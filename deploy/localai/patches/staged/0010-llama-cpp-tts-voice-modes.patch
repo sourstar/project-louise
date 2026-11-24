@@ -40,26 +40,72 @@ the way.
   that decodes in steps under guidance (OmniVoice: 32 steps) can be asked
   for fewer; a model with no steps or guidance refuses a set value itself.
 
+- a voice profile's ENCODED clip kept with the profile (tts_voice_cache.h).
+  A model that clones encodes the reference first, about a second on a GPU;
+  the engine keeps the encoding in memory, so every load paid it again on
+  its first sentence. LocalAI hands a profile's clip to a backend as a
+  request-scoped hard link under voice-profiles/.leases/; the backend
+  finds the profile's own file by the link's inode and names ONE file
+  beside it to the engine (reference.wav.encoded), which reads it when it
+  is that clip's by this model and build and writes it otherwise. It sits
+  in the profile's directory, with its permissions, and LocalAI's own
+  delete (RemoveAll of that directory) removes it: an encoding never
+  outlives its voice. A clip that is no lease, a lease that is a copy, a
+  profile deleted meanwhile, or a llama.cpp that takes no such file: no
+  file is named and the encoding stays in memory, as before.
+
 Nothing changes for Qwen3-TTS Base or LFM3-Audio but the transcript now
 reaching the first, and a seed when the request sets one.
 
 Tested: tts_request_options_test.cpp (four new cases and the thirteen
-there before). The grpc-server change was not compiled here: it is built
-with the backend.
+there before) and tts_voice_cache_test.cpp (thirteen cases on a store
+built in a temporary directory: the lease, a copy, another layout, a
+deleted profile, a link), both standalone and picked up by
+backend/cpp/run-unit-tests.sh. The grpc-server change was not compiled
+here: it is built with the backend.
 
 Assisted-by: Claude Code
 ---
- backend/cpp/llama-cpp/grpc-server.cpp         |  60 ++++++--
- backend/cpp/llama-cpp/prepare.sh              |   8 ++
+ backend/cpp/llama-cpp/CMakeLists.txt          |   5 +
+ backend/cpp/llama-cpp/grpc-server.cpp         |  68 +++++++--
+ backend/cpp/llama-cpp/prepare.sh              |  12 ++
  backend/cpp/llama-cpp/tts_request_options.h   | 133 +++++++++++++++---
  .../llama-cpp/tts_request_options_test.cpp    |  91 ++++++++++++
- 4 files changed, 266 insertions(+), 26 deletions(-)
+ backend/cpp/llama-cpp/tts_voice_cache.h       |  96 +++++++++++++
+ .../cpp/llama-cpp/tts_voice_cache_test.cpp    | 116 +++++++++++++++
+ 7 files changed, 494 insertions(+), 27 deletions(-)
+ create mode 100644 backend/cpp/llama-cpp/tts_voice_cache.h
+ create mode 100644 backend/cpp/llama-cpp/tts_voice_cache_test.cpp
 
+diff --git a/backend/cpp/llama-cpp/CMakeLists.txt b/backend/cpp/llama-cpp/CMakeLists.txt
+index 4d582d9..a2ea530 100644
+--- a/backend/cpp/llama-cpp/CMakeLists.txt
++++ b/backend/cpp/llama-cpp/CMakeLists.txt
+@@ -128,6 +128,11 @@ if(LLAMA_GRPC_BUILD_TESTS)
+     target_compile_features(tts_request_options_test PRIVATE cxx_std_17)
+     add_test(NAME tts_request_options_test COMMAND tts_request_options_test)
+ 
++    add_executable(tts_voice_cache_test tts_voice_cache_test.cpp tts_voice_cache.h)
++    target_include_directories(tts_voice_cache_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
++    target_compile_features(tts_voice_cache_test PRIVATE cxx_std_17)
++    add_test(NAME tts_voice_cache_test COMMAND tts_voice_cache_test)
++
+     add_executable(transcription_prompt_test transcription_prompt_test.cpp transcription_prompt.h)
+     target_include_directories(transcription_prompt_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+     target_compile_features(transcription_prompt_test PRIVATE cxx_std_17)
 diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
-index d1d6a78..8f27b45 100644
+index d1d6a78..94cc0c4 100644
 --- a/backend/cpp/llama-cpp/grpc-server.cpp
 +++ b/backend/cpp/llama-cpp/grpc-server.cpp
-@@ -4227,21 +4227,38 @@ public:
+@@ -88,6 +88,7 @@
+ #include "stream_peer.h"
+ #include "realtime_session.h"
+ #include "tts_request_options.h"
++#include "tts_voice_cache.h"
+ #include "embedding_tokens.h"
+ #include "transcription_prompt.h"
+ #include <getopt.h>
+@@ -4227,21 +4228,38 @@ public:
          }
  
          // Qwen3-TTS Base takes a speaker reference file; LFM3-Audio takes a
@@ -104,7 +150,7 @@ index d1d6a78..8f27b45 100644
          if (!opts.ok) {
              return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, opts.error);
          }
-@@ -4257,16 +4274,21 @@ public:
+@@ -4257,16 +4275,26 @@ public:
              task.tts_inp.set_lang(opts.language);
          }
  
@@ -116,20 +162,26 @@ index d1d6a78..8f27b45 100644
                      "failed to read speaker reference audio: " + opts.voice_path);
              }
              task.tts_inp.set_speaker_ref(mtmd::bitmap_ptr(wrapper.bitmap));
+-        }
+-#if LOCALAI_HAS_TTS_VOICE
+-        else {
++            // A voice profile's clip: the engine's encoding of it is kept in a
++            // file beside the profile's own clip, so a model that has just
++            // loaded reads it instead of encoding again, and deleting the
++            // profile deletes it (tts_voice_cache.h). Any other clip: memory only.
++            llama_grpc::set_speaker_ref_cache(task.tts_inp, opts.voice_path);
 +            // The reference's transcript, where the request has one (a voice
 +            // profile's): the models that take it clone closer with it.
 +            if (!opts.ref_text.empty()) {
 +                task.tts_inp.set_speaker_ref_text(opts.ref_text);
 +            }
-         }
--#if LOCALAI_HAS_TTS_VOICE
--        else {
++        }
 +#if LOCALAI_HAS_TTS_TEMPLATE
 +        if (voice_mode != llama_grpc::tts_voice_mode::reference) {
              // Same as upstream POST /tts: the model's "tts" template renders the
              // prompt with the language and voice, and an empty voice takes the
              // template default. Fall back to the raw text when there is no template.
-@@ -4275,11 +4297,27 @@ public:
+@@ -4275,11 +4303,27 @@ public:
              if (!tts_prompt.empty()) {
                  task.tts_inp.set_prompt(tts_prompt);
              }
@@ -157,7 +209,7 @@ index d1d6a78..8f27b45 100644
          task.tts_inp.data.stream   = stream;
          task.tts_inp.data.out_type = stream
              ? MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM   // Go prepends its own WAV header, see core/backend/tts.go
-@@ -4290,6 +4328,10 @@ public:
+@@ -4290,6 +4334,10 @@ public:
          // its codec EOS, so a short input can otherwise generate the full cap.
          task.params.n_predict = opts.max_frames > 0 ? opts.max_frames : -1;
          task.params.sampling  = params_base.sampling;
@@ -169,10 +221,21 @@ index d1d6a78..8f27b45 100644
          // pair is INERT at this pin: llama_sampler_init_penalties() clamps
          // penalty_last_n with std::max(penalty_last_n, 0), so -1 means "off",
 diff --git a/backend/cpp/llama-cpp/prepare.sh b/backend/cpp/llama-cpp/prepare.sh
-index 02d796f..18d0619 100644
+index 02d796f..5b8954c 100644
 --- a/backend/cpp/llama-cpp/prepare.sh
 +++ b/backend/cpp/llama-cpp/prepare.sh
-@@ -198,6 +198,13 @@ if grep -q "set_voice" llama.cpp/tools/mtmd/mtmd-helper.h; then
+@@ -62,6 +62,10 @@ cp -r passthrough_options_test.cpp llama.cpp/tools/grpc-server/
+ # regression test.
+ cp -r tts_request_options.h llama.cpp/tools/grpc-server/
+ cp -r tts_request_options_test.cpp llama.cpp/tools/grpc-server/
++# Where a voice profile's encoded clip is kept (included by grpc-server.cpp)
++# and its standalone unit test.
++cp -r tts_voice_cache.h llama.cpp/tools/grpc-server/
++cp -r tts_voice_cache_test.cpp llama.cpp/tools/grpc-server/
+ # Transcription prompt construction (included by grpc-server.cpp) and its
+ # standalone regression test.
+ cp -r transcription_prompt.h llama.cpp/tools/grpc-server/
+@@ -198,6 +202,13 @@ if grep -q "set_voice" llama.cpp/tools/mtmd/mtmd-helper.h; then
  else
      HAS_TTS_VOICE=0
  fi
@@ -186,7 +249,7 @@ index 02d796f..18d0619 100644
  # Per-task ASR preset (common_chat_get_asr_prompt takes the requested language,
  # ggml-org/llama.cpp#31257). Older pins have the one-argument form, or none.
  if grep -qF "common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language" llama.cpp/common/chat.h; then
-@@ -237,6 +244,7 @@ cat > llama.cpp/tools/grpc-server/llama_compat.h <<EOF
+@@ -237,6 +248,7 @@ cat > llama.cpp/tools/grpc-server/llama_compat.h <<EOF
  #define LOCALAI_HAS_RERANK_FILES ${HAS_RERANK_FILES}
  #define LOCALAI_HAS_REALTIME ${HAS_REALTIME}
  #define LOCALAI_HAS_TTS_VOICE ${HAS_TTS_VOICE}
@@ -505,6 +568,230 @@ index abd786f..bdb70dd 100644
      test_ignores_unknown_params();
  
      if (failures == 0) {
+diff --git a/backend/cpp/llama-cpp/tts_voice_cache.h b/backend/cpp/llama-cpp/tts_voice_cache.h
+new file mode 100644
+index 0000000..876f657
+--- /dev/null
++++ b/backend/cpp/llama-cpp/tts_voice_cache.h
+@@ -0,0 +1,96 @@
++// Where the engine may keep its encoding of a voice profile's reference clip.
++//
++// A model that clones a voice encodes the reference clip first (OmniVoice: about a second on a GPU). The engine keeps
++// the encoding in memory between requests; a model that has just been loaded encodes again. Given the path of ONE
++// file, the engine keeps the encoding there and a later load reads it (mtmd_helper_gen_audio_inp::speaker_ref_cache).
++//
++// The encoding is the voice, as much as the clip is, so that file must live and die with the profile. LocalAI hands
++// a profile's clip to a backend as a request-scoped HARD LINK,
++//     <data>/voice-profiles/.leases/<process>/<request>.wav  ->  <data>/voice-profiles/<id>/reference*.wav
++// (core/services/voiceprofile, LeaseAudios), and deletes a profile with RemoveAll(<id>). voice_clip_cache_path()
++// finds the profile's own file by the lease's inode and names a file beside it: inside the profile's directory, with
++// its permissions, removed by the same RemoveAll. Anything else - a clip that is no lease, a lease that is a copy
++// (no hard link on that filesystem), a store laid out otherwise - gets no file: the encoding stays in memory, as
++// before.
++//
++// Dependency-free (C++17 standard library, POSIX stat) so that tts_voice_cache_test.cpp tests it without the backend.
++#ifndef LLAMA_GRPC_TTS_VOICE_CACHE_H
++#define LLAMA_GRPC_TTS_VOICE_CACHE_H
++
++#include <filesystem>
++#include <string>
++#include <system_error>
++#include <type_traits>
++#include <utility>
++
++#if !defined(_WIN32)
++#include <sys/stat.h>
++#endif
++
++namespace llama_grpc {
++
++// the suffix of the kept encoding beside a profile's clip
++inline constexpr const char * VOICE_CLIP_CACHE_SUFFIX = ".encoded";
++
++// the file beside the profile's own clip in which the engine may keep the encoding of `clip_path`, "" if there is none
++inline std::string voice_clip_cache_path(const std::string & clip_path) {
++#if defined(_WIN32)
++    (void) clip_path;
++    return {};
++#else
++    namespace fs = std::filesystem;
++    const fs::path lease(clip_path);
++    const fs::path leases = lease.parent_path().parent_path(); // <store>/.leases
++    if (leases.filename() != ".leases" || !leases.has_parent_path()) {
++        return {};
++    }
++    struct stat want;
++    if (stat(clip_path.c_str(), &want) != 0 || !S_ISREG(want.st_mode) || want.st_nlink < 2) {
++        return {}; // not there, or a copy: no other name leads to these bytes
++    }
++    std::error_code ec;
++    for (fs::directory_iterator profiles(leases.parent_path(), ec), end; !ec && profiles != end; profiles.increment(ec)) {
++        const std::string name = profiles->path().filename().string();
++        struct stat dir;
++        if (name.empty() || name[0] == '.' || lstat(profiles->path().c_str(), &dir) != 0 || !S_ISDIR(dir.st_mode)) {
++            continue; // the leases, temporary directories, links
++        }
++        std::error_code ec_files;
++        for (fs::directory_iterator files(profiles->path(), ec_files); !ec_files && files != end; files.increment(ec_files)) {
++            struct stat have;
++            if (lstat(files->path().c_str(), &have) == 0 && S_ISREG(have.st_mode) &&
++                have.st_dev == want.st_dev && have.st_ino == want.st_ino) {
++                return files->path().string() + VOICE_CLIP_CACHE_SUFFIX;
++            }
++        }
++    }
++    return {};
++#endif
++}
++
++// A llama.cpp whose speech input takes the file (set_speaker_ref_cache) is given it; one that does not, is not: the
++// backend builds against both, and without the method the encoding stays in memory.
++template <typename Inp, typename = void>
++struct has_speaker_ref_cache : std::false_type {};
++template <typename Inp>
++struct has_speaker_ref_cache<Inp, std::void_t<decltype(std::declval<Inp &>().set_speaker_ref_cache(std::string()))>> : std::true_type {};
++
++// names the file of clip_path's encoding to the engine, if there is one and the engine takes it; says whether it did
++template <typename Inp>
++bool set_speaker_ref_cache(Inp & inp, const std::string & clip_path) {
++    if constexpr (has_speaker_ref_cache<Inp>::value) {
++        const std::string kept = voice_clip_cache_path(clip_path);
++        if (!kept.empty()) {
++            inp.set_speaker_ref_cache(kept);
++            return true;
++        }
++    } else {
++        (void) inp;
++        (void) clip_path;
++    }
++    return false;
++}
++
++} // namespace llama_grpc
++
++#endif // LLAMA_GRPC_TTS_VOICE_CACHE_H
+diff --git a/backend/cpp/llama-cpp/tts_voice_cache_test.cpp b/backend/cpp/llama-cpp/tts_voice_cache_test.cpp
+new file mode 100644
+index 0000000..ba4bb6d
+--- /dev/null
++++ b/backend/cpp/llama-cpp/tts_voice_cache_test.cpp
+@@ -0,0 +1,116 @@
++// Unit tests for the place of a voice clip's kept encoding (tts_voice_cache.h).
++//
++// Build & run standalone (standard library only):
++//   g++ -std=c++17 tts_voice_cache_test.cpp -o t && ./t
++//
++// Builds LocalAI's voice-profile store in a temporary directory - a profile's clip, its lease as a hard link - and
++// checks that the encoding is placed beside the profile's own clip, and nowhere when the clip is not such a lease.
++// On Windows this file compiles to a no-op success (no file is ever named there).
++
++#include <cstdio>
++#include <cstdlib>
++#include <filesystem>
++#include <fstream>
++#include <string>
++
++#include "tts_voice_cache.h"
++
++static int failures = 0;
++
++static void check(bool ok, const std::string & name) {
++    if (!ok) {
++        failures++;
++        fprintf(stderr, "FAIL: %s\n", name.c_str());
++    } else {
++        fprintf(stderr, "ok:   %s\n", name.c_str());
++    }
++}
++
++#if !defined(_WIN32)
++#include <unistd.h>
++
++namespace fs = std::filesystem;
++
++static void write_file(const fs::path & p, const std::string & bytes) {
++    fs::create_directories(p.parent_path());
++    std::ofstream(p, std::ios::binary) << bytes;
++}
++
++static void test_place() {
++    using llama_grpc::voice_clip_cache_path;
++    char tmpl[] = "/tmp/tts-voice-cache-XXXXXX";
++    if (mkdtemp(tmpl) == nullptr) {
++        check(false, "a temporary directory");
++        return;
++    }
++    const fs::path store = fs::path(tmpl) / "voice-profiles";
++
++    // two profiles, one with two references; a lease of each clip, as LeaseAudios makes them
++    write_file(store / "anna" / "reference.wav", "the first voice");
++    write_file(store / "anna" / "profile.json", "{}");
++    write_file(store / "bruno" / "reference.wav", "the second voice");
++    write_file(store / "bruno" / "reference-1.wav", "the second voice, again");
++    const fs::path leases = store / ".leases" / "process-1";
++    fs::create_directories(leases);
++    const fs::path lease_a  = leases / "request-1.wav";
++    const fs::path lease_b1 = leases / "request-2.wav";
++    fs::create_hard_link(store / "anna" / "reference.wav", lease_a);
++    fs::create_hard_link(store / "bruno" / "reference-1.wav", lease_b1);
++
++    check(voice_clip_cache_path(lease_a.string()) == (store / "anna" / "reference.wav.encoded").string(),
++          "a lease leads to a file beside the profile's own clip");
++    check(voice_clip_cache_path(lease_b1.string()) == (store / "bruno" / "reference-1.wav.encoded").string(),
++          "each reference of a profile has its own");
++
++    // same bytes, another profile: found by the file, not by its content
++    write_file(store / "carla" / "reference.wav", "the first voice");
++    check(voice_clip_cache_path(lease_a.string()) == (store / "anna" / "reference.wav.encoded").string(),
++          "a profile with the same bytes is another profile");
++
++    // a lease that is a copy (LocalAI's fallback where hard links fail): no other name leads to it
++    const fs::path copy = leases / "request-3.wav";
++    fs::copy_file(store / "anna" / "reference.wav", copy);
++    check(voice_clip_cache_path(copy.string()).empty(), "a lease that is a copy gets no file");
++
++    // not a lease at all: a clip somewhere else, a missing file, a directory, an empty path
++    write_file(fs::path(tmpl) / "elsewhere" / "x" / "clip.wav", "a clip of the caller's");
++    check(voice_clip_cache_path((fs::path(tmpl) / "elsewhere" / "x" / "clip.wav").string()).empty(), "a clip that is no lease gets no file");
++    check(voice_clip_cache_path((leases / "missing.wav").string()).empty(), "nor a lease that is gone");
++    check(voice_clip_cache_path(leases.string()).empty(), "nor a directory");
++    check(voice_clip_cache_path("").empty() && voice_clip_cache_path("clip.wav").empty(), "nor a path with no store above it");
++
++    // the profile deleted while a request still holds its lease (LocalAI's RemoveAll): nothing is named any more
++    fs::remove_all(store / "anna");
++    check(voice_clip_cache_path(lease_a.string()).empty(), "a deleted profile's lease gets no file");
++
++    // a link to a profile directory is not a profile
++    fs::create_directory_symlink(store / "bruno", store / "alias");
++    check(voice_clip_cache_path(lease_b1.string()) == (store / "bruno" / "reference-1.wav.encoded").string(),
++          "a link to a profile is not followed");
++
++    // an engine that takes the file is given it, one that does not is left alone
++    struct takes { std::string got; void set_speaker_ref_cache(std::string p) { got = std::move(p); } };
++    struct takes_not { };
++    takes with;
++    takes_not without;
++    check(llama_grpc::set_speaker_ref_cache(with, lease_b1.string()) && with.got == (store / "bruno" / "reference-1.wav.encoded").string(),
++          "an engine that keeps encodings is told the file");
++    check(!llama_grpc::set_speaker_ref_cache(without, lease_b1.string()), "an engine that does not is not");
++    takes none;
++    check(!llama_grpc::set_speaker_ref_cache(none, copy.string()) && none.got.empty(), "no file, nothing told");
++
++    fs::remove_all(tmpl);
++}
++#else
++static void test_place() {}
++#endif
++
++int main() {
++    test_place();
++    if (failures > 0) {
++        fprintf(stderr, "%d test(s) failed\n", failures);
++        return 1;
++    }
++    fprintf(stderr, "all tests passed\n");
++    return 0;
++}
 -- 
 2.43.0
 

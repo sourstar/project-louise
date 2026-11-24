@@ -1,0 +1,842 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 24 Nov 2026 22:20:35 +0000
+Subject: [PATCH] feat(llama-cpp): the MoE cache starts from a record of the
+ experts used
+
+Carried as a llama.cpp patch beside the others
+(patches/0017-moe-record.patch), after the parking prototype.
+
+A mixture-of-experts model whose experts are kept in host memory
+(`n_cpu_moe`, `moe_cache_mib`) keeps the experts it uses most in a GPU
+cache. The cache's knowledge of which those are dies with its context, so
+every load starts with an empty cache and uploads expert by expert under
+its first tokens: the first answer after a load is the slow one.
+
+With LLAMA_MOE_RECORD_DIR=<dir> in the model's environment the engine keeps
+a record of the experts used - per layer and expert, decayed over a few
+answers - in memory with the model and in a file of that directory. A cache
+is filled from it when it is created, inside the load, the best-ranked
+experts first and in runs; its eviction order is seeded from the same
+record; when the cache goes, what it saw is folded in and the file written
+(temporary name, then renamed). The record decides where an expert is read
+from, never what is computed: with no share of the misses on the CPU the
+outputs are the same with and without it. A file of other weights or of
+another build, or one that cannot be read, is ignored with one log line.
+The GPU memory of the cache does not change.
+
+Unset: nothing is read or kept.
+
+STAGED. The record's own test (tests/test-moe-record.cpp, standard library
+only) passes; the fill compiles (g++, icpx 2025.3.3) and has not run where
+it was written: it needs a GPU beside the host. On a device: one fixed
+question at temperature 0, on a cache with no record, in a second context
+of the same process and in a new process that reads the file - the load's
+seconds, the time to the first token, the cache's own "hits, misses,
+uploaded" lines, and the same token ids in all three.
+
+Assisted-by: Claude Code
+---
+ .../llama-cpp/patches/0017-moe-record.patch   | 790 ++++++++++++++++++
+ 1 file changed, 790 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0017-moe-record.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0017-moe-record.patch b/backend/cpp/llama-cpp/patches/0017-moe-record.patch
+new file mode 100644
+index 0000000..dde9bc6
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0017-moe-record.patch
+@@ -0,0 +1,790 @@
++moe-cache: the experts used are recorded beyond a context, and a cache is filled from the record
++
++The MoE cache keeps the recently and repeatedly used experts of
++host-resident MoE layers in a device buffer. What it knows of which experts
++those are - a score of use per layer and expert - lives and dies with the
++context: every new context, and so every load, starts with an empty cache
++and fills it miss by miss, an upload at a time, under its first tokens.
++
++With LLAMA_MOE_RECORD_DIR=<dir> that knowledge is kept (llama-moe-record.h):
++per layer and expert, the lookups that selected the expert, decayed over
++4,096 tokens of its layer - answers, where the cache's own score decays over
++128 tokens.
++- when a cache is created (inside the context's creation, before any token)
++  it is FILLED from the record: the best-ranked experts of each group of
++  layers, as many as it has slots, uploaded in runs of consecutive experts;
++  one log line says how many, how many MiB and in how long;
++- the eviction order is seeded from the same record (moe_cache_lru::seed):
++  each expert put in gets the score its recorded use would have given it,
++  so what leaves first is what the record ranks last, and the real uses
++  take over as they come;
++- when the cache goes, what it saw is folded into the record - in memory
++  with the model (llama_model::moe_record), so the next context of the
++  process starts from it, and in a file of the directory, so the next
++  process does. The file is written whole under a temporary name and
++  renamed, never while the cache computes.
++
++The record only ever decides WHERE an expert is read from: an expert in the
++cache and an expert uploaded at a miss are the same bytes through the same
++kernels, so with no share of the misses on the CPU (--moe-cache-cpu-share 0,
++the default) the outputs are the same with and without it. With a CPU share
++the state of the cache already decides which kernels compute a miss; a
++cache that starts full applies that share from its first token.
++
++A file is used only by the weights and the build that wrote it (the
++model's name, sizes and shape, and a stamp compiled into the library, are
++in its name and in it): another model's, another build's, a cut or changed
++file is ignored with one log line and never a reason not to load. It holds
++counts, no text. The device memory of the cache does not change: its buffer
++is allocated whole when the cache is created, as before; the record decides
++what is in it.
++
++Unset: no record is read or kept, and the cache behaves as before.
++
++Tested: tests/test-moe-record.cpp (standard library only: the choice of
++experts, the decay, the file - every cut and every changed byte refused).
++The fill itself needs a second device: it compiles (g++, icpx 2025.3.3) and
++has not run where it was written.
++---
++diff --git a/src/llama-model.cpp b/src/llama-model.cpp
++index 1f9c98a..f79efcc 100644
++--- a/src/llama-model.cpp
+++++ b/src/llama-model.cpp
++@@ -1,4 +1,5 @@
++ #include "llama-model.h"
+++#include "llama-moe-record.h"
++ 
++ #include "llama-arch.h"
++ #include "llama-ext.h"
++@@ -1387,6 +1388,9 @@ struct llama_model::impl {
++     // the weights are parked (llama_model_park): no buffer in ctxs_bufs that can park may be read or written
++     bool parked = false;
++ 
+++    // the experts used, kept from one context to the next (llama_model::moe_record)
+++    llama_moe_record_store moe_record;
+++
++     buft_list_t cpu_buft_list;
++     std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
++ 
++@@ -4007,6 +4011,10 @@ llama_ftype llama_model_ftype(const llama_model * model) {
++     return model->ftype();
++ }
++ 
+++llama_moe_record_store & llama_model::moe_record() const {
+++    return pimpl->moe_record;
+++}
+++
++ uint64_t llama_model_size(const llama_model * model) {
++     return model->size();
++ }
++diff --git a/src/llama-model.h b/src/llama-model.h
++index 9033973..af6baa9 100644
++--- a/src/llama-model.h
+++++ b/src/llama-model.h
++@@ -1034,6 +1034,9 @@ struct llama_model {
++     bool park();
++     bool unpark();
++ 
+++    // the record of the experts used, kept beyond a context (llama-moe-record.h): its own mutex guards it
+++    struct llama_moe_record_store & moe_record() const;
+++
++     void print_info() const;
++ 
++     ggml_backend_dev_t dev_layer(int il) const;
++diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
++index ba35af0..b6ae3da 100644
++--- a/src/llama-moe-cache.cpp
+++++ b/src/llama-moe-cache.cpp
++@@ -4,15 +4,19 @@
++ #include "llama-impl.h"
++ #include "llama-memory.h"
++ #include "llama-model.h"
+++#include "llama-moe-record.h"
++ 
++ #include "ggml-cpp.h"
++ 
++ #include <algorithm>
+++#include <cinttypes>
++ #include <cmath>
++ #include <cstdio>
++ #include <cstdlib>
++ #include <cstring>
+++#include <mutex>
++ #include <stdexcept>
+++#include <string>
++ #include <unordered_map>
++ #include <vector>
++ 
++@@ -46,6 +50,7 @@ struct moe_cache_lru {
++ 
++     std::vector<float>   crf;      // [n_layer*n_expert]
++     std::vector<int64_t> last_use; // [n_layer*n_expert] layer clock at the last use, -1 if not used
+++    std::vector<uint32_t> n_use;   // [n_layer*n_expert] lookups that selected the expert, for the record (llama-moe-record.h)
++     std::vector<int64_t> clock;    // [n_layer] tokens seen by the layer (as added by plan() for each ubatch)
++ 
++     std::vector<uint32_t> seen; // [n_expert] seen[e] == seen_gen if expert e is selected by the current plan()
++@@ -76,6 +81,7 @@ struct moe_cache_lru {
++         list_of.assign(n_slots, 0);
++         crf.assign((size_t) n_layer*n_expert, 0.0f);
++         last_use.assign((size_t) n_layer*n_expert, -1);
+++        n_use.assign((size_t) n_layer*n_expert, 0);
++         clock.assign(n_layer, 0);
++         seen.assign(n_expert, 0);
++     }
++@@ -127,6 +133,20 @@ struct moe_cache_lru {
++     void use(int32_t il, int32_t key) {
++         crf[key]      = decayed_crf(il, key) + 1.0f;
++         last_use[key] = clock[il];
+++        n_use[key]++;
+++    }
+++
+++    // expert e of layer il takes the unused slot s before any token is seen, with the CRF a record of earlier use gives it
+++    // (at least 1, as after a use): it is evicted in the order of that CRF, and its real uses take over as they come
+++    void seed(int32_t il, int32_t e, int32_t s, float crf_seed) {
+++        GGML_ASSERT(s >= 0 && s < n_slots && key_of[s] < 0 && slot_map[il][e] == empty);
+++        const int32_t key = make_key(il, e);
+++        crf[key]        = std::max(1.0f, crf_seed);
+++        last_use[key]   = clock[il];
+++        key_of[s]       = key;
+++        slot_map[il][e] = s;
+++        n_filled++;
+++        move(s, class_of(key));
++     }
++ 
++     // the experts selected by this plan() must not be evicted, nor the slots this plan() filled already
++@@ -391,6 +411,12 @@ struct llama_moe_cache::impl {
++     // LLAMA_MOE_CACHE_TRACE: the selected experts of each slot lookup, for a simulator of the cache
++     FILE * trace = nullptr;
++ 
+++    // LLAMA_MOE_RECORD_DIR: the experts used are recorded beyond this cache (llama-moe-record.h), in memory with the
+++    // model and in a file of this directory. The cache is filled from the record when it is created and folds what it
+++    // saw into it when it goes. Unset: no record is read or kept.
+++    const llama_model * model = nullptr;
+++    std::string record_dir;
+++
++     // slot maps in host memory
++     ggml_context_ptr ctx_host;
++     ggml_backend_buffer_ptr buf_host;
++@@ -400,7 +426,10 @@ struct llama_moe_cache::impl {
++     ggml_context_ptr ctx_views;
++ 
++     impl(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share) :
++-            n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()), cpu_share(std::clamp(cpu_share, 0.0f, 1.0f)) {
+++            n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()), cpu_share(std::clamp(cpu_share, 0.0f, 1.0f)), model(&model) {
+++        if (const char * dir = getenv("LLAMA_MOE_RECORD_DIR"); dir != nullptr && *dir != '\0' && !no_alloc) {
+++            record_dir = dir;
+++        }
++         for (size_t i = 0; i < backends.size(); ++i) {
++             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
++             if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
++@@ -634,6 +663,147 @@ struct llama_moe_cache::impl {
++                 }
++             }
++         }
+++
+++        if (!record_dir.empty()) {
+++            fill_from_record();
+++        }
+++    }
+++
+++    // what a record is of: these weights, and this build of the library
+++    llama_moe_record::identity record_identity() const {
+++        llama_moe_record::identity id;
+++        id.n_layer    = (uint32_t) layers.size();
+++        id.n_expert   = (uint32_t) model->hparams.n_expert;
+++        id.n_bytes    = model->size();
+++        id.n_elements = model->n_elements();
+++        id.name       = model->name;
+++        id.build      = __DATE__ " " __TIME__;
+++        return id;
+++    }
+++
+++    std::string record_path(const llama_moe_record::identity & id) const {
+++        return record_dir + "/" + llama_moe_record::file_name(id);
+++    }
+++
+++    // the model's record, read from its file by the first cache of the process; the store's mutex is held by the caller
+++    // a file that is missing says nothing; one that cannot be used is said once and ignored
+++    void record_open(llama_moe_record_store & store) const {
+++        const llama_moe_record::identity id = record_identity();
+++        if (!(store.record.id == id)) {
+++            store.record.init(id);
+++            store.file_tried = false;
+++        }
+++        if (store.file_tried) {
+++            return;
+++        }
+++        store.file_tried = true;
+++        std::vector<uint8_t> bytes;
+++        if (!llama_moe_record::read_file(record_path(id), bytes)) {
+++            return;
+++        }
+++        switch (store.record.deserialize(bytes.data(), bytes.size(), id)) {
+++            case llama_moe_record::LOADED:
+++                LLAMA_LOG_INFO("llama_moe_cache: the record of %" PRIu64 " tokens of this model is read from %s\n",
+++                    store.record.n_tokens, llama_moe_record::file_name(id).c_str());
+++                break;
+++            case llama_moe_record::OTHER_MODEL:
+++                LLAMA_LOG_WARN("llama_moe_cache: %s is the record of other weights or of another build, it is ignored\n",
+++                    llama_moe_record::file_name(id).c_str());
+++                break;
+++            case llama_moe_record::UNREADABLE:
+++                LLAMA_LOG_WARN("llama_moe_cache: %s is not a readable record, it is ignored\n", llama_moe_record::file_name(id).c_str());
+++                break;
+++        }
+++    }
+++
+++    // put the experts the record ranks best in the cache, before any token: the uploads a cold cache makes one miss at a
+++    // time under its first tokens are made here, in runs, while the context is created
+++    void fill_from_record() {
+++        llama_moe_record_store & store = model->moe_record();
+++        std::lock_guard<std::mutex> lock(store.mutex);
+++        record_open(store);
+++        const llama_moe_record & record = store.record;
+++        if (record.empty()) {
+++            return;
+++        }
+++
+++        const int64_t t_start = ggml_time_us();
+++        const float to_crf = moe_cache_lru::crf_half_life/llama_moe_record::half_life; // the same uses per token, in the units of the CRF
+++        size_t n_experts = 0;
+++        size_t bytes     = 0;
+++        for (group & g : groups) {
+++            if (g.n_slots == 0 || (uint32_t) g.lru.n_expert != record.id.n_expert) {
+++                continue;
+++            }
+++            // the best keys of the group; slots are given in layer and expert order, so consecutive experts are one upload
+++            std::vector<int32_t> keys = record.best(g.layers, (size_t) g.n_slots);
+++            if (keys.empty()) {
+++                continue;
+++            }
+++            std::vector<int32_t> by_place = keys;
+++            std::sort(by_place.begin(), by_place.end());
+++            std::unordered_map<int32_t, int32_t> slot_of;
+++            for (size_t i = 0; i < by_place.size(); ++i) {
+++                slot_of[by_place[i]] = (int32_t) i;
+++            }
+++            // seeded from the least used to the most: within a class the most used is the last to be evicted
+++            for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
+++                const int32_t il = *it / (int32_t) record.id.n_expert;
+++                const int32_t e  = *it % (int32_t) record.id.n_expert;
+++                g.lru.seed(il, e, slot_of[*it], record.score[*it]*to_crf);
+++            }
+++            ggml_backend_t backend = devices[g.id].backend;
+++            for (size_t i = 0; i < by_place.size();) {
+++                const int32_t il = by_place[i] / (int32_t) record.id.n_expert;
+++                const int32_t e  = by_place[i] % (int32_t) record.id.n_expert;
+++                size_t n = 1;
+++                while (i + n < by_place.size() && by_place[i + n] == by_place[i] + (int32_t) n && (e + (int32_t) n) < (int32_t) record.id.n_expert) {
+++                    n++;
+++                }
+++                const layer & l = layers[il];
+++                for (size_t ip = 0; ip < l.experts.size(); ++ip) {
+++                    const ggml_tensor * w    = l.experts[ip];
+++                    const size_t expert_size = w->nb[2];
+++                    ggml_backend_tensor_set_async(backend, g.banks[ip], (const uint8_t *) w->data + e*expert_size, i*expert_size, n*expert_size);
+++                    bytes += n*expert_size;
+++                }
+++                i += n;
+++            }
+++            ggml_backend_synchronize(backend);
+++            n_experts += by_place.size();
+++        }
+++        LLAMA_LOG_INFO("llama_moe_cache: %zu experts put in the cache from the record of %" PRIu64 " tokens, %.2f MiB uploaded in %.1f ms\n",
+++            n_experts, record.n_tokens, bytes/1024.0/1024.0, (ggml_time_us() - t_start)/1000.0);
+++    }
+++
+++    // what this cache saw joins the record, and the record its file: when the cache goes, never while it computes
+++    void fold_into_record() {
+++        const llama_moe_record::identity id = record_identity();
+++        std::vector<uint32_t> uses((size_t) id.n_layer*id.n_expert, 0);
+++        std::vector<int64_t>  tokens(id.n_layer, 0);
+++        int64_t n_tokens = 0;
+++        for (const group & g : groups) {
+++            if (g.n_slots == 0 || (uint32_t) g.lru.n_expert != id.n_expert) {
+++                continue;
+++            }
+++            for (int32_t il : g.layers) {
+++                tokens[il] = g.lru.clock[il];
+++                n_tokens  += g.lru.clock[il];
+++                for (uint32_t e = 0; e < id.n_expert; ++e) {
+++                    uses[(size_t) il*id.n_expert + e] = g.lru.n_use[g.lru.make_key(il, (int32_t) e)];
+++                }
+++            }
+++        }
+++        if (n_tokens == 0) {
+++            return; // nothing was computed through the cache: the record and its file stay as they are
+++        }
+++        llama_moe_record_store & store = model->moe_record();
+++        std::lock_guard<std::mutex> lock(store.mutex);
+++        record_open(store);
+++        store.record.add(uses, tokens);
+++        if (!store.record.save(record_path(id))) {
+++            LLAMA_LOG_WARN("llama_moe_cache: the record could not be written to %s, it is kept in memory only\n", record_dir.c_str());
+++        }
++     }
++ 
++     // the device that caches layer il
++@@ -684,6 +854,9 @@ struct llama_moe_cache::impl {
++         if (trace != nullptr) {
++             fclose(trace);
++         }
+++        if (!record_dir.empty()) {
+++            fold_into_record();
+++        }
++     }
++ 
++     // the slot map of layer il, if its experts can be read from the cache for n_tokens tokens, nullptr otherwise
++diff --git a/src/llama-moe-record.h b/src/llama-moe-record.h
++new file mode 100644
++index 0000000..34fcafd
++--- /dev/null
+++++ b/src/llama-moe-record.h
++@@ -0,0 +1,262 @@
+++#pragma once
+++
+++// The record of the experts a MoE model used, kept beyond a context.
+++//
+++// The MoE cache (llama-moe-cache) keeps the recently and repeatedly used experts of host-resident MoE layers in a
+++// device buffer. Its knowledge of which experts those are lives and dies with the context: every new context starts
+++// with an empty cache and fills it miss by miss, an upload at a time, under its first tokens.
+++//
+++// This record is that knowledge kept: per layer and expert, the number of tokens that selected the expert, decayed
+++// over `half_life` tokens of the layer - answers, where the cache's own score decays over a hundred tokens. A cache
+++// is filled from it when it is created (the best first) and its eviction order is seeded from it; when the cache
+++// goes, what it saw is folded in. It is kept in memory with the model, for the next context of the process, and in a
+++// file, for the next process.
+++//
+++// It only ever decides WHERE an expert is read from, never what is computed: an expert in the cache and an expert
+++// uploaded at a miss are the same bytes. So a record that is missing, unreadable, or another model's or build's is
+++// ignored, and a wrong one costs uploads, not answers.
+++//
+++// Standard library only, so that the file format and the choice of experts are tested without a model or a device
+++// (tests/test-moe-record.cpp).
+++
+++#include <algorithm>
+++#include <cmath>
+++#include <cstdint>
+++#include <cstdio>
+++#include <cstring>
+++#include <mutex>
+++#include <string>
+++#include <vector>
+++
+++struct llama_moe_record {
+++    // tokens: a use counts for half as much after this many tokens of its layer
+++    static constexpr float half_life = 4096.0f;
+++
+++    static constexpr char     magic[8] = { 'M', 'O', 'E', 'R', 'E', 'C', '1', '\n' };
+++    static constexpr uint32_t max_dim  = 1u << 20; // layers, experts: a header that says more is not a record
+++
+++    // what the record is of: a record is used only by the same weights and the same build of the engine
+++    struct identity {
+++        uint32_t    n_layer    = 0;
+++        uint32_t    n_expert   = 0;
+++        uint64_t    n_bytes    = 0; // size of the model's tensors
+++        uint64_t    n_elements = 0;
+++        std::string name;           // general.name
+++        std::string build;          // of the engine that writes it
+++
+++        bool operator==(const identity & o) const {
+++            return n_layer == o.n_layer && n_expert == o.n_expert && n_bytes == o.n_bytes && n_elements == o.n_elements &&
+++                   name == o.name && build == o.build;
+++        }
+++    };
+++
+++    identity           id;
+++    std::vector<float> score;         // [n_layer*n_expert]
+++    uint64_t           n_tokens = 0;  // tokens folded in, over all layers, for the log
+++
+++    void init(const identity & of) {
+++        id = of;
+++        score.assign((size_t) id.n_layer*id.n_expert, 0.0f);
+++        n_tokens = 0;
+++    }
+++
+++    bool empty() const {
+++        return std::none_of(score.begin(), score.end(), [](float s) { return s > 0.0f; });
+++    }
+++
+++    int32_t key(int32_t il, int32_t e) const { return il*(int32_t) id.n_expert + e; }
+++
+++    // fold in what a cache saw: uses[key] tokens that selected the expert, layer_tokens[il] tokens the layer computed
+++    // through the cache. What was recorded before decays by the tokens the layer has seen since.
+++    void add(const std::vector<uint32_t> & uses, const std::vector<int64_t> & layer_tokens) {
+++        if (uses.size() != score.size() || layer_tokens.size() != id.n_layer) {
+++            return;
+++        }
+++        for (uint32_t il = 0; il < id.n_layer; ++il) {
+++            const int64_t t = layer_tokens[il];
+++            if (t <= 0) {
+++                continue;
+++            }
+++            const float decay = std::exp2(-(float) t/half_life);
+++            for (uint32_t e = 0; e < id.n_expert; ++e) {
+++                float & s = score[(size_t) il*id.n_expert + e];
+++                s = s*decay + (float) uses[(size_t) il*id.n_expert + e];
+++            }
+++            n_tokens += (uint64_t) t;
+++        }
+++    }
+++
+++    // the experts of `layers` to keep in `n` slots: those with a score, the highest first, a tie by layer and expert
+++    // (so the choice is the same on every run)
+++    std::vector<int32_t> best(const std::vector<int32_t> & layers, size_t n) const {
+++        std::vector<int32_t> keys;
+++        for (int32_t il : layers) {
+++            if (il < 0 || (uint32_t) il >= id.n_layer) {
+++                continue;
+++            }
+++            for (uint32_t e = 0; e < id.n_expert; ++e) {
+++                if (score[(size_t) il*id.n_expert + e] > 0.0f) {
+++                    keys.push_back(key(il, (int32_t) e));
+++                }
+++            }
+++        }
+++        std::sort(keys.begin(), keys.end(), [&](int32_t a, int32_t b) {
+++            return score[a] != score[b] ? score[a] > score[b] : a < b;
+++        });
+++        if (keys.size() > n) {
+++            keys.resize(n);
+++        }
+++        return keys;
+++    }
+++
+++    // --- the file: the magic, the identity, the scores, a checksum of all of it; little endian ---
+++
+++    static uint64_t fnv1a(const void * data, size_t size, uint64_t h = 1469598103934665603ull) {
+++        const uint8_t * p = (const uint8_t *) data;
+++        for (size_t i = 0; i < size; ++i) {
+++            h = (h ^ p[i])*1099511628211ull;
+++        }
+++        return h;
+++    }
+++
+++    // the name of the record of these weights and this build in a directory: one file each, so two models, or two
+++    // engines, never read each other's
+++    static std::string file_name(const identity & of) {
+++        uint64_t h = fnv1a(of.name.data(), of.name.size());
+++        h = fnv1a(of.build.data(), of.build.size(), h);
+++        const uint64_t dims[4] = { of.n_layer, of.n_expert, of.n_bytes, of.n_elements };
+++        h = fnv1a(dims, sizeof(dims), h);
+++        char buf[48];
+++        snprintf(buf, sizeof(buf), "moe-record-%016llx.bin", (unsigned long long) h);
+++        return buf;
+++    }
+++
+++    std::vector<uint8_t> serialize() const {
+++        std::vector<uint8_t> out;
+++        auto put = [&](const void * p, size_t n) { out.insert(out.end(), (const uint8_t *) p, (const uint8_t *) p + n); };
+++        auto u32 = [&](uint32_t v) { put(&v, sizeof(v)); };
+++        auto u64 = [&](uint64_t v) { put(&v, sizeof(v)); };
+++        auto str = [&](const std::string & s) { u32((uint32_t) s.size()); put(s.data(), s.size()); };
+++        put(magic, sizeof(magic));
+++        u32(id.n_layer);
+++        u32(id.n_expert);
+++        u64(id.n_bytes);
+++        u64(id.n_elements);
+++        str(id.name);
+++        str(id.build);
+++        u64(n_tokens);
+++        put(score.data(), score.size()*sizeof(float));
+++        u64(fnv1a(out.data(), out.size()));
+++        return out;
+++    }
+++
+++    enum status {
+++        LOADED,
+++        UNREADABLE,  // not a record, cut short, or its checksum does not hold
+++        OTHER_MODEL, // a record of other weights or of another build of the engine
+++    };
+++
+++    // reads a record of `of`; on anything else the record is left as it was
+++    status deserialize(const uint8_t * data, size_t size, const identity & of) {
+++        size_t pos = 0;
+++        auto get = [&](void * p, size_t n) {
+++            if (n > size - pos) {
+++                return false;
+++            }
+++            memcpy(p, data + pos, n);
+++            pos += n;
+++            return true;
+++        };
+++        auto str = [&](std::string & s) {
+++            uint32_t n = 0;
+++            if (!get(&n, sizeof(n)) || n > 4096 || n > size - pos) {
+++                return false;
+++            }
+++            s.assign((const char *) data + pos, n);
+++            pos += n;
+++            return true;
+++        };
+++        if (size < sizeof(magic) + sizeof(uint64_t) || memcmp(data, magic, sizeof(magic)) != 0) {
+++            return UNREADABLE;
+++        }
+++        uint64_t sum = 0;
+++        memcpy(&sum, data + size - sizeof(sum), sizeof(sum));
+++        if (sum != fnv1a(data, size - sizeof(sum))) {
+++            return UNREADABLE;
+++        }
+++        size -= sizeof(sum);
+++        pos   = sizeof(magic);
+++
+++        identity in;
+++        uint64_t tokens = 0;
+++        if (!get(&in.n_layer, 4) || !get(&in.n_expert, 4) || !get(&in.n_bytes, 8) || !get(&in.n_elements, 8) ||
+++            !str(in.name) || !str(in.build) || !get(&tokens, 8)) {
+++            return UNREADABLE;
+++        }
+++        if (in.n_layer == 0 || in.n_expert == 0 || in.n_layer > max_dim || in.n_expert > max_dim) {
+++            return UNREADABLE;
+++        }
+++        const size_t n = (size_t) in.n_layer*in.n_expert;
+++        if (size - pos != n*sizeof(float)) {
+++            return UNREADABLE;
+++        }
+++        if (!(in == of)) {
+++            return OTHER_MODEL;
+++        }
+++        std::vector<float> in_score(n);
+++        memcpy(in_score.data(), data + pos, n*sizeof(float));
+++        for (float s : in_score) {
+++            if (!(s >= 0.0f) || !std::isfinite(s)) { // a NaN compares false
+++                return UNREADABLE;
+++            }
+++        }
+++        id       = in;
+++        score    = std::move(in_score);
+++        n_tokens = tokens;
+++        return LOADED;
+++    }
+++
+++    // false if the file cannot be read at all (it does not exist, most often): nothing to say then
+++    static bool read_file(const std::string & path, std::vector<uint8_t> & out) {
+++        FILE * f = fopen(path.c_str(), "rb");
+++        if (f == nullptr) {
+++            return false;
+++        }
+++        out.clear();
+++        uint8_t buf[65536];
+++        size_t n;
+++        while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+++            out.insert(out.end(), buf, buf + n);
+++            if (out.size() > ((size_t) 1 << 30)) {
+++                break; // no record is a gigabyte
+++            }
+++        }
+++        const bool ok = ferror(f) == 0;
+++        fclose(f);
+++        return ok;
+++    }
+++
+++    // the whole file beside the old one, then renamed over it: a reader sees the old record or the new, never a part
+++    bool save(const std::string & path) const {
+++        const std::vector<uint8_t> out = serialize();
+++        const std::string tmp = path + ".tmp";
+++        FILE * f = fopen(tmp.c_str(), "wb");
+++        if (f == nullptr) {
+++            return false;
+++        }
+++        const bool written = fwrite(out.data(), 1, out.size(), f) == out.size();
+++        const bool closed  = fclose(f) == 0;
+++        if (!written || !closed || rename(tmp.c_str(), path.c_str()) != 0) {
+++            remove(tmp.c_str());
+++            return false;
+++        }
+++        return true;
+++    }
+++};
+++
+++// the record of a model, shared by its contexts: a cache reads it when it is created and folds into it when it goes
+++struct llama_moe_record_store {
+++    std::mutex       mutex;
+++    llama_moe_record record;
+++    bool             file_tried = false; // the file was looked for once, by the first cache of this process
+++};
++diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
++index 0b7e8e4..c0a27ad 100644
++--- a/tests/CMakeLists.txt
+++++ b/tests/CMakeLists.txt
++@@ -192,6 +192,9 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
++     llama_build_and_test(test-batch-alloc.cpp  LABEL behavior  LINK llama)
++     llama_build_and_test(test-kv-cache.cpp LABEL behavior)
++     target_include_directories(test-kv-cache PRIVATE ${PROJECT_SOURCE_DIR}/src)
+++    # the record of the experts a MoE model used (src/llama-moe-record.h): standard library only
+++    llama_build_and_test(test-moe-record.cpp LABEL behavior)
+++    target_include_directories(test-moe-record PRIVATE ${PROJECT_SOURCE_DIR}/src)
++     llama_build_and_test(test-chat.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
++     target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
++     target_link_libraries(test-chat PRIVATE server-context)
++diff --git a/tests/test-moe-record.cpp b/tests/test-moe-record.cpp
++new file mode 100644
++index 0000000..65df74b
++--- /dev/null
+++++ b/tests/test-moe-record.cpp
++@@ -0,0 +1,165 @@
+++// The record of the experts a MoE model used (src/llama-moe-record.h): the choice of experts, the decay, and a file
+++// that is believed only when it is whole and its own.
+++//
+++// Standard library only:  c++ -std=c++17 -I src tests/test-moe-record.cpp -o t && ./t
+++
+++#include "llama-moe-record.h"
+++
+++#include <cstdio>
+++#include <cstdlib>
+++#include <string>
+++#include <vector>
+++
+++static int failures = 0;
+++
+++static void check(bool ok, const std::string & name) {
+++    if (!ok) {
+++        failures++;
+++        fprintf(stderr, "FAIL: %s\n", name.c_str());
+++    } else {
+++        fprintf(stderr, "ok:   %s\n", name.c_str());
+++    }
+++}
+++
+++static llama_moe_record::identity model_a() {
+++    llama_moe_record::identity id;
+++    id.n_layer    = 3;
+++    id.n_expert   = 8;
+++    id.n_bytes    = 123456789;
+++    id.n_elements = 987654;
+++    id.name       = "a mixture of experts";
+++    id.build      = "build 1";
+++    return id;
+++}
+++
+++static void test_choice_and_decay() {
+++    llama_moe_record r;
+++    r.init(model_a());
+++    check(r.empty() && r.best({ 0, 1, 2 }, 100).empty(), "an empty record names no expert");
+++
+++    // layer 0 saw 64 tokens: expert 3 in all of them, expert 5 in half, expert 1 once; layer 2 saw 10, expert 7 in all
+++    std::vector<uint32_t> uses(3*8, 0);
+++    uses[r.key(0, 3)] = 64;
+++    uses[r.key(0, 5)] = 32;
+++    uses[r.key(0, 1)] = 1;
+++    uses[r.key(2, 7)] = 10;
+++    r.add(uses, { 64, 0, 10 });
+++    check(!r.empty() && r.n_tokens == 74, "what a cache saw is folded in");
+++
+++    const auto all = r.best({ 0, 1, 2 }, 100);
+++    check(all == std::vector<int32_t>({ r.key(0, 3), r.key(0, 5), r.key(2, 7), r.key(0, 1) }),
+++          "the experts with a score, the most used first, the unused left out");
+++    check(r.best({ 0, 1, 2 }, 2) == std::vector<int32_t>({ r.key(0, 3), r.key(0, 5) }), "no more than the slots there are");
+++    check(r.best({ 2 }, 100) == std::vector<int32_t>({ r.key(2, 7) }), "only of the layers asked");
+++    check(r.best({ 1, 7, -1 }, 100).empty(), "a layer with nothing recorded, or that does not exist, gives nothing");
+++
+++    // one half-life of other experts later, the old uses count half; a layer that saw nothing keeps its scores
+++    const float before_0 = r.score[r.key(0, 3)];
+++    const float before_2 = r.score[r.key(2, 7)];
+++    std::vector<uint32_t> later(3*8, 0);
+++    later[r.key(0, 6)] = 4096;
+++    r.add(later, { 4096, 0, 0 });
+++    check(std::fabs(r.score[r.key(0, 3)] - before_0/2) < 1e-3f, "a use counts for half after a half-life of its layer's tokens");
+++    check(r.score[r.key(2, 7)] == before_2, "a layer that computed nothing forgets nothing");
+++    check(r.best({ 0 }, 1) == std::vector<int32_t>({ r.key(0, 6) }), "what is used now outranks what was used then");
+++
+++    // equal scores: by layer and expert, the same on every run
+++    llama_moe_record t;
+++    t.init(model_a());
+++    std::vector<uint32_t> same(3*8, 0);
+++    same[t.key(1, 4)] = same[t.key(0, 2)] = same[t.key(1, 0)] = 7;
+++    t.add(same, { 7, 7, 0 });
+++    check(t.best({ 0, 1 }, 3) == std::vector<int32_t>({ t.key(0, 2), t.key(1, 0), t.key(1, 4) }), "a tie is broken the same way every time");
+++
+++    // sizes that are not this model's are not folded in
+++    llama_moe_record u;
+++    u.init(model_a());
+++    u.add(std::vector<uint32_t>(5, 9), { 1, 1, 1 });
+++    u.add(std::vector<uint32_t>(3*8, 9), { 1, 1 });
+++    check(u.empty(), "counts of another shape are refused");
+++}
+++
+++static void test_file() {
+++    llama_moe_record r;
+++    r.init(model_a());
+++    std::vector<uint32_t> uses(3*8, 0);
+++    uses[r.key(1, 2)] = 50;
+++    uses[r.key(2, 0)] = 5;
+++    r.add(uses, { 0, 50, 5 });
+++
+++    const std::vector<uint8_t> bytes = r.serialize();
+++    llama_moe_record back;
+++    back.init(model_a());
+++    check(back.deserialize(bytes.data(), bytes.size(), model_a()) == llama_moe_record::LOADED, "a record is read back");
+++    check(back.score == r.score && back.n_tokens == r.n_tokens && back.id == r.id, "with the same scores");
+++
+++    // other weights, another build: not this model's record, and it leaves what is held alone
+++    auto other = model_a();
+++    other.n_bytes += 1;
+++    llama_moe_record keep;
+++    keep.init(other);
+++    check(keep.deserialize(bytes.data(), bytes.size(), other) == llama_moe_record::OTHER_MODEL && keep.empty(), "the record of other weights is not used");
+++    other = model_a();
+++    other.build = "build 2";
+++    check(keep.deserialize(bytes.data(), bytes.size(), other) == llama_moe_record::OTHER_MODEL, "nor the record of another build of the engine");
+++    check(llama_moe_record::file_name(model_a()) != llama_moe_record::file_name(other), "and each has a file of its own");
+++    check(llama_moe_record::file_name(model_a()) == llama_moe_record::file_name(model_a()), "the same model, the same file");
+++
+++    // a file that is not whole, or not a record, is unreadable: every cut, a flipped byte anywhere, noise, nothing
+++    bool cuts = true;
+++    for (size_t n = 0; n < bytes.size(); ++n) {
+++        cuts = cuts && back.deserialize(bytes.data(), n, model_a()) == llama_moe_record::UNREADABLE;
+++    }
+++    check(cuts, "a record cut short at any byte is unreadable");
+++    bool flips = true;
+++    for (size_t i = 0; i < bytes.size(); ++i) {
+++        std::vector<uint8_t> bad = bytes;
+++        bad[i] ^= 0x40;
+++        flips = flips && back.deserialize(bad.data(), bad.size(), model_a()) != llama_moe_record::LOADED;
+++    }
+++    check(flips, "a record with any byte changed is not loaded");
+++    const std::vector<uint8_t> noise(4096, 0x5a);
+++    check(back.deserialize(noise.data(), noise.size(), model_a()) == llama_moe_record::UNREADABLE, "noise is unreadable");
+++    check(back.deserialize(nullptr, 0, model_a()) == llama_moe_record::UNREADABLE, "an empty file is unreadable");
+++    check(back.score == r.score, "and none of them changed the record held");
+++
+++    // a NaN or a negative score with a checksum that holds: still not a record
+++    llama_moe_record nan = r;
+++    nan.score[0] = std::nanf("");
+++    const auto nan_bytes = nan.serialize();
+++    check(back.deserialize(nan_bytes.data(), nan_bytes.size(), model_a()) == llama_moe_record::UNREADABLE, "a score that is not a number is refused");
+++    nan.score[0] = -1.0f;
+++    const auto neg_bytes = nan.serialize();
+++    check(back.deserialize(neg_bytes.data(), neg_bytes.size(), model_a()) == llama_moe_record::UNREADABLE, "so is a negative one");
+++
+++    // on disk: written whole or not at all
+++    char dir[] = "/tmp/moe-record-test-XXXXXX";
+++    if (mkdtemp(dir) == nullptr) {
+++        check(false, "a temporary directory");
+++        return;
+++    }
+++    const std::string path = std::string(dir) + "/" + llama_moe_record::file_name(model_a());
+++    std::vector<uint8_t> read;
+++    check(!llama_moe_record::read_file(path, read), "no file: nothing to read");
+++    check(r.save(path), "the record is saved");
+++    check(llama_moe_record::read_file(path, read) && read == bytes, "the file holds the record, byte for byte");
+++    FILE * tmp = fopen((path + ".tmp").c_str(), "rb");
+++    check(tmp == nullptr, "no temporary file is left behind");
+++    if (tmp != nullptr) {
+++        fclose(tmp);
+++    }
+++    check(!r.save(std::string(dir) + "/no-such-directory/record.bin"), "a directory that does not exist: not saved, said");
+++    remove(path.c_str());
+++    remove(dir);
+++}
+++
+++int main() {
+++    test_choice_and_decay();
+++    test_file();
+++    if (failures > 0) {
+++        fprintf(stderr, "%d test(s) failed\n", failures);
+++        return 1;
+++    }
+++    fprintf(stderr, "all tests passed\n");
+++    return 0;
+++}
+-- 
+2.43.0
+

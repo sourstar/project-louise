@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PATCHES = ROOT / "deploy" / "localai" / "patches"
 STAGED = PATCHES / "staged"
 PATCH = STAGED / "0015-llama-cpp-park-weights.patch"
-SERIES = STAGED / "parking-prototype.series"
+SERIES = STAGED / "engine-next.series"
 NOTE = (ROOT / "docs" / "notes" / "parking-prototype.md").read_text(encoding="utf-8")
 STANDIN = ROOT / "tools" / "measure" / "park_cpu_standin.patch"
 CPU_TEST = ROOT / "tools" / "measure" / "park_cpu_test.py"
@@ -93,8 +93,15 @@ def test_the_addresses_stay_and_a_full_device_refuses():
     assert "could not be %s again after part %zu failed" in code and "could not be %s again after buffer %zu failed" in code
 
 
-def test_its_engine_is_the_fixes_candidate_and_its_two_patches_never_the_live_series():
-    assert _lines(SERIES) == _lines(STAGED / "engine-fixes.series") + ["staged/" + PATCH.name, "staged/" + REFUSE.name]
+def test_its_engine_is_the_next_live_candidate_where_it_is_off():
+    """One build for everything due (2026-11-24, agreed with the architecture session): a build costs every run
+    its gate, so parking and its test switch ride in the next live engine, OFF, and are measured on copies."""
+    lines = _lines(SERIES)
+    assert lines[:len(_lines(PATCHES / "series"))] == _lines(PATCHES / "series"), "the live series first, unchanged"
+    staged = [line for line in lines if line.startswith("staged/")]
+    assert staged == sorted(staged) and "staged/" + PATCH.name in staged and "staged/" + REFUSE.name in staged
+    for line in staged:
+        assert (PATCHES / line).is_file(), line
     build = ROOT / "deploy" / "localai" / "llama-cpp" / "build.sh"
     names = [subprocess.run(["sh", str(build), "sycl_f16", "/nonexistent"], capture_output=True, text=True, cwd=ROOT,
                             env=dict(os.environ, SERIES_FILE=str(s), NAME_ONLY="1")).stdout.strip()
@@ -102,10 +109,9 @@ def test_its_engine_is_the_fixes_candidate_and_its_two_patches_never_the_live_se
     assert len(set(names)) == 3 and all(len(n) == 12 for n in names), names
     live = (PATCHES / "series").read_text(encoding="utf-8")
     assert PATCH.name not in live and REFUSE.name not in live
-    assert REFUSE.name not in (STAGED / "engine-fixes.series").read_text(encoding="utf-8"), \
-        "the engine that is swapped and gated carries no test switch"
     head = SERIES.read_text(encoding="utf-8")
-    assert "INSTALLED BESIDE THE LIVE ENGINE AND NEVER SWAPPED" in head
+    assert "With every switch off it must gate as 9ea95e93a83c does" in head
+    assert not (STAGED / "parking-prototype.series").exists(), "no prototype engine of its own"
     readme = (STAGED / "README.md").read_text(encoding="utf-8")
     assert PATCH.name in readme and "NEVER RUN ON A CARD" in readme
 
@@ -145,7 +151,7 @@ def test_the_note_says_what_ran_without_a_card_and_what_the_node_measures():
     for run in ("| R0, the control |", "| R1, parkable and not parking |", "| R2, parking, verified |",
                 "| R3, parking, timed |", "| the floor |", "| a refusal"):
         assert run in node, run
-    assert "parking-prototype.series" in node and "keep_context_ms:0" in node and "verbosity: 4" in node
+    assert "engine-next.series" in node and "keep_context_ms:0" in node and "verbosity: 4" in node
     assert "The first thing the run says" in node, "a load on mapped memory that fails stops the prototype"
     # the stand-in and its test are in the repository and name each other
     standin = STANDIN.read_text(encoding="utf-8")

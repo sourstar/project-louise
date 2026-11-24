@@ -124,6 +124,91 @@ def test_a_model_on_our_engine_may_be_given_a_voice_profile_by_its_own_word():
     assert "### P13 (staged). " in ACTIONS
 
 
+def _backend_files() -> dict[str, str]:
+    """{path: 0010's diff for it} (LocalAI's own files, not a llama.cpp patch)."""
+    text = VOICE_MODES.read_text(encoding="utf-8")
+    parts = re.split(r"^diff --git a/(\S+) b/\S+\n", text[text.index("\n---\n"):], flags=re.M)
+    return dict(zip(parts[1::2], parts[2::2]))
+
+
+def _new_backend_file(diff: str) -> str:
+    assert "new file mode" in diff
+    body = diff[diff.index("\n@@ "):].split("\n", 2)[2]
+    return "\n".join(line[1:] for line in body.splitlines() if line.startswith("+")) + "\n"
+
+
+def test_a_clip_s_encoding_is_kept_in_one_file_that_holds_no_samples():
+    """§13: every load paid the clip's encoding on its first sentence (3.22 s against 2.27 s on the card). The
+    port keeps it in ONE file the caller names — the rows and the clip's SHA-256, never the samples (the rows are
+    the voice as much as the clip is; a second copy of the recording would be one more thing to delete)."""
+    added = _pipeline()
+    assert "const char * speaker_ref_cache;" in added, "the input names the file; the pipeline reads no directory"
+    assert "clip_cache_read(inp->speaker_ref_cache, clip, voice_rows, voice_rms)" in added
+    assert "clip_cache_write(inp->speaker_ref_cache, kept_clip, kept_rows, kept_rms)" in added
+    head = added[added.index("struct clip_cache_head {"):]
+    head = head[:head.index("};")]
+    assert "uint8_t  clip_sha256[32];" in head and "float" in head and "samples" not in head
+    write = added[added.index("void clip_cache_write("):]
+    write = write[:write.index("\n    }\n") + 1]
+    assert write.count("put(") == 4, "the magic, the head, the rows, the checksum: nothing else is written"
+    assert "put(rows.data(), rows.size() * sizeof(float));" in write and "put(clip.data()" not in write
+    assert "O_WRONLY | O_CREAT | O_EXCL, 0600" in write and "rename(tmp.c_str(), path)" in write
+    # what the rows depend on is in the key: the clip, both models, this build of the engine
+    assert 'static const char build[] = __DATE__ " " __TIME__;' in added
+    assert "hash_sha256(clip.data(), clip.size() * sizeof(float))" in added
+    # a file that does not match: one line with the digest, the clip encoded - never a failed request, never a path
+    warn = re.findall(r'LOG_WRN\("mtmd_helper_gen_audio: omnivoice: (the (?:kept )?encoding[^"]*)"', added)
+    assert len(warn) == 2 and all("%s" in w and "clip %s" in w for w in warn), warn
+    assert ".substr(0, 16)" in added
+    # the file is never named by a request: llama-server's own routes do not read it
+    server = _inner()
+    assert "speaker_ref_cache" not in "\n".join(
+        line for line in server.splitlines() if "json_value(" in line), "no request body names a file to write"
+    section = NOTE[NOTE.index("## 13. "):]
+    assert "NEVER THE SAMPLES" in section and "| a new process | **read, 0.01 s** | the same bytes |" in section
+
+
+def test_under_localai_the_encoding_sits_beside_the_profile_s_clip_and_goes_with_it(tmp_path):
+    """The architecture session's condition: a deleted voice's encoding does not outlive it. LocalAI hands a
+    profile's clip as a hard link under .leases/ and deletes a profile with RemoveAll of its directory: the backend
+    finds the profile's own file by the link's inode and names the file beside it."""
+    files = _backend_files()
+    main = "\n".join(_added(files["backend/cpp/llama-cpp/grpc-server.cpp"]))
+    assert "llama_grpc::set_speaker_ref_cache(task.tts_inp, opts.voice_path);" in main
+    assert '#include "tts_voice_cache.h"' in main
+    assert "+cp -r tts_voice_cache.h llama.cpp/tools/grpc-server/" in files["backend/cpp/llama-cpp/prepare.sh"]
+    header = _new_backend_file(files["backend/cpp/llama-cpp/tts_voice_cache.h"])
+    assert 'leases.filename() != ".leases"' in header and "want.st_nlink < 2" in header
+    assert "have.st_dev == want.st_dev && have.st_ino == want.st_ino" in header
+    section = NOTE[NOTE.index("## 13. "):]
+    assert "**A deleted voice's encoding does not outlive it**" in section
+    assert "**delete a test profile: its directory is gone, the encoding with it**" in section
+    import shutil
+    import subprocess
+    if shutil.which("g++") is None:
+        return
+    (tmp_path / "tts_voice_cache.h").write_text(header, encoding="utf-8")
+    (tmp_path / "tts_voice_cache_test.cpp").write_text(
+        _new_backend_file(files["backend/cpp/llama-cpp/tts_voice_cache_test.cpp"]), encoding="utf-8")
+    built = subprocess.run(["g++", "-std=c++17", "-Wall", "-Wextra", "-pthread", f"-I{tmp_path}",
+                            str(tmp_path / "tts_voice_cache_test.cpp"), "-o", str(tmp_path / "t")],
+                           capture_output=True, text=True, timeout=180)
+    assert built.returncode == 0, built.stderr
+    ran = subprocess.run([str(tmp_path / "t")], capture_output=True, text=True, timeout=60)
+    assert ran.returncode == 0, ran.stderr
+    for said in ("ok:   a lease leads to a file beside the profile's own clip", "ok:   a lease that is a copy gets no file",
+                 "ok:   a deleted profile's lease gets no file", "ok:   an engine that does not is not"):
+        assert said in ran.stderr, said
+
+
+def test_the_longer_clip_is_answered_with_its_cost_not_promised_away():
+    section = NOTE[NOTE.index("## 13. "):]
+    assert "**The longer clip: no.**" in section
+    assert "| reference frames | 249 | 673 |" in section
+    table = section[section.index("| choice for Philippe's clip | pros | cons |"):]
+    assert table.count("\n| ") >= 4, "the status quo and three alternatives, each with its cons"
+
+
 def test_the_reference_s_hooks_are_the_ones_the_gate_tool_names():
     named = set(re.findall(r"`(OV_[A-Z_]+)[=`]", GATE_TOOL))
     assert {"OV_HARD_MASK", "OV_FORCE_TOKENS", "OV_REPLAY_LOGITS", "OV_THREADS"} <= named

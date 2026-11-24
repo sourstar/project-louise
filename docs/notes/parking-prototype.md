@@ -19,10 +19,11 @@ should cost a copy and a context, not a load. The prototype exists to
 measure exactly that.
 
 Patch: `deploy/localai/patches/staged/0015-llama-cpp-park-weights.patch`
-(one llama.cpp patch, 632 lines in 11 files). Engine:
-`staged/parking-prototype.series` — the fixes' candidate, this patch and a
-test switch for the pool's refusal (0016, §4) — installed BESIDE the live
-engine, never swapped.
+(one llama.cpp patch, 632 lines in 11 files). Engine: the next live one,
+`staged/engine-next.series` (agreed with the architecture session,
+2026-11-24: one build for everything due rather than a prototype engine of
+its own — a build costs every run its gate). Parking is in it and OFF;
+copies switch it on by their env.
 
 ## 2. How it works
 
@@ -76,6 +77,8 @@ bytes.
 | the two new tests of the patch (`test_park_weights.py`) | 2 passed: the switch changes nothing where the weights cannot park, or without context on demand |
 | THE CYCLES, on a stand-in for the device (`tools/measure/park_cpu_standin.patch`, `park_cpu_test.py`): a CPU buffer that POISONS itself while parked | 16 of 16: 12 requests, each on weights that had been parked, gave the un-parked server's embeddings bit for bit; a refused un-park was answered 503, the model stayed parked, the next request was served; weights that did not come back failed the canary and the request was refused |
 
+Run again the same evening on the WHOLE candidate source (`engine-next.series`: the port, the fixes, parking, its switch and the experts' record together, built for CPU): the cycles 16 of 16, the engine's context-on-demand tests and the patch's two, 23 of 23.
+
 What that does NOT show: anything about the card. The reserved-range memory
 has never held weights there, and the copies in and out of it have never
 run. The stand-in proves the layers above the hook; the hook's SYCL half is
@@ -83,10 +86,9 @@ compiled, read twice, and unrun.
 
 ## 4. The measurement on the node (München; the card free, the node as in §5.3 of the design note)
 
-The engine: `SERIES_FILE=deploy/localai/patches/staged/parking-prototype.series
-sh deploy/localai/llama-cpp/build.sh sycl_f16 <out>` with the live engine's
-`INTEL_STACK`, installed beside, used by copies of `vega-bge-m3` DIRECT to
-it (no wrapper). Every copy: the live model's file, options and env, plus
+The engine: the live one, once `staged/engine-next.series` has been swapped
+in and has passed its gates with every switch off. The rows are copies of
+`vega-bge-m3` DIRECT to it (no wrapper). Every copy: the live model's file, options and env, plus
 `context_on_demand:true`, `keep_context_ms:0` (so each request frees its
 context at once) and `verbosity: 4` (the engine's own park lines are info
 lines of the library: below 4 only the server's two are printed).
@@ -116,7 +118,7 @@ and its refusal was NOT provoked on the card: filled to 31,701 of 32,002
 MiB with three other models loaded, every request was served, the driver
 paging an idle neighbour out (566 MiB) instead of refusing (München).
 Filling further means starving the host, which the protocol forbids. Staged
-0016 (`GGML_SYCL_POOL_REFUSE=N`, in this engine only) raises the device's
+0016 (`GGML_SYCL_POOL_REFUSE=N`, off unless a copy's env sets it) raises the device's
 exception where the pool grows, so everything after it — the unwinding in
 the middle of a graph, the queue drained, the request's error, the process
 alive — runs on the real card. A pool's first commit is never refused: the

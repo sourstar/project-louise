@@ -1,0 +1,45 @@
+# THE NEXT LIVE ENGINE, A CANDIDATE: ONE BUILD, ONE SWAP, ONE GATING OF EVERY
+# RUN (operator, 2026-11-24, relayed by München: "I want it, and it is inside
+# my "everything"" — the OmniVoice port becomes the speech backend; "I want
+# the preemptive model load to be implemented and the MoE preloading in VRAM
+# based on the recent experts used"; and, of the first sentence in a voice,
+# "didn't we optimize it?"). Agreed with the architecture session as one
+# build rather than one per feature: a new engine costs every vega run its
+# gate again.
+#   SERIES_FILE=deploy/localai/patches/staged/engine-next.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
+# The live series, then, in the order they apply:
+#   0009  OmniVoice on llama.cpp's own audio generation, with a voice clip's
+#         encoding kept in a file the caller names
+#   0010  LocalAI's speech call: a profile's transcript, a described voice,
+#         seed / steps / guidance, and the kept encoding placed beside the
+#         profile's own clip (gone with LocalAI's delete of the profile)
+#   0012  GGML_SYCL_REORDER_EXPERTS (default: today)        \  live since
+#   0013  a refused pool commit fails the request            }  2026-11-24 in
+#   0014  a second termination signal leaves at once        /  9ea95e93a83c
+#   0015  parking: weights that leave the card and come back at the same
+#         addresses — OFF unless a model's env switches it on
+#   0016  GGML_SYCL_POOL_REFUSE, the test of 0013's refusal — OFF
+#   0017  the MoE cache filled from a record of the experts used — OFF
+#         unless a model's env names the record's directory
+# With every switch off it must gate as 9ea95e93a83c does, fingerprint for
+# fingerprint, or it rolls back. The measurements then run on COPIES on this
+# engine (docs/notes: parking-prototype.md §4, moe-expert-record.md §5,
+# omnivoice-on-our-backend.md §13); no separate prototype engine is built.
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0009-llama-cpp-omnivoice.patch
+staged/0010-llama-cpp-tts-voice-modes.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch
+staged/0016-llama-cpp-sycl-pool-refuse-switch.patch
+staged/0017-llama-cpp-moe-record.patch

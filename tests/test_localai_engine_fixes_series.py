@@ -1,6 +1,6 @@
-"""The candidate engine München builds on the operator's word of 2026-11-24:
-the live series and the three staged engine fixes, nothing else
-(deploy/localai/patches/staged/engine-fixes.series).
+"""The engine München built and swapped in on the operator's word of 2026-11-24,
+LIVE as 9ea95e93a83c: the live series and the three staged engine fixes,
+nothing else (deploy/localai/patches/staged/engine-fixes.series).
 
 A candidate series is a file build.sh takes by SERIES_FILE; its name is the
 digest of the file and of every patch in it. Held here: that it IS the live
@@ -40,6 +40,8 @@ def test_build_sh_reads_it_and_names_another_engine_than_the_live_one():
     candidate, live = _name(CANDIDATE), _name(PATCHES / "series")
     assert candidate.returncode == 0 and live.returncode == 0, candidate.stderr + live.stderr
     assert len(candidate.stdout.strip()) == 12 and candidate.stdout != live.stdout
+    # what is live is named by this file and its three patches: none of them may change under it
+    assert candidate.stdout.strip() == "9ea95e93a83c"
 
 
 def test_the_staged_readme_says_how_it_is_built_and_when_it_goes():

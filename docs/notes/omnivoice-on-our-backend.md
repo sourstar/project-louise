@@ -699,3 +699,118 @@ one).
 3, with `params.seed`), the operator's ear, and the profile by its name
 once the server carries P13.
 
+
+## 13. The first sentence in a voice, and the port going live (2026-11-24, evening)
+
+*Operator, relayed by München: "Why first sentence takes more time, didn't
+we optimize it?"; then "I want it, and it is inside my "everything"" — the
+port becomes the speech backend; and, of Philippe's first, longer clip,
+"With the encoded reference clip cached this overhead should be gone,
+correct? In this case I would like to use the original clip."*
+
+**Why the first sentence was slower.** The clip's encoding was kept in
+memory only (§11): 3.22 s for a first sentence against 2.27 / 2.28 s after,
+on the card — the 0.94 s of §12, paid again by every load.
+
+**What is built: the encoding kept WITH THE PROFILE.**
+- The port (staged 0009) takes the path of ONE file per clip
+  (`mtmd_helper_gen_audio_inp::speaker_ref_cache`; `llama-tts
+  --tts-speaker-cache`). It reads it when it is this clip's by these models
+  and this build, and writes it otherwise.
+- The file holds the rows (651,336 bytes for the 11 s clip), the SHA-256 of
+  the clip's samples, the two models' identity and a stamp compiled into
+  the engine. NEVER THE SAMPLES. Mode 0600, written whole under a temporary
+  name and renamed. A file that does not match or cannot be read is ignored
+  with one line that names the digest and nothing else, and the clip is
+  encoded and the file written again; a request never fails for it.
+- **A deleted voice's encoding does not outlive it** (the architecture
+  session's condition; recorded voices are people's). Read in LocalAI
+  v5.0.1: a profile is a directory `voice-profiles/<id>/` removed with
+  `RemoveAll`, and a request gets the clip as a HARD LINK under
+  `voice-profiles/.leases/`. LocalAI's backend (staged 0010,
+  `tts_voice_cache.h`) finds the profile's own file by the link's inode and
+  names `reference.wav.encoded` BESIDE it: in the profile's directory, with
+  its permissions, gone with the profile. A clip that is no lease, a lease
+  that is a copy, a profile deleted meanwhile, a clip sent as base64: no
+  file, memory only, as before. No engine-wide cache directory exists, so
+  there is nothing to purge.
+- No env, no model option: under LocalAI it happens for a profile's clip
+  and for nothing else.
+
+**Measured here, CPU, four cores** (`llama-tts`, one sentence, the same
+seed; the clip of §11):
+
+| run | the clip | the audio |
+|---|---|---|
+| no file named | encoded, 1.92 s | — |
+| the file named, first run | encoded, 1.99 s, the file written (0600, 651,336 B) | the same bytes |
+| a new process | **read, 0.01 s** | the same bytes |
+| the file with one byte changed | one warning (the digest), encoded 2.17 s, written again | the same bytes |
+| a new process after that | read, 0.01 s | the same bytes |
+
+and `tts_voice_cache_test.cpp`, 13 cases on a store built in a temporary
+directory: the lease found, a second reference, a profile with the same
+bytes not confused, a copy, another layout, a deleted profile, a link to a
+profile not followed.
+
+**The longer clip: no.** The operator's sentence does not hold for this
+model, and nothing exact makes it hold. Each of the 32 steps computes the
+whole conditional sequence again — the text, the reference's frames and the
+target's — plus the target alone for the guidance, and the backbone reads
+in both directions: the reference's own states depend on the sentence being
+generated, at every layer, so nothing of the reference can be kept between
+steps or between sentences without changing the result. The kept encoding
+removes the 0.94 s, once per load; the cost per sentence is rows per step,
+about (text + reference + target) + target, with attention growing as the
+square.
+
+| | the 11.0 s clip | the 27.75 s clip |
+|---|---|---|
+| reference frames | 249 | 673 |
+| rows per step, about | 820 | 1,430 (1.75×) |
+| attention, about | 1× | 3.4× |
+| today's backend, a busy node (München) | 5.0 / 12.3 s | 25.1 / 20.4 s |
+| the port (E: from its 2.27 s and the two ratios) | 2.27 s (M) | 5–8 s |
+
+| choice for Philippe's clip | pros | cons |
+|---|---|---|
+| the 11 s clip, as now | the fastest sentence | the voice he finds less close |
+| the 27.75 s clip at 32 steps | the voice he prefers | every sentence about 2–3.5× slower |
+| the 27.75 s clip at 16 steps (`node speech set --steps 16`) | the voice he prefers at about the 11 s clip's time | 16 steps is audible on some sentences: for his ear |
+| a 15–18 s cut | between the two | another clip to record and hear |
+
+The rows that decide are München's, on an unloaded node, per clip and per
+backend, at 32 steps and at 16 on the port; then his ear.
+
+**The speech model on the engine** (for München's test copy; the one engine,
+no package of its own):
+
+```yaml
+backend: <the live llama.cpp engine's package>
+known_usecases: ["tts"]
+parameters:
+  model: <weights>/omnivoice-Q8_0-lm.gguf      # tools/omnivoice_repack.py, 639,153,792 B
+mmproj: <weights>/omnivoice-Q8_0-mmproj.gguf   # 311,285,504 B
+context_size: 512                              # this context reads one token
+tts:
+  voice_cloning: true                          # P13: the profile by its name
+options: ["fit:off", "parallel:1", "verbosity:4"]   # 4 for the port's own line while measuring
+env: the node's llama.cpp env (NEO_CACHE_DIR, GGML_SYCL_ENABLE_DNN=0, GGML_SYCL_FA_ONEDNN=0)
+```
+
+No line for the clip's encoding: it is placed by the backend.
+
+**On the card (München, order agreed with the architecture session):**
+1. the engine swap and its gates, every switch off;
+2. the port as a speech MODEL beside today's, both installed; per request
+   the port's line — "omnivoice: N chunk(s), 32 steps: voice clip X s,
+   backbone Y s, …; the voice clip's rows encoded | kept | read from its
+   kept encoding";
+3. the kept encoding: a profile's first sentence after a load says "read
+   from its kept encoding" and `voice clip 0.0x s`; the audio of a sentence
+   with a seed is the same bytes with the file and after deleting it;
+   `voice-profiles/<id>/reference.wav.encoded` exists with mode 0600;
+4. **delete a test profile: its directory is gone, the encoding with it**;
+5. the step gate (§10 step 3), the operator's ear on the four synthetic
+   voices and Philippe, then `[speech] tts_model` moved to it, today's
+   backend left installed until he says.
