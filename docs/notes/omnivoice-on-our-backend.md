@@ -314,10 +314,14 @@ differ from the CPU's on either program.
 A control token typed in the text to speak is not read as one (the text is
 the user's).
 
-**Speed, CPU only** (nothing here says what the B70 does): the sentence in
-60 s against omnivoice.cpp's 158 s on the same 4 threads — the unconditional
-sequence is 168 rows instead of 203, and the layers are libllama's. A long
-text (848 characters, 5 chunks, 52.6 s of speech) in 780 s.
+**Speed, CPU only — WITHDRAWN as a comparison, being re-measured.** The
+first figures here (the sentence in 60 s against omnivoice.cpp's 158 s, "on
+the same 4 threads") were not like for like: omnivoice.cpp takes half the
+logical cores (2 threads here), the port ran on 4, and some of the
+reference's runs shared the machine with my other work (the operator's
+question, 2026-11-24; measuring.md §6, "one job on the machine"). Both
+programs were built with the same flags (AVX2, no native). The measurement
+at equal threads on an idle machine is in §11.
 
 **The server and long texts, MEASURED the same day:** `llama-server`'s
 `/v1/audio/speech` returns the tool's file byte for byte for the same text
@@ -358,7 +362,7 @@ Italian sentence with its transcript, the text a second sentence, seed 0):
 | the scoring, with the clip | the reference's scoring on the port's logits: 0 of 752 codes differ over 32 steps |
 | the audio, with the clip | same length (89,760 samples); outside the chunk's last 5,000 samples, 15 samples two units apart and none more; inside, up to 5 units — §8's second difference, which a clip's ending does not hide under silence |
 | the server | `/v1/audio/speech` with `speaker_ref_b64` and `speaker_ref_text`, and with `voice`, gives the tool's files byte for byte; an unknown description is answered 400 |
-| speed, CPU | 3.7 s of speech in a cloned voice: 77 s, against omnivoice.cpp's 262 s |
+| speed, CPU | not a comparison yet: 77 s on 4 threads against omnivoice.cpp's 262 s on 2 (§8, §11) |
 
 **Memory between requests.** The context the decoding runs on is created
 for a request and freed with its audio (4.1 ms to create on the CPU, the
