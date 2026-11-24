@@ -28,6 +28,15 @@ measured (published figures disagree).
   our backend already serves, no patch), a port into llama.cpp. **The operator chose the port ("Go with option D"):**
   in progress in stages, each gated — design, synthesis from text, audio parity with omnivoice.cpp, cloning and the
   server route, the series and the card (§6 of the note). Speech stays on today's backend until the card checks pass.
+  **Same day: the design, synthesis from text and its gate are done on the CPU** (§7–§8). Two findings: today's backend
+  ADDS its attention mask where the model blocks with it (a quirk of PyTorch's "eager" attention that omnivoice.cpp
+  copied; 1,298 of 1,344 codes change), so the port masks as the model does and its audio is not today's sample for
+  sample; and the decoding is chaotic under rounding (a neutral change in omnivoice.cpp alone moves 1,147 of 1,344
+  codes), so the gate compares step by step: prompt identical, logits within the reference's own noise at steps 0–31,
+  the reference's scoring on the port's logits gives the port's codes at all 32 steps, decoders equal to 1.25e-6 but
+  for a chunk's last 83 ms (the port computes two samples omnivoice.cpp zero-pads), two runs byte-identical. Staged as
+  `deploy/localai/patches/staged/0009-llama-cpp-omnivoice.patch`; cloning, voice design, the server route and the card
+  are next.
 - **2026-11-24, "Engine now, chat later" (operator): the new engine is adopted, the chat model decided after the
   POC.** The cut-over's order is in [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §5:
   BACKOUT first; the wrapper `vega-louise-llama-cpp` repointed at `c3294e050ff2`, MADLAD and the nemotron reranker

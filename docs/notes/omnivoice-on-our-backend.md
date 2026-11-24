@@ -139,7 +139,8 @@ its gate:
    the port and through omnivoice.cpp built on the same ggml — the audio
    compared sample by sample. Bar: identical, or one-unit differences
    explained; byte-identical across runs. Nothing goes further until it
-   holds.
+   holds. *(Redrawn in §7.4: the codes are chaotic under rounding, the
+   comparison is step by step. Passed, §8.)*
 4. **Cloning, voice design, long texts; the server's speech route.**
 5. **The series**: the patch, its tests, its entry in localai-bugs.md, the
    model file for LocalAI's llama.cpp backend; then the card, by München:
@@ -270,3 +271,57 @@ blocked:
 
 The trace is a debug dump behind an environment variable, as libmtmd's
 `MTMD_DEBUG_EMBEDDINGS` is.
+
+## 8. Stages 2 and 3: synthesis from text, built and gated on the CPU (2026-11-24)
+
+**Built**, on the engine's tree (llama.cpp 78e0529 with the series), as
+`deploy/localai/patches/staged/0009-llama-cpp-omnivoice.patch` (the
+llama.cpp patch inside is `0012-mtmd-omnivoice.patch`): 1,115 lines of our
+own in 17 files, and 3,706 lines of omnivoice.cpp's host-side rules carried
+UNCHANGED under its MIT notice (`vendor/omnivoice/`: language names, the
+duration estimate, chunking, post-processing, the Philox generator) —
+"do not reinvent the wheel", and the only way those rules stay bit for bit.
+The model files come from `tools/omnivoice_repack.py`; the gate is
+`tools/measure/omnivoice_port_gate.py` with omnivoice.cpp carrying
+`tools/measure/omnivoice_reference_hooks.patch` (three switches for the
+comparison, 163 lines, never shipped).
+
+**The gate (§7.4), MEASURED** — CPU, 4 threads, the Italian sentence of §2,
+seed 0, 32 steps, 168 frames, the node's Q8_0 weights:
+
+| | result |
+|---|---|
+| prompt | the 203 ids identical |
+| the layers and the heads, on the same codes | step 0: cosine 0.999999887, largest difference 0.54 — the reference against itself (+1 on the allowed positions): 0.999999869, 0.53. Step 16: 0.99999943 against the reference's own 0.99999930. Step 31: 0.9999951 against 0.9999946. Steps 1 and 8 in between (0.9999998, 0.9999997). At every step measured the port is as far from omnivoice.cpp as omnivoice.cpp is from itself |
+| the scoring | omnivoice.cpp's own scoring code, fed the port's logits, gives the port's codes after each of the 32 steps: 0 of 1,344 differ |
+| the codec | the port's codes through both decoders: the samples agree to 1.25e-6 (0.04 of a 16-bit unit) except in the last 2,000 of the chunk (83 ms), where they differ by up to 8.5e-4 — see below. The two 16-bit files: same length, 51.5 % of the samples identical, 48.5 % one unit apart, 4 samples two |
+| itself | two runs byte-identical |
+
+**PASS.** The rounding noise of this model is large — a relative 5e-4 on the
+first step, 3e-3 on the last — in omnivoice.cpp as in the port; that is what
+makes the codes incomparable (§7.4), and it will make the card's audio
+differ from the CPU's on either program.
+
+**Three differences from omnivoice.cpp, each on purpose:**
+1. the masking (§7.1);
+2. the end of a chunk: `ConvTranspose1d`'s `output_padding` keeps one more
+   COMPUTED sample (PyTorch: "does not actually add zero-padding to
+   output"); omnivoice.cpp crops both sides and appends a zero, at the two
+   odd strides (5 and 3). The port computes it. It touches the last 83 ms of
+   a chunk, which silence removal and the fade then cut or cover;
+3. the 16-bit file is rounded (llama.cpp's WAV writer for every model),
+   where omnivoice.cpp truncates: the "one unit apart" above.
+A control token typed in the text to speak is not read as one (the text is
+the user's).
+
+**Speed, CPU only** (nothing here says what the B70 does): the sentence in
+60 s against omnivoice.cpp's 158 s on the same 4 threads — the unconditional
+sequence is 168 rows instead of 203, and the layers are libllama's. A long
+text (848 characters, 5 chunks, 52.6 s of speech) in 780 s.
+
+**Not yet** (stage 4): voice cloning from a clip (HuBERT, the semantic and
+DAC encoders, the RVQ encoder), voice design through the model's "tts"
+template, the server's speech route, a chunk delivered as soon as it is
+decoded; and the long text's chunk plan compared line by line with the
+reference's (the same vendored functions; the port's lines print at log
+level 1, to be read in the server test).
