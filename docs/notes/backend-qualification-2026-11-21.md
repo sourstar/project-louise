@@ -914,13 +914,7 @@ runs (finding F4).
 
 ### 4.5 What is left
 
-- **Phase 5, the POC** (everything resident with the 35B as chat): not
-  run. It needs about 1.5 h with the website off, after the node's current
-  collection migration; München asks the operator for the window. By the
-  measured sizes the set leaves the 35B roughly 6–7 GiB of the card, so a
-  3–4 GiB cache: about 60–70 tok/s (E), with 19.3 GiB of host memory held.
-  The POC says whether that holds with every model loaded, and what each
-  model loses beside the others.
+- **Phase 5, the POC**: run 2026-11-24 as the operator cut it down — §4.6.
 - **The cut-over**, the operator's to start, in a window: BACKOUT written
   first; one run per model, gated once with its acceptance recorded;
   MADLAD's byte record re-cut from the adopted engine; the YAMLs with
@@ -939,6 +933,39 @@ for byte); decide the chat model after the POC and the chat contest's
 quality scores, since performance alone does not choose between a 9B at
 0.6 s and a 35B at 3 s. If the operator says nothing, nothing changes: the
 live engines keep serving and the 9B stays the chat model.
+
+### 4.6 The POC, as run (2026-11-24)
+
+*What ran, on the adopted engine: the 35B with MADLAD, the nemotron
+reranker and nemotron-embed (36.1 GiB of models on a 31.9 GiB card), each
+asked in turn, two rounds — once with the 35B resident and the engine's
+2 GiB buffers, the driver swapping (S5), once with its experts in host RAM
+behind an 8 GiB and a 4 GiB cache. What did NOT run, cancelled by the
+operator or never reached: the swap with one 18.5 GiB buffer, the whole set
+of §1 loaded at once, the concurrent pair, the 30-minute loop. Figures: §3,
+phase 5.*
+
+| the 35B as chat | pros | cons |
+|---|---|---|
+| **resident, 2 GiB buffers, the driver swaps** | its own speed, 98–100 tok/s, 0.28 s to the first token when it answers twice running; gives back only what a neighbour needs (4.2 GiB of 21.7); the option costs nothing alone | 1.3–1.8 s more to the first token each time it returns after another model worked, and 0.2–0.4 s on each small model: 2–3 s a round; needs what the node refuses today — a load onto a full card (the VRAM check off for it) and a reclaimer that does not evict at 0.98; coming back runs at 2.4–3.4 GiB/s, so a set further over the card pays more |
+| **experts in host RAM, 8 GiB cache** | 11.5 GiB on the card: the set fits with 5 GiB to spare, nothing ever moves, no policy to change — two options in the model file | every answer slower: 0.5–0.9 s to the first token, 52–84 tok/s; 19.3 GiB of host memory held for as long as it is loaded |
+| experts in host RAM, 4 GiB cache | 7.4 GiB on the card, 9 GiB to spare (Krea 2's room) | 55–70 tok/s; the same host memory |
+| the status quo: the 9B | 0.11 s to the first token, 78 tok/s, 5.4 GiB, nothing to change | the smaller model |
+
+**What the POC answers.** The operator's premise holds: models used one
+after the other can share a card they do not fit on together. Both ways
+work on the B70 with no error in any run; for answers of a few hundred
+tokens they cost about the same per round, and the choice is between a
+toll at each change of model and a slower model at every answer.
+
+**Recommendation**, performance alone: if the 35B becomes the chat model,
+the 8 GiB cache first — it is a model file's two options, inside the
+node's present rules — and the swap as the faster arrangement to build
+toward, with the keeper's and the reclaimer's rules changed for it (the
+architecture session's) and the one layout not yet measured: the 35B with
+the Ask's own two models resident together (28.9 GiB) and only the rest
+swapping. Which model answers is still the chat contest's to say. If the
+operator says nothing, nothing changes: the 9B stays.
 
 ## 5. The cut-over (operator, 2026-11-24: "Engine now, chat later")
 
