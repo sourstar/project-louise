@@ -104,6 +104,10 @@ def fresh_worker_state():
     # the rows the lane deferred are asked, never waited for, again: one
     # test's deferral must not decide the next test's wait
     parallel.forget_deferred()
+    # the give-back threshold is raised by a part whose heap is held: in a
+    # whole-suite process an earlier in-process part left it past the heap a
+    # later test states (2026-11-24, the Tensor session's full run)
+    parallel._trim_floor = parallel.TRIM_ABOVE_BYTES
     # the node profile's cached limit and each collection's watch of it
     cpu_limit.reset()
     worker._cpu_watches.clear()
