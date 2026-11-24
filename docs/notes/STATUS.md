@@ -52,7 +52,11 @@ measured (published figures disagree).
   `params.flow_steps`, a request's own an admin's only, a model without steps asked again without them. Inert on
   today's `omnivoice-cpp` backend, which does not read the field: it needs the port and the second staged patch,
   which now also passes a request's seed and guidance (§10, §11). Left: the card — München's, in a window, with
-  the operator's ear on the two voices (§10 of the note); München is building the test engine for the timing rows.
+  the operator's ear on the two voices (§10 of the note). **First rows on the B70 (München, 11-24, §12): the test
+  engine builds (staged 0010's LocalAI half compiles); a 6-second sentence in 1.23–1.41 s at 32 steps and 0.74 s at
+  16, the model's own voice; phase 0's three texts in 0.40 / 0.71 / 0.75 s against 0.79 / 1.12 / 1.27 s on today's
+  backend another day (not like for like yet); 1,859–1,891 MiB at rest. A recorded voice is refused by LocalAI
+  itself, by the engine's name (localai-bugs.md B17): a blocker for the cut-over, with its options in §12.**
 - **2026-11-24, "Engine now, chat later" (operator): the new engine is adopted, the chat model decided after the
   POC.** The cut-over's order is in [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §5:
   BACKOUT first; the wrapper `vega-louise-llama-cpp` repointed at `c3294e050ff2`, MADLAD and the nemotron reranker

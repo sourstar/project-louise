@@ -416,7 +416,8 @@ of this touches the live speech until the last step.
 2. **Model files**: `python3 -I tools/omnivoice_repack.py --gguf-py
    <llama.cpp>/gguf-py omnivoice-base-Q8_0.gguf
    omnivoice-tokenizer-Q8_0.gguf <out>/omnivoice-Q8_0` (seconds; expected
-   sizes 639,153,568 and about 306.9 MB). A test model on the test engine:
+   sizes 639,153,792 and 311,285,504 bytes — the node's repack gave exactly
+   these, 2026-11-24; the figures here before were an earlier repack's). A test model on the test engine:
    `parameters.model` the `-lm` file, `mmproj` the `-mmproj` file,
    `known_usecases: ["tts"]`, `fit:off`, one slot, the env of the node's
    llama.cpp models. A small `context_size` is enough: that context reads
@@ -560,3 +561,88 @@ says nothing; `louise node speech show` says so beside the value. Unset,
 nothing changes for anyone. Not built: a rule that picks the steps by
 itself (the first sentence of an answer fast, the rest whole) — the dial
 first, the card's seconds and the operator's ear before a rule.
+
+## 12. On the B70: the first rows (München, 2026-11-24)
+
+*The operator: "Measure the timing on the GPU"; to München: "A" — build
+the test engine now, time the rows when it is built.*
+
+**The engine.** `louise-sycl-f16-llama-cpp-d6f9b5247671-stack-7c301a7ba437`,
+installed beside the live one: the series plus staged 0009 and 0010 (0010
+from 563c5a0), Intel stack 2026-11c. Built in 27 minutes beside two other
+jobs, exit 0 — **the second patch's `grpc-server.cpp` half compiles.** The
+repack on the node gave this note's files byte count for byte count.
+
+**How.** Node paused, web stopped, the card empty (25 MiB), one request in
+flight, through LocalAI's `/v1/audio/speech`; two passes, 11:10Z and
+11:30Z, a CPU job (Legal's dump build) beside the first. 32 steps unless
+said, the model's own voice. Wall seconds to the whole clip / the clip's
+seconds, every request:
+
+| | |
+|---|---|
+| load and first request | 61.9 s the first time (the card's kernels compiled), 7.66 s the second |
+| the sentence of §8 (≈ 6 s of audio) | 1.413 / 6.14, 1.290 / 6.37 · second pass 1.272 / 5.93, 1.225 / 5.79, 1.225 / 5.88 |
+| the same, **16 steps** (`params.flow_steps`) | 0.739 / 5.64, 0.748 / 6.43, 0.746 / 6.29 |
+| "La seduta è aperta." | 0.412 / 1.70, 0.403 / 1.84, 0.402 / 1.84 |
+| "Il decreto entra in vigore…" | 0.728 / 3.77, 0.715 / 3.67, 0.708 / 3.97 |
+| "Die Kommission…" (German) | 0.746 / 3.61, 0.755 / 3.83, 0.753 / 3.80 |
+
+A sentence is spoken in about a fifth of its length; at 16 steps in about
+an eighth (0.74 s against 1.23–1.29 s: 0.59 of the time, not the CPU's
+half — the decoder and the rest do not shrink with the steps). The clips'
+lengths differ from request to request because each drew its own noise
+(§10: the seed reaches the pipeline through `params` only).
+
+**Against today's backend: not like for like yet.** Phase 0's figures for
+the last three texts, the model's own voice, on `omnivoice-cpp`: 0.79 /
+1.12 / 1.27 s — the port's 0.40 / 0.71 / 0.75 s are about half of them, but
+those were taken another day; today's backend's rows in this window have
+not run.
+
+**Where the time goes on the card** (the port's line, the sentence, two
+requests):
+
+| | s |
+|---|---|
+| backbone, 32 steps | 0.94, 0.86 |
+| decoder | 0.28, 0.26 |
+| scoring, host | 0.09, 0.10 |
+| audio heads | 0.06, 0.04 |
+
+The backbone is two thirds of a sentence there (95 % on a CPU), the decoder
+a fifth, the host-side scoring 7 %. The first request after a load reads
+1.06 / 0.95 / 0.03 / 0.96 s: kernels compiled once.
+
+**Memory** (the driver's own figure, `vram0_mm`): 1,859–1,891 MiB at rest
+after the load, 2,248 at most during the rows; the process's counters
+1,906 / 600 (VRAM / GTT). Today's backend by the node's budget file of
+11-18: 1,442 at rest, 2,676 at most. The weights are 0.95 GB: what holds
+the other 0.9 GiB at rest is not read yet.
+
+**A recorded voice did not run, and not because of the port.** Every
+request with `voice: localai://voice-profiles/<id>` was answered 400 in
+1–5 ms by LocalAI's HTTP layer, before the backend: "selected model does
+not support reference-audio voice cloning". LocalAI decides that from the
+backend's NAME against its own table, before it reads the model's
+`tts.voice_cloning`; an engine named by its digest resolves to nothing
+(localai-bugs.md B17). For the measurement München sends the clip's path
+and its transcript instead, the same form to both backends. **For the
+cut-over it is a blocker with a decision in it** — Louise names the
+profile:
+
+| | pros | cons |
+|---|---|---|
+| LocalAI's server honours `tts.voice_cloning` for a backend it does not know (about five lines, fileable upstream) | the cause fixed; Louise and the model file unchanged | the node must run a LocalAI SERVER built with it — today only the llama.cpp backend is built here |
+| Louise sends the clip's path and transcript itself | no LocalAI change | Louise would have to know where LocalAI keeps its files; LocalAI refuses a path from anyone but an admin |
+| the speech model names the engine by a name LocalAI's table knows (an alias) | no code | the engine's digest leaves the name for that model; may collide with LocalAI's own backend of that name |
+| speech stays on `omnivoice-cpp` (today) | nothing to do; profiles work | two backends, against "only one"; no dial for the steps; slower if the rows above hold |
+
+Recommendation: the first, once München says whether the node already runs
+a LocalAI server of its own build (asked). If the operator says nothing:
+the port stays a test model and speech stays as it is.
+
+**Still to come from the same window:** the recorded-voice rows on both
+backends, today's backend's own-voice rows, the words check of every clip,
+the rest of the port's lines.
+

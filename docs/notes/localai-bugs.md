@@ -1,7 +1,7 @@
 # LocalAI: every action item for the LocalAI team
 
 *One place for everything this project owes or asks `mudler/LocalAI`: the
-defects found (B1–B14), the patches we carry (P1–P2), and the requests (R1–R5).
+defects found (B1–B17), the patches we carry (P1–P8, two more staged), and the requests (R1–R5).
 The operator files them upstream. Started 2026-10-02 while mapping LocalAI
 against the model pool (`model-pool-prior-art.md`@c572c3b); the patches and
 requests come from `model-pool-over-localai.md`@c572c3b, accepted
@@ -39,6 +39,7 @@ the source):*
 | B14 | defect | llama.cpp backend, `Embedding`: ignores `EmbeddingTokens`, which `/v1/embeddings` fills when given token ids; it embeds the empty text beside them and refuses it ("Input content cannot be empty"), so no client can embed tokens | **blocking** for a space that cuts by tokens: without token ids an input cannot always be cut to exactly its first N tokens (3 of 512 at 1,024 on the AMD peer); P2 | not filed; found 2026-10-18, source in §B14 |
 | B15 | defect | `v4.12.1`: backend downloads are staged at `${basepath}/downloading` = `//downloading`, unwritable by LocalAI's user, so every backend install and auto-upgrade fails | backend updates (the operator wants them); set `LOCALAI_DOWNLOAD_STAGING_PATH` | not filed; §B15 |
 | B16 | defect | llama.cpp backend (llama-server's code): never runs the encoder of an encoder-decoder model; a T5-family GGUF is decoded as if decoder-only and answers garbage (`<2cs><2cs>…`) | MADLAD cannot run on llama.cpp, so it runs on torch (17–38 s cold); P3 | upstream llama.cpp #5763 / #26565, no fix; §P3 |
+| B17 | defect | `v5.0.1`, `/v1/audio/speech`: whether a model may be given a voice profile is decided from its `backend:` NAME against LocalAI's own table, before `tts.voice_cloning` is read — a backend installed under any other name (ours: the engine's digest in it) is refused "selected model does not support reference-audio voice cloning", and no key of the model file can say otherwise | OmniVoice on our engine cannot be asked for a recorded voice the way Louise asks (`localai://voice-profiles/<id>`): blocks the cut-over of speech, not the measurement | not filed; found on the card 2026-11-24 |
 | **P1** | **patch we carry** | `GET /system` lists the options each loaded model was given, with their hash | none since VeGa: the wrapper receives `LoadModel` itself (vega.md §1). It was blocking for the model pool; kept for upstream. NOT in the node's LocalAI (v4.12.1, upstream core; München 2026-11-12): its `/system` rows carry no `load_options`, so Louise reads a model's options from the answering run's statement (`model_load.note_run_options`) | not filed; [`deploy/localai/patches/0001-system-list-load-options.patch`](../../deploy/localai/patches/0001-system-list-load-options.patch) |
 | **P2** | **patch we carry** | llama.cpp backend: `Embedding` embeds `EmbeddingTokens`, with the special tokens a text gets (B14) | **blocking** for the token cut: VeGa's wrapper sends a cut as its first tokens to a backend that embeds them (`Gate._probe`) | not filed; [`deploy/localai/patches/0002-llama-cpp-embed-token-ids.patch`](../../deploy/localai/patches/0002-llama-cpp-embed-token-ids.patch) |
 | **P3** | **patch we carry** | llama.cpp backend: the encoder of an encoder-decoder model runs (B16), as a llama.cpp patch in the backend's own `patches/` | MADLAD on llama.cpp (operator, 2026-10-27: "we need anyway a patched llama.cpp") | not filed; [`deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch`](../../deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch) |
@@ -436,6 +437,37 @@ with the envs.
 
 ---
 
+
+### B17. `v5.0.1`: a voice profile is refused by the backend's name, whatever the model says
+
+*Seen on the node 2026-11-24, the OmniVoice port's first rows on the B70
+(München): every request with `voice: localai://voice-profiles/<id>` to the
+test model answered 400 in 1–5 ms, before the backend; with
+`tts.voice_cloning: true` in the model file the same.*
+
+`core/http/endpoints/localai/tts.go` asks `config.VoiceCloningForModel(cfg)`
+before it leases a profile's clip. That function
+(`core/config/backend_capabilities.go`) first resolves `cfg.Backend` in
+`BackendCapabilities` — the exact name, else with a gallery hardware prefix
+(`intel-sycl-f16-`, `vulkan-`, …) and a release-channel suffix
+(`-development`, `-quantization`) stripped — and returns nil when nothing
+is found. Only then does it read the model's own `tts.voice_cloning`, whose
+comment says "operators with custom filenames can opt in or out
+explicitly". A backend an operator builds and installs under a name of its
+own (`louise-sycl-f16-llama-cpp-<series>-stack-<stack>`: the digest IS the
+name, invariant 12) resolves to nothing, so the explicit opt-in is never
+reached. The live speech model passes only because
+`intel-sycl-f16-omnivoice-cpp` strips to `omnivoice-cpp`.
+
+**Around it, for a measurement:** `voice` as the clip's path with
+`params.ref_text` — a `voice` that is no `localai://` reference goes to the
+backend untouched (refused to a non-admin viewer only), and the llama.cpp
+backend with P12 takes an existing file as the reference.
+
+**The fix it wants upstream:** honour an explicit `tts.voice_cloning: true`
+for a backend the table does not know (the default reference contract), and
+keep the name lookup for the default. About five lines; it needs LocalAI's
+server rebuilt, which the node's llama.cpp build does not do.
 
 ## Patches we carry
 
