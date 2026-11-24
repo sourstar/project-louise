@@ -99,6 +99,11 @@ GOLDEN = [
 CAP_4_OTHER_SUBJECT = [138, 487, 1553, 1792]
 
 
+# loads 2 to 4 with HALF the cache filled (LLAMA_MOE_RECORD_FILL=0.5): the uploads under 16, 64, 256 tokens and in
+# all, and the experts the fill uploads; from the same class and the engine's own llama_moe_record::fill_slots
+HALF_FILL = [[108, 367, 1386, 1625, 24], [99, 321, 1336, 1561, 24], [143, 502, 1584, 1820, 24]]
+
+
 def uploads(row: dict) -> list[int]:
     return [row["uploads"][n][0] for n in (16, 64, 256, "all")]
 
@@ -107,7 +112,7 @@ def test_the_replay_is_the_engines_cache_and_record_on_a_golden_case(tool, tmp_p
     rows = tool.run([str(p) for p in golden_loads(tmp_path)], 49)
     assert rows[0][1]["slots"] == 48 and rows[0][1]["tokens"] == 300
     got = []
-    for _, cold, filled, flat, capped in rows:
+    for _, cold, filled, flat, capped, _ in rows:
         if filled is None:
             got.append(uploads(cold) * 2 + [0] + uploads(cold))
         else:
@@ -127,7 +132,7 @@ def test_a_cold_cache_with_room_uploads_each_expert_once(tool, tmp_path) -> None
     records = [(0, [0, 1]), (1, [2, 3]), (0, [1, 4]), (1, [3, 3 + 2]), (0, [0, 1]), (1, [2, 5])]
     first = write_trace(tmp_path / "a.trace", 2, 8, 2, records)
     again = write_trace(tmp_path / "b.trace", 2, 8, 2, records)
-    (_, cold, none, _, _), (_, cold_again, filled, flat, _) = tool.run([str(first), str(again)], 64)
+    (_, cold, none, _, _, _), (_, cold_again, filled, flat, _, _) = tool.run([str(first), str(again)], 64)
     assert none is None
     assert cold["tokens"] == 3 and cold["lookups"] == 6 and cold["large"] == 0
     assert cold["uploads"]["all"] == (6, 6 << 20)             # experts 0, 1, 4 of layer 0 and 2, 3, 5 of layer 1
@@ -140,7 +145,7 @@ def test_a_large_batch_does_not_read_the_cache(tool, tmp_path) -> None:
     # more than 32 tokens in a lookup: the engine reads the host experts, so nothing is uploaded and nothing recorded
     big = [(0, [e % 8 for e in range(2 * 40)])]
     path = write_trace(tmp_path / "big.trace", 1, 8, 2, big + [(0, [0, 1])])
-    (_, cold, _, _, _), = tool.run([str(path)], 64)
+    (_, cold, _, _, _, _), = tool.run([str(path)], 64)
     assert cold["large"] == 1 and cold["lookups"] == 1 and cold["tokens"] == 1
     assert cold["uploads"]["all"][0] == 2
     assert sum(cold["uses"].values()) == 2
@@ -199,3 +204,22 @@ def test_a_cap_on_the_seeds_lies_between_the_two(tool, tmp_path) -> None:
     assert done.returncode == 0 and done.stdout.count("| cap 4 ") == 3 and done.stdout.count("| flat ") == 3
     refused = subprocess.run([sys.executable, "-I", str(TOOL), "--mib", "49", "--cap", "0.5", *paths], capture_output=True, text=True)
     assert refused.returncode != 0 and "at least" in refused.stderr
+
+
+def test_a_share_of_the_cache_filled_is_the_engines_share(tool, tmp_path) -> None:
+    # --fill S is LLAMA_MOE_RECORD_FILL: the best-ranked experts, as many as that share of the slots, rounded down
+    assert [tool.fill_slots(s, 4492) for s in (1.0, 0.5, 0.25, 0.0, 0.0001)] == [4492, 2246, 1123, 0, 0]
+    paths = [str(p) for p in golden_loads(tmp_path)]
+    rows = tool.run(paths, 49, shares=(1.0, 0.5, 0.0))
+    assert rows[0][5] is None
+    for row, golden, half in zip(rows[1:], GOLDEN[1:], HALF_FILL):
+        shared = row[5]
+        assert uploads(shared[1.0]) + [shared[1.0]["fill"][0]] == golden[4:9]      # the whole cache: 0017 unset
+        assert uploads(shared[0.5]) + [shared[0.5]["fill"][0]] == half
+        assert uploads(shared[0.0]) == golden[0:4] and shared[0.0]["fill"] == (0, 0)  # nothing filled: a cold cache
+    done = subprocess.run([sys.executable, "-I", str(TOOL), "--mib", "49", "--fill", "0.5", "--fill", "0.25", *paths],
+                          capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0 and done.stdout.count("| fill 0.5 ") == 3 and done.stdout.count("| fill 0.25 ") == 3
+    assert done.stdout.count("MiB under 64 tokens for") == 12
+    refused = subprocess.run([sys.executable, "-I", str(TOOL), "--mib", "49", "--fill", "1.5", *paths], capture_output=True, text=True)
+    assert refused.returncode != 0 and "from 0 to 1" in refused.stderr

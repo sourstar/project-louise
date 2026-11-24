@@ -16,6 +16,9 @@ on one filled the same way with every expert seeded as if used once ("flat": a
 wrong guess is the first to go). The first file only builds the record.
 `--cap N` adds a line between the two: the record's rank, but no higher than the
 CRF N (N = 1 is flat; 2, 4, 8 ... let a right guess hold its slot that much longer).
+`--fill S` adds a line for a fill of the share S of the cache's slots, the best-ranked
+experts first (LLAMA_MOE_RECORD_FILL; 0017's seeding): what the fill uploads inside the
+load is on the same line as what it removes under the tokens.
 
     python3 -I tools/measure/moe_record_replay.py --mib 8192 load1.trace load2.trace [load3.trace ...]
 
@@ -305,15 +308,21 @@ def make_caches(trace, size_mib):
     return caches, group_of
 
 
-def fill(caches, groups, record, cap=None):
+def fill_slots(share, n_slots):
+    """llama_moe_record::fill_slots: the slots a fill of `share` takes of a cache of n_slots"""
+    return min(n_slots, int(math.floor(share * float(n_slots)))) if share > 0.0 else 0
+
+
+def fill(caches, groups, record, cap=None, share=1.0):
     """llama_moe_cache::impl::fill_from_record: returns (experts, bytes) uploaded by the fill.
-    cap: an expert is seeded with its record's CRF as 0017 seeds it, but no higher than this; 1 is the CRF of one use"""
+    cap: an expert is seeded with its record's CRF as 0017 seeds it, but no higher than this; 1 is the CRF of one use
+    share: LLAMA_MOE_RECORD_FILL, the share of each cache's slots the fill takes"""
     to_crf = ClassLRU.CRF_HALF_LIFE / RECORD_HALF_LIFE
     n_experts = n_bytes = 0
     for g, c in zip(groups, caches):
         if c is None or g.n_expert != record.n_expert:
             continue
-        keys = record.best(g.layers, c.n_slots)
+        keys = record.best(g.layers, fill_slots(share, c.n_slots))
         slot_of = {key: i for i, key in enumerate(sorted(keys))}
         for key in reversed(keys):  # the least used first: within a class the most used is evicted last
             crf = f32(record.score[key] * to_crf)
@@ -323,12 +332,12 @@ def fill(caches, groups, record, cap=None):
     return n_experts, n_bytes
 
 
-def replay(trace, size_mib, record=None, cap=None):
+def replay(trace, size_mib, record=None, cap=None, share=1.0):
     """one load: {'tokens', 'lookups', 'uploads': {16: (experts, bytes), 64: ..., 256: ..., 'all': ...}, 'fill': (experts, bytes),
     'large': lookups that did not read the cache, 'uses', 'layer_tokens'}"""
     n_layer, n_expert_used, groups, records = trace
     caches, group_of = make_caches(trace, size_mib)
-    filled = fill(caches, groups, record, cap) if record is not None else (0, 0)
+    filled = fill(caches, groups, record, cap, share) if record is not None else (0, 0)
     # a token is counted where its first layer is looked up (the layers of a batch come in order)
     first = min((il for il, _, _ in records if caches[group_of[il]] is not None), default=-1)
     tokens = lookups = large = 0
@@ -358,9 +367,10 @@ def replay(trace, size_mib, record=None, cap=None):
             "slots": sum(c.n_slots for c in caches if c is not None)}
 
 
-def run(paths, size_mib, caps=(1.0,)):
-    """[(path, cold, filled or None, capped or None)]: each file one load, the record built from the loads before it;
-    capped is the replay with the first of `caps` (flat by default), row[4] a dict of all of them by cap"""
+def run(paths, size_mib, caps=(1.0,), shares=()):
+    """[(path, cold, filled or None, capped or None, by cap, by share)]: each file one load, the record built from the
+    loads before it; capped is the replay with the first of `caps` (flat by default), row[4] a dict of all of them by
+    cap, row[5] a dict by share of the cache filled (0017's seeding)"""
     out, record, shape = [], None, None
     for path in paths:
         trace = read_trace(path)
@@ -373,7 +383,8 @@ def run(paths, size_mib, caps=(1.0,)):
         cold = replay(trace, size_mib)
         filled = replay(trace, size_mib, record) if record is not None else None
         capped = {cap: replay(trace, size_mib, record, cap=cap) for cap in caps} if record is not None else None
-        out.append((path, cold, filled, capped[caps[0]] if capped else None, capped))
+        shared = {s: replay(trace, size_mib, record, share=s) for s in shares} if record is not None else None
+        out.append((path, cold, filled, capped[caps[0]] if capped else None, capped, shared))
         if record is None:
             record = Record(trace[2][0].n_expert)
         # the record grows from what a cache saw; a filled and a cold cache see the same lookups
@@ -390,38 +401,49 @@ def main(argv=None):
     ap.add_argument("traces", nargs="+", help="LLAMA_MOE_CACHE_TRACE files, one per load, in the order they were made")
     ap.add_argument("--mib", type=int, required=True, help="the model's moe_cache_mib")
     ap.add_argument("--cap", type=float, action="append", default=[], help="also replay with the seeds capped at this CRF (repeatable)")
+    ap.add_argument("--fill", type=float, action="append", default=[],
+                    help="also replay with this share of the cache filled, 0 to 1 (LLAMA_MOE_RECORD_FILL; repeatable)")
     args = ap.parse_args(argv)
     if any(cap < 1.0 for cap in args.cap):
         ap.error("--cap: a seed is at least the CRF of one use, 1")
+    if any(not 0.0 <= s <= 1.0 for s in args.fill):
+        ap.error("--fill: a share of the cache, from 0 to 1")
+    shares = tuple(sorted(dict.fromkeys(args.fill), reverse=True))
     caps = tuple(dict.fromkeys([1.0, *args.cap]))
 
     def name_of(cap):
         return "flat" if cap == 1.0 else f"cap {cap:g}"
 
-    rows = run(args.traces, args.mib, caps)
+    rows = run(args.traces, args.mib, caps, shares)
     slots = rows[0][1]["slots"]
     print(f"cache {args.mib} MiB: {slots} slots; record half-life {RECORD_HALF_LIFE:.0f} tokens")
     print("load | tokens | cache | uploads under the first 16 / 64 / 256 tokens | in all | MiB in all | the fill (inside the load)")
-    for i, (path, cold, filled, _, capped) in enumerate(rows, 1):
+    for i, (path, cold, filled, _, capped, shared) in enumerate(rows, 1):
         def line(name, r):
             u = r["uploads"]
             fill_said = f"{r['fill'][0]} experts, {mib(r['fill'][1]):.0f} MiB" if name != "cold" else "-"
-            print(f"{i:4d} | {r['tokens']:6d} | {name:7s} | {u[16][0]:6d} / {u[64][0]:6d} / {u[256][0]:6d} | {u['all'][0]:6d} | "
+            print(f"{i:4d} | {r['tokens']:6d} | {name:9s} | {u[16][0]:6d} / {u[64][0]:6d} / {u[256][0]:6d} | {u['all'][0]:6d} | "
                   f"{mib(u['all'][1]):9.0f} | {fill_said}")
 
         def said(name, r):
             c64, call = cold["uploads"][64][0], cold["uploads"]["all"][0]
             d64, dall = c64 - r["uploads"][64][0], call - r["uploads"]["all"][0]
+            removed = (cold["uploads"][64][1] - r["uploads"][64][1]) / 2 ** 20
             print(f"     {name}: the record removes {d64} of {c64} uploads under the first 64 tokens "
-                  f"({100.0 * d64 / max(c64, 1):.0f} %), {dall} of {call} in all ({100.0 * dall / max(call, 1):.0f} %)")
+                  f"({100.0 * d64 / max(c64, 1):.0f} %), {dall} of {call} in all ({100.0 * dall / max(call, 1):.0f} %); "
+                  f"{removed:.0f} MiB under 64 tokens for {mib(r['fill'][1]):.0f} MiB filled")
         line("cold", cold)
         if filled is not None:
             line("filled", filled)
             for cap in sorted(caps, reverse=True):
                 line(name_of(cap), capped[cap])
+            for s in shares:
+                line(f"fill {s:g}", shared[s])
             said("filled", filled)
             for cap in sorted(caps, reverse=True):
                 said(name_of(cap), capped[cap])
+            for s in shares:
+                said(f"fill {s:g}", shared[s])
         if cold["large"]:
             print(f"     ({cold['large']} lookups of large batches read the host experts, cache or not)")
     return 0

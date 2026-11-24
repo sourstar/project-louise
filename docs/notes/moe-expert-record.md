@@ -117,19 +117,55 @@ a WRONG record. `--cap N` (repeatable) adds the seedings between the two:
 the record's rank, no higher than a CRF of N.
 
 It is uploads, not seconds: what an upload costs under a token is §5's.
+`--fill S` (repeatable) replays a fill of the share S of the cache
+(`LLAMA_MOE_RECORD_FILL`).
 
-**The seeding is the open choice it settles.** On synthetic routing (a cache
-a third the size of its experts, an eighth of a layer selected per token —
-NOT the 35B's routing):
+### The node's four answers (München, 2026-11-24, the live engine 9ea95e93a83c)
 
-| seeding | pros | cons |
+A copy of the 35B, `moe_cache_mib: 8192` (4,492 slots), no CPU share,
+temperature 0, an unload between answers. Answer 1 (Italian, a legal
+definition, 157 tokens through the cache) only builds the record: cold,
+2,343 / 4,057 / 5,190 uploads under the first 16 / 64 tokens and in all.
+
+| answer | tokens | cold: under 16 / 64 / in all | filled (0017) | removed under 64 | the fill uploads |
+|---|---|---|---|---|---|
+| 2, a medical question | 439 | 1,077 / 4,220 / 8,780 | 328 / 1,976 / 6,523 | 2,244, 53 % | 4,427 experts, 8,060 MiB |
+| 3, a novel's plot | 424 | 1,077 / 4,111 / 6,868 | 608 / 2,460 / 5,176 | 1,651, 40 % | 4,492 experts, 8,186 MiB |
+| 4, German, EU law | 110 | 1,077 / 4,298 / 4,970 | 704 / 2,580 / 3,258 | 1,718, 40 % | 4,492 experts, 8,186 MiB |
+
+- **The seeding stands.** Filled never costs more than cold, the
+  other-language answer included; the record's rank against a flat seed is
+  within 3 % with no winner (flat ahead on answer 2, the rank on 3 and 4).
+  The synthetic case where a wrong record cost more than a cold cache does
+  not happen on this routing.
+- **The record is about the first tokens only.** From token 64 on, a filled
+  and a cold cache upload the same (answer 2, tokens 64–256: 2,607 against
+  2,606): at 8 GiB the cache turns over 10–14 experts per token whatever it
+  started with.
+- **The cost nobody had a number for: the fill uploads the whole cache** —
+  8.2 GiB inside every load, about 1.3 s at the card's rate — to remove 3.0
+  to 4.1 GiB of uploads under the tokens. Half of what it uploads the answer
+  never uses. Hence `LLAMA_MOE_RECORD_FILL`, added before the candidate's
+  gates were spent (engine `b190673dbdbf`, replacing `5f926f4efa04`).
+- Reading the figures: on answers 2–4 the prompt (26–32 tokens after the 4
+  the load's warm-up left) went through the cache as ONE batch; Louise's
+  prompts are thousands of tokens and go as large batches the cache is not
+  asked for. Answer 1 has the production shape: a cold cache uploads 4,057
+  experts, 7.4 GiB, under its first ~57 generated tokens. The 1,077 under 16
+  tokens, the same on three answers, is the load's own warm-up sequence.
+
+| the fill | pros | cons |
 |---|---|---|
-| the record's rank (0017 as built) | a rightly guessed expert holds its slot through the cache's turnover: 12–20 % of the first 64 tokens' uploads removed | a wrongly guessed one holds it too: on another subject 24 % MORE uploads than a cold cache under the first 64 tokens, 8 % more to the end of the answer |
-| flat, as one use | a wrong guess is the first to go: another subject costs what a cold cache does (within 1 %) | less removed on the record's own subject: 8–13 % |
-| the record's rank, capped (`--cap 4`) | between the two on the record's subject | between the two on another: still 16 % more than cold under the first 64 tokens, 5 % more over the answer |
-| no record (today) | nothing to decide | every load makes its uploads under its first tokens |
+| none (the live engine) | nothing uploaded in the load | 4,057–4,298 uploads, 7.4–7.8 GiB, under the first 64 tokens after every load |
+| the whole cache (0017, the switch unset) | the most removed: 40–53 % of those uploads | 8.2 GiB uploaded in every load for 3.0–4.1 GiB removed: a loss wherever the person waits for the load too |
+| a half or a quarter (`LLAMA_MOE_RECORD_FILL`) | less uploaded for nothing | less removed; how much is `--fill`'s curve and §5's row D |
 
-Recommended: let the node's four traces choose. If `filled` costs more than
-`cold` on the fourth file and `flat` does not, 0017 takes the flat seed — one
-line, which renames the engine; so the replay is read before the candidate's
-gates are spent, not after. The record stays off (no env line) until then.
+Recommended: the whole cache until §5's row D says a smaller share costs
+fewer seconds, load and first tokens together. The record stays off (no env
+line) until those figures are in.
+
+On synthetic routing (a cache a third the size of its experts, an eighth of
+a layer selected per token) the seeding DID matter: the record's rank cost
+24 % more uploads than a cold cache on another subject, a flat seed none.
+Kept as a warning for a smaller cache or another model; `--cap N` replays
+the seedings in between.
