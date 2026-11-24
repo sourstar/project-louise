@@ -1,7 +1,7 @@
 # LocalAI: every action item for the LocalAI team
 
 *One place for everything this project owes or asks `mudler/LocalAI`: the
-defects found (B1–B18), the patches we carry (P1–P8, more staged), and the requests (R1–R6).
+defects found (B1–B19), the patches we carry (P1–P8, more staged), and the requests (R1–R6).
 The operator files them upstream. Started 2026-10-02 while mapping LocalAI
 against the model pool (`model-pool-prior-art.md`@c572c3b); the patches and
 requests come from `model-pool-over-localai.md`@c572c3b, accepted
@@ -121,6 +121,7 @@ the source):*
 | B16 | defect | llama.cpp backend (llama-server's code): never runs the encoder of an encoder-decoder model; a T5-family GGUF is decoded as if decoder-only and answers garbage (`<2cs><2cs>…`) | MADLAD cannot run on llama.cpp, so it runs on torch (17–38 s cold); P3 | upstream llama.cpp #5763 / #26565, no fix; §P3 |
 | B17 | defect | `v5.0.1`, `/v1/audio/speech`: whether a model may be given a voice profile is decided from its `backend:` NAME against LocalAI's own table, before `tts.voice_cloning` is read — a backend installed under any other name (ours: the engine's digest in it) is refused "selected model does not support reference-audio voice cloning", and no key of the model file can say otherwise | OmniVoice on our engine cannot be asked for a recorded voice the way Louise asks (`localai://voice-profiles/<id>`): blocks the cut-over of speech, not the measurement | not filed; found on the card 2026-11-24 |
 | B18 | defect | llama.cpp (ggml-sycl): a device-memory refusal while a graph runs aborts the process — the pool's commit is under `SYCL_CHECK` (`ggml_sycl_pool_vmm::alloc`, `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY`) | on a card several models share, another model's load can kill a model with its request; it is what stands between the node and paging idle models instead of unloading them | not filed; seen on the card 2026-11-24; fixed by P14 (staged) |
+| B19 | defect | llama.cpp backend (LocalAI's `grpc-server.cpp`, the handler of llama.cpp's own server): a SECOND SIGTERM/SIGINT, arriving while the backend cleans up after the first, calls `exit(1)` INSIDE the signal handler — the exit handlers and static destructors then run against the clean-up in progress and can block, the process alive and its card memory held | 3 of 14 unloads of a model behind our wrapper took LocalAI's whole 15 s and ended in its SIGKILL (München, 2026-11-24): LocalAI signals the backend's process GROUP, and anything in that group that forwards the signal delivers it twice | not filed; avoided on our side since 2026-11-24 (the wrapper leaves a backend already told 2 s to go, #856); fixed by P15 (staged) |
 | **P1** | **patch we carry** | `GET /system` lists the options each loaded model was given, with their hash | none since VeGa: the wrapper receives `LoadModel` itself (vega.md §1). It was blocking for the model pool; kept for upstream. IN the node's LocalAI again since 2026-11-21 (v5.0.1 + P1, cherry-picked as 105104c32; operator: "Re-patch, then update"): its `/system` rows carry `load_options` (5 of 5 loaded models, as the runs state them). Before it, v4.12.1 upstream core carried none, and Louise read a model's options from the answering run's statement (`model_load.note_run_options`), as it still can | not filed; [`deploy/localai/patches/0001-system-list-load-options.patch`](../../deploy/localai/patches/0001-system-list-load-options.patch) |
 | **P2** | **patch we carry** | llama.cpp backend: `Embedding` embeds `EmbeddingTokens`, with the special tokens a text gets (B14) | **blocking** for the token cut: VeGa's wrapper sends a cut as its first tokens to a backend that embeds them (`Gate._probe`) | not filed; [`deploy/localai/patches/0002-llama-cpp-embed-token-ids.patch`](../../deploy/localai/patches/0002-llama-cpp-embed-token-ids.patch) |
 | **P3** | **patch we carry** | llama.cpp backend: the encoder of an encoder-decoder model runs (B16), as a llama.cpp patch in the backend's own `patches/` | MADLAD on llama.cpp (operator, 2026-10-27: "we need anyway a patched llama.cpp") | not filed; [`deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch`](../../deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch) |
@@ -132,6 +133,7 @@ the source):*
 | **P12 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the TTS call takes a voice profile's transcript (`params["ref_text"]`), a described voice (`instructions`, or a `voice` that names no file) or no voice at all, for a model that clones AND has a "tts" chat template; `LOCALAI_HAS_TTS_TEMPLATE` probes for the template, which is older than per-session voices | LocalAI resolves a voice profile to a clip and its transcript, and its own llama.cpp backend dropped the transcript and refused a request without a voice; needed for P11's model to be served as Louise asks. Also passes `params["seed"]`, `["flow_steps"]`, `["cfg_scale"]`: without a seed no speech request on this backend is reproducible | not filed; [`deploy/localai/patches/staged/0010-llama-cpp-tts-voice-modes.patch`](../../deploy/localai/patches/staged/0010-llama-cpp-tts-voice-modes.patch); its `grpc-server.cpp` half first compiles with the test engine on the node |
 | **P13 (staged)** | **patch staged, not in the series yet** | LocalAI's server (`core/config`): `VoiceCloningForModel` honours a model's explicit `tts.voice_cloning: true` for a backend the capability table does not know, with the reference contract the cloning backends share | the fix of B17: a model on an engine installed under its own name can be asked for a saved voice profile, as Louise asks | **to file upstream** (the operator, 2026-11-24: "add the improvement to the list of the fixes I have at some point send"); [`deploy/localai/patches/staged/0011-config-voice-cloning-opt-in-unknown-backend.patch`](../../deploy/localai/patches/staged/0011-config-voice-cloning-opt-in-unknown-backend.patch); LocalAI's `core/config` tests pass with it; the node's server not rebuilt yet |
 | **P14 (staged)** | **patch staged, not in the series yet** | llama.cpp (ggml-sycl): the pool's refused commit throws, `ggml_backend_sycl_graph_compute` answers `GGML_STATUS_ALLOC_FAILED`, the server's existing "Compute error." answers the request and the process lives | the fix of B18 | **to file upstream** (ggml-org/llama.cpp); [`deploy/localai/patches/staged/0013-llama-cpp-sycl-pool-refusal.patch`](../../deploy/localai/patches/staged/0013-llama-cpp-sycl-pool-refusal.patch); not compiled here, its test is on the card |
+| **P15 (staged)** | **patch staged, not in the series yet** | llama.cpp backend (`grpc-server.cpp`): a second termination signal leaves through `second_signal.h` — `write(2)` and `std::_Exit(1)`, async-signal-safe calls only — with a standalone test LocalAI's own unit-test runner picks up | the fix of B19 | **to file upstream** (mudler/LocalAI; the same handler is in ggml-org/llama.cpp's `tools/server/server.cpp`); [`deploy/localai/patches/staged/0014-llama-cpp-second-signal-exit.patch`](../../deploy/localai/patches/staged/0014-llama-cpp-second-signal-exit.patch); its test compiled and run here, the backend itself not built |
 | **P7** | **in the series since 2026-11-22** (was P10: staged, built into a separate backend, LIVE 2026-11-11; the qualification's F4) | llama.cpp: nvidia/llama-nemotron-rerank-1b-v2 ranks (`LlamaBidirectionalForSequenceClassification`: bidirectional Llama 3.2 1B, mean-pooled, a `score` head). Ported from ggml-org/llama.cpp#24083 (open) onto ddf48f8: converter class, the optional `cls.output` in llama-embed, BOS for a rerank template's prompt; this base pools before the head when the GGUF says classifier pooling mean, so no graph change | the reranker benchmark's arm A3 (operator, 2026-11-10: "Patch llama.cpp to support nemo reranker, tomorrow I want to see its benchmarks too") | upstream #24083 open; [`deploy/localai/patches/0007-llama-cpp-nemotron-rerank.patch`](../../deploy/localai/patches/0007-llama-cpp-nemotron-rerank.patch), built only from [`staged/nemotron-rerank.series`](../../deploy/localai/patches/staged/nemotron-rerank.series) into its own backend; joins the series only if A3 earns it. A3 earned it (operator, 11-11: B): the `[reranker]` of five collections on `louise-sycl-f16-llama-cpp-9d17b8a39845` (STATUS 11-11); joining the main series waits for the next engine change |
 | **P8** | **in the series since 2026-11-22** (was P11: staged, yet LIVE on the node's engine since the 2026-11-12 trial; F4) | llama.cpp backend: CONTEXT ON DEMAND — a model loaded with the option `context_on_demand` keeps its weights, and a request that carries `metadata.keep_context_ms` has its context (KV cache and compute buffers) freed that long after its answer; the next request creates it again. A request that carries none leaves the context loaded, as ever (the option `keep_context_ms:N` gives such requests a keep). No RPC reads the `llama_context` any more (it is null while the model is idle) | the card holds ~34 GB of models on 32.6 GB, ~10 GB of it context that works seconds a day (operator, 2026-11-11: "when llama.cpp gets a request it allocates the context memory; when the processing is done it frees it"; "Implement it") — [idle-context-brief.md](idle-context-brief.md) | not filed — PREPARED for the operator to file himself (2026-11-11: "prepare everything for upstream, I will upload it eventually"; [`deploy/localai/upstream/llama-cpp-context-on-demand/`](../../deploy/localai/upstream/llama-cpp-context-on-demand/READING-GUIDE.md), [`localai-context-on-demand/`](../../deploy/localai/upstream/localai-context-on-demand/READING-GUIDE.md)); [`deploy/localai/patches/0008-llama-cpp-context-on-demand.patch`](../../deploy/localai/patches/0008-llama-cpp-context-on-demand.patch), built only from [`staged/context-on-demand.series`](../../deploy/localai/patches/staged/context-on-demand.series); CPU checks passed 2026-11-11, card gates not run |
 | **P6** | **patch we carry** | llama.cpp (common/chat): Command R7B / Command A ("Command 3") tool calls are parsed by llama.cpp's own Cohere2 MoE parser; before, the autoparser preserved `<\|START_THINKING\|><\|END_THINKING\|><\|START_ACTION\|>` as ONE token string, the server dropped the three markers, and every R7B tool call was an HTTP 500 | Command R7B as a chat candidate (operator, 2026-11-03: "B, check vllm parser before reinventing") | **to file at ggml-org/llama.cpp as a PR** once proven on the node (#20786, closed unreproduced, was this); [`deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch`](../../deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch); in the series since 2026-11-06: engine ea2417d91dcc, every live model byte-identical, every gate passed |
@@ -1432,6 +1434,57 @@ two older pools.
 **Tested.** Not compiled here. On the card (docs/notes/room-on-the-card.md
 §4): the device filled, a model asked — the request refused, the process
 alive, the same model answering afterwards.
+
+### B19 and P15 (staged). The backend calls `exit()` inside its signal handler
+
+*Seen on the node 2026-11-24 (München, the load timings retaken on an
+unloaded node): 3 of 14 `POST /backend/shutdown` of a model behind our vega
+wrapper took 15.06 s instead of 0.11–0.21 s; 0 of 22 for the same engine
+started directly. File:
+`deploy/localai/patches/staged/0014-llama-cpp-second-signal-exit.patch`.*
+
+**What happens.** LocalAI's unload ends in `process.Stop()`
+(`pkg/model/process.go` L190) of mudler/go-processmanager v0.2.0:
+- SIGTERM to the backend's PROCESS GROUP (`process_unix.go` L39–L46,
+  `syscall.Kill(-pid, …)`; `KillProcessGroup` is true by default and the
+  child is started with `Setpgid`);
+- a poll every 100 ms for the pid it started, for `GracefulTimeout` — 15 s
+  by the library's default (`config.go` L40); LocalAI passes no
+  `WithGracefulTimeout` (`process.go` L332–L341) and has no setting for it;
+- then SIGKILL to the group. The HTTP answer is written after that, and
+  `exitCode=-1` in "Backend process stopped" is Go's code for a child ended
+  by a signal.
+
+Behind the wrapper the engine was in that group, so it took LocalAI's
+SIGTERM and, a millisecond later, the one the wrapper sent its child. The
+backend's handler (`grpc-server.cpp` L218–L227 at v5.0.1; llama.cpp's
+`tools/server/server.cpp` L32–L41 at our pin) serves the first by ending
+the server loop — main() then prints "stopping", "cleaning up before
+exit...", shuts the gRPC server down and frees the backend — and answers
+the second with `fprintf` and `exit(1)`. `exit()` is not safe inside a
+handler: it runs the exit handlers and the static destructors against the
+clean-up it interrupted. The log is the same in the fast and the slow case
+("Received second interrupt, terminating immediately." within 1 ms); in the
+slow one the process stays, the card's counter returns to empty only at
+LocalAI's kill. Where exactly it blocks was not read: the threads' stacks
+during a slow case would say.
+
+**Our side.** The wrapper no longer tells a backend twice (architecture,
+#856: a backend already told is left `OWN_EXIT_S` = 2 s to go by itself,
+and the wrapper's whole stop is over in 12 s, under LocalAI's 15). One case
+stays open there: an engine slower than 2 s to leave — a forced stop with a
+call in progress, a busy node — gets the second signal after all.
+
+**The fix (P15, staged).** The second signal leaves through a small header,
+`second_signal.h`: `write(2)` of the same message and `std::_Exit(1)`,
+nothing else. `second_signal_test.cpp` forks a child whose exit handler
+never returns: it is gone at once with status 1, and the same child leaving
+through `exit(1)` is still there a second later. The test is standalone,
+so `backend/cpp/run-unit-tests.sh` picks it up by its name; compiled and run
+here with that script's flags. The backend itself was not built here: the
+change in `grpc-server.cpp` is one include and one call. It applies on the
+series alone and beside each of 0009–0013. An engine build with it is the
+operator's word to München; it can ride the next one.
 
 ### P6. llama.cpp (common/chat): Command R7B / Command A tool calls parse
 

@@ -1,0 +1,255 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 24 Nov 2026 16:01:10 +0000
+Subject: [PATCH] fix(llama-cpp): a second termination signal leaves at once
+ instead of calling exit() in the handler
+
+The backend's signal handler answered a second SIGTERM/SIGINT with
+fprintf() and exit(1). exit() runs the exit handlers and the static
+destructors from inside the handler while main() is in the middle of the
+clean-up the first signal started (the gRPC server's shutdown, the GPU
+runtime's teardown), and it can block there: "Received second interrupt,
+terminating immediately." is printed and the process stays, its GPU memory
+still held, until LocalAI's SIGKILL at the end of its 15 s grace.
+
+A backend gets two signals whenever something between LocalAI and it
+forwards one: LocalAI stops a backend with SIGTERM to its process group
+(go-processmanager), so a wrapper or supervisor in that group that passes
+the signal to its child delivers a second one a millisecond later. Seen on
+an Intel Arc Pro B70 (SYCL) behind such a wrapper: 3 of 14 unloads took
+15.06 s instead of 0.11-0.21 s and ended with exitCode=-1; started
+directly, one signal, 0 of 22.
+
+The second signal now leaves through second_signal.h: write(2) and
+std::_Exit(1), async-signal-safe calls only. The message is unchanged.
+second_signal_test.cpp (standalone, picked up by
+backend/cpp/run-unit-tests.sh and by ctest) forks a child whose exit
+handler never returns: it is gone at once with status 1, and the same
+child leaving through exit(1) is still there a second later.
+
+llama.cpp's own server has the same handler (tools/server/server.cpp).
+
+Assisted-by: Claude Code
+---
+ backend/cpp/llama-cpp/CMakeLists.txt         |  6 ++
+ backend/cpp/llama-cpp/grpc-server.cpp        |  8 +-
+ backend/cpp/llama-cpp/prepare.sh             |  4 +
+ backend/cpp/llama-cpp/second_signal.h        | 48 ++++++++++
+ backend/cpp/llama-cpp/second_signal_test.cpp | 92 ++++++++++++++++++++
+ 5 files changed, 154 insertions(+), 4 deletions(-)
+ create mode 100644 backend/cpp/llama-cpp/second_signal.h
+ create mode 100644 backend/cpp/llama-cpp/second_signal_test.cpp
+
+diff --git a/backend/cpp/llama-cpp/CMakeLists.txt b/backend/cpp/llama-cpp/CMakeLists.txt
+index 4d582d9..0655aeb 100644
+--- a/backend/cpp/llama-cpp/CMakeLists.txt
++++ b/backend/cpp/llama-cpp/CMakeLists.txt
+@@ -118,6 +118,12 @@ if(LLAMA_GRPC_BUILD_TESTS)
+     target_compile_features(parent_watch_test PRIVATE cxx_std_17)
+     add_test(NAME parent_watch_test COMMAND parent_watch_test)
+ 
++    # Second-signal exit test (second_signal.h) — standard library only.
++    add_executable(second_signal_test second_signal_test.cpp second_signal.h)
++    target_include_directories(second_signal_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
++    target_compile_features(second_signal_test PRIVATE cxx_std_17)
++    add_test(NAME second_signal_test COMMAND second_signal_test)
++
+     add_executable(passthrough_options_test passthrough_options_test.cpp passthrough_options.h)
+     target_include_directories(passthrough_options_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+     target_compile_features(passthrough_options_test PRIVATE cxx_std_17)
+diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
+index d1d6a78..9e587d1 100644
+--- a/backend/cpp/llama-cpp/grpc-server.cpp
++++ b/backend/cpp/llama-cpp/grpc-server.cpp
+@@ -116,6 +116,7 @@
+ #endif
+ 
+ #include "parent_watch.h" // best-effort parent-death backstop (see header)
++#include "second_signal.h" // a second signal leaves at once, without exit() (see header)
+ 
+ 
+ using grpc::Server;
+@@ -219,10 +220,9 @@ static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
+ 
+ static inline void signal_handler(int signal) {
+     if (is_terminating.test_and_set()) {
+-        // in case it hangs, we can force terminate the server by hitting Ctrl+C twice
+-        // this is for better developer experience, we can remove when the server is stable enough
+-        fprintf(stderr, "Received second interrupt, terminating immediately.\n");
+-        exit(1);
++        // a second signal while the first is served: leave now, without exit()
++        // and without stdio - both can block inside a handler (second_signal.h)
++        llama_grpc::terminate_on_second_signal();
+     }
+ 
+     shutdown_handler(signal);
+diff --git a/backend/cpp/llama-cpp/prepare.sh b/backend/cpp/llama-cpp/prepare.sh
+index 02d796f..23aff32 100644
+--- a/backend/cpp/llama-cpp/prepare.sh
++++ b/backend/cpp/llama-cpp/prepare.sh
+@@ -87,6 +87,10 @@ cp -r context_on_demand_test.cpp llama.cpp/tools/grpc-server/
+ # test (run via backend/cpp/run-unit-tests.sh; also buildable under ctest).
+ cp -r parent_watch.h llama.cpp/tools/grpc-server/
+ cp -r parent_watch_test.cpp llama.cpp/tools/grpc-server/
++# Second-signal exit (included by grpc-server.cpp) and its standalone unit
++# test (run via backend/cpp/run-unit-tests.sh; also buildable under ctest).
++cp -r second_signal.h llama.cpp/tools/grpc-server/
++cp -r second_signal_test.cpp llama.cpp/tools/grpc-server/
+ # Dead-stream tracker (included by grpc-server.cpp) and its standalone unit
+ # test (run via backend/cpp/run-unit-tests.sh; also buildable under ctest).
+ cp -r stream_peer.h llama.cpp/tools/grpc-server/
+diff --git a/backend/cpp/llama-cpp/second_signal.h b/backend/cpp/llama-cpp/second_signal.h
+new file mode 100644
+index 0000000..a6bc026
+--- /dev/null
++++ b/backend/cpp/llama-cpp/second_signal.h
+@@ -0,0 +1,48 @@
++// What the llama.cpp gRPC backend does on a SECOND termination signal.
++//
++// The first SIGTERM/SIGINT ends the server loop and main() cleans up: the gRPC
++// server's shutdown, the GPU runtime's teardown. A second one, arriving while
++// that runs, used to call exit(1) from inside the signal handler. exit() runs
++// the exit handlers and the static destructors - on a thread that interrupted,
++// or runs beside, the very clean-up those destructors belong to - and can
++// block there for good: "terminating immediately" printed, the process still
++// alive, its GPU memory still held, until a supervisor's SIGKILL.
++//
++// A backend gets two signals whenever something between LocalAI and it
++// forwards one: LocalAI stops a backend with SIGTERM to its process GROUP, so
++// a wrapper script or supervisor in that group that passes the signal on to
++// its child delivers a second one a millisecond after the first.
++//
++// terminate_on_second_signal() leaves at once with async-signal-safe calls
++// only (POSIX: write(2) and _Exit; no stdio, no exit handlers, no destructors).
++// The operating system reclaims the process's memory, the GPU's included.
++//
++// Dependency-free (C and C++ standard library, unistd.h) so that
++// second_signal_test.cpp can exercise it without building the backend.
++#ifndef LLAMA_GRPC_SECOND_SIGNAL_H
++#define LLAMA_GRPC_SECOND_SIGNAL_H
++
++#include <cstdlib>
++
++#if defined(_WIN32)
++#include <io.h>
++#else
++#include <unistd.h>
++#endif
++
++namespace llama_grpc {
++
++[[noreturn]] inline void terminate_on_second_signal() {
++    static const char msg[] = "Received second interrupt, terminating immediately.\n";
++#if defined(_WIN32)
++    (void) _write(2, msg, (unsigned int) (sizeof(msg) - 1));
++#else
++    const ssize_t written = write(STDERR_FILENO, msg, sizeof(msg) - 1);
++    (void) written;
++#endif
++    std::_Exit(1);
++}
++
++} // namespace llama_grpc
++
++#endif // LLAMA_GRPC_SECOND_SIGNAL_H
+diff --git a/backend/cpp/llama-cpp/second_signal_test.cpp b/backend/cpp/llama-cpp/second_signal_test.cpp
+new file mode 100644
+index 0000000..fad1e91
+--- /dev/null
++++ b/backend/cpp/llama-cpp/second_signal_test.cpp
+@@ -0,0 +1,92 @@
++// Unit test for the second-signal exit (second_signal.h).
++//
++// Build & run standalone (standard library only):
++//   g++ -std=c++17 second_signal_test.cpp -o t && ./t
++//
++// A child process registers an exit handler that never returns - the stand-in
++// for a clean-up the signal interrupted - and is sent a signal whose handler
++// leaves the way the backend leaves on a second signal. With
++// terminate_on_second_signal() the child is gone at once, status 1. The same
++// child leaving with exit(1), as the backend did, is still there a second
++// later: the test shows the hang it guards against, then kills it.
++//
++// On Windows this file compiles to a no-op success (no fork).
++
++#include <cstdio>
++#include <cstdlib>
++#include <string>
++
++#include "second_signal.h"
++
++static int failures = 0;
++
++static void check(bool ok, const std::string &name) {
++    if (!ok) {
++        failures++;
++        fprintf(stderr, "FAIL: %s\n", name.c_str());
++    } else {
++        fprintf(stderr, "ok:   %s\n", name.c_str());
++    }
++}
++
++#if !defined(_WIN32)
++#include <signal.h>
++#include <sys/wait.h>
++#include <time.h>
++
++static void never_returns() {
++    for (;;) {
++        pause();
++    }
++}
++
++static void leave_at_once(int) { llama_grpc::terminate_on_second_signal(); }
++static void leave_through_exit(int) { exit(1); }
++
++// Forks a child that leaves through `handler` on SIGTERM. Returns its wait
++// status once it has ended, or -1 if it is still alive after `wait_ms` (it is
++// then killed).
++static int status_of_child(void (*handler)(int), long wait_ms) {
++    const pid_t pid = fork();
++    if (pid == 0) {
++        fclose(stderr); // the message is the parent's test output otherwise
++        atexit(never_returns);
++        signal(SIGTERM, handler);
++        raise(SIGTERM);
++        for (;;) {
++            pause();
++        }
++    }
++    for (long waited = 0; waited < wait_ms; waited += 10) {
++        int status = 0;
++        if (waitpid(pid, &status, WNOHANG) == pid) {
++            return status;
++        }
++        const struct timespec ten_ms = {0, 10 * 1000 * 1000};
++        nanosleep(&ten_ms, nullptr);
++    }
++    kill(pid, SIGKILL);
++    waitpid(pid, nullptr, 0);
++    return -1;
++}
++
++static void test_second_signal() {
++    const int status = status_of_child(leave_at_once, 5000);
++    check(status != -1, "the process is gone although an exit handler never returns");
++    check(status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 1, "exit status 1");
++    check(status_of_child(leave_through_exit, 1000) == -1,
++          "exit() from the handler is still there a second later (what it replaces)");
++}
++#else
++static void test_second_signal() {}
++#endif
++
++int main() {
++    test_second_signal();
++    if (failures > 0) {
++        fprintf(stderr, "%d test(s) failed\n", failures);
++        return 1;
++    }
++    fprintf(stderr, "all tests passed\n");
++    return 0;
++}
+-- 
+2.43.0
+

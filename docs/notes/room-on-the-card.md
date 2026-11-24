@@ -54,9 +54,11 @@ to München. **The idle sizes are the engine's before the cut-over**
 vega-bge-m3, idle with its context freed, holds 897 MiB, not 621 — 577 of
 weights and about 320 beyond them; the keeper's remembered sizes are keyed
 on the model and keep the least ever read, so an engine swap leaves the
-old engine's (models-beyond-the-card.md §5.2, §8). The other two are to be
-read again the same way; until then the sum above is short by what they
-grew, 276 MiB for bge-m3 alone. With the others opted in: about 3 GiB more (E). At work the set
+old engine's (models-beyond-the-card.md §5.2, §8). Read again on an empty
+card the same afternoon (München; the card's counter and the process's own
+agree): bge-m3 896 MiB, nemotron-embed 2,513 — the remembered 2,512 holds —
+and a stand-in with no weights on the card 319. qwen3-4b's 2,737 is still
+the test copy's of 11-12. So the sum above is short by bge-m3's 275 MiB. With the others opted in: about 3 GiB more (E). At work the set
 adds what runs in the same second — 3,262 MiB at most, 2,221 at p95 (M, 24
 h of the card's record, shared-context.md §2), which is the keeper's
 working-memory reserve.
