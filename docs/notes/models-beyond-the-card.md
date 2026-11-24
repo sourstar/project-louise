@@ -210,8 +210,8 @@ moves models for a question, with today's loads and unloads. RAGE's claim
 ## 5. What is measured first
 
 Each decides a part of the design. What was already held is in §5.1; the
-split of a load (1) and the parked floor (5), read on the node the same
-day, are in §5.2. The rest is not known today.
+split of a load (1) and the parked floor (5), measured on the unloaded
+node, are in §5.2. The rest is not known today.
 
 1. **A cold load's 7.5–8.7 s, split:** the process start, the file read
    (page cache cold and warm), the device's start, the copy, the first pass.
@@ -231,16 +231,16 @@ day, are in §5.2. The rest is not known today.
    nearest one held.
 5. **What a parked process still holds on the card:** its device context
    and compiled kernels, with no weights. LocalAI stops a backend's process
-   when it unloads, so no such process exists today; what is read so far is
-   in §5.2 (about 0.3 GiB for one F16 model, one reading). The empty card
-   reads 25 MiB. It decides how many models beyond the card really fit.
+   when it unloads, so no such process exists today; its stand-ins read
+   319 MiB (§5.2). The empty card reads 25 MiB. It decides how many models
+   beyond the card really fit.
 
 ### 5.1 What the node already holds (München, 2026-11-24)
 
 Totals only, from the day's runs: a request to a model not loaded until its
 first answer, the weights in the page cache, the card not full. TAKEN ON AN
-INGESTING NODE, like §5.2: not this note's scenario, and to be read as
-upper bounds.
+INGESTING NODE: not this note's scenario, and to be read as upper bounds
+(§5.2 has the same loads on the unloaded node).
 
 | model | weights | cold load |
 |---|---|---|
@@ -271,42 +271,88 @@ upper bounds.
   encoders (3). Host memory per minute (4) is being logged since
   2026-11-24, for seven days.
 
-### 5.2 A load, split, and the parked floor (München, 2026-11-24)
+### 5.2 A load, split, and the parked floor, on an unloaded node (München, 2026-11-24, 15:16–15:44Z)
 
-**THESE TIMES ARE NOT VALID FOR THIS NOTE'S SCENARIO AND DECIDE NOTHING.**
-The operator, 2026-11-24: "Have you measured with the unloaded system? No,
-you did not, I'm sitting next to the busy node. Your measurements are
-garbage." The worker was paused for the five minutes of the loads. Nothing
-says what else ran: the write-up names no pass stopped, no load of the host
-before or after, and at least one other backend was on the card.
-measuring.md §10, the operator's rule since 2026-11-03 ("this is not the
-first time it happens"), asks for all of it, and the architecture session
-published the figures without it. They are kept below as what a busy node
-gave, upper bounds at best, until §5.3's retake replaces them. What does
-not depend on the load is said to be so where it stands: a constant read in
-LocalAI's source, and sizes on the card.
+THE CONDITIONS, as §5.3 asks them, and as they were:
+- the node paused for 1,715 s and never resumed inside; no pass, no
+  transfer, no question. Left running and named: web, the gpu probe and
+  governor, LocalAI, the vega wrapper, jellyfin, calibre, cloudflared,
+  tailscale, the OCR container, three host units writing a line a minute;
+- 585 s of settling after the pause before anything was timed; the card at
+  65 °C, its idle reading, from 15:19 on;
+- the card EMPTY and alone for every load: its counter at 25 MiB and nothing
+  loaded before each, only the asked model after; no row left out;
+- the quiet, read three times: 0.83, 0.32 and 0.12 busy cores of 12; load
+  average 2.21, 1.42, 0.56 (one minute, still decaying from the work
+  stopped); MemAvailable 37.8 GB;
+- THE CAVEAT: the web container, restarted by the deploy 20 minutes before,
+  used 0.5 to 0.7 of a core during the live rows. The copies ran after it at
+  0.1 to 0.3 and agree with the live rows within 0.1 s, so the rows are
+  taken;
+- the path: the LIVE models by their names, through LocalAI, the vega
+  wrapper and the engine (MADLAD direct to the engine, as deployed), for
+  the totals; COPIES with `verbosity: 4`, direct to the engine, for the
+  split. Engine louise-sycl-f16-llama-cpp-c3294e050ff2-stack-7c301a7ba437
+  (the wrapper's vega.json), LocalAI v5.0.1-2-gac69f2840, the models' own
+  flags and env. The file in the page cache. A pilot of each first, read,
+  then four loads.
 
-Test copies of two models on the live engine (c3294e), `verbosity: 4`, the
-node paused, the file in the page cache, 14:29–14:34Z. Four loads of each,
-the range. Seconds on the engine's own clock, from the backend process's
-"Server listening".
+**The totals, live models, seconds:**
 
-| part of a cold load | qwen3-embedding-4b (2,375 MiB on the card) | MADLAD f16 (5,109 MiB) | a parked process pays it again |
+| | bge-m3 (577 MiB on the card) | MADLAD f16 (5,109 MiB) | qwen3-embedding-4b Q4_K_M (2,375 MiB) |
 |---|---|---|---|
-| "Server listening" → LocalAI's load call | 2.03–2.05 | 2.01–2.07 | no |
-| the file's header and vocabulary | 0.09 | 0.45–0.60 | no |
-| the weights, read and copied to the card | 0.42–0.50 (4.6–5.5 GiB/s) | 0.83–0.92 (5.4–6.0 GiB/s) | yes: this is the un-park |
-| the context's buffers | 0.02 | 0.01 | yes, as context on demand already does per request |
-| buffers → "model loaded": the warm-up run | 1.8 | 2.85–3.06 | NOT KNOWN |
-| the first answer | in the total | 0.38–0.96 | — |
-| **the client, request to first answer** | **4.51–4.58** | **6.67–7.93** | |
-| the same request with the model loaded | 0.02–0.03 | 0.87–0.89 | |
+| request → first answer, cold | 6.22–6.32 | 6.53–6.63 | 4.25–4.26 |
+| the same request, loaded | 0.03 | 0.35 | 0.05 |
+| unload: the call → the card's counter at empty | 0.21 | 0.21 | 0.11 (and 15.1 once) |
+| on the card after the request, by the counter | 921 MiB | 7,246 MiB | 2,811 MiB |
 
-- **The copy is the smallest part,** a tenth of a load. Its rate is 4.6 to
-  6.0 GiB/s, the read from the page cache and the copy together (§5.1's
-  16.2 GiB/s was a fit, for the copy alone). One load of each, right after
-  another model had been unloaded, took 1.82 s and 2.05 s for the same step
-  (1.3 and 2.4 GiB/s): not explained.
+**The split, copies, seconds from the backend's "Server listening":**
+
+| part of a cold load | bge-m3 | MADLAD | qwen3-embedding-4b | a parked process pays it again |
+|---|---|---|---|---|
+| "Server listening" → LocalAI's load call | 2.04–2.07 | 2.03–2.04 | 2.03–2.06 | no: no spawn |
+| the file's header and vocabulary | 0.28–0.30 | 0.44–0.50 | 0.10 | no |
+| the weights, read and copied, and the context made | 0.19–0.21 | 0.81–0.83 (1.43 on the first load) | 0.35–0.38 | yes: this is the un-park |
+| the warm-up run | 3.43–3.55 | 2.67 | 1.53–1.56 | by the source no, but a quantized model's rewrite (§3.1); not measured |
+| "model loaded" → the first answer | 0.01 | 0.37 | 0.01 | — |
+| **the copy's total** | **6.17–6.27** | **6.43–7.03** | **4.18–4.28** | |
+
+- **The wrapper and the path add under 0.1 s:** the live totals are the
+  copies' within that.
+- **The copy runs at 6.2 to 6.4 GiB/s** for the two larger models, the read
+  from the page cache, the copy and the context together. bge-m3's 0.2 s is
+  mostly not copy (577 MiB). MADLAD's first load, and its pilot, took 1.43
+  and 1.55 s for the same step: not explained.
+- **The unload frees the card in 0.11 to 0.21 s.** Today it ends the
+  process. A park is the same free with the process kept; it copies nothing
+  back, since an F16 model's host copy is the file in the page cache.
+- **The warm-up run is the largest part after LocalAI's wait,** and for
+  bge-m3 the largest of all: 3.4 to 3.5 s of 6.2 (its ubatch is 8,192). It
+  is the cost of a process's first compute on the card; the same request
+  answers in 0.03 s afterwards.
+- **The rewrite of a quantized model's weights could not be taken apart.**
+  The qwen copy with `GGML_SYCL_ENABLE_OPT=0` warmed up in 1.96–1.97 s,
+  0.4 s SLOWER than with the rewrite, and answered in 0.10 s against 0.06:
+  without the rewrite the engine runs other kernels, so the difference is
+  not the rewrite's cost. Its upper bound is the whole warm-up, 1.55 s.
+- **WHAT A PARKED MODEL WOULD PAY, derived and not measured** (no parked
+  process exists): by §3.1 the kernel programs stay with the process and a
+  context costs 23 to 55 ms (measured 11-12), so an F16 model pays the copy
+  and a context. For a quantized one the rewrite is added, somewhere under
+  the warm-up.
+
+  | | cold today | parked, derived |
+  |---|---|---|
+  | bge-m3 | 6.2–6.3 s | about 0.3 s |
+  | MADLAD | 6.5–6.6 s | about 0.9 s (1.5 s where the copy was slow) |
+  | qwen3-embedding-4b | 4.25 s | 0.4 to 1.9 s |
+
+  Step 1 measures the first row.
+- **AN UNLOAD OF A VEGA MODEL SOMETIMES TAKES 15 s MORE:** 15.06 and 15.12
+  s on three of fourteen (both pilots, one qwen load), the card freed only
+  then; MADLAD and the direct copies never. On the wrapper's path, not
+  explained (its own grace is 30 s). A defect on the question's path, where
+  a model is unloaded to make room: being looked into.
 - **2.0 s of every load pass before the engine is asked anything:** the
   backend listens, and LocalAI's load call reaches it 2.0 s later, the same
   for both models. No engine work is in it. IT IS A POLL'S SLEEP (the Tensor
@@ -316,8 +362,8 @@ the range. Seconds on the engine's own clock, from the backend process's
   `grpcAttemptsDelay` whole seconds and checks again; the defaults are 20
   attempts and 2 s (pkg/model/loader_options.go), the same on upstream's
   master. Read from the source; that the WHOLE 2.0 s is this sleep is
-  inferred, and LocalAI's own debug lines around the loop, or a copy with
-  the key below at 1, would make it a reading.
+  inferred (the server's log level does not print the loop's lines), and
+  it fits every load of the retake: 2.03 to 2.07 s, whatever the model.
   - What controls it: the model's YAML only, `grpc: attempts` and
     `attempts_sleep_time`, in whole seconds, 1 at least (0 reads as unset).
     No node-wide setting.
@@ -331,52 +377,25 @@ the range. Seconds on the engine's own clock, from the backend process's
     clockwork is implemented". The server patch, built with parking (§6,
     step 2). Until then the sleep stays at 2 s, and no model file takes the
     key.
-- **The part after the buffers is as large as the start, and it is the
-  warm-up run alone** (the engine's "empty run"), read line by line in one
-  load of each: 1.685 s of qwen's 1.77 s and 2.934 s of MADLAD's 3.12 s,
-  with no line during it. The canary takes 1 ms; the slots and the template
-  the rest. The same run on a loaded model answers in 0.02 s, so this is
-  the cost of a process's FIRST compute on the card. What it is made of is
-  read from the source (§3.1): nothing of it follows an F16 model's
-  weights; a quantized model's rewrite does. The ranges below were drawn
-  from these busy-node times and are withdrawn with them:
 
-  | | cold today | un-park, at best | un-park, the first use paid again |
-  |---|---|---|---|
-  | qwen3-embedding-4b | 4.5 s | 0.45 s | 2.3 s |
-  | MADLAD | 6.7–7.9 s | 0.9 s | 3.9 s |
+**The floor of a parked process,** each alone on the empty card, the context
+freed (`keep_context_ms` 0, the log's last line "context freed"), idle 8 s:
 
-- **Parking itself, card to RAM, copies nothing.** The weights never change
-  and their host copy is the file in the page cache: a park frees the
-  card's buffers. Not timed apart, since an unload today takes the process
-  down.
-- "The totals do not grow with the size" (§5.1) is these two parts: a fixed
-  2.0 s, and a first use that grows less than the weights.
+| | by the card's counter | fdinfo, client 1 + client 2 | GTT |
+|---|---|---|---|
+| a process with no weights (a medcpt-query copy, `gpu_layers 0`, context on demand) | 319 MiB | 251 + 67 | 271 |
+| vega-bge-m3 | 896 MiB | 828 + 67 | 99 |
+| vega-nemotron-3-embed-1b | 2,513 MiB | 2,446 + 67 | 99 |
 
-The floor of a parked process. SIZES, so the host's load does not change
-them; what does is whether the context was freed, and the first two
-readings were wrong on exactly that:
-- the two stand-ins first read (a medcpt-query copy with `gpu_layers 0`:
-  308 MiB of card; a bge-m3 copy: 1,312 MiB) STILL HELD THEIR CONTEXTS:
-  the test requests carried no `keep_context_ms`. Neither is a floor. The
-  "0.3 to 0.7 GiB a parked model" drawn from them is withdrawn;
-- the live vega-bge-m3, its context freed, idle (München, 14:50Z, the
-  process's own fdinfo): 830 MiB on one DRM client and 67 on a second,
-  nothing shared: 897 MiB, of which 577 are its weights. So about 320 MiB
-  beyond the weights, for one F16 model, one reading;
-- every llama.cpp backend on the card has that second client of 65 to 67
-  MiB;
-- the card's own counter could not confirm it by difference: seven backends
-  were loaded. §5.3 reads it on an empty card.
+- **A parked process holds 319 MiB of the card.** Two readings agree: the
+  process with no weights, and bge-m3's 896 less its 577 of weights. 67 of
+  it is a second DRM client every llama.cpp backend has.
+- Ten parked models are 3.2 GiB of the card's 32. With one process per model
+  THE FLOOR, not the weights, bounds how many models a node serves.
+- Nemotron's 2,513 is the figure of 11-23 (2,512). The keeper counted it at
+  2,229, a partial reading remembered as its weights: §8.
 
-The keeper remembered 621 MiB for the same model idle on 2026-11-23, on the
-engine before the cut-over: 276 MiB less. Its remembered sizes are keyed on
-the model, not on the engine (§8).
-
-With one process per model THE FLOOR, not the weights, bounds how many
-models a node serves. One reading does not give it.
-
-### 5.3 The retake, on an unloaded node
+### 5.3 The protocol of the retake
 
 measuring.md §10 and §6, with nothing left to a word like "paused":
 
@@ -398,15 +417,39 @@ measuring.md §10 and §6, with nothing left to a word like "paused":
    step 1's model), MADLAD (F16), qwen3-embedding-4b (Q4_K_M). The split as
    in the table above, the client's total, the same request warm, and the
    unload: from the call to the card's counter back at empty.
-7. **Two measurement copies, never a deployed model:** qwen with
-   `GGML_SYCL_ENABLE_OPT=0`, whose warm-up has no rewrite, so the difference
-   is the rewrite (the switch changes the kernels an encoder runs:
-   invariant 12); and one copy with `grpc: attempts_sleep_time: 1`, where
-   the gap before the load call falls to about 1 s if it is the poll.
+7. **A measurement copy, never a deployed model:** qwen with
+   `GGML_SYCL_ENABLE_OPT=0`, whose warm-up has no rewrite (the switch
+   changes the kernels an encoder runs: invariant 12). It did not give the
+   rewrite's cost (§5.2). The copy with `grpc: attempts_sleep_time: 1` was
+   not run: the poll's choice was made first.
 8. **The floor,** each alone on the empty card, the context freed (the
    request carrying `keep_context_ms` as the deployed model does): bge-m3,
    and the no-weights stand-in. By fdinfo per client and by the card's
    counter.
+
+### 5.4 The first readings, on a busy node: withdrawn
+
+The operator, 2026-11-24: "Have you measured with the unloaded system? No,
+you did not, I'm sitting next to the busy node. Your measurements are
+garbage." The first loads (14:29–14:34Z) were timed with the worker paused
+and nothing else: measuring.md §10, the operator's rule since 2026-11-03
+("this is not the first time it happens"), was not applied, and the
+architecture session published the figures without it. What ran in that
+window (München's record):
+- the worker was pausing, not idle: a wikidata vector index refresh begun
+  at 14:26, Normattiva's fts children parsing, its cgroup at 16.6–17.5 GiB;
+- one backend of 4.4 GB stayed on the card through the first run ("card
+  emptied" was false), and between the two runs the node RAN for 25 s: it
+  cold-started three models and embedded;
+- CPU 79–83 °C and card 74–80 °C every minute; no load average and no
+  container's CPU recorded;
+- the two "floor" processes still held their contexts (no
+  `keep_context_ms` on the requests): 308 and 1,312 MiB were not floors.
+
+What they gave, against §5.2: qwen 4.51–4.58 s (4.25), MADLAD 6.67–7.93 s
+(6.53–6.63), the copy 0.42–0.50 and 0.83–0.92 s (0.35–0.38 and 0.81–0.83),
+the warm-up 1.69 and 2.93 s (1.55 and 2.67). The shape was the same and
+every time was high; the "0.3 to 0.7 GiB a parked model" was wrong.
 
 ## 6. The order, each step on the operator's word
 
@@ -417,13 +460,14 @@ measuring.md §10 and §6, with nothing left to a word like "paused":
 | 2. LocalAI's parked state, its two calls, the RAM budget; the wrapper; the health-check poll at ~50 ms (operator, 2026-11-24) | Tensor, then upstream | a parked model answers after an un-park; the gates pass on the build |
 | 3. the question's plan on the two calls (`question_card`) | architecture | a cold question's first word within a second or two of the warm one's, measured on the node |
 
-STEP 0 IS NOT DONE. The first readings were taken on a busy node (§5.2) and
-give no go and no range for an un-park. What is known does not come from
-them: the 2 s of LocalAI's poll are a constant in its source, and the source
-says a parked F16 model pays the upload and a context creation only (§3.1).
-The retake is §5.3. LocalAI's poll sleep is decided: patched with step 2
-(§5.2). Still to measure after the retake: a load beside a working encoder
-(2), a question's timeline on an unloaded node (3).
+WHAT STEP 0 SAYS (§5.2, the unloaded node): a cold load is 4.3 to 6.6 s,
+and almost none of it is the copy. 2.0 s are LocalAI's wait, 1.5 to 3.5 s
+the process's first compute, 0.2 to 0.8 s the weights. A parked F16 model
+would return in about 0.3 to 0.9 s, by the source and the parts measured;
+no parked process exists to time. Each parked process holds 319 MiB of the
+card. So: go for step 1, which measures what is derived here. LocalAI's
+poll sleep is decided: patched with step 2. Still to measure: a load beside
+a working encoder (2), a question's timeline on an unloaded node (3).
 
 Each step is a deploy of its own. Each can stop there and still be worth
 having. In the serving scenario step 2 alone gives most of the gain: a
@@ -460,15 +504,16 @@ Existing tools, and why they are not the answer by themselves:
 - What is parked: the file's bytes (the reorder runs again at each
   un-park) or the reordered bytes read back once (§3.1).
 - One process per model is LocalAI's shape: what a parked process costs in
-  host RAM beyond its weights, and on the card (about 0.3 GiB for one F16
-  model, one reading, §5.2), and whether several models could share one
-  process's device context, which is not LocalAI's shape today.
-- The keeper's remembered sizes are keyed on the model and keep the fewest
-  ever read: after an engine swap they are the old engine's (bge-m3: 621
-  MiB remembered, 897 read idle on the live engine, §5.2). What the weights
-  count misses lands in the growth margin, so the total holds; the figure
-  shown is stale. To be read on the node for the other on-demand encoders,
-  then fixed in app/resident.py.
+  host RAM beyond its weights, and on the card (319 MiB each, §5.2), and
+  whether several models could share one process's device context, which is
+  not LocalAI's shape today.
+- The keeper learns an on-demand model's weights as the fewest reading
+  over 0.3 of its largest, and keeps it for ever: a reading taken mid-load
+  or partly paged is remembered as the weights. Nemotron: 2,229 MiB
+  counted, 2,513 held at rest (§5.2). Its weights and its context still sum
+  to its largest, so the total holds. Being fixed in app/resident.py: learnt
+  only from a process at rest, and replaced at the next such reading.
+- The 15 s unload of a vega model (§5.2).
 - For a quantized model, what parking keeps (§3.1): the card's bytes copied
   back, or the file read again with every tensor's flag cleared.
 - The chat model's prompt cache across a park.
