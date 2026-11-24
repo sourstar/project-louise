@@ -27,6 +27,13 @@ def caches(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CACHE_DIR", fast)
     monkeypatch.setattr(config, "FILES_CACHE_DIR", files)
     monkeypatch.setattr(config, "PUBMED_PACK_DIR", None, raising=False)
+    # THE ROOM IS THE FIXTURE'S, NOT THE HOST'S. `staged` copies only where
+    # STAGE_FREE of the disk stays free, and these tests read the real disk:
+    # on a machine under that share (2026-11-24, 17 GB free of 252) the code
+    # rightly stayed on the origin and three of them were red. The case
+    # without room sets its own full disk below.
+    roomy = shutil._ntuple_diskusage(total=1000 * 2**30, used=100 * 2**30, free=900 * 2**30)
+    monkeypatch.setattr(derived.shutil, "disk_usage", lambda p: roomy)
     derived._touched.clear()
     return files
 
