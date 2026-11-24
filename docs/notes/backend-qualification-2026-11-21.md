@@ -705,7 +705,7 @@ runs (finding F4).
 | F2 | LocalAI's `auto_upgrade_backends` was true since 11-08 and v5.0.1 upgraded three non-Louise backends | set back to false by München |
 | F3 | MADLAD read 2.4× slower on the new engine | a measurement artifact: the node had gone back to `running` after a reboot; paused, −2 %. Every timed row now records the node's mode and the card's holders |
 | F4 | the repository's series did not hold what was live (P10, P11 were "staged") | fixed: both in the series (41fb62a), the engine rebuilt, phases 1–3 rerun |
-| F5 | NeuRIS has no CPU-reference copy, so its gate cannot run | the collection's; with the architecture session by the operator's order. NeuRIS cannot be cut over until then |
+| F5 | NeuRIS has no CPU-reference copy, so its gate cannot run | CLOSED 2026-11-24: the reference resolves per model through RAGE's API (9ed2281d, live since 11-23); NeuRIS gates with its space at the cut-over |
 | F6 | the device-side MoE scheduler has no effect on the 35B at our settings | two rows queued (override bit, ubatch 2048) |
 | F7 | with `cpu_moe` the experts live in driver-held system memory (19.3 GiB), not in the process: `mlock` does nothing, the memory is not reclaimable | a cost to budget, §4.3 |
 | F8 | the MoE cache's statistics reach no log through LocalAI (the backend is killed before its destructor prints) | the tuning script is the way to read hit rates |
@@ -823,6 +823,17 @@ per-model reference resolution is München's question to architecture.
 Phase 3's evidence for nemotron is the engine's (bit-identical runs, the
 live engine's bytes) and holds for the new space; its gate runs on that
 space at the cut-over like any other.
+
+**Step 4 is DROPPED and F5 is closed (architecture, through München,
+2026-11-24).** The per-model CPU reference resolution is live (9ed2281d,
+`app/rage/reference.py`, deployed 11-23 16:23Z; NeuRIS.next's gate passed
+exact with the reference found by its model's key). NeuRIS, legi_F and
+Normattiva are one space (`a5630843…`) with one validated run: at the
+cut-over it gates ONCE on the new engine, on any of the three (NeuRIS, the
+smallest), and its statement covers all three; wikidata's and
+Normattiva-nemo's nemotron spaces gate on their own against the same
+model's reference. No collection waits. The order stands: architecture's
+7f118736 and its check, then the cut-over's window.
 
 **After it**: phase 5, the POC, on the adopted engine — the live set as it
 is, the 35B as the only test copy in place of the 9B — in a later window.

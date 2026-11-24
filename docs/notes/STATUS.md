@@ -24,8 +24,8 @@ measured (published figures disagree).
   POC.** The cut-over's order is in [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §5:
   BACKOUT first; the wrapper `vega-louise-llama-cpp` repointed at `c3294e050ff2`, MADLAD and the nemotron reranker
   naming it directly (their YAMLs here), `fit:off` on the thirteen; every collection's gate with its acceptance;
-  NeuRIS's vector leg waits for its CPU reference unless that deploy lands first; the old engines archived and
-  deleted. München runs it in a window the operator grants there. NOT yet done on the node.
+  NeuRIS gates with its space like the rest (the per-model CPU reference is live since 11-23: no collection
+  waits); the old engines archived and deleted. It goes after architecture's pending deploy 7f118736 and its check. München runs it in a window the operator grants there. NOT yet done on the node.
 - **2026-11-23, the new llama.cpp engine is QUALIFIED — the report** ([backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §4). Engine `c3294e050ff2` (LocalAI
   v5.0.1, llama.cpp `78e0529`, the eight-patch series): the series' checks pass, every gate that could run passes,
   every encoder bit-identical and equal to the live engine's bytes, the reranker's scores equal in 175/175 lists,
