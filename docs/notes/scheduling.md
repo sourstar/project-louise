@@ -28,7 +28,7 @@ the part that prevents the seventh.
 | **main loop** (`run_forever`) | node control state, discovery requests, telemetry publish, and keeping the embed producers matched to the collections (§12; with `WORKER_EMBED_PRODUCERS=0`, the old encoder rotation and bundles) | run a long CPU or IO job |
 | **embed producer**, one per collection (`_embed_producer`, nice 0) | that collection's embedding: selection, chunks, held rows, the commit; its requests pass the encoder's gate (§12) | drain bundles or archives, or do anything that does not feed its encoder |
 | **pipeline thread**, one per collection (`_pipeline_worker`) | that collection's rdf/fts (rdf also commits each batch's catalog-index entries, app/catalog.py, before the marks), its archive passes, and — when the collection `owns_own_embed` (its encoder is its own container) — its embed step | touch another collection's manifest, index or Lance table |
-| **fts look-ahead** (a chain of links, a daemon thread per link, `app/lookahead.py`; only under a pipeline thread with a parse pool and no binding profile, `FTS_OVERLAP=0` turns it off) | waiting on the pool for the NEXT fts batches while the pipeline thread commits and marks this one (2026-11-07), up to two batches of rows: a batch's carry and the rows after it, and the rows each rdf commit makes pending, the moment it commits | write anything — the pipeline thread takes whole links, re-reads their rows, and writes; or abandons them, and the results are dropped |
+| **fts look-ahead** (a chain of links, a daemon thread per link, `app/lookahead.py`; only under a pipeline thread with a parse pool and no binding profile, `FTS_OVERLAP=0` turns it off; a chain walks one class of pending rows, not yet embedded or embedded — a carried collection's — since 2026-11-24, pitfall 22) | waiting on the pool for the NEXT fts batches while the pipeline thread commits and marks this one (2026-11-07), up to two batches of rows: a batch's carry and the rows after it, and the rows each rdf commit makes pending, the moment it commits | write anything — the pipeline thread takes whole links, re-reads their rows, and writes; or abandons them, and the results are dropped |
 | **index maintainer** (one thread, `_index_maintainer`, at `nice 10` like the parse pool — and the pylance runtime it creates with it) | the vector index and the `book_id` index of every collection, one at a time; and each collection's catalog-index BACKFILL (app/catalog.py) until it is complete, in rowid windows, `CATALOG_BACKFILL_BUDGET_S` per turn | run on a pipeline thread (a refresh took 41 minutes and idled wikivec), hold a manifest write transaction while it works |
 | **stats publisher** | telemetry, the seeding table | do any pipeline work |
 | **resident keeper** (`_resident_keeper`, one thread, every `SETTLE_BEAT_S`; its loads on one `resident-warm` thread at a time; a trial, 2026-11-08) | the preload of the models Ask uses (app/resident.py): a model of the set not loaded, loaded through its caller's own bounded warm when it is in the BUDGET (threshold × total − the working margin, the growth over the at-rest sizes measured over 6 h, − an AIMD penalty for the reclaimer's evictions; filled at rest by priority: chat, rerankers, speech; query encoders; document encoders; MADLAD; the loads in that order — amended 2026-11-08, the set itself overran the card) and the card has room for it under the reclaimer's line; backing off 10 min … 2 h after a repeat eviction. Per beat: the probe once, LocalAI's settings once and `/system` three times per server, whatever the set's size | pin anything (the reclaimer must be able to evict it when space is claimed), unload anything (the budget only decides what is preloaded), wait on the settle thread (a run check can embed a whole set), load two models at once, or load inside a transaction |
@@ -525,6 +525,33 @@ GIL with it. Rule 2's own remedy had turned a hung child into a hung worker.
 The lesson: when a wait gets a bound, ask what the fallback does with the
 thing that was being waited for. If it does the same work in a place that
 cannot be bounded, the bound moved the hang, it did not remove it.
+
+**22. An optimisation that covered one class of rows, and an instrument
+nobody counted.** EUR-Lex5.next's text index, 2026-11-24 (a re-creation:
+every row carried, so EMBEDDED before its text is indexed): the stage was
+73 % of the pipeline thread and 61 % of that was the thread waiting for its
+own batch's parse (374 of 613 s in 841 s of wall, 12,495 documents), while
+the pool's children were idle 88 % of their time (S 637, R 71, D 12
+child-seconds of 720). A batch of THREE documents (two acts of 14 MB) took
+49.3 s of parse: in the 13 s before its commit five children each ended an
+fts part of 40–53 MB, some 240 MB parsed for 28 MB written. The look-ahead
+built on 11-07 for exactly this never ran: it walked the rows NOT YET
+EMBEDDED (`_FTS_NEXT … embed_done=0`, and a batch holding an embedded row
+dropped the chain), which is every row of a fresh collection and no row of
+a carried one. And the look-ahead is also what CARRIES the peers parsed
+past the chunk cap into the next batch: without it a batch parses as many
+rows as the median document would fill it with, writes up to the cap — two
+long acts reach it — and throws the rest away, to be parsed again. So the
+stage waited for parses and repeated them. M1's four legal collections
+indexed their text this way. Every batch line had said so since 11-07 — it
+ends ", parsed ahead)" or it does not — and 0 of 21 did; nothing counted
+the word.
+→ The look-ahead walks one CLASS of the scope index's order a chain: the
+rows not yet embedded, or the embedded ones (`lookahead.Chain.kind`,
+`worker._fts_class`); a batch across the two starts none, once.
+`tools/sched_measure.sh` counts the batches parsed ahead and the parse
+seconds waited in each kind. The rule: when an optimisation applies to SOME
+rows, write down which, and make its own log line a number someone reads.
 
 ## 6. Before you change the scheduler — the checklist
 

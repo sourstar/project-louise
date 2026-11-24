@@ -424,7 +424,9 @@ def test_a_heavy_part_gives_back_what_it_freed_and_says_it(monkeypatch, capsys):
     monkeypatch.setattr(parallel, "_rss_anon", lambda: next(seq))
     monkeypatch.setattr(parallel, "_compute", lambda kind, c, rows: [(True, r["uid"]) for r in rows])
     assert parallel._compute_heavy("fts", _coll(), _rows([MID])) == [(True, "e:0")]
-    assert "gave back 700 MB after a fts part of 60.0 MB" in capsys.readouterr().err
+    said = capsys.readouterr().err
+    assert "gave back 700 MB after a fts part of 60.0 MB" in said
+    assert "(1 row of eurlex; " in said, "the line names its collection and its rows"
     monkeypatch.setattr(parallel, "_rss_anon", lambda: 100 * 2 ** 20)
     assert parallel._give_back() is None, "below the threshold: nothing collected"
 

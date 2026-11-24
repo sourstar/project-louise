@@ -28,6 +28,13 @@ measured (published figures disagree).
   never in the worker's (#859); the pool's lines say when and where (#860); a dead-man's switch for the
   worker and the web, and a journal of what the worker parses in its own process, read by its successor
   (operator: "Do everything"). scheduling.md, pitfall 21.
+- **A carried collection's text index ran without its look-ahead** (Legal's question, München's readings,
+  22:09–22:19Z). EUR-Lex5.next's fts: 374 of the stage's 613 s were the pipeline thread waiting for its own
+  batch's parse, the pool's children idle 88 % of their time, 0 of 21 batches "parsed ahead". The look-ahead
+  of 11-07 walked only the rows not yet embedded, and a re-created collection's rows are embedded before
+  their text is indexed: M1's four legal collections indexed this way. Fixed (a chain per class of rows);
+  the measuring script now counts the batches parsed ahead. Expected 1.5–1.7x on that stage; the AFTER is
+  München's (scheduling-log.md, scheduling.md pitfall 22).
 - **A question's models are loaded ahead of the stage that needs them** (operator: "I want the preemptive
   model load to be implemented"). Each was loaded when its stage reached it, one cold load after the other
   (11-09: MADLAD 8.5 s in the language step, chat 13.4 s in the answer, first word 42.4 s cold against

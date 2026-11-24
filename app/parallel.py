@@ -1659,9 +1659,14 @@ def _compute_heavy(kind: str, collection, rows: list[dict]) -> list[tuple[bool, 
     out = _compute(kind, collection, rows)
     got = _give_back()
     if got is not None and got[0] - got[1] >= TRIM_SAY_BYTES:
+        # the collection and the rows, since 2026-11-24: five parts of 40-53 MB
+        # ended in the 13 s before a batch of THREE documents, and the line
+        # could not say whose they were (CLAUDE.md: every log line names its
+        # collection)
         print(f"{_hms()} [parse pool] child {os.getpid()} gave back {(got[0] - got[1]) / 2 ** 20:.0f} MB after "
               f"a {kind} part of {sum(int(r.get('size') or 0) for r in rows) / 2 ** 20:.1f} MB "
-              f"({got[0] / 2 ** 30:.2f} -> {got[1] / 2 ** 30:.2f} GB resident)", file=sys.stderr, flush=True)
+              f"({len(rows)} row{'s' if len(rows) != 1 else ''} of {getattr(collection, 'name', '?')}; "
+              f"{got[0] / 2 ** 30:.2f} -> {got[1] / 2 ** 30:.2f} GB resident)", file=sys.stderr, flush=True)
     return out
 
 
