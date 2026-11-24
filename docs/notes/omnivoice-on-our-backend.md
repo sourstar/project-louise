@@ -319,9 +319,15 @@ the user's).
 sequence is 168 rows instead of 203, and the layers are libllama's. A long
 text (848 characters, 5 chunks, 52.6 s of speech) in 780 s.
 
+**The server and long texts, MEASURED the same day:** `llama-server`'s
+`/v1/audio/speech` returns the tool's file byte for byte for the same text
+and seed, and honours `flow_steps` (the number of decoding steps) and
+`cfg_scale`; the long text's plan is the reference's line for line — 1,318
+frames, 5 chunks of 202 / 134 / 195 / 182 / 126 characters and 316 / 208 /
+305 / 284 / 199 frames, the first chunk's 316 frames the voice of the other
+four.
+
 **Not yet** (stage 4): voice cloning from a clip (HuBERT, the semantic and
 DAC encoders, the RVQ encoder), voice design through the model's "tts"
-template, the server's speech route, a chunk delivered as soon as it is
-decoded; and the long text's chunk plan compared line by line with the
-reference's (the same vendored functions; the port's lines print at log
-level 1, to be read in the server test).
+template, and a chunk delivered as soon as it is decoded (the audio comes
+in one piece at the end, as Kokoro's does).
