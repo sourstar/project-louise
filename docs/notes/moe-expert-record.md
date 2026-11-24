@@ -45,7 +45,7 @@ The architecture session's conditions, each as built:
 | switched by the model's env; off = today's engine | unset: nothing is read, kept or filled |
 | placement must not change an answer | by construction with no share of the misses on the CPU (`moe_cache_cpu_share` 0, the default and the node's): an expert in the cache and one uploaded at a miss are the same bytes through the same kernels. THE PROOF IS THE NODE'S (§5: the same token ids at temperature 0). With a CPU share above 0 the cache's state already decides today which kernels compute a miss, and a cache that starts full applies the share from its first token: documented, not claimed equal |
 | a record that cannot be read is ignored | cut, changed, noise, a NaN, other weights, another build: one log line, the model loads and starts cold (tested: every cut and every changed byte) |
-| THE FILL BELONGS TO THE LOAD | it is in the cache's constructor, which the context's constructor calls: under LocalAI, inside the load and before the warm-up run. ONLY THE LOAD'S OWN CONTEXT: with context on demand, a context created for a question after the keep ran out is filled inside that question, before its first token — there the person pays the fill, and it pays only if the seconds it saves under the tokens exceed its own (§6). Bounded by the cache's size: at the card's 6.2–6.4 GiB/s (München), 8,192 MiB are about 1.3 s; the fill's own log line says its MiB and its ms |
+| THE FILL BELONGS TO THE LOAD | it is in the cache's constructor, which the context's constructor calls: under LocalAI, inside the load and before the warm-up run. ONLY THE LOAD'S OWN CONTEXT: with context on demand, a context created for a question after the keep ran out is filled inside that question, before its first token — there the person pays the fill, and it pays only if the seconds it saves under the tokens exceed its own (§6). The live 35B is not that case: its YAML has no `context_on_demand` (München, 2026-11-24), so the load's context serves every question and the fill is paid once, in the load. Bounded by the cache's size: at the card's 6.2–6.4 GiB/s (München), 8,192 MiB are about 1.3 s; the fill's own log line says its MiB and its ms |
 | the file written by temporary name and rename, off the token path; a kill leaves the previous file whole | written in the cache's destructor (the unload's graceful path), never while it computes; `rename` over the old file |
 | the card bytes at rest | UNCHANGED: the cache's buffer is allocated whole and cleared when the cache is created, as before; the record decides what is in it. The keeper's size for the model does not move |
 | counts, no text; on the node only | per layer and expert, a float; never in a SHARD or a statement |
@@ -96,7 +96,10 @@ Two rules of the shape (2026-11-24, before the pass):
   after the load. With a keep of 0 the load's context is freed before the
   question and the question's context is filled again before its first
   token: the fill is then counted twice and the load-ahead case never
-  measured. The log says which context served the answer.
+  measured. The log says which context served the answer. P goes to the
+  UNLOADED copy: request to 64th chunk is the whole wait of a person whose
+  35B was not loaded, and the engine's own "model loaded" line isolates
+  the load.
 
 | run | env | read |
 |---|---|---|
@@ -104,6 +107,7 @@ Two rules of the shape (2026-11-24, before the pass):
 | B1, B2, a second context of the same process | `LLAMA_MOE_RECORD_DIR=<its copy>`, the copy on demand (`context_on_demand:true`, a keep of 0), P asked twice: B1 on a record of other questions, B2 on one that now holds P (the best case) | the fill is inside the first token here, by construction: "context created in … ms"; at each context: "N experts put in the cache from the record of T tokens, X MiB uploaded in Y ms"; then the same figures as A |
 | C, a new process reading the file | `LLAMA_MOE_RECORD_DIR=<its copy>`, the live context options | "the record of T tokens of this model is read from moe-record-….bin", the fill's line, the same figures as A, and THE LOAD'S SECONDS against A's |
 | D, the fill at a half and at a quarter | C's env and `LLAMA_MOE_RECORD_FILL=0.5`, then `0.25` | the fill's line (half, a quarter of the experts and MiB), the load's seconds, and the same figures as A |
+| E, the load-ahead shape (if the pause has room) | A and C again, Louise's own warm request first, then P | the warm request's time and P's own: a short warm prompt goes through the cache as one batch and warms a cold cache by itself — what is left for the record to remove when the load is hidden |
 | the proof | A, B1, B2, C, D | the answers equal (their texts: the API gives no token ids) |
 
 What decides: the first token and the first 64 tokens of C against A, C's
