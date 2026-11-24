@@ -898,6 +898,36 @@ Normattiva-nemo's nemotron spaces gate on their own against the same
 model's reference. No collection waits. The order stands: architecture's
 7f118736 and its check, then the cut-over's window.
 
+**First attempt, 2026-11-24 06:16–06:18Z (München): BACKED OUT at the first
+gate, cleanly.** The operator's word: "Deploy and step 3 right after".
+Step 0 on disk (the wrapper copied by `bf_copy`, 5,054 files; `vega.json`,
+`file-digests.json` and 14 YAMLs with their sha256; `backout.sh`). Step 2 as
+corrected by München before it ran: the repository's YAMLs LAG the live
+ones (no `context_on_demand` / `context_canary` on the three embedders,
+nemotron unpinned, qwen3-4b at ubatch 8192 for the live 2048, MADLAD at
+ctx 4096 / parallel 7 for the live 2048 / 4), so nothing was copied from
+the repository — each live file kept every key and gained `fit:off`
+(eleven files), and `louise-translate-madlad`, `-madlad-q8` and
+`louise-rerank-nemotron-1b` were pointed at the new engine. The cold load
+on the new engine worked (`vega-bge-m3` in 6.0 s). Then wikipedia's gate
+exited 2 BEFORE any measurement: the node holds no CPU reference for
+bge-m3's weights with that space's inputs, and "every card run is held to
+its CPU twin (invariant 12), so the gate is not run without one". Backout
+in six seconds: `vega.json` byte-equal, the YAMLs' sha256 back, the web
+down about two minutes, the live set loaded again on `281e1ee481b6`.
+
+**F11 — the qualification never met the gate's precondition.** Phase 3's
+bge-m3 "PASS" ran through the `-q` wrapper without `--accept`, on a path
+that does not ask the node's reference store; the store holds references
+for qwen3-4b (both sides), nemotron (document) and medcpt-query, none for
+bge-m3. Nothing failed in the engine. For the retry: a PREFLIGHT with no
+window — every served collection whose encoder goes through the wrapper
+enumerated (not only the five named above), the reference each gate will
+ask for resolved read-only and listed held or missing, query sides
+included, every missing one made on the CPU first — and that table is the
+retry's step 0b. München is making bge-m3's reference
+(`hold embedder cpu-reference wikipedia`) and retries on the same word.
+
 **After it**: phase 5, the POC, on the adopted engine — the live set as it
 is, the 35B as the only test copy in place of the 9B — in a later window. Two arms
 (§2 phase 5): the 35B offloaded with its cache, and arm S, the 35B resident
