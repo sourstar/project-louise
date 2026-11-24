@@ -13,6 +13,7 @@ docker's 120 s grace). Now a stop is honoured at part boundaries and bounds
 every wait inside it."""
 from __future__ import annotations
 
+import re
 import threading
 import time
 from concurrent.futures import Future
@@ -61,6 +62,43 @@ class _Pool:
             f.set_result(rows)
 
 
+class _Own:
+    """A PROCESS OF ITS OWN, as `_alone` starts one for a part that was in
+    flight when the pool failed — here a future the test decides: answered at
+    once, or never for a part holding a uid of `never`. `ran` records what
+    was handed to such processes, `ended` those terminated."""
+    ran: list[list[str]] = []
+    never: set[str] = set()
+    ended: list[list[str]] = []
+    refuse: BaseException | None = None
+
+    def __init__(self):
+        self.part: list[str] = []
+
+    def submit(self, fn, kind, collection, part, allowance):
+        if _Own.refuse is not None:
+            raise _Own.refuse
+        self.part = [r["uid"] for r in part]
+        _Own.ran.append(self.part)
+        f = Future()
+        f.set_running_or_notify_cancel()
+        if not set(self.part) & _Own.never:
+            f.set_result([(True, r["uid"]) for r in part])
+        return f
+
+    def shutdown(self, wait=True, cancel_futures=False):
+        if cancel_futures:                           # `discard`: the process terminated
+            _Own.ended.append(self.part)
+
+
+@pytest.fixture
+def own(monkeypatch):
+    _Own.ran, _Own.never, _Own.ended, _Own.refuse = [], set(), [], None
+    monkeypatch.setattr(parallel, "_lane_executor", _Own)
+    monkeypatch.setattr(parallel, "ISOLATE_START_S", 0.0)
+    return _Own
+
+
 @pytest.fixture
 def here(monkeypatch):
     """Every row computed in THIS process, by uid."""
@@ -84,10 +122,13 @@ def here(monkeypatch):
 
 # ---- P2: the watchdog is per part; what answered is kept ------------------------------
 
-def test_a_part_that_answered_is_kept_when_another_times_out(here, monkeypatch):
+def test_a_part_that_answered_is_kept_when_another_times_out(here, own, monkeypatch):
     """Before: the timeout sent the WHOLE batch to `_in_process` (4 rows
-    parsed again here, the 3 answered ones included). Now only the part that
-    did not answer is computed here."""
+    parsed again here, the 3 answered ones included). Then only the part that
+    did not answer was computed here — and on 2026-11-24 that part held the
+    document the child had hung on: the worker's own thread hung on it too,
+    the GIL with it, for 21 minutes. Now it is parsed again in a process of
+    its own, and nothing that was in flight is computed here."""
     pool = _Pool()
     monkeypatch.setattr(parallel, "pool", lambda: pool)
     monkeypatch.setattr(config, "PARSE_TIMEOUT_S", 0.3)
@@ -103,9 +144,103 @@ def test_a_part_that_answered_is_kept_when_another_times_out(here, monkeypatch):
     t0 = time.monotonic()
     got = parallel.compute("fts", _coll(k=False), rows)
     assert got == [(True, r["uid"]) for r in rows]
-    assert here == ["e:1"], f"only the part that did not answer is computed here: {here}"
+    assert here == [], f"nothing that was in flight is computed in this process: {here}"
+    assert own.ran == [["e:1"]], "the part that did not answer, in a process of its own"
     assert time.monotonic() - t0 < 3
-    assert parallel.health()["failures"] == 1
+    assert parallel.health()["failures"] == 1, "it came back alone: the pool's failure, counted"
+
+
+def test_a_document_that_does_not_come_back_alone_is_an_error_on_it(here, own, monkeypatch, capsys):
+    """The node, 2026-11-24: one document on which the parse never ends. Its
+    part does not answer in the pool; parsed again in a process of its own,
+    the part does not come back; each of its rows alone, one does not: THAT
+    document is answered as an error (it leaves every selection until
+    someone looks), its neighbour is parsed, nothing is computed in this
+    process, and the failure is the document's — the pool is not switched
+    off for it (off, its work would run in this process)."""
+    pool = _Pool()
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    monkeypatch.setattr(parallel, "_partition", lambda c, rows, want: [rows[i:i + 2] for i in range(0, len(rows), 2)])
+    monkeypatch.setattr(config, "PARSE_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(config, "PARSE_MAX_FAILURES", 1)
+    own.never = {"e:3"}
+    real_submit = pool.submit
+
+    def submit(fn, kind, collection, part):
+        f = real_submit(fn, kind, collection, part)
+        if "e:3" not in {r["uid"] for r in part}:
+            pool.answer(len(pool.futures) - 1)
+        return f
+    pool.submit = submit
+    rows = _rows([1, 1, 1, 1, 1, 1])
+    t0 = time.monotonic()
+    got = parallel.compute("fts", _coll(k=False), rows)
+    assert [g for i, g in enumerate(got) if i != 3] == [(True, r["uid"]) for i, r in enumerate(rows) if i != 3]
+    assert got[3][0] is False and got[3][1]["type"] == "ParseNoAnswer", got[3]
+    assert not worker._deferred_row(got[3][1]), "an error on the document, not a deferral"
+    assert here == [], f"nothing computed in this process: {here}"
+    assert own.ran == [["e:2", "e:3"], ["e:2"], ["e:3"]], "its part, then each of its rows alone"
+    assert own.ended == [["e:2", "e:3"], ["e:3"]], "the processes that did not come back, terminated"
+    assert time.monotonic() - t0 < 5, "bounded: twice the timeout, not for ever"
+    health = parallel.health()
+    assert health["failures"] == 0 and health["disabled"] is False, "the document's failure, not the pool's"
+    err = capsys.readouterr().err
+    assert "document e:3 did not come back from a process of its own" in err
+    # the pool's lines say WHEN and WHERE (the node's line of 2026-11-24 said neither)
+    line = next(ln for ln in err.splitlines() if "[parse pool] TimeoutError" in ln)
+    assert re.match(r"\d\d:\d\d:\d\d \[parse pool\] TimeoutError in fts of eurlex: ", line), line
+    # LEFT PENDING as a peer, it comes back, in the end as its batch's only
+    # row: one light row is computed in this process — not this one. It is
+    # answered as it was, with no pool, no process and nothing computed here
+    asked = len(pool.futures)
+    again = parallel.compute("fts", _coll(k=False), [rows[3]])
+    assert again[0][0] is False and again[0][1]["type"] == "ParseNoAnswer"
+    assert here == [] and len(pool.futures) == asked and len(own.ran) == 3
+    both = parallel.compute("fts", _coll(k=False), [rows[3], {"uid": "e:9", "size": 1}])
+    assert both[0][1]["type"] == "ParseNoAnswer" and both[1] == (True, "e:9"), "its neighbours go on, in order"
+
+
+def test_where_no_process_can_be_started_the_rows_wait_and_are_not_parsed_here(here, own, monkeypatch):
+    pool = _Pool()
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    monkeypatch.setattr(config, "PARSE_TIMEOUT_S", 0.3)
+    own.refuse = OSError("cannot allocate memory")
+    real_submit = pool.submit
+
+    def submit(fn, kind, collection, part):
+        f = real_submit(fn, kind, collection, part)
+        if part[0]["uid"] != "e:1":
+            pool.answer(len(pool.futures) - 1)
+        return f
+    pool.submit = submit
+    got = parallel.compute("fts", _coll(k=False), _rows([1, 1, 1]))
+    assert got[0] == (True, "e:0") and got[2] == (True, "e:2")
+    assert got[1][0] is False and worker._deferred_row(got[1][1]), "deferred: asked again, the document untouched"
+    assert here == []
+
+
+def test_a_stop_ends_the_second_parse_and_its_processes(here, own, monkeypatch):
+    pool = _Pool()
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    monkeypatch.setattr(config, "PARSE_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(parallel, "ISOLATE_START_S", 30.0)          # it would wait half a minute
+    own.never = {"e:1"}
+    real_submit = pool.submit
+
+    def submit(fn, kind, collection, part):
+        f = real_submit(fn, kind, collection, part)
+        if part[0]["uid"] != "e:1":
+            pool.answer(len(pool.futures) - 1)
+        return f
+    pool.submit = submit
+    stop = threading.Event()
+    threading.Timer(0.8, stop.set).start()
+    t0 = time.monotonic()
+    with parallel.controlled(stop=stop):
+        got = parallel.compute("fts", _coll(k=False), _rows([1, 1, 1]))
+    assert time.monotonic() - t0 < 5, "the stop bounds the wait"
+    assert got[1][0] is False and got[1][1]["type"] == "Stopped" and here == []
+    assert own.ended == [["e:1"]], "its process terminated"
 
 
 def test_the_watchdog_waits_for_no_progress_not_for_the_whole_batch(here, monkeypatch):

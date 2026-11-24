@@ -102,6 +102,16 @@ def node(monkeypatch):
     monkeypatch.setattr(model_load.httpc, "get", n.get)
     monkeypatch.setattr(embeddings.httpc, "post", n.post)
     monkeypatch.setattr(model_load, "load_timeout_s", lambda model: 5.0)
+    # each `/system` reading comes a minute after the one before, as one beat
+    # after another: a model read twice running at the same bytes has held
+    # them for AT_REST_S, and nobody asked it meanwhile (`_rests`)
+    clock = {"t": 0.0}
+
+    def tick() -> float:
+        clock["t"] += 60.0
+        return clock["t"]
+    monkeypatch.setattr(model_load, "_rest_clock", tick)
+    monkeypatch.setattr(resident, "_rested", {})
     yield n
     model_load.reset()
     keep.reset()
@@ -280,6 +290,13 @@ def test_a_context_that_failed_its_canary_is_a_deferral_too(node):
 
 # ---- the resident keeper ----------------------------------------------------------------
 
+def _look(node) -> None:
+    """What a beat does: a reading of `/system`, then the keeper's note of
+    which models are at rest (nobody has asked any of them)."""
+    model_load.loaded_models(SERVER, max_age_s=0.0)
+    resident._note_rested([(SERVER, m) for m in node.loaded], {}, resident._wall())
+
+
 def test_the_keeper_counts_such_a_model_at_its_weights_and_its_context_apart(node):
     """qwen3-4b's own figures (the brief §6): 4,263 MiB running, 2,381 MiB
     idle — the weights alone. Operator, 2026-11-24: the weights and the shared
@@ -292,10 +309,10 @@ def test_the_keeper_counts_such_a_model_at_its_weights_and_its_context_apart(nod
     node.options[qwen] = ["context_on_demand", "ubatch:2048"]
     node.options[other] = ["ubatch:512"]
     mem = resident.Memory()
-    for running in (True, False, True, False):
+    for running in (True, False, False):                              # seen working, then at rest
         node.vram[qwen] = (4_263 if running else 2_381) * MIB
         node.vram[other] = (900 if running else 700) * MIB
-        model_load.loaded_models(SERVER, max_age_s=0.0)
+        _look(node)
     on_demand = resident.Resident(SERVER, qwen, ("document",), ("gutenberg",))
     plain = resident.Resident(SERVER, other, ("document",), ("pubmed",))
     assert resident._size(on_demand, mem) == 4_263 * MIB
@@ -319,13 +336,13 @@ def test_such_a_model_never_seen_working_counts_at_its_weights_and_the_floor_hol
     mem = resident.Memory()
     for _ in range(3):
         node.vram[qwen] = 2_381 * MIB
-        model_load.loaded_models(SERVER, max_age_s=0.0)
+        _look(node)
     on_demand = resident.Resident(SERVER, qwen, ("document",), ("gutenberg",))
     assert resident._rest_size(on_demand, mem) == 2_381 * MIB, "its weights"
     assert resident._context_size(on_demand, mem) is None, "never seen with its context"
     assert resident.shared_context([on_demand], mem) == (resident.CONTEXT_RESERVE, ())
     node.vram[qwen] = 4_263 * MIB
-    model_load.loaded_models(SERVER, max_age_s=0.0)
+    _look(node)
     assert resident._rest_size(on_demand, mem) == 2_381 * MIB
     assert resident._context_size(on_demand, mem) == 1_882 * MIB, "seen working: its context is known"
 
@@ -333,21 +350,25 @@ def test_such_a_model_never_seen_working_counts_at_its_weights_and_the_floor_hol
 def test_an_idle_reading_under_half_is_its_weights_not_a_model_off_the_card(node):
     """REST_FLOOR reads a size under half the largest as a model partly off
     the card. A model that keeps only its weights while idle sits there by
-    design — 2,381 of 5,643 MiB is 0.42 — and that reading IS its weights
-    (ON_DEMAND_REST_FLOOR, 0.3). One under 0.3 is a model partly off the
-    card: with no weights kept in the file, it counts at its largest."""
+    design — 2,381 of 5,643 MiB is 0.42 — and that reading, at rest, IS its
+    weights (ON_DEMAND_REST_FLOOR, 0.3). ONE reading under them says nothing
+    (a model loading, a buffer on its way): the weights stand. A model that
+    RESTS under 0.3 is partly off the card: with no weights kept in the file,
+    it counts at its largest."""
     qwen = "vega-qwen3-embedding-4b"
     node.loaded.add(qwen)
     node.options[qwen] = ["context_on_demand"]
     mem = resident.Memory()
     for mib in (5_643, 2_381, 2_381):
         node.vram[qwen] = mib * MIB
-        model_load.loaded_models(SERVER, max_age_s=0.0)
+        _look(node)
     assert resident.ON_DEMAND_REST_FLOOR < 2_381 / 5_643 < resident.REST_FLOOR
     r = resident.Resident(SERVER, qwen, ("document",), ("gutenberg",))
     assert resident._rest_size(r, mem) == 2_381 * MIB
-    node.vram[qwen] = 1_000 * MIB                                     # partly off the card
-    model_load.loaded_models(SERVER, max_age_s=0.0)
+    node.vram[qwen] = 1_000 * MIB                                     # one reading under its weights
+    _look(node)
+    assert resident._rest_size(r, mem) == 2_381 * MIB, "not at rest there: its weights stand"
+    _look(node)                   # and it stays there: partly off the card
     assert resident._rest_size(r, mem) == 5_643 * MIB, "no weights known any more: its largest, the cautious side"
     mem.rest[(SERVER, qwen)] = 2_381 * MIB                            # the file kept them
     assert resident._rest_size(r, mem) == 2_381 * MIB
@@ -363,9 +384,10 @@ def test_the_margin_s_sample_reads_it_at_its_weights_with_its_context_named(node
     node.loaded = {qwen, other}
     node.options[qwen] = ["context_on_demand"]
     mem = resident.Memory()
-    for qwen_mib, other_mib in ((4_263, 900), (2_381, 700)):         # running, then idle
+    for qwen_mib, other_mib in ((4_263, 900), (2_381, 700), (2_381, 700)):    # running, then at rest
         node.vram[qwen], node.vram[other] = qwen_mib * MIB, other_mib * MIB
-        held = resident._held_now([SERVER], mem)
+        _look(node)
+    held = resident._held_now([SERVER], mem)
     by_model = {m: v for (m, _pid), v in held.items()}
     assert by_model == {qwen: (2_381 * MIB, 2_381 * MIB, 1_882 * MIB), other: (700 * MIB, 700 * MIB, 0)}
 

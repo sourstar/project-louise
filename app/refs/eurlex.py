@@ -489,9 +489,9 @@ _FORMS: tuple[_Forms, ...] = (
                   "2018/1725'; 32023D1532 'Cinneadh 2014/512/CBES'"),
     _Forms("hu", R=r"rendelet\w*", L=r"irányelv\w*", D=r"(?:keret)?határozat\w*", type_after=True,
            gap=r"európai\s+parlamenti\s+és\s+tanácsi|tanácsi|bizottsági|végrehajtási|felhatalmazáson\s+alapuló",
-           after=r"(?:\d+[a-z]?\.?(?:\s*(?:[–—-]|,|és|vagy)\s*(?:az?\s+)?)?)*\d+[a-z]?\.\s*cikk\w*"
-                 r"(?:\s*\(\d+[a-z]?\))?(?:\s*,?\s*(?:és|vagy)\s+(?:az?\s+)?(?:\d+[a-z]?\.?(?:\s*(?:[–—-]|,|és)\s*)?)*"
-                 r"\d+[a-z]?\.\s*cikk\w*(?:\s*\(\d+[a-z]?\))?)*",
+           after=r"(?:\d++[a-z]?\.?(?:\s*(?:[–—-]|,|és|vagy)\s*(?:az?\s+)?)?)*\d++[a-z]?\.\s*cikk\w*"
+                 r"(?:\s*\(\d++[a-z]?\))?(?:\s*,?\s*(?:és|vagy)\s+(?:az?\s+)?(?:\d++[a-z]?\.?(?:\s*(?:[–—-]|,|és)\s*)?)*"
+                 r"\d++[a-z]?\.\s*cikk\w*(?:\s*\(\d++[a-z]?\))?)*",
            num_word=r"cikk\w*", sub=r"bekezdés\w*|pont\w*", conj=r"és|vagy|illetve",
            source="32016R0679 Art. 93(2) 'a 182/2011/EU rendelet 5. cikkét', rec. 172 'a 45/2001/EK rendelet 28. "
                   "cikkének (2) bekezdésével', Art. 4(25) 'az (EU) 2015/1535 európai parlamenti és tanácsi "
@@ -499,34 +499,34 @@ _FORMS: tuple[_Forms, ...] = (
     _Forms("fi", R=r"asetu(?:s|ksen|ksessa|ksella|ksesta|kseen|sta|kset|sten|ksiin|ksia)",
            L=r"direktiiv(?:i(?:n|ssä|llä|stä|in|ä|t|en)?|eihin|ejä|eissä|ien)",
            D=r"päätö(?:s|ksen|ksessä|ksellä|ksestä|kseen|stä|kset|sten)",
-           after=r"\d+(?:\s?[a-z](?![^\W\d_]))?(?:\s*(?:[–—-]|,|ja|tai)\s*\d+(?:\s?[a-z](?![^\W\d_]))?)*\s+artikl[ao]\w*"
-                 r"(?:\s+\d+(?:\s?[a-z](?![^\W\d_]))?\s+(?:ala)?kohd\w*)*(?:\s*,?\s*(?:ja|tai)\s+\d+(?:\s?[a-z](?![^\W\d_]))?"
-                 r"(?:\s*(?:[–—-]|,|ja)\s*\d+)*\s+artikl[ao]\w*(?:\s+\d+(?:\s?[a-z](?![^\W\d_]))?\s+(?:ala)?kohd\w*)*)*",
+           after=r"\d++(?:\s?[a-z](?![^\W\d_]))?(?:\s*(?:[–—-]|,|ja|tai)\s*\d++(?:\s?[a-z](?![^\W\d_]))?)*\s+artikl[ao]\w*"
+                 r"(?:\s+\d++(?:\s?[a-z](?![^\W\d_]))?\s+(?:ala)?kohd\w*)*(?:\s*,?\s*(?:ja|tai)\s+\d++(?:\s?[a-z](?![^\W\d_]))?"
+                 r"(?:\s*(?:[–—-]|,|ja)\s*\d++)*\s+artikl[ao]\w*(?:\s+\d++(?:\s?[a-z](?![^\W\d_]))?\s+(?:ala)?kohd\w*)*)*",
            num_word=r"artikl[ao]\w*", sub=r"(?:ala)?kohd\w*", conj=r"ja|tai",
            source="32016R0679 Art. 93(2) 'asetuksen (EU) N:o 182/2011 5 artiklaa', rec. 106 'direktiivin 95/46/EY "
                   "25 artiklan 6 kohdan', Art. 4(25) 'direktiivin (EU) 2015/1535 (19) 1 artiklan'; 32018R0825 "
                   "'asetuksen (EU) 2016/1036 7 artiklan 2 a kohdassa'"),
     _Forms("et", R=r"määrus(?:e|t|es|ega|ele|est|ed|i|te|tele|tes|test)?", L=r"direktiiv(?:i|iga|is|ist|ile|id|e)?",
            D=r"otsus(?:e|t|es|ega|ele|est|ed)?",
-           after=r"artik(?:kel|li\w*)\s+\d+[a-z]?(?:\s*(?:[–—-]|,|ja|või)\s*\d+[a-z]?)*(?:\s+(?:lõi|punkt)\w*\s+\d+[a-z]?)*"
-                 r"(?:\s*,?\s*(?:ja|või)\s+artik(?:kel|li\w*)\s+\d+[a-z]?(?:\s*(?:[–—-]|,|ja)\s*\d+[a-z]?)*"
-                 r"(?:\s+(?:lõi|punkt)\w*\s+\d+[a-z]?)*)*",
+           after=r"artik(?:kel|li\w*)\s+\d++[a-z]?(?:\s*(?:[–—-]|,|ja|või)\s*\d++[a-z]?)*(?:\s+(?:lõi|punkt)\w*\s+\d++[a-z]?)*"
+                 r"(?:\s*,?\s*(?:ja|või)\s+artik(?:kel|li\w*)\s+\d++[a-z]?(?:\s*(?:[–—-]|,|ja)\s*\d++[a-z]?)*"
+                 r"(?:\s+(?:lõi|punkt)\w*\s+\d++[a-z]?)*)*",
            sub=r"lõi\w*|punkt\w*", conj=r"ja|või",
            source="32016R0679 Art. 93(2) 'määruse (EL) nr 182/2011 artiklit 5', rec. 106 'direktiivi 95/46/EÜ "
                   "artikli 25 lõike 6'; 32018R0825 rec. 21 'määruse (EL) 2016/1036 artikli 7 lõikes 2a'"),
     _Forms("lv", R=r"regul(?:a|as|u|ā|ai|ām|ās)", L=r"direktīv(?:a|as|u|ā|ai|ām|ās)",
            D=r"(?:pamat)?lēmum(?:s|a|u|ā|am|i|us)",
-           after=r"\d+(?:\.?[a-z])?\.(?:\s*(?:[–—-]|,|un|vai)\s*\d+(?:\.?[a-z])?\.)*\s*pant\w*"
-                 r"(?:\s+\d+(?:\.?[a-z])?\.\s*(?:apakš)?punkt\w*)*(?:\s*,?\s*(?:un|vai)\s+\d+(?:\.?[a-z])?\."
-                 r"(?:\s*(?:[–—-]|,|un)\s*\d+(?:\.?[a-z])?\.)*\s*pant\w*(?:\s+\d+(?:\.?[a-z])?\.\s*(?:apakš)?punkt\w*)*)*",
+           after=r"\d++(?:\.?[a-z])?\.(?:\s*(?:[–—-]|,|un|vai)\s*\d++(?:\.?[a-z])?\.)*\s*pant\w*"
+                 r"(?:\s+\d++(?:\.?[a-z])?\.\s*(?:apakš)?punkt\w*)*(?:\s*,?\s*(?:un|vai)\s+\d++(?:\.?[a-z])?\."
+                 r"(?:\s*(?:[–—-]|,|un)\s*\d++(?:\.?[a-z])?\.)*\s*pant\w*(?:\s+\d++(?:\.?[a-z])?\.\s*(?:apakš)?punkt\w*)*)*",
            num_word=r"pant\w*", sub=r"(?:apakš)?punkt\w*|daļ\w*", conj=r"un|vai",
            source="32016R0679 Art. 93(2) 'Regulas (ES) Nr. 182/2011 5. pantu', rec. 106 'Direktīvas 95/46/EK 25. "
                   "panta 6. punktu'; 32018R0825 rec. 21 'Regulas (ES) 2016/1036 7. panta 2.a punktā'"),
     _Forms("lt", R=r"reglament(?:as|o|ą|u|e|ai|ui|ų|us|uose|ams)", L=r"direktyv(?:a|os|ą|oje|ai|as|oms|ų)",
            D=r"sprendim(?:as|o|ą|u|e|ai|ui|ų|us|ams)",
-           after=r"\d+[a-z]?(?:\s*(?:[–—-]|,|ir|bei|arba)\s*\d+[a-z]?)*\s+straipsn\w*(?:\s+\d+\s+(?:dal|punkt)\w*)*"
-                 r"(?:\s*,?\s*(?:ir|bei|arba)\s+\d+[a-z]?(?:\s*(?:[–—-]|,|ir|bei)\s*\d+[a-z]?)*\s+straipsn\w*"
-                 r"(?:\s+\d+\s+(?:dal|punkt)\w*)*)*",
+           after=r"\d++[a-z]?(?:\s*(?:[–—-]|,|ir|bei|arba)\s*\d++[a-z]?)*\s+straipsn\w*(?:\s+\d++\s+(?:dal|punkt)\w*)*"
+                 r"(?:\s*,?\s*(?:ir|bei|arba)\s+\d++[a-z]?(?:\s*(?:[–—-]|,|ir|bei)\s*\d++[a-z]?)*\s+straipsn\w*"
+                 r"(?:\s+\d++\s+(?:dal|punkt)\w*)*)*",
            num_word=r"straipsn\w*", sub=r"dal\w*|punkt\w*", conj=r"ir|bei|arba",
            source="32016R0679 Art. 93(2) 'Reglamento (ES) Nr. 182/2011 5 straipsnis', rec. 106 'Direktyvos "
                   "95/46/EB 25 straipsnio 6 dalimi'; 32018R0825 'Reglamento (ES) 2016/1036 5 straipsnio 9 dalį'"),
@@ -560,7 +560,7 @@ _QUESTION_FORMS: tuple[_Forms, ...] = (
            source="the OJ writes 'člen 5'; Slovenian law numbers first, '5. člen'"),
     _Forms("bg", art=r"чл\.", source="the OJ writes 'член 5'"),
     _Forms("el", art=_tonos(r"άρθρ?\."), source="the OJ writes 'άρθρο 5'"),
-    _Forms("lt", after=r"\d+[a-z]?\s+str\.", num_word=r"str\.", source="the OJ writes '5 straipsnis'"),
+    _Forms("lt", after=r"\d++[a-z]?\s+str\.", num_word=r"str\.", source="the OJ writes '5 straipsnis'"),
 )
 _ALL = _FORMS + _QUESTION_FORMS
 
@@ -601,6 +601,16 @@ def _union(field: str, forms=_FORMS) -> str:
     return "|".join(f"(?:{getattr(f, field)})" for f in forms if getattr(f, field))
 
 
+#: IN AN `after` FORM A NUMBER IS NEVER SPLIT: every digit run is possessive
+#: (`\d++`), as `_ANUM`'s. Hungarian's list had `\d+` inside a loop whose
+#: separator is optional, so a number could be read as any run of shorter
+#: ones, and a list that ends in no article word was tried every way: " a
+#: 30340, 30401, 36640, 56800, 76815, 76866, 88640 és 93760 EGK-számú
+#: anyagokra" (32007L0019, hu) held the worker's pipeline thread in one regex
+#: call for 21 minutes, the GIL with it (the node, 2026-11-24). The form is
+#: tried after ANY act's number run, so it was reachable from every language.
+#: tests/test_refs_hostile_text.py runs every resolver on such texts in a
+#: child with a deadline.
 _FIRST = tuple(f for f in _FORMS if not f.type_after)
 _HU = next(f for f in _FORMS if f.type_after)
 #: the look-back from a number run: the type word, what a language writes

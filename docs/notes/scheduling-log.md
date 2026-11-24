@@ -3231,3 +3231,41 @@ a throwaway web container with the live image and env, one question:
 - Still to come (München's night watch to 07:00Z, /root/measure/index-trial/night-log.txt): the refreshes over hours of wikidata embedding, how many, and their durations. Embedding resumes after phase 4 and M1/M2.
 
 Then the permanent form goes to the operator: a byte cap on the tail, which also folds a quiet table's whole tail.
+
+## 2026-11-24 — what was in flight when the pool failed is parsed in processes of its own
+
+**Scenario and BEFORE (live, 15:47–16:11Z; München).** The node running;
+EUR-Lex5.next in rdf and fts (fts batches of ~450–500 documents, 16–18 s
+each), legi_F and wikidata embedding, the other collections caught up.
+- 15:48:11Z the last fts commit of EUR-Lex5.next; 15:49:52Z the last log
+  line of any collection; then "[parse pool] TimeoutError: the parts that
+  answered kept, the others computed in-process (a heavy document deferred)
+  (failure 1 of 3)", and nothing until the restart by hand at 16:10:30Z.
+- One thread at 99.9 % of a core for 19 minutes; py-spy twice, three minutes
+  apart, the same frame (`_occurrences`, app/refs/eurlex.py, under
+  `parallel._in_process`); every other thread at 0 %; 0 embedding requests
+  at LocalAI in those minutes against 2,038 in the 20 minutes before;
+  `docker restart -t 45` took 46 s (killed).
+- The document: hu 32007L0019, 159,976 bytes. Reproduced off the node from
+  its public text: no answer in 60 s; 0.01 s with #858.
+
+**The change.** `parallel.compute` and `compute_pages`: the parts in flight
+when a batch's wait fails go to `_isolated` (processes of their own, two at
+a time, PARSE_TIMEOUT_S + 10 s each; a part, then its rows alone) instead of
+`_here` / `_compute`. Nothing on the success path, no query, no new wait
+without a bound and a stop.
+
+**What the tests give** (no node number exists for a path that runs only
+after a failure).
+- tests/test_parallel_watchdog.py: a row that never answers, in the pool
+  and alone, with PARSE_TIMEOUT_S 0.3: answered as an error in under 5 s,
+  0 rows computed in the calling process, the pool's failure count back at
+  0; its part's and the row's own process terminated.
+- tests/test_parallel_exit.py, real processes, a parser that sleeps for an
+  hour on one row: every other row in order, that row an error, exit 130,
+  the last process it hung in gone, in this interpreter and in 3.12.
+
+**AFTER, to read on the node** (nothing to measure unless a pool failure
+occurs): any "[parse pool] … were in flight: parsed again in processes of
+their own" line, with the seconds to the stage's next commit, and whether a
+"did not come back from a process of its own" line names a document.

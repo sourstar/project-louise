@@ -202,3 +202,22 @@ On the node (München's readings of 11-12 and 11-23):
 - The growth and the shared budget are ADDED, never the larger of the two
   (2026-11-23's reserve): growth held by the chat or the translator is not
   room a context can be made in.
+- HOW THE WEIGHTS ARE KNOWN (2026-11-24, after the two budgets' first hour
+  live): what the model's process holds AT REST, the latest time it was
+  seen so, kept in the file for a restart (`resident._note_rested`,
+  `_weights`). At rest is: the same backend process holding the same bytes
+  for 10 s of `/system` readings (`model_load.steady_vram`), AND nobody on
+  the node having asked the model for 10 s (`encoder_use`). The bytes alone
+  do not say it: a stream that works without pause keeps its context from
+  one request to the next, and the model holds weights and context
+  steadily. Nor does `/system`'s cpu, which behind VeGa is the wrapper's
+  (scheduling.md, Perugia). A context left held by a request without a keep
+  reads as weights until the model next rests: the cautious side, and not
+  for ever. Until then they were the
+  fewest reading of all over 0.3 of the largest, kept for ever, and a
+  reading taken while a model loaded stayed as its weights: nemotron counted
+  2,229 MiB where it holds 2,513 at rest (München, on the empty card), its
+  context 2,175 where it is 1,891. The two still summed to its largest, so
+  nothing was over-committed; the split was wrong. The live engine's
+  figures at rest: qwen3-embedding-4b 2,727, nemotron 2,513, bge-m3 897 MiB
+  (621 on the engine before the cut-over).

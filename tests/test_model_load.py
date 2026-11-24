@@ -595,3 +595,46 @@ def test_nothing_is_loaded_behind_a_caller_where_nothing_is_known(monkeypatch):
     assert model_load.warm_behind(SERVER, "m", warm, caller="c") is True
     assert model_load.warm_behind(SERVER, None, warm, caller="c") is True
     assert calls == []
+
+
+# --- for how long a process has held the same bytes (the node, 2026-11-24) --------------
+
+def test_the_readings_say_for_how_long_a_process_has_held_the_same_bytes(monkeypatch):
+    """The resident keeper reads an on-demand model's weights when it is at
+    rest (app/resident.py `AT_REST_S`); this is the half the readings give:
+    the SAME backend process holding the SAME bytes, first reading to last.
+    Bytes that moved (a load on its way, a context made or freed) and another
+    process (a reload) each begin it again."""
+    mib = 2 ** 20
+    row = {"size": 0, "pid": 7}
+    clock = {"t": 1_000.0}
+
+    def get(url, timeout=None, **_kw):
+        return httpx.Response(200, request=httpx.Request("GET", url), json={"loaded_models": [
+            {"id": "nemo", "size_vram": row["size"], "process": {"pid": row["pid"], "cpu_percent": 0.07}}]})
+    model_load.reset()
+    monkeypatch.setattr(model_load, "_fetch_system", REAL_FETCH)
+    monkeypatch.setattr(model_load.httpc, "get", get)
+    monkeypatch.setattr(model_load, "_rest_clock", lambda: clock["t"])
+    assert model_load.steady_vram(SERVER, "nemo") is None
+
+    def read(size_mib: int, *, after: float, pid: int = 7) -> tuple[int, float]:
+        clock["t"] += after
+        row.update(size=size_mib * mib, pid=pid)
+        model_load.loaded_models(SERVER, max_age_s=0.0)
+        size, seconds = model_load.steady_vram(SERVER, "nemo")
+        return size // mib, seconds
+
+    def held(size_mib: int, seconds: float):
+        return (size_mib, pytest.approx(seconds))
+
+    assert read(2_229, after=0.0) == held(2_229, 0.0), "a reading on its way up"
+    assert read(2_513, after=0.4) == held(2_513, 0.0), "the bytes moved: it begins again"
+    assert read(2_513, after=60.0) == held(2_513, 60.0)
+    assert read(2_513, after=60.0) == held(2_513, 120.0)
+    assert read(4_404, after=1.0) == held(4_404, 0.0), "its context made"
+    assert read(2_513, after=3.0) == held(2_513, 0.0), "and freed"
+    assert read(2_513, after=30.0, pid=8) == held(2_513, 0.0), "a reload: two processes' bytes do not add up"
+    assert read(2_513, after=30.0, pid=8) == held(2_513, 30.0)
+    model_load.reset()
+    assert model_load.steady_vram(SERVER, "nemo") is None

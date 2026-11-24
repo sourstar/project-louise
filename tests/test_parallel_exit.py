@@ -102,12 +102,18 @@ STREAM = """
 
     def compute(kind, collection, rows):
         # in a CHILD, the part holding row {stuck} never returns: a parser
-        # that hangs (in-process, the same part is quick)
+        # that hangs — in the pool's child, and in a process of its own
         if multiprocessing.parent_process() is not None and any(r["n"] == {stuck} for r in rows):
             with open(os.environ["STUCK_PID"], "w") as f:
                 f.write(str(os.getpid()))
             time.sleep(3600)
         return [(True, r["n"]) for r in rows]
+
+    # at import, so a process of its own computes as the pool's children do
+    # (it is handed `_compute_bounded`, which looks `_compute_heavy` up there)
+    parallel._compute = compute
+    parallel._compute_heavy = compute      # what the pool submits for every part (2026-11-24)
+    parallel.ISOLATE_START_S = 4.0
 
     class Collection:
         name = "scenario"
@@ -119,13 +125,11 @@ STREAM = """
         config.PARSE_PROCESSES = 2
         config.PARSE_TASKS_PER_CHILD = {per_child}
         config.PARSE_TIMEOUT_S = {timeout}
-        parallel._compute = compute
-        parallel._compute_heavy = compute      # what the pool submits for every part (2026-11-24)
         pages = ([{{"n": p * 8 + j}} for j in range(8)] for p in range(10_000))
         stream = parallel.compute_pages("chunks", Collection(), pages)
         got = []
         for out in stream:
-            got.extend(v for _ok, v in out)
+            got.extend(v if ok else "x" for ok, v in out)      # x: a row answered as an error
             if len(got) >= {take}:
                 stream.close()             # the build's stop
                 break
@@ -140,17 +144,25 @@ STREAM = """
 @pytest.mark.parametrize("argv", INTERPRETERS, ids=IDS)
 def test_a_stopped_build_leaves_at_once_after_the_watchdog_threw_a_stuck_pool_away(tmp_path, argv):
     """München's scenario: a part stuck in a child, the watchdog takes it
-    in-process and the pages go on with a fresh pool; then the stop. The
-    process exits 130, promptly, and the stuck child is gone. Before: the
-    exit joined the old pool's manager, which waited for the stuck child."""
+    and the pages go on with a fresh pool; then the stop. The process exits
+    130, promptly, and the stuck child is gone. Before: the exit joined the
+    old pool's manager, which waited for the stuck child.
+
+    Since 2026-11-24 the stuck part is parsed again in a process of its own,
+    never in the build's: there the same row hangs again, alone too, and is
+    answered as an error (x), every other row in order. Until then it was
+    computed in the caller's process, on the premise that a parse that hangs
+    in a child is quick there — the premise that froze the node's worker."""
     pid_file = tmp_path / "stuck.pid"
     code, out, err, took = _run(argv, tmp_path, STREAM.format(stuck=3, per_child=500, timeout=2, take=32),
-                                timeout=90, STUCK_PID=str(pid_file))
+                                timeout=120, STUCK_PID=str(pid_file))
     assert code == 130, f"exit {code}\n{err[-2000:]}"
-    assert [int(v) for v in out.split()] == list(range(32)), "every page, in order, the stuck part in-process"
+    assert out.split() == [str(n) if n != 3 else "x" for n in range(32)], \
+        f"every page, in order, the row that hangs an error: {out}\n{err[-1500:]}"
     assert "[parse pool] TimeoutError" in err, "the watchdog took the stuck part"
-    assert pid_file.exists() and _gone(int(pid_file.read_text())), "the stuck child was terminated"
-    assert took < 45, f"left after {took:.0f} s"
+    assert "did not come back from a process of its own" in err
+    assert pid_file.exists() and _gone(int(pid_file.read_text())), "the last process it hung in was terminated"
+    assert took < 75, f"left after {took:.0f} s"
 
 
 @pytest.mark.parametrize("argv", INTERPRETERS, ids=IDS)
@@ -250,11 +262,26 @@ class _ShutDown:
 def test_a_part_on_a_pool_stopped_meanwhile_is_computed_in_process(monkeypatch, gone):
     """Another caller's failure stopped the shared pool. CancelledError and
     the RuntimeError of a submit after shutdown used to escape `compute` and
-    `compute_pages`, past their fallback, into the stage."""
+    `compute_pages`, past their fallback, into the stage. A part the pool
+    never took is computed in-process; one that was IN FLIGHT when it stopped
+    is parsed again in a process of its own (2026-11-24: who noticed the
+    failure first does not say whose part caused it)."""
+    from concurrent.futures import Future as _F
+
+    class Own:
+        def submit(self, fn, kind, collection, part, allowance):
+            f = _F()
+            f.set_running_or_notify_cancel()
+            f.set_result([(True, r["n"]) for r in part])
+            return f
+
+        def shutdown(self, wait=True, cancel_futures=False):
+            pass
     pool = gone()
     parallel._discarded.add(pool)
     monkeypatch.setattr(config, "PARSE_PROCESSES", 2)
     monkeypatch.setattr(parallel, "pool", lambda: pool)
+    monkeypatch.setattr(parallel, "_lane_executor", Own)
     monkeypatch.setattr(parallel, "_partition", lambda c, rows, want: [rows[:1], rows[1:]])
     monkeypatch.setattr(parallel, "_compute", lambda kind, c, rows: [(True, r["n"]) for r in rows])
 

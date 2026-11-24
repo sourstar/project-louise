@@ -104,6 +104,8 @@ def fresh_worker_state():
     # the rows the lane deferred are asked, never waited for, again: one
     # test's deferral must not decide the next test's wait
     parallel.forget_deferred()
+    # nor the rows that did not come back alone from a process of their own
+    parallel.forget_gone_alone()
     # the give-back threshold is raised by a part whose heap is held: in a
     # whole-suite process an earlier in-process part left it past the heap a
     # later test states (2026-11-24, the Tensor session's full run)
@@ -130,11 +132,15 @@ def no_runner_says_what_it_holds(monkeypatch):
     test runs as against a runner that cannot say — exactly the behaviour
     before the warm existed — unless it fakes a runner itself
     (tests/test_model_load.py)."""
-    from app import model_load
+    from app import model_load, resident
     model_load.reset()
+    # what the keeper noted of a model at rest comes from those readings, and
+    # is per process too: one test's must not be the next one's weights
+    resident._rested.clear()
     monkeypatch.setattr(model_load, "_fetch_system", lambda server: None)
     yield
     model_load.reset()
+    resident._rested.clear()
 
 
 @pytest.fixture(autouse=True)
