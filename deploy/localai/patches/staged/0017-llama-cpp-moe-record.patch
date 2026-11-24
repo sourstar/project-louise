@@ -25,6 +25,14 @@ outputs are the same with and without it. A file of other weights or of
 another build, or one that cannot be read, is ignored with one log line.
 The GPU memory of the cache does not change.
 
+LLAMA_MOE_RECORD_FILL=<0 to 1> is the share of the cache the fill takes,
+the best-ranked experts first (unset, 1: all of it; 0: the record is kept
+and nothing is filled). What the fill uploads and the answer does not use
+was uploaded for nothing, inside the load: replayed on four traced answers
+of a 35B model with an 8 GiB cache, a whole fill uploads 8.2 GiB to remove
+3.0 to 4.1 GiB of uploads under the first 64 tokens. The share is there so
+that a device can say what it is worth.
+
 Unset: nothing is read or kept.
 
 STAGED. The record's own test (tests/test-moe-record.cpp, standard library
@@ -33,20 +41,21 @@ it was written: it needs a GPU beside the host. On a device: one fixed
 question at temperature 0, on a cache with no record, in a second context
 of the same process and in a new process that reads the file - the load's
 seconds, the time to the first token, the cache's own "hits, misses,
-uploaded" lines, and the same token ids in all three.
+uploaded" lines, and the same token ids in all three. Then the same with a
+share of a half and of a quarter.
 
 Assisted-by: Claude Code
 ---
- .../llama-cpp/patches/0017-moe-record.patch   | 790 ++++++++++++++++++
- 1 file changed, 790 insertions(+)
+ .../llama-cpp/patches/0017-moe-record.patch   | 868 ++++++++++++++++++
+ 1 file changed, 868 insertions(+)
  create mode 100644 backend/cpp/llama-cpp/patches/0017-moe-record.patch
 
 diff --git a/backend/cpp/llama-cpp/patches/0017-moe-record.patch b/backend/cpp/llama-cpp/patches/0017-moe-record.patch
 new file mode 100644
-index 0000000..dde9bc6
+index 0000000..f30a51c
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0017-moe-record.patch
-@@ -0,0 +1,790 @@
+@@ -0,0 +1,868 @@
 +moe-cache: the experts used are recorded beyond a context, and a cache is filled from the record
 +
 +The MoE cache keeps the recently and repeatedly used experts of
@@ -88,10 +97,20 @@ index 0000000..dde9bc6
 +is allocated whole when the cache is created, as before; the record decides
 +what is in it.
 +
++LLAMA_MOE_RECORD_FILL=<0 to 1> is the share of the cache's slots the fill
++takes, the best-ranked experts first; unset, 1: the whole cache. The fill
++uploads every expert it puts in, inside the load, and what the answer then
++does not use was uploaded for nothing: on the routing of a 35B model with an
++8 GiB cache (four answers traced and replayed, 2026-11-24) a whole fill
++uploads 8.2 GiB to remove 3.0 to 4.1 GiB of uploads under the first 64
++tokens. A smaller share is the same record, less of it; 0 keeps the record
++and fills nothing. A value that is not a share is said and ignored.
++
 +Unset: no record is read or kept, and the cache behaves as before.
 +
 +Tested: tests/test-moe-record.cpp (standard library only: the choice of
-+experts, the decay, the file - every cut and every changed byte refused).
++experts, the decay, the file - every cut and every changed byte refused;
++the share read and refused, and the slots it takes).
 +The fill itself needs a second device: it compiles (g++, icpx 2025.3.3) and
 +has not run where it was written.
 +---
@@ -141,7 +160,7 @@ index 0000000..dde9bc6
 + 
 +     ggml_backend_dev_t dev_layer(int il) const;
 +diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-+index ba35af0..b6ae3da 100644
++index ba35af0..a90d6f6 100644
 +--- a/src/llama-moe-cache.cpp
 ++++ b/src/llama-moe-cache.cpp
 +@@ -4,15 +4,19 @@
@@ -201,20 +220,23 @@ index 0000000..dde9bc6
 +     }
 + 
 +     // the experts selected by this plan() must not be evicted, nor the slots this plan() filled already
-+@@ -391,6 +411,12 @@ struct llama_moe_cache::impl {
++@@ -391,6 +411,15 @@ struct llama_moe_cache::impl {
 +     // LLAMA_MOE_CACHE_TRACE: the selected experts of each slot lookup, for a simulator of the cache
 +     FILE * trace = nullptr;
 + 
 ++    // LLAMA_MOE_RECORD_DIR: the experts used are recorded beyond this cache (llama-moe-record.h), in memory with the
 ++    // model and in a file of this directory. The cache is filled from the record when it is created and folds what it
 ++    // saw into it when it goes. Unset: no record is read or kept.
+++    // LLAMA_MOE_RECORD_FILL: the share of the cache's slots the fill takes, the best-ranked experts first (0 to 1).
+++    // Unset: 1, the whole cache.
 ++    const llama_model * model = nullptr;
 ++    std::string record_dir;
+++    double record_fill = 1.0;
 ++
 +     // slot maps in host memory
 +     ggml_context_ptr ctx_host;
 +     ggml_backend_buffer_ptr buf_host;
-+@@ -400,7 +426,10 @@ struct llama_moe_cache::impl {
++@@ -400,7 +429,15 @@ struct llama_moe_cache::impl {
 +     ggml_context_ptr ctx_views;
 + 
 +     impl(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share) :
@@ -223,10 +245,15 @@ index 0000000..dde9bc6
 ++        if (const char * dir = getenv("LLAMA_MOE_RECORD_DIR"); dir != nullptr && *dir != '\0' && !no_alloc) {
 ++            record_dir = dir;
 ++        }
+++        if (const char * fill = getenv("LLAMA_MOE_RECORD_FILL"); fill != nullptr && *fill != '\0' && !record_dir.empty()) {
+++            if (!llama_moe_record::parse_fill(fill, record_fill)) {
+++                LLAMA_LOG_WARN("llama_moe_cache: LLAMA_MOE_RECORD_FILL=%s is not a share from 0 to 1, the whole cache is filled\n", fill);
+++            }
+++        }
 +         for (size_t i = 0; i < backends.size(); ++i) {
 +             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
 +             if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-+@@ -634,6 +663,147 @@ struct llama_moe_cache::impl {
++@@ -634,6 +671,147 @@ struct llama_moe_cache::impl {
 +                 }
 +             }
 +         }
@@ -303,7 +330,7 @@ index 0000000..dde9bc6
 ++                continue;
 ++            }
 ++            // the best keys of the group; slots are given in layer and expert order, so consecutive experts are one upload
-++            std::vector<int32_t> keys = record.best(g.layers, (size_t) g.n_slots);
+++            std::vector<int32_t> keys = record.best(g.layers, llama_moe_record::fill_slots(record_fill, (size_t) g.n_slots));
 ++            if (keys.empty()) {
 ++                continue;
 ++            }
@@ -374,7 +401,7 @@ index 0000000..dde9bc6
 +     }
 + 
 +     // the device that caches layer il
-+@@ -684,6 +854,9 @@ struct llama_moe_cache::impl {
++@@ -684,6 +862,9 @@ struct llama_moe_cache::impl {
 +         if (trace != nullptr) {
 +             fclose(trace);
 +         }
@@ -386,10 +413,10 @@ index 0000000..dde9bc6
 +     // the slot map of layer il, if its experts can be read from the cache for n_tokens tokens, nullptr otherwise
 +diff --git a/src/llama-moe-record.h b/src/llama-moe-record.h
 +new file mode 100644
-+index 0000000..34fcafd
++index 0000000..956edce
 +--- /dev/null
 ++++ b/src/llama-moe-record.h
-+@@ -0,0 +1,262 @@
++@@ -0,0 +1,291 @@
 ++#pragma once
 ++
 ++// The record of the experts a MoE model used, kept beyond a context.
@@ -415,6 +442,7 @@ index 0000000..dde9bc6
 ++#include <cmath>
 ++#include <cstdint>
 ++#include <cstdio>
+++#include <cstdlib>
 ++#include <cstring>
 ++#include <mutex>
 ++#include <string>
@@ -499,6 +527,34 @@ index 0000000..dde9bc6
 ++            keys.resize(n);
 ++        }
 ++        return keys;
+++    }
+++
+++    // --- how much of a cache the fill takes (LLAMA_MOE_RECORD_FILL) ---
+++    //
+++    // The fill uploads, inside the load, every expert it puts in the cache; what the answer then does not use was
+++    // uploaded for nothing. The share is of the cache's slots, the best-ranked experts first: 1 fills the cache (the
+++    // default), 0 fills nothing and still keeps the record.
+++
+++    // a number from 0 to 1 and nothing else; false leaves `share` as it was
+++    static bool parse_fill(const char * text, double & share) {
+++        if (text == nullptr || *text == '\0') {
+++            return false;
+++        }
+++        char * end = nullptr;
+++        const double v = std::strtod(text, &end);
+++        if (end == text || *end != '\0' || !std::isfinite(v) || v < 0.0 || v > 1.0) {
+++            return false;
+++        }
+++        share = v;
+++        return true;
+++    }
+++
+++    // the slots a fill of `share` takes of a cache of n_slots
+++    static size_t fill_slots(double share, size_t n_slots) {
+++        if (!(share > 0.0)) {
+++            return 0;
+++        }
+++        return std::min(n_slots, (size_t) std::floor(share*(double) n_slots));
 ++    }
 ++
 ++    // --- the file: the magic, the identity, the scores, a checksum of all of it; little endian ---
@@ -668,10 +724,10 @@ index 0000000..dde9bc6
 +     target_link_libraries(test-chat PRIVATE server-context)
 +diff --git a/tests/test-moe-record.cpp b/tests/test-moe-record.cpp
 +new file mode 100644
-+index 0000000..65df74b
++index 0000000..9364cec
 +--- /dev/null
 ++++ b/tests/test-moe-record.cpp
-+@@ -0,0 +1,165 @@
++@@ -0,0 +1,196 @@
 ++// The record of the experts a MoE model used (src/llama-moe-record.h): the choice of experts, the decay, and a file
 ++// that is believed only when it is whole and its own.
 ++//
@@ -827,9 +883,40 @@ index 0000000..dde9bc6
 ++    remove(dir);
 ++}
 ++
+++static void test_fill_share() {
+++    double share = 1.0;
+++    check(llama_moe_record::parse_fill("0.5", share) && share == 0.5, "a share of the cache is read");
+++    check(llama_moe_record::parse_fill("1", share) && share == 1.0 && llama_moe_record::parse_fill("0", share) && share == 0.0,
+++          "from nothing to all of it");
+++    share = 0.25;
+++    bool refused = true;
+++    for (const char * bad : { "", "abc", "0.5x", " ", "1.5", "-0.1", "nan", "inf", "1e9", "0,5" }) {
+++        refused = refused && !llama_moe_record::parse_fill(bad, share);
+++    }
+++    check(refused && !llama_moe_record::parse_fill(nullptr, share) && share == 0.25, "what is not a share from 0 to 1 is refused and changes nothing");
+++
+++    check(llama_moe_record::fill_slots(1.0, 4492) == 4492 && llama_moe_record::fill_slots(0.5, 4492) == 2246 &&
+++          llama_moe_record::fill_slots(0.25, 4492) == 1123, "a share of the slots, rounded down");
+++    check(llama_moe_record::fill_slots(0.0, 4492) == 0 && llama_moe_record::fill_slots(0.0001, 4492) == 0 &&
+++          llama_moe_record::fill_slots(1.0, 0) == 0, "no share, or no slot: nothing is filled");
+++
+++    // the experts a partial fill takes are the best-ranked ones
+++    llama_moe_record r;
+++    r.init(model_a());
+++    std::vector<uint32_t> uses(3*8, 0);
+++    uses[r.key(0, 3)] = 40;
+++    uses[r.key(1, 5)] = 30;
+++    uses[r.key(2, 1)] = 20;
+++    uses[r.key(0, 7)] = 10;
+++    r.add(uses, { 40, 40, 40 });
+++    check(r.best({ 0, 1, 2 }, llama_moe_record::fill_slots(0.5, 4)) == std::vector<int32_t>({ r.key(0, 3), r.key(1, 5) }),
+++          "half a cache takes the better half of the record");
+++}
+++
 ++int main() {
 ++    test_choice_and_decay();
 ++    test_file();
+++    test_fill_share();
 ++    if (failures > 0) {
 ++        fprintf(stderr, "%d test(s) failed\n", failures);
 ++        return 1;

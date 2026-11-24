@@ -66,6 +66,21 @@ def test_nothing_is_read_kept_or_filled_without_the_model_s_env():
     assert "`LLAMA_MOE_RECORD_DIR`" in NOTE and "unset: nothing is read, kept or filled" in NOTE
 
 
+def test_the_share_of_the_cache_the_fill_takes_is_the_model_s_env_too():
+    """Added after the node's traces (the note's §6): a whole fill uploads the whole cache inside the load, and the
+    card must be able to measure a part of it on the same engine."""
+    cache = "\n".join(_added(_files()["src/llama-moe-cache.cpp"]))
+    # read only where a record is kept; what is not a share is said and the whole cache is filled, as without it
+    assert re.search(r'getenv\("LLAMA_MOE_RECORD_FILL"\); fill != nullptr && \*fill != \'\\0\' && !record_dir\.empty\(\)', cache)
+    assert "double record_fill = 1.0;" in cache
+    assert "if (!llama_moe_record::parse_fill(fill, record_fill)) {" in cache and "is not a share from 0 to 1" in cache
+    # it only shortens the list of experts the fill takes: the best-ranked first, as before
+    assert "record.best(g.layers, llama_moe_record::fill_slots(record_fill, (size_t) g.n_slots));" in cache
+    record = _new_file(_files()["src/llama-moe-record.h"])
+    assert "v < 0.0 || v > 1.0" in record and "std::floor(share*(double) n_slots)" in record
+    assert "`LLAMA_MOE_RECORD_FILL`" in NOTE and "| D, the fill at a half and at a quarter |" in NOTE
+
+
 def test_the_fill_is_in_the_cache_s_creation_and_the_file_s_write_in_its_destruction():
     """The architecture session's conditions: the fill belongs to the load, never to a person's first token; the
     file is written off the token path, whole or not at all."""
@@ -103,14 +118,16 @@ def test_the_record_s_own_test_passes_built_from_the_patch(tmp_path):
     assert ran.returncode == 0, ran.stderr
     for said in ("ok:   a record cut short at any byte is unreadable", "ok:   a record with any byte changed is not loaded",
                  "ok:   the record of other weights is not used", "ok:   nor the record of another build of the engine",
-                 "ok:   a tie is broken the same way every time"):
+                 "ok:   a tie is broken the same way every time",
+                 "ok:   what is not a share from 0 to 1 is refused and changes nothing",
+                 "ok:   a share of the slots, rounded down", "ok:   half a cache takes the better half of the record"):
         assert said in ran.stderr, said
 
 
 def test_the_note_says_what_ran_and_what_the_node_measures():
     assert "the fill itself has\nNOT run" in NOTE
     tested = NOTE[NOTE.index("## 3. "):NOTE.index("## 4. ")]
-    assert "| the fill and the seeded eviction | NOT RUN." in tested and "29 checks" in tested
+    assert "| the fill and the seeded eviction | NOT RUN." in tested and "35 checks" in tested
     node = NOTE[NOTE.index("## 5. "):]
     for run in ("| A, today |", "| B, a second context of the same process |", "| C, a new process reading the file |",
                 "| the proof | A, B, C | the token ids of the three answers equal |"):

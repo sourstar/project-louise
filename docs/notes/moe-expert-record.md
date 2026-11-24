@@ -27,12 +27,13 @@ in the middle of a token. The first answer after a load is the slow one.
 ## 2. What is built
 
 Patch: `deploy/localai/patches/staged/0017-llama-cpp-moe-record.patch` (one
-llama.cpp patch, 615 lines in 6 files; in `staged/engine-next.series`).
+llama.cpp patch, 6 files; in `staged/engine-next.series`).
 
 | part | what |
 |---|---|
 | the record (`src/llama-moe-record.h`) | per layer and expert, the lookups that selected the expert, decayed over 4,096 tokens of its layer — answers, where the cache's own score decays over a hundred tokens |
 | the fill | when a cache is created, the best-ranked experts of each group of layers, as many as it has slots, are uploaded in runs of consecutive experts — inside the context's creation, before any token |
+| how much of the cache (`LLAMA_MOE_RECORD_FILL`, 0–1; unset: 1) | the share of the cache's slots the fill takes, the best-ranked experts first; 0 keeps the record and fills nothing. Added after the node's traces (§6): a whole fill uploads the whole cache, and half of it is not used by the answer. A value that is not a share is said and ignored |
 | the eviction order | seeded from the same record: each expert put in gets the score its recorded use would have given it (the record's rate of use in the cache's own units), so what leaves first is what the record ranks last; real uses take over as they come |
 | keeping it | when the cache goes, what it saw is folded in: in memory with the model (the next context of the process), and in a file (the next process) |
 
@@ -62,7 +63,7 @@ maintained by use instead of by hand.
 
 | check | result |
 |---|---|
-| the record's own test (`tests/test-moe-record.cpp`, standard library only) | 29 checks: the choice of experts and its ties, the decay by layer, the file read back, other weights and another build refused, a file cut at ANY byte or with ANY byte changed refused, noise, NaN and negative scores refused, written whole or not at all |
+| the record's own test (`tests/test-moe-record.cpp`, standard library only) | 35 checks: the fill's share read and refused and the slots it takes, the choice of experts and its ties, the decay by layer, the file read back, other weights and another build refused, a file cut at ANY byte or with ANY byte changed refused, noise, NaN and negative scores refused, written whole or not at all |
 | it compiles | g++ (the CPU build of the whole candidate source) and Intel's compiler 2025.3.3 (`libllama` with the patch) |
 | it applies in the build's order | after the port, the three fixes, parking and its switch: the candidate's engine source |
 | the fill's CHOICES, without a device (`tools/measure/moe_record_replay.py`, §6) | its cold replay equals llama.cpp's own simulator (`scripts/moe-cache-tune.py` `replay()`), and its cold and filled replays equal the ENGINE's own `moe_cache_lru` and `llama_moe_record`, extracted from the candidate's source and driven as the cache drives them: 40 random cases, one and two groups, caches from a tenth of the experts to all of them; one case kept as the test's golden figures |
@@ -88,11 +89,14 @@ question at temperature 0 with a fixed seed, `verbosity: 4`.
 | A, today | none | the load's seconds; the time to the first token; tok/s over the first 64 tokens; the cache's lines at unload — "hits = …, misses = …, uploaded = … MiB" |
 | B, a second context of the same process | `LLAMA_MOE_RECORD_DIR=<dir>`, the copy on demand (`context_on_demand:true`, a keep of 0) asked twice | at the second context: "N experts put in the cache from the record of T tokens, X MiB uploaded in Y ms"; then the same figures as A |
 | C, a new process reading the file | the same env, the copy unloaded and loaded again | "the record of T tokens of this model is read from moe-record-….bin", the fill's line, the same figures as A, and THE LOAD'S SECONDS against A's |
+| D, the fill at a half and at a quarter | C's env and `LLAMA_MOE_RECORD_FILL=0.5`, then `0.25` | the fill's line (half, a quarter of the experts and MiB), the load's seconds, and the same figures as A |
 | the proof | A, B, C | the token ids of the three answers equal |
 
 What decides: the first token and the first 64 tokens of C against A, C's
 load against A's (the fill moved there), and the misses of C's first
-answer.
+answer; then the share — the load's seconds PLUS the first 64 tokens' of
+C against D's, since where the load is not ahead of the question the
+person waits for both.
 
 ## 6. Before the engine is swapped: the node's own routing, replayed
 
