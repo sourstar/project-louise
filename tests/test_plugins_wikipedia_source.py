@@ -268,6 +268,11 @@ def test_a_dump_is_read_from_its_copy_on_the_files_cache(corpus, tmp_path, monke
     plain = SOURCE.parse(SOURCE.fetch(refs[nid(3)]))
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "ssd5")
     monkeypatch.setattr(config, "FILES_CACHE_DIR", tmp_path / "ssd3")
+    # the room is the test's, not the host's (tests/test_derived_staged.py, 2026-11-24): `staged`
+    # copies only where STAGE_FREE of the disk stays free, and this read the real disk
+    import shutil
+    roomy = shutil._ntuple_diskusage(total=1000 * 2**30, used=100 * 2**30, free=900 * 2**30)
+    monkeypatch.setattr(derived.shutil, "disk_usage", lambda p: roomy)
     derived._touched.clear()
     wsrc._stream_cache.clear()
     opened: list[str] = []
