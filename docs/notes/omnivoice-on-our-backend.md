@@ -148,3 +148,125 @@ its gate:
 
 Until stage 5's card checks pass, speech stays on today's backend: nothing
 on the node changes.
+
+## 7. The design (2026-11-24)
+
+*Read: k2-fsa/OmniVoice 4d5ed0f (the Python), transformers 5.24.0,
+omnivoice.cpp a650381, llama.cpp 78e0529 with the series. MEASURED means
+run in this session's container on the CPU: omnivoice.cpp built on the
+engine's ggml, the node's two Q8_0 files, the Italian sentence of §2, seed
+0, 32 steps, 168 frames.*
+
+### 7.1 A finding first: today's backend does not mask the way the model does
+
+OmniVoice's code builds a BOOLEAN attention mask for its two rows
+(`omnivoice/models/omnivoice.py` 1329–1347): the conditional row all true;
+the unconditional row true over its target frames, plus the diagonal of its
+padding. transformers hands a four-dimensional mask to the attention
+function untouched (`masking_utils.py` 817). The default function (SDPA)
+reads a boolean as may-attend / may-not. The "eager" function ADDS it to the
+scores (`models/qwen3/modeling_qwen3.py` 190–192): true is +1, false is 0,
+nothing is blocked. omnivoice.cpp was validated against eager
+(`tests/debug-tts-cossim.py` 284; `docs/ARCHITECTURE.md`, "eager
+attention") and reproduces the addition (`src/pipeline-tts.cpp` 134–150,
+whose comment says the model was trained that way). It was not: training
+masks by document (flex attention, `omnivoice.py` 503–518), the published
+config names no attention function (so SDPA), and the authors' own fast
+path packs the two rows with "no pad compute"
+(`omnivoice_flashinfer.py`). A diagonal on the padding only has a purpose
+under a mask that blocks.
+
+So in today's backend every target frame of the unconditional half also
+attends the padding — the text embedding of id 1024, repeated — at e⁻¹ of a
+real position's weight. The conditional half is not affected.
+
+MEASURED, with a local switch in omnivoice.cpp that blocks instead of
+adding: first-step unconditional logits move by up to 2.07, 432 of the
+1,344 first-step predictions change, 1,298 of the 1,344 final codes change,
+the audio is 6.33 s against 6.63 s. A different reading of the sentence,
+not a rounding matter.
+
+| | pros | cons |
+|---|---|---|
+| **the model's own masking** (chosen) | the model as trained and as its authors run it; the 28 layers become an ordinary bidirectional Qwen3 on libllama — the code our engine already qualifies (P5, flash attention), nothing re-implemented; the unconditional half is the target frames alone, so less to compute per step | the port's audio is not today's backend's: on the card the comparison is by ear and by measure, not sample by sample (§7.4 says why that was never available anyway) |
+| today's addition, copied | the same decoding rule as today's backend | a known deviation from the model, kept on purpose; libllama cannot add a bias to its attention, so the 28 layers would have to be rebuilt as a graph inside libmtmd — what upstream's rules forbid, and a second Qwen3 to maintain |
+| the status quo | nothing to do | the deviation stays, with all of §1 |
+
+If the operator says nothing, the port uses the model's own masking.
+Reporting the finding to omnivoice.cpp's author is the operator's call (an
+issue on a public tracker).
+
+### 7.2 The shape
+
+| piece | where | how |
+|---|---|---|
+| the language model: tokenizer, text embeddings, 28 Qwen3 layers | libllama, a new architecture `omnivoice` (`src/models/omnivoice.cpp`, 100 lines): Qwen3's tensors read in both directions, no KV cache — as upstream did for `dream`, `kokoro`, `qwen3tts` | the `-m` file |
+| audio code embeddings, audio heads, RVQ, DAC decoder; for cloning HuBERT, the semantic encoder, the DAC encoder | libmtmd, the mmproj under `a.gen.`; graphs in `tools/mtmd/models/omnivoice.cpp`, transplanted from omnivoice.cpp (MIT) | the mmproj file |
+| the 32 steps: guidance, scoring, Gumbel noise (Philox), the schedule; text rules, duration estimate, long texts, post-processing | host code: one pipeline class in `mtmd-helper-gen.cpp`, shaped like Kokoro's (all the work in `step_prompt`, `step_gen` a no-op) | — |
+| LocalAI | nothing to patch: `model:` and `mmproj:` in a model file, the TTS call is already there | — |
+
+A step is one `llama_process` of two sequences — the conditional one (text,
+reference codes, target) and the unconditional one (the target alone,
+positions from 0) — on a context the pipeline owns, so the server's batch
+size never bounds a sentence; the hidden states of the target rows go
+through the audio heads as one mmproj graph; the rest is host arithmetic.
+
+No vocabulary head in a step: 151,676 × 1,024 per row would add a third to
+each step for logits nobody reads. The architecture computes logits only
+for a batch of tokens (one token, once, so the caller's sampler has
+something to read — Kokoro's arrangement).
+
+Where the layers run — what was weighed:
+
+| | pros | cons |
+|---|---|---|
+| **an architecture of its own in libllama** (chosen) | upstream's pattern for speech backbones; our qualified Qwen3 code path; the head skipped | six registration lines in core files, which a rebase can touch |
+| the stock `qwen3` architecture as `-m` | no core change | per-token states need pooling "none", and with it libllama always computes the vocabulary head (`build_logits`): +32 % per step |
+| the layers inside the mmproj, on a libllama context libmtmd owns (YuE2's way) | stock `qwen3` | the `-m` file would hold a tokenizer and embeddings but no layer, which libllama refuses (`n_layer_all > 0`): a new architecture all the same |
+| the layers as a graph in libmtmd | either masking; comparable op for op with omnivoice.cpp | a transformer re-implemented in libmtmd (its README-dev forbids it); a second Qwen3 to keep |
+
+### 7.3 The model files
+
+`omnivoice_repack.py` turns the node's two files into the two llama.cpp
+loads, changing names and metadata only: every tensor keeps its type and
+its bytes (RULE 1 — the same weights, nothing re-quantised). DONE: 310
+tensors in the text model (639,153,568 B), 488 in the mmproj
+(306,734,944 B). The text model loads on the engine with the new
+architecture and tokenizes the test sentence and the prompt's control
+tokens to the same 34 ids as omnivoice.cpp (llama.cpp's own BPE with the
+`qwen2` pre-tokenizer against omnivoice.cpp's hand-written one). The
+standard alternative — a `conversion/omnivoice.py` from the Hugging Face
+checkpoint, what an upstream pull request would need — is not written: it
+pays when the port goes upstream.
+
+### 7.4 The gate, corrected: the codes cannot be compared, the steps can
+
+MEASURED: adding +1 to every ALLOWED position of the blocked mask — the
+same attention in exact arithmetic — changes 1,147 of the reference's own
+1,344 final codes. The decoding is chaotic: early steps are near-ties, one
+flipped code changes every later step. So no two implementations give the
+same codes, and "identical audio" between the port and omnivoice.cpp is not
+a test that can pass or fail honestly. (§2's finding 2 held because that
+was the same graph on two builds of the same kernels.) Stage 3's bar
+becomes, against omnivoice.cpp a650381 on the engine's ggml with the mask
+blocked:
+
+1. **The prompt**: token ids identical.
+2. **The layers and the heads, per step, on the same input**: the port
+   traces each step (codes before, logits, codes after); omnivoice.cpp is
+   fed the port's codes at steps 0, 1, 8, 16 and 31 and its logits compared
+   with the port's — cosine and largest difference against the reference's
+   own rounding noise (cosine 0.99999987, largest 0.53, measured on the
+   conditional row with the +1 above).
+3. **The scoring**: one Python scorer (guidance, log-softmax, layer penalty,
+   Philox Gumbel noise, the schedule) must turn the REFERENCE's logits into
+   the reference's codes at all 32 steps, exactly; then the same scorer
+   must turn the PORT's logits into the port's codes at all 32 steps,
+   exactly.
+4. **The codec**: the reference's final codes through the port's decoder
+   and post-processing — the audio identical, or one-unit differences
+   explained.
+5. **Itself**: two runs of the port byte-identical.
+
+The trace is a debug dump behind an environment variable, as libmtmd's
+`MTMD_DEBUG_EMBEDDINGS` is.
