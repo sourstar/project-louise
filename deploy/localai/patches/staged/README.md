@@ -20,6 +20,18 @@ while still staged here — the backend qualification's finding F4 — and are n
 0006's llama.cpp patch has 4 rejected hunks: each is rebased onto the series
 and passes its CPU tests again before its card gates.
 
+**A candidate engine, 2026-11-24: `engine-fixes.series`** (operator, relayed by München from the
+architecture session: "Do everything, also 721, everything, run unattended" — an engine build with
+the pool's refusal and the second signal's exit). The live series, then 0012, 0013 and 0014 below:
+
+    SERIES_FILE=deploy/localai/patches/staged/engine-fixes.series \
+      sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
+
+0012 rides although only 0013 and 0014 were named: its switch defaults to today's behaviour, and the
+expert-layout comparison on the 35B then needs no second build and no second gating of every run.
+Should 0012 not compile, its line is dropped and the other two build alone. The file goes when the
+three have passed their card checks and moved up into `series`.
+
 | patch | what | gates before it moves up |
 |---|---|---|
 | `0009-llama-cpp-omnivoice.patch` | OmniVoice on llama.cpp's own audio generation (docs/notes/omnivoice-on-our-backend.md §7–§8), on LocalAI v5.0.1 after series 0001–0008: the architecture `omnivoice` in libllama, the projector type in libmtmd, the pipeline in mtmd-helper, omnivoice.cpp's host rules vendored. Speech from text, in a voice cloned from a clip, or in a described voice | CPU gate against omnivoice.cpp **passed 2026-11-24**, cloning and described voices included (`tools/measure/omnivoice_port_gate.py`; note §8–§9). Speed at equal threads and the request's own timing line: note §11. Before the series, the card: the same gate on the B70, phase 0's three clips against today's backend by ear and by time, memory at rest and at work |
