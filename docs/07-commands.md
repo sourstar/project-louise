@@ -286,7 +286,10 @@ louise hold
                                                                        (operator, 2026-11-22): kept once in the node's store, <LOUISE_ROOT>/state/cpu-reference/<key>/,
                                                                        keyed on the weights, set, ctx, cut, instruction and role, and resolved there by every
                                                                        collection of those inputs through RAGE's API (app/rage/reference.py); no collection holds a
-                                                                       copy. --model / --query-model default to the encoder's model with -cpu
+                                                                       copy. --model / --query-model default to the encoder's model with -cpu.
+                                                                       --check, the collection optional (every one held where none is named): read-only, per role
+                                                                       its space declares, whether the gate would find its reference and, where not, the command
+                                                                       that makes it; exit 1 when one is missing (added 2026-11-24, before an engine cut-over)
   rage-settings show <collection> [--card D:V:P]                       every signer's recommended RAGE settings in the SHARD (09 §9.19), the entry this node's
                                                                        card type takes, and what the collection file states (its keys win); exit 1 when a file was set aside
               record <collection> [--batch N] [--concurrency M] [--busy F] [--chunks-per-s F] [--window-s S] [--card D:V:P]
