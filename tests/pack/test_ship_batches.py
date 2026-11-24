@@ -278,7 +278,8 @@ def test_every_staged_byte_is_a_build_by_the_book(corpus, isolated_config, tmp_p
         broken: list[str] = []
         real_failure = parallel._note_failure
         monkeypatch.setattr(parallel, "_note_failure",
-                            lambda exc, ex=None: broken.append(type(exc).__name__) or real_failure(exc, ex))
+                            lambda exc, ex=None, **kw: broken.append(type(exc).__name__)
+                            or real_failure(exc, ex, **kw))
         parallel.shutdown()
         _killing_a_child(monkeypatch, killed, kinds)
         same_as_the_book(_build(c, tmp_path / "held-pool", held=parts).pack_dir,
