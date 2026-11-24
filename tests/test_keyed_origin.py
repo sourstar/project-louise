@@ -36,6 +36,7 @@ def test_a_keyed_origin_is_declared_with_its_hooks_and_only_from_its_parser():
                 f"{name} {p.PARSER_VERSION}: an origin naming a key does not name the run"
             assert k.key and k.index and k.since <= p.PARSER_VERSION
     assert ("wikipedia", 6) in declared and ("wikipedia", 5) not in declared
+    assert ("wikisource", 1) in declared, "its records name the work's page from its first parser"
 
 
 def test_the_table_sorts_refuses_a_key_twice_and_answers_from_one_row_group(tmp_path):
