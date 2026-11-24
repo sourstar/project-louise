@@ -1119,10 +1119,16 @@ def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
     from . import question_card
     cols = _question_collections(body.collections)
     question_card.before_search(cols, speed=body.speed)
+    # every model the question will meet, loaded ahead of its stage in the
+    # room measured (operator, 2026-11-24; question_card.load_ahead)
+    ahead = question_card.load_ahead(cols, speed=body.speed)
     from . import reading
-    with mt.speed(body.speed), reading.quality(not body.speed):
-        result = _ask_result(body)
-    question_card.after_search(cols, speed=body.speed)
+    try:
+        with mt.speed(body.speed), reading.quality(not body.speed):
+            result = _ask_result(body)
+    finally:
+        ahead.stop()
+    question_card.after_search(cols, speed=body.speed, ahead=ahead)
     _say_search_timings(body, result)
     html = TEMPLATES.env.get_template("_ask_results.html").render(result=result)
     job.emit("result", html=html, search_id=keep_search(body.query, result),

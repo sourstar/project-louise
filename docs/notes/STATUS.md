@@ -28,6 +28,13 @@ measured (published figures disagree).
   never in the worker's (#859); the pool's lines say when and where (#860); a dead-man's switch for the
   worker and the web, and a journal of what the worker parses in its own process, read by its successor
   (operator: "Do everything"). scheduling.md, pitfall 21.
+- **A question's models are loaded ahead of the stage that needs them** (operator: "I want the preemptive
+  model load to be implemented"). Each was loaded when its stage reached it, one cold load after the other
+  (11-09: MADLAD 8.5 s in the language step, chat 13.4 s in the answer, first word 42.4 s cold against
+  14.3 s warm). Now the ask route starts them all as the search starts, in the order of use, four at a
+  time, each only into room measured on the card; a load ahead unloads nothing, so every eviction is still
+  decided where it was (`question_card.load_ahead`; ask-card-workflow.md, "Ahead of the stage"). The gain is
+  NOT measured: München takes a cold question's timeline before and after, on an unloaded node.
 - **Measured on a busy node, published, withdrawn, taken again.** The first load timings for the parking
   note were taken with the worker paused and nothing else (operator: "Your measurements are garbage");
   measuring.md §10 had asked for an unloaded system since 11-03. The retake (node paused 28 minutes, the

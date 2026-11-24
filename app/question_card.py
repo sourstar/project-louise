@@ -40,6 +40,23 @@ they are the last to go; the spec's order applies only where nothing used
 longer ago can give the room. Where it changes spec 4 ("a query encoder goes
 only if they need its room, the largest first"), the operator's rule wins.
 
+AHEAD OF THE STAGE (`load_ahead`; operator, 2026-11-24: "I want the
+preemptive model load to be implemented"). The moment a question is asked
+every model it will meet is known — chat, the translation model, its
+collections' query encoders, their rerankers, the voice — and until now each
+was loaded when its stage reached it, one cold load after the other inside
+the search (4–5 query encoders at 5–14 s each: 24–32 s of a search, München
+2026-11-09) and the reranker's inside it too. Now they are loaded AHEAD, at
+once, in the order the question meets them, each as soon as the card has
+MEASURED room for it under the reclaimer's line: nothing the question needs
+is ever unloaded for a model it needs later (what does not fit yet waits,
+and nothing later goes before it), so the two rules above still decide
+every eviction. The mechanism is the one a stage uses, the warm request
+(`model_load.ensure_loaded`): a stage that reaches a model being loaded
+ahead waits on the same load, never a second one. When LocalAI can "prepare"
+a parked model (docs/notes/models-beyond-the-card.md, step 2), this plan
+calls that instead.
+
 The keeper (app/resident.py `beat`) loads nothing while the claim is held,
 so nothing undoes this mid-question; the claim lingers
 dispatch.QUESTION_LINGER_S after the question's last step (spec 6), then
@@ -293,6 +310,178 @@ def _answer_models(collections: Iterable[Any], *, speed: bool
     return out
 
 
+# ---- ahead of the stage ----------------------------------------------------------
+
+#: loads started ahead at once. LocalAI loads two DIFFERENT models at the
+#: same time — its loader holds no lock across a load, only a wait per model
+#: id (pkg/model/loader.go `loadModel` at v5.0.1: "Load the model (this can
+#: take a long time, no lock held)") — each backend is a process of its own,
+#: and most of a cold load is not the card's: 2.0 s of LocalAI's poll sleep
+#: and 1.5–3.5 s of first run in 4.3–6.6 s (the node unloaded, 2026-11-24;
+#: docs/notes/models-beyond-the-card.md §5.2). What several at once cost
+#: each other on the card is München's to measure
+AHEAD_AT_ONCE = 4
+#: how often the card's room is read again while models wait for it: the
+#: worker is unloading the corpus encoders as the question starts
+AHEAD_EVERY_S = 0.5
+#: after this long nothing more is started ahead: the stages load their own
+AHEAD_FOR_S = 60.0
+
+
+class Ahead:
+    """A question's loads ahead. `stop` ends the STARTING of new ones (the
+    search is over: `after_search` decides from there); a load in flight
+    finishes, and `join` waits for it. `started` names the models asked
+    for, in order."""
+
+    def __init__(self) -> None:
+        self._stop = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.loads: list[threading.Thread] = []
+        self.started: list[str] = []
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def stopped(self) -> bool:
+        return self._stop.is_set()
+
+    def wait(self, seconds: float) -> bool:
+        return self._stop.wait(seconds)
+
+    def join(self, seconds: float) -> None:
+        """Wait, `seconds` at most in all, for the loads already started: a
+        model on its way is not one to make room for a second time."""
+        end = time.monotonic() + seconds
+        for t in [self.thread, *list(self.loads)]:
+            if t is not None and t is not threading.current_thread():
+                t.join(max(0.0, end - time.monotonic()))
+
+
+def _warm_query_encoder(key: tuple[str, str], collections: list[Any]) -> None:
+    """The query side of the first of `collections` whose query encoder is
+    `key`, loaded as a search loads it (`embeddings.warm_side`)."""
+    from app import collections as collections_mod, embeddings
+    for c in collections:
+        try:
+            q = embeddings._side(collections_mod.recipe_for(c), True)
+        except Exception:   # noqa: BLE001 — no encoder declared
+            continue
+        if q.url and q.model and (model_load.server_of(q.url), q.model) == key:
+            embeddings.warm_side(c, query=True, caller="query encoder, ahead")
+            return
+
+
+def _size(key: tuple[str, str]) -> int | None:
+    """What a load of the model is counted at, as every cold load counts it
+    (`model_evict.need_of`: the most it was seen holding, by this process
+    or in the keeper's file; 0 on another card); None never seen."""
+    try:
+        from app import model_evict
+        return model_evict.need_of(*key)
+    except Exception:   # noqa: BLE001 — unknown
+        return None
+
+
+def _plan(collections: list[Any], *, speed: bool) -> list[tuple[str, tuple[str, str], Callable[[], object]]]:
+    """(role, (server, model), warm) of every model the question meets, IN
+    THE ORDER IT MEETS THEM: chat (it reads the query's language before the
+    search, and writes the answer after it), the translation model (not under
+    Speed), the query encoders, the rerankers, text to speech. Each once."""
+    answer = _answer_models(collections, speed=speed)
+    first = [x for x in answer if x[0] in ("chat", "translation")]
+    encoders = [("query encoder", key, lambda key=key: _warm_query_encoder(key, collections))
+                for key in _query_encoders(collections)]
+    last = [x for x in answer if x[0] == "reranker"] + [x for x in answer if x[0] == "text to speech"]
+    out: list[tuple[str, tuple[str, str], Callable[[], object]]] = []
+    seen: set[tuple[str, str]] = set()
+    for role, key, warm in first + encoders + last:
+        if key not in seen:
+            seen.add(key)
+            out.append((role, key, warm))
+    return out
+
+
+def _warm_ahead(warm: Callable[[], object]) -> None:
+    """One load ahead. Its room was measured before it started, so the cold
+    load's own hook (`model_evict.before_load`, the oldest real use unloaded
+    until the model fits) is told so: A LOAD AHEAD UNLOADS NOTHING."""
+    try:
+        from app import model_evict
+        with model_evict.room_made():
+            warm()
+    except Exception:   # noqa: BLE001 — its stage loads it, and says why not
+        pass
+
+
+def load_ahead(collections: Iterable[Any], *, speed: bool = False, background: bool = True) -> Ahead:
+    """THE QUESTION'S MODELS, LOADED AHEAD OF THE STAGE THAT NEEDS THEM
+    (module docstring). In the order of use, AHEAD_AT_ONCE at a time, each
+    only when the card has measured room for it; a model that does not fit
+    yet waits for the room the worker is giving back, and nothing later
+    goes before it. Stops starting when the search ends (`Ahead.stop`), when
+    every model is loaded, or after AHEAD_FOR_S. Where the card or a size
+    cannot be read, nothing is loaded ahead: the stages load as before.
+    Never raises."""
+    cols = list(collections)
+    ahead = Ahead()
+
+    def run() -> None:
+        try:
+            todo = _plan(cols, speed=speed)
+        except Exception:   # noqa: BLE001 — no plan: the stages load as before
+            return
+        flying: dict[tuple[str, str], tuple[threading.Thread, int]] = {}
+        end = time.monotonic() + AHEAD_FOR_S
+        while todo and not ahead.stopped() and time.monotonic() < end:
+            try:
+                server = todo[0][1][0]
+                ids = model_load.loaded_models(server, max_age_s=0.0)
+                free = _free(server)
+            except Exception:   # noqa: BLE001
+                return
+            if ids is None or free is None:
+                return                        # the runner or the card cannot say
+            todo = [x for x in todo if x[1][1] not in ids or x[1][0] != server]
+            for key in [k for k, (t, _size_) in flying.items() if not t.is_alive()]:
+                del flying[key]
+            # a load in flight takes its room as it goes: counted whole until it is done
+            room = free - sum(size for _t, size in flying.values())
+            begun: list[str] = []
+            while todo and len(flying) < AHEAD_AT_ONCE:
+                role, key, warm = todo[0]
+                if key in flying:
+                    todo.pop(0)
+                    continue
+                size = _size(key)
+                if size is None:
+                    return                    # never seen loaded: nothing to tell its room from
+                if size > room:
+                    break                     # in the order of use: it waits, and nothing goes before it
+                t = threading.Thread(target=_warm_ahead, args=(warm,), name=f"question-ahead-{key[1]}",
+                                     daemon=True)
+                flying[key] = (t, size)
+                ahead.loads.append(t)
+                room -= size
+                todo.pop(0)
+                ahead.started.append(key[1])
+                begun.append(f"{key[1]} ({role})")
+                t.start()
+            if begun:
+                _say("info", f"question: {', '.join(begun)} loading ahead of the stage that needs "
+                             f"{'it' if len(begun) == 1 else 'them'}, in the room measured "
+                             f"({max(0, free) // 2**20:,} MiB free under the line)")
+            if todo and ahead.wait(AHEAD_EVERY_S):
+                break
+
+    if not background:
+        run()
+        return ahead
+    ahead.thread = threading.Thread(target=run, name="question-ahead", daemon=True)
+    ahead.thread.start()
+    return ahead
+
+
 def before_search(collections: Iterable[Any], *, speed: bool = False) -> str | None:
     """THE TEXT-TO-SPEECH MODEL GOES ONLY WHEN THE QUERY ENCODERS CANNOT FIT
     OTHERWISE (spec 3), counted on the card as it will be: the free space
@@ -351,7 +540,7 @@ def before_search(collections: Iterable[Any], *, speed: bool = False) -> str | N
 
 
 def after_search(collections: Iterable[Any], *, speed: bool = False,
-                 background: bool = True) -> threading.Thread | None:
+                 background: bool = True, ahead: Ahead | None = None) -> threading.Thread | None:
     """The search is over: the answer's models on the card (spec 4), on a
     thread of its own so the results are not held. THE QUERY ENCODERS STAY
     unless the answer's missing models do not fit beside them — then the
@@ -362,8 +551,14 @@ def after_search(collections: Iterable[Any], *, speed: bool = False,
     probe, a size never seen) they go, as the spec first said. Returns the
     thread (None when `background` is False)."""
     cols = list(collections)
+    if ahead is not None:
+        ahead.stop()                # the search is over: from here this decides, with its evictions
 
     def run() -> None:
+        if ahead is not None:
+            # a model already on its way has its room: counted missing, it
+            # would cost a query encoder that room a second time
+            ahead.join(AHEAD_FOR_S)
         answer = _answer_models(cols, speed=speed)
         missing = [(role, key, warm) for role, key, warm in answer if _loaded(*key) is False]
         if missing:

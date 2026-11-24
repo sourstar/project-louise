@@ -274,3 +274,248 @@ def test_the_keeper_loads_nothing_while_a_question_holds_the_claim(monkeypatch):
     monkeypatch.setattr(resident, "_question_now", lambda: False)
     out = resident.beat([], embed_mode=lambda c: "all")
     assert out["warming"] == [r.key], "the keeper resumes when the claim ends"
+
+
+# ---- ahead of the stage (operator, 2026-11-24) ------------------------------------
+
+MIB_OF = {"vega-4b": 5_600, "bge-m3": 1_300, "gate-q": 900, "chat": 7_300, "madlad": 8_000,
+          "omnivoice": 2_200, "rerank": 1_500, "nemotron": 4_400}
+LINE = int(0.95 * 32_656 * 2**20)
+
+
+def _until(cond, seconds=5.0):
+    import time
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.005)
+    return cond()
+
+
+def _ahead_setup(monkeypatch, card, *, free_mib):
+    """`_answer_setup`, with a card whose driver counts what is on it: the
+    models loaded, at their sizes, over a base that leaves `free_mib` under
+    the line as the test starts; each warm loads its model."""
+    from app import model_evict, retrieval
+    warmed = _answer_setup(monkeypatch, card)
+    state = {"partial": 0, "reads": 0, "evict_hook": 0}
+    on = lambda: sum(MIB_OF[m] for m in card.loaded) * 2**20          # noqa: E731
+    base = LINE - on() - free_mib * 2**20
+
+    def read_card():
+        state["reads"] += 1
+        return 32_656 * 2**20, base + on() + state["partial"]
+    monkeypatch.setattr(resident, "_card", read_card)
+    monkeypatch.setattr(model_evict, "need_of", lambda s, m: MIB_OF[m] * 2**20)
+    monkeypatch.setattr(question_card, "AHEAD_EVERY_S", 0.01)
+    load = lambda m: warmed.append(m) or card.loaded.add(m)            # noqa: E731
+    monkeypatch.setattr(question_card, "_warm_query_encoder", lambda key, cols: load(key[1]))
+    monkeypatch.setattr(resident, "_speech_warm", lambda s, m, kind, role: lambda: load(m))
+    monkeypatch.setattr(retrieval, "_warm_reranker", lambda r: load("rerank"))
+    return warmed, state
+
+
+def test_the_plan_is_every_model_of_the_question_in_the_order_it_meets_them(monkeypatch, isolated_config):
+    card = Card(loaded=set()).install(monkeypatch)
+    _answer_setup(monkeypatch, card)
+    assert [(role, key[1]) for role, key, _w in question_card._plan(["gutenberg"], speed=False)] == [
+        ("chat", "chat"), ("translation", "madlad"), ("query encoder", "vega-4b"),
+        ("query encoder", "bge-m3"), ("query encoder", "gate-q"), ("reranker", "rerank"),
+        ("text to speech", "omnivoice")]
+    assert "madlad" not in [key[1] for _r, key, _w in question_card._plan(["gutenberg"], speed=True)]
+
+
+def test_a_question_s_missing_models_are_loaded_ahead_in_the_order_of_use(monkeypatch, isolated_config):
+    card = Card(loaded={"chat", "omnivoice"}).install(monkeypatch)
+    warmed, _state = _ahead_setup(monkeypatch, card, free_mib=20_000)
+    said = []
+    monkeypatch.setattr(question_card, "_log", [lambda level, text: said.append(text)])
+    ahead = question_card.load_ahead(["gutenberg"], background=False)
+    ahead.join(5)
+    assert ahead.started == ["madlad", "vega-4b", "bge-m3", "gate-q", "rerank"], "what is loaded is not asked"
+    assert sorted(warmed) == sorted(ahead.started) and card.asked == [], "each once; nothing unloaded"
+    assert said and "loading ahead of the stage" in said[0] and "madlad (translation)" in said[0]
+    # Speed: the translation model is not the question's
+    card = Card(loaded={"chat", "omnivoice"}).install(monkeypatch)
+    _ahead_setup(monkeypatch, card, free_mib=20_000)
+    ahead = question_card.load_ahead(["gutenberg"], speed=True, background=False)
+    assert ahead.started == ["vega-4b", "bge-m3", "gate-q", "rerank"]
+
+
+def test_no_more_than_a_few_loads_are_started_at_once(monkeypatch, isolated_config):
+    import threading as _t
+    card = Card(loaded=set()).install(monkeypatch)
+    _ahead_setup(monkeypatch, card, free_mib=28_000)
+    gate, inside, most = _t.Event(), [], []
+    monkeypatch.setattr(question_card, "AHEAD_AT_ONCE", 2)
+
+    def slow(key, cols):
+        inside.append(key[1])
+        most.append(len(inside))
+        gate.wait(5)
+        inside.remove(key[1])
+        card.loaded.add(key[1])
+    monkeypatch.setattr(question_card, "_warm_query_encoder", slow)
+    ahead = question_card.load_ahead(["gutenberg"], speed=True)
+    assert _until(lambda: len(inside) == 1 and "chat" in card.loaded and len(ahead.started) == 2)
+    assert ahead.started == ["chat", "vega-4b"], "bge-m3 waits for one of the two to end"
+    gate.set()
+    assert _until(lambda: len(ahead.started) == 6)
+    ahead.join(5)
+    assert max(most) <= 2
+
+
+def test_a_model_is_loaded_ahead_only_into_measured_room_and_nothing_goes_before_one_that_waits(
+        monkeypatch, isolated_config):
+    """The worker is unloading the corpus encoders as the question starts:
+    what does not fit yet waits for that room, IN ITS PLACE — bge-m3's 1,300
+    MiB would fit beside MADLAD, and the 4B it is used after would then find
+    the card full and cost the question an eviction."""
+    card = Card(loaded={"chat", "omnivoice", "rerank", "nemotron"}).install(monkeypatch)
+    warmed, state = _ahead_setup(monkeypatch, card, free_mib=9_700)
+    ahead = question_card.load_ahead(["gutenberg"])
+    assert _until(lambda: "madlad" in card.loaded)
+    before = state["reads"]
+    assert _until(lambda: state["reads"] >= before + 5)
+    assert ahead.started == ["madlad"], "1,700 MiB left: the 4B's 5,600 wait, and bge-m3 behind it"
+    card.loaded.discard("nemotron")                    # the worker's unload: 6,100 MiB free
+    assert _until(lambda: "vega-4b" in card.loaded)
+    before = state["reads"]
+    assert _until(lambda: state["reads"] >= before + 5)
+    assert ahead.started == ["madlad", "vega-4b"], "500 MiB left: bge-m3 waits"
+    assert card.asked == [], "a load ahead unloads nothing"
+    ahead.stop()
+    ahead.join(5)
+    assert not ahead.thread.is_alive()
+
+
+def test_a_load_ahead_tells_the_cold_load_hook_its_room_is_made(monkeypatch, isolated_config):
+    """`model_load.ensure_loaded` unloads the oldest real use until a cold
+    load fits (app/model_evict.py `before_load`) — which could be a model
+    the question needs later. A load ahead starts only into measured room."""
+    from app import model_evict
+    card = Card(loaded={"chat", "madlad", "vega-4b", "bge-m3", "gate-q", "omnivoice"}).install(monkeypatch)
+    _ahead_setup(monkeypatch, card, free_mib=2_000)
+    seen = []
+    from app import retrieval
+    monkeypatch.setattr(retrieval, "_warm_reranker",
+                        lambda r: seen.append(model_evict._room_made.get()) or card.loaded.add("rerank"))
+    ahead = question_card.load_ahead(["gutenberg"], background=False)
+    ahead.join(5)
+    assert ahead.started == ["rerank"] and seen == [True]
+
+
+def test_nothing_is_loaded_ahead_where_the_card_or_a_size_cannot_be_read(monkeypatch, isolated_config):
+    from app import model_evict
+    card = Card(loaded={"chat"}).install(monkeypatch)
+    warmed, _state = _ahead_setup(monkeypatch, card, free_mib=20_000)
+    monkeypatch.setattr(resident, "_card", lambda: None)
+    assert question_card.load_ahead(["gutenberg"], background=False).started == [] and warmed == []
+    # a model never seen loaded: nothing to tell its room from — and nothing after it
+    card = Card(loaded={"chat"}).install(monkeypatch)
+    warmed, _state = _ahead_setup(monkeypatch, card, free_mib=20_000)
+    monkeypatch.setattr(model_evict, "need_of", lambda s, m: None if m == "vega-4b" else MIB_OF[m] * 2**20)
+    ahead = question_card.load_ahead(["gutenberg"], background=False)
+    ahead.join(5)
+    assert ahead.started == ["madlad"]
+    # the runner cannot say what it holds
+    card = Card(loaded={"chat"}).install(monkeypatch)
+    warmed, _state = _ahead_setup(monkeypatch, card, free_mib=20_000)
+    monkeypatch.setattr(model_load, "loaded_models", lambda server, max_age_s=None: None)
+    assert question_card.load_ahead(["gutenberg"], background=False).started == []
+
+
+def test_a_load_ahead_that_fails_is_left_to_its_stage(monkeypatch, isolated_config):
+    card = Card(loaded={"chat", "omnivoice", "rerank"}).install(monkeypatch)
+    _ahead_setup(monkeypatch, card, free_mib=20_000)
+
+    def refused(key, cols):
+        raise model_load.LoadTimeout("no", model=key[1], bound_s=1.0)
+    monkeypatch.setattr(question_card, "_warm_query_encoder", refused)
+    ahead = question_card.load_ahead(["gutenberg"], background=False)
+    ahead.join(5)
+    assert ahead.started == ["madlad", "vega-4b", "bge-m3", "gate-q"], "each asked once, never again"
+
+
+def test_when_the_search_ends_nothing_more_is_started_ahead(monkeypatch, isolated_config):
+    card = Card(loaded={"chat", "omnivoice", "rerank", "nemotron"}).install(monkeypatch)
+    _warmed, state = _ahead_setup(monkeypatch, card, free_mib=9_700)
+    ahead = question_card.load_ahead(["gutenberg"])
+    assert _until(lambda: "madlad" in card.loaded)
+    ahead.stop()
+    ahead.join(5)
+    assert not ahead.thread.is_alive()
+    card.loaded.discard("nemotron")
+    assert ahead.started == ["madlad"], "after_search decides from here, with its evictions"
+
+
+def test_after_the_search_a_model_on_its_way_is_not_given_room_a_second_time(monkeypatch, isolated_config):
+    """Half loaded, MADLAD is not in the runner's list and half its bytes
+    are on the card: counted missing, its 8,000 MiB did not fit the 3,500
+    left and the 4B was unloaded for a model that already had its room."""
+    import threading as _t
+    from app import translate
+
+    def scene():
+        card = Card(loaded={"vega-4b", "bge-m3", "chat", "omnivoice", "rerank"}).install(monkeypatch)
+        warmed, state = _ahead_setup(monkeypatch, card, free_mib=8_500)
+        gate, inside = _t.Event(), _t.Event()
+
+        def loading():
+            state["partial"] = 5_000 * 2**20
+            inside.set()
+            gate.wait(5)
+            state["partial"] = 0
+            card.loaded.add("madlad")
+        monkeypatch.setattr(translate, "warm", loading)
+        ahead = question_card.load_ahead(["gutenberg"])
+        assert inside.wait(5) and ahead.started == ["madlad"]
+        return card, ahead, gate
+
+    card, ahead, gate = scene()
+    t = question_card.after_search(["gutenberg"], ahead=ahead)
+    t.join(0.2)
+    assert t.is_alive() and card.asked == [], "it waits for the load already started"
+    gate.set()
+    t.join(5)
+    assert not t.is_alive() and card.asked == [] and "vega-4b" in card.loaded
+    # the fault, kept in view: the same card with no word of the load ahead
+    card, ahead, gate = scene()
+    monkeypatch.setattr(question_card, "_lru_room", lambda *a, **k: False)
+    one = _t.Thread(target=lambda: question_card.after_search(["gutenberg"], background=False), daemon=True)
+    one.start()
+    assert _until(lambda: card.asked == ["vega-4b"]), "counted missing, MADLAD cost the 4B"
+    gate.set()
+    one.join(5)
+    ahead.join(5)
+
+
+def test_the_ask_route_loads_ahead_between_the_room_and_the_search():
+    import inspect
+    from app import web
+    src = inspect.getsource(web._relay_search)
+    a, b, c, d = (src.index(x) for x in ("question_card.before_search(", "question_card.load_ahead(",
+                                           "_ask_result(body)", "question_card.after_search("))
+    assert a < b < c < d and "ahead=ahead" in src and "ahead.stop()" in src
+
+
+def test_a_load_in_flight_holds_its_room_before_the_card_shows_it(monkeypatch, isolated_config):
+    import threading as _t
+    card = Card(loaded={"chat", "madlad", "omnivoice", "rerank"}).install(monkeypatch)
+    _warmed, state = _ahead_setup(monkeypatch, card, free_mib=6_500)
+    gate, inside = _t.Event(), _t.Event()
+
+    def slow(key, cols):
+        inside.set()
+        gate.wait(5)                                   # loading: none of its bytes on the card yet
+        card.loaded.add(key[1])
+    monkeypatch.setattr(question_card, "_warm_query_encoder", slow)
+    ahead = question_card.load_ahead(["gutenberg"])
+    assert inside.wait(5)
+    before = state["reads"]
+    assert _until(lambda: state["reads"] >= before + 5)
+    assert ahead.started == ["vega-4b"], "6,500 free, 5,600 of them the 4B's: bge-m3's 1,300 wait"
+    gate.set()
+    ahead.stop()
+    ahead.join(5)
