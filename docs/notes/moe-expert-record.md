@@ -109,7 +109,8 @@ uploaded under the first 16 / 64 / 256 tokens and in all, three ways:
 `cold` (today), `filled` (0017 as built: each expert seeded with the
 eviction rank its record gives it) and `flat` (the same fill, every expert
 seeded as if used once). The last file, on another subject, is the case of
-a WRONG record.
+a WRONG record. `--cap N` (repeatable) adds the seedings between the two:
+the record's rank, no higher than a CRF of N.
 
 It is uploads, not seconds: what an upload costs under a token is §5's.
 
@@ -121,6 +122,7 @@ NOT the 35B's routing):
 |---|---|---|
 | the record's rank (0017 as built) | a rightly guessed expert holds its slot through the cache's turnover: 12–20 % of the first 64 tokens' uploads removed | a wrongly guessed one holds it too: on another subject 24 % MORE uploads than a cold cache under the first 64 tokens, 8 % more to the end of the answer |
 | flat, as one use | a wrong guess is the first to go: another subject costs what a cold cache does (within 1 %) | less removed on the record's own subject: 8–13 % |
+| the record's rank, capped (`--cap 4`) | between the two on the record's subject | between the two on another: still 16 % more than cold under the first 64 tokens, 5 % more over the answer |
 | no record (today) | nothing to decide | every load makes its uploads under its first tokens |
 
 Recommended: let the node's four traces choose. If `filled` costs more than
