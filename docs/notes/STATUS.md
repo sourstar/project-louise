@@ -32,8 +32,9 @@ measured (published figures disagree).
   model load to be implemented"). Each was loaded when its stage reached it, one cold load after the other
   (11-09: MADLAD 8.5 s in the language step, chat 13.4 s in the answer, first word 42.4 s cold against
   14.3 s warm). Now the ask route starts them all as the search starts, in the order of use, four at a
-  time, each only into room measured on the card; a load ahead unloads nothing, so every eviction is still
-  decided where it was (`question_card.load_ahead`; ask-card-workflow.md, "Ahead of the stage"). The gain is
+  time, each only into room measured on the card; the room is made first from the models the question does
+  not use, the oldest real use first, and never from one of its own
+  (`question_card.load_ahead`; ask-card-workflow.md, "Ahead of the stage"). The gain is
   NOT measured: München takes a cold question's timeline before and after, on an unloaded node.
 - **Measured on a busy node, published, withdrawn, taken again.** The first load timings for the parking
   note were taken with the worker paused and nothing else (operator: "Your measurements are garbage");

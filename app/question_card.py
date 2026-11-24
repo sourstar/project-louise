@@ -48,10 +48,13 @@ was loaded when its stage reached it, one cold load after the other inside
 the search (4–5 query encoders at 5–14 s each: 24–32 s of a search, München
 2026-11-09) and the reranker's inside it too. Now they are loaded AHEAD, at
 once, in the order the question meets them, each as soon as the card has
-MEASURED room for it under the reclaimer's line: nothing the question needs
-is ever unloaded for a model it needs later (what does not fit yet waits,
-and nothing later goes before it), so the two rules above still decide
-every eviction. The mechanism is the one a stage uses, the warm request
+MEASURED room for it under the reclaimer's line. The room is made first,
+once, from the loaded models the question does NOT use, the oldest real use
+first — the rule above, for as much of the plan as they can give — and
+NEVER from a model the question uses: what does not fit yet waits for the
+room the worker is giving back, and nothing later goes before it. The
+evictions among the question's own models stay where they were
+(`before_search`, `after_search`). The mechanism is the one a stage uses, the warm request
 (`model_load.ensure_loaded`): a stage that reaches a model being loaded
 ahead waits on the same load, never a second one. When LocalAI can "prepare"
 a parked model (docs/notes/models-beyond-the-card.md, step 2), this plan
@@ -322,10 +325,20 @@ def _answer_models(collections: Iterable[Any], *, speed: bool
 #: each other on the card is München's to measure
 AHEAD_AT_ONCE = 4
 #: how often the card's room is read again while models wait for it: the
-#: worker is unloading the corpus encoders as the question starts
+#: worker is unloading the corpus encoders as the question starts (its
+#: watcher sees the question within WATCH_EVERY_S, an unload takes 0.1–0.2 s
+#: and a busy encoder is asked again for UNLOAD_TRIES x UNLOAD_RETRY_S)
 AHEAD_EVERY_S = 0.5
+#: ... for this long; after it the worker's unloads are over and the room
+#: is read at AHEAD_SLOW_S, so a wait costs reads by its need, not its length
+AHEAD_FAST_S = 10.0
+AHEAD_SLOW_S = 2.0
 #: after this long nothing more is started ahead: the stages load their own
 AHEAD_FOR_S = 60.0
+
+#: every question's loads ahead in flight in this process -> the bytes each
+#: is counted at: two questions asked together measure the same card
+_ahead_flying: dict[tuple[str, str], int] = {}
 
 
 class Ahead:
@@ -402,23 +415,58 @@ def _plan(collections: list[Any], *, speed: bool) -> list[tuple[str, tuple[str, 
     return out
 
 
-def _warm_ahead(warm: Callable[[], object]) -> None:
+def _warm_ahead(key: tuple[str, str], warm: Callable[[], object]) -> None:
     """One load ahead. Its room was measured before it started, so the cold
-    load's own hook (`model_evict.before_load`, the oldest real use unloaded
-    until the model fits) is told so: A LOAD AHEAD UNLOADS NOTHING."""
+    load's own hook (`model_evict.before_load`: the oldest real use unloaded
+    until the model fits, the question's own models included) is told so
+    and unloads nothing."""
     try:
         from app import model_evict
         with model_evict.room_made():
             warm()
     except Exception:   # noqa: BLE001 — its stage loads it, and says why not
         pass
+    finally:
+        with _lock:
+            _ahead_flying.pop(key, None)
+
+
+def _room_ahead(todo: list[tuple[str, tuple[str, str], Callable[[], object]]],
+                protect: set[tuple[str, str]]) -> None:
+    """THE PLAN'S ROOM, MADE ONCE, before any load is in flight (the card's
+    reading is then exact): from the loaded models the question does NOT
+    use, the oldest real use first (`_lru_room`, the call `before_search`
+    and `after_search` make), for the longest run of the plan, from its
+    start, that they can give — the whole of it, else one model fewer, and
+    so on. `make_room` unloads nothing when it cannot give all it is asked.
+    Without it a card full of other questions' models gave a load ahead no
+    room at all, and each stage's own cold load unloaded them one by one."""
+    sizes: list[int] = []
+    for _role, key, _warm in todo:
+        size = _size(key)
+        if size is None:
+            break                             # never seen: the plan is counted up to it
+        sizes.append(size)
+    if not sizes:
+        return
+    server = todo[0][1][0]
+    free = _free(server)
+    if free is None:
+        return
+    for n in range(len(sizes), 0, -1):
+        need = sum(sizes[:n])
+        if need <= free:
+            return                            # as far as this it fits already
+        if _lru_room(server, need, protect, "the question's models, loaded ahead"):
+            return
 
 
 def load_ahead(collections: Iterable[Any], *, speed: bool = False, background: bool = True) -> Ahead:
     """THE QUESTION'S MODELS, LOADED AHEAD OF THE STAGE THAT NEEDS THEM
-    (module docstring). In the order of use, AHEAD_AT_ONCE at a time, each
-    only when the card has measured room for it; a model that does not fit
-    yet waits for the room the worker is giving back, and nothing later
+    (module docstring). Room first, once, from what the question does not
+    use (`_room_ahead`). Then in the order of use, AHEAD_AT_ONCE at a time,
+    each only when the card has measured room for it; a model that does not
+    fit yet waits for the room the worker is giving back, and nothing later
     goes before it. Stops starting when the search ends (`Ahead.stop`), when
     every model is loaded, or after AHEAD_FOR_S. Where the card or a size
     cannot be read, nothing is loaded ahead: the stages load as before.
@@ -431,38 +479,58 @@ def load_ahead(collections: Iterable[Any], *, speed: bool = False, background: b
             todo = _plan(cols, speed=speed)
         except Exception:   # noqa: BLE001 — no plan: the stages load as before
             return
-        flying: dict[tuple[str, str], tuple[threading.Thread, int]] = {}
-        end = time.monotonic() + AHEAD_FOR_S
-        while todo and not ahead.stopped() and time.monotonic() < end:
+        protect = {key for _role, key, _warm in todo}
+        mine: list[threading.Thread] = []
+        t0 = time.monotonic()
+        made = False
+        while todo and not ahead.stopped() and time.monotonic() < t0 + AHEAD_FOR_S:
             try:
                 server = todo[0][1][0]
                 ids = model_load.loaded_models(server, max_age_s=0.0)
+                if ids is None:
+                    return                    # the runner cannot say what it holds
+                todo = [x for x in todo if x[1][1] not in ids or x[1][0] != server]
+                if todo and not made:
+                    made = True
+                    with _lock:
+                        quiet = not _ahead_flying
+                    if quiet:
+                        _room_ahead(todo, protect)
+                # A LOAD IN FLIGHT TAKES ITS ROOM AS IT GOES: counted whole
+                # until it is done. Those in flight are noted BEFORE the card
+                # is read — one that ends in between is then counted twice,
+                # never not at all
+                with _lock:
+                    before = dict(_ahead_flying)
                 free = _free(server)
             except Exception:   # noqa: BLE001
                 return
-            if ids is None or free is None:
-                return                        # the runner or the card cannot say
-            todo = [x for x in todo if x[1][1] not in ids or x[1][0] != server]
-            for key in [k for k, (t, _size_) in flying.items() if not t.is_alive()]:
-                del flying[key]
-            # a load in flight takes its room as it goes: counted whole until it is done
-            room = free - sum(size for _t, size in flying.values())
+            if free is None:
+                return                        # the card cannot say
+            room = free - sum(before.values())
+            mine = [t for t in mine if t.is_alive()]
             begun: list[str] = []
-            while todo and len(flying) < AHEAD_AT_ONCE:
+            now: set[tuple[str, str]] = set()
+            while todo and len(mine) < AHEAD_AT_ONCE:
                 role, key, warm = todo[0]
-                if key in flying:
-                    todo.pop(0)
-                    continue
                 size = _size(key)
                 if size is None:
                     return                    # never seen loaded: nothing to tell its room from
-                if size > room:
-                    break                     # in the order of use: it waits, and nothing goes before it
-                t = threading.Thread(target=_warm_ahead, args=(warm,), name=f"question-ahead-{key[1]}",
+                with _lock:
+                    if key in _ahead_flying:  # on its way for another question
+                        todo.pop(0)
+                        continue
+                    # another question's loads started since the card was read
+                    others = sum(v for k, v in _ahead_flying.items() if k not in before and k not in now)
+                    if size > room - others:
+                        break                 # in the order of use: it waits, and nothing goes before it
+                    _ahead_flying[key] = size
+                room -= size                  # this beat's own, in flight or already done
+                now.add(key)
+                t = threading.Thread(target=_warm_ahead, args=(key, warm), name=f"question-ahead-{key[1]}",
                                      daemon=True)
-                flying[key] = (t, size)
+                mine.append(t)
                 ahead.loads.append(t)
-                room -= size
                 todo.pop(0)
                 ahead.started.append(key[1])
                 begun.append(f"{key[1]} ({role})")
@@ -471,7 +539,8 @@ def load_ahead(collections: Iterable[Any], *, speed: bool = False, background: b
                 _say("info", f"question: {', '.join(begun)} loading ahead of the stage that needs "
                              f"{'it' if len(begun) == 1 else 'them'}, in the room measured "
                              f"({max(0, free) // 2**20:,} MiB free under the line)")
-            if todo and ahead.wait(AHEAD_EVERY_S):
+            every = AHEAD_EVERY_S if time.monotonic() < t0 + AHEAD_FAST_S else AHEAD_SLOW_S
+            if todo and ahead.wait(every):
                 break
 
     if not background:

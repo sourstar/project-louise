@@ -132,11 +132,16 @@ a cold question's first word at 42.4 s against 14.3 s warm.
   Speed), the query encoders, the rerankers, text to speech.
 - Each missing one is loaded AHEAD, `AHEAD_AT_ONCE` (4) at a time. LocalAI loads different models at the same time:
   its loader holds no lock across a load (pkg/model/loader.go `loadModel`, v5.0.1).
-- ONLY INTO MEASURED ROOM: a load starts when the card has its size free under the reclaimer's line, the loads
-  already started counted whole. One that does not fit waits for the room the worker is giving back, read again
-  every 0.5 s, and nothing later in the order goes before it.
-- A LOAD AHEAD UNLOADS NOTHING. Its cold-load hook is told the room is made (`model_evict.room_made`). The evictions
-  stay where they were: `before_search`, `after_search`, a stage's own cold load.
+- ROOM FIRST, ONCE, FROM WHAT THE QUESTION DOES NOT USE: before any load, the loaded models outside the plan give
+  room, the oldest real use first (`model_evict.make_room`, the call `before_search` and `after_search` make), for
+  the longest run of the plan from its start that they can give. Without it a card full of other questions' models
+  (the serving node) gave a load ahead no room, and each stage's cold load unloaded them one by one.
+- NEVER A MODEL OF THE QUESTION'S. Each load's cold-load hook is told the room is made (`model_evict.room_made`):
+  by itself that hook unloads the oldest real use, the question's own models included. The evictions among the
+  question's models stay where they were: `before_search`, `after_search`.
+- ONLY INTO MEASURED ROOM: a load starts when the card has its size free under the reclaimer's line, the loads in
+  flight (every question's) counted whole. One that does not fit waits for the room the worker is giving back,
+  read every 0.5 s for 10 s and every 2 s after, and nothing later in the order goes before it.
 - It stops starting loads when the search ends. `after_search` first waits for the loads on their way, so a model
   half loaded is not given room a second time.
 - No card reading, or a model never seen loaded: nothing is loaded ahead, and the stages load as before.
@@ -146,7 +151,7 @@ a cold question's first word at 42.4 s against 14.3 s warm.
 | | pros | cons |
 |---|---|---|
 | as it was: each stage loads its own | nothing new; one load on the card at a time | every cold load is inside a stage, one after the other |
-| ahead, built | the loads overlap each other and the stages before them; no new eviction | up to four loads on the card at once, their cost to each other unmeasured; one card read and one `/system` read every 0.5 s while a model waits |
+| ahead, built | the loads overlap each other and the stages before them; the idle models that would go one by one go at once, and none of the question's goes | up to four loads on the card at once, their cost to each other unmeasured; a model outside the plan is unloaded for the reranker and the voice at the question's start, not after its search; one card read and one `/system` read per beat while a model waits |
 
 TO MEASURE (München, the protocol of models-beyond-the-card.md §5.3): the rows of the 11-09 table for one cold
 Italian Ask per mode, before and after this, and each load's seconds alone against beside three others.

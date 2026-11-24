@@ -309,6 +309,12 @@ def _ahead_setup(monkeypatch, card, *, free_mib):
     monkeypatch.setattr(resident, "_card", read_card)
     monkeypatch.setattr(model_evict, "need_of", lambda s, m: MIB_OF[m] * 2**20)
     monkeypatch.setattr(question_card, "AHEAD_EVERY_S", 0.01)
+    monkeypatch.setattr(question_card, "AHEAD_SLOW_S", 0.01)
+    monkeypatch.setattr(question_card, "_ahead_flying", {})
+    state["asked_room"] = []
+    monkeypatch.setattr(question_card, "_lru_room",
+                        lambda server, need, protect, for_what: state["asked_room"].append(
+                            (need // 2**20, protect)) and False)
     load = lambda m: warmed.append(m) or card.loaded.add(m)            # noqa: E731
     monkeypatch.setattr(question_card, "_warm_query_encoder", lambda key, cols: load(key[1]))
     monkeypatch.setattr(resident, "_speech_warm", lambda s, m, kind, role: lambda: load(m))
@@ -335,6 +341,7 @@ def test_a_question_s_missing_models_are_loaded_ahead_in_the_order_of_use(monkey
     ahead.join(5)
     assert ahead.started == ["madlad", "vega-4b", "bge-m3", "gate-q", "rerank"], "what is loaded is not asked"
     assert sorted(warmed) == sorted(ahead.started) and card.asked == [], "each once; nothing unloaded"
+    assert _state["asked_room"] == [], "it all fits: no room is asked of anything"
     assert said and "loading ahead of the stage" in said[0] and "madlad (translation)" in said[0]
     # Speed: the translation model is not the question's
     card = Card(loaded={"chat", "omnivoice"}).install(monkeypatch)
@@ -406,116 +413,63 @@ def test_a_load_ahead_tells_the_cold_load_hook_its_room_is_made(monkeypatch, iso
     assert ahead.started == ["rerank"] and seen == [True]
 
 
-def test_nothing_is_loaded_ahead_where_the_card_or_a_size_cannot_be_read(monkeypatch, isolated_config):
-    from app import model_evict
-    card = Card(loaded={"chat"}).install(monkeypatch)
-    warmed, _state = _ahead_setup(monkeypatch, card, free_mib=20_000)
-    monkeypatch.setattr(resident, "_card", lambda: None)
-    assert question_card.load_ahead(["gutenberg"], background=False).started == [] and warmed == []
-    # a model never seen loaded: nothing to tell its room from — and nothing after it
-    card = Card(loaded={"chat"}).install(monkeypatch)
-    warmed, _state = _ahead_setup(monkeypatch, card, free_mib=20_000)
-    monkeypatch.setattr(model_evict, "need_of", lambda s, m: None if m == "vega-4b" else MIB_OF[m] * 2**20)
-    ahead = question_card.load_ahead(["gutenberg"], background=False)
-    ahead.join(5)
-    assert ahead.started == ["madlad"]
-    # the runner cannot say what it holds
-    card = Card(loaded={"chat"}).install(monkeypatch)
-    warmed, _state = _ahead_setup(monkeypatch, card, free_mib=20_000)
-    monkeypatch.setattr(model_load, "loaded_models", lambda server, max_age_s=None: None)
-    assert question_card.load_ahead(["gutenberg"], background=False).started == []
+def test_room_is_made_once_from_what_the_question_does_not_use_for_as_much_of_the_plan_as_they_give(
+        monkeypatch, isolated_config):
+    """A card full of other questions' models gave a load ahead no room at
+    all (the serving node: operator, 2026-11-24). The oldest real use goes
+    first (app/model_evict.py), never a model of the question's — and
+    `make_room` unloads nothing unless it can give all it is asked, so the
+    whole plan is asked first, then one model fewer."""
+    card = Card(loaded={"chat", "omnivoice", "nemotron"}).install(monkeypatch)
+    warmed, state = _ahead_setup(monkeypatch, card, free_mib=3_000)
+    plan = {(S, m) for m in ("chat", "madlad", "vega-4b", "bge-m3", "gate-q", "rerank", "omnivoice")}
 
-
-def test_a_load_ahead_that_fails_is_left_to_its_stage(monkeypatch, isolated_config):
-    card = Card(loaded={"chat", "omnivoice", "rerank"}).install(monkeypatch)
-    _ahead_setup(monkeypatch, card, free_mib=20_000)
-
-    def refused(key, cols):
-        raise model_load.LoadTimeout("no", model=key[1], bound_s=1.0)
-    monkeypatch.setattr(question_card, "_warm_query_encoder", refused)
-    ahead = question_card.load_ahead(["gutenberg"], background=False)
-    ahead.join(5)
-    assert ahead.started == ["madlad", "vega-4b", "bge-m3", "gate-q"], "each asked once, never again"
-
-
-def test_when_the_search_ends_nothing_more_is_started_ahead(monkeypatch, isolated_config):
-    card = Card(loaded={"chat", "omnivoice", "rerank", "nemotron"}).install(monkeypatch)
-    _warmed, state = _ahead_setup(monkeypatch, card, free_mib=9_700)
+    def lru_room(server, need, protect, for_what):
+        state["asked_room"].append((need // 2**20, protect))
+        if need // 2**20 > 13_600:
+            return False                               # the others hold less than that
+        card.loaded.discard("nemotron")                # 4,400 MiB given back ...
+        state["partial"] -= 6_200 * 2**20              # ... and 6,200 by models the test does not name
+        return True
+    monkeypatch.setattr(question_card, "_lru_room", lru_room)
     ahead = question_card.load_ahead(["gutenberg"])
-    assert _until(lambda: "madlad" in card.loaded)
-    ahead.stop()
-    ahead.join(5)
-    assert not ahead.thread.is_alive()
-    card.loaded.discard("nemotron")
-    assert ahead.started == ["madlad"], "after_search decides from here, with its evictions"
-
-
-def test_after_the_search_a_model_on_its_way_is_not_given_room_a_second_time(monkeypatch, isolated_config):
-    """Half loaded, MADLAD is not in the runner's list and half its bytes
-    are on the card: counted missing, its 8,000 MiB did not fit the 3,500
-    left and the 4B was unloaded for a model that already had its room."""
-    import threading as _t
-    from app import translate
-
-    def scene():
-        card = Card(loaded={"vega-4b", "bge-m3", "chat", "omnivoice", "rerank"}).install(monkeypatch)
-        warmed, state = _ahead_setup(monkeypatch, card, free_mib=8_500)
-        gate, inside = _t.Event(), _t.Event()
-
-        def loading():
-            state["partial"] = 5_000 * 2**20
-            inside.set()
-            gate.wait(5)
-            state["partial"] = 0
-            card.loaded.add("madlad")
-        monkeypatch.setattr(translate, "warm", loading)
-        ahead = question_card.load_ahead(["gutenberg"])
-        assert inside.wait(5) and ahead.started == ["madlad"]
-        return card, ahead, gate
-
-    card, ahead, gate = scene()
-    t = question_card.after_search(["gutenberg"], ahead=ahead)
-    t.join(0.2)
-    assert t.is_alive() and card.asked == [], "it waits for the load already started"
-    gate.set()
-    t.join(5)
-    assert not t.is_alive() and card.asked == [] and "vega-4b" in card.loaded
-    # the fault, kept in view: the same card with no word of the load ahead
-    card, ahead, gate = scene()
-    monkeypatch.setattr(question_card, "_lru_room", lambda *a, **k: False)
-    one = _t.Thread(target=lambda: question_card.after_search(["gutenberg"], background=False), daemon=True)
-    one.start()
-    assert _until(lambda: card.asked == ["vega-4b"]), "counted missing, MADLAD cost the 4B"
-    gate.set()
-    one.join(5)
-    ahead.join(5)
-
-
-def test_the_ask_route_loads_ahead_between_the_room_and_the_search():
-    import inspect
-    from app import web
-    src = inspect.getsource(web._relay_search)
-    a, b, c, d = (src.index(x) for x in ("question_card.before_search(", "question_card.load_ahead(",
-                                           "_ask_result(body)", "question_card.after_search("))
-    assert a < b < c < d and "ahead=ahead" in src and "ahead.stop()" in src
-
-
-def test_a_load_in_flight_holds_its_room_before_the_card_shows_it(monkeypatch, isolated_config):
-    import threading as _t
-    card = Card(loaded={"chat", "madlad", "omnivoice", "rerank"}).install(monkeypatch)
-    _warmed, state = _ahead_setup(monkeypatch, card, free_mib=6_500)
-    gate, inside = _t.Event(), _t.Event()
-
-    def slow(key, cols):
-        inside.set()
-        gate.wait(5)                                   # loading: none of its bytes on the card yet
-        card.loaded.add(key[1])
-    monkeypatch.setattr(question_card, "_warm_query_encoder", slow)
-    ahead = question_card.load_ahead(["gutenberg"])
-    assert inside.wait(5)
+    assert _until(lambda: "vega-4b" in card.loaded and "madlad" in card.loaded)
+    # missing, in order: MADLAD 8,000, the 4B 5,600, bge-m3 1,300, gate-q 900, rerank 1,500
+    assert [n for n, _p in state["asked_room"]] == [17_300, 15_800, 14_900, 13_600]
+    assert all(p == plan for _n, p in state["asked_room"]), "every model of the question is protected"
     before = state["reads"]
     assert _until(lambda: state["reads"] >= before + 5)
-    assert ahead.started == ["vega-4b"], "6,500 free, 5,600 of them the 4B's: bge-m3's 1,300 wait"
-    gate.set()
+    assert ahead.started == ["madlad", "vega-4b"] and len(state["asked_room"]) == 4, "once: then it waits"
     ahead.stop()
     ahead.join(5)
+
+
+def test_two_questions_asked_together_measure_the_same_card(monkeypatch, isolated_config):
+    import threading as _t
+    card = Card(loaded={"chat", "madlad", "omnivoice", "rerank", "gate-q"}).install(monkeypatch)
+    _warmed, state = _ahead_setup(monkeypatch, card, free_mib=6_500)
+    gate, inside = _t.Event(), []
+
+    def slow(key, cols):
+        inside.append(key[1])
+        gate.wait(5)
+        card.loaded.add(key[1])
+    monkeypatch.setattr(question_card, "_warm_query_encoder", slow)
+    one = question_card.load_ahead(["gutenberg"])
+    assert _until(lambda: inside == ["vega-4b"])
+    two = question_card.load_ahead(["gutenberg"])
+    before = state["reads"]
+    assert _until(lambda: state["reads"] >= before + 10)
+    assert two.started == [] and inside == ["vega-4b"], \
+        "the 4B is on its way and holds 5,600 of the 6,500: not asked twice, and bge-m3's 1,300 wait"
+    assert [n for n, _p in state["asked_room"]] == [6_900], \
+        "the first asked room for its two before any load; the second asks none while one is in flight"
+    gate.set()
+    assert _until(lambda: "vega-4b" in card.loaded and not question_card._ahead_flying)
+    before = state["reads"]
+    assert _until(lambda: state["reads"] >= before + 10)
+    assert one.started + two.started == ["vega-4b"], "loaded once; 900 MiB are left, and bge-m3 still waits"
+    for a in (one, two):
+        a.stop()
+        a.join(5)
+    assert question_card._ahead_flying == {}

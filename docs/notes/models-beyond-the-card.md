@@ -194,7 +194,8 @@ moves models for a question, with today's loads and unloads. RAGE's claim
   model load to be implemented"): `question_card.load_ahead` is this plan
   with the warm request in place of "prepare". Every model the question
   meets is loaded ahead, in the order of use, four at a time, each only
-  into room measured on the card; a load ahead unloads nothing
+  into room measured on the card; the room is made first from the models
+  the question does not use, never from one it uses
   (ask-card-workflow.md, "Ahead of the stage"). With step 2 the same plan
   calls "prepare", and a load becomes a copy.
 - No corpus schedule changes. Planned turns between corpus encoders are
