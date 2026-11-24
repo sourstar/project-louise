@@ -66,7 +66,9 @@ Two ownership rules follow from the table and are load-bearing:
 2. **A pipeline thread never waits without a bound on an optional
    subsystem.** The parse pool hung with its children gone and pubmed
    stopped dead; a worker that cannot finish also cannot honour SIGTERM
-   (amendment 51).
+   (amendment 51). **And the fallback of a bounded wait is bounded too:**
+   what the pool was computing when it failed is never computed in the
+   worker's own process (pitfall 21).
 3. **Every writer stays in the worker; the pool only computes.** The
    results come back in order, one `(ok, value)` per document, so one bad
    document costs itself and never its batch.
@@ -473,6 +475,43 @@ sizes it is sent, the largest included. Where an index must not be chosen,
 take its columns out of selection with SQLite's unary plus (`+col=?`; #257:
 0.30 ms per 500). And deploy one change at a time, with its AFTER profile
 taken at once: that is what caught this one within the hour.
+
+**21. The fallback of a bounded wait was the unbounded thing.** On
+2026-11-24 the worker stopped for 21 minutes (15:50–16:11Z): no log line,
+no embedding request for any collection, SIGTERM not honoured, restarted by
+hand. A pool child had hung on one EUR-Lex directive (hu 32007L0019, 160
+KB): a citation pattern with `\d+` inside a loop whose separator is
+optional, tried every way on a list of eight numbers. The watchdog did its
+part — no answer for PARSE_TIMEOUT_S (120 s), the pool thrown away — and
+then the fallback parsed "the parts that did not answer" IN THE WORKER'S OWN
+PROCESS, the document that had hung the child among them: one C call, the
+GIL with it. Rule 2's own remedy had turned a hung child into a hung worker.
+→ Three things, in order of reach:
+- the pattern (#858): every digit run of the article forms possessive, and
+  a test that runs every resolver on hostile texts in a child with a
+  deadline (tests/test_refs_hostile_text.py). On the unfixed code 40 of
+  some 600 such texts never came back, from any language's citation;
+- the fallback (`parallel._isolated`): the parts IN FLIGHT when a batch's
+  wait fails are parsed again in processes of their own, each bounded, a
+  part and then each of its rows alone. A row that does not come back alone
+  is an ERROR on that document (`ParseNoAnswer`); it is remembered for the
+  process's life and never computed in the worker; the failure is the
+  document's and does not count toward switching the pool off. Parts never
+  submitted go on in-process, as before. Cost, only after a failure: at
+  most two processes at a time, PARSE_TIMEOUT_S + 10 s each; for the node's
+  case about 4.5 minutes of ONE collection's stage, bounded and stoppable,
+  against 21 minutes of everything;
+- STILL OPEN: a parse that runs in the worker's process from the start (a
+  batch of one light row, the pool off, the embed path's own chunking) has
+  no child to hang in. A document that hangs there holds the worker, and
+  nothing in the process can stop a C call. What would: a dead-man's switch
+  outside the GIL (`faulthandler.dump_traceback_later(..., exit=True)`,
+  re-armed by a thread that needs the GIL) and a journal of what was being
+  parsed, read at the restart. Not built: it changes what the worker does
+  on its own, the operator's to decide.
+The lesson: when a wait gets a bound, ask what the fallback does with the
+thing that was being waited for. If it does the same work in a place that
+cannot be bounded, the bound moved the hang, it did not remove it.
 
 ## 6. Before you change the scheduler — the checklist
 

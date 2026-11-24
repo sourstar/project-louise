@@ -158,8 +158,16 @@ _cpu: dict[str, dict[str, float]] = {}
 #: model AT REST, as its load left it, before a request grows its buffers —
 #: what the resident budget counts (app/resident.py, 2026-11-08)
 _rest: dict[tuple[str, str], int] = {}
-#: (server, model) -> the fewest bytes of ANY reading, REST_FLOOR or not (`least_vram`)
-_least: dict[tuple[str, str], int] = {}
+#: (server, model) -> (pid, bytes, first, last): the backend process `/system`
+#: last showed holding the model, the bytes it held, and the first and the
+#: last reading that showed THAT process holding THOSE bytes (`steady_vram`).
+#: Whether it is at rest then is the resident keeper's to say, with the
+#: node's record of the model's last request (app/resident.py `AT_REST_S`).
+#: Not this row's `cpu_percent`: behind VeGa it is the wrapper's process,
+#: 0.07–2.5 % whatever the engine does (scheduling.md, Perugia 2026-10-19)
+_anchor: dict[tuple[str, str], tuple[int | None, int, float, float]] = {}
+#: the clock the readings are timed on (a test's own)
+_rest_clock = time.monotonic
 #: = app/resident.py REST_FLOOR (that module's reasons; kept here, where the
 #: readings are taken, so neither module imports the other at load)
 REST_FLOOR = 0.5
@@ -200,7 +208,7 @@ def reset() -> None:
         _held.clear()
         _cpu.clear()
         _rest.clear()
-        _least.clear()
+        _anchor.clear()
         _seen.clear()
         _on_demand.clear()
         _run_on_demand.clear()
@@ -264,9 +272,12 @@ def _fetch_system(server: str) -> frozenset[str] | None:
                 _on_demand[(server, m)] = listed[m]
             else:
                 _on_demand.pop((server, m), None)     # this listing cannot say
+        t = _rest_clock()
         for k, v in sizes.items():
             _sizes[k] = max(v, _sizes.get(k, 0))
-            _least[k] = min(v, _least.get(k, v))
+            pid, a = pids.get(k[1]), _anchor.get(k)
+            # another process, or bytes that moved: its present state begins here
+            _anchor[k] = (pid, v, t, t) if a is None or a[0] != pid or a[1] != v else (pid, v, a[2], t)
             # a reading under REST_FLOOR of the largest: the model partly off
             # the card (app/resident.py REST_FLOOR, 2026-11-09), not at rest
             floor = REST_FLOOR * _sizes[k]
@@ -354,12 +365,15 @@ def size_vram(server: str, model: str) -> int | None:
         return _sizes.get((server_of(server), model))
 
 
-def least_vram(server: str, model: str) -> int | None:
-    """The fewest bytes ANY `/system` reading of this process gave `model`,
-    REST_FLOOR or not — for a model loaded with `context_on_demand`, its
-    weights alone (app/resident.py: has it been seen working?)."""
+def steady_vram(server: str, model: str) -> tuple[int, float] | None:
+    """(bytes, seconds): what `model`'s backend process held at the last
+    `/system` reading, and for how long the readings have shown the SAME
+    process holding the SAME bytes, first such reading to last. A load, an
+    unload and a context made or freed each begin it again. None when this
+    process never read the model with a size."""
     with _lock:
-        return _least.get((server_of(server), model))
+        got = _anchor.get((server_of(server), model))
+        return None if got is None else (got[1], got[3] - got[2])
 
 
 def rest_vram(server: str, model: str) -> int | None:

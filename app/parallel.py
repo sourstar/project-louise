@@ -35,6 +35,7 @@ from concurrent.futures import FIRST_COMPLETED, CancelledError, Future, ProcessP
 from concurrent.futures import process as _cf_process
 from concurrent.futures.process import BrokenProcessPool
 from contextlib import contextmanager
+from typing import Callable
 
 from . import config, cpu_limit
 
@@ -1789,6 +1790,214 @@ def _here(kind: str, collection, rows: list[dict], k: float) -> list[tuple[bool,
             for r, h in zip(rows, heavy)]
 
 
+# ---- WHAT WAS IN FLIGHT WHEN THE POOL FAILED IS NEVER PARSED HERE (2026-11-24) ---------
+#
+# A batch's wait ends in a failure when no part answered for PARSE_TIMEOUT_S
+# or the pool broke. The parts in flight then hold, or may hold, the document
+# a child hung on or died of. Until 2026-11-24 the light ones were parsed
+# again in THIS process: on the node, a pool child hung on one EUR-Lex
+# directive (a regex that never ended), the watchdog fired after 120 s, and
+# the worker's pipeline thread then parsed the same document itself — one C
+# call, the GIL with it, for 21 minutes: no collection embedded, SIGTERM was
+# not honoured, the node needed an agent. The bounded wait's fallback had
+# turned a hung child into a hung worker.
+#
+# Now those parts are parsed again in PROCESSES OF THEIR OWN (`_lane_executor`:
+# one process, one task, gone after it), each bounded by PARSE_TIMEOUT_S: a
+# part first, then, where its process does not come back, each of its rows
+# alone. A row that does not come back alone is that document and nothing
+# else: it is answered as an ERROR on it (`ParseNoAnswer`), which takes it
+# out of every selection until someone looks. The failure was then the
+# document's, not the pool's, and does not count toward switching the pool
+# off (`_document_failed`). Parts never submitted were not in flight: they
+# go on as before (`_here`).
+#
+# The standard for this is a subprocess with a timeout (POSIX has no way to
+# stop a thread; CPython's `re` holds the GIL and takes no deadline). The
+# third-party `regex` module takes a `timeout=` per call: adopting it would
+# bound the citation patterns themselves, at the price of a dependency and
+# of porting every pattern; it would not bound a parser written in C.
+#: how many of a failed batch's parts are parsed again at once, each in a
+#: process of its own: two fresh interpreters beside the worker and the
+#: pool's replacement, never a second pool
+ISOLATE_AT_ONCE = 2
+#: what a fresh interpreter is given to start and import before its
+#: PARSE_TIMEOUT_S begins: the pool's children are warm, this one is not
+ISOLATE_START_S = 10.0
+
+
+class _CannotIsolate(RuntimeError):
+    """No process of its own could be started."""
+
+
+def _alone(kind: str, collection, groups: list[list[dict]], bound_s: float) -> list[list | None]:
+    """Each group of rows parsed in a process of its own, ISOLATE_AT_ONCE at
+    a time: its rows' answers, or None for a group whose process did not
+    answer within `bound_s` — terminated — or ended without answering. The
+    caller's stop ends it (`Stopped`, what is running terminated)."""
+    out: list[list | None] = [None] * len(groups)
+    running: dict[int, tuple] = {}
+    nxt = 0
+    try:
+        while nxt < len(groups) or running:
+            if _stopped():
+                raise Stopped("stopped while a failed batch's parts were parsed again")
+            while nxt < len(groups) and len(running) < ISOLATE_AT_ONCE:
+                ex = None
+                try:
+                    ex = _lane_executor()
+                    # as a large part goes (`_LaneTask`), with no data limit set
+                    f = ex.submit(_compute_bounded, kind, collection, groups[nxt], None)
+                except (RuntimeError, OSError) as e:
+                    if ex is not None:
+                        discard(ex)
+                    raise _CannotIsolate(f"{type(e).__name__}: {e}") from e
+                running[nxt] = (ex, f, time.monotonic() + bound_s)
+                nxt += 1
+            live = [w for w in (_waitable(f) for _ex, f, _d in running.values())
+                    if w is not None and not w.done()]
+            if live:
+                wait(live, timeout=_slice(), return_when=FIRST_COMPLETED)
+            now = time.monotonic()
+            for i, (ex, f, deadline) in list(running.items()):
+                w = _waitable(f)
+                if w is not None and not w.done():
+                    if now >= deadline:
+                        discard(ex)              # terminated: it did not come back
+                        del running[i]
+                    continue
+                try:
+                    # done — or a future-like that answers when asked, within its bound
+                    got = f.result(timeout=0 if w is not None else max(0.0, deadline - now))
+                except Exception:   # noqa: BLE001 — its process ended without answering
+                    got = None
+                out[i] = got if isinstance(got, list) and len(got) == len(groups[i]) else None
+                ex.shutdown(wait=False)
+                del running[i]
+            _beat()
+    finally:
+        for ex, f, _d in running.values():
+            f.cancel()
+            discard(ex)
+    return out
+
+
+#: (manifest path, uid) of the rows that did not come back ALONE, in a process
+#: of their own, in this process's life (`_isolated`): answered at once the
+#: next time they are asked — never sent to the pool again, never computed
+#: here. One that failed as a peer of its batch is left pending by its stage
+#: and comes back, in the end as its batch's ONLY row: and one light row is
+#: computed in this process (`compute`), which is the hang again.
+_gone_alone: "OrderedDict[tuple[str, str], None]" = OrderedDict()
+_gone_alone_lock = threading.Lock()
+GONE_ALONE_KEPT = 4_096
+
+
+def gone_alone(collection, row: dict) -> bool:
+    with _gone_alone_lock:
+        return _row_key(collection, row) in _gone_alone
+
+
+def forget_gone_alone() -> None:
+    """Tests: no row remembered."""
+    with _gone_alone_lock:
+        _gone_alone.clear()
+
+
+def _no_answer(bound_s: float) -> tuple[bool, object]:
+    return (False, {"type": "ParseNoAnswer",
+                    "msg": f"its parse did not come back from a process of its own within {bound_s:.0f} s "
+                           f"(the parse pool had failed with it in flight; alone, it failed again): "
+                           f"never parsed in the worker's own process"})
+
+
+def _isolated(kind: str, collection, parts: list[list[dict]], k: float,
+              cannot: Callable[[list[dict]], list[tuple[bool, object]]] | None = None
+              ) -> tuple[list[list[tuple[bool, object]]], int]:
+    """The answers of the parts that were IN FLIGHT when their pool failed,
+    none of them computed in this process, and how many documents did not
+    come back alone (each an error on itself). A row whose estimate reaches
+    IN_PROCESS_PEAK_BYTES is deferred, as `_here` defers it. `cannot` answers
+    the rows when no process can be started (default: a deferral)."""
+    bound = float(config.PARSE_TIMEOUT_S) + ISOLATE_START_S
+    name = getattr(collection, "name", collection)
+    answers: list[list] = [[None] * len(part) for part in parts]
+    groups: list[list[dict]] = []
+    where: list[tuple[int, list[int]]] = []
+    for pi, part in enumerate(parts):
+        light = []
+        for ri, row in enumerate(part):
+            if peak_of(k, row) >= IN_PROCESS_PEAK_BYTES:
+                answers[pi][ri] = _deferred(kind, collection, [row], "a heavy document waits for the parse "
+                                            "pool, never parsed in the worker's own process")[0]
+            else:
+                light.append(ri)
+        if light:
+            groups.append([part[ri] for ri in light])
+            where.append((pi, light))
+    print(f"[parse pool] {name}: {sum(len(g) for g in groups)} document(s) of {len(groups)} part(s) were in "
+          f"flight: parsed again in processes of their own, {ISOLATE_AT_ONCE} at a time, none in this one",
+          file=sys.stderr, flush=True)
+    failed = 0
+
+    def gone(pi: int, ri: int, row: dict) -> None:
+        nonlocal failed
+        failed += 1
+        answers[pi][ri] = _no_answer(bound)
+        with _gone_alone_lock:
+            _gone_alone[_row_key(collection, row)] = None
+            while len(_gone_alone) > GONE_ALONE_KEPT:
+                _gone_alone.popitem(last=False)
+        print(f"[parse pool] {name}: document {row.get('uid')} did not come back from a process of its own "
+              f"within {bound:.0f} s: an error on it", file=sys.stderr, flush=True)
+
+    def rest(answer: Callable[[dict], tuple[bool, object]]) -> None:
+        for pi, part in enumerate(parts):
+            for ri, row in enumerate(part):
+                if answers[pi][ri] is None:
+                    answers[pi][ri] = answer(row)
+    try:
+        singles: list[list[dict]] = []
+        at: list[tuple[int, int]] = []
+        for (pi, ris), rows, got in zip(where, groups, _alone(kind, collection, groups, bound)):
+            if got is not None:
+                for ri, a in zip(ris, got):
+                    answers[pi][ri] = a
+            elif len(rows) == 1:
+                gone(pi, ris[0], rows[0])
+            else:
+                singles.extend([row] for row in rows)
+                at.extend((pi, ri) for ri in ris)
+        if singles:
+            for (pi, ri), rows, got in zip(at, singles, _alone(kind, collection, singles, bound)):
+                if got is not None:
+                    answers[pi][ri] = got[0]
+                else:
+                    gone(pi, ri, rows[0])
+    except Stopped:
+        rest(lambda row: _stopped_rows([row])[0])
+    except _CannotIsolate as e:
+        print(f"[parse pool] {name}: no process of its own could be started ({e})", file=sys.stderr, flush=True)
+        why = ("in flight when the parse pool failed, and no process of its own could be started: asked "
+               "again, never parsed in the worker's own process")
+        rest((lambda row: cannot([row])[0]) if cannot is not None
+             else (lambda row: _deferred(kind, collection, [row], why)[0]))
+    return answers, failed
+
+
+def _document_failed() -> None:
+    """The failure just counted (`_note_failure`) was a DOCUMENT's: it failed
+    again alone, in a process of its own. The pool is not at fault, and is
+    not switched off for it — off, its work would run in this process."""
+    global _failures, _disabled, _disabled_until, _disabled_times
+    with _lock:
+        _failures = max(0, _failures - 1)
+        if _disabled and _failures < max(1, int(config.PARSE_MAX_FAILURES)):
+            _disabled = False
+            _disabled_until = 0.0
+            _disabled_times = max(0, _disabled_times - 1)
+
+
 def _waitable(f) -> Future | None:
     """The `concurrent.futures.Future` behind a part in flight — the pool's,
     or a large part's own process's — or None for a future-like that answers
@@ -1850,6 +2059,14 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
         return []
     if _stopped():
         return _stopped_rows(plain)
+    if any(gone_alone(collection, r) for r in plain):
+        # a row that did not come back alone, in a process of its own, is
+        # answered as it was then: not asked of the pool again, and never
+        # computed here — where one light row would be (below)
+        known = [gone_alone(collection, r) for r in plain]
+        rest = iter(compute(kind, collection, [r for r, g in zip(plain, known) if not g]))
+        bound = float(config.PARSE_TIMEOUT_S) + ISOLATE_START_S
+        return [_no_answer(bound) if g else next(rest) for g in known]
     ex = pool()
     k = peak_per_byte(collection)
     if k:
@@ -2065,7 +2282,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
         # FIRST, while its parts are still in flight: a child killed for
         # memory runs the worker's handler, which records them in the hold
         kill = oom_hold.killed()
-        kept: list = []                    # (part, its rows, or None: not answered)
+        kept: list = []                    # (part, its rows, or None: in flight and not answered)
         for part, f in futures:
             if isinstance(f, list):
                 kept.append((part, f))
@@ -2083,13 +2300,26 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
             # its rows are not parsed again here, where they would kill the
             # worker itself (2026-11-19: 43 kills in a day)
             raise MemoryKilled(kill[0], kill[1], f"{kind} of {getattr(collection, 'name', collection)}") from e
-        # the parts that answered are KEPT; the others, and those never
-        # submitted, here — the light ones; a heavy one deferred (`_here`)
-        for part, got in kept + [(p, None) for p in parts[nxt:]]:
+        # the parts that answered are KEPT. Those IN FLIGHT and not answered
+        # are parsed again in processes of their own, never here: one of them
+        # may be what the child hung on or died of (`_isolated`, 2026-11-24).
+        # Those never submitted, here — the light ones; a heavy one deferred
+        # (`_here`)
+        lost = [part for part, got in kept if got is None]
+        again: list = []
+        if lost and not _stopped():
+            again, failed = _isolated(kind, collection, lost, k)
+            if failed:
+                _document_failed()
+        again_it = iter(again)
+        for part, got in kept:
             if got is None:
-                got = _stopped_rows(part) if _stopped() else _here(kind, collection, part, k)
+                got = next(again_it, None) or _stopped_rows(part)
                 _beat()
             out.extend(got)
+        for part in parts[nxt:]:
+            out.extend(_stopped_rows(part) if _stopped() else _here(kind, collection, part, k))
+            _beat()
         return out
     finally:
         for _part, f in futures:
@@ -2315,12 +2545,21 @@ def compute_pages(kind: str, collection, pages, *, stop=None, say=None):
                 _note_failure(e, owner.get(fut), **({"killed": True} if oom_hold.killed() is not None else {}))
                 owner.clear()
                 _raise_if_killed(f"{kind} of {getattr(collection, 'name', collection)}", e)
-                # what was not answered, in-process; what finished is kept;
-                # what was still queued goes to the next pool
-                results[page_no][i] = _compute(kind, collection, part)
-                for p_no, j, rest, f in inflight:
-                    results[p_no][j] = (_finished(f) if f is not None else None) \
-                        or _compute(kind, collection, rest)
+                # what finished is kept. What was IN FLIGHT and not answered is
+                # parsed again in processes of its own, never here (`_isolated`,
+                # 2026-11-24): one of those parts may be what the child hung on
+                # or died of. What was never submitted, in-process
+                done = [(p_no, j, rest, _finished(f) if f is not None else None, f is not None)
+                        for p_no, j, rest, f in inflight]
+                lost = [part] + [rest for _p, _j, rest, got, flown in done if flown and got is None]
+                again, failed = _isolated(kind, collection, lost, 0.0,
+                                          cannot=lambda rows: _compute(kind, collection, rows))
+                if failed:
+                    _document_failed()
+                again_it = iter(again)
+                results[page_no][i] = next(again_it)
+                for p_no, j, rest, got, flown in done:
+                    results[p_no][j] = got or (next(again_it) if flown else _compute(kind, collection, rest))
                 inflight.clear()
     finally:
         for _p, _i, _part, f in inflight:
