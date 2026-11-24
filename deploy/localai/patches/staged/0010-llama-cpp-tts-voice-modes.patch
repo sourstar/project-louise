@@ -32,23 +32,31 @@ the way.
   set_voice stays behind its own probe. A model without a template keeps
   the reference rule there, as before.
 
-Nothing changes for Qwen3-TTS Base or LFM3-Audio but the transcript now
-reaching the first.
+- the decoding's seed, steps and guidance: params["seed"], ["flow_steps"]
+  and ["cfg_scale"], the three fields upstream's POST /v1/audio/speech
+  reads from its body and this call had no way to set. Without a seed the
+  helper draws one for every request, so the same text never gave the same
+  audio twice; with one it does, and the sampler takes it too. A model
+  that decodes in steps under guidance (OmniVoice: 32 steps) can be asked
+  for fewer; a model with no steps or guidance refuses a set value itself.
 
-Tested: tts_request_options_test.cpp (the two new cases and the thirteen
+Nothing changes for Qwen3-TTS Base or LFM3-Audio but the transcript now
+reaching the first, and a seed when the request sets one.
+
+Tested: tts_request_options_test.cpp (four new cases and the thirteen
 there before). The grpc-server change was not compiled here: it is built
 with the backend.
 
 Assisted-by: Claude Code
 ---
- backend/cpp/llama-cpp/grpc-server.cpp         | 42 +++++++--
- backend/cpp/llama-cpp/prepare.sh              |  8 ++
- backend/cpp/llama-cpp/tts_request_options.h   | 87 +++++++++++++++----
- .../llama-cpp/tts_request_options_test.cpp    | 54 ++++++++++++
- 4 files changed, 165 insertions(+), 26 deletions(-)
+ backend/cpp/llama-cpp/grpc-server.cpp         |  60 ++++++--
+ backend/cpp/llama-cpp/prepare.sh              |   8 ++
+ backend/cpp/llama-cpp/tts_request_options.h   | 133 +++++++++++++++---
+ .../llama-cpp/tts_request_options_test.cpp    |  91 ++++++++++++
+ 4 files changed, 266 insertions(+), 26 deletions(-)
 
 diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
-index d1d6a78..dc2515f 100644
+index d1d6a78..8f27b45 100644
 --- a/backend/cpp/llama-cpp/grpc-server.cpp
 +++ b/backend/cpp/llama-cpp/grpc-server.cpp
 @@ -4227,21 +4227,38 @@ public:
@@ -77,8 +85,8 @@ index d1d6a78..dc2515f 100644
 +        else if (!can_reference) {
 +            voice_mode = llama_grpc::tts_voice_mode::name;
 +        }
-+#endif
  #endif
++#endif
 +        std::error_code voice_ec;
 +        const bool voice_is_file = !request->voice().empty()
 +            && std::filesystem::is_regular_file(request->voice(), voice_ec);
@@ -121,7 +129,7 @@ index d1d6a78..dc2515f 100644
              // Same as upstream POST /tts: the model's "tts" template renders the
              // prompt with the language and voice, and an empty voice takes the
              // template default. Fall back to the raw text when there is no template.
-@@ -4275,7 +4297,9 @@ public:
+@@ -4275,11 +4297,27 @@ public:
              if (!tts_prompt.empty()) {
                  task.tts_inp.set_prompt(tts_prompt);
              }
@@ -131,6 +139,35 @@ index d1d6a78..dc2515f 100644
          }
  #endif
          task.tts_inp.data.top_k    = opts.top_k;
+         task.tts_inp.data.top_p    = opts.top_p;
++        // The decoding's seed, steps and guidance, where the request sets them
++        // (params, as upstream's POST /v1/audio/speech reads them from its
++        // body). Unset, the pipeline draws a seed for the request and keeps the
++        // model's own steps and guidance. A model that has no steps or
++        // guidance refuses a set value when the task starts.
++        if (opts.seed >= 0) {
++            task.tts_inp.data.seed = static_cast<uint32_t>(opts.seed);
++        }
++        if (opts.flow_steps > 0) {
++            task.tts_inp.data.flow_steps = opts.flow_steps;
++        }
++        if (opts.cfg_scale > 0.0f) {
++            task.tts_inp.data.cfg_scale = opts.cfg_scale;
++        }
+         task.tts_inp.data.stream   = stream;
+         task.tts_inp.data.out_type = stream
+             ? MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM   // Go prepends its own WAV header, see core/backend/tts.go
+@@ -4290,6 +4328,10 @@ public:
+         // its codec EOS, so a short input can otherwise generate the full cap.
+         task.params.n_predict = opts.max_frames > 0 ? opts.max_frames : -1;
+         task.params.sampling  = params_base.sampling;
++        // the request's seed is the sampler's too, as upstream has it
++        if (opts.seed >= 0) {
++            task.params.sampling.seed = static_cast<uint32_t>(opts.seed);
++        }
+         // Both values mirror upstream's draft POST /tts handler. Note that the
+         // pair is INERT at this pin: llama_sampler_init_penalties() clamps
+         // penalty_last_n with std::max(penalty_last_n, 0), so -1 means "off",
 diff --git a/backend/cpp/llama-cpp/prepare.sh b/backend/cpp/llama-cpp/prepare.sh
 index 02d796f..18d0619 100644
 --- a/backend/cpp/llama-cpp/prepare.sh
@@ -158,10 +195,18 @@ index 02d796f..18d0619 100644
  EOF
  
 diff --git a/backend/cpp/llama-cpp/tts_request_options.h b/backend/cpp/llama-cpp/tts_request_options.h
-index 177705b..ea89652 100644
+index 177705b..e4f71f6 100644
 --- a/backend/cpp/llama-cpp/tts_request_options.h
 +++ b/backend/cpp/llama-cpp/tts_request_options.h
-@@ -18,10 +18,15 @@ struct tts_request_options {
+@@ -2,6 +2,7 @@
+ 
+ #pragma once
+ 
++#include <cmath>
+ #include <cstdint>
+ #include <exception>
+ #include <map>
+@@ -18,10 +19,15 @@ struct tts_request_options {
      std::string error;
  
      std::string text;
@@ -180,7 +225,25 @@ index 177705b..ea89652 100644
      std::string voice;
      std::string language;
  
-@@ -87,16 +92,32 @@ inline tts_request_options reject(const std::string & message) {
+@@ -35,6 +41,17 @@ struct tts_request_options {
+     // which is roughly 41 s at the 12.5 Hz frame rate. 0 means unset, leaving
+     // that default in place.
+     int32_t max_frames = 0;
++
++    // The decoding of the audio codes, for the models that take them
++    // (OmniVoice decodes in steps, from noise, under guidance): the seed of
++    // the noise (the same text, voice and seed give the same audio), the
++    // number of steps (fewer is faster, and another audio), the guidance
++    // scale (1.0 = none). -1 / 0 / 0.0f mean "unset": a seed drawn for the
++    // request, the model's own steps and guidance. A model that has no steps
++    // or guidance refuses a set value itself.
++    int32_t seed       = -1;
++    int32_t flow_steps = 0;
++    float   cfg_scale  = 0.0f;
+ };
+ 
+ namespace detail {
+@@ -87,16 +104,32 @@ inline tts_request_options reject(const std::string & message) {
  
  } // namespace detail
  
@@ -218,7 +281,7 @@ index 177705b..ea89652 100644
      if (text.empty()) {
          return detail::reject("text must be a non-empty string");
      }
-@@ -105,16 +126,36 @@ inline tts_request_options parse_tts_request_options(
+@@ -105,16 +138,36 @@ inline tts_request_options parse_tts_request_options(
      opts.text     = text;
      opts.language = language;
  
@@ -264,7 +327,45 @@ index 177705b..ea89652 100644
      }
  
      // Both values are range-checked here rather than left to the caller: the
-@@ -159,4 +200,16 @@ inline tts_request_options parse_tts_request_options(
+@@ -155,8 +208,54 @@ inline tts_request_options parse_tts_request_options(
+         }
+     }
+ 
++    // The same three fields upstream's POST /v1/audio/speech reads. -1 is its
++    // spelling of "a random seed" and is taken as unset.
++    const auto seed_it = params.find("seed");
++    if (seed_it != params.end()) {
++        if (!detail::parse_whole_int32(seed_it->second, opts.seed)) {
++            return detail::reject("seed must be an integer, got \"" + seed_it->second + "\"");
++        }
++        if (opts.seed < -1) {
++            return detail::reject("seed must be >= 0, or -1 for a random one, got \"" + seed_it->second + "\"");
++        }
++    }
++
++    const auto flow_steps_it = params.find("flow_steps");
++    if (flow_steps_it != params.end()) {
++        if (!detail::parse_whole_int32(flow_steps_it->second, opts.flow_steps)) {
++            return detail::reject("flow_steps must be an integer, got \"" + flow_steps_it->second + "\"");
++        }
++        // upstream's own bounds for the field
++        if (opts.flow_steps < 0 || opts.flow_steps > 1024) {
++            return detail::reject("flow_steps must be between 0 and 1024, got \"" + flow_steps_it->second + "\"");
++        }
++    }
++
++    const auto cfg_scale_it = params.find("cfg_scale");
++    if (cfg_scale_it != params.end()) {
++        if (!detail::parse_whole_float(cfg_scale_it->second, opts.cfg_scale)) {
++            return detail::reject("cfg_scale must be a number, got \"" + cfg_scale_it->second + "\"");
++        }
++        // negated, as top_p above: NaN fails every comparison
++        if (!(opts.cfg_scale >= 0.0f && std::isfinite(opts.cfg_scale))) {
++            return detail::reject("cfg_scale must be a finite number >= 0, got \"" + cfg_scale_it->second + "\"");
++        }
++    }
++
+     opts.ok = true;
      return opts;
  }
  
@@ -282,7 +383,7 @@ index 177705b..ea89652 100644
 +
  } // namespace llama_grpc
 diff --git a/backend/cpp/llama-cpp/tts_request_options_test.cpp b/backend/cpp/llama-cpp/tts_request_options_test.cpp
-index abd786f..f7ba09d 100644
+index abd786f..bdb70dd 100644
 --- a/backend/cpp/llama-cpp/tts_request_options_test.cpp
 +++ b/backend/cpp/llama-cpp/tts_request_options_test.cpp
 @@ -75,6 +75,58 @@ static void test_accepts_empty_voice_without_reference() {
@@ -344,7 +445,49 @@ index abd786f..f7ba09d 100644
  static void test_parses_sampling_params() {
      const std::map<std::string, std::string> params{
          {"top_k", "40"},
-@@ -240,6 +292,8 @@ int main() {
+@@ -199,6 +251,41 @@ static void test_parses_max_frames() {
+     check(zero.max_frames == 0, "max_frames of 0 means unset");
+ }
+ 
++static void test_parses_the_decoding_s_seed_steps_and_guidance() {
++    using mode = llama_grpc::tts_voice_mode;
++    const auto unset = llama_grpc::parse_tts_request_options(
++        "Hello world", "", "it", "", {}, mode::reference_or_name, false);
++    check(unset.ok && unset.seed == -1 && unset.flow_steps == 0 && unset.cfg_scale == 0.0f,
++          "seed, flow_steps and cfg_scale are unset when the request names none");
++
++    const auto set = llama_grpc::parse_tts_request_options(
++        "Hello world", "", "it", "", {{"seed", "0"}, {"flow_steps", "16"}, {"cfg_scale", "2.5"}},
++        mode::reference_or_name, false);
++    check(set.ok, "seed, flow_steps and cfg_scale are accepted");
++    check(set.seed == 0, "a seed of 0 is a seed, not the unset sentinel");
++    check(set.flow_steps == 16, "flow_steps is parsed");
++    check(set.cfg_scale == 2.5f, "cfg_scale is parsed");
++
++    const auto random = llama_grpc::parse_tts_request_options(
++        "Hello world", "", "it", "", {{"seed", "-1"}}, mode::reference_or_name, false);
++    check(random.ok && random.seed == -1, "a seed of -1 is upstream's random seed: unset");
++}
++
++static void test_rejects_malformed_decoding_params() {
++    using mode = llama_grpc::tts_voice_mode;
++    const std::pair<const char *, const char *> bad[] = {
++        {"seed", "-2"}, {"seed", "zero"}, {"seed", "1.5"},
++        {"flow_steps", "-1"}, {"flow_steps", "1025"}, {"flow_steps", "16x"},
++        {"cfg_scale", "-0.5"}, {"cfg_scale", "nan"}, {"cfg_scale", "inf"}, {"cfg_scale", "high"},
++    };
++    for (const auto & [key, value] : bad) {
++        const auto opts = llama_grpc::parse_tts_request_options(
++            "Hello world", "", "it", "", {{key, value}}, mode::reference_or_name, false);
++        check(!opts.ok, (std::string(key) + " of \"" + value + "\" is rejected").c_str());
++        check(opts.error.find(key) != std::string::npos, (std::string(key) + "'s error names the field").c_str());
++    }
++}
++
+ static void test_rejects_malformed_max_frames() {
+     const auto negative = llama_grpc::parse_tts_request_options(
+         "Hello world", "/models/voices/ref.wav", "", {{"max_frames", "-1"}}, true);
+@@ -240,6 +327,8 @@ int main() {
      test_rejects_missing_speaker_reference();
      test_accepts_named_voice_without_reference();
      test_accepts_empty_voice_without_reference();
@@ -353,6 +496,15 @@ index abd786f..f7ba09d 100644
      test_parses_sampling_params();
      test_rejects_malformed_sampling_params();
      test_rejects_out_of_range_sampling_params();
+@@ -247,6 +336,8 @@ int main() {
+     test_accepts_sampling_param_boundaries();
+     test_parses_max_frames();
+     test_rejects_malformed_max_frames();
++    test_parses_the_decoding_s_seed_steps_and_guidance();
++    test_rejects_malformed_decoding_params();
+     test_ignores_unknown_params();
+ 
+     if (failures == 0) {
 -- 
 2.43.0
 

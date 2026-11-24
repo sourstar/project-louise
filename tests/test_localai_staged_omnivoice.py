@@ -86,6 +86,20 @@ def test_the_patch_holds_the_changes_the_note_says_were_kept():
     assert "llama_batch_ext_set_output_embd(batch.get(), idx, true);" in added
 
 
+def test_a_request_through_localai_can_set_the_seed_the_steps_and_the_guidance():
+    """Without them the gate's replay has no seed to share with the reference
+    and the 16-step choice of §11 cannot be heard on the node: LocalAI's TTS
+    call carried none of the three."""
+    added = "\n".join(_added(VOICE_MODES.read_text(encoding="utf-8")))
+    for field in ("seed", "flow_steps", "cfg_scale"):
+        assert f'params.find("{field}")' in added, f"params[{field!r}] is parsed"
+        assert f"task.tts_inp.data.{field} = " in added, f"{field} reaches the pipeline's input"
+    assert "task.params.sampling.seed = " in added, "the sampler takes the request's seed too"
+    section = NOTE[NOTE.index("## 10. "):]
+    assert """`params: {"seed": "0"}`""" in section, "the card gate's request names its seed"
+    assert """`params: {"flow_steps": "16"}`""" in section, "and §11 says how 16 steps are asked for"
+
+
 def test_the_reference_s_hooks_are_the_ones_the_gate_tool_names():
     named = set(re.findall(r"`(OV_[A-Z_]+)[=`]", GATE_TOOL))
     assert {"OV_HARD_MASK", "OV_FORCE_TOKENS", "OV_REPLAY_LOGITS", "OV_THREADS"} <= named

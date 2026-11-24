@@ -380,7 +380,7 @@ a client that sends long texts and streams.
 ## 10. Stage 5: what LocalAI must pass, and the card (2026-11-24)
 
 **A second staged patch, in LocalAI's own backend code**
-(`staged/0010-llama-cpp-tts-voice-modes.patch`, 165 lines with its tests).
+(`staged/0010-llama-cpp-tts-voice-modes.patch`, 266 lines with its tests).
 Louise's speech request names a LocalAI voice profile
 (`localai://voice-profiles/<id>`); LocalAI's HTTP layer turns it into the
 clip's path as `voice` and its transcript as `params["ref_text"]`. The
@@ -391,8 +391,14 @@ knew no other kind of model. With the patch a model that clones and has a
 that is no file, or OpenAI's `instructions`), or nothing: the node's
 warm-up call (`app/resident.py`, text alone) is answered in the model's own
 voice instead of refused. Qwen3-TTS Base keeps its rule and gains the
-transcript. Its pure half is unit-tested here (15 cases pass); the
-`grpc-server.cpp` half is compiled only with the backend, on the node.
+transcript. Added the same day, found while the card timing was prepared:
+through LocalAI a request could set neither the seed nor the number of steps
+— the helper drew a seed for every request, so no sentence came out the same
+twice and the gate's replay had nothing to hold on to. The patch now passes
+`params: {"seed": …, "flow_steps": …, "cfg_scale": …}` on, the three fields
+llama.cpp's own route reads. Its pure half is unit-tested here (17 cases
+pass); the `grpc-server.cpp` half is compiled only with the backend, on the
+node.
 
 | | pros | cons |
 |---|---|---|
@@ -421,7 +427,9 @@ of this touches the live speech until the last step.
    `tools/measure/omnivoice_reference_hooks.patch` for the reference
    (`OV_HARD_MASK=1`); `tools/measure/omnivoice_port_gate.py` for the
    verdict. The rounding noise on the card is its own: the bar is the
-   reference against itself THERE (`OV_HARD_MASK=shift`), as here.
+   reference against itself THERE (`OV_HARD_MASK=shift`), as here. The
+   port's request carries `params: {"seed": "0"}` (the reference runs with
+   `--seed 0`): without it the port's noise is drawn per request.
 4. **Against today's backend**, phase 0's three clips and one sentence in the
    admin's recorded voice through LocalAI's `/v1/audio/speech` exactly as
    Louise sends it (`voice: localai://voice-profiles/<id>`): time to the
@@ -520,7 +528,7 @@ choice, never a default here:**
 | | pros | cons |
 |---|---|---|
 | 32 steps, guided (today; what the gate passed) | the model's own setting; the audio judged so far | the full time |
-| 16 steps (`flow_steps` in the request; no code needed) | MEASURED 39.7 s against 81.8 s, the same sentence, one after the other | different audio (the file differs); its quality is unjudged — an ear's verdict, on the card |
+| 16 steps (a request's `params: {"flow_steps": "16"}` through LocalAI, which the second staged patch passes on; `flow_steps` in the body of llama.cpp's own route) | MEASURED 39.7 s against 81.8 s, the same sentence, one after the other | different audio (the file differs); its quality is unjudged — an ear's verdict, on the card |
 | no guidance (`cfg_scale` 1) | 23–45 % of the rows gone (counted), once built | the model is trained to be guided; unjudged, likely worse |
 
 Recommendation: nothing changes — 32 guided steps — and the 16-step file
