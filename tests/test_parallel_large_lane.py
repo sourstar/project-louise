@@ -417,6 +417,9 @@ def test_the_batch_that_was_short_of_room_stops_the_keep(fake_compute, monkeypat
 
 
 def test_a_heavy_part_gives_back_what_it_freed_and_says_it(monkeypatch, capsys):
+    # the threshold is this process's own state: in a whole-suite run an earlier in-process part has
+    # already raised it past the test process's real heap, and 900 MB then reads as below it
+    monkeypatch.setattr(parallel, "_trim_floor", parallel.TRIM_ABOVE_BYTES)
     seq = iter([900 * 2 ** 20, 200 * 2 ** 20])
     monkeypatch.setattr(parallel, "_rss_anon", lambda: next(seq))
     monkeypatch.setattr(parallel, "_compute", lambda kind, c, rows: [(True, r["uid"]) for r in rows])
