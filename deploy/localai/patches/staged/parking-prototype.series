@@ -1,0 +1,24 @@
+# THE PARKING PROTOTYPE'S ENGINE (docs/notes/parking-prototype.md; operator,
+# 2026-11-24, relayed from the architecture session: parking step 1, "N park
+# cycles the same bytes; the park, the un-park and the first request timed
+# apart; the parked process's floor read"). The candidate engine-fixes.series
+# and ONE patch more, 0015: weights that leave the device and come back.
+#   SERIES_FILE=deploy/localai/patches/staged/parking-prototype.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>
+# INSTALLED BESIDE THE LIVE ENGINE AND NEVER SWAPPED: one copy of bge-m3 uses
+# it, direct, with three env lines. Without those lines it is the fixes'
+# engine. It may be rebuilt as the prototype is corrected; no gate depends
+# on it, and no vector written to a collection comes from it.
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch

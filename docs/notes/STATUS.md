@@ -20,6 +20,8 @@ measured (published figures disagree).
 
 ### 2026-11-24
 
+- **Parking step 1, the engine prototype — BUILT, NOT YET RUN ON THE CARD** ([parking-prototype.md](parking-prototype.md); operator, relayed: "Do everything, … run unattended"). The weights are released and committed again at the SAME addresses (a reserved virtual range), so no tensor, extra or reorder changes across a park. Staged 0015, its own engine (`parking-prototype.series`, beside the live one, never swapped), env switches only. Here: compiled with Intel's compiler, 16 of 16 on a CPU stand-in that poisons a parked buffer, the engine's 21 context-on-demand tests. The node's measurement (R0–R3, the floor, a refusal) is München's, the card free after tonight's pass.
+- **A candidate engine with the staged fixes** (`engine-fixes.series`: 0012 the expert-layout switch, 0013 the pool's refusal, 0014 the second signal's exit; engine `9ea95e93a83c`), compiled here for the first time (Intel's compiler installed in the cloud session), built on the node by München 19:44Z for one swap-and-gate pass with the wrapper's rebuild.
 - **More models than the card holds: parking — DESIGNED, nothing built** (operator: "it is a matter of
   allowing use cases that today we couldn't afford"; "Both engines"). A model parked in host RAM and put
   back on the card by a copy, after Clockwork (OSDI 2020): the mechanism in the engine, the lifecycle and
