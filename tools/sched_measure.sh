@@ -65,9 +65,10 @@ echo "--- fts batches parsed ahead, and the parse seconds waited, last ${WIN} mi
 docker logs --since ${WIN}m ix-louise-rag-worker-1 2>&1 \
   | grep -E 'indexed [0-9]+ documents / [0-9]+ chunks in one commit' \
   | awk '{ a = ($0 ~ /parsed ahead\)/); n[a]++
-           if (match($0, /parse [0-9.]+/)) p[a] += substr($0, RSTART + 6, RLENGTH - 6) }
-         END { printf "%d of %d parsed ahead (parse %.1fs waited); %d not (parse %.1fs)\n",
-               n[1], n[0] + n[1], p[1], n[0], p[0] }'
+           if (match($0, /parse [0-9.]+/)) p[a] += substr($0, RSTART + 6, RLENGTH - 6)
+           if (match($0, /; [0-9]+ more parsed, thrown away/)) lost += substr($0, RSTART + 2, RLENGTH - 2) + 0 }
+         END { printf "%d of %d parsed ahead (parse %.1fs waited); %d not (parse %.1fs); %d documents parsed and thrown away\n",
+               n[1], n[0] + n[1], p[1], n[0], p[0], lost }'
 echo "--- deferrals (a writer that lost the manifest lock) ---"
 docker logs --since ${WIN}m ix-louise-rag-worker-1 2>&1 | grep -c "round deferred" || true
 echo "--- errors ---"

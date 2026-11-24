@@ -447,6 +447,38 @@ def test_a_row_whose_class_changed_after_its_parse_is_left_to_its_own_turn(tmp_p
     _assert_all_indexed_once(con, c, 20)
 
 
+def _batch_lines(monkeypatch) -> list[str]:
+    lines: list[str] = []
+    real = worker._batch_log
+    monkeypatch.setattr(worker, "_batch_log",
+                        lambda con, stage, c, text, **kw: lines.append(text) or real(con, stage, c, text, **kw))
+    return lines
+
+
+def test_the_batch_line_says_what_was_parsed_past_the_cap_and_what_became_of_it(tmp_path, monkeypatch, parse):
+    """München, 2026-11-24: 240 MB parsed for a batch that wrote 28, and no
+    line had the number. Without a look-ahead the peers past the chunk cap
+    are thrown away and parsed again; with one they are carried."""
+    monkeypatch.setattr(config, "FTS_BATCH_DOCS", 10)
+    monkeypatch.setattr(config, "FTS_BATCH_CHUNKS", 12)
+    lines = _batch_lines(monkeypatch)
+    c, con = _synthetic(tmp_path, 40)
+    assert _round(con, c)
+    assert " more parsed, thrown away" in lines[-1] and "parsed ahead" not in lines[-1], lines[-1]
+    n = int(lines[-1].split("; ")[1].split()[0])
+    assert n == 10 - int(lines[-1].split("indexed ")[1].split()[0]), "the rows parsed, less the rows written"
+    # on a pipeline thread with a pool: carried
+    monkeypatch.setattr(parallel, "prefetch_allowed", lambda: True)
+    monkeypatch.setattr(config, "FTS_OVERLAP", 1)
+    worker._ahead_here.on = True
+    try:
+        assert _round(con, c)
+        assert " more parsed, carried to the next batch" in lines[-1], lines[-1]
+    finally:
+        worker._ahead_here.on = False
+        worker.drop_fts_ahead()
+
+
 def test_without_the_overlap_the_stage_is_what_it_was(tmp_path, monkeypatch, parse, instrumented):
     """Off a pipeline thread (a deposit, a tool, the rollback main loop) — or
     with FTS_OVERLAP=0 — nothing is left parsing behind a batch."""

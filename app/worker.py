@@ -1091,6 +1091,12 @@ def stage_fts(con, row, collection) -> None:
     if not row["fts_done"]:
         _fts_start_ahead(con, collection, computed, {r["uid"] for r, _ in batch}, want,
                          with_names)
+    # PARSED AND NOT WRITTEN: the peers past the cut. The look-ahead carries
+    # them into the next batch; where none is held they are parsed again, and
+    # the line says which (2026-11-24: 240 MB parsed for a batch that wrote
+    # 28, and no line had the number)
+    past = sum(1 for _r, (o, _v) in computed if o) - len(batch)
+    carried = _fts_ahead.get(str(collection.manifest_path)) is not None
 
     # the validity columns of a versioned collection (app/validity.py), read
     # before the lock like every other load; `{}` for every other collection
@@ -1177,6 +1183,8 @@ def stage_fts(con, row, collection) -> None:
                f"indexed {len(batch)} documents / {n_chunks} chunks in one commit ({took:.1f}s: "
                f"parse {parse_s:.1f}, index {index_s:.1f}, the rest {max(0.0, took - parse_s - index_s):.1f}"
                + (", parsed ahead)" if ahead else ")")
+               + (f"; {past} more parsed, {'carried to the next batch' if carried else 'thrown away'}"
+                  if past > 0 else "")
                + (f"; {deferred[0]['uid']} deferred, left pending ({str(deferred[1].get('msg', ''))[:200]})"
                   if deferred else ""),
                docs=len(batch), chunks=n_chunks, secs=took, emit=len(batch) > 1 or deferred is not None,

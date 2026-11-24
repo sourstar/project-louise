@@ -3343,11 +3343,12 @@ the parse can hide behind: the parse wait should fall from 374 s toward
 the excess of a straggler over that work, the wall toward 500–560 s for the
 same documents (1.5–1.7x), and the batch lines read "parsed ahead" for all
 but the first after a start and the one after a class change. The pool's
-CPU for the same documents should FALL (nothing parsed twice): the sum of
-the "part of X MB" lines against the bytes of the documents indexed is the
-measure, now that the line names its collection and its rows. The 1.5–1.7x
-is a floor if the repeated parses were a large share; how large is not
-known from the BEFORE.
+CPU for the same documents should FALL (nothing parsed twice): each batch
+line now says "; N more parsed, carried to the next batch" or "thrown
+away", and `tools/sched_measure.sh` sums the documents thrown away — near
+0 after, unknown before (dozens a batch in the heavy stretches, by the
+pool's lines). The 1.5–1.7x is a floor if the repeated parses were a large
+share.
 
 **AFTER, to read on the node** (the same 15 minutes of lines, the same
 slice if it is still in the heavy years — say which years): `bash
