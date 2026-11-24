@@ -765,7 +765,7 @@ def test_the_order_is_tier_then_recency_then_size_and_tier_one_is_never_pushed_o
             (SERVER, "louise-translate"): now - 60}                   # recent, and still last
     tier1 = 7_441 + 7_879 + 800 + 1_664 + 2_000 + 1_500
     # the budget: tier 1, vega-bge-m3, and 500 MiB more
-    margin = int(0.95 * 32_656 * MIB) - (tier1 + 1_200 + 500) * MIB
+    margin = int(0.95 * 32_656 * MIB) - (tier1 + 1_200 + 500) * MIB - resident.CONTEXT_RESERVE
     mem.peaks[int(now // resident.MARGIN_BUCKET_S * resident.MARGIN_BUCKET_S)] = margin
     p = resident.plan(want, mem, threshold=0.95, used=used, now=now)
     assert [x.resident.model for x in p.placed] == [
@@ -805,7 +805,7 @@ def test_a_set_larger_than_the_budget_preloads_only_the_top_part_and_says_so_onc
     g = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy", reranker="rerank-bge")
     pm = _with(_collection(tmp_path, "pubmed"), "vega-medcpt-article", "lazy", query_model="vega-medcpt-query")
     _known(louise_chat=6_000, rerank_bge=1_600, vega_4b=18_000, vega_medcpt_query=1_100,
-           vega_medcpt_article=12_000, louise_translate=7_900)
+           vega_medcpt_article=11_000, louise_translate=7_900)
     node_state.touch_encoder(SERVER, "vega-medcpt-query", now=resident._wall() - 120)
     node_state.touch_encoder(SERVER, "vega-4b", now=resident._wall() - 3_600)
     _system(monkeypatch, node, {})
@@ -813,14 +813,14 @@ def test_a_set_larger_than_the_budget_preloads_only_the_top_part_and_says_so_onc
     out = _beat([g, pm])
     assert sorted(node.warmed) == ["louise-chat", "louise-translate", "rerank-bge", "vega-medcpt-query"]
     assert out["out_of_budget"] == [(SERVER, "vega-4b"), (SERVER, "vega-medcpt-article")]
-    assert out["budget"] // MIB == 27_761, "0.95 × 32,656 − the reserve 3,262 (1,000 measured, under it)"
+    assert out["budget"] // MIB == 26_761, "0.95 × 32,656 − 1,000 measured − the shared context budget 3,262"
     fell = [t for _, t in node.said if "not preloaded —" in t]
     assert len(fell) == 1
-    assert fell[0].startswith("resident: not preloaded — the budget is 27,761 MiB (the 0.95 line 31,023 MiB "
-                              "− the working memory's reserve 3,262 MiB (the margin, 1,000 MiB measured over "
-                              "6 h, is under it)): ")
+    assert fell[0].startswith("resident: not preloaded — the budget is 26,761 MiB for weights (the 0.95 line "
+                              "31,023 MiB − growth 1,000 MiB, measured over 6 h − the shared context budget "
+                              "3,262 MiB, its floor: no on-demand context is known): ")
     assert ("vega-medcpt-article — encoder (pubmed) — rank 6 of 6, tier 3 of 3: document encoders, never "
-            "used here; the models placed above it take 16,600 MiB and it needs 12,000 MiB — loaded at its "
+            "used here; the models placed above it take 16,600 MiB and it needs 11,000 MiB — loaded at its "
             "first request, then left to the reclaimer's LRU") in fell[0]
     assert "vega-4b — query encoder, encoder (gutenberg) — rank 5 of 6, tier 2 of 3: query encoders" in fell[0]
     node.warmed.clear()
@@ -857,7 +857,7 @@ def test_a_model_out_of_the_budget_is_loaded_at_its_first_request(tmp_path, node
     `off` collection's encoder is, and the next beat leaves it there."""
     _known(louise_chat=6_000, louise_translate=7_900)
     _system(monkeypatch, node, {"louise-chat": 6_000, "louise-translate": 7_900})
-    card = _card(monkeypatch, 32_656, 24_000)                        # 24,000 MiB no model holds
+    card = _card(monkeypatch, 32_656, 20_000)                        # 20,000 MiB no model holds
     out = _beat([])
     assert out["out_of_budget"] == [(SERVER, "louise-translate")] and node.warmed == ["louise-chat"]
     card["used"] = 6_000 + 7_900
@@ -906,8 +906,9 @@ def test_node_resident_show_the_budget(tmp_path, node, monkeypatch):
     _card(monkeypatch, 32_656, 1_000)
     out = resident.show()
     assert out["budget"]["margin"] == "the default 3,072 MiB: nothing measured in the last 6 h"
-    assert out["budget"]["line_mib"] == 31_023 and out["budget"]["budget_mib"] == 27_761, "the reserve counts"
-    assert out["budget"]["reserve_mib"] == 3_262
+    assert out["budget"]["line_mib"] == 31_023 and out["budget"]["budget_mib"] == 24_689, \
+        "the line − the default growth 3,072 − the shared context budget 3,262"
+    assert out["budget"]["context_budget_mib"] == 3_262 and out["budget"]["contexts_mib"] == {}
     assert out["budget"]["penalty_mib"] == 0 and out["budget"]["penalty"].startswith("none")
     assert not resident.memory_path().exists(), "show writes nothing"
     _known(louise_chat=6_000, rerank_bge=1_600, vega_4b=18_000, louise_translate=7_900)
@@ -917,15 +918,16 @@ def test_node_resident_show_the_budget(tmp_path, node, monkeypatch):
     out = resident.show()
     b = out["budget"]
     assert b["margin_mib"] == 1_000 and b["margin"].startswith("measured: the peak of 1 sample period(s)")
-    assert b["budget_mib"] == 27_761 and b["taken_mib"] == 6_000 + 7_900 + 1_600
-    assert b["says"] == ("the budget is 27,761 MiB (the 0.95 line 31,023 MiB − the working memory's reserve "
-                         "3,262 MiB (the margin, 1,000 MiB measured over 6 h, is under it))")
+    assert b["budget_mib"] == 26_761 and b["taken_mib"] == 6_000 + 7_900 + 1_600
+    assert b["says"] == ("the budget is 26,761 MiB for weights (the 0.95 line 31,023 MiB − growth 1,000 MiB, "
+                         "measured over 6 h − the shared context budget 3,262 MiB, its floor: no on-demand "
+                         "context is known)")
     rows = out["models"]
     assert [(r["rank"], r["model"], r["tier"], r["size_mib"], r["in_budget"]) for r in rows] == [
         (1, "louise-chat", 1, 6_000, True), (2, "louise-translate", 1, 7_900, True),
         (3, "rerank-bge", 1, 1_600, True), (4, "vega-4b", 2, 18_000, False)]
-    assert rows[0]["why"] == "in the budget: 6,000 of 27,761 MiB taken with it"
-    assert rows[3]["why"].startswith("not preloaded — the budget is 27,761 MiB")
+    assert rows[0]["why"] == "in the budget: 6,000 of 26,761 MiB taken with it"
+    assert rows[3]["why"].startswith("not preloaded — the budget is 26,761 MiB")
     assert rows[3]["counted_mib"] == 18_000 and rows[3]["tier_says"] == "query encoders"
 
 
@@ -1028,9 +1030,10 @@ def test_the_night_s_set_drops_its_lowest_tier_and_keeps_the_rest():
     mem = resident.Memory(sizes={(SERVER, m): v * MIB for m, v in mib.items()},
                           rest={(SERVER, m): v * MIB for m, v in mib.items() if v}, total=32_656 * MIB)
     p = resident.plan(want, mem, threshold=0.95, used={}, now=now)
-    # the reserve (3,262 MiB) is above the default margin and counts: 27,761 MiB, and
-    # the first model that does not fit, by priority, is the 4B query encoder
-    assert not p.measured and p.margin == 3_072 * MIB and p.budget // MIB == 27_761
+    # the default growth (3,072 MiB) and the shared context budget (3,262 MiB) are both
+    # kept: 24,689 MiB for weights, and the first model that does not fit, by priority,
+    # is the 4B query encoder
+    assert not p.measured and p.margin == 3_072 * MIB and p.budget // MIB == 24_689
     assert [x.resident.model for x in p.placed if not x.fits] == ["vega-4b"]
     assert p.placed[0].resident.model == "louise-chat"
 
@@ -1062,7 +1065,7 @@ def test_an_eviction_shrinks_the_budget_and_the_penalty_halves_every_two_hours(t
     assert said == ["resident: the budget shrank by 7,900 MiB: louise-translate was evicted 3 min after its "
                     "load (tier 1 of 3: chat, translation, speech and rerankers) — the penalty on the margin is 7,900 MiB, halved after "
                     "each 2 h without another such eviction"]
-    assert out["budget"] == int(0.95 * 32_656 * MIB) - resident.CONTEXT_RESERVE - 7_900 * MIB
+    assert out["budget"] == int(0.95 * 32_656 * MIB) - 1_000 * MIB - resident.CONTEXT_RESERVE - 7_900 * MIB
     assert resident._plan_now([_r("louise-chat", "chat")]).says().endswith("− 7,900 MiB for evictions)")
     resident.reset()                                                  # a restart keeps it
     assert resident._plan_now([_r("louise-chat", "chat")]).penalty == 7_900 * MIB
@@ -1240,25 +1243,89 @@ def test_a_probe_that_gives_no_namespace_pid_tells_nothing_apart(tmp_path, node,
     assert mem.sizes[(SERVER, "parakeet-igpu")] == 1_400 * MIB
 
 
-def test_a_quiet_window_keeps_the_working_memory_s_reserve(tmp_path, node, monkeypatch):
-    """Operator, 2026-11-23, B ("Whats left are models and weights"): the
-    budget counts the models at rest, and the working memory's reserve stays
-    free under the line however quiet the margin's window was. A quiet 6 h
-    measured a margin of 0, the budget filled the card to the line, and the
-    next burst made the reclaimer evict an idle model. A margin above the
-    reserve counts instead."""
+def test_the_shared_context_budget_is_kept_beside_the_weights_whatever_the_growth(tmp_path, node, monkeypatch):
+    """Operator, 2026-11-23 (B) and 2026-11-24: "I meant separate 'models and
+    weights' from the context, because we use a 'shared' context and it has
+    to be considered in a separated budget". The weights budget is the line
+    less the growth measured AND the shared context budget: a quiet window
+    (growth 0) keeps it, and a busy one (growth 4,000 MiB, held by models
+    that keep their buffers) does not eat it."""
     now = 1_800_000_000.0
     want = [_r("louise-chat", "chat")]
     mem = resident.Memory(sizes={(SERVER, "louise-chat"): 6_000 * MIB}, rest={(SERVER, "louise-chat"): 6_000 * MIB},
                           total=32_656 * MIB)
-    mem.peaks[int(now // resident.MARGIN_BUCKET_S * resident.MARGIN_BUCKET_S)] = 0
+    bucket = int(now // resident.MARGIN_BUCKET_S * resident.MARGIN_BUCKET_S)
+    mem.peaks[bucket] = 0
     quiet = resident.plan(want, mem, threshold=0.95, used={}, now=now)
     assert quiet.measured and quiet.margin == 0
-    assert quiet.budget == int(0.95 * 32_656 * MIB) - resident.CONTEXT_RESERVE, "the reserve, not the quiet 0"
-    assert "the working memory's reserve 3,262 MiB (the margin, 0 MiB measured over 6 h, is under it)" in quiet.says()
-    mem.peaks[int(now // resident.MARGIN_BUCKET_S * resident.MARGIN_BUCKET_S)] = 4_000 * MIB
+    assert quiet.budget == int(0.95 * 32_656 * MIB) - resident.CONTEXT_RESERVE
+    assert quiet.says() == ("the budget is 27,761 MiB for weights (the 0.95 line 31,023 MiB − growth 0 MiB, "
+                            "measured over 6 h − the shared context budget 3,262 MiB, its floor: no on-demand "
+                            "context is known)")
+    mem.peaks[bucket] = 4_000 * MIB
     busy = resident.plan(want, mem, threshold=0.95, used={}, now=now)
-    assert busy.budget == int(0.95 * 32_656 * MIB) - 4_000 * MIB, "a margin above the reserve counts"
-    assert "− margin 4,000 MiB, measured over 6 h)" in busy.says()
-    # the reclaimer's line moved to 0.98 in LocalAI's settings: the keeper reads it, the reserve stays
-    assert resident.plan(want, mem, threshold=0.98, used={}, now=now).budget == int(0.98 * 32_656 * MIB) - 4_000 * MIB
+    assert busy.budget == int(0.95 * 32_656 * MIB) - 4_000 * MIB - resident.CONTEXT_RESERVE, \
+        "the growth and the context budget are two things: both kept"
+    # the reclaimer's line moved to 0.98 in LocalAI's settings: the keeper reads it
+    assert resident.plan(want, mem, threshold=0.98, used={}, now=now).budget == \
+        int(0.98 * 32_656 * MIB) - 4_000 * MIB - resident.CONTEXT_RESERVE
+
+
+def test_an_on_demand_encoder_counts_at_its_weights_and_its_context_in_the_shared_budget(tmp_path, node,
+                                                                                         monkeypatch):
+    """Operator, 2026-11-24: the weights and the shared context are two
+    budgets. The node's figures: qwen3-embedding-4b holds 2,737 MiB of
+    weights and was seen at 5,685 MiB with its context, before the option;
+    LocalAI now reads it at its weights, working or not. So it counts 2,737
+    for weights, its 2,948 MiB context is the shared budget's, a context live
+    on the card is not growth, and what goes past it is."""
+    monkeypatch.setattr(model_load, "context_on_demand", lambda url, model: model == "vega-4b")
+    resident._write_memory(resident.Memory(sizes={(SERVER, "vega-4b"): 5_685 * MIB}, total=32_656 * MIB))
+    resident.reset()
+    sizes = {"louise-chat": 6_000, "louise-translate": 7_900, "vega-4b": 2_737}
+    node.held |= set(sizes)
+    _system(monkeypatch, node, sizes)
+    card = _card(monkeypatch, 32_656, sum(sizes.values()))
+    g = _with(_collection(tmp_path, "gutenberg"), "vega-4b", "lazy")
+    _beat([g])
+    mem = resident.read_memory()
+    assert mem.rest[(SERVER, "vega-4b")] == 2_737 * MIB, "its weights, kept in the file for a restart"
+    assert mem.margin(resident._wall()) == (0, True)
+    card["used"] = sum(sizes.values()) + 2_948                        # its context live at the sample
+    _beat([g])
+    assert resident.read_memory().margin(resident._wall()) == (0, True), "a live context is not growth"
+    card["used"] = sum(sizes.values()) + 2_948 + 1_500                # and 1,500 MiB of something else
+    _beat([g])
+    assert resident.read_memory().margin(resident._wall()) == (1_500 * MIB, True), "what goes past it is"
+    p = resident._plan_now(resident.wanted([g], embed_mode=_mode, sw=resident.switches()))
+    four_b = next(x for x in p.placed if x.resident.model == "vega-4b")
+    assert four_b.counted == 2_737 * MIB and four_b.largest == 5_685 * MIB
+    assert p.contexts == (("vega-4b", 2_948 * MIB),) and p.reserve == resident.CONTEXT_RESERVE, \
+        "one context known, under the floor: the floor is the budget"
+    assert p.budget == int(0.95 * 32_656 * MIB) - 1_500 * MIB - resident.CONTEXT_RESERVE
+
+
+def test_the_shared_budget_is_the_two_largest_contexts_never_under_its_floor(monkeypatch):
+    """Two on-demand encoders work in the same second 21.7 % of the day,
+    three or more 0.16 % (shared-context.md §2): the budget holds the two
+    largest contexts of the set. The node's three: 2,948 + 1,892 = 4,840 MiB,
+    and 5,554 MiB more of weights fit than when each was counted whole."""
+    figures = {"vega-qwen3-embedding-4b": (2_737, 5_685), "vega-nemotron-3-embed-1b": (2_512, 4_404),
+               "vega-bge-m3": (621, 1_335)}
+    monkeypatch.setattr(model_load, "context_on_demand", lambda url, model: model in figures)
+    want = [_r(m, "query encoder", "encoder") for m in figures] + [_r("louise-chat", "chat")]
+    mem = resident.Memory(sizes={(SERVER, m): big * MIB for m, (_w, big) in figures.items()},
+                          rest={(SERVER, m): w * MIB for m, (w, _big) in figures.items()}, total=32_656 * MIB)
+    mem.sizes[(SERVER, "louise-chat")] = mem.rest[(SERVER, "louise-chat")] = 4_894 * MIB
+    budget, contexts = resident.shared_context(want, mem)
+    assert budget == 4_840 * MIB
+    assert contexts == (("vega-qwen3-embedding-4b", 2_948 * MIB), ("vega-nemotron-3-embed-1b", 1_892 * MIB))
+    p = resident.plan(want, mem, threshold=0.98, used={}, now=1_800_000_000.0)
+    counted = {x.resident.model: x.counted // MIB for x in p.placed}
+    assert counted == {"louise-chat": 4_894, "vega-qwen3-embedding-4b": 2_737,
+                       "vega-nemotron-3-embed-1b": 2_512, "vega-bge-m3": 621}
+    assert sum(big - w for w, big in figures.values()) == 5_554
+    assert "the shared context budget 4,840 MiB, vega-qwen3-embedding-4b 2,948 + vega-nemotron-3-embed-1b 1,892" \
+        in p.says()
+    # one alone, under the floor: the floor
+    assert resident.shared_context(want[2:], mem) == (resident.CONTEXT_RESERVE, (("vega-bge-m3", 714 * MIB),))

@@ -15,7 +15,8 @@ from types import SimpleNamespace
 import pytest
 
 from app import parallel
-from app.plugins.eurlex.source import EurlexSource
+from app.plugins.eurlex import formex
+from app.plugins.eurlex.source import FIGURE_SHARE, EurlexSource
 
 K = 26
 
@@ -42,9 +43,34 @@ def test_a_package_is_counted_unpacked_and_its_size_keeps_its_meaning(tmp_path, 
     monkeypatch.setattr(zipfile.ZipFile, "read", lambda *a, **k: pytest.fail("a member was inflated"))
     monkeypatch.setattr(zipfile.ZipFile, "open", lambda *a, **k: pytest.fail("a member was opened"))
     got = EurlexSource().parse_size(row)
-    assert got == on_disk + unpacked, (got, on_disk, unpacked)
+    pkg = (unit / "OJABA_L_202401689_ENG.fmx4.zip").stat().st_size
+    # the package's own bytes at a figure's share (read whole once, never parsed)
+    assert got == on_disk - pkg + -(-pkg // FIGURE_SHARE) + unpacked, (got, on_disk, unpacked)
     assert got > 4 * on_disk, "the package's members are what the parse holds"
     assert row["size"] == on_disk, "the row's size is untouched"
+
+
+def test_figures_count_at_their_share_and_a_packaged_one_by_its_head(tmp_path):
+    """2026-11-24, step 5a: 32015R2446R(01) de, 911.5 MB of TIFFs, was
+    estimated 26 x 911.5 MB = 23.7 GB (TooLarge for ever, its text never
+    held) and peaked at 2.7 GB; a package of figures (32024R1679R(01) da)
+    counted its members unpacked, 3.6 GB, and peaked at 2.5 GB."""
+    unit = tmp_path / "lang=de" / "2015" / "32015R2446R(01)"
+    unit.mkdir(parents=True)
+    (unit / "tree.json").write_bytes(b"{}" * 500)                       # 1,000: text
+    (unit / "L_2015343DE.01000101.xml").write_bytes(b"<ACT/>" * 1000)   # 6,000: text
+    (unit / "L_2015343DE.01001701.tif").write_bytes(b"I" * 60_000)      # a figure
+    (unit / "L_2015343DE.01001702.TIFF").write_bytes(b"I" * 6_001)      # any case
+    loose = 1_000 + 6_000 + 60_000 // FIGURE_SHARE + -(-6_001 // FIGURE_SHARE)
+    assert EurlexSource().parse_size({"path": str(unit), "size": 0}) == loose
+    pkg = unit / "OJABA_L_201590901_DEU.fmx4.zip"
+    with zipfile.ZipFile(pkg, "w", compression=zipfile.ZIP_STORED) as z:
+        z.writestr("L_201590901DE.000101.fmx.xml", b"<P/>" * 2_500)      # 10,000: read whole
+        z.writestr("L_201590901DE.000102.tif", b"I" * 500_000)            # read by its head
+    size = pkg.stat().st_size
+    got = EurlexSource().parse_size({"path": str(unit), "size": 0})
+    assert got == loose + -(-size // FIGURE_SHARE) + 10_000 + formex._HEAD_BYTES, got
+    assert got < size, "a package of figures is not counted unpacked"
 
 
 def test_a_unit_without_a_package_reads_its_files(tmp_path):

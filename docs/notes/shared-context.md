@@ -128,3 +128,44 @@ samples never catch a context that lives for a request plus a 20 ms keep,
 or the freed memory is not given back to the card, and the reserve then
 counts it twice. vega-bge-m3's backend, sampled every 50 ms (xe fdinfo)
 idle, through a burst and after, tells which.
+
+
+## 2026-11-24: the two budgets (operator)
+
+The operator, on what "models and weights" meant: "I meant separate 'models
+and weights' from the context, because we use a 'shared' context and it has
+to be considered in a separated budget". The card's free memory is the pool
+every on-demand model's context is made from and given back to; it is
+budgeted apart from the weights.
+
+    line (0.98 × the card)
+      = the weights budget               each model at rest; one loaded with
+                                         context_on_demand at its WEIGHTS
+      + the growth measured (6 h peak)   what models that keep their buffers
+                                         grew by, and anything else on the card
+      + the shared context budget        the two largest contexts of the set's
+                                         on-demand models, never under 3,262 MiB
+      + the eviction penalty
+
+On the node (München's readings of 11-12 and 11-23):
+
+| on-demand model | weights | with its context | context |
+|---|---|---|---|
+| qwen3-embedding-4b | 2,737 MiB | 5,685 | 2,948 |
+| nemotron-3-embed-1b | 2,512 | 4,404 | 1,892 |
+| bge-m3 | 621 | 1,335 | 714 |
+
+- Before: the three counted whole, 11,424 MiB, of which 5,554 were held only
+  while they worked; the reserve was 3,262 MiB and the growth was hidden
+  under that over-count (the margin read 0).
+- Now: they count 5,870 MiB of weights; the shared context budget is 2,948 +
+  1,892 = 4,840 MiB (two at once: 21.7 % of the day against 0.16 % for three,
+  §2); the growth is measured again, and a context live at a sample is taken
+  out of it (LocalAI reads such a model at its weights, working or not), so
+  it is not kept twice.
+- A context never seen (LocalAI's size does not show it) is held by the
+  floor. Sizing it needs a per-process reading of the card (xe fdinfo), as
+  München took for bge-m3: open.
+- The growth and the shared budget are ADDED, never the larger of the two
+  (2026-11-23's reserve): growth held by the chat or the translator is not
+  room a context can be made in.
