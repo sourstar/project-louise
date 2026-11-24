@@ -280,10 +280,13 @@ def test_a_context_that_failed_its_canary_is_a_deferral_too(node):
 
 # ---- the resident keeper ----------------------------------------------------------------
 
-def test_the_keeper_counts_such_a_model_at_its_running_size(node):
+def test_the_keeper_counts_such_a_model_at_its_weights_and_its_context_apart(node):
     """qwen3-4b's own figures (the brief §6): 4,263 MiB running, 2,381 MiB
-    idle — the weights alone. The budget counts 4,263: the 1,882 MiB it gives
-    back while idle are headroom on the card, never room for another preload."""
+    idle — the weights alone. Operator, 2026-11-24: the weights and the shared
+    context are two budgets. The weights budget counts 2,381; the 1,882 MiB
+    it makes per request are the shared context budget's, kept free beside
+    the weights and never handed to another preload. (Until then it counted
+    4,263, by the review of 2026-11-12.)"""
     qwen, other = "vega-qwen3-embedding-4b", "vega-medcpt-article"
     node.loaded |= {qwen, other}
     node.options[qwen] = ["context_on_demand", "ubatch:2048"]
@@ -296,16 +299,20 @@ def test_the_keeper_counts_such_a_model_at_its_running_size(node):
     on_demand = resident.Resident(SERVER, qwen, ("document",), ("gutenberg",))
     plain = resident.Resident(SERVER, other, ("document",), ("pubmed",))
     assert resident._size(on_demand, mem) == 4_263 * MIB
-    assert resident._rest_size(on_demand, mem) == 4_263 * MIB, "its running size, by rule"
+    assert resident._rest_size(on_demand, mem) == 2_381 * MIB, "its weights"
+    assert resident._context_size(on_demand, mem) == 1_882 * MIB, "its context, the shared budget's"
     assert resident._rest_size(plain, mem) == 700 * MIB, "any other model: at rest, as before"
+    assert resident._context_size(plain, mem) is None, "it keeps its own: nothing shared"
+    assert resident.shared_context([on_demand, plain], mem) == (resident.CONTEXT_RESERVE, ((qwen, 1_882 * MIB),))
 
 
-def test_such_a_model_never_seen_working_counts_as_a_model_never_seen(node):
+def test_such_a_model_never_seen_working_counts_at_its_weights_and_the_floor_holds_its_context(node):
     """The review of 2026-11-12: preloaded, its context not yet created, its
-    largest reading is its weights alone — ~2 GB short of what its first
-    request creates. Counted at its weights, the budget would admit another
-    preload and the first creation would be refused; it counts as unknown
-    (the set's median) until a reading shows it working."""
+    largest reading is its weights alone, and counted at them the budget
+    admitted another preload and refused the first creation. With the shared
+    budget kept beside the weights, the first creation has its room: the
+    model counts at its weights, its context is unknown, and the budget's
+    floor (3,262 MiB, above the largest context seen) holds it."""
     qwen = "vega-qwen3-embedding-4b"
     node.loaded.add(qwen)
     node.options[qwen] = ["context_on_demand"]
@@ -314,17 +321,21 @@ def test_such_a_model_never_seen_working_counts_as_a_model_never_seen(node):
         node.vram[qwen] = 2_381 * MIB
         model_load.loaded_models(SERVER, max_age_s=0.0)
     on_demand = resident.Resident(SERVER, qwen, ("document",), ("gutenberg",))
-    assert resident._rest_size(on_demand, mem) is None, "never seen working: unknown, not its weights"
+    assert resident._rest_size(on_demand, mem) == 2_381 * MIB, "its weights"
+    assert resident._context_size(on_demand, mem) is None, "never seen with its context"
+    assert resident.shared_context([on_demand], mem) == (resident.CONTEXT_RESERVE, ())
     node.vram[qwen] = 4_263 * MIB
     model_load.loaded_models(SERVER, max_age_s=0.0)
-    assert resident._rest_size(on_demand, mem) == 4_263 * MIB, "seen working: its running size"
+    assert resident._rest_size(on_demand, mem) == 2_381 * MIB
+    assert resident._context_size(on_demand, mem) == 1_882 * MIB, "seen working: its context is known"
 
 
-def test_an_idle_reading_under_half_is_not_taken_for_a_model_off_the_card(node):
+def test_an_idle_reading_under_half_is_its_weights_not_a_model_off_the_card(node):
     """REST_FLOOR reads a size under half the largest as a model partly off
-    the card. A model that keeps only its weights while idle can sit there by
-    design — 2,381 of 5,643 MiB is 0.42 — and its size is still its running
-    one."""
+    the card. A model that keeps only its weights while idle sits there by
+    design — 2,381 of 5,643 MiB is 0.42 — and that reading IS its weights
+    (ON_DEMAND_REST_FLOOR, 0.3). One under 0.3 is a model partly off the
+    card: with no weights kept in the file, it counts at its largest."""
     qwen = "vega-qwen3-embedding-4b"
     node.loaded.add(qwen)
     node.options[qwen] = ["context_on_demand"]
@@ -332,16 +343,22 @@ def test_an_idle_reading_under_half_is_not_taken_for_a_model_off_the_card(node):
     for mib in (5_643, 2_381, 2_381):
         node.vram[qwen] = mib * MIB
         model_load.loaded_models(SERVER, max_age_s=0.0)
-    assert 2_381 / 5_643 < resident.REST_FLOOR
+    assert resident.ON_DEMAND_REST_FLOOR < 2_381 / 5_643 < resident.REST_FLOOR
     r = resident.Resident(SERVER, qwen, ("document",), ("gutenberg",))
-    assert resident._rest_size(r, mem) == 5_643 * MIB
+    assert resident._rest_size(r, mem) == 2_381 * MIB
+    node.vram[qwen] = 1_000 * MIB                                     # partly off the card
+    model_load.loaded_models(SERVER, max_age_s=0.0)
+    assert resident._rest_size(r, mem) == 5_643 * MIB, "no weights known any more: its largest, the cautious side"
+    mem.rest[(SERVER, qwen)] = 2_381 * MIB                            # the file kept them
+    assert resident._rest_size(r, mem) == 2_381 * MIB
 
 
-def test_the_margin_s_sample_counts_it_at_the_same_size_as_the_budget(node):
+def test_the_margin_s_sample_reads_it_at_its_weights_with_its_context_named(node):
     """The margin is the card's count minus what the loaded models hold at
-    rest. Were such a model counted idle there and running in the budget, its
-    context would be paid for twice: in its size, and as "growth" each time it
-    works."""
+    rest. Such a model is read at its weights, as the budget counts it, and
+    its context is named beside: the sample takes a live context out of the
+    growth (`_remember`), so it is never kept twice — in the shared budget
+    and as "growth" each time the model works."""
     qwen, other = "vega-qwen3-embedding-4b", "vega-medcpt-article"
     node.loaded = {qwen, other}
     node.options[qwen] = ["context_on_demand"]
@@ -350,7 +367,7 @@ def test_the_margin_s_sample_counts_it_at_the_same_size_as_the_budget(node):
         node.vram[qwen], node.vram[other] = qwen_mib * MIB, other_mib * MIB
         held = resident._held_now([SERVER], mem)
     by_model = {m: v for (m, _pid), v in held.items()}
-    assert by_model == {qwen: 4_263 * MIB, other: 700 * MIB}
+    assert by_model == {qwen: (2_381 * MIB, 2_381 * MIB, 1_882 * MIB), other: (700 * MIB, 700 * MIB, 0)}
 
 
 def test_a_warm_gives_its_context_back_at_once(node):
