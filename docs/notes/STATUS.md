@@ -54,8 +54,10 @@ measured (published figures disagree).
   which now also passes a request's seed and guidance (§10, §11). Left: the card — München's, in a window, with
   the operator's ear on the two voices (§10 of the note). **First rows on the B70 (München, 11-24, §12): the test
   engine builds (staged 0010's LocalAI half compiles); a 6-second sentence in 1.23–1.41 s at 32 steps and 0.74 s at
-  16, the model's own voice; phase 0's three texts in 0.40 / 0.71 / 0.75 s against 0.79 / 1.12 / 1.27 s on today's
-  backend another day (not like for like yet); 1,859–1,891 MiB at rest. A recorded voice is refused by LocalAI
+  16, the model's own voice. **Both backends in one window: the port is 1.1 times as fast as today's on a long
+  sentence in the model's voice, 1.6–2.1 times in a recorded voice, 2.0–3.5 times on short sentences** (0.40 /
+  0.73 / 0.78 s against 1.4 / 1.6 / 1.6 s); the kept clip reads 0.00 s from the second request; every word found
+  by the node's speech-to-text on every clip; 1.9–2.0 GiB at rest against 1.5. A recorded voice is refused by LocalAI
   itself, by the engine's name (localai-bugs.md B17): a blocker for the cut-over, with its options in §12.**
 - **2026-11-24, "Engine now, chat later" (operator): the new engine is adopted, the chat model decided after the
   POC.** The cut-over's order is in [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §5:

@@ -594,11 +594,7 @@ half — the decoder and the rest do not shrink with the steps). The clips'
 lengths differ from request to request because each drew its own noise
 (§10: the seed reaches the pipeline through `params` only).
 
-**Against today's backend: not like for like yet.** Phase 0's figures for
-the last three texts, the model's own voice, on `omnivoice-cpp`: 0.79 /
-1.12 / 1.27 s — the port's 0.40 / 0.71 / 0.75 s are about half of them, but
-those were taken another day; today's backend's rows in this window have
-not run.
+**Against today's backend:** the table further down, both in one window.
 
 **Where the time goes on the card** (the port's line, the sentence, two
 requests):
@@ -655,7 +651,51 @@ test model with `tts.voice_cloning: true` answers a profile request with
 audio, the live speech model still does, a llama.cpp chat model still
 refuses.
 
-**Still to come from the same window:** the recorded-voice rows on both
-backends, today's backend's own-voice rows, the words check of every clip,
-the rest of the port's lines.
+**Like for like — both backends in one window (München, 12:26–12:31Z).**
+Node paused, web stopped, the card empty, one request in flight, through
+`/v1/audio/speech` with a language; a recorded voice sent to BOTH as the
+profile's own `reference.wav` (11.04 s) and its transcript in
+`params.ref_text` (B17 keeps the profile's name from the port). Wall
+seconds to the whole clip, three requests each; no error in 25 + 19 rows.
+
+| | the port | today's `omnivoice-cpp` | today's / the port |
+|---|---|---|---|
+| load and first request | 8.38 s | 10.61 s | |
+| the sentence (≈ 6.1 s of audio), the model's voice | 1.349, 1.257, 1.275 | 1.621, 1.376, 1.383 | 1.1 |
+| the same in the recorded voice | 3.219 (the first with it), 2.266, 2.284 | 4.439, 3.827, 3.702 | 1.6–1.7 |
+| "Buongiorno a tutti…", the recorded voice (≈ 4.4 s) | 1.722, 1.719, 1.707 | 3.587, 3.598, 3.473 | 2.0–2.1 |
+| "La seduta è aperta." (≈ 1.8 s), the model's voice | 0.412, 0.395, 0.401 | 1.409, 1.414, 1.371 | 3.4–3.5 |
+| "Il decreto entra in vigore…" (≈ 3.8 s) | 0.754, 0.723, 0.731 | 1.658, 1.563, 1.509 | 2.1–2.2 |
+| "Die Kommission…", German (≈ 3.6 s) | 0.788, 0.776, 0.770 | 1.547, 1.652, 1.587 | 2.0–2.1 |
+| the sentence at 16 steps, the model's voice | 0.779, 0.757, 0.759 | — (it reads no step count) | |
+| the same at 16 steps, the recorded voice | 1.295, 1.307, 1.307 | — | |
+
+Phase 0's 0.79 / 1.12 / 1.27 s for the three short texts are NOT what
+today's backend gave here (1.4 / 1.6 / 1.6 s): phase 0 called `/tts`, this
+pass `/v1/audio/speech` with a language, and the difference was not
+chased. The comparison that stands is this table's.
+
+**The port's own lines** (seconds): with the recorded voice the clip's
+encoding is 0.94 the first time and **0.00 from the second request** (the
+kept clip of §11, on the card); the backbone 1.82 with the voice (768 rows)
+against 0.85 without (512); scoring 0.04–0.10; decoder 0.07–0.28; heads
+0.01–0.04. At 16 steps the backbone is 0.42–0.44 (0.92–0.94 with the
+voice) and the decoder what it was. The context for a request is created
+in 2–3 ms.
+
+**Memory**, the driver's count: the port 1,860–2,016 MiB at rest, 2,575 at
+most during its rows; today's backend 1,549 at rest, 1,781 at most — the
+port holds about 0.3–0.5 GiB more at rest and 0.8 GiB more at its peak.
+What makes up its rest is still unread.
+
+**Every word arrives**: each clip through the node's speech-to-text —
+every word of the sentence found, on all rows of both backends, the 16-step
+ones included. The clips are kept for the operator's ear
+(`/root/measure/omnivoice-port/rows/`: `port-R2-2.wav` against
+`live-R2-2.wav` is the recorded-voice pair, `port-R2s16-2.wav` the 16-step
+one).
+
+**Still open on the card:** the step gate against the reference (§10 step
+3, with `params.seed`), the operator's ear, and the profile by its name
+once the server carries P13.
 
