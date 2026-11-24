@@ -705,9 +705,59 @@ small model and 1.3–1.8 s on the 35B: 2–3 s a round, nothing when the same
 model answers twice running, and no decode speed.
 
 **The offloaded arm, on the operator's word to München the same hour
-("Measure now the experts caching option"):** the same sequence with the
-35B as `cpu_moe` with an 8 GiB cache, then 4 GiB, no overcommit — running;
-its rows go here beside S5's.
+("Measure now the experts caching option") (M, 08:19–08:22Z).** The same
+sequence and requests, the 35B as `cpu_moe` with `moe_cache_cpu_share:0`,
+the VRAM check on, nothing overcommitted. Decode is over ONE answer of at
+most 128 tokens here, noisier than phase 4's medians (given in brackets):
+
+| | 8 GiB cache | 4 GiB cache |
+|---|---|---|
+| the 35B on the card | 11,518 MiB | 7,421 MiB |
+| warm, alone: first token / decode | 0.887 s / 66.5 tok/s [0.477 / 84.3] | 0.824 s / 60.1 [0.496 / 69.7] |
+| the three small models loaded on top | nothing moved: 25.7 GiB on the card | nothing moved: 21.6 GiB |
+| the 35B after them, round 1 | 2.094 s / 39.7 (the cache still filling), then 1.219 s / 52.1 | 0.826 s / 61.6, then 0.808 s / 62.0 |
+| the small models after it | 0.35, 0.03, 0.02 s: their warm times | the same |
+| the 35B, round 2 | 0.819 s / 69.7, then 0.710 s / 57.2 | 0.831 s / 54.8, then 0.809 s / 56.2 |
+| MemAvailable, lowest | 34.1 GB | 34.1 GB |
+
+No abort, no kernel line.
+
+**The two arms side by side** (128-token prompt; the set is the 35B,
+MADLAD, the nemotron reranker and nemotron-embed):
+
+| | the 35B on the card | first token | decode | what the others pay | a 300-token answer after the others worked |
+|---|---|---|---|---|---|
+| resident, 2 GiB buffers, the driver swaps (S5) | 21.7 GiB; the set 3.5 GiB over the card | 0.28 s; 1.5–2.0 s on the first answer after the others worked | 98–100 tok/s | +0.2 to +0.4 s each, once, after the 35B answered | about 5.0 s; 3.3 s when it answers twice running |
+| experts in host RAM, 8 GiB cache | 11.5 GiB; the set fits with 5 GiB to spare | 0.7–0.9 s (0.48 by phase 4's median) | 52–70 here (84 by the median) | nothing | about 5.4 s (4.0 s by the medians) |
+| experts in host RAM, 4 GiB cache | 7.4 GiB; 9 GiB to spare | 0.81–0.83 s (0.50) | 55–62 (70) | nothing | about 5.8 s (4.8 s) |
+
+Read together: the swap keeps the 35B's own speed and charges a toll at
+each change of model — about 2–3 s over a round in which every model works
+once; the cache charges every answer (a third of the decode speed lost, half
+a second more to the first token) and nothing at a change, holds 19.3 GiB of
+host memory at all times, and leaves room on the card. For answers of a few
+hundred tokens the two cost about the same per round; the swap wins on long
+answers and on a model answering twice running, the cache on short answers
+and on room for something else (Krea 2). Neither is the arrangement in which
+the Ask's own models and the 35B fit TOGETHER without the toll: the 35B,
+nemotron-embed and the reranker are 28.9 GiB, under the reclaimer's line —
+with MADLAD as the one that swaps, an Ask in the question's own language
+would pay nothing. That arrangement was not measured.
+
+**The operator's question, 08:3xZ: can the two be combined, so that what is
+swapped is experts not needed?** Not with 2 GiB blocks: the driver knows
+nothing of experts and brings every buffer of a process back when it runs
+(the 35B was whole again after its next answer), and a 2 GiB block of the
+all-on-card layout is the complete expert stacks of about four layers, of
+which every token reads some. Two things would do what he describes, neither
+measured: (a) an engine switch, `GGML_SYCL_USM_SYSTEM=1` — buffers of 4 GiB
+or more become host memory the card reads through shared virtual memory, the
+driver bringing in the 2 MiB pages a kernel touches; it needs the device to
+report that capability, does not combine with the 2 GiB cap, and its speed
+is unknown; (b) an expert cache that gives slots back under pressure, which
+the engine does not have (`llama-moe-cache.cpp` sizes its slots at load): a
+patch, with `cpu_moe`'s costs. (a) is one more row on the node, on the
+operator's word to München.
 
 | configuration that fit | sum MiB | free MiB | host RAM | refusals |
 |---|---|---|---|---|
