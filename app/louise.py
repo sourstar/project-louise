@@ -6813,6 +6813,43 @@ def _embedder_check_runs(a, name, codex) -> int:
     return worst
 
 
+def _cpu_reference_check(root, names: list[str] | None) -> int:
+    """`hold embedder cpu-reference [<collection>] --check` (München,
+    2026-11-24, after an engine cut-over backed out at its first gate for a
+    reference the node had never made): per collection held (or the one
+    named), per role its space declares, whether the gate would find its CPU
+    reference — the same `reference.resolve` the gate asks, which creates
+    nothing on a miss — and, where not, the command that makes it. Read-only.
+    Exit 0 when every role finds one, 1 otherwise. A run that states other
+    weights than its Codex is the one case it cannot see: the gate resolves
+    by the run's stated weights."""
+    from app import run_check
+    from app.hold import collection as col
+    from app.rage import reference as rage_reference
+    held = ([col.resolve(root, n) for n in names] if names is not None else col.list_named(root))
+    rows: list[dict] = []
+    for name, codex in held:
+        roles = [("document", codex.space.encoder.weights)]
+        if codex.space.query.encoder is not None:
+            roles.append(("query", codex.space.query.encoder.weights))
+        try:
+            count = len(run_check.calibration_items(root, name, codex))
+        except Exception as e:   # noqa: BLE001 — said for the collection, the others still read
+            rows.append({"collection": name, "space": getattr(codex, "space_id", None), "found": False,
+                         "why": f"its calibration set does not read: {type(e).__name__}: {e}"})
+            continue
+        for role, weights in roles:
+            got = rage_reference.resolve(codex, role, weights, count)
+            rows.append({"collection": name, "space": getattr(codex, "space_id", None), "role": role, "weights": weights,
+                         "found": got is not None,
+                         **({"path": str(got.path)} if got is not None else
+                            {"make": f"louise hold embedder cpu-reference {name}",
+                             "key": rage_reference.key(codex, role, weights)})})
+    missing = sum(1 for r in rows if not r["found"])
+    _print({"references": rows, "missing": missing})
+    return 1 if missing else 0
+
+
 def cmd_embedder_cpu_reference(a) -> int:
     """`hold embedder cpu-reference <collection> [--model M] [--query-model Q]`
     (operator, 2026-10-31; docs/notes/near-exact-runs.md §2): the 512
@@ -6832,6 +6869,12 @@ def cmd_embedder_cpu_reference(a) -> int:
     from app import config, embeddings, encoder_use, run_check
     from app.hold import collection as col, cpu_reference as cpu_ref, embedder as emb
     from app.rage import reference as rage_reference
+    if getattr(a, "check", False):
+        return _cpu_reference_check(a.root, [a.collection] if a.collection else None)
+    if not a.collection:
+        print("louise: hold embedder cpu-reference names a collection (or --check, for all of them)",
+              file=sys.stderr)
+        return 2
     name, codex = col.resolve(a.root, a.collection)
     if a.query_model and codex.space.query.encoder is None:
         print(f"louise: {name}: --query-model names a query side, and this space has none",
@@ -8354,7 +8397,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = everbs.add_parser("cpu-reference",
                           help="keep the calibration set as the encoder's CPU twin embeds it "
                                "(every gate compares its run with it)")
-    root_arg(p); p.add_argument("collection")
+    root_arg(p); p.add_argument("collection", nargs="?")
+    p.add_argument("--check", action="store_true",
+                   help="read-only: per collection (every one held where none is named) and role, whether "
+                        "the gate would find its CPU reference, and the command that makes a missing one")
     p.add_argument("--model", metavar="NAME", help="the CPU twin's model name (default: the encoder's "
                                                     "with -cpu, held to a CPU run of the same weights)")
     p.add_argument("--query-model", metavar="NAME", help="the query side's CPU twin (default: its "
