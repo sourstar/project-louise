@@ -20,6 +20,21 @@ measured (published figures disagree).
 
 ### 2026-11-24 (the engine, the 35B and speech; its older entries carry their own dates)
 
+- **2026-11-24, room on the card — the order of work** ([room-on-the-card.md](room-on-the-card.md); operator:
+  "Extend page instead of unload to the dense models", "the 'shared' context is mandatory improvement"). (1) The
+  shared context (context on demand, P8) is on for three embedders only and the keeper still counts them whole —
+  5,554 MiB counted and not held; every other llama.cpp model still takes its option, a keep, a reading on the
+  card and, for the one encoder, its gate. (2) **Page instead of unload is BUILT, off by default**:
+  `[models] make_room = "page"` lets a load work is waiting on over the line while the host stays above a floor,
+  the driver paging idle models (0.2–0.4 s on their next use against 7.5–8.7 s after an unload, S5); the
+  keeper's preloads, a host under its floor and a model whose paged load failed keep the unload; LocalAI's
+  reclaimer follows the node's file at every deploy. It needs, on the node, the engine's two switches in every
+  llama.cpp model's file, the encoders re-gated, a floor measured in the busy hours (4.7 GB were available under
+  load that day) and a soak. (3) **The 35B's experts paged by use: measured and ended** — the whole model was on
+  the card after one answer, and a neighbour's load died (the qualification note §3); what the run showed
+  besides, long prompts starting 39 % sooner with the experts not reordered, has a switch staged for a clean
+  comparison.
+
 - **2026-11-24, omnivoice on our backend — evaluated, nothing changed** (operator: "I would like to have only one
   backend"). omnivoice.cpp builds unchanged against our engine's ggml and gives the same audio on the CPU (68 of
   159,120 samples off by one unit); its own ggml fork is ours a few days older on SYCL. Four ways, with their costs,

@@ -123,8 +123,9 @@ wheel" (CLAUDE.md), the case is solved simply and the standard written down:
   their full size** (rest = largest), though their contexts are released
   between requests — bge-m3 measured 621 MiB idle, 1,048 in a burst, 622
   after (München, 11-23); nemotron-embed 2,512 idle against 4,399 with its
-  context (11-12): about 4 GiB of the budget is counted and not held (the
-  keeper's rule, the architecture session's). And **"every model opted in"
+  context (11-12): 5,554 MiB of the budget counted and not held, by the
+  three readings (room-on-the-card.md §2; the keeper's rule, the
+  architecture session's). And **"every model opted in"
   still takes, per model**: the option and a keep in its file, the
   idle / burst / after reading on the card, and for an encoder its gate
   under the new file (invariant 12; preflight `louise hold embedder

@@ -189,6 +189,26 @@ class ModelsConfig:
     #: (app/config.py resolves both on every read).
     chat: str | None = None
     translate: str | None = None
+    #: HOW A LOAD THAT DOES NOT FIT THE CARD GETS ITS ROOM (added 2026-11-24,
+    #: operator: "Extend page instead of unload to the dense models").
+    #: "unload", the rule since 2026-11-16: the model with the oldest real use
+    #: is unloaded. "page": for a load WORK is waiting on, nothing is unloaded
+    #: while the host can hold what the card cannot — the driver moves idle
+    #: models' memory to host memory and back at their next use (measured on
+    #: the B70: 0.2–0.4 s more on a small model's next request, against
+    #: 7.5–8.7 s after an unload) — and the unload stays the fallback
+    #: (app/model_evict.py). The keeper's own preloads keep "unload" either way.
+    make_room: str = "unload"
+    #: in "page", the host memory that must stay AVAILABLE once the overflow is
+    #: paged, in GiB: under it a load unloads as before. A default to be
+    #: replaced by the node's own measurement of its busy hours — the host's
+    #: OOM killer is what stands under it (2026-11-24: 4.7 GB available under
+    #: load, where nothing may be paged)
+    page_floor_gib: int = 12
+
+
+#: `[models] make_room`
+MAKE_ROOM = ("unload", "page")
 
 
 @dataclass(frozen=True)
@@ -707,12 +727,18 @@ def _load_one(path: Path) -> PlatformConfig:
         if models_raw.get(key) is not None and not isinstance(models_raw[key], str):
             raise schedule_mod.ScheduleError(
                 f"models.{key} is a model name, got {models_raw[key]!r} (07 §7.8)")
+    make_room = models_raw.get("make_room", ModelsConfig().make_room)
+    if make_room not in MAKE_ROOM:
+        raise schedule_mod.ScheduleError(
+            f"models.make_room is \"unload\" or \"page\", got {make_room!r} (07 §7.8)")
     models = ModelsConfig(load_timeout_s=_positive_int(
         models_raw, "load_timeout_s", ModelsConfig().load_timeout_s),
         keep_ask_resident=models_raw.get("keep_ask_resident", True),
         preload_speech=models_raw.get("preload_speech", True),
         chat=(models_raw.get("chat") or "").strip() or None,
-        translate=(models_raw.get("translate") or "").strip() or None)
+        translate=(models_raw.get("translate") or "").strip() or None,
+        make_room=make_room,
+        page_floor_gib=_positive_int(models_raw, "page_floor_gib", ModelsConfig().page_floor_gib))
 
     speech = _speech(raw.get("speech", {}) or {})
 

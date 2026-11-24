@@ -637,6 +637,8 @@ def ensure_loaded(url: str, model: str | None, warm: Callable[[float], object], 
             # before the flight ends: a caller arriving now finds it loaded,
             # never cold with no warm in flight
             _note_loaded(server, model)
+        from app import model_evict
+        model_evict.load_ended(server, model, outcome == "loaded")     # a paged load that failed
         with _lock:
             _flights.pop(key, None)
         flight.done.set()

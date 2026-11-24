@@ -47,6 +47,39 @@ Louise frees the room itself, so the reclaimer never has to choose:
   (a load into memory not yet given back would overcommit the card, which
   xe does silently — as app/gate_twin.py `make_room` waits).
 
+PAGE INSTEAD OF UNLOAD (operator, 2026-11-24, verbatim: "Extend page instead
+of unload to the dense models"; platform.toml `[models] make_room = "page"`,
+07 §7.8; off by default). Measured on the B70 that morning (München,
+docs/notes/backend-qualification-2026-11-21.md §3 phase 5, S5 part 2): with
+the engine's VRAM check off and its buffers cut in 2 GiB pieces, a card
+overcommitted by 3.5 GiB kept every model loaded — the xe driver moved the
+idle ones' memory to host memory and back at their next use, 0.2–0.4 s more
+on a small model's first request against the 7.5–8.7 s of a load after an
+unload, 1.3–1.8 s on the 35B. So, in "page":
+- a load WORK is waiting on (`before_load` under a counted use) that does
+  not fit under the line unloads NOTHING where the host can hold the
+  difference: MemAvailable less the shortfall stays at or above the node's
+  floor (`page_floor_gib`). The load goes, and the driver chooses what
+  leaves the card — by idleness and by whole buffers, not by this module's
+  order. Said in the node's log, once a load;
+- the host unread, or too short: today's rule, the oldest real use
+  unloaded — the host's own OOM killer is what the floor stands above;
+- THE CALLER SAYS IT (the architecture session's review): the keeper's own
+  preload, a run check's and a gate's load keep today's rule — a preload is
+  never urgent, and what is preloaded must not push what is in use off the
+  card. Only `before_load` under counted work asks to page;
+- a model whose paged load FAILED is remembered (`load_ended`) and gets its
+  room by unloading the next time, for PAGE_AGAIN_S: an llama.cpp model
+  whose file lacks `GGML_SYCL_BMG_VRAM_CHECK=0` refuses an allocation the
+  card cannot hold, and would otherwise be let over the line and fail at
+  every attempt;
+- LocalAI's memory reclaimer must be OFF in this mode
+  (deploy/vega/stage/localai_settings.py follows the setting): a card
+  holding more than its size reads full at every tick. Its threshold stays,
+  for this module's and the keeper's line.
+What it does NOT do: choose the victim, page the keeper's preloads, or
+answer for memory the driver cannot move.
+
 Nothing here unloads for being idle: only a load that needs the room asks
 (operator, 2026-11-08: "nothing is evicted only because it's idle, only if
 space is claimed"). The node's mode wins: paused or seed-only, nothing is
@@ -79,6 +112,14 @@ ROOM_WAIT_S = 10.0
 #: … read this often
 ROOM_POLL_S = 0.5
 
+#: a model whose paged load failed gets its room by unloading for this long
+PAGE_AGAIN_S = 3600.0
+GIB = 1 << 30
+#: (server, model) let over the line by paging, awaiting its load's outcome
+_paged: set[tuple[str, str]] = set()
+#: (server, model) → when its paged load failed
+_no_page: dict[tuple[str, str], float] = {}
+
 #: the keeper made the room for this load itself: the cold-load hook does not
 _room_made: contextvars.ContextVar[bool] = contextvars.ContextVar("model_evict_room_made", default=False)
 
@@ -110,6 +151,8 @@ class Outcome:
     free: int | None = None
     unloaded: tuple[str, ...] = ()
     why: str = ""
+    #: bytes over the line left to the driver to page (`make_room = "page"`)
+    paged: int = 0
 
 
 def eligible(loaded: Iterable[Loaded], horizon: float | None) -> list[Loaded]:
@@ -157,6 +200,86 @@ def _say(level: str, text: str) -> None:
         pass
 
 
+def reset() -> None:
+    """Forget which loads were paged and which failed (tests)."""
+    _paged.clear()
+    _no_page.clear()
+
+
+def host_available() -> int | None:
+    """The host's MemAvailable in bytes (/proc/meminfo: a container reads
+    the host's), or None where it cannot be read. What the kernel says can be
+    taken without swapping; a ZFS ARC is not in it, which errs on the safe
+    side."""
+    try:
+        with open("/proc/meminfo", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def rule() -> tuple[str, int]:
+    """(`[models] make_room`, the host floor in bytes) as the node's file
+    says now; a file that does not load is today's rule."""
+    from app import platform_config
+    try:
+        m = platform_config.load().models
+        return m.make_room, m.page_floor_gib * GIB
+    except Exception:   # noqa: BLE001 — unread: nothing changes
+        return "unload", 0
+
+
+def _page(server: str, *, need: int, free: int, t: float, for_what: str,
+          loading: Iterable[str]) -> Outcome | None:
+    """PAGE INSTEAD OF UNLOAD (the module's docstring): the Outcome of a
+    load let over the line, or None where today's rule applies."""
+    mode, floor = rule()
+    if mode != "page":
+        return None
+    keys = [(server, m) for m in loading]
+    now = time.time()
+    if any(now - _no_page.get(k, float("-inf")) < PAGE_AGAIN_S for k in keys):
+        return None                               # said when it failed
+    short = need - free
+    avail = host_available()
+    if avail is None or avail - short < floor:
+        _say("info", f"card: {for_what} is {short // MIB:,} MiB over the {t:.2f} line and is not paged — "
+                     + ("the host's memory cannot be read" if avail is None else
+                        f"the host has {avail // MIB:,} MiB available and would be under its floor of "
+                        f"{floor // MIB:,} MiB") + ": room is made by unloading, as before")
+        return None
+    _paged.update(keys)
+    _say("info", f"card: nothing unloaded for {for_what} — {need // MIB:,} MiB needed, {max(0, free) // MIB:,} "
+                 f"MiB free under the {t:.2f} line; the driver pages {short // MIB:,} MiB of idle models' memory "
+                 f"to the host ({avail // MIB:,} MiB available, floor {floor // MIB:,}) (operator, 2026-11-24)")
+    return Outcome(True, need, free, why="paged", paged=short)
+
+
+def load_ended(server: str, model: str, loaded: bool) -> None:
+    """The outcome of a cold load, told by `model_load.ensure_loaded`: a
+    model let over the line by paging whose load failed gets its room by
+    unloading for PAGE_AGAIN_S. Never raises."""
+    try:
+        from app import model_load
+        key = (model_load.server_of(server), model)
+        if key not in _paged:
+            return
+        _paged.discard(key)
+        if loaded:
+            _no_page.pop(key, None)
+            return
+        _no_page[key] = time.time()
+        _say("warn", f"card: {model} did not load over the line (paged): for the next "
+                     f"{PAGE_AGAIN_S / 60:.0f} min its room is made by unloading. An llama.cpp model pages only "
+                     f"with GGML_SYCL_BMG_VRAM_CHECK=0 in its file (and GGML_SYCL_HOST_PINNED_MEM_2G=1, so "
+                     f"that it leaves the card in pieces)")
+    except Exception:   # noqa: BLE001 — a note, never a load's failure
+        pass
+
+
 def need_of(server: str, model: str) -> int | None:
     """The most bytes the model was seen holding on the card — this
     process's `/system` readings and the resident budget's file — or None
@@ -173,6 +296,7 @@ def need_of(server: str, model: str) -> int | None:
 
 def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
               protect: Iterable[tuple[str, str]] = (), exclude: Iterable[str] = (),
+              page: bool = False,
               sleep: Callable[[float], None] = time.sleep,
               clock: Callable[[], float] = time.monotonic) -> Outcome:
     """Room for `need` bytes on `server`'s card under the reclaimer's line,
@@ -180,7 +304,9 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
     module's docstring). `horizon`: only models last used before it may go.
     `protect`: (server, model) that stay whatever their use (a question's own
     models). `exclude`: model ids of this server never considered (the model
-    being loaded). Never raises."""
+    being loaded). `page`: the caller is a load work is waiting on, and may
+    be let over the line where the node's rule is "page" (the docstring).
+    Never raises."""
     from app import gate_twin, model_load, model_pins, model_use, resident
     server = model_load.server_of(server)
     try:
@@ -192,6 +318,10 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
         free = int(t * total) - used
         if need <= free:
             return Outcome(True, need, free)
+        if page:
+            paged = _page(server, need=need, free=free, t=t, for_what=for_what, loading=tuple(exclude))
+            if paged is not None:
+                return paged
         # THE one `/system` read — or the cold load's own, a moment ago
         held = model_load.held_sizes(server, max_age_s=model_load.INTERACTIVE_TTL_S)
         if held is None:
@@ -290,4 +420,6 @@ def before_load(server: str, model: str) -> Outcome | None:
             return None                          # paused, seed-only: nothing unloaded
     except Exception:   # noqa: BLE001
         return None
-    return make_room_for(server, model, horizon=horizon_for(server, model))
+    from app import model_use
+    # only a load WORK waits on may page: Louise's own (a preload, a check, a gate) keeps today's rule
+    return make_room_for(server, model, horizon=horizon_for(server, model), page=bool(model_use.counts()))

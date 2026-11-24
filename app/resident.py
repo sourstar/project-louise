@@ -1396,6 +1396,43 @@ def _warm_all(items: list[Resident], stop: Callable[[], bool]) -> None:
             _track.setdefault(r.key, _Track()).warmed_at = _now()
 
 
+def _make_room_shown(want: list[Resident]) -> dict[str, Any]:
+    """`[models] make_room` for `show`: the rule, and in "page" what it
+    stands on — the host's memory against the floor, and LocalAI's reclaimer,
+    which must be off (app/model_evict.py)."""
+    from app import httpc, model_evict
+    mode, floor = model_evict.rule()
+    out: dict[str, Any] = {"rule": mode}
+    if mode != "page":
+        out["says"] = ("a load that does not fit unloads the model with the oldest real use "
+                       "(`[models] make_room = \"page\"` pages idle models to host memory instead)")
+        return out
+    avail = model_evict.host_available()
+    out |= {"host_floor_mib": floor // MIB, "host_available_mib": None if avail is None else avail // MIB,
+            "says": "a load work is waiting on that does not fit unloads nothing while the host stays above "
+                    "its floor: the driver pages idle models' memory out; the keeper's preloads unload as before"}
+    notes = []
+    if avail is None:
+        notes.append("the host's memory cannot be read here: every load unloads as before")
+    elif avail < floor:
+        notes.append(f"the host is under its floor now ({avail // MIB:,} of {floor // MIB:,} MiB): "
+                     f"a load unloads as before")
+    for server in sorted({r.server for r in want}):
+        try:
+            r = httpc.get(f"{server}/api/settings", timeout=SETTINGS_TIMEOUT_S)
+            on = r.json().get("memory_reclaimer_enabled") if r.status_code == 200 else None
+        except Exception:   # noqa: BLE001 — unread: said
+            on = None
+        if on is not False:
+            notes.append(f"{server}: LocalAI's memory reclaimer is "
+                         + ("ON" if on else "not readable") + " — in this mode it must be off, or it unloads "
+                         "the least recently used model whenever the card reads full "
+                         "(deploy/vega/stage/localai_settings.py --platform <platform.toml>)")
+    if notes:
+        out["notes"] = notes
+    return out
+
+
 def _make_room(r: Resident, got: Room):
     """`model_evict.make_room` for the preload of `r`: horizon its own last
     real use (never used: nothing used gives way to it). Never raises."""
@@ -1506,6 +1543,7 @@ def show() -> dict[str, Any]:
                 "only within the budget (2026-11-08), which unloads nothing; every searched "
                 "collection's query encoder, an `off` one's included (2026-11-09)",
         "switches": {ASK: sw.ask, SPEECH: sw.speech}, "mode": state, "preloads": ok, "why": why,
+        "make_room": _make_room_shown(want),
         "budget": {"says": p.says(), "threshold": p.threshold,
                    "line_mib": None if p.line is None else p.line // MIB,
                    "margin_mib": p.margin // MIB,
