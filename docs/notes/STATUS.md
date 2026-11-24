@@ -37,8 +37,11 @@ measured (published figures disagree).
   for a chunk's last 83 ms (the port computes two samples omnivoice.cpp zero-pads), two runs byte-identical. Staged as
   `deploy/localai/patches/staged/0009-llama-cpp-omnivoice.patch`. **Cloning from a clip, described voices and the
   server's speech route followed the same day** (§9): a clip's codes equal the reference's on 158 of 159 frames (the
-  other on a near-tie), prompts identical, the server gives the tool's bytes. Left: a long text streamed chunk by
-  chunk, and the card — München's, with the operator's ear on the two voices.
+  other on a near-tie), prompts identical, the server gives the tool's bytes. A second staged patch
+  (`0010-llama-cpp-tts-voice-modes.patch`, in LocalAI's backend) passes a voice profile's transcript on and accepts a
+  request without a voice, which Louise's own requests need. Streaming a long text chunk by chunk is not ported:
+  Louise sends a sentence per request. Left: the card — München's, in a window, with the operator's ear on the two
+  voices (§10 of the note).
 - **2026-11-24, "Engine now, chat later" (operator): the new engine is adopted, the chat model decided after the
   POC.** The cut-over's order is in [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §5:
   BACKOUT first; the wrapper `vega-louise-llama-cpp` repointed at `c3294e050ff2`, MADLAD and the nemotron reranker

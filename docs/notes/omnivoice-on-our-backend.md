@@ -360,14 +360,67 @@ Italian sentence with its transcript, the text a second sentence, seed 0):
 | the server | `/v1/audio/speech` with `speaker_ref_b64` and `speaker_ref_text`, and with `voice`, gives the tool's files byte for byte; an unknown description is answered 400 |
 | speed, CPU | 3.7 s of speech in a cloned voice: 77 s, against omnivoice.cpp's 262 s |
 
-**Not yet:** a chunk of a long text delivered as soon as it is decoded (the
-audio comes in one piece at the end, as Kokoro's does). omnivoice.cpp has a
-streaming path with its own post-processing; whether today's LocalAI backend
-uses it for the node's speech is the first thing to read before porting it.
+**Not ported, and not needed by the node:** a chunk of a long text delivered
+as soon as it is decoded (the audio comes in one piece at the end, as
+Kokoro's does). omnivoice.cpp has a streaming path and LocalAI's omnivoice
+backend offers it (`TTSStream`), but Louise does not call it: the page sends
+an answer one sentence at a time (`app/static/voice.js`) and
+`app/speech.py` posts each and waits for the whole clip. It would matter to
+a client that sends long texts and streams.
 
-**Next is the card (stage 5), München's:** the engine built with the staged
-patch as a test backend beside the live one; `tools/omnivoice_repack.py` on
-the node's two files; the same gate on the B70 (the tools run there as they
-ran here); phase 0's three clips against today's backend — time to audio,
-memory at rest and at work — and the operator's ear on the two voices,
-which is the comparison that cannot be made by number (§7.1).
+## 10. Stage 5: what LocalAI must pass, and the card (2026-11-24)
+
+**A second staged patch, in LocalAI's own backend code**
+(`staged/0010-llama-cpp-tts-voice-modes.patch`, 165 lines with its tests).
+Louise's speech request names a LocalAI voice profile
+(`localai://voice-profiles/<id>`); LocalAI's HTTP layer turns it into the
+clip's path as `voice` and its transcript as `params["ref_text"]`. The
+llama.cpp backend's TTS call dropped the transcript, read any `voice` as a
+required file, and — at our llama.cpp, which predates per-session voices —
+knew no other kind of model. With the patch a model that clones and has a
+"tts" template takes a file (with its transcript), a description (`voice`
+that is no file, or OpenAI's `instructions`), or nothing: the node's
+warm-up call (`app/resident.py`, text alone) is answered in the model's own
+voice instead of refused. Qwen3-TTS Base keeps its rule and gains the
+transcript. Its pure half is unit-tested here (15 cases pass); the
+`grpc-server.cpp` half is compiled only with the backend, on the node.
+
+| | pros | cons |
+|---|---|---|
+| **this patch** (chosen) | Louise's requests work unchanged; generic — any cloning model gets the transcript; small, with tests, fileable to LocalAI | a second staged patch in `grpc-server.cpp`, the file every rebase re-anchors |
+| no LocalAI patch | nothing to carry | cloning without the clip's transcript (a weaker clone and a wrong length estimate), no described voice, the warm-up refused |
+| change Louise instead | no LocalAI patch | Louise cannot pass a transcript the backend ignores; it would only hide the refusal |
+
+**On the card — München's, in a window the operator gives there.** Nothing
+of this touches the live speech until the last step.
+
+1. **Build** a test engine from the series plus the two staged patches
+   (staged/README.md says how: a local `series` with the two lines
+   appended), installed BESIDE the live one. The build is also the compile
+   check of 0010's `grpc-server.cpp` half.
+2. **Model files**: `python3 -I tools/omnivoice_repack.py --gguf-py
+   <llama.cpp>/gguf-py omnivoice-base-Q8_0.gguf
+   omnivoice-tokenizer-Q8_0.gguf <out>/omnivoice-Q8_0` (seconds; expected
+   sizes 639,153,568 and about 306.9 MB). A test model on the test engine:
+   `parameters.model` the `-lm` file, `mmproj` the `-mmproj` file,
+   `known_usecases: ["tts"]`, `fit:off`, one slot, the env of the node's
+   llama.cpp models. A small `context_size` is enough: that context reads
+   one token; the decoding runs on a context the pipeline sizes itself.
+3. **The gate on the B70** — the same five checks as §8, the tools as they
+   ran here: `MTMD_DEBUG_OMNIVOICE=<dir>` in the test model's env for the
+   port's trace; omnivoice.cpp a650381 built on the engine's ggml with
+   `tools/measure/omnivoice_reference_hooks.patch` for the reference
+   (`OV_HARD_MASK=1`); `tools/measure/omnivoice_port_gate.py` for the
+   verdict. The rounding noise on the card is its own: the bar is the
+   reference against itself THERE (`OV_HARD_MASK=shift`), as here.
+4. **Against today's backend**, phase 0's three clips and one sentence in the
+   admin's recorded voice through LocalAI's `/v1/audio/speech` exactly as
+   Louise sends it (`voice: localai://voice-profiles/<id>`): time to the
+   clip, VRAM at rest and at work for both, and that the transcript arrives
+   (the first-step prompt in the trace has it).
+5. **The operator's ear**: the same sentences from both backends, in the
+   recorded voice and in the model's own. This is the one comparison no
+   number makes (§7.1): the two do not decode alike.
+6. Only then, on the operator's word: the two patches into the series (a new
+   engine, gated like any other), the node's speech model repointed, the
+   omnivoice backend retired.

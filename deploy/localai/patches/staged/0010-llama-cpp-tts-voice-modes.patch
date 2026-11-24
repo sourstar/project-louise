@@ -1,0 +1,358 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 24 Nov 2026 08:24:32 +0000
+Subject: [PATCH] feat(llama-cpp): TTS takes a voice profile's transcript, a
+ described voice, or no voice at all
+
+The llama.cpp backend's TTS call knew two kinds of model: one that needs a
+speaker reference file (Qwen3-TTS Base: `voice` is a path, required) and one
+that takes a named voice through its "tts" chat template (LFM3-Audio). A
+model that does both - it clones from a clip AND has a "tts" template to
+describe a voice with, or speaks in a voice of its own (OmniVoice) - fit
+neither: a request without a voice was refused, a description was read as a
+file name, and the transcript the HTTP layer resolves from a voice profile
+(params["ref_text"], as the omnivoice-cpp backend reads it) was dropped on
+the way.
+
+- tts_request_options: a third mode, reference_or_name. `voice` is the
+  reference when it names an existing file (the caller checks; the header
+  stays free of I/O), a name or a description for the template otherwise,
+  and may be empty. In every mode that describes, the request's
+  `instructions` (OpenAI's field) is the template's voice when the request
+  names none; with a reference it goes along with it. `ref_text` is kept
+  beside a reference - for the model that requires one too.
+- grpc-server: the mode comes from the model (mtmd_helper_cap's speaker
+  reference flag and whether it has a "tts" template); the transcript goes
+  to the helper's speaker_ref_text; the template renders the prompt whenever
+  the mode describes a voice.
+- prepare.sh: LOCALAI_HAS_TTS_TEMPLATE, a probe for
+  common_chat_get_tts_prompt. The "tts" template is older than per-session
+  voices (LOCALAI_HAS_TTS_VOICE): at a pin that has the first and not the
+  second, a model with a template is now served through it, and
+  set_voice stays behind its own probe. A model without a template keeps
+  the reference rule there, as before.
+
+Nothing changes for Qwen3-TTS Base or LFM3-Audio but the transcript now
+reaching the first.
+
+Tested: tts_request_options_test.cpp (the two new cases and the thirteen
+there before). The grpc-server change was not compiled here: it is built
+with the backend.
+
+Assisted-by: Claude Code
+---
+ backend/cpp/llama-cpp/grpc-server.cpp         | 42 +++++++--
+ backend/cpp/llama-cpp/prepare.sh              |  8 ++
+ backend/cpp/llama-cpp/tts_request_options.h   | 87 +++++++++++++++----
+ .../llama-cpp/tts_request_options_test.cpp    | 54 ++++++++++++
+ 4 files changed, 165 insertions(+), 26 deletions(-)
+
+diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
+index d1d6a78..dc2515f 100644
+--- a/backend/cpp/llama-cpp/grpc-server.cpp
++++ b/backend/cpp/llama-cpp/grpc-server.cpp
+@@ -4227,21 +4227,38 @@ public:
+         }
+ 
+         // Qwen3-TTS Base takes a speaker reference file; LFM3-Audio takes a
+-        // named voice through its "tts" chat template. Forks without the voice
+-        // probe predate named voices, so they keep the reference rule.
++        // named voice through its "tts" chat template. A model that clones and
++        // also has a "tts" template (OmniVoice) takes either: a reference when
++        // the request's voice names a file, a described voice otherwise, or
++        // its own voice when the request names none. Forks without the voice
++        // probe predate named voices, so they keep the reference rule for
++        // every model that has no "tts" template to describe a voice with.
++        auto voice_mode = llama_grpc::tts_voice_mode::reference;
++#if LOCALAI_HAS_TTS_TEMPLATE
++        const bool can_reference = ctx_server.impl->mtmd_cap.audio_gen_spk_ref;
++        const bool has_template  = llama_model_chat_template(ctx_server.impl->model_tgt, "tts") != nullptr;
++        if (can_reference && has_template) {
++            voice_mode = llama_grpc::tts_voice_mode::reference_or_name;
++        }
+ #if LOCALAI_HAS_TTS_VOICE
+-        const bool needs_reference = ctx_server.impl->mtmd_cap.audio_gen_spk_ref;
+-#else
+-        const bool needs_reference = true;
++        else if (!can_reference) {
++            voice_mode = llama_grpc::tts_voice_mode::name;
++        }
++#endif
+ #endif
++        std::error_code voice_ec;
++        const bool voice_is_file = !request->voice().empty()
++            && std::filesystem::is_regular_file(request->voice(), voice_ec);
+ 
+         std::map<std::string, std::string> params(request->params().begin(), request->params().end());
+         const auto opts = llama_grpc::parse_tts_request_options(
+             request->text(),
+             request->voice(),
+             request->has_language() ? request->language() : std::string(),
++            request->has_instructions() ? request->instructions() : std::string(),
+             params,
+-            needs_reference);
++            voice_mode,
++            voice_is_file);
+         if (!opts.ok) {
+             return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, opts.error);
+         }
+@@ -4257,16 +4274,21 @@ public:
+             task.tts_inp.set_lang(opts.language);
+         }
+ 
+-        if (needs_reference) {
++        if (!opts.voice_path.empty()) {
+             auto wrapper = mtmd_helper_bitmap_init_from_file(ctx_server.impl->mctx, opts.voice_path.c_str(), false LOCALAI_MTMD_INIT_OPT_ARG(ctx_server.impl->init_opt));
+             if (!wrapper.bitmap) {
+                 return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                     "failed to read speaker reference audio: " + opts.voice_path);
+             }
+             task.tts_inp.set_speaker_ref(mtmd::bitmap_ptr(wrapper.bitmap));
++            // The reference's transcript, where the request has one (a voice
++            // profile's): the models that take it clone closer with it.
++            if (!opts.ref_text.empty()) {
++                task.tts_inp.set_speaker_ref_text(opts.ref_text);
++            }
+         }
+-#if LOCALAI_HAS_TTS_VOICE
+-        else {
++#if LOCALAI_HAS_TTS_TEMPLATE
++        if (voice_mode != llama_grpc::tts_voice_mode::reference) {
+             // Same as upstream POST /tts: the model's "tts" template renders the
+             // prompt with the language and voice, and an empty voice takes the
+             // template default. Fall back to the raw text when there is no template.
+@@ -4275,7 +4297,9 @@ public:
+             if (!tts_prompt.empty()) {
+                 task.tts_inp.set_prompt(tts_prompt);
+             }
++#if LOCALAI_HAS_TTS_VOICE
+             task.tts_inp.set_voice(opts.voice);
++#endif
+         }
+ #endif
+         task.tts_inp.data.top_k    = opts.top_k;
+diff --git a/backend/cpp/llama-cpp/prepare.sh b/backend/cpp/llama-cpp/prepare.sh
+index 02d796f..18d0619 100644
+--- a/backend/cpp/llama-cpp/prepare.sh
++++ b/backend/cpp/llama-cpp/prepare.sh
+@@ -198,6 +198,13 @@ if grep -q "set_voice" llama.cpp/tools/mtmd/mtmd-helper.h; then
+ else
+     HAS_TTS_VOICE=0
+ fi
++# The "tts" chat template (common_chat_get_tts_prompt): the prompt of a text to
++# speak, with a named or described voice. It came before per-session voices.
++if grep -q "common_chat_get_tts_prompt" llama.cpp/common/chat.h; then
++    HAS_TTS_TEMPLATE=1
++else
++    HAS_TTS_TEMPLATE=0
++fi
+ # Per-task ASR preset (common_chat_get_asr_prompt takes the requested language,
+ # ggml-org/llama.cpp#31257). Older pins have the one-argument form, or none.
+ if grep -qF "common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language" llama.cpp/common/chat.h; then
+@@ -237,6 +244,7 @@ cat > llama.cpp/tools/grpc-server/llama_compat.h <<EOF
+ #define LOCALAI_HAS_RERANK_FILES ${HAS_RERANK_FILES}
+ #define LOCALAI_HAS_REALTIME ${HAS_REALTIME}
+ #define LOCALAI_HAS_TTS_VOICE ${HAS_TTS_VOICE}
++#define LOCALAI_HAS_TTS_TEMPLATE ${HAS_TTS_TEMPLATE}
+ #define LOCALAI_HAS_ASR_PRESET ${HAS_ASR_PRESET}
+ EOF
+ 
+diff --git a/backend/cpp/llama-cpp/tts_request_options.h b/backend/cpp/llama-cpp/tts_request_options.h
+index 177705b..ea89652 100644
+--- a/backend/cpp/llama-cpp/tts_request_options.h
++++ b/backend/cpp/llama-cpp/tts_request_options.h
+@@ -18,10 +18,15 @@ struct tts_request_options {
+     std::string error;
+ 
+     std::string text;
+-    // Speaker reference file, set only when the model needs one (Qwen3-TTS Base).
++    // Speaker reference file, set when the model clones a voice and the request
++    // names one (Qwen3-TTS Base, which needs it; OmniVoice, which can do without).
+     std::string voice_path;
+-    // Named voice, set only when the model takes a name (LFM3-Audio "tts"
+-    // template: "female", "male"). Empty means the template default.
++    // Transcript of the speaker reference (params["ref_text"], which the voice
++    // profiles fill in). Kept only beside a reference.
++    std::string ref_text;
++    // Named or described voice for the model's "tts" chat template (LFM3-Audio:
++    // "female", "male"; OmniVoice: "female, young adult, british accent").
++    // Empty means the template default.
+     std::string voice;
+     std::string language;
+ 
+@@ -87,16 +92,32 @@ inline tts_request_options reject(const std::string & message) {
+ 
+ } // namespace detail
+ 
+-// needs_reference is the model's mtmd_helper_cap.audio_gen_spk_ref. When true
+-// (Qwen3-TTS Base), voice is a speaker reference file and is required. When
+-// false (LFM3-Audio), voice is a named voice for the "tts" chat template, and
+-// an empty voice lets the template pick its default.
++// How the loaded model takes its voice.
++enum class tts_voice_mode {
++    // A name or a description for the "tts" chat template (LFM3-Audio); an
++    // empty voice lets the template pick its default.
++    name,
++    // A speaker reference file, required: the model has no voice of its own
++    // (Qwen3-TTS Base).
++    reference,
++    // A file to clone when the request names one, a name or a description
++    // otherwise, or nothing at all: the model clones AND has a "tts" template
++    // (OmniVoice).
++    reference_or_name,
++};
++
++// voice_is_file is the caller's answer to "does `voice` name an existing
++// file", read only in reference_or_name mode; this header does no I/O.
++// instructions is the request's free-form voice description (OpenAI's
++// `instructions`): it is the template's voice when the request names none.
+ inline tts_request_options parse_tts_request_options(
+         const std::string & text,
+         const std::string & voice,
+         const std::string & language,
++        const std::string & instructions,
+         const std::map<std::string, std::string> & params,
+-        bool needs_reference) {
++        tts_voice_mode mode,
++        bool voice_is_file) {
+     if (text.empty()) {
+         return detail::reject("text must be a non-empty string");
+     }
+@@ -105,16 +126,36 @@ inline tts_request_options parse_tts_request_options(
+     opts.text     = text;
+     opts.language = language;
+ 
+-    if (needs_reference) {
+-        // The Qwen3-TTS Base checkpoints have no built-in speaker. Without a
+-        // reference clip the model picks an arbitrary voice, so an unset voice
+-        // is a request error rather than a defaulted one.
+-        if (voice.empty()) {
+-            return detail::reject("voice must name a speaker reference audio file");
++    switch (mode) {
++        case tts_voice_mode::reference:
++            // The Qwen3-TTS Base checkpoints have no built-in speaker. Without a
++            // reference clip the model picks an arbitrary voice, so an unset voice
++            // is a request error rather than a defaulted one.
++            if (voice.empty()) {
++                return detail::reject("voice must name a speaker reference audio file");
++            }
++            opts.voice_path = voice;
++            break;
++        case tts_voice_mode::reference_or_name:
++            if (!voice.empty() && voice_is_file) {
++                opts.voice_path = voice;
++            } else {
++                opts.voice = voice;
++            }
++            break;
++        case tts_voice_mode::name:
++            opts.voice = voice;
++            break;
++    }
++    if (mode != tts_voice_mode::reference && opts.voice.empty()) {
++        opts.voice = instructions;
++    }
++
++    if (!opts.voice_path.empty()) {
++        const auto ref_text_it = params.find("ref_text");
++        if (ref_text_it != params.end()) {
++            opts.ref_text = ref_text_it->second;
+         }
+-        opts.voice_path = voice;
+-    } else {
+-        opts.voice = voice;
+     }
+ 
+     // Both values are range-checked here rather than left to the caller: the
+@@ -159,4 +200,16 @@ inline tts_request_options parse_tts_request_options(
+     return opts;
+ }
+ 
++// The two modes that predate tts_voice_mode. needs_reference is the model's
++// mtmd_helper_cap.audio_gen_spk_ref: a required reference, or a named voice.
++inline tts_request_options parse_tts_request_options(
++        const std::string & text,
++        const std::string & voice,
++        const std::string & language,
++        const std::map<std::string, std::string> & params,
++        bool needs_reference) {
++    return parse_tts_request_options(text, voice, language, std::string(), params,
++        needs_reference ? tts_voice_mode::reference : tts_voice_mode::name, true);
++}
++
+ } // namespace llama_grpc
+diff --git a/backend/cpp/llama-cpp/tts_request_options_test.cpp b/backend/cpp/llama-cpp/tts_request_options_test.cpp
+index abd786f..f7ba09d 100644
+--- a/backend/cpp/llama-cpp/tts_request_options_test.cpp
++++ b/backend/cpp/llama-cpp/tts_request_options_test.cpp
+@@ -75,6 +75,58 @@ static void test_accepts_empty_voice_without_reference() {
+     check(opts.voice_path.empty(), "empty voice without reference has no path");
+ }
+ 
++static void test_a_model_that_clones_and_describes_takes_either_or_neither() {
++    using mode = llama_grpc::tts_voice_mode;
++    const std::map<std::string, std::string> params{{"ref_text", "Good morning."}};
++
++    // A voice profile: the HTTP layer resolved it to a file and its transcript.
++    const auto cloned = llama_grpc::parse_tts_request_options(
++        "Hello world", "/voices/ref.wav", "en", "", params, mode::reference_or_name, true);
++    check(cloned.ok, "a file is accepted as a reference");
++    check(cloned.voice_path == "/voices/ref.wav", "the file is the reference");
++    check(cloned.ref_text == "Good morning.", "the reference's transcript passes through");
++    check(cloned.voice.empty(), "a reference leaves the described voice empty");
++
++    // Not a file: a description for the "tts" template.
++    const auto described = llama_grpc::parse_tts_request_options(
++        "Hello world", "female, young adult", "en", "", params, mode::reference_or_name, false);
++    check(described.ok, "a description is accepted");
++    check(described.voice == "female, young adult", "the description is the template's voice");
++    check(described.voice_path.empty(), "a description is not a file");
++    check(described.ref_text.empty(), "a transcript without a reference is dropped");
++
++    // Neither: the model's own voice (a warm-up call, a client that names none).
++    const auto none = llama_grpc::parse_tts_request_options(
++        "Hello world", "", "", "", {}, mode::reference_or_name, false);
++    check(none.ok, "no voice is accepted when the reference is optional");
++    check(none.voice.empty() && none.voice_path.empty(), "no voice stays none");
++
++    // OpenAI's `instructions` describes the voice when the request names none,
++    // beside a reference too.
++    const auto instructed = llama_grpc::parse_tts_request_options(
++        "Hello world", "", "en", "male, elderly", {}, mode::reference_or_name, false);
++    check(instructed.voice == "male, elderly", "instructions describe the voice");
++    const auto both = llama_grpc::parse_tts_request_options(
++        "Hello world", "/voices/ref.wav", "en", "whisper", params, mode::reference_or_name, true);
++    check(both.voice_path == "/voices/ref.wav" && both.voice == "whisper", "a reference and instructions go together");
++    const auto named = llama_grpc::parse_tts_request_options(
++        "Hello world", "male", "en", "whisper", {}, mode::name, false);
++    check(named.voice == "male", "a named voice wins over instructions");
++}
++
++static void test_a_required_reference_keeps_its_rules_and_gains_the_transcript() {
++    using mode = llama_grpc::tts_voice_mode;
++    const auto opts = llama_grpc::parse_tts_request_options(
++        "Hello world", "/voices/ref.wav", "en", "ignored here", {{"ref_text", "Hi."}}, mode::reference, false);
++    check(opts.ok && opts.voice_path == "/voices/ref.wav", "a required reference is taken as a path, checked when it is read");
++    check(opts.ref_text == "Hi.", "a required reference carries its transcript");
++    check(opts.voice.empty(), "instructions are not a voice for a model that only clones");
++
++    const auto missing = llama_grpc::parse_tts_request_options(
++        "Hello world", "", "en", "male", {}, mode::reference, false);
++    check(!missing.ok, "a required reference is still required");
++}
++
+ static void test_parses_sampling_params() {
+     const std::map<std::string, std::string> params{
+         {"top_k", "40"},
+@@ -240,6 +292,8 @@ int main() {
+     test_rejects_missing_speaker_reference();
+     test_accepts_named_voice_without_reference();
+     test_accepts_empty_voice_without_reference();
++    test_a_model_that_clones_and_describes_takes_either_or_neither();
++    test_a_required_reference_keeps_its_rules_and_gains_the_transcript();
+     test_parses_sampling_params();
+     test_rejects_malformed_sampling_params();
+     test_rejects_out_of_range_sampling_params();
+-- 
+2.43.0
+

@@ -47,6 +47,7 @@ the source):*
 | **P9 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder output is kept PER SEQUENCE (`llama_memory_enc_dec`, stage 1 of llama-cpp-encoder-decoder.md), so a slot is encoded while others decode; on P3 and P4 | a late request joins the next decode step instead of waiting for the wave; the upstream shape (no public API) | not filed; [`deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch`](../../deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch); moves into the series after its card gates |
 | **P10 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder outputs live ON THE DEVICE (stage 2: a persistent store written by the encoder graph, read by the decoder's `ggml_get_rows`; no host copies), on P5 | the shape upstream asked for (a persistent buffer, no host copies); the per-step upload gone | not filed; [`deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch`](../../deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch); moves into the series with P5 after the card gates |
 | **P11 (staged)** | **patch staged, not in the series yet** | llama.cpp: OmniVoice (k2-fsa/OmniVoice) speaks on llama.cpp's own audio generation — the architecture `omnivoice` in libllama, the projector type in libmtmd, the pipeline in mtmd-helper, omnivoice.cpp's host rules vendored (MIT); a text model and an mmproj repacked from omnivoice.cpp's two files | one backend for speech too: the omnivoice-cpp backend (another ggml, another build, unpinned) is no longer needed; the model as its authors mask it | not filed (upstream llama.cpp has no OmniVoice; an upstream pull request needs a converter from the Hugging Face checkpoint and the operator's own review); [`deploy/localai/patches/staged/0009-llama-cpp-omnivoice.patch`](../../deploy/localai/patches/staged/0009-llama-cpp-omnivoice.patch); speech from text, from a clip and from a described voice gated on the CPU 2026-11-24; the card before the series |
+| **P12 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the TTS call takes a voice profile's transcript (`params["ref_text"]`), a described voice (`instructions`, or a `voice` that names no file) or no voice at all, for a model that clones AND has a "tts" chat template; `LOCALAI_HAS_TTS_TEMPLATE` probes for the template, which is older than per-session voices | LocalAI resolves a voice profile to a clip and its transcript, and its own llama.cpp backend dropped the transcript and refused a request without a voice; needed for P11's model to be served as Louise asks | not filed; [`deploy/localai/patches/staged/0010-llama-cpp-tts-voice-modes.patch`](../../deploy/localai/patches/staged/0010-llama-cpp-tts-voice-modes.patch); its `grpc-server.cpp` half first compiles with the test engine on the node |
 | **P7** | **in the series since 2026-11-22** (was P10: staged, built into a separate backend, LIVE 2026-11-11; the qualification's F4) | llama.cpp: nvidia/llama-nemotron-rerank-1b-v2 ranks (`LlamaBidirectionalForSequenceClassification`: bidirectional Llama 3.2 1B, mean-pooled, a `score` head). Ported from ggml-org/llama.cpp#24083 (open) onto ddf48f8: converter class, the optional `cls.output` in llama-embed, BOS for a rerank template's prompt; this base pools before the head when the GGUF says classifier pooling mean, so no graph change | the reranker benchmark's arm A3 (operator, 2026-11-10: "Patch llama.cpp to support nemo reranker, tomorrow I want to see its benchmarks too") | upstream #24083 open; [`deploy/localai/patches/0007-llama-cpp-nemotron-rerank.patch`](../../deploy/localai/patches/0007-llama-cpp-nemotron-rerank.patch), built only from [`staged/nemotron-rerank.series`](../../deploy/localai/patches/staged/nemotron-rerank.series) into its own backend; joins the series only if A3 earns it. A3 earned it (operator, 11-11: B): the `[reranker]` of five collections on `louise-sycl-f16-llama-cpp-9d17b8a39845` (STATUS 11-11); joining the main series waits for the next engine change |
 | **P8** | **in the series since 2026-11-22** (was P11: staged, yet LIVE on the node's engine since the 2026-11-12 trial; F4) | llama.cpp backend: CONTEXT ON DEMAND — a model loaded with the option `context_on_demand` keeps its weights, and a request that carries `metadata.keep_context_ms` has its context (KV cache and compute buffers) freed that long after its answer; the next request creates it again. A request that carries none leaves the context loaded, as ever (the option `keep_context_ms:N` gives such requests a keep). No RPC reads the `llama_context` any more (it is null while the model is idle) | the card holds ~34 GB of models on 32.6 GB, ~10 GB of it context that works seconds a day (operator, 2026-11-11: "when llama.cpp gets a request it allocates the context memory; when the processing is done it frees it"; "Implement it") — [idle-context-brief.md](idle-context-brief.md) | not filed — PREPARED for the operator to file himself (2026-11-11: "prepare everything for upstream, I will upload it eventually"; [`deploy/localai/upstream/llama-cpp-context-on-demand/`](../../deploy/localai/upstream/llama-cpp-context-on-demand/READING-GUIDE.md), [`localai-context-on-demand/`](../../deploy/localai/upstream/localai-context-on-demand/READING-GUIDE.md)); [`deploy/localai/patches/0008-llama-cpp-context-on-demand.patch`](../../deploy/localai/patches/0008-llama-cpp-context-on-demand.patch), built only from [`staged/context-on-demand.series`](../../deploy/localai/patches/staged/context-on-demand.series); CPU checks passed 2026-11-11, card gates not run |
 | **P6** | **patch we carry** | llama.cpp (common/chat): Command R7B / Command A ("Command 3") tool calls are parsed by llama.cpp's own Cohere2 MoE parser; before, the autoparser preserved `<\|START_THINKING\|><\|END_THINKING\|><\|START_ACTION\|>` as ONE token string, the server dropped the three markers, and every R7B tool call was an HTTP 500 | Command R7B as a chat candidate (operator, 2026-11-03: "B, check vllm parser before reinventing") | **to file at ggml-org/llama.cpp as a PR** once proven on the node (#20786, closed unreproduced, was this); [`deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch`](../../deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch); in the series since 2026-11-06: engine ea2417d91dcc, every live model byte-identical, every gate passed |
@@ -1203,6 +1204,44 @@ gallery would list the two repacked files under the llama.cpp backend. For
 llama.cpp's: the patch needs a converter from the Hugging Face checkpoint
 (`conversion/omnivoice.py`) in place of our repack of omnivoice.cpp's files,
 and the vendored headers restyled or rewritten.
+
+### P12 (staged). llama.cpp backend: TTS takes a transcript, a described voice, or no voice
+
+*Base: LocalAI v5.0.1 (`dd5780a`), after P1–P8 and P11. File:
+`deploy/localai/patches/staged/0010-llama-cpp-tts-voice-modes.patch` (staged
+2026-11-24 with P11; docs/notes/omnivoice-on-our-backend.md §10).*
+
+**What happens.** `core/http/endpoints/localai/tts.go` resolves a saved voice
+profile into `voice` = the clip's path and `params["ref_text"]` = its
+transcript. The llama.cpp backend's `prepareTTSTask` knows two kinds of
+model — a required speaker reference (`voice` is a path) or, where llama.cpp
+has per-session voices, a named voice for the "tts" template — and never
+reads `ref_text` or the request's `instructions`. A model that clones and
+describes (OmniVoice) is then refused without a voice, has a description
+opened as a file, and clones without the transcript the profile holds. At a
+llama.cpp pin without `set_voice` (v5.0.1's own, 78e0529) the template branch
+is compiled out altogether, though `common_chat_get_tts_prompt` is there.
+
+**The patch.** `tts_request_options.h` gets a third mode, a reference OR a
+name: `voice` is the reference when the caller found a file of that name, a
+name or description otherwise, and may be empty; `instructions` is the
+template's voice when the request names none; `ref_text` is kept beside a
+reference, in the required-reference mode too. `grpc-server.cpp` picks the
+mode from the model (its speaker-reference capability and whether it has a
+"tts" template), hands the transcript to the helper's `speaker_ref_text` and
+renders the template whenever the mode describes. `prepare.sh` gains the
+probe `LOCALAI_HAS_TTS_TEMPLATE`; `set_voice` stays behind
+`LOCALAI_HAS_TTS_VOICE`. Qwen3-TTS Base and LFM3-Audio behave as before,
+but for the transcript now reaching the first.
+
+**Tested.** `tts_request_options_test.cpp`: the thirteen cases there before
+and two new ones (a clip with its transcript, a description, neither,
+`instructions`, both together; the required reference keeping its rule).
+NOT compiled here: the `grpc-server.cpp` half builds with the backend.
+
+**For LocalAI's team:** the patch is independent of OmniVoice and could be
+filed on its own — the transcript of a voice profile is lost on the llama.cpp
+backend today for Qwen3-TTS Base as well.
 
 ### P6. llama.cpp (common/chat): Command R7B / Command A tool calls parse
 
