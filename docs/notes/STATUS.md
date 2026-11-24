@@ -33,7 +33,11 @@ measured (published figures disagree).
   BACKOUT first; the wrapper `vega-louise-llama-cpp` repointed at `c3294e050ff2`, MADLAD and the nemotron reranker
   naming it directly (their YAMLs here), `fit:off` on the thirteen; every collection's gate with its acceptance;
   NeuRIS gates with its space like the rest (the per-model CPU reference is live since 11-23: no collection
-  waits); the old engines archived and deleted. It goes after architecture's pending deploy 7f118736 and its check. München runs it in a window the operator grants there. NOT yet done on the node.
+  waits); the old engines archived and deleted. It went after architecture's deploy 7f118736, on the
+  operator's word to München ("Deploy and step 3 right after"). **First attempt 2026-11-24 06:16Z: backed out cleanly
+  at the first gate** — the node held no CPU reference for bge-m3 (not an engine fault; the web was down two
+  minutes; the live set back on the old engine). A preflight of every gate's reference comes before the retry
+  (§5, F11). NOT yet done on the node.
 - **2026-11-23, the new llama.cpp engine is QUALIFIED — the report** ([backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §4). Engine `c3294e050ff2` (LocalAI
   v5.0.1, llama.cpp `78e0529`, the eight-patch series): the series' checks pass, every gate that could run passes,
   every encoder bit-identical and equal to the live engine's bytes, the reranker's scores equal in 175/175 lists,
