@@ -261,7 +261,7 @@ the range. Seconds on the engine's own clock, from the backend process's
 | the file's header and vocabulary | 0.09 | 0.45–0.60 | no |
 | the weights, read and copied to the card | 0.42–0.50 (4.6–5.5 GiB/s) | 0.83–0.92 (5.4–6.0 GiB/s) | yes: this is the un-park |
 | the context's buffers | 0.02 | 0.01 | yes, as context on demand already does per request |
-| buffers → "model loaded": the warm-up run and the canary | 1.8 | 2.85–3.06 | NOT KNOWN |
+| buffers → "model loaded": the warm-up run | 1.8 | 2.85–3.06 | NOT KNOWN |
 | the first answer | in the total | 0.38–0.96 | — |
 | **the client, request to first answer** | **4.51–4.58** | **6.67–7.93** | |
 | the same request with the model loaded | 0.02–0.03 | 0.87–0.89 | |
@@ -277,11 +277,16 @@ the range. Seconds on the engine's own clock, from the backend process's
   new backend to answer, it comes off EVERY cold load by a setting or a
   small patch, parking or not, and is done first. To be read in LocalAI's
   source; nothing here says what it is.
-- **The part after the buffers is as large as the start,** and it is the
-  model's first use: the warm-up run and the canary, where ggml-sycl
-  rewrites the weights on the card (§3.1). A parked process keeps its
-  compiled kernels; whether it runs the rewrite again is §8's choice. So an
-  un-park costs between the copy alone and the copy with that part:
+- **The part after the buffers is as large as the start, and it is the
+  warm-up run alone** (the engine's "empty run"), read line by line in one
+  load of each: 1.685 s of qwen's 1.77 s and 2.934 s of MADLAD's 3.12 s,
+  with no line during it. The canary takes 1 ms; the slots and the template
+  the rest. The same run on a loaded model answers in 0.02 s, so this is
+  the cost of a process's FIRST compute on the card. The log does not say
+  what it is made of: the cached kernels being loaded and the pools' first
+  allocation would stay with a parked process; a rewrite of the weights
+  (§3.1) would be paid at each un-park, by §8's choice. So an un-park costs
+  between the copy alone and the copy with that part:
 
   | | cold today | un-park, at best | un-park, the first use paid again |
   |---|---|---|---|
@@ -322,10 +327,11 @@ many models a node serves; step 1 reads the real one.
 WHAT STEP 0 SAYS SO FAR (§5.2): go, and the gain is smaller than the totals
 suggested. Parking takes a 4.5 s load to between 0.45 and 2.3 s, and a 7 s
 load to between 0.9 and 3.9 s; where in that range is the rewrite at first
-use, which step 1 times. Before step 1, two readings that cost nothing: what
-LocalAI does in the 2.0 s before its load call, and the engine's lines
-between the buffers and "model loaded". Still to measure: a load beside a
-working encoder (2), a question's timeline on the live engine (3).
+use, which step 1 times. Before step 1, two readings of the source that
+cost nothing (asked of Tensor, 2026-11-24): what LocalAI does in the 2.0 s
+before its load call, and what a process's first compute on the card is
+made of. Still to measure: a load beside a working encoder (2), a
+question's timeline on the live engine (3).
 
 Each step is a deploy of its own. Each can stop there and still be worth
 having. In the serving scenario step 2 alone gives most of the gain: a
