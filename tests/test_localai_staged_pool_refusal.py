@@ -3,7 +3,7 @@ device-memory refusal while a request runs fails that request, not the
 backend (docs/notes/room-on-the-card.md §4; localai-bugs.md B18 / P14).
 
 It cannot be compiled where it is written, so its proof is the card's (the
-note's four steps). Held here: its shape — the pool throws instead of
+note's five steps). Held here: its shape — the pool throws instead of
 aborting, one place catches and answers ALLOC_FAILED — and that the page
 rule's switch-on waits for it, in writing."""
 import re
@@ -57,7 +57,9 @@ def test_the_pool_throws_where_it_aborted_and_one_place_answers_alloc_failed():
 def test_the_card_s_test_is_written_and_the_page_rule_waits_for_the_fix():
     section = NOTE[NOTE.index("## 4. "):]
     assert PATCH.name in section and "Not compiled here; its test is on the card" in section
-    assert len(re.findall(r"^\d\. ", section, re.M)) == 4
+    assert len(re.findall(r"^\d\. ", section, re.M)) == 5
+    assert "one RERANKER" in section and "the sixteen fingerprints" in section, \
+        "the pool is every model's; and a new build is a new run, gated before it serves"
     assert "the\n   backend's pid is the same afterwards" in section or "backend's pid is the same" in section
     assert 'Until it is in the live engine, `make_room = "page"` stays off' in section
     assert "| B18 | defect |" in ACTIONS and "### B18 and P14 (staged). " in ACTIONS

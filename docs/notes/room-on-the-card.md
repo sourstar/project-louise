@@ -144,10 +144,19 @@ operator's word there), an engine built with the patch:
    5xx, "Compute error." or a load that fails with its reason), the
    backend's log carries "the device refused … for the pool", and **the
    backend's pid is the same afterwards**;
-3. free the card: the same model answers, with no load in between (its
+3. the pool is every model's (the architecture session): one RERANKER
+   request on the filled card — refused the same way, its backend's pid
+   unchanged; the chat model runs the same code;
+4. free the card: the same model answers, with no load in between (its
    weights never left), and its vectors are the bytes of before;
-4. the engine's own checks as for any engine (the series' tests, the
-   encoders' gates): nothing of a computation changes.
+5. it is a new build, so a new engine and a new run: before it serves,
+   each space gates on it once, as at the cut-over — preflight `louise hold
+   embedder cpu-reference --check`, then the gates — and its ordinary
+   outputs are byte for byte c3294e050ff2's, the sixteen fingerprints
+   equal: nothing of a computation changes.
+
+Order (the architecture session): the build and the card test on the
+operator's word, then the gates, and only then may page mode be weighed.
 
 Until it is in the live engine, `make_room = "page"` stays off (step 0 of
 §3's list).
