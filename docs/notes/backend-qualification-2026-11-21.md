@@ -759,6 +759,38 @@ the engine does not have (`llama-moe-cache.cpp` sizes its slots at load): a
 patch, with `cpu_moe`'s costs. (a) is one more row on the node, on the
 operator's word to München.
 
+**The operator, later the same morning: `GGML_SYCL_USM_SYSTEM` with a
+history of page use, for preloading and for swapping — an opinion asked.**
+What is read from the engine: the switch puts buffers of 4 GiB and more in
+plain host memory and the card reads them through shared virtual memory;
+its documentation calls it experimental and asks for an Xe2 card (the B70 is
+one), Linux, a kernel built with `CONFIG_DRM_XE_GPUSVM`, and "enough host
+memory for model weights and caches"; the engine gives the driver no hint
+about those buffers today (no prefetch, no advice); and its expert cache
+already counts each expert's use with a half-life (`llama-moe-cache.cpp`,
+"CRF"), in memory only. What follows is design, not measurement:
+- it fits the model: an expert of the 35B is about 3 MB, a page 2 MiB, so
+  residency by page is nearly residency by expert; a page is in host memory
+  OR on the card, never both (the cache duplicates, and holds 19.3 GiB);
+  and the graph is the plain resident one, so what is on the card should
+  run at the resident speed, not the cache's;
+- the history should be the engine's own count of expert use, which is
+  exact, not a record of page faults: saved with the model at unload, read
+  at load to bring the dense weights and the most-used experts to the card
+  before the first token (as much as the keeper allows), and read again
+  when the keeper needs room, to push the least-used experts back to host
+  memory while the model keeps answering;
+- unknown, and only the node can say, in this order: whether the driver
+  reports the capability (the node's kernel); whether the 35B then answers
+  at about 100 tok/s once warm and what the first touches cost; what the
+  driver itself evicts under pressure (likely by age of arrival, not by
+  use — the reason the engine should choose); and whether user space can
+  move a page each way on demand (to the card by touching or prefetching it
+  from a kernel, back by reading it from the CPU: how Linux device memory
+  behaves as I know it, NOT verified on xe here).
+Order: the one-row test of the switch as it is; the history is worth
+building only if that row runs at resident speed.
+
 | configuration that fit | sum MiB | free MiB | host RAM | refusals |
 |---|---|---|---|---|
 | | | | | |
