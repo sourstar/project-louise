@@ -273,10 +273,24 @@ the range. Seconds on the engine's own clock, from the backend process's
   (1.3 and 2.4 GiB/s): not explained.
 - **2.0 s of every load pass before the engine is asked anything:** the
   backend listens, and LocalAI's load call reaches it 2.0 s later, the same
-  for both models. No engine work is in it. If it is LocalAI's wait for a
-  new backend to answer, it comes off EVERY cold load by a setting or a
-  small patch, parking or not, and is done first. To be read in LocalAI's
-  source; nothing here says what it is.
+  for both models. No engine work is in it. IT IS A POLL'S SLEEP (the Tensor
+  session, from LocalAI's source, 2026-11-24): `spawnGRPCModel`
+  (pkg/model/initializers.go) checks the new backend's health the instant
+  it has spawned it, before the process has bound its port, then sleeps
+  `grpcAttemptsDelay` whole seconds and checks again; the defaults are 20
+  attempts and 2 s (pkg/model/loader_options.go), the same on upstream's
+  master. Read from the source; that the WHOLE 2.0 s is this sleep is
+  inferred, and LocalAI's own debug lines around the loop, or a copy with
+  the key below at 1, would make it a reading.
+  - What controls it: the model's YAML only, `grpc: attempts` and
+    `attempts_sleep_time`, in whole seconds, 1 at least (0 reads as unset).
+    No node-wide setting.
+  - It is paid by every cold load of every backend LocalAI spawns, so also
+    by every load after an eviction. A parked model does not pay it (no
+    spawn); the cold loads that remain do.
+  - The fix is a server patch: poll every ~50 ms for the first seconds,
+    then as today; about 1.9 s off every cold load. The YAML key at 1 takes
+    1 s off with no build. Neither is built: the operator's choice.
 - **The part after the buffers is as large as the start, and it is the
   warm-up run alone** (the engine's "empty run"), read line by line in one
   load of each: 1.685 s of qwen's 1.77 s and 2.934 s of MADLAD's 3.12 s,
@@ -309,6 +323,12 @@ the card was NOT otherwise empty, one live backend held 2.5 to 4.4 GB):
   of weights on the card: 1,312 MiB of card and 880 of GTT, so 735 MiB
   beyond its weights.
 
+The two figures are not counted twice across a process's two DRM clients
+(München's check: the card's own counter gives 334 and 1,337 MiB for the
+same processes by difference, and a live backend's second client holds 68
+MiB and shares nothing). Why the bge-m3 copy idles at 1,312 MiB when the
+keeper counts the live one at 621 is open.
+
 So a parked process costs between 0.3 GiB (the first never computed on the
 card) and 0.7 GiB (what the second holds beyond its weights, unless a park
 also frees the engine's pools). Ten parked models are 3 to 7 GiB of the
@@ -327,10 +347,10 @@ many models a node serves; step 1 reads the real one.
 WHAT STEP 0 SAYS SO FAR (§5.2): go, and the gain is smaller than the totals
 suggested. Parking takes a 4.5 s load to between 0.45 and 2.3 s, and a 7 s
 load to between 0.9 and 3.9 s; where in that range is the rewrite at first
-use, which step 1 times. Before step 1, two readings of the source that
-cost nothing (asked of Tensor, 2026-11-24): what LocalAI does in the 2.0 s
-before its load call, and what a process's first compute on the card is
-made of. Still to measure: a load beside a working encoder (2), a
+use, which step 1 times. Before step 1: LocalAI's poll sleep, 2.0 s of every
+cold load, is the operator's choice (§5.2), and it pays with or without
+parking; and one reading of the source asked of Tensor, what a process's
+first compute on the card is made of. Still to measure: a load beside a working encoder (2), a
 question's timeline on the live engine (3).
 
 Each step is a deploy of its own. Each can stop there and still be worth
@@ -372,8 +392,10 @@ Existing tools, and why they are not the answer by themselves:
   the card (0.3 to 0.7 GiB each, §5.2): whether a park frees the engine's
   pools, and whether several models could share one process's device
   context, which is not LocalAI's shape today.
-- The 2.0 s between a backend's "Server listening" and LocalAI's load call
-  (§5.2): what it is, and whether a setting removes it.
+- LocalAI's poll sleep (§5.2): left, halved by a key in each model's YAML,
+  or removed by a server patch. With the operator.
+- The bge-m3 copy's idle size on the card, twice the keeper's figure for
+  the live model (§5.2).
 - The chat model's prompt cache across a park.
 - Page mode once parking exists: kept as the fallback for a backend that
   cannot park, or retired.
