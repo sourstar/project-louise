@@ -61,7 +61,7 @@ inside LocalAI's automatic upgrades until München switched those off
 | **A. The same engine, a second package** | LocalAI's omnivoice backend built by OUR build, on our Intel stack, with `GGML_SOURCE_DIR` set to our patched llama.cpp's ggml and omnivoice.cpp pinned in the series file | no code to write or carry — two build arguments; our SYCL fixes and switches reach speech; pinned and qualified with the engine; nothing upgrades behind us; findings 1–3 say it works | LocalAI still lists two backends; a second image to build at each engine change |
 | **B. One binary** | a LocalAI patch that links omnivoice.cpp's library into the llama.cpp backend and sends an OmniVoice load and its TTS calls to it | literally one backend package; everything of A | a carried patch of roughly 500–700 lines, with hooks in `grpc-server.cpp`'s load and speech paths — the file every rebase so far has had to re-anchor; upstream LocalAI would not take it (it has a backend for this); no memory saved (finding 6) |
 | **C. A native model** | change the speech model to one llama.cpp runs itself — Qwen3-TTS is the candidate | one backend today with NO patch; follows upstream for free | a different voice: a listening comparison in Italian and English, the admin's recorded voice re-done through its cloning, 10 languages instead of 646, its size and speed on the B70 unmeasured |
-| **D. A port into llama.cpp** | OmniVoice written into llama.cpp's own audio generation | the cleanest end state, upstreamable | 13,800 lines to port, and MaskGIT's parallel decoding does not fit the server's token-by-token speech slots without new plumbing; not checked whether upstream has it in progress |
+| **D. A port into llama.cpp** | OmniVoice written into llama.cpp's own audio generation | the cleanest end state, upstreamable | 13,800 lines to port, and MaskGIT's parallel decoding does not fit the server's token-by-token speech slots without new plumbing; nobody has proposed it upstream (§5) |
 | the status quo | LocalAI's image as installed | nothing to do | an engine nobody here builds, pins or qualifies; no P5 |
 
 ## 4. Recommendation
@@ -79,3 +79,47 @@ the same build; the model file's `backend` changed; the old image retired.
 What C takes first: Qwen3-TTS (`ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF`)
 loaded as a test copy on our engine, the same three texts, the operator's
 ear.
+
+## 5. What D would bring, and where upstream stands (2026-11-24)
+
+Checked on llama.cpp's tracker: **no issue or pull request proposes
+OmniVoice.** What exists: the audio-output plan in libmtmd (#21956, by
+ngxson, completed 2026-11-06 with Chatterbox's support), and the primitives
+OmniVoice needs, upstreamed by omnivoice.cpp's own author
+(ServeurpersoCom): COL2IM_1D on the CPU (#24206), CUDA and SYCL (#25264),
+the fused snake activation on CUDA and Vulkan (#22667, #22855). The pieces
+are in; the model is not, and its author serves it from his own
+`tts-server`.
+
+What D brings that A, B and C do not:
+- one backend with NO LocalAI patch: LocalAI's llama.cpp backend already
+  sends a speech call to llama.cpp's native audio generation, so an
+  OmniVoice model would load there like Qwen3-TTS does;
+- the same voice: OmniVoice itself, its 646 languages, its cloning and voice
+  design (C changes the model);
+- if upstream takes it, nothing to carry at all — it follows every bump;
+- speech under the same server as everything else: streaming, the
+  OpenAI-compatible speech route, the engine's load check and switches in
+  one place.
+
+What it does not bring: memory (one process per model either way), speed
+(the same kernels), or anything the listener hears.
+
+What it costs: omnivoice.cpp's 13,800 lines re-expressed in libmtmd — the
+bidirectional backbone with MaskGIT's 32-step parallel decoding, which the
+server's speech slots (built for token-by-token models) have no loop for;
+the DAC decoder; HuBERT, the semantic encoder and the DAC encoder for
+cloning; the duration estimator and long-form chunking; a GGUF layout of
+llama.cpp's own, so new model files; a parity suite against omnivoice.cpp
+(the comparison of §2 finding 2, on the card). Until upstream merges it, it
+is a carried llama.cpp patch far larger than any in the series (the
+nemotron reranker's port is 190 lines). And upstream's rules put the review
+on the submitter: every line explained by a person, no AI-written
+description — as for the context-on-demand material.
+
+So D is worth it only as an upstream contribution, and the person best
+placed to make it is omnivoice.cpp's author, who already lands its
+primitives there. The cheap move is to ask him (an issue on omnivoice.cpp
+or llama.cpp: "OmniVoice in libmtmd?") and take A meanwhile; D done here
+alone would be the most expensive way to remove one line from LocalAI's
+backend list.
