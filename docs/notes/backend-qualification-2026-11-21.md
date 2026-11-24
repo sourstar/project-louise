@@ -912,6 +912,42 @@ load; the least used given back when the keeper asks). Everything on the
 card after twenty questions, or neighbours that die — the idea ends there,
 and the history can still serve the cache (the table's third row).
 
+**FIRST READINGS (München, 2026-11-24 ~13:00Z, on the operator's "Go"; the
+run still going, the full rows to follow).** Engine
+`louise-sycl-f16-llama-cpp-271bff744c28-stack-7c301a7ba437` (the series +
+staged 0012; built 12:20–12:39Z, it compiles).
+
+| step | the driver's video memory | host MemAvailable | time, speed |
+|---|---|---|---|
+| the load | 2.3 → 3.3 GiB for 80 s: the weights stay in HOST memory, as written | 24.5 → about 5 GB, lowest 4.8 | — |
+| the first answer | 3.3 → 8.3 → 14.4 → 21.3 → **21.7 GiB in about 30 s** | back to 23 GB | first token 110.8 s after the load began |
+| five answers, the fixed prompt | 21,567–21,691 MiB (the process's counters 3,204 / 714) | | first token 0.247–0.273 s, 93.6–97.3 tok/s (100.4 resident) |
+
+The five texts all differ from copy A's — sensible Italian in another
+wording: the expert kernels on the plain layout round otherwise, and the
+sampling follows.
+
+**What it says, on the first answer already: the whole model is on the card
+after ONE answer.** The load does what the patch meant; the use does not,
+and not for a reason in the engine: a prompt of 128 tokens makes 128
+selections in every layer, and between them they name almost every expert.
+The tuner's figure said as much — a cache holding 30 % of the experts
+still missed 10 % of the reads: the less-used experts are read all the
+time, each a little. A page is the wrong unit for that. Without a policy
+that takes pages back, by-use paging ends where resident starts, after 111
+s instead of 8 and with the host at 4.8 GB on the way; with one, every
+prompt would page the cold two thirds in again at the 2.4–3.4 GiB/s
+measured for coming back (S5). The engine's cache answers a miss ON THE
+CPU, from host memory, moving nothing — which is why it holds 84 tok/s
+with a third of the experts on the card.
+
+So, provisionally (rows 4–8 still to come): **paging the experts by use is
+not the way to hold fewer of them on the card; the cache is.** The usage
+history keeps its use there (the choices table's third row: the cache
+warm from its first answer). The room for the rest of the set comes from
+the context on demand on every model and from paging whole idle models
+instead of unloading them.
+
 | configuration that fit | sum MiB | free MiB | host RAM | refusals |
 |---|---|---|---|---|
 | | | | | |
