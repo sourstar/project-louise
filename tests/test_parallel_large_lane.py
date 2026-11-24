@@ -148,7 +148,7 @@ def test_a_pool_that_times_out_defers_the_large_row_instead_of_parsing_it_here(f
     pool = _Pool()
     pool.raise_on = "e:1"
     monkeypatch.setattr(parallel, "pool", lambda: pool)
-    monkeypatch.setattr(parallel, "_note_failure", lambda e, ex=None: None)
+    monkeypatch.setattr(parallel, "_note_failure", lambda e, ex=None, **kw: None)
     got = parallel.compute("chunks", _coll(), _rows([1, BIG, 1]))
     assert got[0] == (True, "e:0") and got[2] == (True, "e:2"), "the others computed in-process, as before"
     assert got[1][0] is False and got[1][1]["type"] == "MemoryWait"

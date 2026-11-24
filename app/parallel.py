@@ -104,6 +104,14 @@ class _Executor(ProcessPoolExecutor):
 DISCARD_WAIT_S = 5.0
 
 
+def _hms() -> str:
+    """The time a line of the pool's own is printed, as the worker's log lines
+    carry it. On 2026-11-24 the line of the timeout that froze the node had
+    neither a time nor a collection: its hour had to be worked out from a
+    thread's CPU time, and its stage from a stack."""
+    return time.strftime("%H:%M:%S")
+
+
 def discard(ex: ProcessPoolExecutor, wait_s: float = DISCARD_WAIT_S) -> None:
     """Stop an executor whose answers nobody will read: its children
     TERMINATED until its manager thread has ended, then its queue
@@ -146,7 +154,7 @@ def discard(ex: ProcessPoolExecutor, wait_s: float = DISCARD_WAIT_S) -> None:
             break
         manager.join(0.02)
     if manager is not None and manager.is_alive():
-        print(f"[parse pool] a stopped pool's manager is still waiting after {wait_s:.0f} s",
+        print(f"{_hms()} [parse pool] a stopped pool's manager is still waiting after {wait_s:.0f} s",
               file=sys.stderr, flush=True)
     ex.shutdown(wait=False, cancel_futures=True)
 
@@ -291,7 +299,7 @@ def each_part(fn, tasks: list[tuple], *, limit: int | None = None):
                 _raise_if_killed(f"{len(tasks) - taken} part(s) of {getattr(fn, '__name__', fn)} unanswered", e)
                 nxt = taken                 # the unanswered go again
                 n //= 2
-                print(f"[parse pool] a child was killed: {len(tasks) - taken} part(s) go again "
+                print(f"{_hms()} [parse pool] a child was killed: {len(tasks) - taken} part(s) go again "
                       + (f"on {n} process(es)" if n > 1 else "in this process"),
                       file=sys.stderr, flush=True)
                 ex = (ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
@@ -359,7 +367,7 @@ def each_part_unordered(fn, tasks: list[tuple], *, limit: int | None = None):
                 inflight.clear()
                 _raise_if_killed(f"{len(todo)} part(s) of {getattr(fn, '__name__', fn)} unanswered", broken)
                 n //= 2
-                print(f"[parse pool] a child was killed: {len(todo)} part(s) go again "
+                print(f"{_hms()} [parse pool] a child was killed: {len(todo)} part(s) go again "
                       + (f"on {n} process(es)" if n > 1 else "in this process"), file=sys.stderr, flush=True)
                 ex = (ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
                                           initializer=watch_parent)
@@ -609,7 +617,7 @@ def recycle_for_room(name: str | None, own_slots: int = 0) -> int:
             return 0
         ex, n, _pool, _pool_size = _pool, _pool_size, None, 0
     discard(ex)
-    print(f"[parse pool] its {n} children stopped: what they kept held the room a "
+    print(f"{_hms()} [parse pool] its {n} children stopped: what they kept held the room a "
           f"{name} part needed; the next batch starts fresh ones", file=sys.stderr, flush=True)
     return n
 
@@ -653,7 +661,7 @@ def _retry_due() -> bool:
             return True
         _disabled = False
         _failures = max(0, int(config.PARSE_MAX_FAILURES) - 1)
-    print(f"[parse pool] children again after {_disabled_for(_disabled_times):.0f} s off: on probation "
+    print(f"{_hms()} [parse pool] children again after {_disabled_for(_disabled_times):.0f} s off: on probation "
           f"(one more failure and they are off for {_disabled_for(_disabled_times + 1):.0f} s)",
           file=sys.stderr, flush=True)
     return True
@@ -674,7 +682,7 @@ def _note_success() -> None:
 
 
 def _note_failure(exc: BaseException, ex: ProcessPoolExecutor | None = None, *,
-                  killed: bool = False) -> None:
+                  killed: bool = False, where: str = "") -> None:
     """A pool that did not answer: rebuild it, and give up on children
     entirely if it keeps happening. Printed, not log_event'd — this module
     has no manifest connection, and the worker's stdout IS the log.
@@ -685,8 +693,9 @@ def _note_failure(exc: BaseException, ex: ProcessPoolExecutor | None = None, *,
     the pool that replaced it."""
     global _failures, _disabled, _disabled_until, _disabled_times
     if ex is not None and ex in _discarded:
-        print(f"[parse pool] {type(exc).__name__} from a pool already stopped: "
-              f"computing this batch's unanswered parts in-process", file=sys.stderr, flush=True)
+        print(f"{_hms()} [parse pool] {type(exc).__name__}{where} from a pool already stopped: this "
+              f"batch's parts in flight are parsed again in processes of their own, the rest in-process",
+              file=sys.stderr, flush=True)
         return
     shutdown()
     off = 0.0
@@ -701,10 +710,10 @@ def _note_failure(exc: BaseException, ex: ProcessPoolExecutor | None = None, *,
     # what happens to the batch, as it happens (2026-11-20: "computing this
     # batch in-process" was printed for a batch whose child the kernel had
     # killed for memory, which `compute` then held, never computing it here)
-    print(f"[parse pool] {type(exc).__name__}: "
+    print(f"{_hms()} [parse pool] {type(exc).__name__}{where}: "
           + ("a child killed for memory: the batch is NOT computed again (the worker is held) "
-             if killed else "the parts that answered kept, the others computed in-process "
-                            "(a heavy document deferred) ")
+             if killed else "the parts that answered kept, those in flight parsed again in processes "
+                            "of their own, the rest computed in-process (a heavy document deferred) ")
           + f"(failure {failures} of {config.PARSE_MAX_FAILURES})"
           + (f"; children OFF for {off:.0f} s, then on probation" if off else ""),
           file=sys.stderr, flush=True)
@@ -1643,7 +1652,7 @@ def _compute_heavy(kind: str, collection, rows: list[dict]) -> list[tuple[bool, 
     out = _compute(kind, collection, rows)
     got = _give_back()
     if got is not None and got[0] - got[1] >= TRIM_SAY_BYTES:
-        print(f"[parse pool] child {os.getpid()} gave back {(got[0] - got[1]) / 2 ** 20:.0f} MB after "
+        print(f"{_hms()} [parse pool] child {os.getpid()} gave back {(got[0] - got[1]) / 2 ** 20:.0f} MB after "
               f"a {kind} part of {sum(int(r.get('size') or 0) for r in rows) / 2 ** 20:.1f} MB "
               f"({got[0] / 2 ** 30:.2f} -> {got[1] / 2 ** 30:.2f} GB resident)", file=sys.stderr, flush=True)
     return out
@@ -1935,7 +1944,7 @@ def _isolated(kind: str, collection, parts: list[list[dict]], k: float,
         if light:
             groups.append([part[ri] for ri in light])
             where.append((pi, light))
-    print(f"[parse pool] {name}: {sum(len(g) for g in groups)} document(s) of {len(groups)} part(s) were in "
+    print(f"{_hms()} [parse pool] {name}: {sum(len(g) for g in groups)} document(s) of {len(groups)} part(s) were in "
           f"flight: parsed again in processes of their own, {ISOLATE_AT_ONCE} at a time, none in this one",
           file=sys.stderr, flush=True)
     failed = 0
@@ -1948,7 +1957,7 @@ def _isolated(kind: str, collection, parts: list[list[dict]], k: float,
             _gone_alone[_row_key(collection, row)] = None
             while len(_gone_alone) > GONE_ALONE_KEPT:
                 _gone_alone.popitem(last=False)
-        print(f"[parse pool] {name}: document {row.get('uid')} did not come back from a process of its own "
+        print(f"{_hms()} [parse pool] {name}: document {row.get('uid')} did not come back from a process of its own "
               f"within {bound:.0f} s: an error on it", file=sys.stderr, flush=True)
 
     def rest(answer: Callable[[dict], tuple[bool, object]]) -> None:
@@ -1977,7 +1986,7 @@ def _isolated(kind: str, collection, parts: list[list[dict]], k: float,
     except Stopped:
         rest(lambda row: _stopped_rows([row])[0])
     except _CannotIsolate as e:
-        print(f"[parse pool] {name}: no process of its own could be started ({e})", file=sys.stderr, flush=True)
+        print(f"{_hms()} [parse pool] {name}: no process of its own could be started ({e})", file=sys.stderr, flush=True)
         why = ("in flight when the parse pool failed, and no process of its own could be started: asked "
                "again, never parsed in the worker's own process")
         rest((lambda row: cannot([row])[0]) if cannot is not None
@@ -2295,7 +2304,8 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
         futures.clear()
         for give_back in lanes:
             give_back()
-        _note_failure(e, ex, **({"killed": True} if kill is not None else {}))
+        _note_failure(e, ex, where=f" in {kind} of {getattr(collection, 'name', collection)}",
+                      **({"killed": True} if kill is not None else {}))
         if kill is not None:
             # its rows are not parsed again here, where they would kill the
             # worker itself (2026-11-19: 43 kills in a day)
@@ -2373,7 +2383,7 @@ def _submit(ex, kind, collection, part):
     try:
         return ex.submit(_compute_heavy, kind, collection, part)
     except RuntimeError as e:
-        _note_failure(e, ex)
+        _note_failure(e, ex, where=f" in {kind} of {getattr(collection, 'name', collection)}")
         return None
 
 
@@ -2542,7 +2552,8 @@ def compute_pages(kind: str, collection, pages, *, stop=None, say=None):
                         mine -= 1
                         _occupy(name, -1)
                 from . import oom_hold
-                _note_failure(e, owner.get(fut), **({"killed": True} if oom_hold.killed() is not None else {}))
+                _note_failure(e, owner.get(fut), where=f" in {kind} of {getattr(collection, 'name', collection)}",
+                              **({"killed": True} if oom_hold.killed() is not None else {}))
                 owner.clear()
                 _raise_if_killed(f"{kind} of {getattr(collection, 'name', collection)}", e)
                 # what finished is kept. What was IN FLIGHT and not answered is
