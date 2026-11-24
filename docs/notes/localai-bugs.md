@@ -1,7 +1,7 @@
 # LocalAI: every action item for the LocalAI team
 
 *One place for everything this project owes or asks `mudler/LocalAI`: the
-defects found (B1–B18), the patches we carry (P1–P8, more staged), and the requests (R1–R5).
+defects found (B1–B18), the patches we carry (P1–P8, more staged), and the requests (R1–R6).
 The operator files them upstream. Started 2026-10-02 while mapping LocalAI
 against the model pool (`model-pool-prior-art.md`@c572c3b); the patches and
 requests come from `model-pool-over-localai.md`@c572c3b, accepted
@@ -141,6 +141,7 @@ the source):*
 | R3 | request | read API keys from a file, not only from `LOCALAI_API_KEY` | only if LocalAI's own UI is published (invariant 8) | not filed |
 | R4 | request | admission by declared memory, priority eviction, refusal instead of overcommit (opt-in), eviction aware of other processes' memory, restore after quiet | availability; what the model pool gives up at the cut-over | not filed; #5352 is the nearest open issue |
 | R5 | request | a strict mode: LocalAI fills in no load option the model's YAML leaves unset — no GGUF guess, no hardware tuning, no app-wide setting — or says, per option, where each value came from | settings changed in LocalAI's UI would otherwise give runs nobody asked for; we pin instead (model-pool-over-localai.md@c572c3b §10) | not filed |
+| R6 | request, a patch to come | the readiness poll after a backend is spawned: LocalAI checks `Health` at once, before the process has bound its port, then sleeps `grpc.attempts_sleep_time` (default 2, whole seconds) before it looks again — about 2 s of every cold load of every spawned backend, with no work in them | 2.01–2.07 s between the backend's "Server listening" and LocalAI's load call, the same for qwen3-embedding-4b and MADLAD (München, 2026-11-24); every load after an eviction pays it | not filed; the patch is built with the parking work (operator, 2026-11-24, relayed by München: "Patch localAI when clockwork is implemented") |
 
 A global compile-cache directory was considered and is **not to be filed**
 (operator, 2026-10-02): the per-model caches already exist (§ at the end).
@@ -1807,6 +1808,42 @@ the app-wide settings. Ask for either:
 
 Until then the model pool's models pin every such field
 (`model-pool-over-localai.md`@c572c3b §10).
+
+### R6. The readiness poll costs every cold load two seconds
+
+Found 2026-11-24 from a load timed line by line on the node
+(`models-beyond-the-card.md` §5.2): the llama.cpp backend prints "Server
+listening" and LocalAI's `LoadModel` reaches it 2.01–2.07 s later, the same
+for a 2.5 GiB encoder and a 6 GiB translator. Read at `v5.0.1`, and the same
+on master that day:
+- `spawnGRPCModel` (`pkg/model/initializers.go` L190–L203) starts the
+  process and loops: `HealthCheck`, and if it is not alive,
+  `time.Sleep(grpcAttemptsDelay × 1 s)`, at most `grpcAttempts` times;
+- the defaults are 20 attempts and a delay of 2 (`pkg/model/loader_options.go`
+  L161–L162); a model's YAML may set them, `grpc: attempts` and
+  `attempts_sleep_time` (`core/config/model_config.go` L1783–L1784), in whole
+  seconds, and 0 reads as unset, so 1 s is the least a file can ask;
+- the first check runs the instant the process is spawned. The client is
+  `grpc.NewClient` (`pkg/grpc/client.go` L83) and the call does not wait for
+  the connection, so a refused loopback connection fails at once: the first
+  check never succeeds, and the second comes a full delay later.
+
+So a backend that listens after 50 ms is found after 2 s. LocalAI's own
+documentation presents the two keys as the window for slow backends
+(attempts × sleep ≈ 40 s); the delay is also the resolution with which a
+fast one is noticed. That the whole 2.0 s is this sleep is inferred from the
+source; a copy with `attempts_sleep_time: 1` would make it a reading (the
+gap falls to about 1 s, or it is not the poll).
+
+The patch to come, in `spawnGRPCModel` alone: the wait between two checks
+starts at a few tens of milliseconds and doubles up to the configured delay,
+inside the same window (attempts × delay) — exponential backoff, no new
+setting, no YAML key. gRPC's own wait-for-ready was looked at and does not do
+it alone: its reconnect backoff starts at 1 s. Not searched upstream yet.
+Decided (operator, 2026-11-24, relayed by München): "Patch localAI when
+clockwork is implemented" — built and swapped with the parking work's
+LocalAI changes (`models-beyond-the-card.md` §6, step 2), one server
+rebuild, and no YAML key meanwhile.
 
 ---
 

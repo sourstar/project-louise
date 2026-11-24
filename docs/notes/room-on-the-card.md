@@ -49,7 +49,14 @@ a separated budget"; cdeea12, on main as #847): the keeper has TWO budgets
 — the weights, each on-demand model counted at what it holds idle (2,737 /
 2,512 / 621 MiB), and beside them one shared context budget of 4,840 MiB,
 the two largest contexts (2,948 + 1,892). Deployed on the operator's word
-to München. With the others opted in: about 3 GiB more (E). At work the set
+to München. **The idle sizes are the engine's before the cut-over**
+(München, 2026-11-24 14:50Z, the process's own counters): the live
+vega-bge-m3, idle with its context freed, holds 897 MiB, not 621 — 577 of
+weights and about 320 beyond them; the keeper's remembered sizes are keyed
+on the model and keep the least ever read, so an engine swap leaves the
+old engine's (models-beyond-the-card.md §5.2, §8). The other two are to be
+read again the same way; until then the sum above is short by what they
+grew, 276 MiB for bge-m3 alone. With the others opted in: about 3 GiB more (E). At work the set
 adds what runs in the same second — 3,262 MiB at most, 2,221 at p95 (M, 24
 h of the card's record, shared-context.md §2), which is the keeper's
 working-memory reserve.
