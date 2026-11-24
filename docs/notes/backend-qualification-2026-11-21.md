@@ -791,6 +791,64 @@ already counts each expert's use with a half-life (`llama-moe-cache.cpp`,
 Order: the one-row test of the switch as it is; the history is worth
 building only if that row runs at resident speed.
 
+**The switch as it is — MEASURED by München, 2026-11-24 08:53–09:11Z, on
+the operator's word ("Test A"); logs `/root/measure/cutover-c3294e/{log.txt,usm/}`.**
+The card reports the capability: the verbose load prints
+`GGML_SYCL_USM_SYSTEM: 1`, no "does not support" line, `SYCL0 model buffer
+size = 20583.34 MiB`.
+
+| | resident (part 1, copy A) | `GGML_SYCL_USM_SYSTEM=1` |
+|---|---|---|
+| load to first token | 8.1 s (file in the page cache) | 70.1, 84.3, 85.0 s |
+| 128-token prompt: first token / prefill / decode | 0.280 s / — / 100.6 tok/s | 0.288 s / 486.2 / 73.5 (median of the first 5); single answers after: 100.7, 101.1, 99.9, 99.6 |
+| 2,048-token prompt | — | 2.480 s / 831.2 / 98.3 |
+| the five answers | — | equal to copy A's, 5 of 5 |
+| card, by the process's own counters (fdinfo) | 21,782 MiB | **3,238 MiB** (+ 434 GTT) |
+| card, by the driver's manager (`…/dri/0000:03:00.0/vram0_mm`) | — | **21,656 MiB** loaded (25 MiB empty), 21,690 after a long answer |
+| backend's resident size | — | 19.5 GB |
+
+Beside other models (part 2's sequence): MADLAD 8.66 s first / 0.34 warm
+and the reranker 7.51 / 0.03, both fine; **the nemotron-embed copy's
+backend exited on load** (`Backend process exited unexpectedly …
+exitCode=-1`, requests 500 then 503 — once, see below); after it the 35B's own counters read
+329 / 3,342 (its ordinary buffers pushed out) and its next answer took
+0.725 s to the first token at 101.1 tok/s, the one after 0.278 s (2.04 s
+with 2 GiB blocks). No kernel line of the abort kind; MemAvailable never
+under 32.7 GB. `vram0_mm` was not read during that sequence, so how many of
+the 35B's pages the driver took back under pressure is NOT measured.
+
+**What it says.** Speed once warm is the resident one — the condition set
+above is met. The saving is not there as the engine loads today, and the
+source says why (`ggml-sycl.cpp`, `ggml_backend_sycl_buffer_set_tensor`):
+the load writes every tensor with a copy that runs ON THE CARD
+(`stream->memcpy`), into a buffer that is host memory, so the card faults
+on every page and the driver moves each one to video memory — the whole
+model, 2 MiB at a time, which is also the 70–85 s. Three things follow:
+- the footprint is the resident one, and the per-process counters miss
+  18.4 GiB of it: anything that budgets from fdinfo (München's
+  `drm_holders`, the keeper) undercounts — the driver's `vram0_mm` is the
+  figure;
+- the 19.5 GB resident size is the same pages counted again, not host
+  memory held besides: MemAvailable was 38,488 MiB before the first load
+  and 37,357 MiB with the copy loaded and answering (München's log) — the
+  load cost the host **about 1.1 GB**. A page moved to a card stays in the
+  process's count;
+- a newcomer was not served by a swap: its backend died while the 35B's
+  pages held the card — ONCE (08:57:34 → 08:57:40; the later refusals were
+  LocalAI's cooldown after a failed load, corrected by München). That copy
+  ran without the switch (`GGML_SYCL_BMG_VRAM_CHECK=0` alone). LocalAI
+  kept only the last line of its stderr, so the cause is NOT known; a
+  failed device allocation is the likely one.
+
+**What would make it do what the operator described** (design, nothing
+measured): write the load from the HOST when the buffer is host memory (a
+plain `memcpy`, ~10 lines in the same function), so that a page reaches
+the card only when a kernel reads it — the dense weights and the experts
+actually used; then the history (above) to choose what to bring first and
+what to give back. Open before any of that is worth an hour: the
+newcomer's exit, and whether the driver gives such pages back to a model
+that asks for ordinary memory.
+
 | configuration that fit | sum MiB | free MiB | host RAM | refusals |
 |---|---|---|---|---|
 | | | | | |
