@@ -823,7 +823,9 @@ of theirs is ever freed; the Nemotron reranker stays on its own backend
   search's check; the gate's fixed keep is sent whatever `/system` says;
 - the keeper counted an on-demand model never seen working at its weights
   (~2 GB short): it now counts as a model never seen (the set's median)
-  until a reading shows it working (`model_load.least_vram`);
+  until a reading shows it working (`model_load.least_vram`; since
+  2026-11-24 its weights are what its process holds at rest,
+  `model_load.idle_vram`: shared-context.md, "the two budgets");
 - one keep test passed vacuously (the refused request was the stream's
   first): it now refuses after an answered request, past the keep, and holds
   the excuse to be counted.

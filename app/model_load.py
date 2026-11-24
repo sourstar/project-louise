@@ -158,8 +158,26 @@ _cpu: dict[str, dict[str, float]] = {}
 #: model AT REST, as its load left it, before a request grows its buffers —
 #: what the resident budget counts (app/resident.py, 2026-11-08)
 _rest: dict[tuple[str, str], int] = {}
-#: (server, model) -> the fewest bytes of ANY reading, REST_FLOOR or not (`least_vram`)
-_least: dict[tuple[str, str], int] = {}
+#: (server, model) -> what the model's process held AT REST, the LATEST time
+#: it was seen so: the same process, the same bytes, not serving, over
+#: AT_REST_SPAN_S of `/system` readings (`idle_vram`). An on-demand model's
+#: WEIGHTS for the resident budget. The latest, not the fewest: a wrong
+#: figure (a model partly off the card, a context held) lasts until the next
+#: time it rests, and the wrong side it can stay on is the cautious one.
+#: Until 2026-11-24 the weights were the fewest reading of all, kept for
+#: ever: one taken while the model loaded was remembered as its weights (the
+#: node: nemotron-3-embed-1b counted 2,229 MiB, 2,513 at rest)
+_idle: dict[tuple[str, str], int] = {}
+#: (server, model) -> (pid, bytes, when) of the reading its present state began with
+_anchor: dict[tuple[str, str], tuple[int | None, int, float]] = {}
+#: a model is at rest once its process has held the same bytes, without serving,
+#: for this long: a load passes through its sizes in under a second each (the
+#: node, 2026-11-24: weights in 0.2–0.8 s, the warm-up run 1.5–3.5 s, serving)
+AT_REST_SPAN_S = 5.0
+#: a backend over this (percent) is serving (= app/model_evict.py BUSY_CPU_PERCENT)
+QUIET_CPU_PERCENT = 5.0
+#: the clock the span is counted on (a test's own)
+_rest_clock = time.monotonic
 #: = app/resident.py REST_FLOOR (that module's reasons; kept here, where the
 #: readings are taken, so neither module imports the other at load)
 REST_FLOOR = 0.5
@@ -200,7 +218,8 @@ def reset() -> None:
         _held.clear()
         _cpu.clear()
         _rest.clear()
-        _least.clear()
+        _idle.clear()
+        _anchor.clear()
         _seen.clear()
         _on_demand.clear()
         _run_on_demand.clear()
@@ -264,9 +283,14 @@ def _fetch_system(server: str) -> frozenset[str] | None:
                 _on_demand[(server, m)] = listed[m]
             else:
                 _on_demand.pop((server, m), None)     # this listing cannot say
+        t = _rest_clock()
         for k, v in sizes.items():
             _sizes[k] = max(v, _sizes.get(k, 0))
-            _least[k] = min(v, _least.get(k, v))
+            pid, a = pids.get(k[1]), _anchor.get(k)
+            if cpu.get(k[1], 0.0) > QUIET_CPU_PERCENT or a is None or a[0] != pid or a[1] != v:
+                _anchor[k] = (pid, v, t)       # serving, another process, or bytes that moved
+            elif t - a[2] >= AT_REST_SPAN_S:
+                _idle[k] = v
             # a reading under REST_FLOOR of the largest: the model partly off
             # the card (app/resident.py REST_FLOOR, 2026-11-09), not at rest
             floor = REST_FLOOR * _sizes[k]
@@ -354,12 +378,13 @@ def size_vram(server: str, model: str) -> int | None:
         return _sizes.get((server_of(server), model))
 
 
-def least_vram(server: str, model: str) -> int | None:
-    """The fewest bytes ANY `/system` reading of this process gave `model`,
-    REST_FLOOR or not — for a model loaded with `context_on_demand`, its
-    weights alone (app/resident.py: has it been seen working?)."""
+def idle_vram(server: str, model: str) -> int | None:
+    """The bytes `model`'s backend process held AT REST, the latest time
+    `/system` showed it so (`_idle`). For a model loaded with
+    `context_on_demand`, its weights. None when this process never saw it at
+    rest."""
     with _lock:
-        return _least.get((server_of(server), model))
+        return _idle.get((server_of(server), model))
 
 
 def rest_vram(server: str, model: str) -> int | None:

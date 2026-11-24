@@ -595,3 +595,48 @@ def test_nothing_is_loaded_behind_a_caller_where_nothing_is_known(monkeypatch):
     assert model_load.warm_behind(SERVER, "m", warm, caller="c") is True
     assert model_load.warm_behind(SERVER, None, warm, caller="c") is True
     assert calls == []
+
+
+# --- a model at rest (the node, 2026-11-24) ---------------------------------------------
+
+def test_a_models_weights_are_read_only_from_a_process_at_rest(monkeypatch):
+    """The node, 2026-11-24: nemotron-3-embed-1b was counted at 2,229 MiB, a
+    reading taken on its way to its 2,513, kept for ever as "the fewest". A
+    model is at rest when the SAME process has held the SAME bytes, without
+    serving, for AT_REST_SPAN_S; what it holds then is the figure, the latest
+    time it was seen so."""
+    mib = 2 ** 20
+    row = {"size": 0, "pid": 7, "cpu": 0.0}
+    clock = {"t": 1_000.0}
+
+    def get(url, timeout=None, **_kw):
+        return httpx.Response(200, request=httpx.Request("GET", url), json={"loaded_models": [
+            {"id": "nemo", "size_vram": row["size"],
+             "process": {"pid": row["pid"], "cpu_percent": row["cpu"]}}]})
+    model_load.reset()
+    monkeypatch.setattr(model_load, "_fetch_system", REAL_FETCH)
+    monkeypatch.setattr(model_load.httpc, "get", get)
+    monkeypatch.setattr(model_load, "_rest_clock", lambda: clock["t"])
+
+    def read(size_mib: int, *, after: float, pid: int = 7, cpu: float = 0.0) -> int | None:
+        clock["t"] += after
+        row.update(size=size_mib * mib, pid=pid, cpu=cpu)
+        model_load.loaded_models(SERVER, max_age_s=0.0)
+        got = model_load.idle_vram(SERVER, "nemo")
+        return None if got is None else got // mib
+
+    assert read(2_229, after=0.0) is None, "loading: a reading on its way up"
+    assert read(2_513, after=0.4) is None, "its weights, just reached"
+    assert read(2_513, after=2.0) is None, "the same bytes, not yet for the span"
+    assert read(2_513, after=model_load.AT_REST_SPAN_S) == 2_513, "at rest: its weights"
+    assert read(4_404, after=1.0, cpu=180.0) == 2_513
+    assert read(4_404, after=60.0, cpu=180.0) == 2_513, "the same bytes while SERVING are not a rest"
+    assert read(2_229, after=1.0) == 2_513, "one reading under them says nothing"
+    assert read(2_513, after=1.0) == 2_513
+    # a reload is another process: the bytes of two processes never add up to a rest,
+    # and the new one's first rest REPLACES the figure, upward as well as downward
+    assert read(2_600, after=60.0, pid=8) == 2_513
+    assert read(2_600, after=60.0, pid=9) == 2_513, "another process again: not at rest"
+    assert read(2_600, after=model_load.AT_REST_SPAN_S, pid=9) == 2_600, "the latest rest"
+    model_load.reset()
+    assert model_load.idle_vram(SERVER, "nemo") is None

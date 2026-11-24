@@ -823,10 +823,13 @@ def _rest_size(r: Resident, mem: Memory) -> int | None:
         # Until 2026-11-24 it counted at its running size (the review of
         # 2026-11-12): the three on the node were counted 5,554 MiB above what
         # they held, and that many MiB of weights stayed off the card.
-        got = [v for v in (mem.rest.get(r.key), model_load.rest_vram(r.server, r.model),
-                           model_load.least_vram(r.server, r.model))
-               if _whole(v, largest, ON_DEMAND_REST_FLOOR)]
-        return min(got) if got else largest
+        # ITS WEIGHTS ARE WHAT ITS PROCESS HELD AT REST (`model_load.idle_vram`),
+        # the file's where this process has not seen it at rest. Never the
+        # fewest reading of all (until 2026-11-24): a reading taken while a
+        # model loads is under its weights and over the floor, and it stayed
+        # for ever (the node: nemotron 2,229 MiB counted, 2,513 at rest).
+        weights = _weights(r.server, r.model, mem, largest)
+        return weights if weights else largest
     got = [v for v in (mem.rest.get(r.key), model_load.rest_vram(r.server, r.model)) if _whole(v, largest)]
     return min(got) if got else largest
 
@@ -836,6 +839,18 @@ def _whole(rest: int | None, largest: int | None, floor: float = REST_FLOOR) -> 
     ON_DEMAND_REST_FLOOR for a model that idles at its weights) of the most
     it was seen holding (none known: taken as it is)."""
     return bool(rest) and (not largest or rest >= floor * largest)
+
+
+def _weights(server: str, model: str, mem: Memory, largest: int | None) -> int | None:
+    """An on-demand model's weights on the card: what its backend process held
+    the latest time this process saw it at rest (`model_load.idle_vram`),
+    else what the file remembers; None when neither is a reading of the
+    model whole."""
+    from app import model_load
+    for v in (model_load.idle_vram(server, model), mem.rest.get((server, model))):
+        if _whole(v, largest, ON_DEMAND_REST_FLOOR):
+            return v
+    return None
 
 
 def _rest_floor(server: str, model: str) -> float:
@@ -1049,7 +1064,7 @@ def _held_now(servers: Iterable[str], mem: Memory) -> dict[tuple, int] | None:
     """Every model the set's runners hold, {(model, pid) or (server, model):
     (its bytes AT REST, its bytes in this reading, the context it makes on
     demand — 0 for one that keeps its own, or whose context was never seen)}
-    — at rest: the fewest of this reading, this process's and the file's —
+    — at rest: the fewest of this reading and what is known of it at rest —
     read fresh; None when one cannot say or gives no sizes."""
     from app import model_load
     out: dict[tuple, tuple[int, int, int]] = {}
@@ -1064,8 +1079,9 @@ def _held_now(servers: Iterable[str], mem: Memory) -> dict[tuple, int] | None:
             # context is the shared budget's, taken out of the sample by the
             # caller (`_remember`), never counted in the model and in the margin
             floor = _rest_floor(s, m)
-            whole = [v for v in (size, mem.rest.get((s, m)), model_load.rest_vram(s, m))
-                     if _whole(v, largest, floor)]
+            known = ((_weights(s, m, mem, largest),) if floor != REST_FLOOR
+                     else (mem.rest.get((s, m)), model_load.rest_vram(s, m)))
+            whole = [v for v in (size, *known) if _whole(v, largest, floor)]
             # a model partly off the card counts whole: what it will hold again once used
             rest = (min(whole) if whole else largest) if size else 0
             context = (_context_size(Resident(s, m, (), ()), mem) or 0) if size else 0
@@ -1155,12 +1171,18 @@ def _remember(want: list[Resident]) -> Memory:
                 continue
             largest = mem.sizes.get(r.key)
             floor = _rest_floor(r.server, r.model)
-            # an on-demand model's weights are its fewest reading of all (kept
-            # in the file too: a restart counts it at its weights at once)
-            for v in (model_load.rest_vram(r.server, r.model),
-                      model_load.least_vram(r.server, r.model) if floor != REST_FLOOR else None):
-                if _whole(v, largest, floor) and v < mem.rest.get(r.key, v + 1):
+            if floor != REST_FLOOR:
+                # an on-demand model's weights: what its process held the
+                # latest time it rested, REPLACING what the file had (a restart
+                # counts it at its weights at once; a wrong figure lasts until
+                # the next time it rests, never for ever)
+                v = model_load.idle_vram(r.server, r.model)
+                if _whole(v, largest, floor) and v != mem.rest.get(r.key):
                     mem.rest[r.key] = v
+                continue
+            v = model_load.rest_vram(r.server, r.model)
+            if _whole(v, largest, floor) and v < mem.rest.get(r.key, v + 1):
+                mem.rest[r.key] = v
         if card is not None and card[0] != mem.total:
             mem.total = card[0]
         if sample is not None:
