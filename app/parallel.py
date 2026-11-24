@@ -524,10 +524,20 @@ def _compute_bounded(kind: str, collection, rows: list[dict], allowance: int | N
 
 
 def _lane_executor() -> ProcessPoolExecutor:
-    """One process, one task, gone after it."""
-    return ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"),
-                               initializer=_child_init, initargs=(_knobs(), _base_nice()),
-                               max_tasks_per_child=1)
+    """One process, one task, gone after it.
+
+    THE POOL'S OWN CLASS (`_Executor`), since 2026-11-24. Its child retires
+    after its one task, and its executor is let go of the moment the answer
+    is read (`shutdown(wait=False)`: `_processes` is None from there). 3.12's
+    manager thread then asks the executor to replace the retired child, and
+    the standard library's `_adjust_process_count` reads `len(None)`: a
+    TypeError in the manager thread, which dies before it closes the
+    executor's queues. München, the live worker: 80 tracebacks in fifteen
+    minutes, one a large part, in a slice of packages of figures. `_Executor`
+    leaves an executor that is shut down alone, as 3.13 does."""
+    return _Executor(max_workers=1, mp_context=multiprocessing.get_context("spawn"),
+                     initializer=_child_init, initargs=(_knobs(), _base_nice()),
+                     max_tasks_per_child=1)
 
 
 class _LaneTask:
