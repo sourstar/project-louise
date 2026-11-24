@@ -123,3 +123,28 @@ primitives there. The cheap move is to ask him (an issue on omnivoice.cpp
 or llama.cpp: "OmniVoice in libmtmd?") and take A meanwhile; D done here
 alone would be the most expensive way to remove one line from LocalAI's
 backend list.
+
+## 6. The operator chose D (2026-11-24: "Go with option D")
+
+OmniVoice is ported into llama.cpp's own audio generation, carried as a
+patch of the series until upstream has it. The work, in stages, each with
+its gate:
+
+1. **Design**: how the model maps onto libmtmd — the backbone, MaskGIT's
+   parallel decoding, the DAC decoder, the cloning encoders, the duration
+   estimate, the model files. Written here before code.
+2. **Synthesis from text** in the engine's tree (llama.cpp 78e0529 with the
+   series' patches), built on the CPU: `llama-tts` writes a WAV.
+3. **The parity gate**: the same model files, text, seed and steps through
+   the port and through omnivoice.cpp built on the same ggml — the audio
+   compared sample by sample. Bar: identical, or one-unit differences
+   explained; byte-identical across runs. Nothing goes further until it
+   holds.
+4. **Cloning, voice design, long texts; the server's speech route.**
+5. **The series**: the patch, its tests, its entry in localai-bugs.md, the
+   model file for LocalAI's llama.cpp backend; then the card, by München:
+   phase 0's three clips on the B70 against today's backend, speech cut
+   over, the omnivoice backend retired.
+
+Until stage 5's card checks pass, speech stays on today's backend: nothing
+on the node changes.
