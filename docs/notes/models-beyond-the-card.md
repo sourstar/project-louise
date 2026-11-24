@@ -14,7 +14,12 @@ The operator, 2026-11-24:
   to llama.cpp";
 - on the scenario: "Heavy parsing/indexing/embedding like now is not the
   scenario for clockwork; its scenario is no data ingestion/processing,
-  only serving queries on an unloaded system".
+  only serving queries on an unloaded system";
+- on production: "My idea in production is to run the data ingestion at
+  night only and serve the queries during the day. The data fetching can
+  run 24h with a limited bandwidth during the day"; and, of the node as it
+  runs now: "Keep the current mix, I told you about the production scenario
+  for you to understand the scenario for clockwork".
 
 ## 1. What it is for
 
@@ -44,6 +49,20 @@ question in hand has to fit. The use cases this opens:
 Heavy ingestion beside the questions (parsing, indexing, embedding) is not
 this note's scenario. It keeps today's rules: corpus work stands aside for a
 question, and the keeper's two budgets decide what is preloaded.
+
+IN PRODUCTION THAT NODE IS THE DAY (operator, 2026-11-24): ingestion runs at
+night only; by day the node answers questions and only fetches, on a limited
+bandwidth. The day is this note's scenario; the night keeps the two budgets.
+It is stated to fix the scenario and is NOT switched on: the node keeps its
+current mix (operator, the same day). Nothing is to be built for it, the
+settings exist: `[schedule] profile`, a profile's `mode = "acquire-only"`
+(app/node_profile.py) and `[budget] schedule` (app/transfer/schedule.py).
+Two things follow for this design, both for the day the plan is switched on:
+- by day no document is embedded, so an encoder that only embeds documents
+  need not be on the card: the keeper could leave it parked;
+- the room for parked weights is the DAY's host RAM, which is not the paused
+  node's: the idle parse pool may keep its children's memory while nothing
+  parses. Not measured (§5, item 4).
 
 ## 2. The standard: Clockwork
 
@@ -185,7 +204,9 @@ rest is not known today.
 4. **The host RAM a serving node has for parked weights.** Measured
    2026-11-24: 28.6 GB available with the node paused, against about 25.5
    GB of weights for everything loaded today. (Under heavy ingestion it fell
-   to 4.7 GB: not this scenario.)
+   to 4.7 GB: not this scenario.) On the production day (fetching only, the
+   parse pool idle) it is not measured: the paused node's figure is the
+   nearest one held.
 5. **What a parked process still holds on the card:** its device context
    and compiled kernels, with no weights. Not measured: LocalAI stops a
    backend's process when it unloads, so no such process exists today. The
