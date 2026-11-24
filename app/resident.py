@@ -850,7 +850,9 @@ def _whole(rest: int | None, largest: int | None, floor: float = REST_FLOOR) -> 
 #: (app/rage/keep.py), and the model then holds its weights AND its context,
 #: steadily. 10 s is past every keep (2 s at most), past the 5 s between two
 #: writes of a model's last use, and past the parts of a load (the node,
-#: 2026-11-24: weights in 0.2–0.8 s, the warm-up run in 1.5–3.5 s).
+#: 2026-11-24: weights in 0.2–0.8 s, the warm-up run in 1.5–3.5 s). A model
+#: whose requests leave no such record is judged on its bytes alone, and is
+#: counted with its context while it works: the cautious side.
 AT_REST_S = 10.0
 #: (server, model) -> what its process held the LATEST time this process saw
 #: it at rest (`_note_rested`). The latest, not the fewest: a wrong figure (a
