@@ -148,6 +148,42 @@ collection touched.
    query_under_load.py`'s idle run) with the set resident; `GET /system`,
    the driver and host RAM every minute; any eviction, refusal or kill.
 
+**Arm S — the driver's swap (operator, 2026-11-24: "can't a memory swap
+occur as-is and the model be reloaded as-is, like if it was just idle in the
+meantime?" — "Yes, add it to the POC").** The same set with the 35B RESIDENT
+(no `cpu_moe`) and nothing evicted: what does not fit is left to the `xe`
+driver, which moves an idle model's buffers to host RAM and back at its next
+request, the process alive throughout. Never timed on this node (the
+estimate: 0.4–0.9 s for a model of MADLAD's size, 1.3–2.7 s for the 35B,
+from the measured 16.2 GiB/s upload). Test copies, node paused, web stopped
+(Louise's room-maker would otherwise unload models), every model of the arm
+pinned in LocalAI or its reclaimer held off for the window (München's
+choice, recorded), and `GGML_SYCL_BMG_VRAM_CHECK=0` in the env of the
+llama.cpp copies (the check refuses a load onto a full card).
+- **Guards.** Start only with MemAvailable ≥ 22 GB (the set is about 43 GiB
+  on a 31.9 GiB card: ~11 GiB goes to the host). ABORT, unload everything
+  and record, on any of: an `xe` error, engine reset or DEVICE_LOST line in
+  dmesg; an OOM line; MemAvailable under 4 GB.
+- **S1, the load.** The order of the fit step, then the 35B. After each
+  load: every process's VRAM and GTT (fdinfo, summed over its DRM clients),
+  the card's used, MemAvailable, the ARC — who was pushed out, and how much.
+- **S2, the swap, timed.** One warm-sized request to each model in turn, in
+  an Ask's order (query encoder → reranker → MADLAD → the 35B → omnivoice),
+  three rounds: the request's wall time against the same request's warm
+  time alone (phases 3 and 4) — the difference is the swap-in — with the
+  model's VRAM and GTT before and after, and which process gave the room.
+  Then the 35B twice running: the second must be warm (no thrash).
+- **S3, the comparison.** Fifteen minutes of the Ask loop in this
+  arrangement: seconds per loop and per step, the 35B's decode tok/s, set
+  beside the offloaded arm's loop.
+- **S4, the cliff, once and bounded.** A nemotron batch while the 35B
+  answers the 2k prompt: both figures; under a quarter of the alone figure
+  is the cliff, recorded, the pair stopped.
+- Then everything unloaded, pins and settings restored, the GTT back at its
+  baseline, the live set reloaded.
+If the window is short, S1 and S2 come first: the measured swap time is the
+one number nobody has.
+
 ### Phase 6 — the report (below), and the cut-over decision
 
 The engine is ADOPTED for production when: every encoder's gate passes
@@ -836,4 +872,6 @@ model's reference. No collection waits. The order stands: architecture's
 7f118736 and its check, then the cut-over's window.
 
 **After it**: phase 5, the POC, on the adopted engine — the live set as it
-is, the 35B as the only test copy in place of the 9B — in a later window.
+is, the 35B as the only test copy in place of the 9B — in a later window. Two arms
+(§2 phase 5): the 35B offloaded with its cache, and arm S, the 35B resident
+with the driver swapping idle models to host RAM.
