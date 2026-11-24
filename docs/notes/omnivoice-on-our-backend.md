@@ -491,6 +491,12 @@ the backbone, the heads and the decoder are the card's, and what stays on
 the host — the scoring, and the clip's encoding on every sentence — is what
 a sentence of two or three seconds would notice. That is where the changes
 went, and why the line ships: München's run gives this table on the B70.
+Read in the engine, not measured: a step's batch (371–616 rows) is wider
+than the card's quantized kernels take (8, 32 and 80 columns —
+`MMVQ_MAX_BATCH_SIZE`, `MMQ_MAX_BATCH_SIZE`, `GGML_SYCL_XMX_MAX_COLS`), so
+the weights go the way a chat model's prompt does
+(`ggml_sycl_op_mul_mat_sycl`: dequantize and gemm): the card's backbone
+seconds are to be read against a 0.6B model's prompt rate there.
 
 **The changes** — each with the audio unchanged byte for byte (the sentence
 against the gated file on 2 and 4 threads; the clip's sentence against the
