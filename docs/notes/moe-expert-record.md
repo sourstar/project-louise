@@ -65,6 +65,7 @@ maintained by use instead of by hand.
 | the record's own test (`tests/test-moe-record.cpp`, standard library only) | 29 checks: the choice of experts and its ties, the decay by layer, the file read back, other weights and another build refused, a file cut at ANY byte or with ANY byte changed refused, noise, NaN and negative scores refused, written whole or not at all |
 | it compiles | g++ (the CPU build of the whole candidate source) and Intel's compiler 2025.3.3 (`libllama` with the patch) |
 | it applies in the build's order | after the port, the three fixes, parking and its switch: the candidate's engine source |
+| the fill's CHOICES, without a device (`tools/measure/moe_record_replay.py`, §6) | its cold replay equals llama.cpp's own simulator (`scripts/moe-cache-tune.py` `replay()`), and its cold and filled replays equal the ENGINE's own `moe_cache_lru` and `llama_moe_record`, extracted from the candidate's source and driven as the cache drives them: 40 random cases, one and two groups, caches from a tenth of the experts to all of them; one case kept as the test's golden figures |
 | the fill and the seeded eviction | NOT RUN. The cache needs a card beside the host (it refuses to be created without one), and none of the stand-ins tried here could give one: the engine's SYCL device discovery refuses the CPU device, and a software Vulkan device needed a downloaded compiler binary that this session is not permitted to run |
 
 ## 4. What it should bring, and what would make it not worth having
@@ -92,3 +93,37 @@ question at temperature 0 with a fixed seed, `verbosity: 4`.
 What decides: the first token and the first 64 tokens of C against A, C's
 load against A's (the fill moved there), and the misses of C's first
 answer.
+
+## 6. Before the engine is swapped: the node's own routing, replayed
+
+The live engine already writes what the record would have been built from:
+`LLAMA_MOE_CACHE_TRACE=<file>` in the model's env gives, per lookup, the
+layer and the experts selected (no text). The file is opened anew by every
+context, so each answer's file is moved aside after its unload. Then, with
+no engine and no card:
+
+    python3 -I tools/measure/moe_record_replay.py --mib 8192 answer1.trace answer2.trace answer3.trace other-language.trace
+
+Each file is one load. Per load after the first it prints the experts
+uploaded under the first 16 / 64 / 256 tokens and in all, three ways:
+`cold` (today), `filled` (0017 as built: each expert seeded with the
+eviction rank its record gives it) and `flat` (the same fill, every expert
+seeded as if used once). The last file, on another subject, is the case of
+a WRONG record.
+
+It is uploads, not seconds: what an upload costs under a token is §5's.
+
+**The seeding is the open choice it settles.** On synthetic routing (a cache
+a third the size of its experts, an eighth of a layer selected per token —
+NOT the 35B's routing):
+
+| seeding | pros | cons |
+|---|---|---|
+| the record's rank (0017 as built) | a rightly guessed expert holds its slot through the cache's turnover: 12–20 % of the first 64 tokens' uploads removed | a wrongly guessed one holds it too: on another subject 24 % MORE uploads than a cold cache under the first 64 tokens, 8 % more to the end of the answer |
+| flat, as one use | a wrong guess is the first to go: another subject costs what a cold cache does (within 1 %) | less removed on the record's own subject: 8–13 % |
+| no record (today) | nothing to decide | every load makes its uploads under its first tokens |
+
+Recommended: let the node's four traces choose. If `filled` costs more than
+`cold` on the fourth file and `flat` does not, 0017 takes the flat seed — one
+line, which renames the engine; so the replay is read before the candidate's
+gates are spent, not after. The record stays off (no env line) until then.
