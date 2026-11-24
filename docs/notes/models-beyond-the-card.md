@@ -571,8 +571,9 @@ asks for.
 only one backend"). The next live engine is ONE candidate series: the live
 series, 0012–0014 as tonight, the OmniVoice port (0009 with the clip's
 entry, 0010), parking (0015, off) and its test switch (0016, off), the
-experts' record (0017, off). Candidate 5f926f4efa04 is built and installed
-beside the live one (München, 23:00Z); the separate prototype engine was
+experts' record (0017, off). Candidate 5f926f4efa04 was built and
+installed beside the live one (München, 23:00Z) and re-cut the same hour as
+b190673dbdbf (below, the record's fill); the separate prototype engine was
 not built. On the node, each a pass of its own:
 
 | step | what | done when |
@@ -623,6 +624,12 @@ counts only, on the node only; the proof is the same tokens at temperature
 0 with and without the record, with no miss computed on the CPU. First
 replay (München, 23:00Z): the record removes 40–55 % of the first 64
 tokens' uploads on the next answers, one in another language included.
+The same trace showed the fill uploading the WHOLE 8 GB cache inside every
+load, so 0017 gained a switch of its own (`LLAMA_MOE_RECORD_FILL`; unset:
+the record orders the cache and fills nothing ahead) and the candidate was
+re-cut (b190673dbdbf at 012e00e). What a full fill adds to a load, against
+what it saves at the first tokens, is the fourth figure of its measurement
+and decides the switch.
 
 **§6's step 3a is built** (`question_card.load_ahead`, #865); its AFTER is
 München's.
