@@ -123,8 +123,23 @@ TREE_TIMEOUT_S = 30.0
 #: this long for the hash. 8 GB hash in about 5 s from a warm SSD (model-pool-over-
 #: localai.md@c572c3b §8.3); half an hour is a disk that is failing.
 WEIGHTS_TIMEOUT_S = 1800.0
-#: A stop lets the call in progress finish within this, as LocalAI's backends do.
-GRACE_S = 30.0
+#: A stop is OVER within this: the call in progress, then the backend. Under the
+#: 15 s after which LocalAI kills a backend it stopped: its stop SIGTERMs the
+#: backend's process GROUP, polls for the pid it started, and SIGKILLs the group
+#: after its process library's GracefulTimeout (mudler/go-processmanager v0.2.0,
+#: 15 s by default; LocalAI v5.0.1 sets none and has no setting for it). At 30 s
+#: the wrapper was the pid LocalAI still saw at its kill.
+GRACE_S = 12.0
+#: A stop by signal first lets the backend LEAVE ON ITS OWN for this long.
+#: LocalAI's stop reaches the engine as well as the wrapper, so the engine has
+#: been told already when the wrapper gets to it, and a SECOND signal is
+#: llama.cpp's "Received second interrupt, terminating immediately": an exit
+#: inside its handler, which hung with the card still held on 3 of 14 unloads,
+#: until LocalAI killed the lot 15 s later (the node, 2026-11-24: 15.06–15.12 s
+#: against 0.11–0.21 s). An engine told once left within 0.21 s, 22 times of
+#: 22. One that has not left by this is told then: its first signal if nobody
+#: told it, the second, meant as one, if it is stuck in its cleanup.
+OWN_EXIT_S = 2.0
 #: AN INPUT COMPUTED IN MORE THAN ONE PASS (operator, 2026-11-12: "for future
 #: trimming improvements we should gracefully log when a text is splitted"):
 #: llama.cpp computes an input in passes of the load's ubatch. Every answer's
@@ -1487,12 +1502,21 @@ class Child:
     def alive(self) -> bool:
         return self.proc.poll() is None
 
-    def stop(self, grace: float = GRACE_S) -> None:
+    def stop(self, grace: float = GRACE_S, own_exit_s: float = 0.0) -> None:
+        """`own_exit_s`: how long a backend that was told already is left to
+        go by itself before it is signalled (`OWN_EXIT_S`)."""
         if self.proc.poll() is not None:
             return
+        own = min(max(0.0, own_exit_s), grace)
+        if own > 0:
+            try:
+                self.proc.wait(timeout=own)
+                return
+            except subprocess.TimeoutExpired:
+                pass
         self.proc.terminate()
         try:
-            self.proc.wait(timeout=grace)
+            self.proc.wait(timeout=max(0.0, grace - own))
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait()
@@ -2421,11 +2445,14 @@ class Running:
     gate: Gate
     port: int
 
-    def stop(self, grace: float = GRACE_S) -> None:
+    def stop(self, grace: float = GRACE_S, own_exit_s: float = 0.0) -> None:
+        """The whole stop within `grace`: what the call in progress took of it
+        is not given again to the backend."""
+        end = time.monotonic() + grace
         self.server.stop(grace).wait()
         self.channel.close()
         self.gate.receipts.close()
-        self.child.stop(grace)
+        self.child.stop(max(0.0, end - time.monotonic()), own_exit_s)
 
 
 def serve(cfg: Config, address: str, *, pb: Any, interceptors: Iterable[Any] = (),
@@ -2500,7 +2527,8 @@ def main(argv: list[str] | None = None) -> int:
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
     stop.wait()
-    running.stop(GRACE_S)
+    # a signal that stopped this process reached the backend too (`OWN_EXIT_S`)
+    running.stop(GRACE_S, OWN_EXIT_S)
     return code[0]
 
 
