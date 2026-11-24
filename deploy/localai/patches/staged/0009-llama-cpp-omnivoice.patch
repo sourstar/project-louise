@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
-Date: Tue, 24 Nov 2026 07:46:57 +0000
+Date: Tue, 24 Nov 2026 08:16:22 +0000
 Subject: [PATCH] feat(llama-cpp): speak with OmniVoice on llama.cpp's own
  audio generation
 MIME-Version: 1.0
@@ -16,30 +16,31 @@ Qwen3-TTS and the others. Nothing in LocalAI's own sources changes.
 
 The patch adds the architecture `omnivoice` to libllama (the backbone: Qwen3
 layers read in both directions, no KV cache), the projector type `omnivoice`
-to libmtmd (the audio heads and the codec decoder), the pipeline to
-mtmd-helper (the 32 decoding steps, long texts, post-processing), and
+to libmtmd (the audio heads and the codec decoder) with an audio encoder
+beside it for voice clips, the pipeline to mtmd-helper (the 32 decoding
+steps, cloning, described voices, long texts, post-processing), and
 vendors omnivoice.cpp's host-side rules unchanged (MIT). Its description
 gives the detail, and the one deliberate difference from omnivoice.cpp: the
 sequences are masked as the reference model masks them, where omnivoice.cpp
 adds its mask to the attention scores.
 
-STAGED: synthesis from text is built and gated on the CPU against
-omnivoice.cpp step by step (docs/notes/omnivoice-on-our-backend.md, §7.4 and
-§8, in the Louise repository). Voice cloning, voice design and the card come
-before it joins the series.
+STAGED: synthesis from text, from a voice clip and from a described voice
+is built and gated on the CPU against omnivoice.cpp step by step
+(docs/notes/omnivoice-on-our-backend.md, §7.4, §8 and §9, in the Louise
+repository). The card comes before it joins the series.
 
 Assisted-by: Claude Code
 ---
- .../patches/0012-mtmd-omnivoice.patch         | 5267 +++++++++++++++++
- 1 file changed, 5267 insertions(+)
+ .../patches/0012-mtmd-omnivoice.patch         | 5757 +++++++++++++++++
+ 1 file changed, 5757 insertions(+)
  create mode 100644 backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
 
 diff --git a/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch b/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
 new file mode 100644
-index 0000000..f589a33
+index 0000000..8db0d14
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
-@@ -0,0 +1,5267 @@
+@@ -0,0 +1,5757 @@
 +mtmd: speak with OmniVoice (k2-fsa/OmniVoice), text to speech by masked generative decoding
 +
 +OmniVoice is a Qwen3-0.6B read in both directions that fills the 8 codebooks
@@ -73,10 +74,23 @@ index 0000000..f589a33
 +  schedule are host code; a long text is cut into chunks, the first one is
 +  the voice of the next ones. cfg_scale and flow_steps set the guidance and
 +  the number of steps.
++- voice cloning: the mmproj also has an audio encoder, the projector type
++  `omnivoice_spkenc`. Its preprocessor lays a clip out at 24 kHz and at 16 kHz
++  (omnivoice.cpp's resampler); its graph is the codec's encoder - HuBERT and
++  a conv stack for the semantic half, a DAC encoder for the acoustic half, 8
++  residual codebooks - and returns one backbone row per frame, the sum of
++  the embeddings of its codes. The pipeline prepares the clip as the
++  reference does (level, silences), puts its rows before the target frames
++  and its transcript before the text, and gives the audio the clip's level.
++- voice design: the text model's "tts" chat template puts a description of
++  the voice ("female, young adult, british accent") before the text, between
++  <|instruct_start|> and <|instruct_end|>; the pipeline holds it to the
++  vocabulary the model was trained on (omnivoice.cpp's table) and refuses
++  the rest.
 +- vendor/omnivoice: omnivoice.cpp's host-side rules, unchanged (MIT): language
 +  names, the duration estimate, the chunking of long texts, post-processing,
-+  and Philox4x32-10 (the generator of torch.rand on CUDA, the noise of the
-+  decoding).
++  the resampler, the vocabulary of voice descriptions, and Philox4x32-10
++  (the generator of torch.rand on CUDA, the noise of the decoding).
 +- MTMD_DEBUG_OMNIVOICE=<dir> dumps the prompt, each step and the codes of the
 +  first chunk in omnivoice.cpp's dump format, to compare the two step by step
 +  (the codes themselves cannot be compared: the decoding is chaotic under
@@ -85,7 +99,8 @@ index 0000000..f589a33
 +The model files are omnivoice.cpp's two GGUFs repacked (names and metadata,
 +no weight touched): a text model (-m) and an mmproj (-mm).
 +
-+Not yet: voice cloning from a clip, voice design, streaming by chunk.
++Not yet: a chunk of a long text delivered as soon as it is decoded (the
++audio comes in one piece, as Kokoro's does).
 +---
 +diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
 +index c2ecc31..5e28f3d 100644
@@ -341,10 +356,10 @@ index 0000000..f589a33
 + target_compile_features   (mtmd PRIVATE cxx_std_17)
 + 
 +diff --git a/tools/mtmd/models/models.h b/tools/mtmd/models/models.h
-+index e5e568b..c2adaa1 100644
++index e5e568b..c2a9df9 100644
 +--- a/tools/mtmd/models/models.h
 ++++ b/tools/mtmd/models/models.h
-+@@ -258,6 +258,33 @@ struct mtmd_graph_chatterbox : mtmd_graph_chatterbox_base {
++@@ -258,6 +258,51 @@ struct mtmd_graph_chatterbox : mtmd_graph_chatterbox_base {
 +     ggml_cgraph * build_vocoder(int n_mel, int n_stft);
 + };
 + 
@@ -375,15 +390,33 @@ index 0000000..f589a33
 ++    ggml_cgraph * build_dec();
 ++};
 ++
+++// OmniVoice reference clip -> one backbone row per codec frame, see models/omnivoice.cpp
+++struct mtmd_graph_omnivoice_spkenc : mtmd_graph {
+++    mtmd_graph_omnivoice_spkenc(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+++    ggml_cgraph * build() override;
+++
+++  private:
+++    ggml_tensor * tensor(const std::string & name) const;
+++    ggml_tensor * snake(const std::string & name, ggml_tensor * x) const;
+++    ggml_tensor * conv(ggml_tensor * w, ggml_tensor * b, ggml_tensor * x, int stride, int pad, int dilation) const;
+++    ggml_tensor * conv(const std::string & name, ggml_tensor * x, int stride, int pad, int dilation, bool bias = true) const;
+++    ggml_tensor * linear(const std::string & name, ggml_tensor * x) const;
+++    ggml_tensor * layer_norm(const std::string & name, ggml_tensor * x) const;
+++    ggml_tensor * res_unit(const std::string & name, ggml_tensor * x, int dilation) const;
+++    ggml_tensor * hubert(ggml_tensor * audio) const;
+++    ggml_tensor * semantic(ggml_tensor * x) const;
+++    ggml_tensor * acoustic(ggml_tensor * audio) const;
+++};
+++
 + struct mtmd_graph_kokoro : mtmd_graph {
 +     enum stage_type {
 +         STAGE_TEXT, // tokens -> text encoder CNN
 +diff --git a/tools/mtmd/models/omnivoice.cpp b/tools/mtmd/models/omnivoice.cpp
 +new file mode 100644
-+index 0000000..d7f3c3c
++index 0000000..ef3baa8
 +--- /dev/null
 ++++ b/tools/mtmd/models/omnivoice.cpp
-+@@ -0,0 +1,117 @@
++@@ -0,0 +1,343 @@
 ++#include "models.h"
 ++
 ++// OmniVoice (k2-fsa/OmniVoice): what the mmproj holds, the backbone being the text model (src/models/omnivoice.cpp)
@@ -501,11 +534,325 @@ index 0000000..f589a33
 ++    }
 ++    GGML_ABORT("invalid omnivoice stage");
 ++}
+++
+++//
+++// reference clip -> codes -> backbone rows (voice cloning)
+++//
+++// The codec's encoder, as in omnivoice.cpp: HuBERT reads the clip at 16 kHz and a small conv stack turns the mean of
+++// its 13 hidden states into semantic features (768 per frame); a DAC encoder reads it at 24 kHz (256 per frame); a
+++// linear layer joins the two and 8 residual codebooks quantize the result. The row of a frame is the sum of the
+++// embeddings of its 8 codes, what the backbone reads for a frame of audio.
+++//
+++
+++ggml_tensor * mtmd_graph_omnivoice_spkenc::tensor(const std::string & name) const {
+++    const auto it = model.cbx_tensors.find(name);
+++    if (it == model.cbx_tensors.end() || !it->second) {
+++        throw std::runtime_error("omnivoice: missing tensor " + name);
+++    }
+++    return it->second;
+++}
+++
+++ggml_tensor * mtmd_graph_omnivoice_spkenc::snake(const std::string & name, ggml_tensor * x) const {
+++    ggml_tensor * t = ggml_mul(ctx0, x, tensor(name + ".alpha"));
+++    t = ggml_sin(ctx0, t);
+++    t = ggml_sqr(ctx0, t);
+++    t = ggml_mul(ctx0, t, tensor(name + ".inv_b"));
+++    return ggml_add(ctx0, x, t);
+++}
+++
+++// x: [T, IC], w: [K, IC, OC], returns [T_out, OC]
+++ggml_tensor * mtmd_graph_omnivoice_spkenc::conv(ggml_tensor * w, ggml_tensor * b, ggml_tensor * x, int stride, int pad, int dilation) const {
+++    ggml_tensor * y = ggml_conv_2d_direct(ctx0,
+++            ggml_reshape_4d(ctx0, w, w->ne[0], 1, w->ne[1], w->ne[2]),
+++            ggml_reshape_4d(ctx0, x, x->ne[0], 1, x->ne[1], 1), stride, 1, pad, 0, dilation, 1);
+++    y = ggml_reshape_2d(ctx0, y, y->ne[0], y->ne[2]);
+++    return b ? ggml_add(ctx0, y, ggml_reshape_2d(ctx0, b, 1, b->ne[0])) : y;
+++}
+++
+++ggml_tensor * mtmd_graph_omnivoice_spkenc::conv(const std::string & name, ggml_tensor * x, int stride, int pad, int dilation, bool bias) const {
+++    return conv(tensor(name + ".weight"), bias ? tensor(name + ".bias") : nullptr, x, stride, pad, dilation);
+++}
+++
+++// x: [C_in, T]
+++ggml_tensor * mtmd_graph_omnivoice_spkenc::linear(const std::string & name, ggml_tensor * x) const {
+++    return ggml_add(ctx0, ggml_mul_mat(ctx0, tensor(name + ".weight"), x), tensor(name + ".bias"));
+++}
+++
+++// over the channels of each frame, x: [C, T]
+++ggml_tensor * mtmd_graph_omnivoice_spkenc::layer_norm(const std::string & name, ggml_tensor * x) const {
+++    x = ggml_norm(ctx0, x, 1e-5f);
+++    return ggml_add(ctx0, ggml_mul(ctx0, x, tensor(name + ".weight")), tensor(name + ".bias"));
+++}
+++
+++// DAC residual unit: x + conv2(snake2(conv1(snake1(x)))), kernel 7 then 1
+++ggml_tensor * mtmd_graph_omnivoice_spkenc::res_unit(const std::string & name, ggml_tensor * x, int dilation) const {
+++    ggml_tensor * h = snake(name + ".snake1", x);
+++    h = conv(name + ".conv1", h, 1, 3 * dilation, dilation);
+++    h = snake(name + ".snake2", h);
+++    h = conv(name + ".conv2", h, 1, 0, 1);
+++    return ggml_add(ctx0, x, h);
+++}
+++
+++// audio [T, 1] at 16 kHz -> features [768, T_s], 25 per second
+++ggml_tensor * mtmd_graph_omnivoice_spkenc::hubert(ggml_tensor * audio) const {
+++    static constexpr int strides[7] = { 5, 2, 2, 2, 2, 2, 2 };
+++    static constexpr int n_head = 12, n_group = 16, n_layer = 12;
+++    const std::string p = "a.spk.hubert.";
+++
+++    // feature extractor: 7 strided convs (320 samples per frame), the first one normalized per channel over time
+++    ggml_tensor * x = audio;
+++    for (int i = 0; i < 7; i++) {
+++        const std::string q = p + "feature_extractor.conv_layers." + std::to_string(i);
+++        x = conv(q + ".conv", x, strides[i], 0, 1, false);
+++        if (i == 0) {
+++            const int64_t n_t = x->ne[0], n_ch = x->ne[1];
+++            x = ggml_group_norm(ctx0, ggml_reshape_3d(ctx0, x, n_t, 1, n_ch), (int) n_ch, 1e-5f);
+++            x = ggml_reshape_2d(ctx0, x, n_t, n_ch);
+++            x = ggml_mul(ctx0, x, ggml_reshape_2d(ctx0, tensor(q + ".layer_norm.weight"), 1, n_ch));
+++            x = ggml_add(ctx0, x, ggml_reshape_2d(ctx0, tensor(q + ".layer_norm.bias"), 1, n_ch));
+++        }
+++        x = ggml_gelu_erf(ctx0, x);
+++    }
+++
+++    // projection to the encoder width
+++    x = ggml_cont(ctx0, ggml_transpose(ctx0, x)); // [512, T]
+++    x = layer_norm(p + "feature_projection.layer_norm", x);
+++    x = linear(p + "feature_projection.projection", x); // [768, T]
+++    const int64_t n_embd = x->ne[0], n_t = x->ne[1];
+++
+++    // positions: a grouped conv over time (kernel 128, 16 groups), its last output dropped
+++    {
+++        ggml_tensor * w  = tensor(p + "encoder.pos_conv_embed.conv.weight"); // [128, 48, 768]
+++        ggml_tensor * b  = tensor(p + "encoder.pos_conv_embed.conv.bias");
+++        const int64_t n_cg = n_embd / n_group;
+++        ggml_tensor * x3 = ggml_reshape_3d(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, x)), n_t, n_cg, n_group);
+++        ggml_tensor * y  = nullptr;
+++        for (int g = 0; g < n_group; g++) {
+++            ggml_tensor * xg = ggml_view_2d(ctx0, x3, n_t, n_cg, x3->nb[1], (size_t) g * x3->nb[2]);
+++            ggml_tensor * wg = ggml_view_3d(ctx0, w, w->ne[0], n_cg, n_cg, w->nb[1], w->nb[2], (size_t) g * n_cg * w->nb[2]);
+++            ggml_tensor * bg = ggml_view_1d(ctx0, b, n_cg, (size_t) g * n_cg * b->nb[0]);
+++            ggml_tensor * yg = conv(wg, bg, xg, 1, (int) w->ne[0] / 2, 1); // [T + 1, 48]
+++            y = y ? ggml_concat(ctx0, y, yg, 1) : yg;
+++        }
+++        y = ggml_cont(ctx0, ggml_view_2d(ctx0, y, n_t, n_embd, y->nb[1], 0));
+++        y = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_gelu_erf(ctx0, y)));
+++        x = layer_norm(p + "encoder.layer_norm", ggml_add(ctx0, x, y));
+++    }
+++
+++    // 12 post-norm layers; the features are the mean of the 13 states
+++    ggml_tensor * sum = x;
+++    const int64_t d_head = n_embd / n_head;
+++    for (int il = 0; il < n_layer; il++) {
+++        const std::string q = p + "layers." + std::to_string(il);
+++        ggml_tensor * Q = ggml_reshape_3d(ctx0, linear(q + ".attention.q_proj", x), d_head, n_head, n_t);
+++        ggml_tensor * K = ggml_reshape_3d(ctx0, linear(q + ".attention.k_proj", x), d_head, n_head, n_t);
+++        ggml_tensor * V = ggml_reshape_3d(ctx0, linear(q + ".attention.v_proj", x), d_head, n_head, n_t);
+++        Q = ggml_cont(ctx0, ggml_permute(ctx0, Q, 0, 2, 1, 3));
+++        K = ggml_cont(ctx0, ggml_permute(ctx0, K, 0, 2, 1, 3));
+++        V = ggml_cont(ctx0, ggml_permute(ctx0, V, 1, 2, 0, 3));
+++        ggml_tensor * kq = ggml_soft_max(ctx0, ggml_scale(ctx0, ggml_mul_mat(ctx0, K, Q), 1.0f / sqrtf((float) d_head)));
+++        ggml_tensor * h  = ggml_mul_mat(ctx0, V, kq);
+++        h = ggml_reshape_2d(ctx0, ggml_cont(ctx0, ggml_permute(ctx0, h, 0, 2, 1, 3)), n_embd, n_t);
+++        h = linear(q + ".attention.out_proj", h);
+++        x = layer_norm(q + ".layer_norm", ggml_add(ctx0, x, h));
+++
+++        h = linear(q + ".ffn_up", x);
+++        h = linear(q + ".ffn_down", ggml_gelu_erf(ctx0, h));
+++        x = layer_norm(q + ".final_layer_norm", ggml_add(ctx0, x, h));
+++
+++        sum = ggml_add(ctx0, sum, x);
+++    }
+++    ggml_tensor * mean = ggml_scale(ctx0, sum, 1.0f / (float) (n_layer + 1));
+++
+++    // every other frame: 50 -> 25 per second
+++    return ggml_cont(ctx0, ggml_view_2d(ctx0, mean, n_embd, n_t / 2, 2 * mean->nb[1], 0));
+++}
+++
+++// features [T, 768] -> [T, 768]
+++ggml_tensor * mtmd_graph_omnivoice_spkenc::semantic(ggml_tensor * x) const {
+++    const std::string p = "a.spk.sem.";
+++    x = conv(p + "conv", x, 1, 1, 1, false);
+++    for (int ib = 0; ib < 2; ib++) {
+++        const std::string q = p + "conv_blocks." + std::to_string(ib);
+++        for (int ir = 0; ir < 2; ir++) {
+++            const std::string r = q + ".res_units." + std::to_string(ir);
+++            ggml_tensor * h = conv(r + ".conv1", ggml_elu(ctx0, x), 1, 1, 1, false);
+++            h = conv(r + ".conv2", ggml_elu(ctx0, h), 1, 0, 1, false);
+++            x = ggml_add(ctx0, x, h);
+++        }
+++        x = conv(q + ".conv", x, 1, 1, 1);
+++    }
+++    return x;
+++}
+++
+++// audio [T, 1] at 24 kHz -> [T / 960, 256]
+++ggml_tensor * mtmd_graph_omnivoice_spkenc::acoustic(ggml_tensor * audio) const {
+++    static constexpr int strides[5]   = { 8, 5, 4, 2, 3 };
+++    static constexpr int pads[5]      = { 4, 3, 2, 1, 2 };
+++    static constexpr int dilations[3] = { 1, 3, 9 };
+++    const std::string p = "a.spk.enc.";
+++
+++    ggml_tensor * x = conv(p + "conv1", audio, 1, 3, 1);
+++    for (int ib = 0; ib < 5; ib++) {
+++        const std::string q = p + "block." + std::to_string(ib);
+++        for (int ir = 0; ir < 3; ir++) {
+++            x = res_unit(q + ".res_unit" + std::to_string(ir + 1), x, dilations[ir]);
+++        }
+++        x = snake(q + ".snake1", x);
+++        x = conv(q + ".conv1", x, strides[ib], pads[ib], 1);
+++    }
+++    x = snake(p + "snake1", x);
+++    return conv(p + "conv2", x, 1, 1, 1);
+++}
+++
+++ggml_cgraph * mtmd_graph_omnivoice_spkenc::build() {
+++    using g = mtmd_graph_omnivoice;
+++
+++    // the preprocessor hands over one row: the clip at 24 kHz, then at 16 kHz with 160 zeros on each side
+++    ggml_tensor * inp_raw = build_inp_raw(1);
+++    const int64_t n_frames = (inp_raw->ne[0] - 320) / (g::hop + 640);
+++    const int64_t n_24k    = n_frames * g::hop;
+++    const int64_t n_16k    = inp_raw->ne[0] - n_24k;
+++    GGML_ASSERT(n_frames > 0 && inp_raw->ne[0] == mtmd_hparams::omnivoice_spk_n_input((int32_t) n_frames));
+++    ggml_tensor * a24 = ggml_view_2d(ctx0, inp_raw, n_24k, 1, inp_raw->nb[1], 0);
+++    ggml_tensor * a16 = ggml_view_2d(ctx0, inp_raw, n_16k, 1, inp_raw->nb[1], (size_t) n_24k * inp_raw->nb[0]);
+++
+++    ggml_tensor * sem = hubert(ggml_cont(ctx0, a16));                 // [768, T]
+++    sem = semantic(ggml_cont(ctx0, ggml_transpose(ctx0, sem)));      // [T, 768]
+++
+++    // the strided convs give one frame less than HuBERT for some lengths: half a frame of zeros on each side then
+++    int64_t n_ac = n_24k;
+++    for (int i = 0; i < 5; i++) {
+++        static constexpr int k[5] = { 16, 10, 8, 4, 6 }, s[5] = { 8, 5, 4, 2, 3 }, pd[5] = { 4, 3, 2, 1, 2 };
+++        n_ac = (n_ac + 2 * pd[i] - k[i]) / s[i] + 1;
+++    }
+++    a24 = ggml_cont(ctx0, a24);
+++    if (n_ac != sem->ne[0]) {
+++        a24 = ggml_pad_ext(ctx0, a24, g::hop / 2, g::hop / 2, 0, 0, 0, 0, 0, 0);
+++    }
+++    ggml_tensor * ac = acoustic(a24);                                 // [T, 256]
+++    if (ac->ne[0] != sem->ne[0]) {
+++        throw std::runtime_error("omnivoice: the acoustic and semantic encoders disagree on the length of the clip");
+++    }
+++
+++    // [256 + 768, T] -> codec width
+++    ggml_tensor * z = ggml_concat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, ac)), ggml_cont(ctx0, ggml_transpose(ctx0, sem)), 0);
+++    z = linear("a.spk.fc", z);
+++
+++    // residual quantization: nearest entry of each codebook, by 2 e.z - |e|^2; the row of a frame is the sum of the
+++    // embeddings of its 8 codes
+++    ggml_tensor * table = tensor("a.gen.audio_embeddings.weight");
+++    ggml_tensor * out   = nullptr;
+++    for (int k = 0; k < g::n_codebook; k++) {
+++        const std::string q = std::to_string(k);
+++        ggml_tensor * embed = tensor("a.gen.rvq." + q + ".codebook.embed");
+++        ggml_tensor * h     = linear("a.spk.rvq." + q + ".project_in", z);
+++        ggml_tensor * score = ggml_sub(ctx0, ggml_scale(ctx0, ggml_mul_mat(ctx0, embed, h), 2.0f), tensor("a.spk.rvq." + q + ".embed_sq"));
+++        ggml_tensor * idx   = ggml_argmax(ctx0, score);
+++        z = ggml_sub(ctx0, z, linear("a.gen.rvq." + q + ".project_out", ggml_get_rows(ctx0, embed, idx)));
+++
+++        ggml_tensor * rows = ggml_get_rows(ctx0,
+++                ggml_view_2d(ctx0, table, table->ne[0], g::n_code, table->nb[1], (size_t) k * g::n_code * table->nb[1]), idx);
+++        out = out ? ggml_add(ctx0, out, rows) : rows;
+++    }
+++    cb(out, "spk_rows", -1);
+++    ggml_build_forward_expand(gf, out);
+++
+++    return gf;
+++}
++diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
++index 638648a..f12a137 100644
++--- a/tools/mtmd/mtmd-audio.cpp
+++++ b/tools/mtmd/mtmd-audio.cpp
++@@ -4,6 +4,8 @@
++ #include <cfloat>
++ #include <cmath>
++ #include <cstdint>
+++#include <cstdio>
+++#include <cstdlib>
++ #include <cstring>
++ #include <vector>
++ #include <fstream>
++@@ -2260,6 +2262,44 @@ bool mtmd_audio_preprocessor_fish_s2::process(const float * samples, size_t n_sa
++     return mtmd_audio_preprocessor_muse_spark_audio::process(samples, n_samples, output, shape_only);
++ }
++ 
+++//
+++// mtmd_audio_preprocessor_omnivoice
+++//
+++// The codec reads the clip twice: the acoustic encoder at 24 kHz, HuBERT at 16 kHz with 160 zeros on each side.
+++// The resampler is omnivoice.cpp's (the Kaiser-windowed sinc of torchaudio): the codes depend on it.
+++//
+++
+++namespace omnivoice_ref {
+++#include <omnivoice/audio-resample.h>
+++} // namespace omnivoice_ref
+++
+++bool mtmd_audio_preprocessor_omnivoice::process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool /*shape_only*/) const {
+++    const size_t hop = (size_t) hparams.audio_samples_per_token();
+++    const size_t n   = n_samples / hop * hop; // a partial frame at the end is dropped, like the reference
+++    if (n == 0 || n > (size_t) INT32_MAX / 2) {
+++        return false;
+++    }
+++    int n_16k = 0;
+++    float * a16 = omnivoice_ref::audio_resample(samples, (int) n, hparams.audio_sample_rate, 16000, 1, &n_16k);
+++    if (!a16 || (size_t) n_16k != n / 3 * 2) {
+++        free(a16);
+++        LOG_ERR("%s: failed to resample the clip\n", __func__);
+++        return false;
+++    }
+++
+++    mtmd_audio_mel out;
+++    out.n_mel     = 1;
+++    out.n_len     = mtmd_hparams::omnivoice_spk_n_input((int32_t) (n / hop));
+++    out.n_len_org = (int64_t) n_samples;
+++    out.data.assign((size_t) out.n_len, 0.0f);
+++    std::copy(samples, samples + n, out.data.begin());
+++    std::copy(a16, a16 + n_16k, out.data.begin() + n + 160);
+++    free(a16);
+++
+++    output.push_back(std::move(out));
+++    return true;
+++}
+++
++ //
++ // mtmd_audio_preprocessor_vibevoice_asr
++ //
++diff --git a/tools/mtmd/mtmd-audio.h b/tools/mtmd/mtmd-audio.h
++index 117d2bb..df19e40 100644
++--- a/tools/mtmd/mtmd-audio.h
+++++ b/tools/mtmd/mtmd-audio.h
++@@ -140,6 +140,14 @@ struct mtmd_audio_preprocessor_fish_s2 : mtmd_audio_preprocessor_muse_spark_audi
++     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
++ };
++ 
+++// omnivoice reference clip: the 24 kHz waveform cut to whole codec frames, then the same clip at 16 kHz for the
+++// semantic encoder, see mtmd_hparams::omnivoice_spk_n_input()
+++struct mtmd_audio_preprocessor_omnivoice : mtmd_audio_preprocessor {
+++    mtmd_audio_preprocessor_omnivoice(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+++    void initialize() override {}
+++    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+++};
+++
++ // vibevoice: gain to -25 dBFS RMS, without clipping the peak
++ // the RMS is floored at -50 dBFS, so that silence or noise alone is not boosted to full scale
++ double mtmd_audio_vibevoice_gain(double sum_sq, int64_t n_samples, double peak);
 +diff --git a/tools/mtmd/mtmd-graph.cpp b/tools/mtmd/mtmd-graph.cpp
-+index 24469c1..0fb6d12 100644
++index 24469c1..e9e6da5 100644
 +--- a/tools/mtmd/mtmd-graph.cpp
 ++++ b/tools/mtmd/mtmd-graph.cpp
-+@@ -1097,6 +1097,13 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const
++@@ -977,6 +977,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const
++             {
++                 builder = std::make_unique<mtmd_graph_fish_s2_spkenc>(ctx, img);
++             } break;
+++        case PROJECTOR_TYPE_OMNIVOICE_SPKENC:
+++            {
+++                builder = std::make_unique<mtmd_graph_omnivoice_spkenc>(ctx, img);
+++            } break;
++         case PROJECTOR_TYPE_POCKETTTS_GEN:
++             {
++                 const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
++@@ -1097,6 +1101,13 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const
 +                 const int n_frames = params && params->feats ? (int) (params->feats->size() / ctx->model.hparams.projection_dim) : 2;
 +                 builder = std::make_unique<mtmd_graph_soprano>(ctx, img, n_frames);
 +             } break;
@@ -520,10 +867,10 @@ index 0000000..f589a33
 +             {
 +                 // without a stage (warmup), a short decoder graph: 2 frames, 600 samples each, one STFT row per 5 samples
 +diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
-+index ef9cfee..ee95432 100644
++index ef9cfee..d65f3b7 100644
 +--- a/tools/mtmd/mtmd-helper-gen.cpp
 ++++ b/tools/mtmd/mtmd-helper-gen.cpp
-+@@ -7,14 +7,38 @@
++@@ -7,14 +7,39 @@
 + #include <algorithm>
 + #include <cctype>
 + #include <cmath>
@@ -554,6 +901,7 @@ index 0000000..f589a33
 ++#include <omnivoice/duration-estimator.h>
 ++#include <omnivoice/text-chunker.h>
 ++#include <omnivoice/audio-postproc.h>
+++#include <omnivoice/voice-design.h>
 ++} // namespace ov
 ++#if defined(__GNUC__)
 ++#pragma GCC diagnostic pop
@@ -562,7 +910,7 @@ index 0000000..f589a33
 + #ifdef MTMD_INTERNAL_HEADER
 + #error "mtmd-helper is a public library outside of mtmd. it must not include internal headers"
 + #endif
-+@@ -1361,6 +1385,675 @@ private:
++@@ -1361,6 +1386,732 @@ private:
 +     bool sent    = false;
 + };
 + 
@@ -572,7 +920,11 @@ index 0000000..f589a33
 ++//   voice, the target frames) and the unconditional one (the target frames alone); the audio heads of the mmproj
 ++//   turn the states of the target frames into logits, guidance combines the two
 ++// - 32 steps reveal the 8 codebooks of every frame, the most confident first, then the codec decodes them
-++// - a long text is cut into chunks, the first chunk is the voice of the next ones
+++// - a voice clip (inp->speaker_ref, with its transcript in speaker_ref_text) is encoded to codec frames by the audio
+++//   encoder of the mmproj and put before the target frames; without one the model picks a voice
+++// - a voice can be described instead ("female, young adult, british accent"): the "tts" chat template of the text
+++//   model puts the description before the text, between <|instruct_start|> and <|instruct_end|>
+++// - a long text is cut into chunks; without a clip the first chunk is the voice of the next ones
 ++// the rules (text, duration, schedule, scoring, noise, post-processing) are the reference's, see vendor/omnivoice;
 ++// the sequences are masked like the reference masks them (a sequence only sees itself), where omnivoice.cpp adds
 ++// its mask to the attention scores
@@ -589,8 +941,9 @@ index 0000000..f589a33
 ++        chunk_audio.clear();
 ++        audio.clear();
 ++        wav.clear();
-++        voice_codes.clear();
+++        voice_rows.clear();
 ++        voice_text.clear();
+++        voice_rms  = -1.0f;
 ++        n_voice    = 0;
 ++        n_done     = 0;
 ++        philox_ctr = 0;
@@ -604,12 +957,30 @@ index 0000000..f589a33
 ++            LOG_ERR("mtmd_helper_gen_audio: omnivoice requires a prompt\n");
 ++            return 1;
 ++        }
-++        if (inp->speaker_ref) {
-++            LOG_ERR("mtmd_helper_gen_audio: omnivoice: voice cloning is not supported yet\n");
-++            return 1;
-++        }
 ++        if (!load()) {
 ++            return 1;
+++        }
+++        if (inp->speaker_ref) {
+++            if (mtmd_bitmap_is_voice(inp->speaker_ref) || !mtmd_bitmap_is_audio(inp->speaker_ref)) {
+++                LOG_ERR("mtmd_helper_gen_audio: omnivoice clones a voice from an audio clip\n");
+++                return 1;
+++            }
+++            // the clip as the reference prepares it: raised to 0.1 RMS when quieter, its silences trimmed
+++            const float * pcm = (const float *) mtmd_bitmap_get_data(inp->speaker_ref);
+++            std::vector<float> clip(pcm, pcm + mtmd_bitmap_get_n_bytes(inp->speaker_ref) / sizeof(float));
+++            voice_rms = ov::ref_preprocess_audio(clip, info.sample_rate, true);
+++            mtmd::bitmap_ptr prepared(clip.empty() ? nullptr : mtmd_bitmap_init_from_audio(clip.size(), clip.data()));
+++            if (!prepared || !encode_speaker(prepared.get(), voice_rows) || voice_rows.empty()) {
+++                LOG_ERR("mtmd_helper_gen_audio: omnivoice: failed to encode the voice clip\n");
+++                return 1;
+++            }
+++            n_voice = (int) (voice_rows.size() / n_embd);
+++            if (inp->speaker_ref_text && inp->speaker_ref_text[0]) {
+++                voice_text = ov::add_punctuation(inp->speaker_ref_text);
+++            }
+++            if (trace_dir()) {
+++                trace_dump("voice-rows", voice_rows, { n_voice, n_embd });
+++            }
 ++        }
 ++        seq_id   = inp->seq_id;
 ++        out_type = inp->out_type;
@@ -620,6 +991,28 @@ index 0000000..f589a33
 ++        guidance = inp->cfg_scale > 0.0f ? inp->cfg_scale - 1.0f : 2.0f;
 ++        lang     = ov::resolve_language(inp->lang ? inp->lang : "");
 ++        text.assign(inp->prompt, inp->prompt_len);
+++
+++        // a description of the voice, as the "tts" template writes it; held to the vocabulary the model was trained on
+++        instruct.clear();
+++        static const std::string open = "<|instruct_start|>", close = "<|instruct_end|>";
+++        if (text.compare(0, open.size(), open) == 0) {
+++            const size_t end = text.find(close, open.size());
+++            if (end == std::string::npos) {
+++                LOG_ERR("mtmd_helper_gen_audio: omnivoice: %s without %s\n", open.c_str(), close.c_str());
+++                return 2;
+++            }
+++            const std::string described = text.substr(open.size(), end - open.size());
+++            text.erase(0, end + close.size());
+++            std::string err;
+++            if (!ov::voice_design_normalize(&voice_design, described, ov::voice_design_has_cjk(text), &instruct, &err)) {
+++                LOG_ERR("mtmd_helper_gen_audio: omnivoice: %s\n", err.c_str());
+++                return 2;
+++            }
+++        }
+++        if (text.empty()) {
+++            LOG_ERR("mtmd_helper_gen_audio: omnivoice requires a prompt\n");
+++            return 1;
+++        }
 ++
 ++        // a text longer than 30 s of speech is spoken in chunks of 15 s
 ++        const int n_total = ov::duration_estimate_tokens(text, voice_text, n_voice);
@@ -691,9 +1084,12 @@ index 0000000..f589a33
 ++        }
 ++        if (chunked && n_done == 0 && n_voice == 0) {
 ++            // without a voice, the first chunk is the voice of the next ones
-++            voice_codes = std::move(codes);
-++            voice_text  = chunk.text;
-++            n_voice     = chunk.n_frames;
+++            voice_rows.resize((size_t) chunk.n_frames * n_embd);
+++            for (int t = 0; t < chunk.n_frames; t++) {
+++                audio_row(codes.data(), chunk.n_frames, t, voice_rows.data() + (size_t) t * n_embd);
+++            }
+++            voice_text = chunk.text;
+++            n_voice    = chunk.n_frames;
 ++        }
 ++        n_done++;
 ++        return (int32_t) (chunks.size() - n_done);
@@ -780,6 +1176,7 @@ index 0000000..f589a33
 ++            return false;
 ++        }
 ++        audio_embd = std::move(table);
+++        ov::voice_design_init(&voice_design);
 ++        return true;
 ++    }
 ++
@@ -996,9 +1393,7 @@ index 0000000..f589a33
 ++            LOG_ERR("mtmd_helper_gen_audio: omnivoice: failed to read the text embeddings\n");
 ++            return false;
 ++        }
-++        for (int t = 0; t < n_voice; t++) {
-++            audio_row(voice_codes.data(), n_voice, t, rows.data() + (size_t) (n_text + t) * n_embd);
-++        }
+++        std::copy(voice_rows.begin(), voice_rows.end(), rows.begin() + (size_t) n_text * n_embd);
 ++        float * target = rows.data() + (size_t) (n_text + n_voice) * n_embd;
 ++
 ++        llama_batch_ext_ptr batch(llama_batch_ext_init(backbone.get()));
@@ -1166,8 +1561,15 @@ index 0000000..f589a33
 ++            return false;
 ++        }
 ++        ov::remove_silence(audio, info.sample_rate, 500, 100, 100, -50.0);
-++        // without a voice clip there is no level to follow: half scale at the peak
-++        ov::peak_normalize_half(audio);
+++        if (voice_rms < 0.0f) {
+++            // without a voice clip there is no level to follow: half scale at the peak
+++            ov::peak_normalize_half(audio);
+++        } else if (voice_rms < 0.1f) {
+++            // the clip was raised to 0.1 RMS to be encoded: back to its own level
+++            for (float & v : audio) {
+++                v *= voice_rms / 0.1f;
+++            }
+++        }
 ++        ov::fade_and_pad(audio, info.sample_rate, 0.1, 0.1);
 ++        finished = true;
 ++        return true;
@@ -1208,6 +1610,7 @@ index 0000000..f589a33
 ++    llama_token tok_instruct_start = LLAMA_TOKEN_NULL, tok_instruct_end = LLAMA_TOKEN_NULL;
 ++    llama_token tok_text_start = LLAMA_TOKEN_NULL, tok_text_end = LLAMA_TOKEN_NULL;
 ++    std::vector<float> audio_embd; // [8 * 1025, n_embd]
+++    ov::VoiceDesign voice_design;  // the vocabulary of voice descriptions
 ++
 ++    llama_context_ptr backbone;
 ++    int n_rows_max = 0;
@@ -1219,9 +1622,11 @@ index 0000000..f589a33
 ++    float    guidance   = 2.0f;
 ++    bool     denoise    = true;
 ++
-++    // the voice: codes of a reference clip or of the first chunk, [8, n_voice], and their transcript
-++    std::vector<int32_t> voice_codes;
+++    // the voice: backbone rows of the frames of a clip, or of the first chunk, [n_voice, n_embd]; their transcript;
+++    // the level of the clip before it was prepared, < 0 without a clip
+++    std::vector<float> voice_rows;
 ++    std::string voice_text;
+++    float voice_rms = -1.0f;
 ++    int n_voice = 0;
 ++
 ++    std::vector<chunk> chunks;
@@ -1238,7 +1643,7 @@ index 0000000..f589a33
 + // tiny-voca is not autoregressive: the backbone encodes the phonemes of one sentence, the mmproj turns its states into audio
 + // the prompt is a phoneme string, symbols separated by spaces, a stress mark (ˈ or ˌ) before a stressed vowel
 + // each sentence is one utterance, like the reference pipeline: the "tts" template ends each one with <eos>
-+@@ -4926,6 +5619,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
++@@ -4926,6 +5677,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
 +             return std::unique_ptr<mtmd_gen_audio_pipeline>(new kokoro_gen_audio_pipeline(lctx, mctx));
 +         case MTMD_GEN_AUDIO_TYPE_TINY_VOCA:
 +             return std::unique_ptr<mtmd_gen_audio_pipeline>(new tiny_voca_gen_audio_pipeline(lctx, mctx));
@@ -1248,30 +1653,47 @@ index 0000000..f589a33
 +             return std::unique_ptr<mtmd_gen_audio_pipeline>(new lfm3a_gen_audio_pipeline(lctx, mctx));
 +         case MTMD_GEN_AUDIO_TYPE_CHATTERBOX:
 +diff --git a/tools/mtmd/mtmd-impl.h b/tools/mtmd/mtmd-impl.h
-+index c28a13d..3f0fa56 100644
++index c28a13d..bd23ebf 100644
 +--- a/tools/mtmd/mtmd-impl.h
 ++++ b/tools/mtmd/mtmd-impl.h
-+@@ -617,6 +617,7 @@ enum projector_type {
++@@ -617,6 +617,8 @@ enum projector_type {
 +     PROJECTOR_TYPE_SOPRANO,
 +     PROJECTOR_TYPE_KOKORO,
 +     PROJECTOR_TYPE_TINY_VOCA,
 ++    PROJECTOR_TYPE_OMNIVOICE,
+++    PROJECTOR_TYPE_OMNIVOICE_SPKENC,
 +     PROJECTOR_TYPE_LFM3A_GEN,
 +     PROJECTOR_TYPE_DRAMA3_GEN,
 +     PROJECTOR_TYPE_ZONOS3_GEN,
-+@@ -715,6 +716,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
++@@ -715,6 +717,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
 +     { PROJECTOR_TYPE_SOPRANO,           "soprano"},
 +     { PROJECTOR_TYPE_KOKORO,            "kokoro"},
 +     { PROJECTOR_TYPE_TINY_VOCA,         "tiny_voca"},
 ++    { PROJECTOR_TYPE_OMNIVOICE,         "omnivoice"},
+++    { PROJECTOR_TYPE_OMNIVOICE_SPKENC,  "omnivoice_spkenc"},
 +     { PROJECTOR_TYPE_LFM3A_GEN,         "lfm3a_gen"},
 +     { PROJECTOR_TYPE_DRAMA3_GEN,        "drama3_gen"},
 +     { PROJECTOR_TYPE_ZONOS3_GEN,        "zonos3_gen"},
 +diff --git a/tools/mtmd/mtmd-model.cpp b/tools/mtmd/mtmd-model.cpp
-+index 35f9d1c..fb6dfc0 100644
++index 35f9d1c..f5af0d0 100644
 +--- a/tools/mtmd/mtmd-model.cpp
 ++++ b/tools/mtmd/mtmd-model.cpp
-+@@ -1174,6 +1174,7 @@ struct mtmd_model_loader {
++@@ -1145,6 +1145,14 @@ struct mtmd_model_loader {
++                         hparams.flow_n_step       = 1;
++                         hparams.gen_eos_threshold = -4.0f;
++                     } break;
+++                case PROJECTOR_TYPE_OMNIVOICE_SPKENC:
+++                    {
+++                        // one row per codec frame: 960 samples at 24 kHz
+++                        hparams.audio_sample_rate = 24000;
+++                        hparams.audio_patch_sizes = { 8, 5, 4, 2, 3 };
+++                        // 3 s, as the preprocessor lays a clip out
+++                        hparams.warmup_audio_size = mtmd_hparams::omnivoice_spk_n_input(75);
+++                    } break;
++                 case PROJECTOR_TYPE_FISH_S2_SPKENC:
++                     {
++                         // Fish DAC encoder, codec.pth has no config
++@@ -1174,6 +1182,7 @@ struct mtmd_model_loader {
 +                     } break;
 +                 case PROJECTOR_TYPE_KOKORO:
 +                 case PROJECTOR_TYPE_TINY_VOCA:
@@ -1279,18 +1701,38 @@ index 0000000..f589a33
 +                     {
 +                         hparams.audio_sample_rate = 24000;
 +                     } break;
-+@@ -1585,6 +1586,7 @@ struct mtmd_model_loader {
++@@ -1411,6 +1420,7 @@ struct mtmd_model_loader {
++                                        model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
++                                        model.proj_type != PROJECTOR_TYPE_VIBEVOICE_ASR &&
++                                        model.proj_type != PROJECTOR_TYPE_POCKETTTS_SPKENC &&
+++                                       model.proj_type != PROJECTOR_TYPE_OMNIVOICE_SPKENC &&
++                                        model.proj_type != PROJECTOR_TYPE_FISH_S2_SPKENC;
++ 
++                 // Validate audio hparams loaded from GGUF metadata
++@@ -1585,6 +1595,8 @@ struct mtmd_model_loader {
 +             model.proj_type != PROJECTOR_TYPE_SOPRANO &&
 +             model.proj_type != PROJECTOR_TYPE_KOKORO &&
 +             model.proj_type != PROJECTOR_TYPE_TINY_VOCA &&
 ++            model.proj_type != PROJECTOR_TYPE_OMNIVOICE &&
+++            model.proj_type != PROJECTOR_TYPE_OMNIVOICE_SPKENC &&
 +             model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
 +             model.proj_type != PROJECTOR_TYPE_VIBEVOICE_ASR &&
 +             model.proj_type != PROJECTOR_TYPE_CHATTERBOX &&
-+@@ -3466,6 +3468,16 @@ struct mtmd_model_loader {
++@@ -3466,6 +3478,27 @@ struct mtmd_model_loader {
 +                         }
 +                     }
 +                 } break;
+++            case PROJECTOR_TYPE_OMNIVOICE_SPKENC:
+++                {
+++                    // the graph looks the tensors up by name, see models/omnivoice.cpp
+++                    // the codebooks and the code embeddings are the decoder's
+++                    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta.get()); t; t = ggml_get_next_tensor(ctx_meta.get(), t)) {
+++                        const std::string name = t->name;
+++                        if (name.rfind("a.spk.", 0) == 0 || name.rfind("a.gen.rvq.", 0) == 0 || name == "a.gen.audio_embeddings.weight") {
+++                            model.cbx_tensors[name] = get_tensor(name);
+++                        }
+++                    }
+++                } break;
 ++            case PROJECTOR_TYPE_OMNIVOICE:
 ++                {
 ++                    // the graphs and the host code look the tensors up by name, see models/omnivoice.cpp
@@ -1304,7 +1746,19 @@ index 0000000..f589a33
 +             case PROJECTOR_TYPE_KOKORO:
 +                 {
 +                     // the graphs and the host code look the tensors up by name, see models/kokoro.cpp
-+@@ -4923,6 +4935,11 @@ size_t mtmd_model::cbx_read_tensor(const char * name, float * out, size_t n_max)
++@@ -4859,6 +4892,11 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
++                 // one hidden-state vector fed back to the talker per call
++                 n_patches = 1;
++             } break;
+++        case PROJECTOR_TYPE_OMNIVOICE_SPKENC:
+++            {
+++                // one backbone row per codec frame, see mtmd_hparams::omnivoice_spk_n_input()
+++                n_patches = (int) ((img->nx() - 320) / 1600);
+++            } break;
++         case PROJECTOR_TYPE_FISH_S2_SPKENC:
++             {
++                 // one backbone row per codec frame, the preprocessor pads to whole frames
++@@ -4923,6 +4961,11 @@ size_t mtmd_model::cbx_read_tensor(const char * name, float * out, size_t n_max)
 +         std::vector<ggml_fp16_t> tmp(n);
 +         ggml_backend_tensor_get(t, tmp.data(), 0, n * sizeof(ggml_fp16_t));
 +         for (size_t i = 0; i < n; i++) out[i] = ggml_fp16_to_fp32(tmp[i]);
@@ -1316,16 +1770,34 @@ index 0000000..f589a33
 +     } else {
 +         return 0;
 +     }
-+@@ -5070,6 +5087,7 @@ int mtmd_model::n_mmproj_embd() const {
++@@ -5070,6 +5113,8 @@ int mtmd_model::n_mmproj_embd() const {
 +         case PROJECTOR_TYPE_SOPRANO:
 +         case PROJECTOR_TYPE_KOKORO:
 +         case PROJECTOR_TYPE_TINY_VOCA:
 ++        case PROJECTOR_TYPE_OMNIVOICE:
+++        case PROJECTOR_TYPE_OMNIVOICE_SPKENC:
 +             return hparams.projection_dim;
 +         case PROJECTOR_TYPE_PARAKEET:
 +             return mm_1_w->ne[1];
++diff --git a/tools/mtmd/mtmd-model.h b/tools/mtmd/mtmd-model.h
++index 2dcf190..bea59a9 100644
++--- a/tools/mtmd/mtmd-model.h
+++++ b/tools/mtmd/mtmd-model.h
++@@ -165,6 +165,12 @@ struct mtmd_hparams {
++     std::vector<int32_t> audio_patch_sizes;
++     std::vector<int32_t> audio_depths;
++ 
+++    // omnivoice reference clip of n_frames codec frames, as its preprocessor lays it out: the samples at 24 kHz,
+++    // then the same clip at 16 kHz with 160 zeros on each side
+++    static constexpr int32_t omnivoice_spk_n_input(int32_t n_frames) {
+++        return n_frames * (960 + 640) + 320;
+++    }
+++
++     int32_t audio_samples_per_token() const {
++         int64_t n = 1;
++         for (int32_t p : audio_patch_sizes) {
 +diff --git a/tools/mtmd/mtmd-subcontext.cpp b/tools/mtmd/mtmd-subcontext.cpp
-+index 4f3a240..3cf542e 100644
++index 4f3a240..8a7a118 100644
 +--- a/tools/mtmd/mtmd-subcontext.cpp
 ++++ b/tools/mtmd/mtmd-subcontext.cpp
 +@@ -1600,6 +1600,17 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
@@ -1346,7 +1818,15 @@ index 0000000..f589a33
 +         case PROJECTOR_TYPE_KOKORO:
 +             {
 +                 const auto * io = params->kokoro;
-+@@ -2510,6 +2521,15 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
++@@ -1830,6 +1841,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
++         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
++         case PROJECTOR_TYPE_ZONOS3_SPKENC:
++         case PROJECTOR_TYPE_FISH_S2_SPKENC:
+++        case PROJECTOR_TYPE_OMNIVOICE_SPKENC:
++             {
++                 // do nothing
++             } break;
++@@ -2510,6 +2522,15 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
 +         return false;
 +     }
 + 
@@ -1393,10 +1873,21 @@ index 0000000..f589a33
 +     struct mtmd_subctx_gen_state * gen_state = nullptr;
 + 
 +diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
-+index a4fee15..7a13693 100644
++index a4fee15..028b5bb 100644
 +--- a/tools/mtmd/mtmd.cpp
 ++++ b/tools/mtmd/mtmd.cpp
-+@@ -2762,6 +2762,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
++@@ -1483,6 +1483,10 @@ struct mtmd_context {
++                 {
++                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_fish_s2>(models.a.get());
++                 } break;
+++            case PROJECTOR_TYPE_OMNIVOICE_SPKENC:
+++                {
+++                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_omnivoice>(models.a.get());
+++                } break;
++             case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
++                 {
++                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_chatterbox_ref>(models.a.get(), cbx_is_mtl(*models.a));
++@@ -2762,6 +2766,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
 +             info.type = MTMD_GEN_AUDIO_TYPE_TINY_VOCA;
 +             info.sample_rate = 24000;
 +             break;
@@ -1407,7 +1898,7 @@ index 0000000..f589a33
 +         default:
 +             info.type = MTMD_GEN_AUDIO_TYPE_NONE;
 +             break;
-+@@ -3196,6 +3200,7 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
++@@ -3196,6 +3204,7 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
 +         case PROJECTOR_TYPE_SOPRANO:
 +         case PROJECTOR_TYPE_KOKORO:
 +         case PROJECTOR_TYPE_TINY_VOCA:
@@ -1415,7 +1906,7 @@ index 0000000..f589a33
 +             inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
 +             break;
 +         case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
-+@@ -3948,6 +3953,74 @@ int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
++@@ -3948,6 +3957,74 @@ int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
 +     return 0;
 + }
 + 
@@ -1490,7 +1981,7 @@ index 0000000..f589a33
 + static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
 +     mtmd_subcontext * sctx = ctx->ctx_gen_a.get();
 +     if (!sctx) {
-+@@ -3974,6 +4047,10 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state *
++@@ -3974,6 +4051,10 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state *
 +         return mtmd_gen_wav_tiny_voca(ctx, state, inp, out);
 +     }
 + 

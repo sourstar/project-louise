@@ -327,7 +327,47 @@ frames, 5 chunks of 202 / 134 / 195 / 182 / 126 characters and 316 / 208 /
 305 / 284 / 199 frames, the first chunk's 316 frames the voice of the other
 four.
 
-**Not yet** (stage 4): voice cloning from a clip (HuBERT, the semantic and
-DAC encoders, the RVQ encoder), voice design through the model's "tts"
-template, and a chunk delivered as soon as it is decoded (the audio comes
-in one piece at the end, as Kokoro's does).
+## 9. Stage 4: a voice from a clip, a voice from a description (2026-11-24)
+
+Both are in the staged patch (now 1,510 lines of our own in 20 files; the
+vendored rules gain the resampler and the vocabulary of voice descriptions).
+
+**From a clip.** The mmproj gets an audio encoder beside the decoder, as
+llama.cpp's other cloning models have (`omnivoice_spkenc`, modelled on Fish
+S2's): the codec's encoder as one graph — HuBERT, the semantic conv stack,
+the DAC encoder, the 8 residual codebooks — returning one backbone row per
+frame. The pipeline prepares the clip as the reference does (raised to 0.1
+RMS when quieter, silences trimmed), puts its rows before the target frames
+and its transcript before the text, and gives the audio the clip's level.
+LocalAI needs nothing new: a request whose `voice` is a file is already
+handed over as the clip.
+
+**From a description.** `voice` as words ("female, young adult, british
+accent") goes through the text model's "tts" chat template, llama.cpp's
+mechanism for named voices, and is held to the vocabulary the model was
+trained on (omnivoice.cpp's table, vendored): anything else is refused.
+
+**MEASURED** (CPU, the same weights; the clip is the port's own 6.5 s
+Italian sentence with its transcript, the text a second sentence, seed 0):
+
+| | result |
+|---|---|
+| the clip's codes | 158 of 159 frames give the reference's 8 codes. The other one sits on a near-tie in the first codebook: best against second entry 0.049 apart, where the median over the clip is 9.9 |
+| prompt | text part identical with a clip (55 ids, `<\|denoise\|>` included); with a description all 133 ids identical, the description normalised as the reference normalises it |
+| first step, logits | with the clip: cosine 0.99999973 (conditional), 0.99999994 (unconditional); with a description: 0.99999976, 0.99999986 |
+| the scoring, with the clip | the reference's scoring on the port's logits: 0 of 752 codes differ over 32 steps |
+| the audio, with the clip | same length (89,760 samples); outside the chunk's last 5,000 samples, 15 samples two units apart and none more; inside, up to 5 units — §8's second difference, which a clip's ending does not hide under silence |
+| the server | `/v1/audio/speech` with `speaker_ref_b64` and `speaker_ref_text`, and with `voice`, gives the tool's files byte for byte; an unknown description is answered 400 |
+| speed, CPU | 3.7 s of speech in a cloned voice: 77 s, against omnivoice.cpp's 262 s |
+
+**Not yet:** a chunk of a long text delivered as soon as it is decoded (the
+audio comes in one piece at the end, as Kokoro's does). omnivoice.cpp has a
+streaming path with its own post-processing; whether today's LocalAI backend
+uses it for the node's speech is the first thing to read before porting it.
+
+**Next is the card (stage 5), München's:** the engine built with the staged
+patch as a test backend beside the live one; `tools/omnivoice_repack.py` on
+the node's two files; the same gate on the B70 (the tools run there as they
+ran here); phase 0's three clips against today's backend — time to audio,
+memory at rest and at work — and the operator's ear on the two voices,
+which is the comparison that cannot be made by number (§7.1).

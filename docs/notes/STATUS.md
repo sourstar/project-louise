@@ -35,8 +35,10 @@ measured (published figures disagree).
   codes), so the gate compares step by step: prompt identical, logits within the reference's own noise at steps 0–31,
   the reference's scoring on the port's logits gives the port's codes at all 32 steps, decoders equal to 1.25e-6 but
   for a chunk's last 83 ms (the port computes two samples omnivoice.cpp zero-pads), two runs byte-identical. Staged as
-  `deploy/localai/patches/staged/0009-llama-cpp-omnivoice.patch`; cloning, voice design, the server route and the card
-  are next.
+  `deploy/localai/patches/staged/0009-llama-cpp-omnivoice.patch`. **Cloning from a clip, described voices and the
+  server's speech route followed the same day** (§9): a clip's codes equal the reference's on 158 of 159 frames (the
+  other on a near-tie), prompts identical, the server gives the tool's bytes. Left: a long text streamed chunk by
+  chunk, and the card — München's, with the operator's ear on the two voices.
 - **2026-11-24, "Engine now, chat later" (operator): the new engine is adopted, the chat model decided after the
   POC.** The cut-over's order is in [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §5:
   BACKOUT first; the wrapper `vega-louise-llama-cpp` repointed at `c3294e050ff2`, MADLAD and the nemotron reranker

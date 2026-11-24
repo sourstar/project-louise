@@ -47,6 +47,14 @@ def lm_name(name: str) -> str | None:
     return f"blk.{bid}.{part}"
 
 
+# the "tts" chat template of llama.cpp: the prompt of a text to speak. A voice asked by name is a description of it
+# ("female, young adult"), which the pipeline reads between the two markers
+TTS_TEMPLATE = (
+    "{%- if voice is defined and voice -%}<|instruct_start|>{{ voice }}<|instruct_end|>{%- endif -%}"
+    "{{ messages[0]['content'] }}"
+)
+
+
 class Derived:
     """A tensor made here, with the fields write() reads from a reader's tensor."""
 
@@ -198,6 +206,7 @@ def main() -> None:
     w.add_eos_token_id(tokens.index("<|im_end|>"))
     w.add_pad_token_id(n_bpe)
     w.add_add_bos_token(False)
+    w.add_chat_template([{"name": "tts", "template": TTS_TEMPLATE}])
 
     lm = [(lm_name(t.name), t) for t in base.tensors if lm_name(t.name)]
     if len(lm) != field(base, f"{a}.block_count") * 11 + 2:
