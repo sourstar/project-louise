@@ -11,6 +11,8 @@ No weight is touched: every tensor keeps its type and its bytes, only names and 
 decoder graph needs are folded here, as omnivoice.cpp does when it loads the file:
   - a transposed convolution's weight [IC, OC, K] is laid out [OC * K, IC] (the same values, moved)
   - each snake activation gets its reciprocal beside it: inv_b = 1 / (alpha + 1e-9), in float32
+  - each codebook gets the squared norm of its entries (the quantizer's score is 2 e.z - |e|^2)
+  - a convolution kernel stored quantized becomes float16
 """
 from __future__ import annotations
 
@@ -53,29 +55,47 @@ class Derived:
         self.tensor_type = tensor_type
 
 
-# GGUF names hold 63 characters and omnivoice.cpp's go up to 71: the modules get short names in the mmproj
+# GGUF names hold 63 characters and omnivoice.cpp's go up to 71: the modules get short names in the mmproj.
+# "a.gen." is what speech generation loads, "a.spk." what reads a voice clip (the audio encoder of the mmproj)
 RENAMES = (
-    ("acoustic_decoder.", "dec."),
-    ("acoustic_encoder.", "enc."),
-    ("encoder_semantic.", "sem."),
-    ("semantic_model.encoder.layers.", "hubert.layers."),
-    ("semantic_model.", "hubert."),
-    ("quantizer.quantizers.", "rvq."),
+    ("acoustic_decoder.", "a.gen.dec."),
+    ("fc2.", "a.gen.fc2."),
+    ("audio_embeddings.", "a.gen.audio_embeddings."),
+    ("audio_heads.", "a.gen.audio_heads."),
+    ("acoustic_encoder.", "a.spk.enc."),
+    ("encoder_semantic.", "a.spk.sem."),
+    ("semantic_model.encoder.layers.", "a.spk.hubert.layers."),
+    ("semantic_model.", "a.spk.hubert."),
+    ("fc.", "a.spk.fc."),
+)
+SHORTER = (
     (".feed_forward.intermediate_dense.", ".ffn_up."),
     (".feed_forward.output_dense.", ".ffn_down."),
 )
+QUANTIZER = "quantizer.quantizers."
 
 
 def mmproj_name(name: str) -> str:
-    for old, new in RENAMES:
-        name = name.replace(old, new)
-    name = "a.gen." + name
-    if len(name) > 63:
-        raise SystemExit(f"{name}: name too long for GGUF")
-    return name
+    if name.startswith(QUANTIZER):
+        # the codebooks and their way out decode; the way in only encodes a clip
+        rest = name[len(QUANTIZER):]
+        out = ("a.spk.rvq." if ".project_in." in rest else "a.gen.rvq.") + rest
+    else:
+        for old, new in RENAMES:
+            if name.startswith(old):
+                out = new + name[len(old):]
+                break
+        else:
+            raise SystemExit(f"{name}: not a tensor of omnivoice.cpp's files")
+    for old, new in SHORTER:
+        out = out.replace(old, new)
+    if len(out) > 63:
+        raise SystemExit(f"{out}: name too long for GGUF")
+    return out
 
 
 def codec_tensors(gguf, tensors):
+    f32 = gguf.GGMLQuantizationType.F32
     for t in tensors:
         name = mmproj_name(t.name)
         if t.name.startswith("acoustic_decoder.") and t.name.endswith(".conv_t1.weight"):
@@ -83,11 +103,25 @@ def codec_tensors(gguf, tensors):
             ic, oc, k = t.data.shape
             yield name, Derived(t.data.transpose(1, 2, 0).reshape(oc * k, ic), t.tensor_type)
         elif t.name.startswith(("acoustic_decoder.", "acoustic_encoder.")) and t.name.endswith(".alpha"):
-            if t.tensor_type != gguf.GGMLQuantizationType.F32:
+            if t.tensor_type != f32:
                 raise SystemExit(f"{t.name}: expected float32")
             yield name, t
             inv_b = np.float32(1.0) / (t.data.astype(np.float32) + np.float32(1e-9))
             yield name[: -len(".alpha")] + ".inv_b", Derived(inv_b.astype(np.float32), t.tensor_type)
+        elif t.name.startswith(QUANTIZER) and t.name.endswith(".codebook.embed"):
+            if t.tensor_type != f32:
+                raise SystemExit(f"{t.name}: expected float32")
+            yield name, t
+            # |e|^2 of each entry, summed in float32 in the order omnivoice.cpp sums it
+            sq = np.zeros(t.data.shape[0], dtype=np.float32)
+            for i in range(t.data.shape[1]):
+                sq += t.data[:, i] * t.data[:, i]
+            yield name.replace("a.gen.rvq.", "a.spk.rvq.")[: -len(".codebook.embed")] + ".embed_sq", Derived(sq, f32)
+        elif len(t.shape) == 3 and t.tensor_type not in (f32, gguf.GGMLQuantizationType.F16):
+            # a quantized convolution kernel (HuBERT's positional conv): the convolution reads float16
+            shape = tuple(int(n) for n in reversed(t.shape))
+            w = gguf.quants.dequantize(t.data, t.tensor_type).reshape(shape)
+            yield name, Derived(w.astype(np.float16), gguf.GGMLQuantizationType.F16)
         else:
             yield name, t
 
@@ -186,6 +220,16 @@ def main() -> None:
     w.add_gen_audio_block_count(field(base, f"{a}.block_count"))
     w.add_gen_audio_head_count(field(base, f"{a}.attention.head_count"))
     w.add_gen_audio_attention_layernorm_eps(field(base, f"{a}.attention.layer_norm_rms_epsilon"))
+    # the audio encoder of the mmproj reads a voice clip: one backbone row per codec frame
+    w.add_clip_has_audio_encoder(True)
+    w.add_clip_audio_projector_type("omnivoice_spkenc")
+    w.add_audio_projection_dim(n_embd)
+    w.add_audio_embedding_length(field(codec, "omnivoice.semantic.hidden_size"))
+    w.add_audio_feed_forward_length(field(codec, "omnivoice.semantic.intermediate_size"))
+    w.add_audio_block_count(field(codec, "omnivoice.semantic.num_hidden_layers"))
+    w.add_audio_head_count(field(codec, "omnivoice.semantic.num_attention_heads"))
+    w.add_audio_attention_layernorm_eps(field(codec, "omnivoice.semantic.layer_norm_eps"))
+    w.add_audio_num_mel_bins(1)  # the raw waveform, one channel in the place of the mel bins
 
     mm = [(mmproj_name(t.name), t) for t in base.tensors if not lm_name(t.name)]
     if sorted(n for n, _ in mm) != ["a.gen.audio_embeddings.weight", "a.gen.audio_heads.weight"]:

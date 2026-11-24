@@ -47,6 +47,14 @@ measured (published figures disagree).
   at the first gate** — the node held no CPU reference for bge-m3 (not an engine fault; the web was down two
   minutes; the live set back on the old engine). A preflight of every gate's reference comes before the retry
   (§5, F11). NOT yet done on the node.
+  **Second attempt, 06:40Z: the gates and the checks PASSED, the engine `c3294e050ff2` serves** — wikipedia, gutenberg
+  (both sides), pubmed's query side, NeuRIS (for legi_F and Normattiva too) and wikidata all exact, each within its
+  CPU reference; MADLAD 379/379 identical to the qualified engine, the reranker's scores equal on 20 of 20 lists, the
+  9B at 78.0 / 75.7 tok/s. Left: the web up and the thirty-minute watch, the old engines' retirement, the live model
+  files back into the repository (MADLAD runs without `fit:off`; the repository's file has it). **The POC was cut down
+  by the operator the same morning**: the whole-buffer driver swap is cancelled, the 2 GiB-buffer test (S5) is the
+  swap arm, and the offloaded 35B is measured further only if S5's numbers are bad (the bar proposed in
+  backend-qualification-2026-11-21.md, phase 5).
 - **2026-11-23, the new llama.cpp engine is QUALIFIED — the report** ([backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §4). Engine `c3294e050ff2` (LocalAI
   v5.0.1, llama.cpp `78e0529`, the eight-patch series): the series' checks pass, every gate that could run passes,
   every encoder bit-identical and equal to the live engine's bytes, the reranker's scores equal in 175/175 lists,

@@ -148,6 +148,40 @@ collection touched.
    query_under_load.py`'s idle run) with the set resident; `GET /system`,
    the driver and host RAM every minute; any eviction, refusal or kill.
 
+**AMENDED 2026-11-24, 08:1xZ — the operator to München, relayed verbatim.**
+Shown the POC's parts (S5 part 1, S5 part 2, the offloaded arm, the
+driver-swap arm without the option): "Cancel the Driver-swap arm without
+the option / And keep the Offloaded arm option noted just in case option 2
+has bad numbers, otherwise cancel it as well"; asked whether that includes
+S5 part 2's pass with the single 18.5 GiB buffer: "Yes cancel it too". So:
+- **arm S's S1–S4 are CANCELLED** (the 35B resident, one buffer, left to the
+  driver), and so is part 2's pass with copy A: the plain whole-buffer swap
+  is never measured on this node;
+- **S5 runs as the POC's swap arm**: part 1 unchanged (A B A B on an empty
+  card), part 2 once, with the 2 GiB buffers only (copy B);
+- **the offloaded arm (steps 1–4 above: `cpu_moe` and the cache) is a
+  FALLBACK**: it runs only if part 2's numbers are bad, and is cancelled if
+  they are good.
+
+*What "bad" means for part 2 — proposed to the operator, who decides on the
+figures.* Bad on ANY of:
+1. an abort (an `xe` error or reset, an OOM line, MemAvailable under 4 GB)
+   or a refused load;
+2. the 35B's first answer after the three small models were loaded on top
+   reaches its first token more than **2 s** later than warm (warm: about
+   0.25 s on the 128-token prompt; expected for ~3 GiB brought back at the
+   measured 16.2 GiB/s: 0.2–0.4 s);
+3. its next answer is not warm again: first token more than 10 % over warm,
+   or decode under 90 tok/s (resident 100.4 / 97.9; the offloaded arm's best
+   84.3);
+4. a small model's request after the 35B has answered takes more than 1 s
+   over its own warm time;
+5. the driver moves the 35B whole all the same (its host share grows by more
+   than twice what the card was over): the option then buys nothing.
+The 2 s is one answer's worth of what the offloaded arm costs — 16–30 % of
+the decode speed, 0.6–1.3 s on a 300-token answer, on EVERY answer — with a
+margin: under it, the swap is the cheaper way to keep the set loaded.
+
 **Arm S — the driver's swap (operator, 2026-11-24: "can't a memory swap
 occur as-is and the model be reloaded as-is, like if it was just idle in the
 meantime?" — "Yes, add it to the POC").** The same set with the 35B RESIDENT
@@ -897,6 +931,41 @@ smallest), and its statement covers all three; wikidata's and
 Normattiva-nemo's nemotron spaces gate on their own against the same
 model's reference. No collection waits. The order stands: architecture's
 7f118736 and its check, then the cut-over's window.
+
+**Second attempt, 2026-11-24 06:40Z (München): steps 3 and 5 PASSED; the
+engine `c3294e050ff2` serves.** After wikipedia's CPU reference and a clean
+preflight 0b (11 roles found). Step 3, each gate with `--remeasure --accept`,
+the card emptied before it, exit 0:
+
+| gate | whole set, worst / median | itself | CPU reference, worst / median | tok/s | statement |
+|---|---|---|---|---|---|
+| wikipedia, bge-m3, document | 0.999939 / 0.999999, 0 of 512 under 0.995 | exact, 3 fresh loads; 300 fresh contexts, closest 1.0000000 | 0.999930 / 0.999999 | 56,828 | `document-e470257a42df7739.json` |
+| gutenberg, qwen3-embedding-4b, document and query | 0.999473 / 0.999949 | exact | 0.996084 / 0.997927 | 3,120 | `document-` and `query-449ca5005f89a66f.json` |
+| pubmed, query side, medcpt-query | 0.999649 / 1.000000 | exact | 0.999951 | 30,958 | `query-d1e409e859d6bac4.json` |
+| NeuRIS (covers legi_F and Normattiva), nemotron | 1.000000 | exact | 0.999997 | 6,863 | `document-71f82f1d15c01b37.json` |
+| wikidata, its own space, nemotron | the same figures, the same fingerprint `9863c1d7…` | exact | the same | 6,858 | the same statement |
+
+Step 5: MADLAD, pilot 18/18, then T4 one at a time 379/379 identical to the
+qualification's engine (375/379 to P3's old one-slot record, 345/379 to
+torch, median 0.42 s), T3 the same group twice 624/626, in a wave equal to
+alone 612/626, 1.05 s a question; its byte record re-cut
+(`/root/madlad-gguf/cmp-t4-c3294e050ff2-2026-11-24.jsonl`, 379 rows, sha256
+`6ae3e651d9f9a51c…`). The reranker: parity on 20 queries, the engine
+reproduces itself; 20 of 20 lists with scores equal to phase 0's, largest
+difference 0.0, 2,441 ms a list (phase 0: 2,496). The chat 9B: 0.113 s /
+1,244 / 78.0 tok/s on the short prompt, 0.609 s / 3,383 / 75.7 on the long
+one (phase 0: 0.121 / 1,157 / 77.5 and 0.624 / 3,301 / 75.5). The OCR model
+loaded and answered. No `xe` or OOM line.
+
+As it runs: `fit:off` is in ELEVEN model files; MADLAD runs WITHOUT it, as
+it was qualified. The repository's `louise-translate-madlad.yaml` carries it
+(094df03) and the "thirteen" above is the repository's count: both are
+corrected when step 8 brings the live files here.
+
+Still to come, in this order (the operator, to München: "After part 1 do
+also part 2"): S5 part 1 (running since 08:08Z) and part 2, then step 6 (the
+web up; the node stays PAUSED, the operator paused it himself at 06:30Z),
+the thirty minutes, step 7, step 8.
 
 **First attempt, 2026-11-24 06:16–06:18Z (München): BACKED OUT at the first
 gate, cleanly.** The operator's word: "Deploy and step 3 right after".

@@ -81,13 +81,22 @@ def test_the_decoders_must_agree_before_the_tail_of_a_chunk_only(tmp_path):
     assert not gate.compare_decoders(tmp_path / "ref.bin", tmp_path / "short.bin")["ok"]
 
 
-def test_rounding_against_truncation_is_one_unit_and_more_than_two_fails(tmp_path):
-    _wav(tmp_path / "ref.wav", [0, 100, -100, 3000])
-    _wav(tmp_path / "port.wav", [0, 101, -100, 3001])
-    _wav(tmp_path / "far.wav", [0, 104, -100, 3000])
+def test_rounding_against_truncation_is_one_unit_and_more_than_two_fails_before_the_tail(tmp_path):
+    n = gate.WAV_TAIL + 4
+    ref = np.zeros(n, dtype=np.int64)
+    ref[:4] = [0, 100, -100, 3000]
+    port, far, tail = ref.copy(), ref.copy(), ref.copy()
+    port[:4] = [0, 101, -100, 3001]
+    far[1] = 104
+    tail[-10] = 30
+    for name, samples in (("ref", ref), ("port", port), ("far", far), ("tail", tail)):
+        _wav(tmp_path / f"{name}.wav", samples)
     near = gate.compare_wav(tmp_path / "ref.wav", tmp_path / "port.wav")
-    assert near["ok"] and near["identical"] == 0.5 and near["one_unit"] == 0.5 and near["more"] == 0
+    assert near["ok"] and near["body_more"] == 0 and near["body_max"] == 1 and near["one_unit"] == 2 / n
     assert not gate.compare_wav(tmp_path / "ref.wav", tmp_path / "far.wav")["ok"]
+    late = gate.compare_wav(tmp_path / "ref.wav", tmp_path / "tail.wav")
+    assert late["ok"] and late["tail_max"] == 30, "the tail of the last chunk is reported, not judged"
+    assert not gate.compare_wav(tmp_path / "ref.wav", tmp_path / "ref.wav")["samples"] != n
     assert gate.same_file(tmp_path / "ref.wav", tmp_path / "ref.wav")
     assert not gate.same_file(tmp_path / "ref.wav", tmp_path / "port.wav")
 

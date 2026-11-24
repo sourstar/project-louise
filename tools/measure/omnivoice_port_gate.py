@@ -46,6 +46,8 @@ NOISE_FACTOR = 1.5
 # samples: the two decoders agree to rounding before the tail of a chunk (measured 1.25e-6)
 BODY_MAX = 1e-5
 TAIL = 2000
+# the same tail in the file: after it come the fade and 0.1 s of padding
+WAV_TAIL = 5000
 
 
 def load(path: Path | str) -> np.ndarray:
@@ -127,13 +129,16 @@ def read_wav(path: Path) -> np.ndarray:
 
 
 def compare_wav(reference: Path, port: Path) -> dict:
-    """16-bit files of the same codes: the port rounds where omnivoice.cpp truncates, so half the samples differ by 1."""
+    """16-bit files of the same codes: the port rounds where omnivoice.cpp truncates, so half the samples differ by 1.
+    The end of the file is the tail of the last chunk and the padding after it: reported, not judged."""
     a, b = read_wav(reference), read_wav(port)
     if a.size != b.size:
         return {"ok": False, "samples": [int(a.size), int(b.size)]}
     d = np.abs(a - b)
-    return {"ok": bool(d.max() <= 2), "samples": int(a.size), "identical": float((d == 0).mean()),
-            "one_unit": float((d == 1).mean()), "more": int((d > 1).sum()), "max": int(d.max())}
+    body, tail = d[:-WAV_TAIL], d[-WAV_TAIL:]
+    return {"ok": bool(body.size == 0 or body.max() <= 2), "samples": int(a.size), "identical": float((d == 0).mean()),
+            "one_unit": float((d == 1).mean()), "body_more": int((body > 1).sum()),
+            "body_max": int(body.max()) if body.size else 0, "tail_max": int(tail.max()), "tail_samples": WAV_TAIL}
 
 
 def same_file(a: Path, b: Path) -> bool:
