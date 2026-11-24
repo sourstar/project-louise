@@ -532,13 +532,20 @@ every row carried, so EMBEDDED before its text is indexed): the stage was
 73 % of the pipeline thread and 61 % of that was the thread waiting for its
 own batch's parse (374 of 613 s in 841 s of wall, 12,495 documents), while
 the pool's children were idle 88 % of their time (S 637, R 71, D 12
-child-seconds of 720) and two 14 MB acts held a three-document batch for 49
-s. The look-ahead built on 11-07 for exactly this never ran: it walked the
-rows NOT YET EMBEDDED (`_FTS_NEXT … embed_done=0`, and a batch holding an
-embedded row dropped the chain), which is every row of a fresh collection
-and no row of a carried one. M1's four legal collections indexed their text
-this way. Every batch line had said so since 11-07 — it ends ", parsed
-ahead)" or it does not — and 0 of 21 did; nothing counted the word.
+child-seconds of 720). A batch of THREE documents (two acts of 14 MB) took
+49.3 s of parse: in the 13 s before its commit five children each ended an
+fts part of 40–53 MB, some 240 MB parsed for 28 MB written. The look-ahead
+built on 11-07 for exactly this never ran: it walked the rows NOT YET
+EMBEDDED (`_FTS_NEXT … embed_done=0`, and a batch holding an embedded row
+dropped the chain), which is every row of a fresh collection and no row of
+a carried one. And the look-ahead is also what CARRIES the peers parsed
+past the chunk cap into the next batch: without it a batch parses as many
+rows as the median document would fill it with, writes up to the cap — two
+long acts reach it — and throws the rest away, to be parsed again. So the
+stage waited for parses and repeated them. M1's four legal collections
+indexed their text this way. Every batch line had said so since 11-07 — it
+ends ", parsed ahead)" or it does not — and 0 of 21 did; nothing counted
+the word.
 → The look-ahead walks one CLASS of the scope index's order a chain: the
 rows not yet embedded, or the embedded ones (`lookahead.Chain.kind`,
 `worker._fts_class`); a batch across the two starts none, once.

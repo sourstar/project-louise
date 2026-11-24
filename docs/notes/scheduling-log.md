@@ -3300,8 +3300,13 @@ and goes out in the same deploy — it is not a scheduling change). Live build
   parse 186.5 + index 76 + the rest 1; a batch 6–552 documents, parse
   0.5–16.7 s, index 0.9–5.8 s. PARSED AHEAD: 0 of 21.
 - The slowest batch of the hour: 3 documents / 318 chunks, 49.9 s, parse
-  49.3 — sk and es of 32008R0149, 13.96 and 13.95 MB each, in two children,
-  the other nine with nothing to do.
+  49.3 — sk and es of 32008R0149, 13.96 and 13.95 MB, and a 38 KB decision.
+  Alone, in a container of its own (Legal), the sk act's `fts` takes 10 s
+  (tokenizer 3.7, Formex 4.6, the manifest read 1.2, entity tagging 0.6).
+  In the 13 s before that commit five children each ended an fts part of
+  40.0–53.3 MB ("[parse pool] child N gave back …"): some 240 MB parsed for
+  a batch that wrote 28 MB. The largest fts parts of the half hour: 271.4,
+  254.3, 254.0, 253.9, 253.8 MB.
 - py-spy, 10 dumps of "pipeline-EUR-Lex5.next": 8 in `parallel.compute` ←
   `fts_for_rows` ← `stage_fts` (worker.py:1018), 2 in `fts.index_books`. No
   thread named fts-ahead in any.
@@ -3313,6 +3318,13 @@ and goes out in the same deploy — it is not a scheduling change). Live build
 **The cause.** The look-ahead walked the rows not yet embedded only
 (`_FTS_NEXT … embed_done=0`; a batch holding an embedded row dropped the
 chain). A carried collection has no such row (scheduling.md, pitfall 22).
+Two costs, not one: the thread waits for its own batch's parse; and the
+peers parsed past the chunk cap are thrown away and parsed again, because
+it is the look-ahead that carries them into the next batch. A batch parses
+as many rows as the MEDIAN document would fill it with and writes up to
+the cap, which two long acts reach: 240 MB parsed, 28 MB written. (My
+first reading of that batch — both acts in one part, one after the other —
+was refuted by the pool's own lines.)
 
 **The change.** A chain walks one class of the scope index's order, not yet
 embedded or embedded (`lookahead.Chain.kind`); the batch across the two
@@ -3330,8 +3342,12 @@ cycle (rdf 252 s + fts index and marks 239 s = 491 s of the 841) is what
 the parse can hide behind: the parse wait should fall from 374 s toward
 the excess of a straggler over that work, the wall toward 500–560 s for the
 same documents (1.5–1.7x), and the batch lines read "parsed ahead" for all
-but the first after a start and the one after a class change. A batch with
-a 49 s act still waits for it, less the write before it.
+but the first after a start and the one after a class change. The pool's
+CPU for the same documents should FALL (nothing parsed twice): the sum of
+the "part of X MB" lines against the bytes of the documents indexed is the
+measure, now that the line names its collection and its rows. The 1.5–1.7x
+is a floor if the repeated parses were a large share; how large is not
+known from the BEFORE.
 
 **AFTER, to read on the node** (the same 15 minutes of lines, the same
 slice if it is still in the heavy years — say which years): `bash
