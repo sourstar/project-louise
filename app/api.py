@@ -44,6 +44,11 @@ from . import idle_trim, node_state, speech
 
 STATIC = Path(__file__).parent / "static"
 
+#: seconds one thread may hold the web process before it leaves by itself
+#: (LOUISE_DEADMAN_S overrides it, as the worker's)
+WEB_DEADMAN_S = 120.0
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from . import fdlimit
@@ -53,6 +58,11 @@ async def lifespan(app: FastAPI):
     # given back after a while without a question (app/idle_trim.py; platform.toml [web] idle_trim_s)
     embeddings.use_web_caches()
     idle_trim.start()
+    # a web process one thread holds leaves by itself (app/deadman.py): a
+    # question's text goes through every citation resolver in this process.
+    # Two minutes here: nothing it does holds the GIL in one call for seconds
+    from . import deadman
+    deadman.arm(default=WEB_DEADMAN_S, who="the web")
     try:
         # PER-COLLECTION (invariant 1): one collection whose space does not
         # match is not served, and the node keeps the rest. The web process

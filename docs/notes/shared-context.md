@@ -219,5 +219,9 @@ On the node (München's readings of 11-12 and 11-23):
   2,229 MiB where it holds 2,513 at rest (München, on the empty card), its
   context 2,175 where it is 1,891. The two still summed to its largest, so
   nothing was over-committed; the split was wrong. The live engine's
-  figures at rest: qwen3-embedding-4b 2,727, nemotron 2,513, bge-m3 897 MiB
-  (621 on the engine before the cut-over).
+  figures 8 s after a request: qwen3-embedding-4b 2,727, nemotron 2,513,
+  bge-m3 897 MiB. After minutes of idle the driver has moved part of each
+  process to system memory and the card holds less — bge-m3 613, qwen 2,498
+  (München, 2026-11-24 evening; fdinfo and `size_vram` agree) — which is
+  what the keeper then counts, the rest being inside the model's context
+  figure (its largest less its weights) when it comes back.
