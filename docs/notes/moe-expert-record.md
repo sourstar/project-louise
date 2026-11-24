@@ -160,9 +160,33 @@ definition, 157 tokens through the cache) only builds the record: cold,
 | the whole cache (0017, the switch unset) | the most removed: 40–53 % of those uploads | 8.2 GiB uploaded in every load for 3.0–4.1 GiB removed: a loss wherever the person waits for the load too |
 | a half or a quarter (`LLAMA_MOE_RECORD_FILL`) | less uploaded for nothing | less removed; how much is `--fill`'s curve and §5's row D |
 
-Recommended: the whole cache until §5's row D says a smaller share costs
-fewer seconds, load and first tokens together. The record stays off (no env
-line) until those figures are in.
+**The curve of the share** (the same four files, `--fill`): MiB removed
+under the first 64 tokens for MiB the fill uploads.
+
+| share filled | the fill uploads | answer 2 | answer 3 | answer 4, other language | removed per MiB filled |
+|---|---|---|---|---|---|
+| 1 (0017 unset) | 8,060–8,186 MiB | 4,090 MiB, 53 % | 3,015, 40 % | 3,131, 40 % | 0.51 / 0.37 / 0.38 |
+| 0.75 | 6,140 | 3,442, 45 % | 2,664, 35 % | 2,841, 36 % | 0.56 / 0.43 / 0.46 |
+| 0.5 | 4,093 | 2,535, 33 % | 1,960, 26 % | 2,079, 27 % | 0.62 / 0.48 / 0.51 |
+| 0.25 | 2,047 | 1,329, 17 % | 999, 13 % | 1,001, 13 % | 0.65 / 0.49 / 0.49 |
+| 0.1 | 816 | 504, 7 % | 360, 5 % | 262, 3 % | 0.62 / 0.44 / 0.32 |
+
+Close to a straight line: **no share removes as many MiB as it uploads**
+(0.4–0.65 of a MiB per MiB), and a half keeps 62–66 % of the whole fill's
+saving for half its upload. So the record does not save bytes; it MOVES
+them — from one miss at a time under the first tokens to one run inside the
+load. What that is worth is seconds, and only the card has them (§5):
+
+- added: the load's seconds with the fill, minus without;
+- saved: the seconds of the first 64 generated tokens without it, minus with.
+
+Saved above added: the fill pays even where the person waits for the load,
+and the whole cache is the default. Saved below added: it pays only where
+the load is ahead of the question (Louise's load-ahead), and the default is
+set by that. A straight line puts the best share at one end, so row D is
+one middle point (0.5), to confirm the seconds follow the uploads.
+
+Recommended: nothing is switched on until those two numbers are in.
 
 On synthetic routing (a cache a third the size of its experts, an eighth of
 a layer selected per token) the seeding DID matter: the record's rank cost
