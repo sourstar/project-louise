@@ -348,11 +348,21 @@ THE CONDITIONS, as §5.3 asks them, and as they were:
   | qwen3-embedding-4b | 4.25 s | 0.4 to 1.9 s |
 
   Step 1 measures the first row.
-- **AN UNLOAD OF A VEGA MODEL SOMETIMES TAKES 15 s MORE:** 15.06 and 15.12
+- **AN UNLOAD OF A VEGA MODEL SOMETIMES TOOK 15 s MORE:** 15.06 and 15.12
   s on three of fourteen (both pilots, one qwen load), the card freed only
-  then; MADLAD and the direct copies never. On the wrapper's path, not
-  explained (its own grace is 30 s). A defect on the question's path, where
-  a model is unloaded to make room: being looked into.
+  then; MADLAD and the direct copies never (0 of 22). THE ENGINE WAS TOLD TO
+  STOP TWICE. LocalAI's stop SIGTERMs the backend's process group, polls
+  for the pid it started, and SIGKILLs the group after its process
+  library's 15 s (mudler/go-processmanager; the Tensor session, from the
+  source). Behind the wrapper the engine got the group's signal and, a
+  millisecond later, the wrapper's own: llama.cpp answers a second with
+  "terminating immediately", an exit inside its handler, which sometimes
+  hung with the card held. A direct engine prints the first line only
+  (München, every unload logged). Fixed in the wrapper: a backend told
+  already is left to go by itself (`OWN_EXIT_S`), and the wrapper's whole
+  stop is under LocalAI's 15 s (`GRACE_S` 12, from 30). The engine's exit
+  from a signal handler is an upstream defect, on Tensor's list.
+
 - **2.0 s of every load pass before the engine is asked anything:** the
   backend listens, and LocalAI's load call reaches it 2.0 s later, the same
   for both models. No engine work is in it. IT IS A POLL'S SLEEP (the Tensor
@@ -513,7 +523,6 @@ Existing tools, and why they are not the answer by themselves:
   counted, 2,513 held at rest (§5.2). Its weights and its context still sum
   to its largest, so the total holds. Being fixed in app/resident.py: learnt
   only from a process at rest, and replaced at the next such reading.
-- The 15 s unload of a vega model (§5.2).
 - For a quantized model, what parking keeps (§3.1): the card's bytes copied
   back, or the file read again with every tensor's flag cleared.
 - The chat model's prompt cache across a park.

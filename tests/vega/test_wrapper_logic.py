@@ -1320,3 +1320,124 @@ def test_an_on_demand_load_must_say_its_canary_either_way():
     assert w.canary_unstated(_canon(["device:gpu", "parallel:1"])) is None, \
         "a load that keeps its context has no canary to state"
     assert w.canary_unstated(_canon(["context_on_demand:false"])) is None
+
+
+# --- the stop: the backend is told once (the node, 2026-11-24) ---------------------------
+
+_COUNTS = """\
+import signal, sys, time
+out, deaf = sys.argv[1], sys.argv[2] == "deaf"
+n = [0]
+def told(*_):
+    n[0] += 1
+    open(out, "w").write(str(n[0]))
+signal.signal(signal.SIGTERM, told)
+open(out + ".ready", "w").write("")
+while deaf or n[0] == 0:
+    time.sleep(0.01)
+time.sleep(0.3)        # its clean-up: a second signal would land inside it
+"""
+
+
+def _backend_that_counts(tmp_path, *, deaf: bool = False):
+    """A backend's `run.sh` whose process writes how many SIGTERMs it got and
+    leaves 0.3 s after the first (`deaf`: never)."""
+    import sys
+    out = tmp_path / "told"
+    (tmp_path / "counts.py").write_text(_COUNTS)
+    run_sh = tmp_path / "run.sh"
+    run_sh.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{tmp_path / "counts.py"}" "{out}" '
+                      f'{"deaf" if deaf else "hears"} "$@"\n')
+    run_sh.chmod(0o755)
+    child = vw.Child(run_sh)
+    deadline = time.monotonic() + 10
+    while not Path(str(out) + ".ready").exists():
+        assert time.monotonic() < deadline, "the stand-in backend never started"
+        time.sleep(0.01)
+    return child, out
+
+
+def _handled(out) -> None:
+    """The backend has HANDLED its first signal, as the engine had on the node
+    (its lines came a millisecond apart): two signals sent before the first is
+    handled are one to the process, and a test of them would say nothing."""
+    deadline = time.monotonic() + 10
+    while not out.exists():
+        assert time.monotonic() < deadline, "the stand-in backend never handled its signal"
+        time.sleep(0.005)
+
+
+def test_the_stand_in_counts_a_second_signal(tmp_path):
+    """What the wrapper did until 2026-11-24, on the stand-in: told at once, a
+    backend LocalAI told already gets a second signal inside its clean-up."""
+    import os
+    import signal
+    child, out = _backend_that_counts(tmp_path)
+    os.kill(child.pid, signal.SIGTERM)
+    _handled(out)
+    child.stop(5.0, 0.0)
+    assert out.read_text() == "2"
+
+
+def test_a_backend_localai_told_already_is_not_told_twice(tmp_path):
+    """LocalAI's stop SIGTERMs the backend's process group: the engine has
+    been told when the wrapper gets to it, and a second signal is llama.cpp's
+    "terminating immediately", which hung with the card held on 3 of 14
+    unloads until LocalAI's kill 15 s later (the node, 2026-11-24)."""
+    import os
+    import signal
+    child, out = _backend_that_counts(tmp_path)
+    os.kill(child.pid, signal.SIGTERM)             # the group's signal, as LocalAI sends it
+    _handled(out)
+    t0 = time.monotonic()
+    child.stop(5.0, vw.OWN_EXIT_S)
+    assert not child.alive() and out.read_text() == "1", "told once: by LocalAI, not again by the wrapper"
+    assert time.monotonic() - t0 < vw.OWN_EXIT_S, "it left by itself: nothing was waited out"
+    assert child.proc.returncode == 0
+
+
+def test_a_backend_nobody_told_is_told_when_its_own_time_is_up(tmp_path):
+    child, out = _backend_that_counts(tmp_path)
+    t0 = time.monotonic()
+    child.stop(5.0, 0.4)
+    assert not child.alive() and out.read_text() == "1"
+    assert time.monotonic() - t0 >= 0.4, "left alone first, then told"
+
+
+def test_a_backend_that_does_not_leave_is_killed_within_the_grace(tmp_path):
+    child, out = _backend_that_counts(tmp_path, deaf=True)
+    t0 = time.monotonic()
+    child.stop(1.0, 0.3)
+    assert not child.alive() and child.proc.returncode == -9
+    assert out.read_text() == "1" and time.monotonic() - t0 < 3.0, "the own time is part of the grace"
+
+
+def test_the_whole_stop_is_over_before_localais_kill():
+    """LocalAI SIGKILLs a backend's process group 15 s after its stop
+    (go-processmanager's GracefulTimeout): the wrapper leaves before that, and
+    what the call in progress took is not given again to the backend."""
+    assert vw.GRACE_S < 15.0 and 0 < vw.OWN_EXIT_S < vw.GRACE_S
+
+    class Server:
+        def stop(self, grace):
+            time.sleep(0.3)                         # a call in progress
+            ev = threading.Event()
+            ev.set()
+            return ev
+
+    class Closes:
+        receipts = None
+
+        def close(self):
+            pass
+
+    class Kid:
+        got = None
+
+        def stop(self, grace, own_exit_s):
+            Kid.got = (grace, own_exit_s)
+
+    gate = Closes()
+    gate.receipts = Closes()
+    vw.Running(server=Server(), child=Kid(), channel=Closes(), gate=gate, port=0).stop(5.0, 1.5)
+    assert Kid.got[1] == 1.5 and 4.0 < Kid.got[0] <= 4.7, Kid.got
