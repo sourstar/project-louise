@@ -253,7 +253,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 
 from app import model_pins
 
@@ -438,6 +438,7 @@ def reset() -> None:
         _track.clear()
         _memory, _out_said, _write_failed = None, frozenset(), False
         _orphans_at = None
+        _rested.clear()
 
 
 def switches() -> Switches:
@@ -823,11 +824,11 @@ def _rest_size(r: Resident, mem: Memory) -> int | None:
         # Until 2026-11-24 it counted at its running size (the review of
         # 2026-11-12): the three on the node were counted 5,554 MiB above what
         # they held, and that many MiB of weights stayed off the card.
-        # ITS WEIGHTS ARE WHAT ITS PROCESS HELD AT REST (`model_load.idle_vram`),
-        # the file's where this process has not seen it at rest. Never the
-        # fewest reading of all (until 2026-11-24): a reading taken while a
-        # model loads is under its weights and over the floor, and it stayed
-        # for ever (the node: nemotron 2,229 MiB counted, 2,513 at rest).
+        # ITS WEIGHTS ARE WHAT ITS PROCESS HELD AT REST (`_note_rested`), the
+        # file's where this process has not seen it at rest. Never the fewest
+        # reading of all (until 2026-11-24): a reading taken while a model
+        # loads is under its weights and over the floor, and it stayed for
+        # ever (the node: nemotron 2,229 MiB counted, 2,513 at rest).
         weights = _weights(r.server, r.model, mem, largest)
         return weights if weights else largest
     got = [v for v in (mem.rest.get(r.key), model_load.rest_vram(r.server, r.model)) if _whole(v, largest)]
@@ -841,13 +842,44 @@ def _whole(rest: int | None, largest: int | None, floor: float = REST_FLOOR) -> 
     return bool(rest) and (not largest or rest >= floor * largest)
 
 
+#: AN ON-DEMAND MODEL IS AT REST when its backend process has held the same
+#: bytes for this long (`model_load.steady_vram`) AND nobody on the node has
+#: asked it anything for this long (`encoder_use`, written by the embeddings
+#: client of every process). The bytes alone do not say it: a stream that
+#: works without pause keeps its context from one request to the next
+#: (app/rage/keep.py), and the model then holds its weights AND its context,
+#: steadily. 10 s is past every keep (2 s at most), past the 5 s between two
+#: writes of a model's last use, and past the parts of a load (the node,
+#: 2026-11-24: weights in 0.2–0.8 s, the warm-up run in 1.5–3.5 s).
+AT_REST_S = 10.0
+#: (server, model) -> what its process held the LATEST time this process saw
+#: it at rest (`_note_rested`). The latest, not the fewest: a wrong figure (a
+#: model partly off the card; a context a request without a keep left held)
+#: lasts until the next time it rests, never for ever. Read and written one
+#: key at a time, WITHOUT `_lock`: `_rest_size` reads it under that lock.
+_rested: dict[tuple[str, str], int] = {}
+
+
+def _note_rested(keys: Iterable[tuple[str, str]], used: Mapping[tuple[str, str], float],
+                 now: float) -> None:
+    """Note what each of these models holds if it is at rest now (`AT_REST_S`):
+    `used` the node's last request to each (epoch seconds), `now` the wall's."""
+    from app import model_load
+    for key in keys:
+        got = model_load.steady_vram(*key)
+        if got is None or got[1] < AT_REST_S:
+            continue
+        last = used.get(key)
+        if last is not None and now - last < AT_REST_S:
+            continue                       # asked a moment ago: its context may be live
+        _rested[key] = got[0]
+
+
 def _weights(server: str, model: str, mem: Memory, largest: int | None) -> int | None:
     """An on-demand model's weights on the card: what its backend process held
-    the latest time this process saw it at rest (`model_load.idle_vram`),
-    else what the file remembers; None when neither is a reading of the
-    model whole."""
-    from app import model_load
-    for v in (model_load.idle_vram(server, model), mem.rest.get((server, model))):
+    the latest time this process saw it at rest (`_rested`), else what the
+    file remembers; None when neither is a reading of the model whole."""
+    for v in (_rested.get((server, model)), mem.rest.get((server, model))):
         if _whole(v, largest, ON_DEMAND_REST_FLOOR):
             return v
     return None
@@ -1060,16 +1092,21 @@ def unreserve(key: tuple[str, str]) -> None:
         _reserved.pop(key, None)
 
 
-def _held_now(servers: Iterable[str], mem: Memory) -> dict[tuple, int] | None:
+def _held_now(servers: Iterable[str], mem: Memory,
+              rested: Callable[[], None] | None = None) -> dict[tuple, int] | None:
     """Every model the set's runners hold, {(model, pid) or (server, model):
     (its bytes AT REST, its bytes in this reading, the context it makes on
     demand — 0 for one that keeps its own, or whose context was never seen)}
     — at rest: the fewest of this reading and what is known of it at rest —
-    read fresh; None when one cannot say or gives no sizes."""
+    read fresh; None when one cannot say or gives no sizes. `rested` is called
+    between the reading and the count: the models at rest in THIS reading
+    are counted at what it shows (`_note_rested`)."""
     from app import model_load
     out: dict[tuple, tuple[int, int, int]] = {}
-    for s in sorted(set(servers)):
-        got = model_load.held_sizes(s, max_age_s=0.0)
+    read = {s: model_load.held_sizes(s, max_age_s=0.0) for s in sorted(set(servers))}
+    if rested is not None and all(got is not None for got in read.values()):
+        rested()
+    for s, got in read.items():
         if got is None:
             return None
         for m, (pid, size) in got.items():
@@ -1124,11 +1161,20 @@ def _remember(want: list[Resident]) -> Memory:
     if servers:
         with _lock:
             frozen = mem.copy()
-        before = None if loading or settling else _held_now(servers, frozen)
+        # which on-demand models are at rest in each reading: what they hold
+        # then is their weights (`_weights`), noted BEFORE the reading is
+        # counted, so the beat that first sees a model at rest already
+        # counts it right
+        used, at = _last_used(), _wall()
+        on_demand = [r.key for r in want if _rest_floor(r.server, r.model) != REST_FLOOR]
+
+        def rested() -> None:
+            _note_rested(on_demand, used, at)
+        before = None if loading or settling else _held_now(servers, frozen, rested)
         card = _card()
         with _lock:
             here, there = _pids_seen
-        after = None if before is None or card is None else _held_now(servers, frozen)
+        after = None if before is None or card is None else _held_now(servers, frozen, rested)
         if before is not None and after is not None and card is not None:
             held = dict(before)
             for k, v in after.items():
@@ -1176,7 +1222,7 @@ def _remember(want: list[Resident]) -> Memory:
                 # latest time it rested, REPLACING what the file had (a restart
                 # counts it at its weights at once; a wrong figure lasts until
                 # the next time it rests, never for ever)
-                v = model_load.idle_vram(r.server, r.model)
+                v = _rested.get(r.key)
                 if _whole(v, largest, floor) and v != mem.rest.get(r.key):
                     mem.rest[r.key] = v
                 continue

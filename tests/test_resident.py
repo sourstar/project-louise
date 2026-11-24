@@ -672,6 +672,18 @@ def _system(monkeypatch, node, sizes_mib: dict[str, int]):
     monkeypatch.setattr(httpc, "get", get)
 
 
+def _a_minute_a_reading(monkeypatch) -> None:
+    """Each `/system` reading comes a minute after the one before, as one
+    beat after another: a model read twice at the same bytes has held them
+    for AT_REST_S (`model_load.steady_vram`)."""
+    clock = {"t": 0.0}
+
+    def tick() -> float:
+        clock["t"] += 60.0
+        return clock["t"]
+    monkeypatch.setattr(model_load, "_rest_clock", tick)
+
+
 def _known(**sizes_mib: int) -> None:
     """Sizes this process remembers (`model_load.size_vram`), as after each
     model was seen loaded once."""
@@ -1280,9 +1292,7 @@ def test_an_on_demand_encoder_counts_at_its_weights_and_its_context_in_the_share
     for weights, its 2,948 MiB context is the shared budget's, a context live
     on the card is not growth, and what goes past it is."""
     monkeypatch.setattr(model_load, "context_on_demand", lambda url, model: model == "vega-4b")
-    # at rest as soon as it is read twice at the same bytes (a beat reads twice);
-    # the time it must stay so is tests/test_model_load.py's
-    monkeypatch.setattr(model_load, "AT_REST_SPAN_S", 0.0)
+    _a_minute_a_reading(monkeypatch)                # at rest from its second reading on
     resident._write_memory(resident.Memory(sizes={(SERVER, "vega-4b"): 5_685 * MIB}, total=32_656 * MIB))
     resident.reset()
     sizes = {"louise-chat": 6_000, "louise-translate": 7_900, "vega-4b": 2_737}
@@ -1317,7 +1327,7 @@ def test_a_wrong_weights_figure_is_replaced_the_next_time_the_model_rests(tmp_pa
     file's figure, upward too; one reading under them changes nothing."""
     key = (SERVER, "vega-nemo")
     monkeypatch.setattr(model_load, "context_on_demand", lambda url, model: model == "vega-nemo")
-    monkeypatch.setattr(model_load, "AT_REST_SPAN_S", 0.0)             # a beat reads twice: at rest
+    _a_minute_a_reading(monkeypatch)
     resident._write_memory(resident.Memory(sizes={key: 4_404 * MIB}, rest={key: 2_229 * MIB},
                                            total=32_656 * MIB))
     resident.reset()
@@ -1336,7 +1346,45 @@ def test_a_wrong_weights_figure_is_replaced_the_next_time_the_model_rests(tmp_pa
     assert mem.margin(resident._wall()) == (0, True), "nothing of it reads as growth"
     sizes["vega-nemo"] = 2_229                                         # a reading on its way, seen once
     model_load.loaded_models(SERVER, max_age_s=0.0)
-    assert resident._rest_size(nemo, mem) == 2_513 * MIB, "one reading under its weights says nothing"
+    sizes["vega-nemo"] = 2_513
+    _beat([g])
+    assert resident.read_memory().rest[key] == 2_513 * MIB, \
+        "bytes that have just moved are not a rest: its weights stand"
+    assert resident._rest_size(nemo, resident.read_memory()) == 2_513 * MIB
+
+
+def test_a_model_that_was_asked_a_moment_ago_is_not_at_rest_whatever_it_holds(tmp_path, node, monkeypatch):
+    """A stream that works without pause keeps its context from one request
+    to the next (app/rage/keep.py): the model holds its weights AND its
+    context, the same bytes reading after reading. That is not a rest, and
+    the bytes alone cannot say so — nor can `/system`'s cpu, which behind
+    VeGa is the wrapper's (scheduling.md, Perugia). The node's record of its
+    last request does: asked less than AT_REST_S ago, nothing is noted."""
+    key = (SERVER, "vega-nemo")
+    monkeypatch.setattr(model_load, "context_on_demand", lambda url, model: model == "vega-nemo")
+    _a_minute_a_reading(monkeypatch)
+    resident._write_memory(resident.Memory(sizes={key: 4_404 * MIB}, rest={key: 2_513 * MIB},
+                                           total=32_656 * MIB))
+    resident.reset()
+    sizes = {"louise-chat": 6_000, "vega-nemo": 4_404}                 # working: its context held
+    node.held |= set(sizes)
+    _system(monkeypatch, node, sizes)
+    _card(monkeypatch, 32_656, sum(sizes.values()))
+    g = _with(_collection(tmp_path, "gutenberg"), "vega-nemo", "lazy")
+    nemo = _r("vega-nemo", "document", collections=("gutenberg",))
+    monkeypatch.setattr(resident, "_last_used", lambda: {key: resident._wall() - 3.0})
+    _beat([g])
+    _beat([g])
+    assert resident.read_memory().rest[key] == 2_513 * MIB, "serving: what it holds is not its weights"
+    assert resident._rest_size(nemo, resident.read_memory()) == 2_513 * MIB
+    # the same bytes with nobody asking: a context a request without a keep left held.
+    # Counted whole until it next rests at its weights: the cautious side, and not for ever
+    monkeypatch.setattr(resident, "_last_used", lambda: {key: resident._wall() - 600.0})
+    _beat([g])
+    assert resident.read_memory().rest[key] == 4_404 * MIB
+    sizes["vega-nemo"] = 2_513
+    _beat([g])
+    assert resident.read_memory().rest[key] == 2_513 * MIB, "replaced the next time it rests"
 
 
 def test_the_shared_budget_is_the_two_largest_contexts_never_under_its_floor(monkeypatch):
