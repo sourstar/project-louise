@@ -114,11 +114,14 @@ def split_locator(locator: str) -> tuple[Path, int]:
     return Path(path), int(page)
 
 
-def _streams(dump: Path, rows: list[dict]) -> dict[int, dump_mod.Page]:
-    """Every page `rows` names, each stream read once."""
+def _streams(dump: Path, rows: list[dict], read: set | None = None) -> dict[int, dump_mod.Page]:
+    """Every page `rows` names, each stream read once. `read`: the streams
+    read are added to it, `(start, end)` (`origin_ranges`)."""
     want: dict[tuple[int, int], set[int]] = {}
     for r in rows:
         want.setdefault((r["start"], r["end"]), set()).add(r["id"])
+    if read is not None:
+        read.update(want)
     out: dict[int, dump_mod.Page] = {}
     with open(dump, "rb") as f:
         for (start, end), ids in sorted(want.items()):
@@ -308,19 +311,20 @@ class WikisourceSource:
 
     # ---- a unit -----------------------------------------------------------------
 
-    def _unit(self, dump: Path, page_id: int) -> list[dump_mod.Page]:
+    def _unit(self, dump: Path, page_id: int, read: set | None = None) -> list[dump_mod.Page]:
         """The pages a record is parsed from, in reading order: the work's
-        pages (work.order), then each scan page in the order they read it."""
+        pages (work.order), then each scan page in the order they read it.
+        `read`: the dump's streams read for it are added, `(start, end)`."""
         works = index_mod.Works(index_mod.ensure(dump))
         try:
             row = works.by_id(page_id)
             if row is None:
                 raise RuntimeError(f"page {page_id} is not in {dump.name}")
             if row["ns"] != 0:                       # an author's page: itself
-                return [_streams(dump, [row])[page_id]]
+                return [_streams(dump, [row], read)[page_id]]
             titles = [row["title"]] + works.subpages(row["title"])
             rows = [works.page(0, t) for t in titles]
-            got = _streams(dump, rows)
+            got = _streams(dump, rows, read)
             by_title = {r["title"]: got[r["id"]] for r in rows if r["id"] in got}
             ordered = work.order(row["title"], list(by_title), lambda t: by_title[t].text)
             scan_ns, scan_name = _scan_namespace(works)
@@ -340,7 +344,7 @@ class WikisourceSource:
                         if r is not None and title not in seen:
                             seen.add(title)
                             scans.append(r)
-            scan_pages = _streams(dump, scans)
+            scan_pages = _streams(dump, scans, read)
             return [by_title[t] for t in ordered] + [scan_pages[r["id"]] for r in scans if r["id"] in scan_pages]
         finally:
             works.close()
@@ -396,6 +400,29 @@ class WikisourceSource:
         wiki, _pid = locate.read(origin)
         run_ = locate.need_run(run, origin)
         return [locate.run_file(Path(base), wiki, run_, unit) for unit in locate.UNITS]
+
+    def origin_ranges(self, origin: str, base, run: str | None):
+        """What `origin`'s unit is read from in the copy at `base`, for an
+        origin compared by Range (app/acquire/range_origin.py;
+        plugin_io.OriginRanges): the run's three tables whole, and of the
+        dump the streams of the pages `_unit` reads — found, when asked, by
+        reading them in the copy, through its index of the run."""
+        from app import plugin_io
+        wiki, pid = locate.read(origin)
+        run_ = locate.need_run(run, origin)
+        dump = locate.run_file(Path(base), wiki, run_, locate.DUMP_UNIT)
+        tables = tuple(locate.run_file(Path(base), wiki, run_, unit) for unit in locate.TABLE_UNITS)
+
+        def ranges() -> list[tuple[Path, int, int]]:
+            if not dump.is_file():
+                raise FileNotFoundError(str(dump))
+            read: set[tuple[int, int]] = set()
+            try:
+                self._unit(dump, pid, read)
+            except RuntimeError as e:        # the page is not in this run's dump
+                raise locate.PageNotInRun(f"{origin}: {e}") from None
+            return [(dump, start, end) for start, end in sorted(read)]
+        return plugin_io.OriginRanges(tables, ranges, ("dump", wiki))
 
     def run_of_locator(self, locator: str) -> str | None:
         return locate.run_of_locator(locator)
