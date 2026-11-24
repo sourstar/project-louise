@@ -45,7 +45,7 @@ The architecture session's conditions, each as built:
 | switched by the model's env; off = today's engine | unset: nothing is read, kept or filled |
 | placement must not change an answer | by construction with no share of the misses on the CPU (`moe_cache_cpu_share` 0, the default and the node's): an expert in the cache and one uploaded at a miss are the same bytes through the same kernels. THE PROOF IS THE NODE'S (§5: the same token ids at temperature 0). With a CPU share above 0 the cache's state already decides today which kernels compute a miss, and a cache that starts full applies the share from its first token: documented, not claimed equal |
 | a record that cannot be read is ignored | cut, changed, noise, a NaN, other weights, another build: one log line, the model loads and starts cold (tested: every cut and every changed byte) |
-| THE FILL BELONGS TO THE LOAD | it is in the cache's constructor, which the context's constructor calls: under LocalAI, inside the load and before the warm-up run. Bounded by the cache's size: at the card's 6.2–6.4 GiB/s (München), 8,192 MiB are about 1.3 s; the fill's own log line says its MiB and its ms |
+| THE FILL BELONGS TO THE LOAD | it is in the cache's constructor, which the context's constructor calls: under LocalAI, inside the load and before the warm-up run. ONLY THE LOAD'S OWN CONTEXT: with context on demand, a context created for a question after the keep ran out is filled inside that question, before its first token — there the person pays the fill, and it pays only if the seconds it saves under the tokens exceed its own (§6). Bounded by the cache's size: at the card's 6.2–6.4 GiB/s (München), 8,192 MiB are about 1.3 s; the fill's own log line says its MiB and its ms |
 | the file written by temporary name and rename, off the token path; a kill leaves the previous file whole | written in the cache's destructor (the unload's graceful path), never while it computes; `rename` over the old file |
 | the card bytes at rest | UNCHANGED: the cache's buffer is allocated whole and cleared when the cache is created, as before; the record decides what is in it. The keeper's size for the model does not move |
 | counts, no text; on the node only | per layer and expert, a float; never in a SHARD or a statement |
@@ -82,15 +82,29 @@ a record that does not help is switched off by removing one env line.
 ## 5. The measurement on the node (München; a copy of the 35B as in its cache arm)
 
 `n_cpu_moe` and `moe_cache_mib: 8192` as in the morning's arm, one fixed
-question at temperature 0 with a fixed seed, `verbosity: 4`.
+Louise-shaped prompt P (2,048 tokens: it goes as large batches, as in
+production, and the first 64 tokens are generated ones) at temperature 0
+with a fixed seed, `verbosity: 4`.
+
+Two rules of the shape (2026-11-24, before the pass):
+- **the record C and D read does not hold the answer they measure.** A
+  process with the record's directory answers two or three OTHER long
+  prompts and is unloaded; that directory is copied for B, for C and for
+  D. A record that holds P itself is the best case, not the case that
+  decides (§6's 40–53 % is for other questions);
+- **A, C and D run on the live 35B's own context options**, P sent right
+  after the load. With a keep of 0 the load's context is freed before the
+  question and the question's context is filled again before its first
+  token: the fill is then counted twice and the load-ahead case never
+  measured. The log says which context served the answer.
 
 | run | env | read |
 |---|---|---|
 | A, today | none | the load's seconds; the time to the first token; tok/s over the first 64 tokens; the cache's lines at unload — "hits = …, misses = …, uploaded = … MiB" |
-| B, a second context of the same process | `LLAMA_MOE_RECORD_DIR=<dir>`, the copy on demand (`context_on_demand:true`, a keep of 0) asked twice | at the second context: "N experts put in the cache from the record of T tokens, X MiB uploaded in Y ms"; then the same figures as A |
-| C, a new process reading the file | the same env, the copy unloaded and loaded again | "the record of T tokens of this model is read from moe-record-….bin", the fill's line, the same figures as A, and THE LOAD'S SECONDS against A's |
+| B1, B2, a second context of the same process | `LLAMA_MOE_RECORD_DIR=<its copy>`, the copy on demand (`context_on_demand:true`, a keep of 0), P asked twice: B1 on a record of other questions, B2 on one that now holds P (the best case) | the fill is inside the first token here, by construction: "context created in … ms"; at each context: "N experts put in the cache from the record of T tokens, X MiB uploaded in Y ms"; then the same figures as A |
+| C, a new process reading the file | `LLAMA_MOE_RECORD_DIR=<its copy>`, the live context options | "the record of T tokens of this model is read from moe-record-….bin", the fill's line, the same figures as A, and THE LOAD'S SECONDS against A's |
 | D, the fill at a half and at a quarter | C's env and `LLAMA_MOE_RECORD_FILL=0.5`, then `0.25` | the fill's line (half, a quarter of the experts and MiB), the load's seconds, and the same figures as A |
-| the proof | A, B, C | the token ids of the three answers equal |
+| the proof | A, B1, B2, C, D | the answers equal (their texts: the API gives no token ids) |
 
 What decides: the first token and the first 64 tokens of C against A, C's
 load against A's (the fill moved there), and the misses of C's first

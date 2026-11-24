@@ -129,9 +129,12 @@ def test_the_note_says_what_ran_and_what_the_node_measures():
     tested = NOTE[NOTE.index("## 3. "):NOTE.index("## 4. ")]
     assert "| the fill and the seeded eviction | NOT RUN." in tested and "35 checks" in tested
     node = NOTE[NOTE.index("## 5. "):]
-    for run in ("| A, today |", "| B, a second context of the same process |", "| C, a new process reading the file |",
-                "| the proof | A, B, C | the token ids of the three answers equal |"):
+    for run in ("| A, today |", "| B1, B2, a second context of the same process |", "| C, a new process reading the file |",
+                "| the proof | A, B1, B2, C, D | the answers equal"):
         assert run in node, run
+    # the record that is measured was built from OTHER questions, and the fill is counted once
+    assert "the record C and D read does not hold the answer they measure" in node
+    assert "A, C and D run on the live 35B's own context options" in node
     assert "THE LOAD'S SECONDS against A's" in node, "the fill moved into the load: its cost is read there"
     assert "staged/" + PATCH.name in (STAGED / "engine-next.series").read_text(encoding="utf-8")
     assert PATCH.name not in (PATCHES / "series").read_text(encoding="utf-8")
