@@ -11,7 +11,10 @@ The operator, 2026-11-24:
 - "it is not a matter of how the current use case would improve, it is a
   matter of allowing use cases that today we couldn't afford";
 - on where it is built: "Both engines, and omnivoice has already been ported
-  to llama.cpp".
+  to llama.cpp";
+- on the scenario: "Heavy parsing/indexing/embedding like now is not the
+  scenario for clockwork; its scenario is no data ingestion/processing,
+  only serving queries on an unloaded system".
 
 ## 1. What it is for
 
@@ -21,12 +24,26 @@ an unload (measured on the node, backend-qualification-2026-11-21.md, phase
 5). So the keeper preloads what fits its weights budget, and a collection
 with an encoder of its own asks which model leaves the card.
 
-The aim is that the card's MEMORY stops deciding how many models the node
-serves. Only the card's TIME is shared. The use cases this opens:
-- ten collections embedding at once, each with its own encoder;
-- an encoder per collection, chosen for the collection, never for the room;
-- a larger chat model beside corpus work;
-- a peer with a small card serving the same collections, slower.
+THE SCENARIO IS SERVING (operator, 2026-11-24): a node that ingests nothing
+and answers questions, over more collections and models than its card
+holds. A question needs a few models, one after the other, and which ones
+is known the moment it is asked. Measured on such a question (München,
+2026-11-09, ask-card-workflow.md):
+- its query encoders cold: 5.4 to 13.9 s each, the search 24 to 46 s;
+- the first word of the answer 42.4 s after Ask with models cold, 14.3 s
+  with the same models still loaded.
+
+The aim is that the cold question costs what the warm one does. The card's
+MEMORY then stops deciding how many models the node serves; only the
+question in hand has to fit. The use cases this opens:
+- many collections, each with the encoder and the reranker chosen for it,
+  never for the room;
+- a larger chat model, or several, beside them;
+- a peer with a small card serving the same collections.
+
+Heavy ingestion beside the questions (parsing, indexing, embedding) is not
+this note's scenario. It keeps today's rules: corpus work stands aside for a
+question, and the keeper's two budgets decide what is preloaded.
 
 ## 2. The standard: Clockwork
 
@@ -56,6 +73,9 @@ What does not carry over as it is:
 
 ## 3. Where each part is built (operator: both engines)
 
+"Both engines": the model engine under LocalAI, and RAGE, Louise's own, whose claim opens a
+question's plan.
+
 VeGa's rule stands: "LocalAI is the only one handling VRAM on the card"
 (vega.md §1). So Louise never loads or frees card memory herself. She asks.
 
@@ -63,7 +83,7 @@ VeGa's rule stands: "LocalAI is the only one handling VRAM on the card"
 |---|---|---|---|
 | mechanism | a model PARKED: its process alive, its weights in host RAM, nothing on the card; putting it back is a copy | the engine (llama.cpp, our series) | nothing above the engine can do it |
 | lifecycle | parks a model where it stopped one; un-parks it on a request; two calls, "prepare model X" and "park model Y" | LocalAI | it owns loading and eviction already; every client of LocalAI gains, with no scheduler at all |
-| foresight | which model is on the card next, and when, ahead of the requests | RAGE | only RAGE knows the queue: which collections have work for hours, and that a person's question goes first |
+| foresight | which models a question needs next, put on the card before it reaches them | Louise: the question's card (`app/question_card.py`) behind RAGE's claim | only Louise knows a question's plan: its collections' encoders, then the rerankers, the chat, the voice |
 
 ### 3.1 The engine
 
@@ -113,18 +133,25 @@ session, from the source, 2026-11-24):
 - It is generic, so it is proposed upstream (the pattern of
   `deploy/localai/upstream/`). Until it is taken, it is a patch we carry.
 
-### 3.3 RAGE
+### 3.3 Louise: the question's plan
 
-- The plan per card: the next model is prepared while the current one
-  works, when both fit the weights budget and the shared context budget.
-- What leaves the card is the model whose next use is furthest away
-  (Belady's rule: the queue is known), where today it is the oldest use.
-- Turns are sized from the measured cost of a switch, so that switching is
-  a small share of the card's time.
-- A person's question first, as today: the tier-1 models stay on the card.
+The module exists: `app/question_card.py` (ask-card-workflow.md) already
+moves models for a question, with today's loads and unloads. RAGE's claim
+(`dispatch.question`) says a question is open; the card's side follows it.
+
+- At the question's start, its SEARCH's models are prepared: the query
+  encoders of the collections asked, and the translator under Quality.
+- While the search runs, the ANSWER's models are prepared, in the order
+  the answer meets them: the rerankers, the chat, the voice. This is
+  `after_search` today, with a copy where it pays a load.
+- What leaves the card is parked, never stopped: the models the question
+  does not use, the oldest real use first (model_evict's rule, kept).
+- A question in flight protects its own models, as today (spec 5).
+- The page knows the collections chosen before Ask is pressed: preparing
+  their encoders then is a later refinement, measured first.
 - Louise uses the two calls and nothing else (invariant 7).
-- It changes WHAT RUNS WHEN: scheduling.md §6 binds it, with a row in
-  scheduling-log.md before its deploy.
+- No corpus schedule changes. Planned turns between corpus encoders are
+  out of this note's scope.
 
 ## 4. VeGa and invariant 12
 
@@ -152,12 +179,13 @@ rest is not known today.
 2. **The copy's rate, host to B70,** for a 2.7 GB model. And whether a copy
    beside a working encoder slows that encoder: Clockwork's premise, to be
    shown on this card and driver.
-3. **The card's busy share when two encoders alternate today**
-   (`louise dev schedule-report --gpu`): what a plan could win.
-4. **The host RAM that can be held for parked weights in the busy hours.**
-   Measured 2026-11-24: 28.6 GB available with the node paused, 10–20 GB
-   working, 4.7 GB at the lowest (the worker at 18 GiB beside two builds).
-   The weights of everything loaded today are about 25.5 GB.
+3. **A question's timeline on today's code, cold and warm,** stage by
+   stage (the 2026-11-09 figures, taken again on the live engine): what
+   parking has to bring to the warm case.
+4. **The host RAM a serving node has for parked weights.** Measured
+   2026-11-24: 28.6 GB available with the node paused, against about 25.5
+   GB of weights for everything loaded today. (Under heavy ingestion it fell
+   to 4.7 GB: not this scenario.)
 5. **What a parked process still holds on the card:** its device context
    and compiled kernels, with no weights. Not measured: LocalAI stops a
    backend's process when it unloads, so no such process exists today. The
@@ -204,20 +232,22 @@ first answer, the weights in the page cache, the card not full.
 | 0. the four measurements | München | the numbers are in this note; go or no go |
 | 1. the engine parks one encoder (bge-m3, 621 MiB) | Tensor | N park cycles give the same bytes; timed apart: the park, the un-park (allocate, copy, reorder), the first request after; the parked process's floor on the card read |
 | 2. LocalAI's parked state, its two calls, the RAM budget; the wrapper | Tensor, then upstream | a parked model answers after an un-park; the gates pass on the build |
-| 3. RAGE's plan | architecture | scheduling.md §6; a cost test; one deploy, measured on the node |
+| 3. the question's plan on the two calls (`question_card`) | architecture | a cold question's first word within a second or two of the warm one's, measured on the node |
 
 Each step is a deploy of its own. Each can stop there and still be worth
-having: step 2 without step 3 already makes eviction cheap.
+having. In the serving scenario step 2 alone gives most of the gain: a
+question's first request to a parked model waits for a copy, not a load.
+Step 3 hides the copy as well.
 
 ## 7. The alternatives
 
 | choice | pros | cons |
 |---|---|---|
 | status quo | nothing to build | more models than fit means full loads, 7.5–8.7 s each |
-| RAGE alone: planned turns over today's load and unload | no engine or LocalAI change | every switch is still a process start; only Louise gains |
+| Louise alone: the question's card over today's load and unload (live since 2026-11-09) | no engine or LocalAI change | every model a question meets cold is a process start, 5–14 s each; only Louise gains |
 | page mode (room-on-the-card.md, built, off) | automatic; +0.2–0.4 s for a small model, +1.3–1.8 s for the 35B (measured) | the driver chooses what moves and when; it holds host RAM; a full card killed a backend (0013 staged for it) |
 | LocalAI and the engine alone | generic; could go upstream | reactive: the first request to a parked model waits for the copy |
-| **both engines, in that order (the operator's choice)** | each layer where its knowledge is; RAGE adds two calls | the largest change; a LocalAI patch to carry until upstream takes it |
+| **both engines, in that order (the operator's choice)** | each layer where its knowledge is; Louise adds two calls to a module she has | the largest change; a LocalAI patch to carry until upstream takes it |
 
 Existing tools, and why they are not the answer by themselves:
 - **llama-swap** swaps whole llama.cpp server processes: every swap is a
