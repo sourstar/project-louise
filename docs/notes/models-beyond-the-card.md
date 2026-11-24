@@ -135,6 +135,36 @@ Nothing below is known today. Each decides a part of the design.
    working, 4.7 GB at the lowest (the worker at 18 GiB beside two builds).
    The weights of everything loaded today are about 25.5 GB.
 
+### 5.1 What the node already holds (München, 2026-11-24)
+
+Totals only, from the day's runs: a request to a model not loaded until its
+first answer, the weights in the page cache, the card not full.
+
+| model | weights | cold load |
+|---|---|---|
+| bge-m3 (through the wrapper) | 621 MiB | 6.0 s |
+| qwen3-embedding-4b (the gate's cold start) | 2,737 MiB | 4.2 s |
+| nemotron-3-embed-1b (engine direct, context held) | 2,512 MiB | 5.17–6.11 s |
+| the Nemotron reranker | 2,465 MiB | 7.41–7.51 s |
+| the OmniVoice port | 1,442 MiB | 7.7–8.4 s (61.9 s the first time on a new engine: its kernels compiled) |
+| MADLAD | 4,850 MiB | 8.14–8.70 s |
+| the 35B chat | 20.6 GiB | 8.1–8.8 s (40.8 s with its file not yet in the page cache) |
+
+- **The totals do not grow with the size.** 0.6 GiB takes 6.0 s and 20.6 GiB
+  takes 8.1 s. So most of a load is not the copy. This is read off totals of
+  different models on different paths, not a split: the split (a load with
+  `verbosity:4`, an encoder and MADLAD) confirms or corrects it.
+- If it holds, parking saves most of a load: what remains is the copy, a
+  fraction of a second for an encoder.
+- The copy's rate, indirectly: the driver brought 4.2 GiB of paged-out
+  buffers back in 1.25–1.76 s (2.4–3.4 GiB/s); the 35B's whole load is at
+  least 2.5 GiB/s with everything in it.
+- A file out of the page cache costs far more than anything else (40.8 s
+  against 8.1 s): parked weights held in host RAM are what avoids it.
+- Not held: the split itself (1), a load beside a working encoder (2), the
+  busy share with two encoders (3). Host memory per minute (4) is being
+  logged since 2026-11-24, for seven days.
+
 ## 6. The order, each step on the operator's word
 
 | step | who | done when |
