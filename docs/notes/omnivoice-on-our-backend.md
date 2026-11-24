@@ -314,7 +314,7 @@ differ from the CPU's on either program.
 A control token typed in the text to speak is not read as one (the text is
 the user's).
 
-**Speed, CPU only — WITHDRAWN as a comparison, being re-measured.** The
+**Speed, CPU only — WITHDRAWN as a comparison, re-measured in §11.** The
 first figures here (the sentence in 60 s against omnivoice.cpp's 158 s, "on
 the same 4 threads") were not like for like: omnivoice.cpp takes half the
 logical cores (2 threads here), the port ran on 4, and some of the
@@ -333,7 +333,7 @@ four.
 
 ## 9. Stage 4: a voice from a clip, a voice from a description (2026-11-24)
 
-Both are in the staged patch (now 1,510 lines of our own in 20 files; the
+Both are in the staged patch (1,582 lines of our own in 21 files with §11's changes; the
 vendored rules gain the resampler and the vocabulary of voice descriptions).
 
 **From a clip.** The mmproj gets an audio encoder beside the decoder, as
@@ -362,7 +362,7 @@ Italian sentence with its transcript, the text a second sentence, seed 0):
 | the scoring, with the clip | the reference's scoring on the port's logits: 0 of 752 codes differ over 32 steps |
 | the audio, with the clip | same length (89,760 samples); outside the chunk's last 5,000 samples, 15 samples two units apart and none more; inside, up to 5 units — §8's second difference, which a clip's ending does not hide under silence |
 | the server | `/v1/audio/speech` with `speaker_ref_b64` and `speaker_ref_text`, and with `voice`, gives the tool's files byte for byte; an unknown description is answered 400 |
-| speed, CPU | not a comparison yet: 77 s on 4 threads against omnivoice.cpp's 262 s on 2 (§8, §11) |
+| speed, CPU | 80.4 s against omnivoice.cpp's 167.1 s, 4 threads each, one job on the machine (§11; the first figures, 77 s on 4 threads against 262 s on 2, were not like for like) |
 
 **Memory between requests.** The context the decoding runs on is created
 for a request and freed with its audio (4.1 ms to create on the CPU, the
@@ -426,10 +426,98 @@ of this touches the live speech until the last step.
    admin's recorded voice through LocalAI's `/v1/audio/speech` exactly as
    Louise sends it (`voice: localai://voice-profiles/<id>`): time to the
    clip, VRAM at rest and at work for both, and that the transcript arrives
-   (the first-step prompt in the trace has it).
+   (the first-step prompt in the trace has it). The port's own line per
+   request (§11; `verbosity:4` in the model's options, as for the engine's
+   other INFO lines) splits that time into the clip's encoding, the
+   backbone, the heads, the scoring and the decoder: on the second
+   sentence in the same voice the clip's part must read 0.00 s — the model
+   on ONE slot — and what the host-side scoring weighs on the card is the
+   figure the next optimization would start from.
 5. **The operator's ear**: the same sentences from both backends, in the
    recorded voice and in the model's own. This is the one comparison no
    number makes (§7.1): the two do not decode alike.
 6. Only then, on the operator's word: the two patches into the series (a new
    engine, gated like any other), the node's speech model repointed, the
    omnivoice backend retired.
+
+## 11. Speed at equal threads, and what was optimized (2026-11-24)
+
+*The operator: "have both the timings been calculated with an unloaded
+CPU?" — no (§8). Then: "Can you implement and measure the omnivoice
+improvements?"*
+
+**How** (measuring.md §6). This session's machine: CPU only, 4 cores, no
+card. One job at a time; each row written with the load before it and the
+count of other processes above 5 % of a core (none, every row). Both
+programs built with the same flags on the same ggml, the same Q8_0 weights;
+omnivoice.cpp with its mask blocked (`OV_HARD_MASK=1`, so both decode the
+model's way) and its thread count set (`OV_THREADS`, new in
+`tools/measure/omnivoice_reference_hooks.patch`: it takes half the cores
+otherwise), the port with `-t N -tb N`; the two alternated. Wall time of the
+whole program, the load of the model included.
+
+| | threads | omnivoice.cpp, s | the port, s | ratio |
+|---|---|---|---|---|
+| a sentence in the model's voice (168 frames, 6.72 s of audio) | 2 | 199.2, 208.1 | 133.8, 146.8 | 1.42–1.49 |
+| the same | 4 | 101.0, 109.5 | 82.3, 80.7 | 1.23–1.36 |
+| a sentence in a clip's voice (94 frames, 3.76 s; the clip 6.5 s) | 4 | 167.1 | 80.4 | 2.08 |
+
+The ratio is the result, not the seconds: that hour the machine ran about
+1.3 times slower than when the withdrawn figures were taken (omnivoice.cpp
+on 2 threads then 155–159 s, the port on 4 59.6 s), and a row repeats within
+5–10 %. Part of the ratio is counted rather than timed: a step of the port
+is the conditional sequence plus the target frames alone — 203 + 168 = 371
+rows for the sentence, 308 + 94 = 402 with the clip — where omnivoice.cpp
+pads the second sequence to the first: 406 and 616 rows, 1.09 and 1.53
+times as many. Every port row gave the gated audio byte for byte, on 2 and
+on 4 threads.
+
+**Where the port's time goes** — its own line in the log, new with this
+work (`omnivoice: 1 chunk(s), 32 steps: voice clip … s, backbone … s,
+audio heads … s, scoring … s, decoder … s`), 4 threads, before any change:
+
+| | the sentence | with the clip |
+|---|---|---|
+| backbone, 32 steps | 77.7 s (95 %) | 75.1 s (93 %) |
+| the clip's encoding | — | 2.5 s |
+| audio heads | 1.25 s | 0.62 s |
+| scoring, host code | 0.87 s | 0.48 s |
+| decoder | 1.55 s | 0.75 s |
+
+On a CPU the backbone is the whole cost, at the rate the engine gives any
+0.6B model (about 156 rows a second on 4 threads here), and nothing that
+keeps the audio shortens it. **The card will not look like this**: there
+the backbone, the heads and the decoder are the card's, and what stays on
+the host — the scoring, and the clip's encoding on every sentence — is what
+a sentence of two or three seconds would notice. That is where the changes
+went, and why the line ships: München's run gives this table on the B70.
+
+**The changes** — each with the audio unchanged byte for byte (the sentence
+against the gated file on 2 and 4 threads; the clip's sentence against the
+earlier file, through the tool and through `llama-server`):
+
+| change | measured, 4 threads | cost | kept |
+|---|---|---|---|
+| a slot keeps the last clip, sample for sample, with the rows its encoding gave; a request with the same clip reuses them (Louise sends an answer one sentence per request, each with the same voice profile) | the clip's encoding 2.55 s → 0.00 s on the next request (another clip: 1.35 → 0.00), and by the server's own clock 2.59 s → 2 ms from taking the request to starting its decoding; the clip changed and changed back is encoded again each time, its audio equal to a fresh process's | the clip and its rows held between requests: 1.3 MB for 6.5 s; per slot — with several slots a request may land on one that has not seen the clip (measured: four slots, four encodings). The node's speech model has one | yes |
+| the scoring of a step shared by the caller's batch threads (`std::thread`; the helper has no pool and ggml's serves graphs only) | 0.87–0.92 s → 0.44 s a sentence | three threads started per step | yes |
+| a slot already decoded is not scored again | 0.44 s → 0.37–0.40 s (few slots are decoded before the last steps) | none | yes |
+| states asked for the target rows only, so that the last layer leaves the text and voice rows out | nothing: alternate steps of one run with and without, 3 runs, 48 pairs — 112.37 s against 112.33 s, where a step varies by ±10 % | — | **no, taken out** |
+
+On this CPU the kept ones are worth 0.5 s of a sentence's 80 and 2–2.6 s
+more when the clip repeats. Not built: dropping the second sequence when a
+request asks for no guidance (`cfg_scale` 1) — it would cut 23–45 % of the
+rows of a mode nobody uses.
+
+**What would shorten the backbone changes the audio — the operator's
+choice, never a default here:**
+
+| | pros | cons |
+|---|---|---|
+| 32 steps, guided (today; what the gate passed) | the model's own setting; the audio judged so far | the full time |
+| 16 steps (`flow_steps` in the request; no code needed) | MEASURED 39.7 s against 81.8 s, the same sentence, one after the other | different audio (the file differs); its quality is unjudged — an ear's verdict, on the card |
+| no guidance (`cfg_scale` 1) | 23–45 % of the rows gone (counted), once built | the model is trained to be guided; unjudged, likely worse |
+
+Recommendation: nothing changes — 32 guided steps — and the 16-step file
+joins the sentences the operator listens to at §10 step 5, where the card's
+own seconds say whether halving them is worth a hearing. If the operator
+says nothing: 32 steps.

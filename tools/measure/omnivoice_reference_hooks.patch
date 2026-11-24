@@ -1,3 +1,21 @@
+diff --git a/src/backend.h b/src/backend.h
+index 2b7dcc0..7c6c03f 100644
+--- a/src/backend.h
++++ b/src/backend.h
+@@ -27,6 +27,13 @@ struct BackendPair {
+ // Used for GGML CPU thread count: GEMM shares SIMD units across hyperthreads,
+ // so one thread per physical core is optimal.
+ static int backend_cpu_n_threads(void) {
++    // LOCAL TEST HOOK (not upstream): OV_THREADS=<n> sets the count, to time this program at a given one
++    if (const char * env = getenv("OV_THREADS")) {
++        int forced = atoi(env);
++        if (forced > 0) {
++            return forced;
++        }
++    }
+     int n = (int) std::thread::hardware_concurrency() / 2;
+     return n > 0 ? n : 1;
+ }
 diff --git a/src/maskgit-tts.h b/src/maskgit-tts.h
 index 2fbbe5a..7d65da3 100644
 --- a/src/maskgit-tts.h

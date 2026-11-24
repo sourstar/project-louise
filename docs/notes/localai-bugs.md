@@ -1198,6 +1198,11 @@ a chunk (two transposed convolutions omnivoice.cpp pads with a zero); two
 runs byte-identical; a clip's codes equal on 158 of 159 frames, the other on
 a near-tie (`tools/measure/omnivoice_port_gate.py`,
 `tests/test_measure_omnivoice_port_gate.py`, `tests/test_omnivoice_repack.py`).
+**Speed (CPU, equal threads, one job on the machine):** 1.2–1.5 times
+omnivoice.cpp's on a sentence, 2.1 times with a voice clip; a slot keeps the
+last clip's frames, so an answer read sentence by sentence encodes its
+clip once; one log line per request says where its time went
+(omnivoice-on-our-backend.md §11; `tests/test_localai_staged_omnivoice.py`).
 
 **For LocalAI's team, when it is filed:** nothing to change in LocalAI; the
 gallery would list the two repacked files under the llama.cpp backend. For

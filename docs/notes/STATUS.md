@@ -40,8 +40,14 @@ measured (published figures disagree).
   other on a near-tie), prompts identical, the server gives the tool's bytes. A second staged patch
   (`0010-llama-cpp-tts-voice-modes.patch`, in LocalAI's backend) passes a voice profile's transcript on and accepts a
   request without a voice, which Louise's own requests need. Streaming a long text chunk by chunk is not ported:
-  Louise sends a sentence per request. Left: the card — München's, in a window, with the operator's ear on the two
-  voices (§10 of the note).
+  Louise sends a sentence per request. **Speed, measured at equal threads with one job on the machine (§11; the first
+  figures, 60 s against 158 s, compared 4 threads with 2 and are withdrawn):** the port is 1.2–1.5 times faster than
+  omnivoice.cpp on a sentence and 2.1 times with a voice clip, on the CPU; 95 % of its time is the backbone, which
+  nothing that keeps the audio shortens. Kept, audio unchanged byte for byte: a slot reuses the last clip's frames
+  (2.1–2.6 s a sentence here, every sentence after the first of an answer), the scoring on the caller's threads and
+  without the decoded slots (0.9 → 0.4 s); taken out for want of a measured gain: states for target rows only. A
+  line per request says where its time went — the card's proportions will not be the CPU's. Left: the card —
+  München's, in a window, with the operator's ear on the two voices (§10 of the note).
 - **2026-11-24, "Engine now, chat later" (operator): the new engine is adopted, the chat model decided after the
   POC.** The cut-over's order is in [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §5:
   BACKOUT first; the wrapper `vega-louise-llama-cpp` repointed at `c3294e050ff2`, MADLAD and the nemotron reranker

@@ -20,7 +20,9 @@ The port's side is its trace (`MTMD_DEBUG_OMNIVOICE=<dir> llama-tts ...`);
 the reference's side is omnivoice.cpp with
 tools/measure/omnivoice_reference_hooks.patch (`OV_HARD_MASK`,
 `OV_FORCE_TOKENS`, `OV_REPLAY_LOGITS`), built on the engine's ggml. Both dump
-`int32 n_dims, int32 shape[n_dims], float32 data`.
+`int32 n_dims, int32 shape[n_dims], float32 data`. `OV_THREADS=<n>` in the
+same patch sets the reference's thread count (it takes half the machine's
+by default; the port takes `-t`): a speed comparison sets both.
 
     python3 -I tools/measure/omnivoice_port_gate.py --port TRACE \\
         --reference DUMP --forced 16=DIR --noise 16=DIR ... --replay DIR \\

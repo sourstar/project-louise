@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
-Date: Tue, 24 Nov 2026 08:31:49 +0000
+Date: Tue, 24 Nov 2026 10:23:14 +0000
 Subject: [PATCH] feat(llama-cpp): speak with OmniVoice on llama.cpp's own
  audio generation
 MIME-Version: 1.0
@@ -31,16 +31,16 @@ repository). The card comes before it joins the series.
 
 Assisted-by: Claude Code
 ---
- .../patches/0012-mtmd-omnivoice.patch         | 5783 +++++++++++++++++
- 1 file changed, 5783 insertions(+)
+ .../patches/0012-mtmd-omnivoice.patch         | 5854 +++++++++++++++++
+ 1 file changed, 5854 insertions(+)
  create mode 100644 backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
 
 diff --git a/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch b/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
 new file mode 100644
-index 0000000..17f5b22
+index 0000000..3f82062
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
-@@ -0,0 +1,5783 @@
+@@ -0,0 +1,5854 @@
 +mtmd: speak with OmniVoice (k2-fsa/OmniVoice), text to speech by masked generative decoding
 +
 +OmniVoice is a Qwen3-0.6B read in both directions that fills the 8 codebooks
@@ -91,6 +91,15 @@ index 0000000..17f5b22
 +  <|instruct_start|> and <|instruct_end|>; the pipeline holds it to the
 +  vocabulary the model was trained on (omnivoice.cpp's table) and refuses
 +  the rest.
++- between two requests a slot's pipeline keeps the last voice clip, sample
++  for sample, with the rows its encoding gave: an answer read one sentence
++  per request in the same voice encodes its clip once (2.1 to 2.6 s a
++  request on 4 CPU threads). The scoring of a step leaves out the slots
++  already decoded and is shared by the caller's batch threads (0.9 s a
++  sentence down to 0.4 s on 4 threads); a slot's arithmetic is the same on
++  any count, and the audio is the same byte for byte with both.
++- one line per request says where its time went: the clip's encoding, the
++  backbone, the audio heads, the scoring, the decoder.
 +- vendor/omnivoice: omnivoice.cpp's host-side rules, unchanged (MIT): language
 +  names, the duration estimate, the chunking of long texts, post-processing,
 +  the resampler, the vocabulary of voice descriptions, and Philox4x32-10
@@ -871,10 +880,10 @@ index 0000000..17f5b22
 +             {
 +                 // without a stage (warmup), a short decoder graph: 2 frames, 600 samples each, one STFT row per 5 samples
 +diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
-+index ef9cfee..e6f7d37 100644
++index ef9cfee..955727b 100644
 +--- a/tools/mtmd/mtmd-helper-gen.cpp
 ++++ b/tools/mtmd/mtmd-helper-gen.cpp
-+@@ -7,14 +7,39 @@
++@@ -7,14 +7,40 @@
 + #include <algorithm>
 + #include <cctype>
 + #include <cmath>
@@ -890,6 +899,7 @@ index 0000000..17f5b22
 + #include <unordered_map>
 ++#include <unordered_set>
 ++#include <utility>
+++#include <thread>
 + #include <vector>
 + 
 ++// OmniVoice's host-side rules, unchanged from omnivoice.cpp (MIT, see vendor/omnivoice): language names, the duration
@@ -914,7 +924,7 @@ index 0000000..17f5b22
 + #ifdef MTMD_INTERNAL_HEADER
 + #error "mtmd-helper is a public library outside of mtmd. it must not include internal headers"
 + #endif
-+@@ -1361,6 +1386,740 @@ private:
++@@ -1361,6 +1387,801 @@ private:
 +     bool sent    = false;
 + };
 + 
@@ -947,6 +957,7 @@ index 0000000..17f5b22
 ++        wav.clear();
 ++        backbone.reset();
 ++        n_rows_max = 0;
+++        t_us = {};
 ++        voice_rows.clear();
 ++        voice_text.clear();
 ++        voice_rms  = -1.0f;
@@ -972,15 +983,27 @@ index 0000000..17f5b22
 ++                return 1;
 ++            }
 ++            // the clip as the reference prepares it: raised to 0.1 RMS when quieter, its silences trimmed
+++            const int64_t t_voice = ggml_time_us();
 ++            const float * pcm = (const float *) mtmd_bitmap_get_data(inp->speaker_ref);
 ++            std::vector<float> clip(pcm, pcm + mtmd_bitmap_get_n_bytes(inp->speaker_ref) / sizeof(float));
-++            voice_rms = ov::ref_preprocess_audio(clip, info.sample_rate, true);
-++            mtmd::bitmap_ptr prepared(clip.empty() ? nullptr : mtmd_bitmap_init_from_audio(clip.size(), clip.data()));
-++            if (!prepared || !encode_speaker(prepared.get(), voice_rows) || voice_rows.empty()) {
-++                LOG_ERR("mtmd_helper_gen_audio: omnivoice: failed to encode the voice clip\n");
-++                return 1;
+++            if (!kept_clip.empty() && kept_clip == clip) {
+++                // the same clip as the last request's (an answer read sentence by sentence): its frames are the same
+++                voice_rows = kept_rows;
+++                voice_rms  = kept_rms;
+++            } else {
+++                kept_clip = clip;
+++                voice_rms = ov::ref_preprocess_audio(clip, info.sample_rate, true);
+++                mtmd::bitmap_ptr prepared(clip.empty() ? nullptr : mtmd_bitmap_init_from_audio(clip.size(), clip.data()));
+++                if (!prepared || !encode_speaker(prepared.get(), voice_rows) || voice_rows.empty()) {
+++                    kept_clip.clear();
+++                    LOG_ERR("mtmd_helper_gen_audio: omnivoice: failed to encode the voice clip\n");
+++                    return 1;
+++                }
+++                kept_rows = voice_rows;
+++                kept_rms  = voice_rms;
 ++            }
 ++            n_voice = (int) (voice_rows.size() / n_embd);
+++            t_us.voice = ggml_time_us() - t_voice;
 ++            if (inp->speaker_ref_text && inp->speaker_ref_text[0]) {
 ++                voice_text = ov::add_punctuation(inp->speaker_ref_text);
 ++            }
@@ -1075,6 +1098,7 @@ index 0000000..17f5b22
 ++        if (!generate(chunk.text, chunk.n_frames, codes, trace)) {
 ++            return -1;
 ++        }
+++        const int64_t t_dec = ggml_time_us();
 ++        mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
 ++        inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
 ++        inp.codes   = codes.data();
@@ -1083,6 +1107,7 @@ index 0000000..17f5b22
 ++        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
 ++            return -1;
 ++        }
+++        t_us.decoder += ggml_time_us() - t_dec;
 ++        chunk_audio.emplace_back(out.audio, out.audio + out.n_samples);
 ++        if (trace) {
 ++            trace_dump("mg-tokens", codes, { n_codebook, chunk.n_frames });
@@ -1367,6 +1392,21 @@ index 0000000..17f5b22
 ++        return true;
 ++    }
 ++
+++    // [0, n) in equal parts, one per thread of the caller's batch threads (std::thread: the helper has no pool of
+++    // its own, and ggml's serves graphs only); a part is at least 64 items
+++    template <typename F> void each_part(int n, F && work) const {
+++        const int n_part = std::max(1, std::min(llama_n_threads_batch(lctx), n / 64));
+++        std::vector<std::thread> others;
+++        others.reserve((size_t) n_part - 1);
+++        for (int w = 1; w < n_part; w++) {
+++            others.emplace_back(work, (int) ((int64_t) n * w / n_part), (int) ((int64_t) n * (w + 1) / n_part));
+++        }
+++        work(0, (int) ((int64_t) n / n_part));
+++        for (auto & t : others) {
+++            t.join();
+++        }
+++    }
+++
 ++    static void log_softmax(float * x, int n) {
 ++        float m = x[0];
 ++        for (int v = 1; v < n; v++) {
@@ -1468,6 +1508,7 @@ index 0000000..17f5b22
 ++            for (int t = 0; t < n_frames; t++) {
 ++                audio_row(codes.data(), n_frames, t, target + (size_t) t * n_embd);
 ++            }
+++            const int64_t t_step = ggml_time_us();
 ++            if (!fill_batch() || llama_process(backbone.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
 ++                LOG_ERR("mtmd_helper_gen_audio: omnivoice backbone failed\n");
 ++                return false;
@@ -1480,6 +1521,10 @@ index 0000000..17f5b22
 ++                std::copy(h, h + n_embd, states.begin() + (size_t) i * n_embd);
 ++            }
 ++
+++            const int64_t t_heads = ggml_time_us();
+++            t_us.backbone += t_heads - t_step;
+++            t_us.n_steps++;
+++
 ++            mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
 ++            inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
 ++            inp.feats   = states.data();
@@ -1489,6 +1534,9 @@ index 0000000..17f5b22
 ++                LOG_ERR("mtmd_helper_gen_audio: omnivoice audio heads failed\n");
 ++                return false;
 ++            }
+++            const int64_t t_score = ggml_time_us();
+++            t_us.heads += t_score - t_heads;
+++
 ++            // a state gives the 8 codebooks side by side; the scoring reads one codebook after the other
 ++            for (int k = 0; k < n_codebook; k++) {
 ++                for (int t = 0; t < n_frames; t++) {
@@ -1504,28 +1552,37 @@ index 0000000..17f5b22
 ++                trace_step(step, "logits-uncond", u_log, { n_codebook, n_frames, n_code });
 ++            }
 ++
-++            // guidance in log space, the best code of each slot and its log-probability
-++            for (int i = 0; i < n_slots; i++) {
-++                float * c = c_log.data() + (size_t) i * n_code;
-++                float * u = u_log.data() + (size_t) i * n_code;
-++                if (guidance != 0.0f) {
+++            // guidance in log space, the best code of each slot and its log-probability. A slot reads and writes
+++            // nothing of another, so the caller's threads share them and the result is the same on any count
+++            each_part(n_slots, [&](int i0, int i1) {
+++                for (int i = i0; i < i1; i++) {
+++                    if (codes[i] != mask_id) {
+++                        // decoded already: its score is -inf below whatever the logits say
+++                        predicted[i]  = codes[i];
+++                        confidence[i] = 0.0f;
+++                        continue;
+++                    }
+++                    float * c = c_log.data() + (size_t) i * n_code;
+++                    float * u = u_log.data() + (size_t) i * n_code;
+++                    if (guidance != 0.0f) {
+++                        log_softmax(c, n_code);
+++                        log_softmax(u, n_code);
+++                        for (int v = 0; v < n_code; v++) {
+++                            c[v] = c[v] + guidance * (c[v] - u[v]);
+++                        }
+++                    }
 ++                    log_softmax(c, n_code);
-++                    log_softmax(u, n_code);
-++                    for (int v = 0; v < n_code; v++) {
-++                        c[v] = c[v] + guidance * (c[v] - u[v]);
+++                    c[mask_id] = -INFINITY;
+++                    int best = 0;
+++                    for (int v = 1; v < n_code; v++) {
+++                        if (c[v] > c[best]) {
+++                            best = v;
+++                        }
 ++                    }
+++                    predicted[i]  = best;
+++                    confidence[i] = c[best];
 ++                }
-++                log_softmax(c, n_code);
-++                c[mask_id] = -INFINITY;
-++                int best = 0;
-++                for (int v = 1; v < n_code; v++) {
-++                    if (c[v] > c[best]) {
-++                        best = v;
-++                    }
-++                }
-++                predicted[i]  = best;
-++                confidence[i] = c[best];
-++            }
+++            });
 ++            // the first codebooks first, then Gumbel noise: the generator of torch.rand on CUDA, one block per step
 ++            for (int i = 0; i < n_slots; i++) {
 ++                confidence[i] -= (float) (i / n_frames) * layer_penalty;
@@ -1545,6 +1602,7 @@ index 0000000..17f5b22
 ++            for (int n = 0; n < schedule[step]; n++) {
 ++                codes[order[n]] = predicted[order[n]];
 ++            }
+++            t_us.scoring += ggml_time_us() - t_score;
 ++            if (trace) {
 ++                trace_step(step, "codes-after", codes, { n_codebook, n_frames });
 ++            }
@@ -1583,6 +1641,9 @@ index 0000000..17f5b22
 ++        // the backbone context is the request's: between two requests only the weights stay loaded
 ++        backbone.reset();
 ++        n_rows_max = 0;
+++        LOG_INF("mtmd_helper_gen_audio: omnivoice: %zu chunk(s), %d steps: voice clip %.2f s, backbone %.2f s, audio heads %.2f s, "
+++                "scoring %.2f s, decoder %.2f s\n", chunks.size(), t_us.n_steps, t_us.voice / 1e6, t_us.backbone / 1e6,
+++                t_us.heads / 1e6, t_us.scoring / 1e6, t_us.decoder / 1e6);
 ++        finished = true;
 ++        return true;
 ++    }
@@ -1627,6 +1688,12 @@ index 0000000..17f5b22
 ++    llama_context_ptr backbone;
 ++    int n_rows_max = 0;
 ++
+++    // where the time of a request goes, in microseconds
+++    struct {
+++        int64_t voice = 0, backbone = 0, heads = 0, scoring = 0, decoder = 0;
+++        int32_t n_steps = 0;
+++    } t_us;
+++
 ++    std::string text, lang, instruct;
 ++    uint32_t seed       = 0;
 ++    uint32_t philox_ctr = 0; // one generator for all the chunks
@@ -1640,6 +1707,10 @@ index 0000000..17f5b22
 ++    std::string voice_text;
 ++    float voice_rms = -1.0f;
 ++    int n_voice = 0;
+++
+++    // the last clip encoded, sample for sample, with its rows and its level: kept across requests
+++    std::vector<float> kept_clip, kept_rows;
+++    float kept_rms = -1.0f;
 ++
 ++    std::vector<chunk> chunks;
 ++    size_t n_done = 0;
@@ -1655,7 +1726,7 @@ index 0000000..17f5b22
 + // tiny-voca is not autoregressive: the backbone encodes the phonemes of one sentence, the mmproj turns its states into audio
 + // the prompt is a phoneme string, symbols separated by spaces, a stress mark (ˈ or ˌ) before a stressed vowel
 + // each sentence is one utterance, like the reference pipeline: the "tts" template ends each one with <eos>
-+@@ -4926,6 +5685,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
++@@ -4926,6 +5747,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
 +             return std::unique_ptr<mtmd_gen_audio_pipeline>(new kokoro_gen_audio_pipeline(lctx, mctx));
 +         case MTMD_GEN_AUDIO_TYPE_TINY_VOCA:
 +             return std::unique_ptr<mtmd_gen_audio_pipeline>(new tiny_voca_gen_audio_pipeline(lctx, mctx));
