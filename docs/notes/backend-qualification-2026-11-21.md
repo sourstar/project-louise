@@ -739,3 +739,74 @@ for byte); decide the chat model after the POC and the chat contest's
 quality scores, since performance alone does not choose between a 9B at
 0.6 s and a 35B at 3 s. If the operator says nothing, nothing changes: the
 live engines keep serving and the 9B stays the chat model.
+
+## 5. The cut-over (operator, 2026-11-24: "Engine now, chat later")
+
+The engine is adopted; the chat model stays the 9B until the POC and the
+chat contest decide. München runs the cut-over on the node, in a window the
+operator grants there, on its own switch tooling (the 11-11 switch's), in
+this order. approved-encoders.md "Retiring an engine after a swap" is the
+standing procedure; what follows is this swap's instance of it.
+
+**What changes on the node**
+- the wrapper package `vega-louise-llama-cpp` points at
+  `louise-sycl-f16-llama-cpp-c3294e050ff2-stack-7c301a7ba437` (at the live
+  wrapper revision, as `vega-louise-llama-cpp-q` was built for phase 3): every
+  `vega-` llama.cpp encoder and the chat model move with it;
+- `louise-translate-madlad` and `louise-rerank-nemotron-1b` name that engine
+  directly (their YAMLs in this commit);
+- the thirteen YAMLs carry `fit:off` (094df03), as gated in phase 3.
+Nothing else: no collection's data, no Codex, no app code. The engine's VRAM
+check stays at its default (on): Louise frees the room before every cold
+load (`model_load._make_room`, operator 2026-11-16), a refused load reads as
+a busy endpoint, and the check is the backstop that replaces the silent
+spill.
+
+**Order**
+0. BACKOUT first, on disk before anything moves: the live wrapper package
+   copied outside the backends path (`backend_files.sh`'s `bf_copy`: the ACL
+   trap), every YAML about to change copied with its sha256; the old engines
+   stay installed until step 7. Backout = the wrapper and the YAMLs put back,
+   `models/reload`, each llama.cpp model shut down.
+1. The node paused, the web stopped; every llama.cpp model shut down; the
+   driver read (the card's zero).
+2. The wrapper repointed, the YAMLs replaced, `models/reload`. The test
+   copies (`vega-*-q`, `qual-*`) and the `-q` wrapper package removed, so
+   that nothing loads twice.
+3. The gates, one collection and role at a time, with their acceptance
+   recorded (`hold embedder check`): wikipedia (bge-m3), gutenberg
+   (qwen3-embedding-4b), pubmed's query side (medcpt-query), and every
+   collection on nemotron that is not frozen. A run that does not reproduce
+   itself, or a CPU reference below its line, stops the cut-over and the
+   BACKOUT runs — the wrapper is one package, so it is all or nothing.
+   Expected from phase 3: exact, the bytes the live engine gave.
+4. **NeuRIS**: its gate cannot run until a CPU reference resolves for it
+   (F5). If the architecture session's per-model reference is deployed by
+   the window, NeuRIS gates like the rest. If not, NeuRIS's run on the new
+   engine stays untested: its vector leg is withheld and its embedding
+   deferred, its text search goes on (03 §3.3), until that deploy. München
+   puts this to the operator with the window: cut over now with NeuRIS's
+   vectors waiting, or hold the whole cut-over for that deploy.
+5. MADLAD on its live name: t5waves T4 and T3 (the pilot first), equal to
+   the qualification's rows; its byte record re-cut from this engine and
+   dated. The reranker: `nemotron_rerank_parity.py` and twenty lists of
+   `rerank_bench`, scores equal to phase 0's. The chat 9B: one warm answer
+   on each fixed prompt.
+6. The web up, the node back to its mode. One Ask read end to end. Thirty
+   minutes watched: refusals by the VRAM check, evictions, deferrals in the
+   worker's log, `louise node resident show`.
+7. Retirement (standing permission): the old engines a Codex names archived
+   first (`tools.archive_backend`, its sidecar), then
+   `python3 -I deploy/vega/retired_backends.py`, then `--delete`:
+   `281e1ee481b6…`, `10aa8b1851d7`, the first v5.0.1 engine `133ef68669a1`
+   (it never served). Its output is the record.
+8. The record: what ran — the switch script, the final names, the gates'
+   lines — comes back here and is committed, so that the repository holds
+   what is live (F4's lesson).
+
+The keeper's context reserve and the reclaimer's line at 0.98 (the
+operator's B, with the architecture session) are another change: not in the
+same step, so that what the thirty minutes show belongs to one of them.
+
+**After it**: phase 5, the POC, on the adopted engine — the live set as it
+is, the 35B as the only test copy in place of the 9B — in a later window.

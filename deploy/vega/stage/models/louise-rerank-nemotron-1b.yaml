@@ -17,8 +17,12 @@
 # the SAME files are installed again under the name by the book, below, with no rebuild
 # (docs/notes/localai-bugs.md, "The series digest": the rename and its proof).
 # Its licence asks for "Built with Llama" on the service: Help › Basics › Models says it.
+# 2026-11-24 (operator: "Engine now, chat later"): the port is series 0007 on LocalAI v5.0.1
+# (llama.cpp 78e0529) and the reranker runs on the ONE engine below with every other llama.cpp
+# model. Qualified 2026-11-22: scores identical to the 10aa8b1851d7 run in 175 of 175 lists, parity
+# with torch (tau 1.0), 2,468 ms a list against 2,512 (backend-qualification-2026-11-21.md).
 {
-  "backend": "louise-sycl-f16-llama-cpp-10aa8b1851d7",
+  "backend": "louise-sycl-f16-llama-cpp-c3294e050ff2-stack-7c301a7ba437",
   "context_size": 3072,
   "embeddings": true,
   "env": {
