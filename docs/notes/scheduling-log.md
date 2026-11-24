@@ -3269,3 +3269,12 @@ after a failure).
 occurs): any "[parse pool] … were in flight: parsed again in processes of
 their own" line, with the seconds to the stage's next commit, and whether a
 "did not come back from a process of its own" line names a document.
+
+**AFTER (München, live 15e84e9 since 19:43Z, the pattern's fix #858 with
+it).** EUR-Lex5.next resumed at 21:41:33Z after the evening's pass: hu
+32007L0019 and its two corrigenda indexed within the first minute
+(fts_done 1; 36, 4 and 4 chunks), no error. In that time no "[parse pool]
+TimeoutError", no "in flight" and no "did not come back" line: the fallback
+has not run on the node, as expected with the pattern fixed. The count of
+the pool's failure lines per collection over the first hour is München's to
+add.

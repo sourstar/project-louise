@@ -33,6 +33,16 @@ measured (published figures disagree).
   measuring.md §10 had asked for an unloaded system since 11-03. The retake (node paused 28 minutes, the
   card empty for every load): a cold load is 4.3 to 6.6 s, of which 2.0 s are LocalAI's poll sleep, 0.2 to
   0.8 s the weights and 1.5 to 3.5 s the process's first run; a parked process holds 319 MiB of the card.
+- **The evening's pass, one round of gates for two changes** (München, 19:58–21:41Z, the node paused 6,203 s):
+  the four vega packages rebuilt with #856's wrapper and the engine swapped to 9ea95e93a83c (the live series
+  with staged 0012, 0013, 0014) together, then the seven gates ONCE: every fingerprint identical to before,
+  nothing rolled back. Gating the wrapper first and the engine three hours later would have validated seven
+  runs only to replace them (RULE 1). 0014 passed its card test (ten double signals, gone in 52–155 ms);
+  0012's default is today's engine by the fingerprints; 0013 (the pool's refusal) could not be provoked at
+  31,701 of 32,002 MiB and is live UNTESTED on the card. Twenty unloads through the new wrapper: 110–211 ms,
+  exit 0 each, no second interrupt. Against the morning's records of c3294e: MADLAD 379 of 379 translations
+  identical, the reranker's 20 lists equal, the 9B chat's rates the same. EUR-Lex5.next resumed at 21:41Z and
+  indexed hu 32007L0019 and its two corrigenda in its first minute (36, 4 and 4 chunks).
 - **Two more defects the retake found.** A vega model's unload took 15 s more on 3 of 14: the engine was
   told to stop twice (LocalAI signals the group, the wrapper signalled again), fixed in the wrapper (#856;
   a wrapper change IS a new run for every vega space — the wrapper's code is in the engine's image since
