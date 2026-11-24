@@ -621,8 +621,20 @@ def _with_rid(con, row) -> dict:
 #   2. then the pending rows after the selection's last rowid, walked by the
 #      scope index from that rowid (`_FTS_NEXT`): the rows of this batch,
 #      still unmarked, are behind the cursor, so nothing is taken twice.
-# Fresh batches only, and only while the pending set has no embedded row (the
-# index orders those last); anything else is selected afresh, as before.
+# Fresh batches only (never a re-index), of ONE CLASS: the scope index orders
+# the pending rows by `embed_done` and then by rowid, so the rows not yet
+# embedded come first and the embedded ones after them, each class in rowid
+# order. A chain walks the class of the batch that started it (`Chain.kind`).
+#
+# THE EMBEDDED CLASS WAS LEFT OUT UNTIL 2026-11-24, and that was a whole
+# collection's text index: a CARRIED collection's rows (a re-creation, a
+# rechunk — M1's four legal collections) are embedded before their text is
+# indexed, so no batch of theirs was ever parsed ahead. München, EUR-Lex5.next,
+# 21:55–22:09Z: 0 of 21 batch lines "parsed ahead", no fts-ahead thread, the
+# pipeline thread in `parallel.compute` in 8 dumps of 10, the pool's children
+# idle 88 % of their time; 374 s of the stage's 613 s (841 s of wall) were the
+# thread waiting for its own batch's parse, beside 252 s of rdf it could have
+# hidden them behind (docs/notes/scheduling.md §5, pitfall 22).
 #
 # TAKEN ONLY WHEN IT IS STILL TRUE. The next round takes it only if its own
 # selected row is the one the look-ahead starts at; and every row is read
@@ -646,7 +658,7 @@ def _with_rid(con, row) -> dict:
 # alone, written as a batch of its own.
 _FTS_NEXT = (
     "SELECT rowid AS rid, * FROM documents "
-    "WHERE in_scope=1 AND rdf_done=1 AND fts_done=0 AND embed_done=0 AND rowid>? "
+    "WHERE in_scope=1 AND rdf_done=1 AND fts_done=0 AND embed_done=? AND rowid>? "
     "AND error IS NULL AND retries<? ORDER BY rowid LIMIT ?")
 #: a look-ahead's rows read again, by rowid, in parts of this many (the `IN`
 #: size `_RESIDUAL_SQL` sends too; plan-checked at it)
@@ -675,10 +687,17 @@ def _fts_overlap() -> bool:
             and parallel.prefetch_allowed())
 
 
-def _fts_pending(r) -> bool:
-    """Still a fresh text-index candidate, in the look-ahead's order."""
+def _fts_class(r) -> int:
+    """The class of a pending row in the scope index's order: 0 not yet
+    embedded, 1 embedded already (a carried collection's rows)."""
+    return 1 if r["embed_done"] else 0
+
+
+def _fts_pending(r, kind: int = 0) -> bool:
+    """Still a fresh text-index candidate of the look-ahead's class `kind`,
+    in its order."""
     return (r["in_scope"] == 1 and r["rdf_done"] == 1 and r["fts_done"] == 0
-            and not r["embed_done"] and r["error"] is None
+            and _fts_class(r) == kind and r["error"] is None
             and int(r["retries"] or 0) < config.MAX_RETRIES)
 
 
@@ -751,7 +770,7 @@ def _fts_extend(con, collection, chain: lookahead.Chain, want: int, names: bool)
     added = 0
     while room > 0:
         n = min(room, want)
-        rows = [dict(r) for r in con.execute(_FTS_NEXT, (chain.cursor, config.MAX_RETRIES, n))]
+        rows = [dict(r) for r in con.execute(_FTS_NEXT, (chain.kind, chain.cursor, config.MAX_RETRIES, n))]
         if not rows:
             break
         chain.add(_fts_link(collection, rows, [None] * len(rows), names),
@@ -793,7 +812,7 @@ def _fts_take_ahead(con, row, collection) -> list | None:
         now = current.get(int(r["rid"]))
         if now == r:
             out.append((r, res))
-        elif now is not None and now["uid"] == r["uid"] and _fts_pending(now):
+        elif now is not None and now["uid"] == r["uid"] and _fts_pending(now, chain.kind):
             out.append((now, _CHANGED))
     if not out or out[0][0]["uid"] != row["uid"] or out[0][1] is _CHANGED:
         _fts_ahead.drop(key)                # the selected row itself changed: parse it now
@@ -817,13 +836,17 @@ def _fts_start_ahead(con, collection, computed: list, written: set, want: int,
     if not _fts_overlap():
         _fts_ahead.drop(key)
         return
-    if any(r["rid"] is None or r["embed_done"] for r, _ in computed):
+    kinds = {_fts_class(r) for r, _ in computed}
+    if any(r["rid"] is None for r, _ in computed) or len(kinds) != 1:
+        # a batch across the two classes (the last rows not yet embedded and
+        # the first embedded ones): the next one is selected afresh, once
         _fts_ahead.drop(key)
         return
+    kind = kinds.pop()
     anchor = max(int(r["rid"]) for r, _ in computed)
     chain = _fts_ahead.get(key)
-    if chain is None or chain.broken:
-        chain = lookahead.Chain(anchor)
+    if chain is None or chain.broken or chain.kind != kind:
+        chain = lookahead.Chain(anchor, kind=kind)
         _fts_ahead.put(key, chain)
     else:
         chain.cursor = max(chain.cursor, anchor)
