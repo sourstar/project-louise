@@ -928,6 +928,26 @@ included, every missing one made on the CPU first — and that table is the
 retry's step 0b. München is making bge-m3's reference
 (`hold embedder cpu-reference wikipedia`) and retries on the same word.
 
+**The preflight (München, with architecture's read-only resolver:
+`reference.resolve` by the Codex's weights, set, ctx, cut and instruction;
+nothing created on a miss).** The collections whose encoder goes through the
+wrapper are exactly: wikipedia (bge-m3), gutenberg (qwen3-embedding-4b,
+document and query), pubmed's query side (medcpt-query), wikidata (nemotron,
+its own space) and S4 = NeuRIS / legi_F / Normattiva (and EUR-Lex5.next:
+Legal's, paused, not gated, covered by NeuRIS's statement). Nothing on
+granite, harrier or a `-nemo` collection is held; nemotron spaces declare no
+query encoder, so no query reference is asked. Every reference FOUND —
+wikidata's is the same key as S4's (ctx 8191, "passage: ", tokens) — **but
+wikipedia's** (weights `daec91ff…`, ctx 1024, tokens), in the making since
+06:30Z. pubmed's document side (OpenVINO) and Normattiva-DAR (torch) are
+outside the cut-over. The retry is armed on the node: it waits for that
+reference, runs the preflight again into the cut-over's log, requires every
+role found and the backout copies byte-equal to the live files, then steps
+1–3 once. On F11's other path: München reads the 11-22 gate as having taken
+the collection's own kept reference, under the code live before the
+node-store rule of that evening (9ed2281d); the gate's output comes with
+step 8.
+
 **After it**: phase 5, the POC, on the adopted engine — the live set as it
 is, the 35B as the only test copy in place of the 9B — in a later window. Two arms
 (§2 phase 5): the 35B offloaded with its cache, and arm S, the 35B resident
