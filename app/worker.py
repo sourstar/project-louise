@@ -152,14 +152,18 @@ def _ends_stop_watch(fn):
 def _load_chunks(row, collection):
     plugin = collection.plugin_instance()
     # ONE PARSE (docs/notes/one-parse.md): the fresh record where there is one
-    from . import record_source
+    from . import parse_journal, record_source
     pair = layers_mod.has_pair_layer(collection)
-    title, chapters, source = record_source.title_sections_and_source(collection, row, plugin, pair=pair)
-    # the document's LAYER decides the chunker (amendment 41); one layer =
-    # the plugin's chunker, exactly as before. Each chunk carries the record's
-    # `content_hash`, written beside its vector (embeddings.SOURCE_COLUMN)
-    return layers_mod.with_source(layers_mod.chunks_for_document(collection, row, chapters, title=title),
-                                  source)
+    # in the worker's own process, on its caller's thread: written down while
+    # it runs (app/parse_journal.py), and refused (ParseHeld, this document's
+    # error) once it was in progress at two ends of the process
+    with parse_journal.parsing(parse_journal.where_of(collection), row["uid"], "embed-chunks"):
+        title, chapters, source = record_source.title_sections_and_source(collection, row, plugin, pair=pair)
+        # the document's LAYER decides the chunker (amendment 41); one layer =
+        # the plugin's chunker, exactly as before. Each chunk carries the record's
+        # `content_hash`, written beside its vector (embeddings.SOURCE_COLUMN)
+        return layers_mod.with_source(layers_mod.chunks_for_document(collection, row, chapters, title=title),
+                                      source)
 
 _RDF_BATCH_PEERS = (
     "SELECT * FROM documents WHERE in_scope=1 AND rdf_done=0 AND error IS NULL "
@@ -6992,6 +6996,13 @@ def run_forever():
     # default SIGHUP and leave rsync writing with nobody to stop it
     signal.signal(signal.SIGHUP, _handle_sigterm)
     _register_stack_dump()
+    # A PROCESS ONE THREAD HOLDS LEAVES BY ITSELF (app/deadman.py; the node,
+    # 2026-11-24: 21 minutes in one regex call, restarted by hand), and what
+    # it was parsing in its own process is known to its successor
+    # (app/parse_journal.py), which then parses that document elsewhere
+    from . import deadman, parse_journal
+    deadman.arm(who="the worker")
+    parse_journal.start(config.louise_root() / "state")
     _start_stop_watch()
     _start_oom_watch()
     from . import jobs, run_check
