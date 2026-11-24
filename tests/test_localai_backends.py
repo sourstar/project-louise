@@ -779,8 +779,11 @@ RETIRED_PER_MODEL = ("louise-dar-legal-it", "louise-madlad", "louise-medcpt-arti
                      "vega-louise-medcpt-article-ov")
 # Everything else is llama.cpp: the one VeGa package (and its CPU build), or an
 # engine loaded directly — MADLAD, whose parallel slots the wrapper refuses
-# (approved-encoders.md).
-LLAMA_CPP_BACKENDS = r"vega-louise-llama-cpp(-cpu)?|louise-sycl-f16-llama-cpp-[0-9a-f]{7,40}"
+# (approved-encoders.md). An engine built on a pinned Intel stack says so in its
+# name (deploy/localai/llama-cpp/build.sh: `-stack-<digest>`; the node's since
+# the 2026-11-12 rename).
+LLAMA_CPP_BACKENDS = (r"vega-louise-llama-cpp(-cpu)?"
+                      r"|louise-sycl-f16-llama-cpp-[0-9a-f]{7,40}(-stack-[0-9a-f]{7,40})?")
 
 
 def test_the_backend_rules_name_tonights_backends():
@@ -790,6 +793,8 @@ def test_the_backend_rules_name_tonights_backends():
                                                             "vega-louise-python-20261021a"))
     assert not _on_a_python_tree("louise-sycl-f16-llama-cpp-16acc89")
     assert re.fullmatch(LLAMA_CPP_BACKENDS, "louise-sycl-f16-llama-cpp-16acc89")
+    assert re.fullmatch(LLAMA_CPP_BACKENDS, "louise-sycl-f16-llama-cpp-c3294e050ff2-stack-7c301a7ba437")
+    assert not re.fullmatch(LLAMA_CPP_BACKENDS, "louise-sycl-f16-llama-cpp-c3294e050ff2-stack-")
     assert not re.fullmatch(LLAMA_CPP_BACKENDS, "louise-madlad")
     assert not set(RETIRED_PER_MODEL) & set(PYTHON_TREES)
 
