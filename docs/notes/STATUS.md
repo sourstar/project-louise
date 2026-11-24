@@ -35,6 +35,12 @@ measured (published figures disagree).
   their text is indexed: M1's four legal collections indexed this way. Fixed (a chain per class of rows);
   the measuring script now counts the batches parsed ahead. Expected 1.5–1.7x on that stage; the AFTER is
   München's (scheduling-log.md, scheduling.md pitfall 22).
+- **A traceback for every large part on the live worker** (München, 80 in fifteen minutes on 89c6b6da:
+  "TypeError: object of type 'NoneType' has no len()" in `_adjust_process_count`). A large part runs in a
+  process used once; its executor was the standard library's, and 3.12's manager thread asked it to replace
+  the retired child after it was let go of. The thread died there, the answers were all in. The lane's
+  executor is the pool's own class now (`parallel._Executor`, the gh-115634 fix), reproduced and held by a
+  test on 3.12.
 - **A question's models are loaded ahead of the stage that needs them** (operator: "I want the preemptive
   model load to be implemented"). Each was loaded when its stage reached it, one cold load after the other
   (11-09: MADLAD 8.5 s in the language step, chat 13.4 s in the answer, first word 42.4 s cold against
