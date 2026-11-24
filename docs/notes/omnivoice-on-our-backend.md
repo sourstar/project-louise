@@ -360,6 +360,11 @@ Italian sentence with its transcript, the text a second sentence, seed 0):
 | the server | `/v1/audio/speech` with `speaker_ref_b64` and `speaker_ref_text`, and with `voice`, gives the tool's files byte for byte; an unknown description is answered 400 |
 | speed, CPU | 3.7 s of speech in a cloned voice: 77 s, against omnivoice.cpp's 262 s |
 
+**Memory between requests.** The context the decoding runs on is created
+for a request and freed with its audio (4.1 ms to create on the CPU, the
+audio unchanged): at rest the model holds its weights and nothing sized by
+the last sentence. What that is in MiB on the B70 is step 4 of §10.
+
 **Not ported, and not needed by the node:** a chunk of a long text delivered
 as soon as it is decoded (the audio comes in one piece at the end, as
 Kokoro's does). omnivoice.cpp has a streaming path and LocalAI's omnivoice

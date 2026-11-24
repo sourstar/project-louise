@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
-Date: Tue, 24 Nov 2026 08:24:18 +0000
+Date: Tue, 24 Nov 2026 08:31:49 +0000
 Subject: [PATCH] feat(llama-cpp): speak with OmniVoice on llama.cpp's own
  audio generation
 MIME-Version: 1.0
@@ -31,16 +31,16 @@ repository). The card comes before it joins the series.
 
 Assisted-by: Claude Code
 ---
- .../patches/0012-mtmd-omnivoice.patch         | 5773 +++++++++++++++++
- 1 file changed, 5773 insertions(+)
+ .../patches/0012-mtmd-omnivoice.patch         | 5783 +++++++++++++++++
+ 1 file changed, 5783 insertions(+)
  create mode 100644 backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
 
 diff --git a/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch b/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
 new file mode 100644
-index 0000000..03011b2
+index 0000000..17f5b22
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
-@@ -0,0 +1,5773 @@
+@@ -0,0 +1,5783 @@
 +mtmd: speak with OmniVoice (k2-fsa/OmniVoice), text to speech by masked generative decoding
 +
 +OmniVoice is a Qwen3-0.6B read in both directions that fills the 8 codebooks
@@ -65,7 +65,9 @@ index 0000000..03011b2
 +  embeddings).
 +- mtmd-helper: the pipeline. A step is one batch of two sequences on a
 +  backbone context the pipeline owns, so the caller's batch size never
-+  bounds a sentence: the conditional one (style, text, the codes of a voice,
++  bounds a sentence; it is created for a request (4 ms on the CPU) and freed
++  with its audio, so that between two requests only the weights stay loaded.
++  The sequences: the conditional one (style, text, the codes of a voice,
 +  the target frames) and the unconditional one (the target frames alone). A
 +  sequence only sees itself, which is how the reference masks: omnivoice.cpp
 +  ADDS its mask to the attention scores (the behaviour of transformers'
@@ -869,7 +871,7 @@ index 0000000..03011b2
 +             {
 +                 // without a stage (warmup), a short decoder graph: 2 frames, 600 samples each, one STFT row per 5 samples
 +diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
-+index ef9cfee..d65f3b7 100644
++index ef9cfee..e6f7d37 100644
 +--- a/tools/mtmd/mtmd-helper-gen.cpp
 ++++ b/tools/mtmd/mtmd-helper-gen.cpp
 +@@ -7,14 +7,39 @@
@@ -912,7 +914,7 @@ index 0000000..03011b2
 + #ifdef MTMD_INTERNAL_HEADER
 + #error "mtmd-helper is a public library outside of mtmd. it must not include internal headers"
 + #endif
-+@@ -1361,6 +1386,732 @@ private:
++@@ -1361,6 +1386,740 @@ private:
 +     bool sent    = false;
 + };
 + 
@@ -943,6 +945,8 @@ index 0000000..03011b2
 ++        chunk_audio.clear();
 ++        audio.clear();
 ++        wav.clear();
+++        backbone.reset();
+++        n_rows_max = 0;
 ++        voice_rows.clear();
 ++        voice_text.clear();
 ++        voice_rms  = -1.0f;
@@ -1352,11 +1356,14 @@ index 0000000..03011b2
 ++        cparams.n_threads_batch = llama_n_threads_batch(lctx);
 ++        cparams.embeddings      = true; // the states of every row, the model pools nothing
 ++        cparams.no_perf         = true;
+++        const int64_t t_start = ggml_time_us();
 ++        backbone.reset(llama_init_from_model(const_cast<llama_model *>(model), cparams));
 ++        if (!backbone) {
 ++            LOG_ERR("mtmd_helper_gen_audio: omnivoice: failed to create the backbone context\n");
 ++            return false;
 ++        }
+++        LOG_INF("mtmd_helper_gen_audio: omnivoice: backbone context of %d rows created in %.1f ms\n",
+++                n_rows_max, (ggml_time_us() - t_start) / 1000.0);
 ++        return true;
 ++    }
 ++
@@ -1573,6 +1580,9 @@ index 0000000..03011b2
 ++            }
 ++        }
 ++        ov::fade_and_pad(audio, info.sample_rate, 0.1, 0.1);
+++        // the backbone context is the request's: between two requests only the weights stay loaded
+++        backbone.reset();
+++        n_rows_max = 0;
 ++        finished = true;
 ++        return true;
 ++    }
@@ -1645,7 +1655,7 @@ index 0000000..03011b2
 + // tiny-voca is not autoregressive: the backbone encodes the phonemes of one sentence, the mmproj turns its states into audio
 + // the prompt is a phoneme string, symbols separated by spaces, a stress mark (ˈ or ˌ) before a stressed vowel
 + // each sentence is one utterance, like the reference pipeline: the "tts" template ends each one with <eos>
-+@@ -4926,6 +5677,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
++@@ -4926,6 +5685,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
 +             return std::unique_ptr<mtmd_gen_audio_pipeline>(new kokoro_gen_audio_pipeline(lctx, mctx));
 +         case MTMD_GEN_AUDIO_TYPE_TINY_VOCA:
 +             return std::unique_ptr<mtmd_gen_audio_pipeline>(new tiny_voca_gen_audio_pipeline(lctx, mctx));
