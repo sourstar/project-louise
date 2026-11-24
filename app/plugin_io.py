@@ -12,6 +12,7 @@ plugin encoded at discovery (e.g. pubmed's container::index) round-trips.
 """
 import json
 from pathlib import Path
+from collections.abc import Callable
 from typing import NamedTuple
 
 from .plugins.base import CanonicalDoc, DocRef
@@ -270,6 +271,26 @@ class OriginReads(NamedTuple):
     size: int | None
     shared: tuple[tuple[str, int | None], ...] = ()
     group: tuple[str, str] | None = None
+
+
+class OriginRanges(NamedTuple):
+    """WHAT A RECORD'S UNIT IS READ FROM IN A COPY OF THE ORIGIN, for an
+    origin compared with the copy by Range (app/acquire/range_origin.py):
+    `whole` — the files read whole, each shared by the units that read it
+    (a run's tables); `ranges()` — of the files read in part, the byte
+    ranges read, `(file, start, end)`, worked out when asked, since finding
+    them may read the copy (a work's pages are found by reading them);
+    `group` as `OriginReads`'."""
+    whole: tuple[Path, ...]
+    ranges: Callable[[], list[tuple[Path, int, int]]]
+    group: tuple[str, str] | None = None
+
+
+def origin_ranges(plugin, origin: str, base, *, run: str | None = None) -> "OriginRanges | None":
+    """`plugin.origin_ranges(origin, base, run)`, or None where the plugin
+    names no ranges (its origin is read another way)."""
+    of = getattr(plugin, "origin_ranges", None)
+    return None if of is None else of(origin, Path(base), run)
 
 
 def origin_weigher(plugin, base, *, run: str | None = None):
