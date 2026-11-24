@@ -195,6 +195,17 @@ llama.cpp copies (the check refuses a load onto a full card).
   again with it: how many MiB of the 35B go to the host when a small model
   needs room (expected: about what is needed, not 18.5 GiB), and what its
   next answer pays to bring them back.
+  **Brought forward (operator, 2026-11-24: "Test
+  GGML_SYCL_HOST_PINNED_MEM_2G"), ahead of the rest of the POC and after
+  the cut-over's own checks.** Part 1, no overcommit: two test copies of
+  the 35B differing only by the env, loaded A, B, A, B on an empty card —
+  load to first token, the two prompts, the footprint, the allocations
+  listed by `GGML_SYCL_MEMTRACE=1`, and the five short answers of B
+  against A's, text for text. Part 2, the partial swap under arm S's
+  guards: the 35B, then MADLAD, the reranker and nemotron-embed loaded on
+  top (the card over by ~3 GiB), each process's VRAM and GTT after every
+  step, the 35B's first-token time when it is asked again; once with 2 GiB
+  buffers and once with the single buffer.
 - Then everything unloaded, pins and settings restored, the GTT back at its
   baseline, the live set reloaded.
 If the window is short, S1 and S2 come first: the measured swap time is the
