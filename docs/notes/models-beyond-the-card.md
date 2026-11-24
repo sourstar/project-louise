@@ -67,16 +67,37 @@ VeGa's rule stands: "LocalAI is the only one handling VRAM on the card"
 
 ### 3.1 The engine
 
-- Context on demand (P11) already makes and frees a model's CONTEXT per
-  request. Parking extends the same idea to the WEIGHTS: the device buffers
-  are released, the host copy is kept, and an un-park allocates and copies.
+- Context on demand (P8 in the series since 11-22) already makes and frees
+  a model's CONTEXT per request, in 23–55 ms (measured 11-12). Parking is
+  that lifecycle carried one level down, to the WEIGHTS, and it needs it: a
+  model can be parked only with no live context.
 - One backend carries nearly everything on the card: the encoders, the
   rerankers, the chat, MADLAD (the encoder-decoder patches) and OmniVoice
-  (ported 2026-11-24, staged 0009 and 0010; operator: "I would like to have
-  only one backend"). Outside it: medcpt-article on OpenVINO (312 MiB),
-  parakeet (on the iGPU) and silero (CPU). They keep today's unload.
-- The engine counts its uploads, as P11 counts context creations, and
+  (ported 2026-11-24, staged; operator: "I would like to have only one
+  backend"). Outside it: medcpt-article on OpenVINO (312 MiB), parakeet (on
+  the iGPU) and silero (CPU). They keep today's unload.
+- The engine counts its uploads, as P8 counts context creations, and
   refuses rather than aborts when the device is full (staged 0013).
+
+What the engine does today, which parking has to change (the Tensor
+session, from the source, 2026-11-24):
+- **llama.cpp keeps no host copy of the weights for a GPU backend,** nor the
+  loader that knows each tensor's place in the file: both go after the
+  load. Parking keeps that map, and the file open or mapped, to copy again.
+- **ggml-sycl rewrites weights on the card at first use** (the reorder
+  layout). A parked copy is either the file's bytes, and the reorder runs
+  again after every un-park (a pass over the weights on the card,
+  deterministic, so the same bytes), or the reordered bytes read back once.
+  The choice decides an un-park's real cost (§8).
+- **Every tensor's address changes at an un-park.** Whatever remembers one
+  must be gone first: contexts (P8 does that), recorded SYCL graphs, the
+  fused-op and expert caches.
+- **A parked process is not nothing on the card:** its SYCL/Level Zero
+  context and compiled kernels stay. With one process per model, that floor
+  is multiplied by the number of parked models (§5, 5).
+- **OmniVoice is two model files** (a text model and an audio model, the
+  second with its own weights on the card). P8 refuses such a model today;
+  parking it means parking both halves.
 
 ### 3.2 LocalAI
 
@@ -85,7 +106,9 @@ VeGa's rule stands: "LocalAI is the only one handling VRAM on the card"
 - A request to a parked model un-parks it. That alone serves every client of
   LocalAI: eviction becomes cheap, with no caller changed.
 - Two calls, for a caller that knows what comes next: prepare, park. `/system`
-  says each model's state.
+  says each model's state. For the backend they are two new RPCs in
+  LocalAI's backend.proto, additive as P1 was. A backend that cannot park
+  answers "unsupported" and keeps today's unload.
 - A host-RAM budget for parked models, and a real unload beyond it.
 - It is generic, so it is proposed upstream (the pattern of
   `deploy/localai/upstream/`). Until it is taken, it is a patch we carry.
@@ -119,7 +142,8 @@ VeGa's rule stands: "LocalAI is the only one handling VRAM on the card"
 
 ## 5. What is measured first
 
-Nothing below is known today. Each decides a part of the design.
+Each decides a part of the design. What is already held is in §5.1; the
+rest is not known today.
 
 1. **A cold load's 7.5–8.7 s, split:** the process start, the file read
    (page cache cold and warm), the device's start, the copy, the first pass.
@@ -134,6 +158,11 @@ Nothing below is known today. Each decides a part of the design.
    Measured 2026-11-24: 28.6 GB available with the node paused, 10–20 GB
    working, 4.7 GB at the lowest (the worker at 18 GiB beside two builds).
    The weights of everything loaded today are about 25.5 GB.
+5. **What a parked process still holds on the card:** its device context
+   and compiled kernels, with no weights. Not measured: LocalAI stops a
+   backend's process when it unloads, so no such process exists today. The
+   empty card reads 25 MiB. It decides how many models beyond the card
+   really fit.
 
 ### 5.1 What the node already holds (München, 2026-11-24)
 
@@ -156,9 +185,12 @@ first answer, the weights in the page cache, the card not full.
   `verbosity:4`, an encoder and MADLAD) confirms or corrects it.
 - If it holds, parking saves most of a load: what remains is the copy, a
   fraction of a second for an encoder.
-- The copy's rate, indirectly: the driver brought 4.2 GiB of paged-out
-  buffers back in 1.25–1.76 s (2.4–3.4 GiB/s); the 35B's whole load is at
-  least 2.5 GiB/s with everything in it.
+- The copy's rate: 16.2 GiB/s host to B70 by the expert-cache tuner's fit
+  (backend-qualification-2026-11-21.md, phase 4, row 7), so about 0.2 s for
+  a 2.7 GB model. Memory the DRIVER brings back is slower: 4.2 GiB of
+  paged-out buffers in 1.25–1.76 s (2.4–3.4 GiB/s).
+- A device's kernels compiled for the first time cost about 60 s (the first
+  load on a new engine); later loads read the cache.
 - A file out of the page cache costs far more than anything else (40.8 s
   against 8.1 s): parked weights held in host RAM are what avoids it.
 - Not held: the split itself (1), a load beside a working encoder (2), the
@@ -170,7 +202,7 @@ first answer, the weights in the page cache, the card not full.
 | step | who | done when |
 |---|---|---|
 | 0. the four measurements | München | the numbers are in this note; go or no go |
-| 1. the engine parks one encoder (bge-m3, 621 MiB) | Tensor | N park cycles give the same bytes; the cycle is timed |
+| 1. the engine parks one encoder (bge-m3, 621 MiB) | Tensor | N park cycles give the same bytes; timed apart: the park, the un-park (allocate, copy, reorder), the first request after; the parked process's floor on the card read |
 | 2. LocalAI's parked state, its two calls, the RAM budget; the wrapper | Tensor, then upstream | a parked model answers after an un-park; the gates pass on the build |
 | 3. RAGE's plan | architecture | scheduling.md §6; a cost test; one deploy, measured on the node |
 
@@ -198,8 +230,14 @@ Existing tools, and why they are not the answer by themselves:
 ## 8. Open
 
 - How the engine holds parked weights: the file's page cache, or a pinned
-  host buffer. The first costs nothing more and can be dropped by the
-  kernel; the second is certain and counts against the worker's neighbours.
+  host buffer. The first costs nothing more, and the kernel will drop it
+  sometimes (4.7 GB were available at the worst hour): the un-park then
+  reads the SSD, which is still not a process start. The second is certain
+  and competes with the worker. NOT as GGML_SYCL_USM_SYSTEM memory:
+  measured 2026-11-24, such pages do not make room for a neighbour (a load
+  beside them died).
+- What is parked: the file's bytes (the reorder runs again at each
+  un-park) or the reordered bytes read back once (§3.1).
 - One process per model is LocalAI's shape: what a parked process costs in
   host RAM beyond its weights.
 - The chat model's prompt cache across a park.
