@@ -107,6 +107,29 @@ the last roll (app/validity.py `roll`). The result says which version it
 is (§5.3, `validity`). The snapshot chain keeps its own meaning for it — when the
 origin's state was held — and is not what a date asks of it.
 
+*Amended 2026-11-21* (the EUR-Lex5 review, V3/V4; the legal session, in
+charge by the operator's word). In a collection whose plugin declares that
+it holds an act's ORIGINAL and not every version the origin publishes
+(`VALIDITY_ENDS_AT_AMENDMENT`: EUR-Lex, its consolidations a slice), the END
+of a Work's LAST version is also the first day after its start from which a
+statement this collection holds says the text changed — an amending act's own (its `eli:amends` edge, from
+the day it names or else the day its own validity starts), or a version
+naming the act that amended it and the day: the next version starts that
+day, whether or not it is held (app/validity.py `first_change`; a repeal of
+the whole act stays a closure's). EUR-Lex's base holds originals and its
+consolidations only as a history slice: an original amended since was
+shown as the text in force, and a consolidation fetched for one date became
+the open-ended version of every later date. Such a version is still the one
+shown (the latest that started), labelled with its end and "amended since,
+the amended text is not held"; a date after the change admits none of the
+Work's text. A statement is dated by the first version of the amending act
+that states it; a day from 2999-01-01 names none. A collection whose origin
+dates every version itself (Normattiva's vigenza, LEGI's DATE_FIN, NeuRIS's
+expressions) keeps the origin's word: no other act's statement ends one of
+its versions (München's count: 20,365 and 14,382 versions would have been
+ended against their origin). A manifest derived under the old rule is
+re-chained once (`validity.CHAIN_VERSION`), from its tables, nothing parsed.
+
 *Amended 2026-11-15* (operator: "we add a 'draft' flag for the in force
 date, and we use the publishing date as draft. When this information is
 correctly published we replace all the draft dates"). Where the origin
@@ -490,6 +513,15 @@ reason — beside `withheld`, which names only what was left out whole. A
 result list from such a copy is a text-leg list, and a reader has to be
 able to tell.
 
+*Amended 2026-11-23* (the operator: "A"). The other legs are named the same
+way when they cannot answer: `leg` is `"vector"`, `"catalog"` (its index not
+complete or not readable, amended 2026-10-21) or `"text"` (a text index that
+could not be searched: it does not open, its lock cannot be taken, a segment
+does not read; the reason names each index and says whether the others
+answered). Until then a text index that failed answered an empty list,
+indistinguishable from no match. The Ask page shows every entry above the
+results, and the answer's sources say it.
+
 Facts are placed beside the lists, never in them. Every fact names the
 reference source and its `ref_version` (§6.5), the table, the canonical
 id, the row's columns, and — when *expand* reached it — the link it was
@@ -559,7 +591,7 @@ louise_search(query, collections?, annotations?, space?, filters?, limit?,
     → {lists: [{space_id, question, hits: [<result, §5.3>]}],   -- question is "relevance" (§5.1)
        facts: [<fact, §5.3>], unresolved: [<canonical id>],
        withheld: [{collection_id, shards, reason}],
-       legs_withheld: [{collection_id, leg, reason}],     -- leg is "vector"; the copy IS searched, on its text leg (§5.3)
+       legs_withheld: [{collection_id, leg, reason}],     -- leg is "vector", "catalog" or "text"; the copy IS searched, on its other legs (§5.3, amended 2026-11-23)
        translations: [...],   -- shards: a list, or "all" for a copy in quarantine (§5.3)
        history: {requested, limit, timeout_s,
                  fetches: [{collection, act, language, version, status, why}]} | null}   -- §5.3, amended 2026-11-16
@@ -822,6 +854,35 @@ lists, `rerank_withheld: [{collection, reason}]` with the reason "model
 loading took longer than N s"; a query encoder's does the same to the
 vector leg, in `legs_withheld`. A runner that cannot say what it holds
 is asked as before, and its load counts against the budget.
+
+*Amended 2026-11-18* (operator: "Yes to both, replacing the words the
+reranker does not know with the words it knows, just enables it to do its
+job"; docs/notes/historical-languages.md, "Proposal: a reading annotation
+for historical Italian"). **The reranker reads a copy of each record's
+chunks with its period's old words read**, where the record states a
+publication year a reading holds — the fields its plugin declares, in
+order (`publication_year_fields`; gutenberg: the work's first publication,
+then the print year of the edition PG transcribed; never PG's release
+date) — and no copy otherwise. A word with an attested modern form (the
+`wikisource-readings` reference source, 06 §6.5) is replaced by it, case
+kept; one with only a lemma (`tlio`) keeps its place with the lemma after
+it, `abondava [abbondare]`. The result shows the record's own text. This
+is a reorder under invariant 4's WEIGHTS rule: the ORIGINAL of each
+changed text is scored in the same call, and each record whose place
+differs carries `moved_by` `{"weight": "historical reading (<source>
+<ref_version> <digest>; …)", "from": <its place read as it was>, "to":
+<its place now>}`; nothing is removed; the same reading versions give the
+same order. Under QUALITY only — the request's Quality/Speed choice
+(operator, 2026-11-18: "Keep the word replacement under quality search
+only"); under Speed no year, no lookup, no copy, no moved_by; off for its
+measurement (`retrieval.READING_RERANK`, from the command line). The chat model's
+copy (§5.3 answer) carries the replacements; TLIO's lemma and definition
+there are OFF by default (architecture's ruling, 2026-11-18, invariant 4
+(3): 8 judged answers, agreement ON 2.125 against OFF 2.75), back only
+once at least 30 judged answers show ON ≥ OFF and the operator approves
+(`reading.CHAT_TLIO`); then each form once, at most `CHAT_GLOSSES` a text.
+A form TLIO lists under several lemmas is read by neither copy, and an
+entry of several senses gives its lemma alone.
 
 ## 5.7 Facets: the categories, and what is in them
 

@@ -699,7 +699,17 @@ frozen, every document whose `content_hash` is the source snapshot's keeps
 its vectors, its chunks being a function of its title and sections alone
 (invariant 3); every other one — revised at the origin, new, or gone —
 loses them and is embedded again (`--reconcile`); and `vectors-sample`
-passes before use, as for any carry. Gutenberg's parser 9 is the case:
+passes before use, as for any carry. *(Amended 2026-11-19, the A1c
+re-derive; confirmed on NeuRIS and Normattiva:)* what the worker derived
+from its own parse — the validity rows, the catalogue row and the text-index
+rows — follows the RECORD, not its content: every document whose record line
+moved, `extra` included, provenance (`origin`, `origin_hash`) aside, has
+those rows deleted and its rdf and fts marks reset, so the worker derives
+them again at the target's parser; its vectors follow `content_hash` alone.
+A target reconciled before this, with no source snapshot left, is repaired
+by `louise dev rederive` (every document derived again) or, for a large one,
+`--verify` (only those whose chunks, fields or validity differ from what the
+worker would derive now). Gutenberg's parser 9 is the case:
 `origin_hash` now covers the book's catalogue entry, so every record's
 bytes moved and not one chunk did. *Amendment A1d (RULE 1, 2026-10-18):*
 the parser may also read an origin file the source's did not — the
@@ -746,6 +756,24 @@ anyone from the Codex alone (`admitted_spaces`). Its bundles pass T0 (03
 changes and nobody fetches them again; the carry moves `state/bundles` and
 `state/share` too and re-keys the coverage rows to the new collection
 instead of clearing them. Gutenberg's 43 GB of bundles are the case.
+*Amendment A1k (RULE 1; proposed 2026-11-21, ADOPTED by architecture
+2026-11-23 under RULE 1, the operator told; docs/notes/legal-chunker-v4.md
+§4.3. When the shared legal space moves is the operator's decision, M1 of
+§4.4):* the space
+may also differ by its layers' chunker VERSION, and only that way — the same
+records but for the layers, each layer the same chunker, parameters, rule and
+input, and the function equal (`space_differences` empty: the query
+instruction and the cut are not crossed with it). The layers are inside
+`space_id` and the version inside every chunk id, so no row keeps its id; but
+the same cleaned text has the same vector, the rule 06 §6.3 applies within a
+space when a record is cut again. So the target's manifest is the source's
+with every embed and index mark emptied (as A1i's relayered sister's), and
+every chunk the new version cuts whose text a row of the same document holds
+— by its chunk hash, never its position — takes that row's vector bytes under
+its new id (`louise dev carry --rechunked`); a document whose every chunk was
+kept is marked embedded, and every other chunk is the embed stage's. The gate
+runs once for the new space and `vectors-sample` passes before use, as for any
+carry. The shared legal space's `legal_article` 3 → 4 is the case.
 
 The **calibration** block is the contract for anyone who wants to
 contribute vectors. The calibration set is corpus-independent: a fixed

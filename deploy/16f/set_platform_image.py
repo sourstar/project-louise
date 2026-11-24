@@ -11,6 +11,11 @@ and every Codex created meanwhile names an image that did not build it —
 a version-4 one, an image that cannot even read it (operator's yes,
 2026-10-07: fix it).
 
+And THE COMMANDS (set_commands.py, 2026-11-20): what web and worker run, as
+deploy/truenas-app.yaml states it, in the same update — the deploy never
+applies that file, and #779's `python -m app.worker_guard` would have
+reached no node.
+
 It also CARRIES the web's `GPU_PROBE_URL` to the worker (CARRIED): the
 worker's card recorder (app/card_record.py, #164) asks the same probe the
 web's GPU panel does, and the node's app config gave it to the web alone
@@ -83,20 +88,21 @@ def main(argv: list[str]) -> int:
     want = argv[1]
     renamed: list[str] = []
     carried: list[str] = []
+    sc = _sibling("set_commands")
+    try:
+        commands = sc.wanted()
+    except (OSError, ValueError) as e:
+        print(f"set_platform_image: {e}", file=sys.stderr)
+        return 2
     from truenas_api_client import Client
     with Client() as c:
         cfg = c.call("app.config", APP)
         try:
             before = apply(cfg, want)
             carried = carry(cfg)
+            commanded, notes = sc.apply(cfg, commands)
             if len(argv) == 6:
-                import importlib.util
-                from pathlib import Path
-                spec = importlib.util.spec_from_file_location(
-                    "rename_mounts", Path(__file__).with_name("rename_mounts.py"))
-                rm = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(rm)
-                renamed = rm.apply(cfg, *argv[2:6])
+                renamed = _sibling("rename_mounts").apply(cfg, *argv[2:6])
         except ValueError as e:
             print(f"set_platform_image: {e}", file=sys.stderr)
             return 2
@@ -104,9 +110,11 @@ def main(argv: list[str]) -> int:
             print(f"{name:7} {KEY} {before[name]} -> {want}")
         for line in carried:
             print(f"worker  {line}")
+        for line in commanded + notes:
+            print(line)
         for line in renamed:
             print(f"rename {line}")
-        if all(v == want for v in before.values()) and not renamed and not carried:
+        if all(v == want for v in before.values()) and not renamed and not carried and not commanded:
             print("unchanged")
             return 0
         try:
@@ -128,8 +136,23 @@ def main(argv: list[str]) -> int:
         if missing:
             print(f"set_platform_image: the worker did not take {missing}", file=sys.stderr)
             return 1
+        uncommanded = sc.missing(after, commands)
+        if uncommanded:
+            print(f"set_platform_image: the command {sc.FILE.name} states did not take: {uncommanded}",
+                  file=sys.stderr)
+            return 1
         print("set")
         return 0
+
+
+def _sibling(name: str):
+    """A module beside this one (deploy/16f/ is no package)."""
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(f"{name}.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 if __name__ == "__main__":

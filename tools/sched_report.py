@@ -189,7 +189,7 @@ def rates(names, seconds: int) -> None:
                 continue
             con = db.connect(col)
             r = con.execute("SELECT SUM(rdf_done) rdf, SUM(fts_done) fts, "
-                            "SUM(embed_done) emb, SUM(in_scope) scope FROM documents").fetchone()
+                            "SUM(embed_done) emb, SUM(in_scope=1) scope FROM documents").fetchone()
             out[name] = {k: int(r[k] or 0) for k in ("rdf", "fts", "emb", "scope")}
             con.close()
         return out

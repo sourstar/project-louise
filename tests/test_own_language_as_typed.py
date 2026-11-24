@@ -12,8 +12,10 @@ reranker on 451 descriptive queries: MRR 0.219 → 0.231, R@10 0.404 →
 as-typed text in EVERY group when the language is unknown was measured
 too and is not done: MRR 0.212 → 0.187 (49 better, 79 worse)."""
 import json
+import time
 
-from app import collections as collections_mod, db, fts, language_plan, llm, retrieval
+from app import collections as collections_mod
+from app import db, fts, language_plan, llm, retrieval
 
 
 class Rewriter:
@@ -85,18 +87,27 @@ def test_the_own_language_list_reaches_the_fusion_as_the_readers_own_words(
     c = collections_mod.default_collection()
     _plan_, _ = _plan(monkeypatch, "Dumas novel about the diamond necklace", "en")
     ran = []
-    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None:
-                        ran.append((group, q)) or [{"chunk_id": f"g:{len(ran)}:0:1",
-                                                    "book_id": len(ran), "source": f"fts:{group}",
-                                                    "text": q}])
+    # the groups are searched on threads (app/retrieval.py), so `ran` is in
+    # the order they FINISHED: each hit names its group, and the fusion's own
+    # list is found by what it holds, never by the order of the calls
+    # English finishes LAST of the three, so a list placed by finishing order
+    # would put it where French belongs
+    book, late = {"de": 1, "en": 2, "fr": 3}, {"de": 0.0, "en": 0.2, "fr": 0.1}
+    monkeypatch.setattr(fts, "search", lambda group, q, limit=20, collection=None, langs=None, **_kw:
+                        time.sleep(late[group]) or ran.append((group, q))
+                        or [{"chunk_id": f"g:{book[group]}:0:1", "book_id": book[group],
+                             "source": f"fts:{group}", "text": q}])
     monkeypatch.setattr(retrieval.embeddings, "search", lambda *a, **k: [])
     seen = {}
     real = retrieval._merge_rrf
     monkeypatch.setattr(retrieval, "_merge_rrf",
-                        lambda lists, depth=None, **kw: seen.update(kw) or real(lists, depth, **kw))
+                        lambda lists, depth=None, **kw: seen.update(kw, lists=lists)
+                        or real(lists, depth, **kw))
     retrieval._search_one_collection(db.connect(c), c, "Dumas novel about the diamond necklace",
                                      10, "hybrid", True, [], _plan_, 50)
     assert ("en", "Dumas novel about the diamond necklace") in ran
     assert not any(q == "[en] rewritten" for _, q in ran)
-    groups = [g for g, _ in ran]
-    assert seen["own"] == {groups.index("en")}, "its list is the user's own words, first on a tie"
+    english = [i for i, hits in enumerate(seen["lists"])
+               if any(h.get("source") == "fts:en" for h in hits)]
+    assert english == [1], "the lists reach the fusion in the plan's order, not the finishing one"
+    assert seen["own"] == {1}, "its list is the user's own words, first on a tie"

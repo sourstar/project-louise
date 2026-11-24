@@ -125,10 +125,19 @@ def test_one_collections_slow_stream_never_holds_anothers_encoder(tmp_path, monk
     monkeypatch.setattr(worker, "_producer_step", step)
     worker._sync_embed_producers([slow, fast])
     try:
-        deadline = time.monotonic() + 5
-        while calls["fast"] < 5 and time.monotonic() < deadline:
+        # FROM THE MOMENT the slow stream is held, the fast one goes on. Not
+        # a fixed window from the start: on the node's deploy run (8c56161,
+        # 2026-11-20, a busy host) the slow thread could take its first step
+        # after the fast one had taken five, and `slow == 1` failed although
+        # nothing waited on anything. Bounded generously, never timed.
+        deadline = time.monotonic() + 30
+        while calls["slow"] < 1 and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert calls["slow"] == 1 and calls["fast"] >= 5, calls
+        assert calls["slow"] == 1, calls
+        held_at = calls["fast"]
+        while calls["fast"] < held_at + 5 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert calls["slow"] == 1 and calls["fast"] >= held_at + 5, (held_at, calls)
     finally:
         release.set()
         threads = [t for t, _ in worker._embed_producers.values()]
@@ -214,11 +223,14 @@ def test_a_background_thread_started_by_one_does_not_compound(monkeypatch):
 
 
 @linux_only
-def test_a_parse_child_sits_at_the_workers_base_plus_ten_whoever_started_it():
+def test_a_parse_child_sits_at_the_workers_base_plus_ten_whoever_started_it(monkeypatch):
     """A child process inherits its starter's nice; started from a lowered
     pipeline thread, a relative nice(10) put it at 15, below the index
     maintainer — whose rule is that it yields to parsing."""
     from app import parallel
+    # the child's parent watch is a thread for the life of the process: not
+    # in the test's (tests/conftest.py, nothing_only_a_child_does_is_done_here)
+    monkeypatch.setattr(parallel, "watch_parent", lambda: None)
     base = os.getpriority(os.PRIO_PROCESS, os.getpid())
     seen = {}
 

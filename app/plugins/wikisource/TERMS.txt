@@ -1,0 +1,21 @@
+Wikisource text is licensed under the Creative Commons Attribution-
+ShareAlike 4.0 International License (CC BY-SA 4.0), with some content
+under compatible terms. https://creativecommons.org/licenses/by-sa/4.0/
+
+By acquiring this corpus you acknowledge:
+
+1. ATTRIBUTION. Reuse of the text must credit Wikisource and its
+   contributors (linking the source page satisfies attribution for
+   hyperlinked media); each record names the revisions it was read from.
+2. SHARE-ALIKE. Adaptations of the text you distribute must carry the same
+   license. Whether embedding vectors are derivative works of the text is
+   legally unsettled; this platform classifies Wikisource text yellow, as
+   it does Wikipedia's.
+3. NO ENDORSEMENT. Wikisource and the Wikimedia Foundation do not endorse
+   this platform or any use of the corpus.
+4. THE SCANS. The page images an index names are Commons files, each under
+   its own licence; their names and hashes are kept, their bytes are not
+   fetched.
+
+Dumps are fetched from dumps.wikimedia.org; their etiquette asks for at
+most 2 concurrent connections, which the acquisition spec enforces.

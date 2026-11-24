@@ -154,6 +154,11 @@ def _publish(c) -> dict[str, Any]:
     return out
 
 
+def _reading_status(loaded) -> str | None:
+    from app import reading
+    return reading.status([getattr(c, "plugin", None) for c in loaded])
+
+
 def show() -> dict[str, Any]:
     from app import collections as collections_mod, health, node_state
     got = collections_mod.load_all(skip_unreadable=True)
@@ -181,7 +186,12 @@ def show() -> dict[str, Any]:
         # not; None when the governor is not running
         from app import gpu
         profile["gpu_applied"] = gpu.governor().get("level")
+    from app import oom_hold
+    held = oom_hold.held()
     return {"mode": ov["mode"], "overrides": ov,
+            # a memory kill holds the worker down until released (app/oom_hold.py;
+            # operator, 2026-11-19): said first, in plain words, with its record
+            **({"oom_hold": {"says": oom_hold.describe(held), "record": held}} if held else {}),
             # the quiet / day / night profile in force (platform.toml [schedule]):
             # what background CPU work and the card may use now, and until when
             "profile": profile,
@@ -196,7 +206,19 @@ def show() -> dict[str, Any]:
             # "woke 2 annotations (snapshot 2026-11)", "woken by wikipedia
             # 2026-11 — done 03:41"
             "cascade": _cascade(),
+            # the historical reader's tables, or that none is synced (RULE 2;
+            # app/reading.py `status`)
+            "historical_reading": _reading_status(loaded),
+            # the web gives back its freed memory after this many seconds
+            # without a question (platform.toml [web] idle_trim_s; 0 never):
+            # the value its timer reads, from its one resolution
+            "web": {"idle_trim_s": _idle_trim_s()},
             "last_round": last_round(loaded)}
+
+
+def _idle_trim_s() -> float:
+    from app import idle_trim
+    return idle_trim.timeout_s()
 
 
 def _cascade() -> list[dict[str, Any]]:

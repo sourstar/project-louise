@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import Iterator
 
 from app import derived
+from app.bz2_blocks import Lines
 from app.plugins import cursor
 from app.backend import OriginForm, Template
 from app.plugins.base import (CanonicalDoc, DiscoverState, DocRef, Erasure, LicenseClass, Modality, Mutability,
@@ -197,6 +198,14 @@ class WikidataSource:
     origin_versions = "history"
     LOCATOR_SEP = _LOCATOR_SEP
     LOCATOR_MEMBER_FIELDS = 1
+    #: RECORDS-VS-ORIGIN BY THE DUMP'S BLOCKS (2026-11-18, operator: "A";
+    #: app/acquire/block_origin.py): the dump is one bzip2 stream framed as
+    #: dump.py reads it — `[`, one entity a line opening with `{`, `]` — so
+    #: a manifest locator's ordinal is the dump's unit line of that ordinal,
+    #: and the copy's block index (app/bz2_blocks.py) says which blocks hold
+    #: it. The index holds the file to this framing before an ordinal is
+    #: placed in it.
+    origin_lines = Lines(opens=b"{", head=b"[", tail=b"]")
 
     # ---- the record's origin, by entity (parser 3; app/keyed_origin.py) ----------
 
@@ -225,6 +234,27 @@ class WikidataSource:
         if index is None:
             raise EntityNotInRun(f"{origin}: run {run}'s pack holds no {m['eid']}")
         return dump, f"{dump}{_LOCATOR_SEP}{index}"
+
+    def origin_ordinals(self, dump: Path):
+        """`origin -> the ordinal of its line in dump`, for one check of the
+        block origin (app/acquire/block_origin.py), which asks it of every
+        sampled record twice (~3.8 M on the node): `local_of` without its
+        three stats and its paths a record (76 µs measured, the run's dump
+        and table found again each time) — the table ensured once here, an
+        entity's ordinal one lookup in it. None for an origin of another
+        form (parser 2's, read by `local_of`) or another suffix."""
+        table = entities.ensure(Path(dump))
+        z = Path(dump).name.rsplit(".", 1)[-1]
+
+        def ordinal(origin: str) -> int | None:
+            m = _KEYED.match(str(origin))
+            if m is None or m["z"] != z:
+                return None
+            got = entities.TABLE.lookup(table, ids.native_id_of(m["eid"]))
+            if got is None:
+                raise EntityNotInRun(f"{origin}: {Path(dump).name}'s pack holds no {m['eid']}")
+            return int(got[0])
+        return ordinal
 
     def origin_files(self, origin: str, base, run: str | None) -> list[Path]:
         """The file `origin` is read from in `run`, no table read."""

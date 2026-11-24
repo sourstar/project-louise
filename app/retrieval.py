@@ -37,6 +37,9 @@ from typing import Any
 import httpx
 from . import (cancel, catalog, collections as collections_mod, config, copy_state, db,
                embeddings, model_load, fts, httpc, language_plan, refs, work_dedup)
+# the refusal check by its own name: a test that swaps `httpc` for an httpx
+# client (tests/test_localai_backends.py) keeps it (#798, 2026-11-22)
+from .httpc import raise_for_status as _raise_for_status
 from .rage import dispatch
 from .language_plan import LanguagePlan
 from .refs.resolver import row_of
@@ -436,6 +439,64 @@ def _rerank_list(query: str, hits: list[dict], recipe, budget_s: float,
         return _rerank_held(query, hits, recipe, budget_s, depth, queries)
 
 
+#: 05 §5.6 (amended 2026-11-18): the reranker reads a COPY of a record's
+#: chunks with its period's old words read (app/reading.py) where the record
+#: states a year a reading holds. Operator, 2026-11-18: "Yes to both,
+#: replacing the words the reranker does not know with the words it knows,
+#: just enables it to do its job" — on by default; a reorder under invariant
+#: 4's WEIGHTS rule, so every hit it moved says so and by how much
+#: (`moved_by`: its place had the original been read, and its place now).
+#: False only for the measurement of it (tools/measure, from the command line).
+#: Under QUALITY only (operator, 2026-11-18: "Keep the word replacement under
+#: quality search only"): the request's choice, `reading.quality`.
+READING_RERANK = True
+
+
+#: the last time a reading failure was logged, by collection: at most one a minute each
+_reading_logged: dict[str, float] = {}
+READING_LOG_EVERY_S = 60.0
+
+
+def _reading_failed(collection: str, e: BaseException) -> None:
+    """The reading's fallback, said: at most once a minute per collection,
+    naming it (every log line names its collection, CLAUDE.md)."""
+    now = time.monotonic()
+    if now - _reading_logged.get(collection, float("-inf")) < READING_LOG_EVERY_S:
+        return
+    _reading_logged[collection] = now
+    print(f"{time.strftime('%H:%M:%S')} [{collection} warn:reading] the reranker reads the texts as "
+          f"they were: {type(e).__name__}: {e}", flush=True)
+
+
+def _reading_copies(head: list[dict], owner: list[tuple[int, dict]], texts: list[str]
+                    ) -> tuple[dict[int, str], str, dict[int, int]]:
+    """{text index: its ORIGINAL text} for the texts the reader changed (each
+    changed in `texts` in place), and the reading's version. Nothing on any
+    failure: the rerank reads the texts as they were."""
+    from . import reading
+    if not READING_RERANK or not reading.quality_on():
+        return {}, "", {}                       # under Speed: no year, no lookup, no copy (operator)
+    try:
+        years = reading.years(head)
+        if not years:
+            return {}, "", {}
+        chunks = [(t, i, c) for t, (i, c) in enumerate(owner) if i in years]
+        found = reading.lookup(reading.words_of(c.get("text") or "" for _t, _i, c in chunks))
+    except Exception as e:   # noqa: BLE001 — a reading is a help, never the search's failure
+        _reading_failed(reading.collection_of(head[0]) if head else "?", e)
+        return {}, "", {}
+    originals: dict[int, str] = {}
+    for t, i, c in chunks:
+        body = c.get("text") or ""
+        lang = str(head[i].get("lang") or "").lower()[:2]
+        new, used = reading.apply(body, years[i], found, reading.RERANK, lang=lang)
+        if used and new != body:
+            originals[t] = texts[t]
+            title = head[i].get(HEAD) or ""
+            texts[t] = f"{title}\n\n{new}" if title else new
+    return originals, found.version, years
+
+
 def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: int,
                  queries: dict[str, str] | None) -> tuple[list[dict], bool]:
     """`_rerank_list`'s work, inside the list's one claim."""
@@ -448,6 +509,16 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
             body_text = c.get("text") or ""
             texts.append(f"{title}\n\n{body_text}" if title else body_text)
             owner.append((i, c))
+    # THE READER'S COPY, and the ORIGINALS of the texts it changed, scored
+    # too (the ruling: "score the ORIGINAL copy too, but only for the hits
+    # whose copy changed"): appended after the copies, so the delta of each
+    # moved hit is measured in the same call
+    originals, reading_version, reading_years = _reading_copies(head, owner, texts)
+    original_of: dict[int, int] = {}          # the original's text index -> its copy's
+    for t, text in originals.items():
+        original_of[len(texts)] = t
+        texts.append(text)
+        owner.append(owner[t])
     budget_s = budget_s * max(1.0, len(texts) / max(1, len(head)))
     # WARMED BEFORE THE CUT: the cut asks the reranker's own tokenizer, and a
     # cold one took that request as its load — 10 s timeout, the text cut by
@@ -512,24 +583,50 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
         for local, t in enumerate(idx):
             scores[t] = got[at[part[local]]]
     best: dict[int, tuple[float, dict]] = {}
+    as_was: dict[int, float] = {}             # each record's best score had nothing been read
     for t, (i, c) in enumerate(owner):
+        if t in original_of:
+            as_was[i] = max(as_was.get(i, float("-inf")), scores[t])
+            continue
         if i not in best or scores[t] > best[i][0]:
             best[i] = (scores[t], c)
+        if t not in originals:
+            as_was[i] = max(as_was.get(i, float("-inf")), scores[t])
     ranked = []
-    if RERANK_LANGUAGE_ORDER == "slots" and len(groups) > 1 and set(best) == set(range(len(head))):
-        order = _by_language_slots(head, [best[i][0] for i in range(len(head))])
-    else:
-        order = _rerank_order([best[i][0] for i in range(len(head))], fuse=RERANK_FUSE) \
-            if set(best) == set(range(len(head))) else sorted(best, key=lambda i: (-best[i][0], i))
-    moved: dict[int, dict] = {}
+
+    def _ordered(score_of: dict[int, float]) -> list[int]:
+        if RERANK_LANGUAGE_ORDER == "slots" and len(groups) > 1 and set(score_of) == set(range(len(head))):
+            return _by_language_slots(head, [score_of[i] for i in range(len(head))])
+        return _rerank_order([score_of[i] for i in range(len(head))], fuse=RERANK_FUSE) \
+            if set(score_of) == set(range(len(head))) else sorted(score_of, key=lambda i: (-score_of[i], i))
+    order = _ordered({i: b[0] for i, b in best.items()})
+    moved: dict[int, list[dict]] = {}
+    if originals:
+        # CLAUDE.md invariant 4 (2), WEIGHTS (amended 2026-11-18): "every
+        # result it moved" — every record whose place differs from its place
+        # had nothing been read, `read` saying whether its own copy changed
+        # (False: it moved because another record was read)
+        before = _ordered(as_was)
+        from . import reading
+        changed = {owner[t][0] for t in originals}
+        at_before = {r: k for k, r in enumerate(before)}
+        for k, i in enumerate(order):
+            if i in at_before and at_before[i] != k:
+                entry = {"weight": reading.label(reading_version), "from": at_before[i] + 1, "to": k + 1,
+                         "read": i in changed,
+                         # whom the readings are from (operator, 2026-11-18: "add the usual credits")
+                         "credits": reading.credits(reading.sources_in(reading_version))}
+                if i in changed and getattr(reading_years.get(i), "by", ""):
+                    entry["by"] = reading_years[i].by        # what dated it: shown as the badge shows it
+                moved.setdefault(i, []).append(entry)
     if CATALOG_FIRST:
         before = order
         order = _catalog_first(order, head)
         if order and before and order[0] != before[0]:
             # CLAUDE.md invariant 4, rule 2: a weight's result says what moved
             # it and how far — here from the reranker's place to the first
-            moved[order[0]] = {"weight": "catalog_first", "from": before.index(order[0]) + 1,
-                               "to": 1}
+            moved.setdefault(order[0], []).append({"weight": "catalog_first",
+                                                   "from": before.index(order[0]) + 1, "to": 1})
     for i in order:
         score, c = best[i]
         h = dict(head[i])
@@ -538,7 +635,7 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
             h.update({f: c[f] for f in ("chunk_id", "text", "chapter") if f in c})
         h["rerank_score"] = score
         if i in moved:
-            h["moved_by"] = [moved[i]]
+            h["moved_by"] = moved[i]
         ranked.append(h)
     return ranked + tail, True
 
@@ -659,7 +756,7 @@ def _rerank_call(recipe, body: dict, timeout: float, deadline: float) -> dict:
                 timeout = left
                 continue
         try:
-            r.raise_for_status()
+            _raise_for_status(r)              # the server's reason with the status
         except httpx.HTTPStatusError as e:
             e.retried = attempt == 2          # what the reason says
             raise
@@ -982,6 +1079,7 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
     cancel.checkpoint()
     t0 = time.time()
     # as deep as the text leg's other variants: it is one of them (§5.1)
+    text_why = None
     catalog_hits, catalog_why = (
         catalog_leg(con, core, limit=max(k, depth, 20), langs=limited_langs(collection, plan.only),
                     collection=collection)
@@ -1016,13 +1114,21 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
                 tasks.append((group, q))
         cancel.checkpoint()
 
+        #: the text indexes that could not be searched, each said once, named
+        #: in `legs_withheld` (leg "text"; the operator, 2026-11-23: "A")
+        text_failed: dict[str, str] = {}
+
         def one(task: tuple[str, str]) -> list[dict]:
             group, q = task
             cancel.checkpoint()            # one group per language: a query can fan out wide
             # deep enough to hold `limit` RECORDS, not chunks (05 §5.1,
             # amended 2026-10-10: app/leg_depth.py)
-            return fts.search_records(group, q, limit, collection=collection,
-                                      langs=plan.lang_filter(group), **restrict)
+            try:
+                return fts.search_records(group, q, limit, collection=collection,
+                                          langs=plan.lang_filter(group), raise_errors=True, **restrict)
+            except fts.TextLegError as e:
+                text_failed.setdefault(group, str(e))
+                return []
         # THE GROUPS AND THEIR VARIANTS AT ONCE (CLAUDE.md: multi-threading is
         # a must; München, 2026-11-09: wikipedia's ten language indexes, one
         # after the other, 13.2 s a variant and 19-25 s an Ask — en alone
@@ -1066,6 +1172,11 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
                 own.add(len(lists))
                 lists.append(variant)
         timings["fts"] = round((time.time() - t0) * 1000, 1)
+        if text_failed:
+            searched = len({g for g, _ in tasks})
+            text_why = (f"{len(text_failed)} of its {searched} text index(es) could not be searched"
+                        + ("; the others answered" if len(text_failed) < searched else "")
+                        + ": " + "; ".join(text_failed[g] for g in sorted(text_failed)))[:600]
 
     if mode in ("hybrid", "dense"):
         # F1-D6: this leg used to be gated on scope["embed_mode"] != "off",
@@ -1142,7 +1253,7 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
 
     return {"catalog": catalog_hits[:CATALOG_PROMPT], "merged": merged, "translations": plan.translations,
             "timings": timings, "scope": scope, "vector_leg": vector_leg,
-            "catalog_leg": catalog_why,
+            "catalog_leg": catalog_why, "text_leg": text_why,
             "filtered": len(book_ids) if book_ids is not None else None}
 
 
@@ -1166,6 +1277,8 @@ def _legs_withheld(collection, partial: dict) -> list[dict]:
         out.append(_leg_withheld(collection, partial["vector_leg"]))
     if partial.get("catalog_leg"):
         out.append(_leg_withheld(collection, partial["catalog_leg"], leg="catalog"))
+    if partial.get("text_leg"):
+        out.append(_leg_withheld(collection, partial["text_leg"], leg="text"))
     return out
 
 

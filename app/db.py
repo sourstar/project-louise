@@ -552,6 +552,12 @@ DEFAULT_SCOPE = {
     "embed_mode": collections_mod.DEFAULT_EMBED_MODE,   # off | lazy | all
 }
 
+#: `documents.in_scope` of a row `louise dev rederive --first` holds out of
+#: every stage's selection (they select in_scope=1; apply_scope widens only 0)
+#: until `--release` (app/hold/carry.py, operator 2026-11-22)
+SCOPE_HELD = 2
+
+
 def get_control(con, key, default=None):
     row = con.execute("SELECT value FROM control WHERE key=?", (key,)).fetchone()
     return row["value"] if row else default

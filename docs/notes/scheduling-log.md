@@ -3031,3 +3031,203 @@ shape. **The node's model at this sandbox's rates:** wikidata's 103.8 GB is ~49 
 fetched again (~86 min at 20 MB/s, ~5.8 h at 5 MB/s; the node's rate from Wikimedia is not measured); enwiki's
 27.1 GB multistream ~5.5 min. **AFTER, on the node:** the first mend's `counts.mended` in `state/update.json` (bytes
 fetched again, seconds) and the keeper round's time from the worker log.
+
+## 2026-11-17 — the scheduled check holds a collection paused on its own (app/scheduled_checks.py `turn`, `summary`) — BEFORE (deploy pending)
+
+**Why.** `turn` asked only the node's mode. After `dev pin-run`, the paused wikidata.next has a new snapshot,
+so it is due. The worker would then check it inside its own 24 GiB cgroup while München checks it in its
+own container (wikidata-entity-origin.md, step 5). That is the OOM again: two checks at once, and two
+writers of attestations. 07 §7.3 holds a collection paused on its own at every stage.
+
+**The change.** `node_state.paused_collections()` is read once a turn, from the node's store opened
+read-only (`node_state.peek`, which creates nothing), and a paused collection is skipped. A store that
+cannot be read runs no check that beat. `hold collection show` says "held: the collection is paused" in
+`scheduled_check`.
+
+**MEASURED here, synthetic** (this 4-core sandbox, other sessions' load; `turn` over 500 collections on the
+idle path, nothing due, 200 turns each):
+
+| | ms a turn |
+|---|---|
+| before (no paused read) | 1.66 |
+| after, none paused | 1.34 |
+| after, half paused | 0.91 |
+
+The read is within this sandbox's noise (~0.1–0.3 ms). Each paused collection saves its snapshot read and
+its due test. No query was added to a manifest.
+
+**AFTER, on the node:** a paused collection with a due snapshot leaves no `scheduled-check.started.json`
+over a night, and `hold collection show <it>` says it is held.
+
+
+## 2026-11-19 — the parse pool's large-document lane (app/parallel.py `compute`; EUR-Lex `PARSE_PEAK_PER_BYTE`) — BEFORE (deploy pending)
+
+**Scenario (München, the node, 2026-11-19).**
+- The worker's container has a 24 GiB cap and the profile "quiet: 12 cores", so 11 parse slots.
+- The worker was OOM-killed 41 times: 35 from 08:03Z to 17:35Z, and 6 from 19:03Z to 20:24Z (memory.peak = the limit; memory.events oom_kill).
+- What had work then:
+  - EUR-Lex5's re-parse, resumed at 07:42Z;
+  - Normattiva's full re-derive (342 k rdf/fts, until 17:10Z);
+  - gutenberg's re-derive (47 k rdf / 48 k fts, 735 embeds);
+  - pubmed's reset re-index (from 19:00Z);
+  - wikidata's embedding.
+- EUR-Lex5 was paused at 20:30Z, and no kill followed in the hour after.
+
+**BEFORE, measured.**
+- One act, 32021R2017 el (204,218,240 bytes, in a container of its own):
+  - chunks: 63.1 s, peak RSS 5.25 GB (25.7× its bytes);
+  - metadata: 21.4 s, 2.06 GB (10.1×).
+- The worker's EUR-Lex5 fts batches:
+  - 3 documents / 1,253 chunks: 351 s of parse;
+  - 52 / 20,516: 2,106 s.
+- `compute`'s deadline is 120 s for the whole batch, so such a batch threw the pool away and parsed itself again in the main process. The main process was what the kernel killed at 19:14Z and 20:23Z (5.75 and 6.94 GB anon).
+- The 24 language versions of one act sit next to each other in rowid order, so several 4–10 GB children ran at once.
+
+**The change.**
+- A row whose `PARSE_PEAK_PER_BYTE` × `size` reaches 2 GiB is a part of its own.
+- At most one such part is in flight in the process.
+- It starts only when the cgroup's working set leaves room for its peak, waiting at most 120 s, then is deferred (`MemoryWait`, never an error).
+- Its batch's deadline grows by 4 × 63.1 s per 204 MB.
+- It is never parsed in the main process: the no-pool, single-row and timeout fallbacks defer it.
+- A peak past ⅔ of the limit is the document's error (`TooLarge`), with both numbers.
+- EUR-Lex declares 26.
+
+**AFTER.** To be completed after the deploy:
+- the kill count over 24 h with EUR-Lex5 running;
+- EUR-Lex5 rdf/fts docs/s against today's 18/s;
+- the lane's deferrals per hour.
+
+**AFTER, first night (d3f6d87, live since 2026-11-19 22:14Z; München).**
+- Nine OOM kills in the worker container, 03:39Z to 04:08Z; the worker restarted at 04:08:02Z (RestartCount 3).
+- The killed processes' anon-rss: 6.16, 5.39, 5.27, 7.22, 6.89, 4.71, 4.50, 4.50 and 8.63 GB.
+- Just before, EUR-Lex5's fts alone, every other collection idle:
+  - 232 documents / 3,197 chunks in one commit, 122.5 s (parse 120.1, parsed ahead);
+  - 9 documents / 142 chunks, 179.4 s (parse 140.0).
+- The lane did what it was built for, but it counts one row of ≥ ~82 MB. The 40–82 MB acts went through the ordinary pool, several to a part, eleven slots of them, and a child holds every result of its part beside the parse in hand.
+
+## 2026-11-20 — the parse pool's memory: parts cut by estimate, one budget (app/parallel.py `compute`) — BEFORE (deploy pending)
+
+**The change** (the commit after #780):
+- A part of a plugin that declares `PARSE_PEAK_PER_BYTE` is cut where its rows' estimates sum past 2 GiB (`PART_PEAK_BYTES`). Its estimate is the sum of its rows', which covers the results a child keeps.
+- Every part in flight reserves its estimate from one budget per process, ⅔ of the cgroup's limit (16 GiB under the worker's 24 GiB).
+- A part that does not fit waits for parts in flight to finish: at once where its batch has some, at most 120 s where it has none. It is then deferred (`MemoryWait`), never parsed in the main process.
+- A parse child's `oom_score_adj` is 500, so the kernel takes a child before the main process. Three of the nine kills took the main process.
+- The OOM hold records the watcher's last 5 s sample of the cgroup's processes (RssAnon, oom_score_adj, command), the sample at the kill, and the reservation in flight.
+- Measured, not assumed: glibc gives lxml's memory back after a 64 MB parse (RssAnon 391 MB at the peak, 73 MB after, with or without `malloc_trim`). A child's high-water mark is not what it keeps.
+- Nothing moves for a plugin that declares no peak, or where no cgroup limit reads.
+
+**AFTER.** To be completed after the deploy, EUR-Lex5 running:
+- kills over 24 h;
+- MemoryWait deferrals per hour;
+- EUR-Lex5 fts docs/s against the 232 documents in 122.5 s above;
+- the largest process in the samples.
+
+## 2026-11-20 — the parse pool admits by the cgroup's measured room (app/parallel.py `_reserve`) — BEFORE (deploy pending)
+
+**BEFORE, the first OOM hold (ba84645, #781's budget live; München, oom-hold.json).**
+- Held since 14:42:50Z. The kernel killed two parse children, 2.9 and 2.5 GB anon RSS, oom_score_adj 500. The cgroup's peak was 24.0 GB; memory.events since the deploy: oom 4, oom_kill 2.
+- In flight: 7 fts parts, all EUR-Lex5, 4 rows each (mostly ~17 MB acts), 280 MB of source. Estimates 0.59–1.7 GB each, 7.12 GB in all, inside the 16 GB budget.
+- The sample 7 s before: the main process 4.12 GB, and 11 children at 1.88, 1.66, 1.64, 1.56, 1.51, 1.44, 1.08, 1.08, 1.04, 0.84 and 0.69 GB. That is ~18.5 GB, with 11 children for 7 parts.
+- Reading: #781's budget counted only the estimates in flight. The main process and what each child KEEPS between parts (their plugin caches: 12 idle children held 10.8 GiB on 2026-10-28, `release_idle`) were outside it. The two killed held their keep plus their part.
+
+**The change.**
+- A part is admitted only where the cgroup's working set (current less inactive_file), plus every estimate in flight, plus its own, stays within 85 % of the limit (20.4 GB of 24 GiB).
+  - It is never exempted, even with nothing reserved. Where it does not fit, the part waits at most 120 s, then is deferred.
+  - Estimates in flight are counted whole, so what of them is already resident counts twice. This is the safe side; the cost is fewer heavy parts at once when the children are large.
+- A batch that deferred a part for room stops the pool's children (`recycle_for_room`). It does so only where no other batch, of another collection or of another stage of the same one, is inside the pool. The next batch starts fresh ones.
+- A batch of ONE row whose estimate passes 256 MB goes through the pool's admission. Before, it was parsed in the main process unmeasured.
+- A child that ran a part with an estimate, and holds more than 512 MB after it, collects and calls glibc's `malloc_trim`. Each give-back of ≥ 64 MB is logged ("[parse pool] child … gave back …"), so whether a keep is free heap or held caches is read off the log, not assumed.
+
+**AFTER.** To be completed after the deploy and the release, EUR-Lex5 running:
+- kills over 24 h;
+- deferrals for room per hour, and the recycles' lines;
+- the give-back lines (MB per part);
+- EUR-Lex5 fts docs/s against 232 documents in 122.5 s;
+- the largest process in the samples.
+
+## 2026-11-20 — a large part in a bounded process of its own; the chunker's encode bounded (app/parallel.py `_LaneTask`, app/chunking_legal.py `_spans`) — BEFORE (deploy pending for the lane)
+
+**BEFORE, the second OOM hold (05cc32a, 21:44:03Z; München).**
+- One kill; the cgroup at 24.0 GB.
+- In flight: one EUR-Lex5 fts row, 32018R0688 el, 128 MB, estimated 3.25 GB (26×).
+- The killed child held 11.16 GB anon, 87× its bytes. It sat beside the main process at 4.21 GB and ten children at 0.86–0.94 GB.
+- #785's admission worked on the estimate; the estimate is not a bound.
+
+**Measured (tools/measure/parse_peak.py, #786; own 16g containers).**
+
+| Act | Size | metadata | chunks | fts |
+|---|---|---|---|---|
+| 32018R0688 el | 128 MB | 2.93 GB (21.8×) | 11.18 GB (83.2×), 54.3 M characters | = chunks |
+| 32021R2017 el | 204 MB | 1.97 GB (9.7×) | 5.18 GB (25.4×), 23.6 M characters | = chunks |
+
+- ~206–219 bytes a character: the peak followed the text, from one encode of a whole section.
+
+**Done, live as 92bba7b since 23:05:08Z (#787).**
+- The chunker's encode is bounded to 200,000 characters.
+- Identical by construction for the pinned tokenizer. Held identical on the node:
+  - EUR-Lex5: the 50 largest, the two acts, 300 sampled;
+  - Normattiva: 282 + 30;
+  - NeuRIS: 271;
+  - legi_F: 30.
+- 0688's chunks rise after it: 2.94 GB (21.9×), against 11.18 GB before.
+- EUR-Lex5 resumed at about 23:3xZ.
+
+**The change (this row).**
+- A large part runs in a process of its own, used once. Its RLIMIT_DATA is the room its admission granted.
+- Past it, the process fails alone:
+  - a MemoryError in Python;
+  - a SIGABRT from Rust: the pinned tokenizer under the limit prints "memory allocation of 67108864 bytes failed" and aborts, measured here.
+- The row is then asked again with twice the room. Past ⅔ of the limit it is the document's TooLarge error.
+- A cgroup kill is still the hold's.
+
+**AFTER.** To be completed after the deploy:
+- kills over 24 h;
+- MemoryWait and TooLarge from the lane, per day;
+- the lane's spawn cost per large row, against its parse time.
+
+## 2026-11-22 — the vector index's unindexed tail, refreshed sooner: a trial on the existing thresholds (`VECTOR_INDEX_REFRESH_MAX_ROWS`, `VECTOR_INDEX_REFRESH_ROWS`) — BEFORE (trial pending)
+
+**Why.** Every dense search scans a table's unindexed rows flat, in the
+asking process. In the web that is the question's memory peak (operator,
+2026-11-22: the web "should be less than 1GB"). München, c40eb74 (live #812),
+a throwaway web container with the live image and env, one question:
+- memray, wikidata: peak 1.543 GB, 75.6 % in Lance's native threads;
+- one leg at a time, peak / held / after a trim:
+  - wikidata dense: +1,670 / +1,060 / +129 MiB in 11.9 s;
+  - wikidata hybrid at depth 50: +1,783 / +1,275 / +44 MiB;
+  - pubmed dense: +328 / +328 / +221 MiB in 10.0 s;
+  - the fts legs: +150–200 MiB.
+- Unindexed (index_stats):
+  - wikidata 353,401 of 20,196,239: 353 k × 1,024 × 4 B ≈ 1.4 GB, matching its dense peak;
+  - pubmed 45,474 of 41,434,034;
+  - wikipedia and gutenberg 0.
+- By design (`vector_index.refresh_due`): a delta is due at max(50 k, min(2 % of the table, 500 k)) unindexed rows. That is 404 k for wikidata and 500 k for pubmed. A QUIET table (no new rows for a pass) refreshes only at the 50 k floor, so pubmed's 45 k stays scanned by every question. The 500 k cap was set on 2026-11-08 for latency (~0.72 ms a 1 k rows); its memory was not weighed.
+
+**BEFORE (live, 2026-11-22 ~19:00–19:20Z).**
+- Scenario: the node running, wikidata embedding, the EUR-Lex5 drift run on 8 CPUs beside it.
+- The same 5 /api/search questions:
+  - web anon 968 MiB before, then 1,610 / 1,286 / 2,127 / 2,096 / 1,873 MiB after each;
+  - 30.9 / 27.7 / 24.5 / 34.0 / 25.5 s each;
+  - the idle trim then took it to 729 MiB.
+- Embed rates over 10 min: wikidata +7,881 rows (~47 k rows/h; the batches at 15–22 chunks/s), pubmed +0.
+- A delta refresh's duration on these tables: not in any surviving log. The deploys recreated the worker. The only point of comparison is normattiva on 2026-10-23, 93 s for 591,591 rows.
+
+**The trial.** The operator, 2026-11-22: "Trial".
+- The worker's env only: `VECTOR_INDEX_REFRESH_MAX_ROWS=65000` (~256 MiB of 1,024-d float32) and `VECTOR_INDEX_REFRESH_ROWS=40000`, then a restart. No code.
+- Wikidata's 353 k and pubmed's 45 k tails are due at its next pass; after that, wikidata about every 1.4 h at today's rate.
+
+**AFTER, first part (live from 20:44Z; München).**
+- Both settings were unset before (500,000 / 50,000). They were set in the worker's env only, through app.update after a config backup. The web has neither.
+- The first refresh came 33 min after the restart, at the worker's first maintenance turn:
+  - wikidata, 21:17:00Z: 398,035 unindexed of 20,240,873 (45 fragments) folded in **in 90 s**; 1,301 remain; 4 deltas merged into one (2 indexes).
+  - pubmed, 21:19:41Z: 45,474 of 41,434,034 (58 fragments) folded in **in 8 s**; 0 remain; 4 deltas merged into one (2 indexes).
+  - ~0.23 ms a row for wikidata, against normattiva's 0.16 (2026-10-23).
+  - The worker's anon at refresh: not read (the sampler took docker-init's pid).
+- The same 5 /api/search questions, live:
+  - the web started cold at 123 MiB, restarted by the same app.update;
+  - 55.9 s (the cold first), then 22.1 / 22.0 / 25.7 / 20.5 s, against 24.5–34.0 s;
+  - anon after each 795 / 1,283 / 1,254 / 1,595 / 1,400 MiB, against 1,610 / 1,286 / 2,127 / 2,096 / 1,873.
+  - The scenario differs from BEFORE: the web was freshly restarted here, and the node was running before phase 4.
+- Still to come (München's night watch to 07:00Z, /root/measure/index-trial/night-log.txt): the refreshes over hours of wikidata embedding, how many, and their durations. Embedding resumes after phase 4 and M1/M2.
+
+Then the permanent form goes to the operator: a byte cap on the tail, which also folds a quiet table's whole tail.

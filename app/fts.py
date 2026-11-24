@@ -382,15 +382,36 @@ def index_books(entries, collection=None) -> None:
         raise ReaderWrite(f"{collection.name} reads the text index its sister "
                           f"{text_index.role(collection).writer} writes: it never indexes")
     by_group: dict[str, list] = {}
+    languages = section_languages(collection)
+    mul_groups: list[str] | None = None   # the groups a `mul` record can be in, held on disk
     for entry in entries:
         lang, book_id, chunks = entry[0], entry[1], entry[2]
         extra = entry[3] if len(entry) > 3 else None     # app/validity.py's columns
         names = entry[4] if len(entry) > 4 else None
-        parts = by_section_language(lang, chunks, section_languages(collection))
+        parts = by_section_language(lang, chunks, languages)
+        reached: set[str] = set()
         for k, (part_lang, part) in enumerate(parts):
             # the names ride on the record's first part (its first chunk)
+            reached.add(group_for(part_lang))
             by_group.setdefault(group_for(part_lang), []).append(
                 (part_lang, book_id, part, extra, names if k == 0 else None))
+        if (lang or "") == MULTILINGUAL and languages:
+            # A `mul` RECORD THAT LOST A SECTION LANGUAGE (P6 of the 2026-11-21
+            # review), or every chunk: its rows in the groups its new chunks do
+            # not reach went nowhere, and stayed. The groups it CAN be in are
+            # known — each declared language's and `other` (`groups_for_lang`)
+            # — so the record is deleted in each of those its chunks do not
+            # reach: a delete by book_id, in the same commit as the batch's
+            # writes there; a group with no index on disk holds nothing and is
+            # not created. Bounded by the declared languages, never a read of
+            # the index (a per-batch read of every group was 2026-11-08's
+            # 73 GB pattern)
+            if mul_groups is None:
+                mul_groups = [g for g in groups_for_lang(collection, MULTILINGUAL)
+                              if (base_of(collection) / g / "meta.json").is_file()]
+            for g in mul_groups:
+                if g not in reached:
+                    by_group.setdefault(g, []).append((MULTILINGUAL, book_id, [], None, None))
     for group, items in by_group.items():
         idx = get_index(group, collection)
         algorithm = pystem_algorithm(group)
@@ -582,6 +603,15 @@ def index_book(lang: str, book_id: int, chunks: list[dict], collection=None):
     """One document, one commit — for callers that genuinely have one."""
     index_books([(lang, book_id, chunks)], collection)
 
+def groups_for_lang(collection, lang: str | None) -> list[str]:
+    """The groups a document of `lang` sits in: its language's group, and
+    for a `mul` record every group its sections can be in (as `delete_book`)."""
+    lang = lang or "und"
+    if lang == MULTILINGUAL:
+        return list(dict.fromkeys([group_for(l) for l in section_languages(collection)] + [group_for(lang)]))
+    return [group_for(lang)]
+
+
 def delete_book(lang: str, book_id: int, collection=None):
     """A `mul` record's sections may be in several groups
     (`by_section_language`): it is deleted from each group its sections can
@@ -730,6 +760,32 @@ def chunk_counts(collection, book_ids: list[int]) -> dict[int, int]:
     return out
 
 
+def stored_by_group(collection, book_ids: list[int]) -> dict[int, dict[str, list[tuple[str, str, str]]]]:
+    """`stored_chunks`, kept apart by group: `{book: {group: [(chunk id,
+    heading, text)…]}}` — what each group's index holds of each document
+    (app/hold/derived_check.py: the group a document's rows sit in is not
+    always the one its language names now)."""
+    out: dict[int, dict[str, list[tuple[str, str, str]]]] = {}
+    if not book_ids:
+        return out
+    for group in existing_groups(collection):
+        idx = get_index(group, collection)
+        idx.reload()
+        q = tantivy.Query.term_set_query(idx.schema, "book_id", list(book_ids))
+        searcher = idx.searcher()
+        total = searcher.search(q, 1, count=True).count
+        if not total:
+            continue
+        for _score, addr in searcher.search(q, total).hits:
+            doc = searcher.doc(addr)
+            out.setdefault(int(doc["book_id"][0]), {}).setdefault(group, []).append(
+                (doc["chunk_id"][0], doc["chapter"][0] if doc["chapter"] else "", doc["body"][0]))
+    for groups in out.values():
+        for v in groups.values():
+            v.sort()
+    return out
+
+
 def stored_chunks(collection, book_ids: list[int]) -> dict[int, list[tuple[str, str, str]]]:
     """Every stored chunk of each of `book_ids` as (chunk id, heading, text),
     over every group, sorted by chunk id — what the text index would give a
@@ -798,15 +854,46 @@ def tie_key(chunk_id: str) -> tuple:
     except (IndexError, ValueError):
         return (text.encode("utf-8"), 0, text)
 
+class TextLegError(RuntimeError):
+    """A text index that could not be searched (it does not open, its lock
+    cannot be taken, a segment does not read): the leg's failure, said, never
+    an empty list that reads as "no match" (the operator, 2026-11-23: "A")."""
+
+
+#: (index path, error kind) already logged by this process: a broken index
+#: says so once, not on every question
+_logged_failures: set[tuple[str, str]] = set()
+
+
+def _say_failure(group: str, collection, e: Exception) -> str:
+    name = getattr(collection, "name", None) or "?"
+    why = f"the text index {group} could not be searched: {type(e).__name__}: {e}"[:300]
+    key = (f"{name}/{group}", type(e).__name__)
+    if key not in _logged_failures:
+        _logged_failures.add(key)
+        import sys
+        import time
+        print(f"{time.strftime('%H:%M:%S')} [{name} warn:text] {why}", file=sys.stderr, flush=True)
+    return why
+
+
 def search(group: str, query: str, limit: int = 20, collection=None,
            book_ids: list[int] | None = None, langs: list[str] | None = None,
-           validity: dict | None = None) -> list[dict]:
+           validity: dict | None = None, raise_errors: bool = False) -> list[dict]:
     """book_ids, when given, is a hard prefilter (Tantivy term-set query
     ANDed with the text query) — the facet filters' restriction (05 §5.2:
     "a filter restricts; nothing boosts"), and the one a resolved
     identifier's would be.
     `langs` is the same kind of prefilter on the stored `lang`, for the
-    mixed groups (cjk, other) when a query is restricted to languages."""
+    mixed groups (cjk, other) when a query is restricted to languages.
+
+    AN INDEX THAT CANNOT BE SEARCHED IS SAID (2026-11-23): with
+    `raise_errors` the failure is a `TextLegError` the search names in its
+    `legs_withheld` (leg "text"); without it the leg answers [] as before,
+    for the callers that only look a record up. Either way it is logged once,
+    with the collection. Until then it was an empty list: a copy mounted
+    read-only, whose lock tantivy takes to read, answered nothing to every
+    question, and a measurement read it as a fast search (München)."""
     try:
         idx = get_index(group, collection)
         idx.reload()
@@ -877,7 +964,10 @@ def search(group: str, query: str, limit: int = 20, collection=None,
         # deterministic secondary key so results are reproducible, then cut.
         out.sort(key=lambda h: (-h["score"], tie_key(h["chunk_id"])))
         return out[:limit]
-    except Exception:
+    except Exception as e:   # noqa: BLE001 — the leg's failure, said (above), never the search's
+        why = _say_failure(group, collection, e)
+        if raise_errors:
+            raise TextLegError(why) from e
         return []
 
 

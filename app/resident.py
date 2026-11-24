@@ -81,7 +81,7 @@ busy; one question then paid two chat cold starts of 11–15 s, and the
 back-off backed off the chat itself. So the set is fitted to a budget
 first, which the system decides (RULE 2: no list typed):
 
-    budget = threshold × total − the working margin − the eviction penalty
+    budget = threshold × total − max(the working margin, the reserve) − the eviction penalty
 
   and the set is counted AT REST: each model at the bytes its load left it
   holding, before a request grows its buffers.
@@ -103,7 +103,9 @@ first, which the system decides (RULE 2: no list typed):
   Its peak per MARGIN_BUCKET_S is kept in the file for MARGIN_WINDOW_S
   (6 h); the margin is the peak of the window. No sample while this
   keeper's own load runs (that model is counted in the budget already),
-  nor where a runner gives no per-model sizes. Nothing measured in the
+  nor for SETTLE_S after the node resumes (a benchmark window's exit empties
+  and refills the card, 2026-11-23), nor where a runner gives no per-model
+  sizes. Nothing measured in the
   window: DEFAULT_MARGIN, 3.0 GiB — the node's night: ~28.4 GB at rest
   with 11 models, and the reclaimer read 95.9 % of 32.7 GB = 31.36 GB,
   ~2.96 GB of growth. With it, that night's set (28.4 + 3.0 > 31.0 GB)
@@ -272,6 +274,16 @@ MIB = 1 << 20
 #: measured in the window: the node, 2026-11-08, ~28.4 GB at rest with 11
 #: models, the reclaimer reading 95.9 % of 32.7 GB = 31.36 GB: ~2.96 GB grown
 DEFAULT_MARGIN = 3072 * MIB
+#: THE WORKING MEMORY'S RESERVE (operator, 2026-11-23, B: "Whats left are
+#: models and weights"): the budget counts the models at rest, their weights,
+#: and never less than this is kept free under the line for what requests
+#: grow (contexts made on demand, KV and compute buffers), however quiet the
+#: margin's window was. A quiet 6 h measured a margin of 0, the budget filled
+#: the card to the reclaimer's line, and the next burst evicted an idle model.
+#: The size is the peak context held at once by the models running in the same
+#: second, 3,262 MiB (docs/notes/shared-context.md §2, the card record of
+#: 2026-11-10/11); a margin measured above it counts instead
+CONTEXT_RESERVE = 3262 * MIB
 #: the eviction penalty halves after each this long without another eviction
 PENALTY_HALVING_S = 2 * 3600.0
 #: A READING BELOW THIS SHARE OF THE MODEL'S LARGEST IS NOT "AT REST" — the
@@ -288,6 +300,13 @@ REST_FLOOR = 0.5            # = app/model_load.py REST_FLOOR, where the readings
 #: the margin's samples are kept under this basis; peaks of another (the
 #: at-rest sizes before REST_FLOOR) are dropped when the file is read
 MARGIN_BASIS = 2
+#: AFTER A RESUME THE CARD IS NOT YET LOUISE'S (2026-11-23): phase 4's exit
+#: emptied the card, resumed the node, and reloaded the live set; 9 s after its
+#: 35B container exited, the first beat read a margin of 16,759 MiB, and the
+#: budget fell from 31,020 to 14,262 MiB for the window's 6 h, five encoders
+#: out of it. No margin sample this long after the node turns from a mode that
+#: preloads nothing to one that does (one bucket: the next one is its own)
+SETTLE_S = 600.0
 #: the margin is the peak of the samples this recent (restarts included)
 MARGIN_WINDOW_S = 6 * 3600.0
 #: one peak kept per this many seconds of the window
@@ -834,10 +853,17 @@ class Plan:
     measured: bool
     median: int | None
     penalty: int = 0
+    reserve: int = 0
+
+    @property
+    def kept(self) -> int:
+        """What the budget keeps free under the line for working memory: the
+        margin, never less than the reserve."""
+        return max(self.margin, self.reserve)
 
     @property
     def budget(self) -> int | None:
-        return None if self.line is None else self.line - self.margin - self.penalty
+        return None if self.line is None else self.line - self.kept - self.penalty
 
     @property
     def fitting(self) -> frozenset[tuple[str, str]]:
@@ -850,8 +876,11 @@ class Plan:
                "the default: nothing measured in the last "
                f"{MARGIN_WINDOW_S / 3600:.0f} h")
         pen = f" − {self.penalty // MIB:,} MiB for evictions" if self.penalty else ""
+        kept = (f"margin {self.margin // MIB:,} MiB, {how}" if self.margin >= self.reserve else
+                f"the working memory's reserve {self.reserve // MIB:,} MiB (the margin, "
+                f"{self.margin // MIB:,} MiB {how}, is under it)")
         return (f"the budget is {max(0, self.budget) // MIB:,} MiB (the {self.threshold:.2f} line "
-                f"{self.line // MIB:,} MiB − margin {self.margin // MIB:,} MiB, {how}{pen})")
+                f"{self.line // MIB:,} MiB − {kept}{pen})")
 
 
 def _ago(seconds: float) -> str:
@@ -863,7 +892,8 @@ def _ago(seconds: float) -> str:
 
 
 def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
-         used: dict[tuple[str, str], float], now: float, reserved: int = 0) -> Plan:
+         used: dict[tuple[str, str], float], now: float, reserved: int = 0,
+         reserve: int | None = None) -> Plan:
     """THE BUDGET, filled: the set in priority order (`tier_of`; within a
     tier the most recently used first, then the never used, smaller first),
     each at its AT-REST size (never seen: the median of the set's known
@@ -884,14 +914,15 @@ def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
     ranked = sorted(want, key=order)
     margin, measured = mem.margin(now)
     penalty = mem.penalty_now(now) + int(reserved)
+    keep = CONTEXT_RESERVE if reserve is None else int(reserve)
     line = None if not mem.total else int(threshold * mem.total)
-    budget = None if line is None else line - margin - penalty
+    budget = None if line is None else line - max(margin, keep) - penalty
     uses: dict[int, list[float]] = {}
     for r in ranked:
         if used.get(r.key) is not None:
             uses.setdefault(tier_of(r)[0], []).append(used[r.key])
     taken, placed = 0, []
-    head = Plan((), line, threshold, margin, measured, median, penalty)
+    head = Plan((), line, threshold, margin, measured, median, penalty, keep)
     for rank, r in enumerate(ranked, 1):
         tier, size, need, t = tier_of(r)[0], sizes[r.key], counted[r.key], used.get(r.key)
         seen = ("on another card: costs this one nothing" if r.key in mem.elsewhere else
@@ -918,7 +949,7 @@ def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
                       + " — loaded at its first request, then left to the reclaimer's LRU")
             fits, why = False, f"not preloaded — {head.says()}; {detail}"
         placed.append(Placed(r, rank, tier, size, _size(r, mem), need, t, fits, why, detail))
-    return Plan(tuple(placed), line, threshold, margin, measured, median, penalty)
+    return Plan(tuple(placed), line, threshold, margin, measured, median, penalty, keep)
 
 
 def _plan_now(want: Iterable[Resident], mem: Memory | None = None) -> Plan:
@@ -979,24 +1010,41 @@ def _held_now(servers: Iterable[str], mem: Memory) -> dict[tuple, int] | None:
     return out
 
 
+def _settling(now: float | None = None) -> bool:
+    """Whether the node RESUMED less than SETTLE_S ago: its last mode write
+    turned a mode that preloads nothing into one that does (node_state's
+    history; its clock is the wall's)."""
+    from app import node_state
+    hist = node_state.mode_history()
+    if len(hist) < 2:
+        return False
+    last, prev = hist[-1], hist[-2]
+    at = float(last.get("at") or 0)
+    now = time.time() if now is None else now
+    return (last.get("state") in PRELOADING_MODES and prev.get("state") not in PRELOADING_MODES
+            and 0 <= now - at < SETTLE_S)
+
+
 def _remember(want: list[Resident]) -> Memory:
     """The beat's part of the budget: the set's sizes as this process saw
     them merged into the memory (the largest and the fewest kept), the
     card's total, one sample of the margin — the card's count minus the
     at-rest sizes of what LocalAI lists loaded, read before and after it —
-    unless this keeper's own load runs; peaks older than the window
-    dropped; the file written when anything changed."""
+    unless this keeper's own load runs or the node resumed less than
+    SETTLE_S ago; peaks older than the window dropped; the file written when
+    anything changed."""
     from app import model_load
     mem = _memory_now()
     servers = {r.server for r in want}
     with _lock:
         loading = _warm_thread is not None and _warm_thread.is_alive()
+    settling = _settling()
     card = sample = None
     moved: dict[tuple[str, str], bool] = {}
     if servers:
         with _lock:
             frozen = mem.copy()
-        before = None if loading else _held_now(servers, frozen)
+        before = None if loading or settling else _held_now(servers, frozen)
         card = _card()
         with _lock:
             here, there = _pids_seen
@@ -1466,6 +1514,11 @@ def show() -> dict[str, Any]:
                               if p.measured else
                               f"the default {DEFAULT_MARGIN // MIB:,} MiB: nothing measured in the last "
                               f"{MARGIN_WINDOW_S / 3600:.0f} h"),
+                   "reserve_mib": p.reserve // MIB,
+                   "reserve": (f"{p.reserve // MIB:,} MiB kept for working memory whatever the margin "
+                               f"(operator, 2026-11-23, B); "
+                               + ("the margin is above it and counts" if p.margin >= p.reserve else
+                                  "it counts, the margin being under it")),
                    "penalty_mib": p.penalty // MIB,
                    "penalty": (f"{p.penalty // MIB:,} MiB for the reclaimer's evictions of preloaded models, "
                                f"the last at "

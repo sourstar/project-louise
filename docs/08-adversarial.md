@@ -317,7 +317,7 @@ origin published; it is never rendered, because rendering is what runs it.
 
 **Caps, applied before decoding.** At most 16 MiB of bytes per figure, at
 most 64 megapixels once the header is read but before any pixel is, and
-at most 4,096 figures per record. The first two are what stop a
+at most 65,536 figures per record (*amended 2026-11-18 and 2026-11-19*, below). The first two are what stop a
 decompression bomb — a few hundred kilobytes of PNG that decodes to
 tens of gigabytes — and they are applied to the DECLARED dimensions in
 the header, so the decoder is never handed something it will die inside.
@@ -340,7 +340,29 @@ The count cap was 1,024 and refused eleven books, the largest carrying
 3,503 images — which is 0.025 % of the corpus and the WRONG 0.025 %:
 they are the most illustrated books in it, which is what a plates
 collection is for. A rule that admits a novel's frontispiece and refuses
-an illustrated natural history is backwards, so the cap is 4,096.
+an illustrated natural history is backwards, so the cap was 4,096.
+
+*Amended 2026-11-18.* That measurement counted the images the parser of
+the day carried. Gutenberg's parser 11 carries EVERY plate (operator,
+2026-10-25: "Every plate"), and the first whole build at parser 12 refused
+gutenberg:47273, which names 4,464 figures — a real book refused, which is
+the one thing the count cap must not do, and its figures may not be dropped
+or folded either (invariant 11). The cap became 16,384, set from that one
+book.
+
+*Amended 2026-11-19.* The next whole build refused gutenberg:61985, "Harrods
+for Everything", a department-store catalogue naming 17,167 figures (16,994
+distinct). Counted then over the WHOLE corpus — gutenberg's 79,866 records,
+the 30 most illustrated re-parsed at parser 12 with the same entries as at
+10 — it is the most of any record; the next are the two volumes of
+*Principia mathematica* (15,059 and 13,330, their formulas as images), the
+A.N.W.B. travel guide (7,037 entries of 17 images) and *The Egyptian Book of
+the Dead* (6,869). A cap set from one book is the 2026-09-09 mistake again,
+so the cap is set from the corpus: 65,536, nearly four times its largest
+record. It still stops a record from naming the unbounded; a record over it
+still aborts the build (pack/build.py) and fails `hold check`'s `figures`
+row. A peer on a build before these amendments fails that row for such a
+record until it updates.
 
 The media-type list was measured too: `image/jpeg` and `image/png` cover
 99.66 % of that corpus. SVG is REAL in it — 2,407 images — so refusing

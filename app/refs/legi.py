@@ -230,7 +230,8 @@ class LegiRefSource:
     namespaces = NAMESPACES
     eli_jurisdiction = ELI_JURISDICTION
     #: a pinned article's note, in French (app/ask/articles.py)
-    article_notes = ArticleNotes("texte en vigueur", "texte au {day}", "dernier texte en vigueur")
+    article_notes = ArticleNotes("texte en vigueur", "texte au {day}", "dernier texte en vigueur",
+                                 "texte jusqu'au {day} ; modifié depuis, le texte modifié n'est pas disponible")
 
     def key_lookup(self, canonical: str) -> tuple[str, str, str] | None:
         """`(table, column, value)` for a key a `legi` record writes: its

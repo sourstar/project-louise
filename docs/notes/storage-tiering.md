@@ -443,6 +443,19 @@ successor).
 | the manifests, text indexes and SEARCHED vector tables | random, queries | | ssd4 |
 | origins, SHARDs, bundles, exports | sequential, archive | | tank, then tank1 |
 
+*Restated 2026-11-22* (the operator, choosing the claim index's seek table, B):
+"we can consider 2 kind of caching on storage devices: 1. disk cache (ssd3,
+SSD technology caching HDD, big but slower than nvem anyway much faster than
+mechanical hdd; use it for things like parsing, indexing, anything that can
+benefit from copying large amount of data from hdd) 2. RAM cache (ssd5, nvem
+gen5, the fastest storage device we have. the indexing caching currently
+stored in RAM for instance? But this is more your call)". So what a process
+would otherwise hold decoded in its heap — an index it looks up at random —
+goes to ssd5, mmapped, and its pages are the page cache's and the ARC's, never
+the heap's. The first index moved out of the web's heap by it: the claim
+index's seek table (app/hold/claim_index.py), which replaced every part's pack
+index held decoded (+485 MiB a question, München).
+
 **Which kind goes where** is app/derived.py's `FILES`, by how a kind is READ:
 the four packs are decompressed archives; everything else is read at random or
 memory-mapped. A pack on ssd3 costs a parse only where the parse waits on it:
@@ -555,3 +568,84 @@ tank is never touched; the downloads stay there without expiry (2026-11-14).
   network file's cookie, and tank is a local pool.
 - A new reader of a bulk file asks whether it reads at random or more than once.
   If it does, it opens the file through `staged`.
+
+## 12. ssd4 is for LanceDB only (operator, 2026-11-22)
+
+"Ssd4 is for lancedb only." Today ssd4 (`/mnt/ssd4/apps/louise-rag`) also
+holds what §10's table puts there with the vector tables: every collection's
+manifest (`state/manifest.sqlite`, the authoritative state, SQLite WAL), its
+text indexes (`index/`, tantivy), the rest of its `state/` (the share caches,
+the runs), the node's `state/` (`node.sqlite`, trust, `new/`,
+`cpu-reference/`), acquisition `staging/` and `hub/`, and `config/` and
+`secrets/`. Each of those moves off it. Where each goes is put to the operator
+as options, from München's read-only inventory (sizes, free space on ssd3 and
+ssd5, the manifests' write rate), with these constraints:
+- the authoritative state never goes to a cache (invariant 6: the archive and
+  the authoritative state never go under `LOUISE_CACHE_DIR`);
+- ssd3 is QLC (Samsung 870 QVO, an 18 GB SLC cache, 158 MiB/s past it, §9),
+  and a manifest is random small writes;
+- a text index is derived but costs days to rebuild for pubmed: it moves as
+  the same bytes (RULE 1), never rebuilt.
+
+**The operator's choices (2026-11-22):**
+- text indexes: "B but measure", to ssd3;
+- SQLite state: "A but measure", to ssd3 in its own dataset at recordsize 16K;
+- the rest: "Delete or move at your discretion". Done 23:13Z: `data/cache` deleted (808 MB); the measurement folders and `hub/` moved to `ssd3/attic/<name>`, each compared.
+
+**Measured (München, 2026-11-23 00:49–01:31Z, the node and OCR paused; /root/measure/ssd3-trial2/).** A first run was invalid, and the reasons are kept as lessons:
+- a copy of a text index mounted read-only cannot be searched, because tantivy takes its lock to read;
+- a replay that sets a column to itself writes no page in SQLite.
+
+M1, gutenberg's text index (51 GB), 72 searches each, 0 failed, the copy's text hits checked before each run:
+
+| | fts p50 | fts p95 | total p50 |
+|---|---|---|---|
+| ssd4, live | 860 ms | 1,786 ms | 8,433 ms |
+| ssd3 copy, primarycache=all | 406 ms | 1,162 ms | 6,353 ms |
+| ssd3 copy, primarycache=metadata, page cache dropped | 405 ms | 1,749 ms (max 3,182) | 6,414 ms |
+
+ssd4's own run gave 407 / 1,150 the night before, so it moves 2× between runs. The runs were made once each, in that order. **ssd3 is not slower than ssd4 for the text leg, uncached included; no gain is shown.** The total is the reranker's (3–5 s).
+
+fio on ssd3:
+- 30 GB sequential at 157 MB/s (942 for the first 5 s, the SLC, then a steady 155);
+- 4k random writes with an fsync each: 523 IOPS, fsync p50 0.73 ms, p99 7.9 ms.
+
+M2, wikidata's manifest (35.5 GB), copied by SQLite's online backup, caches dropped before each run. The replay was 2,000 commits of 500 random rows (updated_at+1), with a checkpoint every 100 (206 MB of WAL each), then 10 M rows in windows of 50 k:
+
+| | commit p50 | p99 | checkpoint p50 / max | 10 M rows |
+|---|---|---|---|---|
+| ssd3, recordsize 16K | 119 ms | 1,214 ms | 3.26 / 3.63 s | 105 s (95 k/s), pool 8–90 MB/s |
+| ssd4, the live pool | 124 ms | 2,469 ms | 4.09 / 20.8 s | 178 s (56 k/s), pool up to 256 MB/s |
+
+The medians are equal; **ssd3 has the shorter tails and writes about a third of the bytes.** Confounds: the recordsizes differ, ssd4 ran second beside the live web and its snapshots, and each was run once.
+
+The live write load on ssd4 (München, the evening before, 10 min in normal embedding): about 1.2 MB/s, 4.3 GB/h, Lance's writes included. That is far inside ssd3's 18 GB SLC cache.
+
+The trial datasets and the ssd4 baseline (53.3 + 26.2 + 13 GB, and their copies on tank) are no longer needed for the decision.
+
+**How the move is made** was put on 2026-11-23:
+- A: one root for the searched vector tables on ssd4 (`LOUISE_LANCE_ROOT`), reached by a link from each collection's folder, which then moves whole to ssd3.
+- B: per-collection bind mounts.
+- C: code roots for state and index (128 and 14 hand-built paths).
+
+**Decided (operator, 2026-11-23): "A".** Built (07 §7.3, §7.8; app/vector_place.py, tests/test_vector_place.py):
+- `LOUISE_LANCE_ROOT`, identity tier, resolved by vector_place alone (tests/test_invariant_6_storage.py);
+- a link into the root is `hot`, one into the build area `build`, so `take_over` leaves the first alone;
+- `hold vectors move <c> --to hot --apply` adopts a table that is still the directory beside its collection by a RENAME: nothing copied (RULE 1), the name never absent, a stop between its two steps finished by the next run; two filesystems are refused;
+- with the root set, a table made since goes there; `forget` and `rename` follow it.
+
+**The procedure (the node, with the operator's word; each step checked before the next):**
+1. `mkdir /mnt/ssd4/apps/louise-rag/lance`; set `LOUISE_LANCE_ROOT=/data/lance` in web and worker; deploy. Stage 6 checks it is a directory in both. The root is inside the /data dataset, so the adoptions are renames.
+2. `node pause`; then, per collection, `hold vectors move <c> --to hot` (the dry run says "adopt"), then `--apply`. `find /mnt/ssd4/apps/louise-rag/collections -maxdepth 2 -name lance -type d` must print nothing: a table left as a directory would move to ssd3 with its folder. Searches answer as before, through the links.
+3. The app stopped. One ssd3 dataset for all of /data (`atime=off`, `compression=lz4`, `recordsize=16K`: the operator's figure for SQLite). Copy everything but `lance/` and the caches already mounted elsewhere, keeping symlinks as symlinks (`rsync -aHAX --exclude=/lance/`). Compare the two sides by count, bytes and a sha256 sample.
+4. Re-run M1 against the copy before the switch, since the copy is at 16K and M1's index copy may not have been. Text hits must be greater than 0.
+5. Mount the new dataset at `/data` and `/mnt/ssd4/apps/louise-rag/lance` at `/data/lance`, in web and worker, with the nested mounts that exist today kept (`/data/cache` ssd5, `/data/files-cache`, `/data/pubmed-pack`). Start the app and run the deploy's stage-6 checks. Every collection must be served (`hold collection show`: no refusal), and each must answer a text and a vector search.
+6. The old copies on ssd4 are deleted only after step 5 holds for a day, with the operator's word.
+
+**Done (München, 2026-11-23; the operator: "B", all of it now; the website down 03:40–04:57Z):**
+- Step 2: 11 tables adopted, each "by a rename (exchanged)". The row counts were unchanged, and each table answered a vector search through its link. `--apply` needs the collection paused BY NAME; `node pause` alone leaves the worker holding it.
+- Step 3: the copy took 2,863 s (573 GB logical, 157 MB/s steady), and a second dry pass was empty. The two sides agree on 151,454 files and 574,784,082,677 bytes, and symlink targets hash equal. sha256 of 106 files (1 in 2000, plus every `.sqlite`/`.db` whole): 0 differ. The GPU governor writes `node.sqlite` every heartbeat, so it was stopped and `state/` copied again. On disk: 429 GB (lz4 1.24×).
+- Step 4, the 16K copy (72 searches, 0 failed, text hits 20): fts p50 392.5 / p95 1,113 ms, against M1's 128K copy at 406 / 1,162. **Not slower at 16K.**
+- Step 5: `/mnt/ssd3/louise-data:/data` and `/mnt/ssd4/apps/louise-rag/data/lance:/data/lance` in web and worker. The governor's `/data/state` was moved by stage 8's own code. There are no refusals, and every collection gives text hits and vector search with the same row counts.
+- Since then the deploy owns the Lance root's bind (`flatten_mounts.lance_root`). Stage 6 checks that the containers' `/data/lance` IS the host's folder (device and inode), never the empty mount point under it.
+- Left on ssd4 besides `data/lance`: `config/`, `secrets/`, `src/` (KB, and the deploy's code). Moving them changes the deploy's `ROOT` and ~25 host paths; that is not done yet.

@@ -30,8 +30,7 @@ def test_note_granted_counts_without_touching_tokens():
         "accounting must not double-charge the budget the lease already paid"
 
 
-@pytest.mark.skipif(shutil.which("rsync") is None,
-                    reason="rsync is not installed: this test runs the real program (the node's image has it)")
+@pytest.mark.skipif(shutil.which("rsync") is None, reason="rsync not installed")
 def test_local_rsync_fetch_is_accounted(tmp_path, monkeypatch, isolated_config):
     """A real (local-path) rsync fetch must report its bytes. Local rsync
     needs no daemon, so this exercises the genuine subprocess + .part flow."""

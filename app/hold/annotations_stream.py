@@ -913,6 +913,7 @@ def pin_part(ref, tables, k0: int, offsets: np.ndarray, lengths: np.ndarray, lin
     with _opened(ref) as src:
         raws = _read_in_order(src, offsets, lengths)
     missing, out, dropped, error = _Missing(), [], [], None
+    moved: Counter = Counter()
     for b0 in range(0, len(raws), BATCH):
         claims = _claims_of(raws[b0:b0 + BATCH])
         held.load(_uids_of(claims))
@@ -928,22 +929,48 @@ def pin_part(ref, tables, k0: int, offsets: np.ndarray, lengths: np.ndarray, lin
             except Exception:           # noqa: BLE001 — the parent raises it, as `pin` would
                 error = k0 + j
                 break
+            if p is not None and strip:
+                moved.update(repinned(c, p))
             if p is not None and keys and (fresh is None or fresh[j]):
                 out.append((_number_order(p, version), k0 + j))
         if error is not None:
             break
-    return {"keys": out, "count": missing.count, "first": missing.first, "dropped": dropped, "error": error}
+    return {"keys": out, "count": missing.count, "first": missing.first, "dropped": dropped, "error": error,
+            "moved": dict(moved)}
+
+
+#: `repinned`'s counter keys: a claim whose record's TEXT moved under it, by
+#: its method's kind; one pinned to another snapshot of the same text
+TEXT_MOVED, SNAPSHOT_ONLY = "text moved", "snapshot only"
+
+
+def repinned(stated: dict[str, Any], pinned: dict[str, Any]) -> Counter:
+    """What re-pinning moved for one claim: `stated` as the file gave it
+    (its pins, if any), `pinned` as `_pin_one` pinned it anew. A pin that
+    moved means the claim was checked against OTHER text of the record — the
+    count an operator reads before a re-created target's annotations are
+    carried (`create --repin`); a claim the file gave no pin is not counted."""
+    kind = str((stated.get("method") or {}).get("kind") or "?")
+    text = any(stated.get(k) is not None and stated.get(k) != pinned.get(k)
+               for k in ("subject_hash", "object_hash"))
+    if text:
+        return Counter({f"{TEXT_MOVED}: {kind}": 1})
+    if stated.get("target_snapshot") is not None and stated["target_snapshot"] != pinned.get("target_snapshot"):
+        return Counter({SNAPSHOT_ONLY: 1})
+    return Counter()
 
 
 def check_pins(src: ClaimsSource, sv: Survey, tables: "Held | Path", *, snapshots: dict[str, str],
                codices: dict[str, Any], sort: ExternalSort | None, version: int, strip: bool = False,
-               drop: bool = False, fresh: np.ndarray | None = None) -> list[tuple[int, str]]:
+               drop: bool = False, fresh: np.ndarray | None = None,
+               moved: Counter | None = None) -> list[tuple[int, str]]:
     """Pass 2: every claim pinned as `pin` pins it — the ends not held
     counted and refused together at the end, any other refusal raised at the
     first claim in the file's order that has one — and its numbering key
     (`_number_order`) with its ordinal added to `sort` (only the claims
     `fresh` marks, when given). Nothing is kept; pass 3 pins again what it
-    writes. Returns the claims `drop` set aside, in the file's order."""
+    writes. Returns the claims `drop` set aside, in the file's order; with
+    `strip`, `moved` (when given) counts what the re-pin moved (`repinned`)."""
     from app import parallel
     from .annotations import AnnotationsError, _not_held, _pin_one
     tasks = [(src.ref, tables, a, sv.offsets[a:a + PIN_CLAIMS], sv.lengths[a:a + PIN_CLAIMS],
@@ -964,6 +991,8 @@ def check_pins(src: ClaimsSource, sv: Survey, tables: "Held | Path", *, snapshot
                                    f"file or the target changed while it was read")
         count += got["count"]
         first.extend(got["first"][:8 - len(first)])
+        if moved is not None:
+            moved.update(got.get("moved") or {})
         if sort is not None:
             for item in got["keys"]:
                 sort.add(item)

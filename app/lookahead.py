@@ -37,22 +37,55 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Sequence
-from concurrent.futures import Future
+from concurrent.futures import Future, wait
+
+#: the longest one wait of a take lasts before it looks at its link again
+TAKE_SLICE_S = 0.25
+
+
+class Control:
+    """A link's computation and its taker, talking (2026-11-21, P4 of the
+    EUR-Lex review: an abandoned link only cancelled its Future, and its
+    computation went on — holding the parse pool's large lane — while the
+    stage parsed the same rows again). `is_set()` once the link is let go of:
+    the computation stops at its next boundary (`parallel.controlled`).
+    `beat()` each time the computation is seen alive within its own bound
+    (`parallel.compute`'s watchdog): the taker waits for a link that keeps
+    beating — a large act's 730 s parse is taken, never parsed twice — and
+    lets go of one gone quiet. Cooperative cancellation by a token, with a
+    heartbeat (the standard watchdog)."""
+
+    def __init__(self) -> None:
+        self._stop = threading.Event()
+        #: when the computation last said it was alive (monotonic)
+        self.last = time.monotonic()
+
+    def is_set(self) -> bool:
+        return self._stop.is_set()
+
+    def set(self) -> None:
+        self._stop.set()
+
+    def beat(self) -> None:
+        self.last = time.monotonic()
 
 
 class Ahead:
     """`rows` in their order, each with its result: `known[i]` where it is
     already in hand (carried from the batch before), else computed by
     `compute(the rows still to do)` on a daemon thread, which returns one
-    result per row, in order."""
+    result per row, in order. `controlled`: `compute(todo, control)` is
+    handed the link's `Control` — told when the link is let go of, and
+    beating while it works."""
 
-    def __init__(self, rows: Sequence, known: Sequence, compute: Callable[[list], list], *,
-                 name: str = "lookahead") -> None:
+    def __init__(self, rows: Sequence, known: Sequence, compute: Callable[..., list], *,
+                 name: str = "lookahead", controlled: bool = False) -> None:
         if len(rows) != len(known):
             raise ValueError("one known result (or None) per row")
         self.rows = list(rows)
         self._known = list(known)
         self._future: Future = Future()
+        self.control: Control | None = Control() if controlled else None
         todo = [r for r, k in zip(self.rows, self._known) if k is None]
         self.computing = len(todo)
         if not todo:
@@ -60,11 +93,11 @@ class Ahead:
             return
         threading.Thread(target=self._run, args=(compute, todo), name=name, daemon=True).start()
 
-    def _run(self, compute: Callable[[list], list], todo: list) -> None:
+    def _run(self, compute: Callable[..., list], todo: list) -> None:
         if not self._future.set_running_or_notify_cancel():
             return                                  # abandoned before it began
         try:
-            got = compute(todo)
+            got = compute(todo) if self.control is None else compute(todo, self.control)
             if len(got) != len(todo):
                 raise RuntimeError(f"{len(got)} results for {len(todo)} rows")
             self._future.set_result(got)
@@ -72,6 +105,11 @@ class Ahead:
             self._future.set_exception(e)
 
     def done(self) -> bool:
+        return self._future.done()
+
+    def wait(self, timeout: float) -> bool:
+        """Wait up to `timeout` seconds for the computation; whether it is done."""
+        wait([self._future], timeout=max(0.0, timeout))
         return self._future.done()
 
     def results(self, timeout: float) -> list | None:
@@ -85,8 +123,12 @@ class Ahead:
         return [k if k is not None else next(got) for k in self._known]
 
     def abandon(self) -> None:
-        """Nobody will take it: not started, it never starts; running, its
-        result is dropped when it comes."""
+        """Nobody will take it: not started, it never starts; running, a
+        controlled computation is told to stop at its next boundary (its
+        large part's process terminated, the lane given back), and whatever
+        result comes is dropped."""
+        if self.control is not None:
+            self.control.set()
         self._future.cancel()
 
 
@@ -168,12 +210,37 @@ class Chain:
         first link did not answer within the bound (or raised): the chain is
         then abandoned whole. A later link that did not answer ends the take
         with what came; the rest of the chain is abandoned and it is
-        `broken`."""
+        `broken`. A CONTROLLED link (`Ahead(controlled=True)`) is waited for
+        by its heartbeat when it is the first — as long as it beats, quiet
+        for `timeout` at most — and, when a later one has not answered,
+        stays held, the chain whole."""
         deadline = time.monotonic() + max(0.0, timeout)
         out: list = []
         while self._links and len(out) < want and not enough(out):
             link = self._links[0]
-            got = link.results(timeout=deadline - time.monotonic())
+            if link.control is not None and not out:
+                # THE FIRST LINK, its computation controlled (P4, 2026-11-21):
+                # waited for as long as it beats — alive within its own bound
+                # (`parallel.compute`'s watchdog: a large act's lane part has
+                # the time its bytes take) — and let go of once it has been
+                # quiet for `timeout`. Parsing it again here would only do the
+                # same work twice, behind the lane the first still holds
+                while not link.done():
+                    now = time.monotonic()
+                    limit = max(deadline, link.control.last + max(0.0, timeout))
+                    if now >= limit:
+                        break
+                    link.wait(min(TAKE_SLICE_S, max(0.01, timeout / 4), limit - now))
+                got = link.results(timeout=0)
+            elif link.control is not None:
+                # A LATER LINK, controlled: within the take's bound; else the
+                # take ends with what came and the link stays held, still
+                # computing, for the next take — never let go of half-done
+                if not link.wait(max(0.0, deadline - time.monotonic())):
+                    break
+                got = link.results(timeout=0)
+            else:
+                got = link.results(timeout=deadline - time.monotonic())
             if got is None:
                 if not out:
                     self.abandon()

@@ -141,7 +141,12 @@ def test_a_shard_is_one_slice_and_one_number():
     """One shard per bundle is a hard constraint: a bundle spanning two
     shards has no single entry in the coverage map (§9.10)."""
     bd.check(header(shard="year=1980/00003"))
-    for bad in ("lang=it", "lang=it/00007/extra", "lang=it/abc", "/7"):
+    # a slice of two segments (09 §9.3): wikipedia's, legi's. Refused until
+    # 2026-11-23, which failed wikipedia's publish pass
+    bd.check(header(shard="lang=de/pages=0M/00001"))
+    bd.check(header(shard="kind=code/year=2020/00003"))
+    for bad in ("lang=it", "lang=it/00007/extra", "lang=it/abc", "/7", "lang=de//00001",
+                "lang=de/pages=0M/abc", "lang=de/pages=0M/"):
         with pytest.raises(BundleError, match="shard"):
             bd.check(header(shard=bad))
 

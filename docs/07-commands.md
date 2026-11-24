@@ -65,17 +65,19 @@ one.
 
 ```
 louise hold
-  collection  new <plugin> --recipe FILE --name N --encoder URL --cpu-model T [--api A] [--embed-model M]
+  collection  new <plugin> --recipe FILE --name N --encoder URL [--cpu-model T] [--api A] [--embed-model M]
                                                                        A NEW COLLECTION, ONE WORKFLOW (operator, 2026-11-06): case A of docs/notes/new-collection.md,
                                                                        its steps declared in app/hold/workflow.py, every input from the recipe: resolve (the recipe's
                                                                        ctx, cut, instruction, set, weights, engine; the CPU twin must state a CPU run of the weights);
                                                                        check (an existing collection of that name held to the recipe by space_id, engine and set,
                                                                        before anything is measured); calibrate against the twin (the CPU lane kept in the node's
-                                                                       store); tolerance (the recipe's must be the measured one); make; cpu-reference from the store;
+                                                                       store); tolerance (the recipe's must be the measured one); make; cpu-reference, INHERITED where the
+                                                                       node's store holds the space's key, else made once for the node (operator, 2026-11-22; the CPU
+                                                                       twin is the encoder's model with -cpu unless --cpu-model names it);
                                                                        gate. Exit 0 only on a pass; embedding stays off. Kept: <collection>/state/calibration.json and
                                                                        the run's progress, <LOUISE_ROOT>/state/new/<name>.json (run again: a done step is checked, not
                                                                        redone). A space.query.encoder is case B, refused until phase 3; the other cases: the note
-              new <plugin> --recipe FILE --name N --re-create --cpu-model T [--sample N] [--encoder URL] [--api A] [--embed-model M] [--dry-run]
+              new <plugin> --recipe FILE --name N --re-create [--cpu-model T] [--sample N] [--encoder URL] [--api A] [--embed-model M] [--dry-run]
                                                                        case F, A RE-CREATION (RULE 1; added 2026-11-07, normattiva): the collection held under --name is the
                                                                        predecessor; the recipe must make its space_id and its records (another engine, refused otherwise,
                                                                        before anything is measured); its endpoint, model and platform image are the predecessor's unless
@@ -93,12 +95,12 @@ louise hold
                                                                        that differ (the engine alone expected), the space_id kept, the documents, vector rows and
                                                                        bytes to carry counted from the predecessor with the time the count took, the room (short: exit
                                                                        2, the carry's refusal), the sample and its seed. It writes nothing and takes no lock
-              new <plugin> --name N --space-from C [--recipe FILE] --cpu-model T [--encoder URL] [--api A] [--embed-model M] [--dry-run]
+              new <plugin> --name N --space-from C [--recipe FILE] [--cpu-model T] [--encoder URL] [--api A] [--embed-model M] [--dry-run]
                                                                        case E, a SECOND COLLECTION IN A HELD SPACE (added 2026-11-08, the legal collections): the space,
                                                                        its layers, calibration set and CPU reference are the held collection C's; the recipe gives the
                                                                        rest (origin, work), and a field of the space it states must equal C's
-              new <plugin> --name N --sister-of S --space-from C --cpu-model T [--encoder URL] [--api A] [--embed-model M] [--dry-run]
-              new <plugin> --name N --sister-of S --layer-param KEY=VALUE [--layer-param …] --cpu-model T [--dry-run]
+              new <plugin> --name N --sister-of S --space-from C [--cpu-model T] [--encoder URL] [--api A] [--embed-model M] [--dry-run]
+              new <plugin> --name N --sister-of S --layer-param KEY=VALUE [--layer-param …] [--cpu-model T] [--dry-run]
                 (a sister in S's space with a layer param changed: a new space, S's encoder, run and reference;
                  only a param S's chunker states, to another value; the chunker measurements, 2026-11-14)
                                                                        case J, a SISTER INTO A HELD SPACE (added 2026-11-08, normattiva-nemo): `derive` of her sister S
@@ -119,18 +121,38 @@ louise hold
                                                                        [--calibration-from NAME]: a held collection whose document-side reference vectors and envelope the new
                                                                        Codex reuses (RULE 1) — the same space but the query side; only the query side is embedded (added 2026-10-25)
                                                                        (amended 2026-10-08)
+                                                                       [--run YYYYMMDD] (added 2026-11-17, München): for a plugin whose origin publishes dated dumps, the
+                                                                       Codex names the FIRST run its records are built from and its whole identifying half (09 §9.17):
+                                                                       every key of `origin.spec` the recipe — a TOML or a whole Codex — states none for, from the
+                                                                       plugin's acquisition spec, in wikipedia's form (a stated key is never touched). The run: the
+                                                                       recipe's own `files`; else --run (an operator's); else DETERMINED (RULE 2) — the run the corpus
+                                                                       holds where the update's completion check says it is complete (the newest, never an older one
+                                                                       while a newer is not), else for `<name>.next` the run the held `<name>` holds, else the origin's
+                                                                       latest complete run (its index, through the budget) — said on stderr and in the Library's
+                                                                       notice; refused (exit 2) where none can tell, saying what would supply it; an origin away is
+                                                                       exit 3. A Codex whose records name a keyed unit and which names no run is refused by every create
               create deposit --name N [--encoder URL [--api A] [--embed-model M] [--query-model M]] [--space-from CODEX | --space FILE]
                                                                        a deposit collection (02 §2.9): no recipe; the node's deposit encoder unless one is named
-              create annotations --claims FILE --name N [--annotates C [--from-snapshot S] [--annotates C2 --from-snapshot S2 …]] [--title T] [--summary S] [--annotator A] [--snapshot ID] [--container jsonl|parquet] [--dry-run]
+              create annotations --claims FILE --name N [--annotates C [--from-snapshot S] [--annotates C2 --from-snapshot S2 …]] [--title T] [--summary S] [--annotator A] [--snapshot ID] [--container jsonl|parquet] [--repin] [--select FILE|- …] [--dry-run]
                                                                        an annotations collection (02 §2.10; amended 2026-10-09): no recipe, no encoder; each claim's
                                                                        target hashes read from C's snapshot S; writes the parts, the relations, the first snapshot
                                                                        (signed with the node's key when there is one) and the file; prints its id. `--dry-run`
                                                                        (2026-10-19) checks the file against S exactly as the write would and prints the counts.
                                                                        Without --annotates the targets are the held collections the claims' uids name, each
-                                                                       from its newest snapshot; a target without --from-snapshot, its newest (2026-10-25, §7.4)
+                                                                       from its newest snapshot; a target without --from-snapshot, its newest (2026-10-25, §7.4).
+                                                                       `--repin` (2026-11-18): the claims' own pins are dropped and every claim is pinned anew
+                                                                       against the targets, as `annotations update` re-checks the claims it holds — for a target
+                                                                       re-created at a new parser, whose records' text and snapshot moved; the dry run and the
+                                                                       log count the claims whose record's text moved, by method, and those moved to another
+                                                                       snapshot of the same text
                                                                        (claims, target records named, by type and method), writing nothing. Several claims
                                                                        files for one collection are merged first with `tools/annotations_merge.py` (the
                                                                        wikidata claims whole, a matcher claim only where its books are not one work yet)
+                                                                       --select FILE, one per --annotates ('-' for a target taken whole): the rule
+                                                                       choosing which of that target's records the claims are about, pinned in the
+                                                                       Codex as {id, version, sha256 of the file} (09 §9.3, version 12; 2026-11-18), and
+                                                                       the file itself written into the SHARD as `select/<sha256 hex>.toml` (09 §9.4,
+                                                                       §9.16; 2026-11-23): a pin whose bytes are not given is refused before a byte is written
               derive <codex> [--space-from CODEX | --space FILE] [--layers FILE] [--update FILE] [--work FILE] [--archives ID …] --accept
                                                                        a sister: same corpus, new space or new schedule; refuses one that differs in nothing.
                                                                        Prints what would be inherited — vectors, coverage, credits — and waits for --accept;
@@ -166,7 +188,8 @@ louise hold
                                                                        — and its stages as `node show` counts them, with what holds each (`status`, one status, added 2026-11-07)
   annotations claims <collection> --out FILE                    the claims the latest snapshot holds, one per line, each pinned as its record holds it — a claims
                                                                        file `create annotations` reads: a re-created target's annotations collection is created from it
-                                                                       against the new target, every end read there and every pin checked (amended 2026-11-17)
+                                                                       against the new target, every end read there and every pin checked (amended 2026-11-17); where
+                                                                       the target's text moved (a new parser), with `--repin` (2026-11-18)
   annotations update <collection> [--claims FILE] [--against TARGET=SNAPSHOT …] [--snapshot ID] [--dry-run] [--whole]
                                                                        (amended 2026-10-23, operator: updated, not replaced; 02 §2.10) the next snapshot of the SAME
                                                                        annotations collection: the claims checked against each target's newest snapshot (or
@@ -212,7 +235,11 @@ louise hold
                                                                        place; then its first snapshot under C's id, signed where this peer has a key, and the proof that
                                                                        `dev carry --reconcile` reads instead of both snapshots. Refused (exit 2) unless only the parser
                                                                        and its image differ and C's parts are cut as a build by the book cuts them. Resumable by part,
-                                                                       the node's pool (amended 2026-11-17: wikipedia parser 5 → 6, the origin by page)
+                                                                       the node's pool (amended 2026-11-17: wikipedia parser 5 → 6, the origin by page). Admits the
+                                                                       origin pinned to the run C's records were read in (`dev carry` A1j), each part held to it: a
+                                                                       line naming another run refuses its part. Refused, nothing written, into a Codex whose records
+                                                                       name a keyed unit (wikidata's entity, wikipedia's page) and which names no run; so are
+                                                                       `records build` and `snapshot create` of one (09 §9.4 `origin_run`; München, 2026-11-17)
               relocate <collection> --corpus DIR [--workers N] [--dry-run]
                                                                        every record's `origin` written again from the manifest by the build's own function, the parts
                                                                        that change rewritten by the build's own writer — byte for byte a rebuild (RULE 1); refused while
@@ -253,9 +280,16 @@ louise hold
   embedder    check <collection>                                       the calibration gate (§3.3) against the run the endpoint states; a pass validates it and keeps its signed statement in `state/`
   embedder    tree-diff <before> <after>                               what differs between two backend trees, path by path: digests read from VEGA_URL or JSON files (vega.md §12); exit 1 when they differ
               benchmark <collection>                                   tokens per second on the calibration set
-              cpu-reference <collection> --model M [--query-model Q] [--again]   the calibration set as the encoder's CPU twin embeds it, kept for every later gate to compare
-                                                                       its run with (near-exact-runs.md §2); refused unless the twin states a CPU run and gives
-                                                                       back its own bytes; writes (added 2026-10-31)
+              cpu-reference <collection> [--model M] [--query-model Q] [--again]   the calibration set as the encoder's CPU twin embeds it, kept for every later gate to compare
+                                                                       its run with (near-exact-runs.md §2); refused unless the twin states a CPU run of the space's
+                                                                       weights and gives back its own bytes; writes (added 2026-10-31). PER MODEL, NOT PER COLLECTION
+                                                                       (operator, 2026-11-22): kept once in the node's store, <LOUISE_ROOT>/state/cpu-reference/<key>/,
+                                                                       keyed on the weights, set, ctx, cut, instruction and role, and resolved there by every
+                                                                       collection of those inputs through RAGE's API (app/rage/reference.py); no collection holds a
+                                                                       copy. --model / --query-model default to the encoder's model with -cpu.
+                                                                       --check, the collection optional (every one held where none is named): read-only, per role
+                                                                       its space declares, whether the gate would find its reference and, where not, the command
+                                                                       that makes it; exit 1 when one is missing (added 2026-11-24, before an engine cut-over)
   rage-settings show <collection> [--card D:V:P]                       every signer's recommended RAGE settings in the SHARD (09 §9.19), the entry this node's
                                                                        card type takes, and what the collection file states (its keys win); exit 1 when a file was set aside
               record <collection> [--batch N] [--concurrency M] [--busy F] [--chunks-per-s F] [--window-s S] [--card D:V:P]
@@ -357,6 +391,16 @@ louise node
   checkpoint watch [--after 2h] [--dry-run] [--json]                   the watchdog's one check: no beat for --after and past any declared step -> the dev units on stdout one a line (or
                                                                        JSON) and the restore; exit 0 nothing to do, 10 restored, 11 expired under --dry-run, 1 the restore failed in part
   health [<collection>] [--errors]                                     every stage's state per collection; exit 1 when a stage has work it cannot start (added 2026-10-08)
+  release-oom --cause TEXT | --diagnostic TEXT                         lift the OOM HOLD (operator, 2026-11-19: "the very first time a worker is killed because of OOM, it is
+                                                                       not relauched until the cause has been determined or diagnostics has been added"): the first time
+                                                                       the kernel kills for memory in the worker's cgroup — the worker, a parse-pool child, any process in
+                                                                       it — state/oom-hold.json is written with what it was doing (the worker's last lines, the parts in
+                                                                       flight, the cgroup's peak), the worker stops at its units and its guard (`python -m
+                                                                       app.worker_guard`, the container's command) starts none while it is in force; `node show` says
+                                                                       it first. --cause names what was determined, --diagnostic what was added that names it the next
+                                                                       time, one of them in words; both kept in state/oom-holds.jsonl; exit 2 with none in force. An
+                                                                       operator pass has its own beside its supervisor's hold file: `deploy/release-oom.sh <name>
+                                                                       --cause|--diagnostic` (added 2026-11-19)
   speech show                                                          the Ask page's voice: the speech models as the node resolves them (platform.toml `[speech]`, §7.8),
                                                                        the model server they run on, what the page offers and why not, whether the server lists each
                                                                        model (`GET /v1/models`) (added 2026-11-07, operator)
@@ -368,7 +412,8 @@ louise node
   pins                                                                 the models Louise holds pinned in LocalAI now, with their holders, the restores left failing and the pin failures (state/model-pins.json); read-only (added 2026-11-09)
   resident show                                                        the models the worker preloads on the card for Ask (a trial): `[models] keep_ask_resident`
                                                                        and `preload_speech` (§7.8), the node's mode and whether it preloads, the budget (the line,
-                                                                       the working margin — measured over 6 h, or the 3.0 GiB default — the eviction penalty, and
+                                                                       the working margin — measured over 6 h, or the 3.0 GiB default — never less than the working
+                                                                       memory's reserve, 3,262 MiB (2026-11-23), the eviction penalty, and
                                                                        what is left), each model in priority order with its rank, tier, roles, collections, loaded
                                                                        state, at-rest and largest size, in the budget or not and why, last use, and pin holders
                                                                        (an embed batch's, the operator's; never the preload's); read-only (added 2026-11-08,
@@ -405,6 +450,29 @@ louise dev                                                             operator 
                                                                        chunks > 0) that hold no vector — never embedded again, missing from dense search — with --apply marked not
                                                                        embedded (embed_done 0, embed_version 0), guarded `embed_done = 1` and the version read; its own cursor
                                                                        (added 2026-11-07)
+  cpu-reference-legacy                                                 the CPU references collections kept under <collection>/state/cpu-reference/ before the node's
+                                                                       store (2026-11-06), each held to the store by the space's key: identical (redundant), differs
+                                                                       (the store's is what every gate reads), unproven (the store holds none: never filed under a key,
+                                                                       since the copy names no inputs — wikidata's held characters-cut vectors for a tokens space),
+                                                                       refused (another set, unreadable, not a CPU run's); read-only; exit 1 on unproven or differs
+                                                                       (added 2026-11-22; the deploy prints it)
+  retire-superseded <collection> [--yes]                               a unit held under two ids keeps the one it has now; the other rows are retired from every index
+                                                                       and tombstoned (app/hold/identity.py; one unit, one document, 2026-11-21); a dry run without
+                                                                       --yes; with it, the collection's write lock (exit 2 when held)
+  rederive <collection> [--yes] [--again] [--verify [--every N] [--limit N]] [--ids FILE [--retry-errors] [--first]] [--release [--ids FILE]]
+                                                                       every document's derived marks reset, so the worker parses each again at the collection's parser
+                                                                       and writes its validity, catalogue and text-index rows again, its vectors kept (app/hold/carry.py;
+                                                                       the A1c repair where no source snapshot is left); --verify instead resets only the documents whose
+                                                                       chunks, fields or validity row differ from what the worker would derive now, strays deleted first
+                                                                       (app/hold/derived_check.py; on the parse pool, resumable; --every N one document in N, --limit N
+                                                                       at most N); --again starts over once one finished; --ids FILE instead the documents FILE lists, a
+                                                                       uid or a document's path a line (the EUR-Lex units check's --list-included), their embedding
+                                                                       reset too where the collection holds no records (its vectors are its chunks'; added 2026-11-20);
+                                                                       --retry-errors a listed document's error cleared too (never a superseded row's); --first every
+                                                                       OTHER row held out of every stage (in_scope 2) until --release, which puts them back and applies
+                                                                       the scope again, those --ids FILE lists kept held (operator, 2026-11-22: "A, problem slice
+                                                                       first"); a dry run without --yes; writes
+                                                                       (added 2026-11-19)
   reindex <collection> --ids FILE [--yes]                              the documents FILE lists (a uid a line) queued for the text-index stage again — fts_done = 0, embedding untouched; for rows indexed under an earlier parse (`index-drift --ids-out` lists them); writes (added 2026-10-25)
   index-drift <collection> [--shards S,…] [--cut-all] [--sample F] [--seed HEX] [--snapshot ID] [--ids-out FILE]
                                                                        the documents whose SERVED state disagrees with the latest held snapshot's records (added
@@ -456,7 +524,11 @@ louise dev                                                             operator 
                                                                        differ; no snapshot is compared and the target builds its own records; --reconcile, after
                                                                        that build and snapshot, keeps the vectors of every document whose content_hash did not move,
                                                                        resets the rest to embed again and sets each txt_hash to its record's origin_hash. --rebuilt
-                                                                       also admits an origin that only ADDS files beside those read (A1d, 2026-10-18); --resign, where
+                                                                       also admits an origin that only ADDS files beside those read (A1d, 2026-10-18), and (A1j,
+                                                                       2026-11-17) one that only PINS the run the source's records were read in — `origin.spec` given
+                                                                       `delta.mode` "dated-dumps", the plugin's filters and that run's files where the source's names
+                                                                       none (wikidata parser 2 -> 3; the run as this node resolves it: the source Codex's current run,
+                                                                       else its collection file's `snapshot`), a pin to another run refused; --resign, where
                                                                        the source holds no records: the target's own discovery once, every moved document taking its
                                                                        new locator and signature with txt_hash unset and every mark and vector kept, then a seeded
                                                                        sample re-cut by the target's parser must hold exactly the chunk texts the vector table holds
@@ -472,6 +544,46 @@ louise dev                                                             operator 
                                                                        source's corpus, removes `create`'s empty folder and re-roots the copied paths, and refuses a
                                                                        target whose origin holds another corpus; --share-origin does that alone, for a carry finished
                                                                        before it did (2026-11-15)
+  carry <from> <to> --rechunked [--dry-run | --yes] [--window N] [--processes N]
+                                                                       A1k (02 §2.4; adopted by architecture 2026-11-23; app/hold/rechunk.py,
+                                                                       docs/notes/legal-chunker-v4.md §4.3): into a successor whose space differs ONLY by its layers'
+                                                                       chunker version — the same records but for the layers, each layer the same chunker, params,
+                                                                       rule and input, the space's function equal (nothing crossed, not even the query instruction or
+                                                                       the cut). Refused, nothing written, for any other difference, a target not empty, a source
+                                                                       table not its space's, or without both write locks. Always copies: the manifest as a relayered
+                                                                       sister's (every embed and index mark and count emptied, the chunk-hash holders, queues, bundles
+                                                                       and gate state too; A1i), the catalogue index, the CPU reference (the same encoder side and
+                                                                       set), the space re-pinned; then the RE-KEY: the source's documents in windows of --window
+                                                                       rowids (500) from a cursor, each cut at the target's layers on the parse pool at the profile's
+                                                                       cores (--processes asks fewer), and every new chunk whose text a row of the same document holds
+                                                                       (by its BLAKE2b-128, never its position) written with that row's vector bytes under its new id;
+                                                                       a document whose every chunk carried marked embedded, every other left to the embed stage. A
+                                                                       window's range is committed before its first write and its marks and cursor after its last; a
+                                                                       stop in between is undone by the next run; SIGTERM at a window boundary (exit 130); the end
+                                                                       holds the table to the rows carried (exit 1). Per language: documents, chunks, carried, to
+                                                                       embed, dropped. --dry-run: the same refusals and the same pass, nothing written; without --yes
+                                                                       or --dry-run, the refusals and the plan
+  pin-run <collection> [--run YYYYMMDD] [--dry-run | --yes]            an UNPUBLISHED collection whose dated-dump Codex names no run (wikidata.next, München,
+                                                                       2026-11-17) given the Codex that names the run its records were read in, IN PLACE (RULE 1;
+                                                                       amends §7.8's "a name holds one collection for its life" for a collection whose id never left
+                                                                       this node): the Codex is `create --run`'s pin of it; its one snapshot written again — the same
+                                                                       parts and members, `collection_id` replaced and `origin_run` written, spliced as a stream —
+                                                                       held to the build database and re-signed; codex.json, the collection file's `codex`, the
+                                                                       staging's claim, the carry markers and the manifest's cursors re-pointed; every other file a
+                                                                       writer under `shard/` and `state/` puts the old id in taken as app/hold/pin_run.py's table says
+                                                                       (removed: attestations, the origin note and ack, gate statements made under it — the gate runs
+                                                                       again before any embed —, the scheduled check's files, a do-nothing update; this node's RAGE
+                                                                       settings signed again); then no file may still name the old id. The same sweep runs FIRST,
+                                                                       every file streamed whatever its size, the kinds not read named: a file naming the old id the
+                                                                       pass does not know, or one it cannot read, refuses the pin. The run from the manifest's
+                                                                       locators, the line carry's source and the file's `snapshot`, which must agree (--run is
+                                                                       checked against them). Refused (exit 2), nothing written: a Codex naming a run, an origin of no
+                                                                       dated dumps, more than one snapshot, an update under way, a peer's RAGE settings, and anything
+                                                                       published or shared — `share = true`, a snapshot the seeder served, the publisher's
+                                                                       `publish:<name>` row, coverage rows, a published attestation, a certifier's pointer or anchor,
+                                                                       a chain fetched from a peer, a held Codex naming the id; and whatever of these cannot be read
+                                                                       (a locked node database, a Codex file, a missing manifest): a doubt refuses. The plan with
+                                                                       --dry-run or without --yes (a pin under way is said so); resumable (`state/pin-run.json`)
   eurlex-dump <collection> [--dump <dir>] [--languages <codes>] [--carry-from <dir>]
                                                                        every EUR-Lex unit the Data Dump gives, built from it alone into a parser-4 collection's corpus:
                                                                        the MTD tree scoped to each language and the items of the form Cellar would choose; no Cellar
@@ -764,7 +876,15 @@ reader needs at the command line:
   exits 130, a kill anywhere leaves one valid table under the name, and a
   run again goes on from the journal. A table already where `--to` says is
   nothing to do. `rename` refuses while a move is begun; `forget` takes the
-  build area's folder with the collection.
+  build area's folder with the collection. With a LANCE ROOT set
+  (`LOUISE_LANCE_ROOT`, §7.8, *amended 2026-11-23*), `hot` is the root:
+  a table built in the build area moves there, and a table that is still
+  the directory beside its collection is ADOPTED by `--to hot --apply` — a
+  rename on its own filesystem, nothing copied: a link into the root takes
+  the name in one exchange with the directory, then the directory is
+  renamed under it (a stop between the two leaves the link dangling, the
+  collection refused meanwhile, and a run again finishes it). On two
+  filesystems the adoption is refused (exit 2) and names the copy.
 - **`vectors show`.** Prints the coverage map (09 §9.10): per part of
   the current snapshot the chunks accepted here, whether it is open, and
   — among the live peers whose digests carry a benchmark for the space,
@@ -846,6 +966,17 @@ reader needs at the command line:
   per layer and per group of the origin (wikipedia: archive or dump, and the
   wiki), how many sampled records were compared and why the others were
   not; a layer of which none was compared is said first (03 §3.2).
+  *Added 2026-11-18:* a dated dump that is ONE bzip2 stream (wikidata's
+  `all.json.bz2`) is asked by its blocks: with no `--origin`,
+  `records-vs-origin` fetches by Range only the compressed blocks around
+  each sampled record and compares them with the copy's (03 §3.2). The
+  copy's block index is built first where it is missing — on the cores the
+  node allows, resumable (a stop exits 130 and the next check goes on from
+  where it stopped), placed on the fast cache. By hand the copy is the
+  collection's corpus (its file's, else `<root>/<name>/origin`) and the
+  index is built whole; the nightly check (`--origin-else`) builds it for at
+  most an hour a night and, until it is whole, re-parses the kept copy and
+  says so. `--origin <the kept copy>` is still INCONCLUSIVE "kept copy".
 - **`key`.** `create` writes a new seed at `NODE_KEY_PATH` in the form
   of 09 §9.2, refuses to overwrite one, and prints the public key; a key
   file readable by anyone but its owner is refused at load, never
@@ -1539,9 +1670,14 @@ The MCP server's `initialize` gives the same text as its
 **Speech** (*added 2026-11-06, -07*; `app/speech.py`, `app/transcribe.py`,
 `app/voice.py`). OpenAI's two audio endpoints, relayed to the node's model
 server with what only Louise knows. `POST /v1/audio/speech` `{input, model,
-voice, language}`: nothing in square brackets is read (a citation, in
+voice, language, context}`: nothing in square brackets is read (a citation, in
 whatever shape the language writes it), one voice for every language, the
-text's language sent as `language`, the model pinned from the first
+text's language sent as `language`. Where the sentence alone cannot tell its
+language, `context` (the answer so far, which the page sends when it shows
+the answer in its original language; never relayed) tells it. A recorded
+voice with no language known is sent `language = "none"`, OmniVoice's auto,
+never left to its profile's own tag, which is the recording's language and
+read every language with its accent (*2026-11-23*). The model is pinned from the first
 sentence until 120 s after the end of the last; a request naming no model
 or voice gets `[speech] tts_model` and `tts_voice` (§7.8), and one naming a
 voice profile the model server no longer holds gets `tts_voice` too (the
@@ -1775,6 +1911,8 @@ sensible its own behaviour looks.
 | 2 | refused: a rule stood in the way before anything was done — an invariant, a licence, a missing acknowledgement, an unknown collection, no key, a schema not this platform's |
 | 3 | deferred: nothing is wrong and nothing was done — an origin, an encoder or a peer was unreachable, a lock was held; retry later |
 | 130 | interrupted after a clean commit (SIGTERM or SIGINT) |
+| 137 | a process of the pass's cgroup was killed for memory — the pass itself, or a parse-pool child, whose parts are then not computed again (`parallel.MemoryKilled`); `deploy/supervise-pass.sh` holds it until `deploy/release-oom.sh` names the cause or the diagnostic (operator, 2026-11-19; added the same day) |
+| 75 | the worker alone: it stopped at its units after a memory kill in its cgroup, the OOM hold written; its guard keeps it down until `node release-oom` (added 2026-11-19) |
 
 A command never exits 1 for a deferral and never 0 for a failure. The
 message on stderr names the unit — the part, the document, the bundle,
@@ -1922,7 +2060,7 @@ one home.
 
 | tier | carries | changes by |
 |---|---|---|
-| **environment** — identity | `LOUISE_ROOT` (the one directory), `LOUISE_BUILD_DIR` (the build area, *amended 2026-11-07*), `NODE_KEY_PATH`, `NODE_PUBLIC_KEY_PATH`, `ADMIN_TOKEN_FILE`, `DEPOSIT_TOKEN_FILE`, `GIT_PRIVATE_KEY_FILE`, `CHAT_URL`, `TRANSLATE_URL`, `TRANSLATE_MODEL` (the model TRANSLATE_URL's server is asked for, as `CHAT_MODEL` is for chat; amended 2026-10-09), `RERANK_URL`, `GPU_PROBE_URL`, `VEGA_URL` | restart |
+| **environment** — identity | `LOUISE_ROOT` (the one directory), `LOUISE_BUILD_DIR` (the build area, *amended 2026-11-07*), `LOUISE_LANCE_ROOT` (the searched vector tables' root, *amended 2026-11-23*), `NODE_KEY_PATH`, `NODE_PUBLIC_KEY_PATH`, `ADMIN_TOKEN_FILE`, `DEPOSIT_TOKEN_FILE`, `GIT_PRIVATE_KEY_FILE`, `CHAT_URL`, `TRANSLATE_URL`, `TRANSLATE_MODEL` (the model TRANSLATE_URL's server is asked for, as `CHAT_MODEL` is for chat; amended 2026-10-09), `RERANK_URL`, `GPU_PROBE_URL`, `VEGA_URL` | restart |
 | **files** — desired state | `platform.toml` and `collections/<name>.toml` under `LOUISE_ROOT` | editing the file; `hold config apply` |
 | **files** — desired state | `users.toml` beside `platform.toml` (*amended 2026-10-22*): the users of §7.4, each token as its SHA-256 only; when each was last seen is `state/users-seen.json`, not desired state | `louise user …`, the admin API — never by hand |
 | **files** — desired state | `recipes/<plugin>.toml` beside `collections/` (*amended 2026-10-25, RULE 2*): this node's recipe for a plugin (06 §6.6) — what the Library's *new collection*, which names a plugin and a local name only, creates from | editing the file |
@@ -2008,6 +2146,11 @@ variable, a file, a log line or a message.
              # MAIN languages: its one-language text indexes, largest first by documents, until they hold this
              # share of the collection (0 < share <= 1; 1.0 is every one of them). The others are searched by
              # the vector leg, and by text only in the query's own language (05 §5.2; amended 2026-10-10)
+[web]        idle_trim_s = 900                          # after this many seconds without a QUESTION (an Ask request:
+             # the Ask page's routes, /api/search, /api/ask/…, /v1/chat/completions), the web gives back the heap
+             # it freed, once, with glibc's malloc_trim(0); 0 never. Read at every check, so an edit needs no
+             # restart; `node show` and the System page show the value in force (app/idle_trim.py `timeout_s`;
+             # operator, 2026-11-22: the web under 1 GB, "after 15 minutes without a question")
 [models]     load_timeout_s = 120                       # the bound on LOADING a model its runner reports as not
              # loaded (LocalAI's GET /system): Louise warms it with a minimal request first, so no request's
              # budget or timeout holds a cold start; a model measured on the node has its own bound
@@ -2271,7 +2414,7 @@ collection is another name.
 │       ├── shard/           the copy, the SHARD (`drag/` until 2026-10-11): exactly the tree of 02 §2.6 — what `share` serves, and nothing else; the bytes may live on other storage, mounted here
 │       ├── state/           manifest.sqlite (with the origin's flagged issues, 06 §6.1), cursor, ack.json, attestations/, bundles/, lock — this peer's alone; frozen/: while the collection is frozen, the newer snapshot its alignment is read against, never in the copy (04 §4.3, added 2026-11-07)
 │       ├── index/           the text index of the parts held, and the facet values (05 §5.7); a sister sharing her text index keeps only her catalogue and facets here (state/text-index.json names the shared one, below)
-│       ├── lance/           the vector table search reads; while it is built, a link into the build area (`LOUISE_BUILD_DIR`, below)
+│       ├── lance/           the vector table search reads; while it is built, a link into the build area (`LOUISE_BUILD_DIR`, below); with a Lance root, a link into it (`LOUISE_LANCE_ROOT`, below)
 │       └── origin/          the origin files the records are parsed from — 06 §6.2's corpus directory, kept for records-vs-origin; the bytes may live on other storage, mounted here
 │   └── .text-index/<identity>/  ONE text index for sisters whose index would be the same byte for byte, written by one (`writer.json`), read by the others; formed, joined and left at the worker's boot (02 §2.7, amended 2026-11-10; app/text_index.py)
 ├── state/                   node.sqlite: the catalogue, coverage maps (09 §9.10), peers seen, runtime overrides; trust.json; web-sources-ack.json (09 §9.13); working-state.json (`node checkpoint`, §7.3); resident-budget.json (the resident budget's measured margin, at-rest and largest model sizes, card total and eviction penalty, written by the worker, read by `node resident show`; §7.3, 2026-11-08)
@@ -2353,6 +2496,23 @@ container's own storage; a collection whose `lance` link reaches nothing
 — the area not mounted — is refused, named in the refusals, never served
 with an empty table in its place. Unset, every table stays beside its
 collection, as before.
+
+A Lance root for the searched vector tables (*amended 2026-11-23*,
+operator: "Ssd4 is for lancedb only", then "A";
+docs/notes/storage-tiering.md §12): with `LOUISE_LANCE_ROOT` set
+(environment: this node's path; app/vector_place.py alone resolves it),
+the data pool's tier (`hot`) is `<LOUISE_LANCE_ROOT>/<name>`, behind the
+same `<name>/lance` link, so a collection's folder — its manifest, text
+index and state — can live on another pool while its vectors stay on
+theirs. A table made since (a new collection's without a build area, the
+first of a collection that had none) is placed there; a table built in
+the build area moves there when it takes over; a table that is the
+directory beside its collection stays so until `hold vectors move <name>
+--to hot --apply` adopts it, by a rename. Nothing moves by itself; only
+the node's own root is placed; `rename` carries the root's folder with
+the name and `forget` removes it. Set but not a directory: nothing is
+placed (exit 2), and a collection whose link reaches nothing is refused,
+named in the refusals, never served with an empty table.
 
 `dev mark-embedded <collection> [--dry-run]` (amended 2026-10-19): the
 documents whose every chunk has a vector here and whose manifest row still
@@ -2443,7 +2603,10 @@ encoder — applies at the next round, and the change is logged with the
 collection's name. An edited `[encoder]` re-runs `embedder check`
 before the next embed. `hold config apply` is the same reload on demand
 and, with `--set`, the way a script or the web interface edits one value
-without opening the file; `--set` writes the file, then applies it.
+without opening the file; `--set` writes the file, then applies it. A
+list value is given as the file writes it (`--set 'embed_slices=["a", "b"]'`)
+or by commas (`--set embed_slices=a,b`); a refusal names the key set
+(*amended 2026-11-18*).
 
 **A copy's state is per collection, and derived.** A copy is *refused*,
 in *quarantine* or *in use* (03 §3.6): computed at start and between

@@ -56,10 +56,12 @@ def _docs(plugin, root: Path) -> dict:
     return out
 
 
-def test_the_registered_parser_is_4_and_carries_3():
-    assert SOURCE.PARSER_VERSION == 4 and SOURCE.at_parser_version(4) is SOURCE
+def test_the_registered_parser_is_5_and_carries_3():
+    """Parser 5 (2026-11-18); parser 4 is not carried — EUR-Lex4, the one
+    Codex naming it, published nothing and is re-created as EUR-Lex5."""
+    assert SOURCE.PARSER_VERSION == 5 and SOURCE.at_parser_version(5) is SOURCE
     assert isinstance(V3, src.EurlexSourceV3) and V3.PARSER_VERSION == 3
-    assert SOURCE.at_parser_version(2) is None
+    assert SOURCE.at_parser_version(4) is None and SOURCE.at_parser_version(2) is None
 
 
 @pytest.mark.parametrize("celex", ["31972R1473", "31978A0060"])

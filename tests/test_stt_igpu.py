@@ -137,3 +137,46 @@ def test_the_readings(tmp_path):
     (dev / "mem_info_vram_total").write_text("536870912\n")
     got = si.igpu_memory("0000:13:00.0", tmp_path / "pci")
     assert got["mem_info_vram_total"] == 536870912 and got["mem_info_gtt_used"] is None
+
+
+# ---- the B70's twin (operator, 2026-11-23: "Move the STT model on the b70") ----
+
+RADV = "/backends/vulkan-parakeet-cpp/vulkan/icd.d/radeon_icd.json"
+ANV = "/backends/vulkan-parakeet-cpp/vulkan/icd.d/intel_icd.json"
+
+
+def test_a_twin_is_made_from_a_twin_pinned_to_the_new_card_alone(tmp_path):
+    """The live STT is the iGPU's twin: the B70's is made from it, its name
+    the base's with -b70, its RADV pins gone, ANV's in; the source, on a GPU
+    build, is not re-pinned to the CPU."""
+    igpu = si.igpu_twin(si.load_model(LIVE), "vulkan-parakeet-cpp",
+                        {"VK_DRIVER_FILES": RADV, "VK_ICD_FILENAMES": RADV, "GGML_VK_VISIBLE_DEVICES": "0"})
+    written = si.write_yamls(igpu, tmp_path, "vulkan-parakeet-cpp",
+                             {"VK_DRIVER_FILES": ANV, "VK_ICD_FILENAMES": ANV}, "-b70")
+    assert [p.name for p in written] == ["parakeet-tdt-0.6b-v3-b70.yaml"], "the twin alone"
+    b70 = si.load_model(written[0].read_text())
+    assert b70["name"] == "parakeet-tdt-0.6b-v3-b70" and b70["backend"] == "vulkan-parakeet-cpp"
+    assert b70["env"] == {"OMP_NUM_THREADS": "6", "VK_DRIVER_FILES": ANV, "VK_ICD_FILENAMES": ANV}, \
+        "never pinned to both cards"
+    assert "louise node speech set --stt parakeet-tdt-0.6b-v3-igpu" in written[0].read_text(), "the way back"
+
+
+def test_a_source_on_the_sycl_named_cpu_build_is_left_as_it_is(tmp_path):
+    sycl = si.load_model(LIVE.replace("backend: parakeet-cpp", "backend: intel-sycl-f16-parakeet-cpp"))
+    written = si.write_yamls(sycl, tmp_path, "vulkan-parakeet-cpp", {"VK_DRIVER_FILES": ANV}, "-b70")
+    assert [p.name for p in written] == ["parakeet-tdt-0.6b-v3-b70.yaml"]
+    with pytest.raises(SystemExit, match="not a parakeet build"):
+        si.igpu_twin(si.load_model(LIVE.replace("backend: parakeet-cpp", "backend: whisper")),
+                     "vulkan-parakeet-cpp", {"VK_DRIVER_FILES": ANV})
+
+
+def test_diff_reads_the_older_results_rows():
+    """The 2026-11-11 result files name a clip `file`; `diff` stopped on them."""
+    ref = {"model": "cpu", "clips": [{"file": "fr/1.wav", "text": "Qui a écrit", "warm_median_s": 0.5}]}
+    other = {"model": "b70", "clips": [{"clip": "fr/1.wav", "text": "Qui a écrit", "warm_median_s": 0.6}]}
+    got = si.compare(ref, other)
+    assert (got["equal"], got["compared"]) == (1, 1)
+    no_time = {"model": "x", "clips": [{"file": "fr/1.wav", "text": "Qui a écrit"}]}
+    assert si.compare(no_time, other)["clips"][0]["speed"] is None, "a row with no time compares its words"
+    with pytest.raises(SystemExit, match="names no clip"):
+        si.compare({"clips": [{"name": "fr/1.wav", "text": "x"}]}, other)

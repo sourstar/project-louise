@@ -49,8 +49,10 @@ from __future__ import annotations
 import base64
 import binascii
 import re
+import sqlite3
 import threading
 import zipfile
+from collections import OrderedDict
 from pathlib import Path
 from typing import Iterator
 
@@ -79,7 +81,9 @@ ATTO = RefTable(
         RefColumn("pubblicazione", "TEXT"), # the GU date
     ),
     primary_key="urn",
-    indexes=("eli", "akn"),                # key_lookup reads both by value
+    # key_lookup reads eli and akn by value; a citation's acts are read by
+    # their year (`_acts_of_year`, 2026-11-24)
+    indexes=("eli", "akn", "anno"),
 )
 
 VERSIONE = RefTable(
@@ -187,7 +191,8 @@ class NormattivaRefSource:
     namespaces = NAMESPACES
     eli_jurisdiction = ELI_JURISDICTION
     #: a pinned article's note, in Italian (app/ask/articles.py)
-    article_notes = ArticleNotes("testo vigente", "testo al {day}", "ultimo testo in vigore")
+    article_notes = ArticleNotes("testo vigente", "testo al {day}", "ultimo testo in vigore",
+                                 "testo fino al {day}; modificato da allora, il testo modificato non è disponibile")
 
     def article_repealed(self, text: str) -> bool:
         return article_repealed(text)
@@ -453,6 +458,11 @@ def _stamp(refs: RefLookup):
     return tuple(sorted((r["source_id"], r["ref_version"], r["synced_at"]) for r in refs.rows("ref_meta")))
 
 
+#: the acts index's key, and the fields `CitationResolver.resolve` reads
+_ACT_KEY = ("tipo", "numero", "anno")
+_ACT_KEPT = ("urn", "data", "denominazione")
+
+
 def _acts_index(refs: RefLookup) -> dict:
     """`atto` keyed by (tipo, numero, anno), built once per reference-data
     version — the gene resolver's reasoning (`_symbol_index`)."""
@@ -467,25 +477,84 @@ def _acts_index(refs: RefLookup) -> dict:
         return cached[1]
     index: dict = {}
     try:
-        rows = refs.rows("atto")
+        try:
+            rows = refs.rows("atto", columns=_ACT_KEY + _ACT_KEPT)
+        except TypeError:   # a RefLookup without `columns` (a test's double): every column
+            rows = refs.rows("atto")
     except Exception:   # noqa: BLE001 — a store without the table (never synced): no acts
         rows = []
     for r in rows:
         key = (r["tipo"], str(r["numero"] or "").lower(), r["anno"])
-        index.setdefault(key, []).append(r)
+        # WHAT THE RESOLVER READS, AND NOTHING ELSE (2026-11-24): every parse
+        # child builds this index, and holding each act's whole row — its
+        # title, ELI, AKN path, publication — was ~390 MB in each of twelve,
+        # the worker's 24 GB cap crossed (fts_child_memory.py on the node)
+        kept = {k: r.get(k) for k in _ACT_KEPT}
+        index.setdefault(key, []).append(kept)
         # every act also by number and year alone, whatever its form: a dated
         # citation whose form is not the origin's finds it by its date
-        index.setdefault(("*",) + key[1:], []).append(r)
+        index.setdefault(("*",) + key[1:], []).append(kept)
     if stamp is not None:
         with _index_lock:
             _index_cache = (stamp, index)
     return index
 
 
+#: A CITATION'S ACTS, READ BY ITS YEAR FROM refs.db (2026-11-24). Every parse
+#: child held the whole `atto` table in `_acts_index`: ~390 MB, then ~224 MB
+#: kept to three fields, in each of twelve (fts_child_memory.py on the node:
+#: twelve at 1.0-1.25 GiB, the 01:46:57Z kill at 1.6-1.75). SQLite's own index
+#: on `anno` gives a year's acts (a few thousand); the key is matched here as
+#: the index matched it (tipo, numero lower-cased, anno), so the same acts in
+#: the same order. The last _YEARS_HELD years asked are kept per process,
+#: keyed on the reference data's version (`_stamp`).
+_YEARS_HELD = 64
+_years: "OrderedDict[tuple, list[tuple]]" = OrderedDict()
+
+
+def _acts_of_year(refs: RefLookup, anno, stamp) -> list[tuple] | None:
+    """(tipo, numero lower-cased, urn, data, denominazione) of every act of
+    `anno`, in the table's order; None for a RefLookup without a SQLite
+    connection (a test's double), which keeps the whole-table index."""
+    con = getattr(refs, "con", None)
+    if not isinstance(con, sqlite3.Connection):
+        return None
+    key = (stamp, anno)
+    if stamp is not None:
+        with _index_lock:
+            hit = _years.get(key)
+            if hit is not None:
+                _years.move_to_end(key)
+                return hit
+    try:
+        got = [(r[0], str(r[1] or "").lower(), r[2], r[3], r[4]) for r in con.execute(
+            "SELECT tipo, numero, urn, data, denominazione FROM atto WHERE anno=? ORDER BY rowid", (anno,))]
+    except sqlite3.Error:   # a store without the table (never synced): no acts
+        got = []
+    if stamp is not None:
+        with _index_lock:
+            _years[key] = got
+            _years.move_to_end(key)
+            while len(_years) > _YEARS_HELD:
+                _years.popitem(last=False)
+    return got
+
+
+def _acts(refs: RefLookup, tipo: str, numero: str, anno, stamp) -> list[dict]:
+    """The acts a citation's (tipo, numero, anno) names, "*" for any form —
+    what `_acts_index(refs).get(...)` gave, without holding the table."""
+    year = _acts_of_year(refs, anno, stamp)
+    if year is None:
+        return _acts_index(refs).get((tipo, numero, anno), [])
+    return [{"urn": u, "data": d, "denominazione": n} for t, num, u, d, n in year
+            if num == numero and (tipo == "*" or t == tipo)]
+
+
 def invalidate_cache() -> None:
     global _index_cache
     with _index_lock:
         _index_cache = None
+        _years.clear()
 
 
 class CitationResolver:
@@ -498,11 +567,14 @@ class CitationResolver:
         found = citations(query)
         if not found:
             return []
-        index = _acts_index(refs)
+        try:
+            stamp = _stamp(refs)
+        except Exception:   # noqa: BLE001 — no ref_meta: nothing kept between calls
+            stamp = None
         out: list[Entity] = []
         seen: set[str] = set()
         for c in found:
-            rows = index.get((c["tipo"], c["numero"], c["anno"]), []) if c["tipo"] != "*" else []
+            rows = _acts(refs, c["tipo"], c["numero"], c["anno"], stamp) if c["tipo"] != "*" else []
             if c["data"]:
                 dated = [r for r in rows if r.get("data") == c["data"]]
                 rows = dated or rows
@@ -510,7 +582,7 @@ class CitationResolver:
                     # the form the citation gives is not the origin's (a
                     # "legge" that is a regio decreto-legge, a "testo unico"):
                     # date and number name one act whatever its form
-                    rows = [r for r in index.get(("*", c["numero"], c["anno"]), [])
+                    rows = [r for r in _acts(refs, "*", c["numero"], c["anno"], stamp)
                             if r.get("data") == c["data"]]
             for r in rows:
                 # the URN verbatim IS the canonical id (05 §5.2): namespace

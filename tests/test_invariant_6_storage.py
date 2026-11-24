@@ -198,6 +198,10 @@ _DERIVED_WRITERS = {
     "app/plugins/pubmed/pack.py": "the per-container pack, rebuilt from the gz XML",
     "app/plugins/wikipedia/page_props.py": "the page-props pack, rebuilt from the dump's SQL",
     "app/plugins/wikipedia/stream_index.py": "a run's page id → stream table, rebuilt from the multistream index",
+    "app/plugins/wikisource/index.py": "a run's works index (every page by namespace and title, its stream), "
+                                       "rebuilt from the dump in one pass",
+    "app/plugins/wikisource/tables.py": "a run's categorylinks, linktarget and page_props packs (a page's rows, "
+                                        "a category's title), rebuilt from the run's SQL dumps",
     "app/plugins/wikidata/pack.py": "the pack and label table, rebuilt from the dump",
     "app/plugins/legi/pack.py": "the per-tarball pack and the scan's facts, rebuilt from the tarballs",
     "app/ask/part_cache.py": "per-part search facts, rebuilt from the part on a miss",
@@ -206,6 +210,7 @@ _DERIVED_WRITERS = {
     "app/acquire/work_trees.py": "eurlex's whole tree per work, fetched again from Cellar on a miss",
     "app/acquire/cellar_listing.py": "Cellar's listing windows kept between passes, paged again on a miss",
     "app/acquire/neuris_snapshot.py": "NeuRIS's daily snapshot, a transport downloaded again from the API's link",
+    "app/bz2_blocks.py": "a one-stream bz2 file's block index, rebuilt from the file (records-vs-origin's blocks)",
 }
 
 
@@ -308,3 +313,53 @@ def test_with_a_build_dir_set_only_vector_tables_go_there(isolated_config, tmp_p
     root = config.louise_root() / "collections"
     placed = vector_place.place_new(root, "new-one")
     assert placed.parent.parent == build and sorted(p.name for p in build.rglob("*")) == ["lance", "new-one"]
+
+
+# ---------------- LOUISE_LANCE_ROOT: searched vector tables only, one resolver ----------------
+# (operator, 2026-11-22: "Ssd4 is for lancedb only"; 2026-11-23: "A",
+# docs/notes/storage-tiering.md §12)
+
+def test_only_vector_place_resolves_the_lance_root():
+    readers = {p.relative_to(ROOT).as_posix() for p in APP.rglob("*.py")
+               if re.search(r"\bLANCE_ROOT\b", p.read_text(encoding="utf-8"))}
+    env_readers = {p.relative_to(ROOT).as_posix() for p in APP.rglob("*.py")
+                   if re.search(r"""(getenv\(|environ(\.get\(|\[))\s*["']LOUISE_LANCE_ROOT""",
+                                p.read_text(encoding="utf-8"))}
+    assert env_readers == {"app/config.py"}, f"LOUISE_LANCE_ROOT read from the env by {env_readers}"
+    assert readers == {"app/config.py", "app/vector_place.py"}, (
+        "invariant 6: only app/vector_place.py resolves LOUISE_LANCE_ROOT (config.LANCE_ROOT); "
+        f"these read it too: {sorted(readers - {'app/config.py', 'app/vector_place.py'})}")
+
+
+def test_with_a_lance_root_set_nothing_moves_and_only_tables_go_there(isolated_config, tmp_path, monkeypatch):
+    """Set, every collection's manifest, index and corpus stay where they
+    are, and a table that exists stays where it is until it is adopted or
+    moved (`hold vectors move --to hot`); what goes there is a table made
+    since — a new collection's, or the first of one that had none — and
+    nothing else."""
+    from app import collections as collections_mod, config, db, node_state, vector_place
+    lr = tmp_path / "lance-root"
+    lr.mkdir()
+    collections = collections_mod.load_all()
+    assert collections, "no collection loaded — the fixture is wrong"
+    had = {c.name for c in collections if Path(c.lance_dir).is_dir()}
+    monkeypatch.setattr(config, "LANCE_ROOT", lr)
+    collections = collections_mod.load_all()
+    for c in collections:
+        for p in (c.manifest_path, c.fts_dir, c.corpus_dir):
+            assert lr not in Path(p).resolve().parents, f"{c.name}: {p} is under LOUISE_LANCE_ROOT"
+        db.connect(c).close()
+        lance = Path(c.lance_dir)
+        if c.name in had:
+            assert lance.is_dir() and not lance.is_symlink(), f"{c.name}: an existing table moved by the setting"
+        else:
+            assert lance.is_symlink() and vector_place.physical(lance) == lr / c.name, \
+                f"{c.name}: its first table is made in the Lance root"
+    node_state.connect().close()
+    made = {c.name for c in collections} - had
+    assert sorted(p.name for p in lr.iterdir()) == sorted(made), "only tables in the Lance root"
+    assert all(not any(p.iterdir()) for p in lr.iterdir()), "an empty folder each: a table made, no file"
+    root = config.louise_root() / "collections"
+    link = vector_place.table_dir(root, "new-one")
+    vector_place.ensure(link)
+    assert link.is_symlink() and "new-one" in {p.name for p in lr.iterdir()}

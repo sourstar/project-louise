@@ -340,9 +340,11 @@ def test_a_card_without_a_profile_is_left_as_it_is(tmp_path, store, monkeypatch)
                          kwargs=dict(stop=stop, freq_dir=d, drm_dir=tmp_path / "nodrm",
                                      hwmon_dir=h.parent))
     t.start()
-    _until(lambda: gpu.governor()["state"] == "running", "the governor never said it runs")
-    stop.set()
-    t.join(5)
+    try:          # stopped whatever fails: a thread left running writes the real node store
+        _until(lambda: gpu.governor()["state"] == "running", "the governor never said it runs")
+    finally:
+        stop.set()
+        t.join(5)
     assert _n(h / "power1_max") == 180 * W and _n(d / "max_freq") == 2000
 
 

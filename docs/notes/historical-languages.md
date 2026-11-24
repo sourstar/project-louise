@@ -43,12 +43,351 @@ historical-Italian LLM or GGUF exists. What exists:
 | corpus | MIDIA (lemmas, POS) | corpusmidia.unito.it | 1200–1900 | 7.5M words | search, CSV export | from sources |
 | corpus | DanteSearch XML | dantesearch.dantenetwork.it/DanteSearchXML.zip | 1300s | all Dante | unknown | yes |
 | lexicon | TLIO | tlio.ovi.cnr.it | <1400 | — | online only | yes |
-| lexicon | MIDIA lexicon: 571,779 historical form → modern lemma pairs | (Alzetta & Montemagni) | 1300–1500 | 70K lemmas | ? | availability unverified |
+| lexicon | MIDIA *formario*: ~550K historical forms → modern lemma + POS (TreeTagger lexicon, built on Morph-it!) | not published; ask infocorpusmidia@gmail.com | 1200–1900 | 70K lemmas | corpus CC BY-NC 4.0; lexicon terms unknown | 2026-11-17: no download (see below) |
 | lexicon | Crusca's five Vocabolario editions | accademiadellacrusca.it | 1612–1923 | — | online only | from documents |
 | lexicon | Tommaseo-Bellini | tommaseobellini.it | 1800s | — | all rights reserved | yes |
 | eval | Bologna historical-Italian LLM benchmark | github.com/Zhangshibf/Benchmarking-Large-Language-Model-on-Historical-Italian | 1200–1900 | ~200 a task | CC BY 4.0 | yes: Minerva-7B 0.16, Claude 0.93 on Manzoni word sense |
 | eval | Zibaldone NER | arxiv.org/abs/2505.20113 | 1817–1832 | 2,899 mentions | ? | paper |
 | eval | UD_Italian-Old | universaldependencies.org/treebanks/it_old | 1300s | 119K tokens | CC BY-SA 4.0 | yes |
+
+## Word lists for scoring or checking words (2026-11-17)
+
+Asked by the louise-ocr session (via München): what can score or check
+OCR words of 1200–1800 Italian. Nothing is downloaded or held by Louise yet.
+
+| resource | what | where | licence | usable now |
+|---|---|---|---|---|
+| MIDIA *formario* | ~550K historical forms → modern lemma, POS; made for TreeTagger over MIDIA's 1200–1900 texts; reused by CODIT (Prague) | not published (D'Achille & Iacobini, SLI LIV, 2022, pp. 210–212); contact infocorpusmidia@gmail.com | corpus CC BY-NC 4.0 (site); the lexicon's terms unknown | no: ask the team (operator's choice; nothing sent) |
+| MIDIA corpus | 7.5M words, ~800 texts, searchable by form, lemma, period | corpusmidia.unito.it (search, per-query CSV export) | CC BY-NC 4.0, cite MIDIA | search only: no bulk; NC is a yellow class (invariant 9) |
+| Morph-it! | 568,771 modern forms → lemma, 28.5K lemmas (Baroni & Zanchetta, Bologna) | sslmit.unibo.it/morphit (site answered 402 on 2026-11-17) | CC BY-SA 2.0 and LGPL (dual, per its readme; confirm on the licence file) | yes, for words still in use; no old forms |
+| Italian Wikisource | 65K texts, old editions among them; a frequency list by period can be derived | hf.co/datasets/wikimedia/wikisource (20231201.it) | CC BY-SA 3.0 | yes: derive the list |
+| UD_Italian-Old | Dante's works, 119K tokens, lemmatised | universaldependencies.org/treebanks/it_old | CC BY-SA 4.0 | yes: small, 1300s only |
+| DanteSearch XML | all of Dante, lemmatised | dantesearch.dantenetwork.it/DanteSearchXML.zip | unknown | no: terms first |
+| TLIO, OVI | Old Italian dictionary and corpus, <1400 | tlio.ovi.cnr.it, ovi.cnr.it | online only, no download | no |
+| RNNTagger (Old Italian) | neural tagger and lemmatiser listing Old Italian | cis.uni-muenchen.de/~schmid/tools/RNNTagger | academic, per its page (unchecked) | a model, not a list: torch, behind HTTP (invariant 7) |
+| BERToldo | BERT models by period (encoder, can score words in context) | github.com/dhfbk/historical-bert | Apache-2.0 | yes: a model, torch |
+
+No language model for chat or generation in historical Italian exists
+(searched 2026-11-16). For 1500–1800 the spelling rules in
+`app/historical.py` (ſ, et, -tione, h-) and its marker words are a small
+start, written by hand, not a list.
+
+## Scoring OCR readings by period (2026-11-17, for louise-ocr)
+
+Asked by louise-ocr via München: scoring OCR candidates of 1200–1800
+Italian WITHOUT modernising (choose between two engines' readings of a
+block, flag improbable words). Nothing here is adopted without the
+operator's choice. "Counted" = measured in this session; else stated.
+
+**(1) What can score candidates by period**
+
+| resource | period | scores by | licence | caveat |
+|---|---|---|---|---|
+| TLIO's lists of forms (each entry's "0.1", every attested spelling; ABBONDARE has ~150) | <1400 | lookup: a form is attested or not, and under which lemma | none stated; the operator, 2026-11-17: "assume we can use it for non commercial purposes, I will clarify the licensing myself" | being fetched (below); non-commercial; NOT shared or published until the licence is recorded |
+| Italian Wikisource, frequency by century | 1200–1900 | log-frequency of the exact form in its century | CC BY-SA 3.0 (a derived list is CC BY-SA, attributed) | many texts are modern critical editions, partly regularised; prints of the 1500s–1700s are closer |
+| BERToldo till1500 / 1500-1700 / 1700-1900 | as named | masked-LM pseudo-log-likelihood of a word in context | Apache-2.0 | uncased (see 3) |
+| Morph-it! | 1900s | lookup | CC BY-SA 2.0 / LGPL | modern forms only: a "probably modern" signal, never a reason to reject an old form |
+| UD_Italian-Old | 1300s (Dante) | lookup, lemma | CC BY-SA 4.0 | 119K tokens |
+| MIDIA *formario* | 1200–1900 | lookup | not published | ask the team (operator's choice) |
+
+Lists are evidence FOR a reading, never against it: an OCR form absent from
+every list is flagged for review, not rejected; old spelling varies freely
+(*abondare / habundare / abunnare*).
+
+**(2) A Wikisource frequency list by century — counted.** The dump
+(hf.co/datasets/wikimedia/wikisource, config 20231201.it, one Parquet
+file, 115 MB, 65,047 pages) has no date field, but each work's root page
+begins with its *Intestazione* (author, year or "XVI secolo", subject)
+and its subpages inherit it (`IncludiIntestazione`). Dated so: 12,078 of
+15,440 works. Words by century of the work: 1200s 0.5M, 1300s 1.5M,
+1400s 0.8M, 1500s 3.0M, 1600s 0.9M, 1700s 1.1M, 1800s 5.8M. Proposed
+format, as louise-ocr asked: TSV `form<TAB>count<TAB>century`, the form
+as written (case-folded only, no accent or ſ folding), a header naming the
+snapshot, the licence and the attribution. Where: built by a script on
+the node's side into louise-ocr's data directory (my container is
+ephemeral and not reachable from there); a few hours' work once chosen.
+
+**Built (2026-11-17): `tools/lexicon/wikisource_period_freq.py`**, in
+louise-ocr's format (`form	count	century	source`, UTF-8; lower-cased, ſ as
+s, accents and elision kept; century = its first year), with `LICENCE`
+(the CC BY-SA 3.0 legal code, byte-exact, sha256 3f941b3b…f72f) and
+`SOURCES` beside it. 10 s on 8 cores; 602,396 rows for 1200–1899 from the
+20231201.it dump (sha256 of the TSV f46d3ffd…056f). The data is not in the
+repository: the node builds it (`python -m tools.lexicon.wikisource_period_freq
+it.parquet --out /mnt/ssd3/louise-ocr/lexicon/it-old/`). TLIO's forms
+cannot travel this way: this repository is public and TLIO's use is
+non-commercial and unshared until the operator records its licence.
+
+**Built (2026-11-17), the period's own spelling: `--pages`.** louise-ocr
+measured 18.1 % of GLM-OCR's words unseen, correct period spellings
+(*vtilissimo*) among them: the main namespace dates a text by its WORK and
+often holds a modern, regularised edition. The XML dump's scan pages
+(ns 108, transcribed from the scanned EDITION; ſ as s by Wikisource's
+convention) dated by the edition's PRINT year (ns 110, Anno), proofread
+only (level ≥ 3): `python -m tools.lexicon.wikisource_period_freq --pages
+itwikisource-latest-pages-articles.xml.bz2 --out DIR --source
+wikisource-it-pages-20261101 --from 1400 --to 1899`. Counted on the
+20261101 dump (445 MB; 3,840 dated editions; 3 min 43 s, the XML parse in
+one process — bz2 is one stream; the counting on the pool): 1,361,607
+rows; words by print century 1400s 0.1M, 1500s 1.5M, 1600s 1.6M, 1700s
+4.7M, 1800s 63.5M. *huomo* 1,010 (1500s) where the work-dated list is
+regularised; *vtilissimo* attested; the OCR slip *ehe* 2 in the 1500s
+(proofread pages carry few slips; 46 in the 1800s). TSV sha256
+122663640dd6913940957221a893393f7f2d6cc1175721fcf6097f84747d6fe5.
+
+**(3) BERToldo on CPU.** Eight models (Palmero Aprosio, Menini, Tonelli,
+LT4HALA 2022): BERT-base architecture (110M parameters), 128-token
+window; trained on Wikisource and Liberliber, split till1500,
+1500-1700, 1700-1900, plus "all" and four continued from
+dbmdz/bert-base-italian-xxl-uncased. Scoring a word = mask each of its
+subwords and sum the log-probabilities (pseudo-log-likelihood, Salazar et
+al., ACL 2020): one forward pass per subword, so comparing two readings
+costs a few passes for the words that differ only. Expected tens of ms a
+pass on CPU — NOT measured. Caveats: UNCASED, and BERT's uncased
+tokenizer normally also strips accents, so *perché/perche* and probably
+ſ are not distinguished — check the weights' tokenizer config before use;
+weights are on Google Drive only (no Hub card); torch or ONNX in
+louise-ocr's own container, never in the app (invariant 7); llama.cpp has
+no masked-LM head, so not through the node's engine.
+
+**(4) What a period plugin should carry**
+
+- *Characters, by MUFI* (Medieval Unicode Font Initiative, the standard
+  for medieval characters — do not invent codepoints): ſ, the tironian
+  et ⁊, &, ę (e caudata), æ/œ, the nasal macron and tilde (ā ẽ ũ = a
+  following m/n), ꝑ ꝓ p̄ (per, pro, pre), ꝯ (con), q̃/ꝗ, superscript
+  letters, ligatures (ct, st, ſt, ff); and the OUTPUT convention the
+  plugin declares: diplomatic (marks kept) or semi-diplomatic
+  (abbreviations expanded in brackets), never silently mixed.
+- *Distribution rules*, as evidence: u/v by position (v initial, u
+  medial, until about 1600), i/j/y, ſ never final, h- before vowels
+  (*huomo, hauere*), -tione/-zione, word division (*de la*, *allhora*),
+  the line-end hyphen ("=" or "-"), Roman numerals, catchwords and
+  running heads to drop from the text, not to score.
+- *Abbreviations*: Cappelli's *Lexicon abbreviaturarum*, all 14,357
+  entries, digitised by Ad fontes (University of Zurich), public domain,
+  a ZIP of an Excel table plus an image per abbreviation
+  (adfontes.uzh.ch, "Cappelli: Downloadable Data"; crowdsourced, errors
+  possible). Mostly Latin and manuscript, which old Italian prints share.
+- *Latin*: passages in Latin are common in these books; the plugin needs
+  a Latin lexicon or the language decided per block, or Latin words read
+  as improbable Italian.
+- *Ground truth to measure*: none found for Italian prints. GT4HistOCR
+  (CC BY 4.0) is German Fraktur and Early Modern Latin; a measured set of
+  Italian pages would have to be made.
+
+## TLIO fetch (2026-11-17)
+
+Operator: "Can you gently fetch all the content and make a glossary?",
+then "So far assume we can use it for non commercial purposes, I will
+clarify the licensing myself". The terms text recorded with the data
+(TERMS.txt, sha256 b7e29c1a15627afe0e92925f05e0b5d466c37193c46c10722b7ba3614249ce1d)
+states the site gives no licence, CNR's IRIS says "all rights reserved,
+unless stated otherwise", and the operator's words. 43,911 published
+entries (the 26 lists of tlio.ovi.cnr.it/TLIOlemm/?q=<letter>), one
+request at a time, at most one a second, raw pages kept gzipped for
+verification; robots.txt disallows /TLIO/ (the query system) only, which
+is not used. Non-commercial; not shared with peers, not published, not
+in this repository until the licence is recorded.
+
+**Complete on the node, 2026-11-17** (München, on the operator's word: 32
+parallel requests, 0 errors, no throttling): 50,115 of the lists' 50,137
+ids held — 43,902 entries and 6,213 cross-references; the other 22 answer
+404. Raw pages gzipped, byte-exact, in
+`/mnt/ssd3/louise-ocr/lexicon/tlio/raw/{lists,voci}/` with infolemm,
+TERMS.txt, TERMS.sha256 and SOURCES; louise-ocr's
+`/mnt/ssd3/louise-ocr/lexicon/it-old/tlio-forms.tsv`, 257,823 rows (form,
+count, century, source, lemma). Same terms: non-commercial, local, not
+shared or published until the licence is recorded. (The lists link
+cross-reference pages too, which the cloud fetch's 43,911 did not count.)
+
+**Light update, 2026-11-17** (operator: "Run the light update"; München, on
+the node, `tools/lexicon/tlio_manifest.py` ae8a209, 16 s): 50,142 ids
+listed (43,911 entries, 6,226 cross-references `r…`, 5 `p…` the first
+fetch's pattern missed); withdrawn 0, new 4, missing 23 (HTTP 404). The
+manifest (`raw/manifest.sqlite`) holds per entry the sha256, size, fetch
+time, TLIO's revision date (19,207 entries state one) and the editor's
+date; the lists' hashes are now recorded, so the next light update says
+which list changed. tlio-forms.tsv: 257,823 → 258,015 rows.
+
+**Stopped, 2026-11-17, on the operator's word ("Stop yours"):** the node's own fetch (München's `tlio-fetch.service`, `/mnt/ssd3/louise-ocr/lexicon/tlio/`) is the one. The cloud fetch held 4,300 pages; none left the container. Its earlier status follows.
+
+**Status, 2026-11-17 10:58 UTC:** 3,211 of 43,911 entries; 0.48 s an
+entry measured (one request at a time, no pause while answers come right,
+backoff after a failure); ~5.4 h left if it runs without a stop. Runs in
+the claude.ai cloud container of the session that wrote this note (its
+scratchpad, `tlio-data/`), under a shell supervisor. It does NOT reliably
+continue while that session is idle: each restart of the session's worker
+kills it (stopped 07:21–10:52 at 2,784), and the hourly check-in meant to
+restart it fails ("access denied") — it resumes only when the session is
+active again. The data is lost if the container is replaced. Updates
+later: `--update` (light: the 26 lists and the info page, new and removed
+entries) or `--update=full` (every entry asked with HTTP conditional
+requests); per-entry hash, Last-Modified, ETag, fetch and revision dates
+in `manifest.sqlite`.
+
+## Proposal: a reading annotation for historical Italian (2026-11-18, for the architecture session)
+
+Operator, 2026-11-18, verbatim: "make an annotation to correctly interpret
+the old fashioned italian words. This annotation will be used to replace
+the ancient expressions before the results are passed to the reranker and
+before they are processed by the chat model for the AI summary. Since the
+sources must carry a publication year, louise search engine is able to know
+wether to use it or not. Of there is no publication year, or the year does
+not apply, the annotation is not used." The architecture session decides
+the implementation; nothing is built in app/ before its ruling.
+
+**What it is.** A held annotation of (historical form, period) → reading
+(a modern form, or a gloss), each pair naming its method and source. At ask
+time, for a hit whose publication year falls in a pair's period, the COPY
+the reranker reads and the COPY the chat model reads have the form replaced;
+the hit the page, the PDF and API clients show is never touched (invariant
+11, as `historical.prepare` does today). No year, or a year outside every
+period: nothing applied.
+
+**The pairs, by source** (all already held, licences as recorded):
+
+| source | pairs it gives | period | replace or gloss | licence |
+|---|---|---|---|---|
+| spelling rules (`app/historical.py`: ſ, -tione, h-, u/v, et) | form → modern form (*huomo → uomo*, *vtile → utile*) | 1500–1800 | replace: grammar is kept | ours |
+| Wikisource, print-dated scan pages × work-dated pages | a variant and its modern form both attested, joined by the rule that maps one to the other (louise-ocr's `it_old._key`: u/v, i/j, h-, ph, ti+vowel, ct/pt) | 1400–1899, by print century | replace, where the modern form is attested ≥ N times in the 1900s | CC BY-SA 3.0 |
+| TLIO forms (258,015) | form → LEMMA (*abondava → ABBONDARE*), with the definition | < 1400 | GLOSS, not replace: a lemma is a citation form (*abondava* → *abbondare* breaks the sentence); the copy reads *abondava [abbondare: …]* | non-commercial, local: `share = false`, never to peers |
+
+**Four points for the ruling.**
+
+1. *Its shape.* A glossary is facts about WORDS, not claims about records:
+   09 §9.5's claim has a record as subject. Either a reference source
+   (facts by key, pinned, never ranked — invariant 4) used as a TEXT
+   TRANSFORM, or an annotations collection whose claims' subject is a
+   word. Which, and its Codex form?
+2. *It reorders.* Replacing words in the reranker's input changes the
+   order: invariant 4's WEIGHTS rule applies — a named source (yes), every
+   moved hit shows what moved it (`moved_by: "historical reading"`), the
+   reader's choice (Quality on, as today) or a default measured on the
+   judged query set (`tools/measure/fusion_calibration.py`, a historical
+   subset to be judged) and approved by the operator, never removing, the
+   same versions giving the same order.
+3. *Which year.* For SPELLING the edition's print year matters (a 1910
+   edition of Boccaccio is regularised); for VOCABULARY the work's date
+   (its words stay medieval in any edition). A record states at most
+   `first_published` (the WORK's, where its own corpus says so: ~12 % of
+   gutenberg's books, 2026-11-16) — the corpus-only rule forbids taking it
+   elsewhere. Proposed: spelling pairs by the edition's year where stated,
+   else the work's; TLIO glosses by the work's year. Coverage follows the
+   corpus: no year, no reading.
+4. *Where it runs.* The reranker's copy is built per hit after fusion and
+   before `rerank` (app/retrieval.py), the chat model's in
+   `historical.prepare` (both answer paths). A lookup per word of the
+   reranked depth (50 by default): a dictionary, microseconds a hit, so
+   no measurable cost — to be timed on the real path before it is claimed.
+   Its version (each source's snapshot and the rules' version) is part of
+   the reranker's input, so a cached rerank keys on it.
+
+The current answer-time helps (markers, `language-stage` claims, the
+spelling pre-pass in the model's copy) stay; the annotation replaces their
+spelling step with attested pairs and adds the reranker's copy and the
+glosses. The trigger becomes the year, as the operator said; the markers
+and the stage claim remain for books with no year? — the operator's words
+say NO ("If there is no publication year ... the annotation is not used"),
+so the ruling should say whether the existing marker trigger stays for the
+model's copy or goes.
+
+## Built (2026-11-18): the reader, as ruled
+
+Architecture's ruling, the operator's words (all 2026-11-18, through
+München): the reading is two REFERENCE SOURCES (06 §6.5, amended):
+`wikisource-readings` (app/refs/wikisource_readings.py) and `tlio`
+(app/refs/tlio.py), one table each in TEI's orig/reg vocabulary
+(app/refs/readings.py); the reader `app/reading.py`; the reranker's copy in
+`retrieval._rerank_held` (05 §5.6, amended); the chat model's copy in
+`historical.read_sources` (both answer paths).
+
+- *The year, as finally ruled (2026-11-18)*: the WORK's, for every
+  gutenberg record — the first publication PG's summary states (one
+  definition, 1000–2099), then its authors' lifetime L with the summary's
+  century C ("[early|mid|late] Nth century"): L∩C its midpoint, no overlap
+  C rejected as the edition's, L or C alone its midpoint; never the
+  edition's year nor a translator's dates (operator: "Publication date (not
+  the first) is totally unreliable, do not consider it at all, same for
+  translations. What's the purpose of using a Plato translation of the 1950
+  to place a Plato book in a timeline???"). A translation keeps its work's
+  year and the glossary NEVER reads it (a 1950 Plato at -388 would fall in
+  TLIO's period). The cost: a medieval volgarizzamento loses the glossary
+  too; its `language-stage` claim still gives the chat copy A and B. The
+  known-item set leaves translations out and counts them. The bullet below
+  is the first ruling, superseded.
+- *What marks a translation (architecture, 2026-11-18)*: the record's OWN
+  corpus only — a `trl` credit, or its title or summary (marc500, marc520)
+  stating it (`historical.is_translation`). Counted by München on the
+  node's 1,112 Italian gutenberg records: 80 trl credits; PG's RDF holds no
+  marc041, 240 or 500 for them; 4 statements, 2 without trl (54167, 40326):
+  82 marked. And its FRONT MATTER (architecture, 2026-11-18): the "Front
+  matter" section, else the first 5,000 characters — "Translated by",
+  "tradotto dal <lingua>/da <Nome>", "volgarizzat…", "versione italiana",
+  "recato in italiano"; never deep in the body ("tradotta dal regno dei
+  sogni", 45334). Scott's *La promessa sposa di Lammermoor* (42881–42883),
+  with no credit and no summary saying so, is caught by its title page's
+  "Translated by Gaetano Barbieri". `translation-of` claims: none
+  in gutenberg-book-editions (all 7,160 are same-work), so no claim marks
+  one. What remains unknown, counted on the node at 1b8fbc6
+  (`reading_year_rules --claims`): of 1,507 cross-language same-work
+  pairs, 268 have no translation mark on either side, 15 of them with an
+  Italian side — the Italian records that may be unmarked translations.
+- *The year (first ruling)*: `publication_year_fields`, declared per plugin, in order —
+  gutenberg `("first_published", "date")` (operator: "work's
+  first-publication year is the default, and print year of the edition
+  Project Gutenberg transcribed is the fallback"); normattiva declares NONE
+  (operator, 2026-11-18: "Only Gutenberg, normattiva language is too
+  recent"), so its acts are never read nor moved;
+  none declared, nothing applied; PG's release date (`extra.issued`)
+  never read (tests/test_reading.py: 1605 / 1851 / none, never 2004).
+- *Measured, 20261101 dump*: 3,417 replace pairs (MIN_OLD 3, MIN_LEN 5,
+  a modern form ≥ 1 a million 1900s words, the old form < 5 % of it in
+  the 1900s), 3 min 43 s on 8 cores. Not yet synced on the node.
+  The bar is RELATIVE (architecture accepted it, 2026-11-18; a derivation
+  parameter, so in `ref_version`, now 2): *perche* is printed 15 a million
+  1900s words (reprints of old texts) against *perché*'s 751 — kept;
+  *gioja* 16.3 against *gioia*'s 127.9 — still current then, excluded. An
+  absolute 1-a-million bar dropped *perche* (tests/test_refs_readings.py).
+  *Version 3* (2026-11-18): version 2's 5-letter minimum (my 3,416 pairs
+  were derived BEFORE it; München's 2,900 after, on another copy of the
+  dump: sha256 51e95656… against mine e327357c…, both 445,564,638 bytes)
+  dropped auea → avea, cosi → così, cio → ciò, deue → deve. Now: 4 letters,
+  3 for a restored final accent; a form under 6 letters printed ≥ 10 times
+  and not elided; no Roman numerals (ciij); no "modern form" ending in two
+  consonants (bapt → batt); no y → i (a y in these prints is a foreign
+  word's: boys → bois, dyk → dik). 2,652 pairs on my copy; 50 random all
+  sound; known false ones left: huile → vile (French), hasta → asta and
+  haber → aber (Spanish), hauto → auto (avuto).
+- *The digest* is computed OFF the query path: `reading.warm`, at the web
+  process's start and at each look of its watcher (a sync runs in another
+  process), under a 60 s bound SQLite enforces; a query before the warm
+  computes it once. No schema change.
+- *The cost on the node*: `python -m tools.measure.reading_cost
+  --collection <gutenberg's> --collection <normattiva's>
+  [--readings-tsv wikisource_readings.tsv]`, read-only, one JSON line per
+  collection (reading.years cold and warm, lookup + apply at depth 50).
+- *Cost* (this cloud container, NOT the node; synthetic texts, the real
+  3,417-pair table and a 250,000-row table of TLIO's size): lookup and
+  apply for 100 texts (depth 50, two chunks each) 12.9 ms a rerank; the
+  version digests 385 ms, once after each sync, on the first query. Owed:
+  the same on the node's real path (measuring.md §6), and `reading.years`'
+  facts lookup, not measured here.
+- *No rerank cache exists* in the code (searched 2026-11-18): the
+  version is in each moved hit's `moved_by` instead, so a reorder names
+  the tables that made it.
+
+**The measurement, its rule stated BEFORE the run** (the ruling; the
+chunker report's form). Set (amended the same day): a KNOWN-ITEM set, gutenberg only, ≥ 100 queries
+kept, written by the node's chat model from a sampled passage alone
+(tools/measure/reading_known_items.py, temperature 0, seeded). Harness:
+the one that measured titles (`tools/measure/rerank_variants.py`, the
+API's path, bit-exact reranker); `retrieval.READING_RERANK` True and
+False, from the command line, same depth, same everything else. Metric:
+reranked MRR@10; also R@10 and the number of hits `moved_by` names. Rule:
+ON stays if MRR@10(on) ≥ MRR@10(off) − 0.02; a loss of more than 0.02
+goes to the operator the same day with the hits it moved. The number is
+recorded here whatever it is.
 
 ## Other languages (top picks; full tables in this session's reports, to be added)
 
@@ -156,7 +495,8 @@ stay at answer time.
   the order human, Wikidata, matcher. `object_hash` null; the edge
   `annotations:language-stage` to the stage, none for null.
 - **Where** (operator's "A"): in gutenberg-book-editions, re-created at
-  version 9 (its 4,387 claims carried unchanged), title gaining "and the
+  version 9 (its claims carried unchanged: 7,160 same-work at its 2026-11
+  snapshot, see below), title gaining "and the
   stage of each edition's language". München re-creates and shares on the
   operator's word, after Frankfurt's review.
 - **The matcher** (`app/historical.py` `stage_claim`, run by
@@ -179,12 +519,28 @@ stay at answer time.
 - **`same-work`** (02 §2.10, 09 §9.5, amended): "two records are versions
   of one work — editions in one language or in different languages". The
   sentence said "in different languages"; gutenberg-book-editions holds
-  7,154 claims (4,357 wikidata, 2,797 matcher) of which 5,644 join editions
-  in ONE language (counted on the node by München), so the collection was
+  7,154 claims at its 2026-09 snapshot (4,357 wikidata, 2,797 matcher), of
+  which 5,644 join editions in ONE language (counted on the node by
+  München), so the collection was
   right and the sentence wrong (architecture's ruling). A one-language
   refusal, built and withdrawn the same day, is not in the code. An older
   source whose same-work partner carries no stage is pointed at it as
   "a modern version of it".
+- **The count today** (München on the node, 2026-11-19, for the parser-12
+  re-creation): `hold annotations claims gutenberg-book-editions` gives
+  7,160 lines, all `same-work`: 4,365 wikidata and 2,795 matcher (2,765
+  same-title rule, 19 one-language-per-work, 11 classical-translation).
+  The 2026-09 snapshot's 7,154 changed by the collection's own monthly
+  method (`gutenberg-editions`): 2026-10 added 32, tombstoned 83, changed
+  33 (7,103); 2026-11 added 71, tombstoned 14, changed 24 (7,160). The
+  re-creation adds the 18 human `translation-of` claims (operator,
+  2026-11-18).
+- **What gutenberg (parser 12) does not hold**: 34 of its 79,866 documents
+  give no record, as in the parser-10 collection. Gutenberg never published
+  33 of them as books (gutenberg:0, 182–199, 1070–1072, 1648, 1691, 1766,
+  1767, 1789, 1914, 1964, 1984, 2001, 2091, 2200: "no epub, txt or rdf"),
+  and one is book 673, Webster's Unabridged Dictionary, whose encoding the
+  origin itself declares broken.
 - **At answer time** (Quality): the claim is attached to the hit as the
   fact `language_stage` (app/ask/annotations.py); a record with a claim is
   read by it (or not at all for a person's null); a record without one is
@@ -220,3 +576,41 @@ Asked by the louise-ocr session (scan-to-EPUB OCR for Italian books
   Whatever the operator obtains from the people they are contacting is
   that project's choice. If Louise later reads the same glossary, the three
   rules above apply.
+
+## The glossary with TLIO, first measured (2026-11-18)
+
+TLIO acknowledged (operator, A). On the node, v3 Wikisource pairs + TLIO 1:
+known-item MRR@10 ON 0.5596 vs OFF 0.555 (+0.0046, CI [0, 0.0138], 20 of
+109 queries moved, the gain in the 1200s); lookup+apply 7.3 ms; summary
+agreement ON 2.125 vs OFF 2.75 (8 judged, CI [-1.375, 0.0]) — worse.
+
+München read the 8 rows. Causes, in weight:
+1. Overload: up to 35 glosses a passage (Inferno XXI); the model answered
+   "the sources do not contain it", or lost a name (Curio) the plain text gave.
+2. Wrong sense: a form under a homograph's lemma (fuoro → fuoco; cuoci →
+   cuoco; abborri → abborrare), or TLIO's FIRST sense where another is meant
+   (satisfaccia → paying a debt).
+3. The judge: no penalty for modern wording found.
+
+Fixes (reader 2026-11-18, tlio PARSER_VERSION 2): the chat copy glosses each
+form at its first occurrence, `CHAT_GLOSSES` = 5 a text; a form listed under
+several lemmas is not glossed; an entry of several senses gives its lemma
+alone. The reranker's copy is unchanged (it measured +0.005). Remeasured
+from the commit that carries them.
+
+Architecture's ruling the same day: TLIO's glosses in the CHAT copy OFF by
+default (`reading.CHAT_TLIO`) until at least 30 judged answers show ON >=
+OFF and the operator approves; the reranker's copy keeps them. The wrong
+lemmas are tests on the branch (fuoro, cuoci, abborri: none where the form
+is ambiguous). The eval's ON arm turns `CHAT_TLIO` on for its own answers.
+
+The summary eval at e812174 (tlio 3): 7 judged, ON 1.857 vs OFF 2.429,
+too few — 20 records in span, 4 with a passage TLIO reads. Operator's
+choice C (2026-11-18): judge it blind himself.
+`tools/measure/reading_blind_judge.py` needs no modern version, so it
+draws from every Italian record of 1100–1400: `make` writes judge.html
+(the passage, the query, two answers as A and B) and key.json apart;
+`score` unblinds (wins, ties, errors per arm, sign test). TLIO's glosses
+return to the chat copy only at 30 judged or more, ON winning at least as
+often as OFF, with no more errors. One leak the page cannot hide: an ON
+answer may quote a bracketed gloss.

@@ -46,6 +46,16 @@ FILES="requirements.txt requirements-dev.txt requirements-build.txt constraints.
 TGZ=/tmp/louise-src.tgz
 COMMIT=$(cat /tmp/louise-commit)
 HOLD=/root/supervise/louise.hold
+PASS_BIN=/root/supervise/bin
+# THE DEPLOY'S TESTS AGAINST THE NODE'S OWN LOAD (München, 2026-11-21: #789's first two
+# tries died at 95 % and 65 % of a 900 s `timeout -s KILL`, the host at 15-16 on 12 cores —
+# worker 215 %, LocalAI 186 %, louise-ocr 98 %, web 76 %; the third passed with the node in
+# acquire-only). Their containers get cgroup v2 cpu.weight above the node's (docker's
+# --cpu-shares 8192 against the default 1024 the node's containers run at — CLAUDE.md: CPU
+# weighting is cgroups v2's), so a busy node yields the CPU to them and keeps running; the
+# kill bound stays, for a run that hangs, at twice the old one
+TEST_CPU_SHARES=${TEST_CPU_SHARES:-8192}
+TEST_BOUND=${TEST_BOUND:-1800}
 say() { printf '\n=== %s %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 [ ! -e "$HOLD" ] || { echo "$HOLD exists: Louise is held by the operator; no deploy begins (rm it to deploy)"; exit 1; }
 
@@ -65,7 +75,7 @@ grep -q "def determinism_lacks" "$ROOT/src.new/deploy/vega/vega_wrapper.py"   # 
 grep -q "def keep_producer_scan" "$ROOT/src.new/app/hold/carry.py"           # e3f4687
 grep -q "embeddings.scan_columns(coll" "$ROOT/src.new/app/hold/carry.py"     # b561ef8
 grep -q "^def mentions" "$ROOT/src.new/app/ask/figures.py"                   # de64164
-grep -q "PARSER_VERSION = 11" "$ROOT/src.new/app/plugins/gutenberg/source.py"   # 693ffcc (10: f9bdf66)
+grep -q "PARSER_VERSION = 12" "$ROOT/src.new/app/plugins/gutenberg/source.py"   # parser 12: whole credits (11: 693ffcc, 10: f9bdf66)
 grep -q "gh-115634" "$ROOT/src.new/app/parallel.py"                              # c3dcb4c
 grep -qE "^(PAGES|ROWS)_AHEAD = " "$ROOT/src.new/app/parallel.py"                 # 21da0e3 (PAGES_AHEAD = 16; in rows since 4cafea4)
 grep -q "CREATE TABLE IF NOT EXISTS issues" "$ROOT/src.new/app/db.py"            # 787ebad
@@ -180,7 +190,7 @@ grep -q "^def small_fragments(collection)" "$ROOT/src.new/app/vector_index.py"  
 grep -q "^VECTOR_INDEX_LIGHT_CHECK_S = " "$ROOT/src.new/app/config.py"                       # #109
 grep -q "^def _as_candidate(recipe, a):" "$ROOT/src.new/app/louise.py"                         # 5388ade: `hold embedder check --model` gates a candidate model name
 grep -q '^TREE_TYPES = ("file", "dir", "link", "setting")$' "$ROOT/src.new/app/vega/service.py"   # #116 (f1fd164): the receipts service takes the wrapper's `setting` entry, BEFORE the wrappers move
-grep -q "^def find(root: Path, name: str, role: str, \*, weights: str, set_id: str," "$ROOT/src.new/app/hold/cpu_reference.py"   # #119 (bbf6628): the stored CPU reference, statement version 5, own bytes enforced
+grep -q "^def node_find(d: Path, \*, set_id: str, count: int" "$ROOT/src.new/app/hold/cpu_reference.py"   # #119 (bbf6628): the stored CPU reference, statement version 5, own bytes enforced (in the node's store since 2026-11-22)
 grep -q "^def fresh_loads(texts: Sequence, embed_one, reload: " "$ROOT/src.new/app/hold/embedder.py"   # #120 (5f49e24): the multi-load gate, `exactness = "near"` opt-in
 grep -q '^IDLE, RUNNING, HELD, BLOCKED = "idle", "running", "held", "blocked"$' "$ROOT/src.new/app/status.py"   # #126 (2c765fa): a stage the profile pauses says so — in app/status.py since one status (2026-11-07)
 grep -q "^def _merge_by_relevance(lists: list\[tuple\[list\[dict\], Any\]\]) -> list\[dict\]:" "$ROOT/src.new/app/retrieval.py"   # #128 (a46fe9b): lists merged on calibrated relevance (off until a calibration)
@@ -203,14 +213,14 @@ grep -q "^def prefetch_held(collection, rows: list\[dict\]) -> None:" "$ROOT/src
 grep -q "^def _columns_of(buf: list\[dict\], lines: list) -> tuple | None:" "$ROOT/src.new/app/pack/build.py"   # #150 (5487524): a part to its writer as columns and one bytes object
 grep -q "^def _reparse_many_from(codex, name: str, origin_dir" "$ROOT/src.new/app/louise.py"   # #152 (a2100c5): records-vs-origin re-parses in the parse pool
 grep -q "^def _compared_in_part(ctx: Ctx, ran, keep, size_of: dict, per_unit: dict," "$ROOT/src.new/app/hold/check.py"   # #153 (698dcfd): a heavy origin unit is compared in part, by the seed
-grep -q '^WHOLE_KINDS = ("terms", "validation", "slicing", "calibration", "seals")' "$ROOT/src.new/app/share/holdings.py"   # a8fa256: the family map is a whole-collection member
+grep -q '^WHOLE_KINDS = ("terms", "validation", "slicing", "select", "calibration", "seals")' "$ROOT/src.new/app/share/holdings.py"   # a8fa256: the family map is a whole-collection member; 2026-11-23: the selection rules too
 grep -q '^SHOWN_ONLY = ("origin",)' "$ROOT/src.new/app/copy_state.py"   # #154 (28b265f): records-vs-origin is optional and gates nothing (operator 2026-11-01)
 grep -q '^TABLE_KEYS: dict\[str, str\] = {}' "$ROOT/src.new/app/pack/slicing.py"   # #155 (b7d54a7): per-value vector tables, INERT while no key is declared; grow fix (bb0a391)
 grep -q "^def settle_stopped(collection, state_dir: Path, con, log=None) -> bool:" "$ROOT/src.new/app/share/seeder.py"   # #156 (0333c15): the SHARE box's graceful stop
 grep -q "^def _profile_held(collection" "$ROOT/src.new/app/web.py"   # #156: held languages checked in grow
 grep -q "^def held(recipe, \*, holder: str" "$ROOT/src.new/app/encoder_use.py"   # #157 (103c22a): embedder commands hold the encoder lease for their whole run
 grep -q '^def _exactness(raw: dict, where: str) -> str:' "$ROOT/src.new/app/collections.py"   # #160 (55840ac): a collection's exactness; its default is "exact" again since #244 (marker below)
-grep -q "^CODEX_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)" "$ROOT/src.new/app/hold/codex.py"   # #161 (5b2698e): Codex 10, space.exactness; 11 since #252
+grep -q "^CODEX_VERSIONS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)" "$ROOT/src.new/app/hold/codex.py"   # #161 (5b2698e): Codex 10, space.exactness; 11 since #252; 12 since 2026-11-18 (annotates[].select)
 grep -q "^def unchanged_books(table, rows, natives) -> set\[int\]:" "$ROOT/src.new/app/bundles/genesis.py"   # #162 (b50a3be): genesis skips byte-identical re-imports; own statements first
 grep -q "^def parse_counters(text: str) -> Counters | None:" "$ROOT/src.new/app/gpu_busy.py"   # #164: the card's busy time (I1-I3)
 grep -q '^CARRIED = ("GPU_PROBE_URL",)' "$ROOT/src.new/deploy/16f/set_platform_image.py"   # #165: the worker gets GPU_PROBE_URL in the image's app.update
@@ -232,12 +242,18 @@ grep -q "RELAY_RETRY_MS=500" "$ROOT/src.new/app/templates/ask.html"   # #189: th
 grep -q '    mode: str = "running"' "$ROOT/src.new/app/node_profile.py"   # #192/#193: a profile takes a mode (quiet = acquire-only, 12 cores)
 grep -q 'processing suspended' "$ROOT/src.new/app/cpu_limit.py"   # #192: the quiet window says it once
 grep -q 'rows = rows.filter(pc.is_in(rows.column("id"), value_set=wanted))' "$ROOT/src.new/app/embeddings.py"   # vectors_by_chunk_id keeps the asked ids in Arrow (the bakeoff pool's OOM)
-grep -q '^def kept(root: Path, name: str, role: str' "$ROOT/src.new/app/hold/cpu_reference.py"   # cpu-reference skips a role its run already kept
+grep -q '^def obtain(d: Path, role: str' "$ROOT/src.new/app/hold/cpu_reference.py"   # cpu-reference skips a role its run already kept (the node's store)
 test -s "$ROOT/src.new/app/embed_select.py" && grep -q 'waiting for the embed selection' "$ROOT/src.new/app/worker.py"   # #200: wikipedia's smart embedding
 grep -q 'Embed which' "$ROOT/src.new/app/templates/library.html"                                  # #204: the Library's embed-which select
 grep -q '^MEASURED_CPU_WORST: dict\[str, float\] = {' "$ROOT/src.new/app/hold/embedder.py"       # #205: the 16-bit review line
 grep -q '^RUN python -m compileall -q -j 0 app tools' "$ROOT/src.new/Dockerfile"                   # #208: the image compiles its own code
 grep -q '^def _structured_code(code)' "$ROOT/src.new/app/plugins/wikipedia/wikitext.py"           # #219 A, #222 A2: the wikitext parse (IDENTICAL on 100,000 real pages first)
+test -s "$ROOT/src.new/app/worker_guard.py" && grep -q "'app.worker_guard'" "$ROOT/src.new/deploy/truenas-app.yaml"   # #779: the worker run by its guard (the OOM hold)
+grep -q '^def apply(cfg: dict, want: dict' "$ROOT/src.new/deploy/16f/set_commands.py"            # the file's commands reach the live app, in the image's update
+grep -q 'HELD, not restarted' "$ROOT/src.new/deploy/supervise-pass.sh" && test -x "$ROOT/src.new/deploy/release-oom.sh"   # #779: a pass killed for memory is held
+grep -q '^def spans_are_exact(tok: Any) -> bool:' "$ROOT/src.new/app/chunking_legal.py"   # the legal chunker reads a text in bounded spans
+grep -q '"auto_upgrade_backends": False,' "$ROOT/src.new/deploy/vega/stage/localai_settings.py"   # LocalAI's auto-upgrade held off, at every deploy
+grep -q '^def resolve(codex, role: str, weights: str, count: int)' "$ROOT/src.new/app/rage/reference.py"   # the CPU reference resolved by its key, through RAGE
 grep -q '^_CITE_SHORT = re.compile' "$ROOT/src.new/app/refs/normattiva.py"                        # #219 B: the citation scan
 grep -q '^SHIP_BATCH_RECORDS = 64' "$ROOT/src.new/app/pack/build.py" && grep -q '^orjson==3.13.0' "$ROOT/src.new/constraints.txt"   # #221 C+F: the records child, orjson
 grep -q '^def set_paused(name: str, paused: bool, \*, by: str = "") -> set\[str\]:' "$ROOT/src.new/app/node_state.py"   # #122 (4ef5c49): a pause records who and when
@@ -256,7 +272,7 @@ grep -q ':root\[data-theme="kelsch"\]' "$ROOT/src.new/app/static/admin.css"     
 test -s "$ROOT/src.new/deploy/vega/stage/models/louise-translate-madlad-torch.yaml"        # 931887e
 ! grep -q 'cache_type_' "$ROOT/src.new/deploy/vega/stage/models/louise-translate-madlad.yaml"   # d372ba5: the F16 cache (P5); b68820c had f32
 test ! -e "$ROOT/src.new/deploy/reference"
-grep -q '^def journal(root: Path, name: str, role: str' "$ROOT/src.new/app/hold/cpu_reference.py"   # #231: the CPU reference's roles journalled
+grep -q '^def journal_in(d: Path' "$ROOT/src.new/app/hold/cpu_reference.py"   # #231: the CPU reference's roles journalled (in the node's store)
 grep -q '^_NATIVE = None if _louise_cdc is None' "$ROOT/src.new/app/chunking.py" && test -s "$ROOT/src.new/native/louise_cdc/Cargo.lock"   # D: the compiled cdc loop (cdc_identity IDENTICAL, 100,000 wikipedia records, 2026-11-02)
 test -s "$ROOT/src.new/app/plugins/wikidata/pure.py" && test -s "$ROOT/src.new/requirements-build.txt"   # E: the compiled textifier (textify_identity IDENTICAL, 100,018 entities, 2026-11-02)
 grep -q '^def near_exact_relaxed' "$ROOT/src.new/deploy/vega/vega_wrapper.py"   # #241: one setting of a vendor's mode declared near-exact
@@ -299,7 +315,7 @@ print(' '.join(sorted(x.name for x in c.load_all())))" 2>/dev/null || true)
 echo "live load_all: ${LIVE_NAMES:-(the live web did not answer)}"
 LIVE_MOUNTS=$(docker inspect ix-louise-rag-web-1 \
   --format '{{range .Mounts}}-v {{.Source}}:{{.Destination}}{{if eq .Destination "/config"}}:ro{{else if not .RW}}:ro{{end}} {{end}}')
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv $LIVE_MOUNTS \
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv $LIVE_MOUNTS \
   -e CONFIG_DIR=/config -e DATA_DIR=/data -e LIVE_NAMES="$LIVE_NAMES" louise-rag:staged python -c "
 import os
 from app import collections as c
@@ -314,8 +330,8 @@ else:   # annotations collections are not pipeline collections
         assert n in names or n + '.next' in names, (n, names)
 assert not c.refusals(), c.refusals()
 "
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
-  louise-rag:staged timeout -s KILL 900 python -m pytest -q -p no:cacheprovider \
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
+  louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider \
     tests/hold/test_carry.py tests/ask/ tests/test_annotations_from_titles.py tests/test_gutenberg_broken_encoding.py tests/test_unindexable_stability.py tests/test_catalog_index.py tests/share/test_contribute.py tests/share/test_remint_end_to_end.py tests/share/test_accept.py tests/test_gutenberg_scan_signature.py tests/test_users.py tests/deposit/test_openai_stores.py tests/share/test_predecessors_lock.py tests/test_invariant_guards.py tests/test_image_constraints.py tests/test_model_pins.py tests/test_rewrite_drain.py tests/test_model_load.py tests/test_rerank_reasons.py tests/test_dispatch.py tests/test_louise_level.py tests/test_rerank_per_collection.py tests/share/test_possession_part_cache.py \
     tests/test_invariant_8_secrets.py tests/test_identity.py tests/test_node_init.py \
     tests/test_parallel.py tests/test_parallel_exit.py tests/test_issues.py tests/ask/test_figures.py \
@@ -331,20 +347,24 @@ docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
     $(cd "$ROOT/src.new" && ls tests/test_node_profile*.py tests/test_cpu_limit*.py 2>/dev/null)
 # test_rename.py in its own run: in one invocation with tests/ask/ its directory's
 # conftest `codex` fixture is not found (2026-10-27; alone and in the full suite it passes)
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
-  louise-rag:staged timeout -s KILL 900 python -m pytest -q -p no:cacheprovider tests/hold/test_rename.py
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
+  louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider tests/hold/test_rename.py
 # tests/hold/test_codex.py the same (its `codex` fixture; 61 errors in the long run, 2026-11-02),
 # with #252's document-instruction tests beside it
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
-  louise-rag:staged timeout -s KILL 900 python -m pytest -q -p no:cacheprovider \
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
+  louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider \
     tests/hold/test_codex.py tests/hold/test_codex_document_instruction.py
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv -v "$ROOT/config:/config:ro" \
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv -v "$ROOT/config:/config:ro" \
   -e CONFIG_DIR=/config louise-rag:staged python -c "
 from app import node_profile as np
 print('the live platform.toml, read by the staged code: profile now', np.active())"
-docker run --rm -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
-  louise-rag:staged timeout -s KILL 900 python -m pytest -q -p no:cacheprovider \
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
+  louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider \
     tests/vega/ tests/test_localai_backends.py
+# the legal chunker's bounded encode, byte for byte the whole one, against the image's OWN pinned
+# tokenizer (2026-11-20, the second OOM hold): required here, never skipped
+docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv -e LOUISE_REQUIRE_PINNED_TOKENIZER=1 \
+  louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider tests/test_chunking_legal_spans.py
 find "$ROOT/src.new" -name '__pycache__' -type d -prune -exec rm -rf {} +
 rm -rf "$ROOT/src.new/tests/fixtures/pubmed-mini/.pack"
 
@@ -366,6 +386,20 @@ docker build -q -t louise-rag:local "$ROOT/src"
 echo "$COMMIT" > "$ROOT/src/.deployed-commit"
 NEW_ID=$(docker inspect louise-rag:local --format '{{.Id}}')
 echo "louise-rag:local = $NEW_ID"
+
+say "4b. the pass supervisor and its release where the passes run them ($PASS_BIN)"
+# The passes run /root/supervise/bin/supervise-pass.sh, a copy no deploy updated: #779's
+# memory hold reached it by hand (München, 2026-11-20). Installed by RENAME, never written
+# over: a pass running the one before keeps reading the file it opened (bash reads a
+# script as it runs; lessons-learned.md, 2026-10-31), and the next pass runs this one.
+mkdir -p "$PASS_BIN"
+for f in supervise-pass.sh release-oom.sh; do
+  dst="$PASS_BIN/$f"
+  if cmp -s "$ROOT/src/deploy/$f" "$dst"; then echo "$f unchanged"; continue; fi
+  [ ! -e "$dst" ] || cp -p "$dst" "$dst.pre-$COMMIT"
+  install -m 0755 "$ROOT/src/deploy/$f" "$dst.new.$$" && mv -f "$dst.new.$$" "$dst"
+  echo "$f installed$( [ -e "$dst.pre-$COMMIT" ] && echo ", the one before kept as $f.pre-$COMMIT")"
+done
 
 say "5. restart: stop (wait for the job), LOUISE_PLATFORM_IMAGE, start"
 # the containers are recreated: their logs go with them unless kept (2026-10-23: a
@@ -446,6 +480,11 @@ from truenas_api_client import Client
 shared, build_env = fm.build_area(os.environ.get("LOUISE_BUILD_HOST") or None)
 print(f"build area: {shared[0][0]} -> {shared[0][1]}" if shared else
       "build area: no ssd3 dataset named or mounted, LOUISE_BUILD_DIR left unset")
+# THE LANCE ROOT (storage-tiering.md §12): the ssd4 folder of the searched vector tables
+lance, lance_env = fm.lance_root(os.environ.get("LOUISE_LANCE_HOST") or None)
+print(f"Lance root: {lance[0][0]} -> {lance[0][1]}" if lance else
+      "Lance root: none on this host, LOUISE_LANCE_ROOT left as it is")
+shared, build_env = tuple(shared) + tuple(lance), {**build_env, **lance_env}
 # THE TWO CACHE AREAS (operator 2026-11-14, storage-tiering.md §10): ssd5 for what is
 # read at random or memory-mapped, ssd3 for the decompressed archives a parse streams
 # through; each once its copy is compared and READY, the fast one only beside the files one
@@ -479,6 +518,7 @@ echo "state after start: $s"; [ "$s" = "RUNNING" ]
 say "6. web and worker run the same, new image"
 sleep 5
 WEB=$(docker inspect ix-louise-rag-web-1 --format '{{.Image}}'); WRK=$(docker inspect ix-louise-rag-worker-1 --format '{{.Image}}')
+LANCE_HOST=${LOUISE_LANCE_HOST:-$(python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import flatten_mounts as fm; print(fm.LANCE_HOST or '')" "$ROOT/src/deploy/16f")}
 echo "web $WEB"; echo "worker $WRK"
 [ "$WEB" = "$WRK" ] && [ "$WEB" = "$NEW_ID" ]
 for c in ix-louise-rag-web-1 ix-louise-rag-worker-1; do
@@ -488,11 +528,49 @@ for c in ix-louise-rag-web-1 ix-louise-rag-worker-1; do
   v=$(docker exec "$c" printenv LOUISE_CACHE_DIR || true); echo "$c LOUISE_CACHE_DIR $v"; [ "$v" = "/data/cache" ]
   b=$(docker exec "$c" printenv LOUISE_BUILD_DIR || true); echo "$c LOUISE_BUILD_DIR ${b:-unset}"
   if [ -n "$b" ]; then docker exec "$c" test -d "$b" || { echo "$c: LOUISE_BUILD_DIR $b is not a directory: the build area is not mounted"; exit 1; }; fi
+  # THE LANCE ROOT (operator 2026-11-22: "Ssd4 is for lancedb only"; storage-tiering.md §12)
+  l=$(docker exec "$c" printenv LOUISE_LANCE_ROOT || true); echo "$c LOUISE_LANCE_ROOT ${l:-unset}"
+  if [ -n "$l" ]; then docker exec "$c" test -d "$l" || { echo "$c: LOUISE_LANCE_ROOT $l is not a directory: the Lance root is not mounted"; exit 1; }; fi
+  # and it IS the host's Lance root folder (device and inode), never the empty mount point beneath it
+  if [ -n "$l" ] && [ -d "$LANCE_HOST" ]; then
+    have=$(docker exec "$c" stat -c '%d %i' "$l"); want=$(stat -c '%d %i' "$LANCE_HOST")
+    echo "$c LOUISE_LANCE_ROOT is $have, $LANCE_HOST is $want"
+    [ "$have" = "$want" ] || { echo "$c: $l is not $LANCE_HOST: the Lance root's bind is missing"; exit 1; }
+  fi
 done
 for i in $(seq 1 60); do w=$(curl -s -m 5 -o /dev/null -w "%{http_code}" http://127.0.0.1:30042/healthz); [ "$w" = 200 ] && break; sleep 2; done
 echo "web /healthz $w, worker $(docker inspect -f '{{.State.Status}}' ix-louise-rag-worker-1)"; [ "$w" = 200 ]
 [ "$(docker inspect -f '{{.State.Status}}' ix-louise-rag-worker-1)" = running ]
+# the worker runs what deploy/truenas-app.yaml says (set_commands.py, in the image's update)
+want=$(python3 -c "import json, sys, yaml; print(json.dumps(yaml.safe_load(open(sys.argv[1]))['services']['worker']['command'], separators=(',', ':')))" "$ROOT/src/deploy/truenas-app.yaml")
+got=$(docker inspect ix-louise-rag-worker-1 --format '{{json .Config.Cmd}}')
+echo "worker command $got (the file: $want)"; [ "$got" = "$want" ]
 STARTED=1; trap - EXIT INT TERM          # the start is verified: no self-healing past here
+say "6a. the OOM hold sees the worker's memory kills (operator, 2026-11-19)"
+# without the cgroup's counter the guard cannot tell a memory kill from a crash and
+# restarts it like one: the rule would be void while every other check passed
+if docker exec ix-louise-rag-worker-1 grep -q '^oom_kill ' /sys/fs/cgroup/memory.events; then
+  echo "worker cgroup: $(docker exec ix-louise-rag-worker-1 grep '^oom_kill ' /sys/fs/cgroup/memory.events)"
+else
+  echo "the worker's /sys/fs/cgroup/memory.events has no oom_kill: the OOM hold cannot see a memory kill here"; exit 1
+fi
+docker top ix-louise-rag-worker-1 -eo pid,args | grep 'app.worker_guard' >/dev/null && echo "the guard runs the worker" \
+  || { echo "no app.worker_guard process in the worker container"; exit 1; }
+say "6a'. LocalAI's runtime settings Louise depends on (deploy/vega/stage/localai_settings.py)"
+# the WatchDog's line and auto-upgrade OFF (operator, 2026-11-21: LocalAI's runtime settings,
+# written from its UI, win over LOCALAI_AUTO_UPGRADE_BACKENDS=false, and v5 upgraded three
+# upstream backends by itself): applied, idempotent, printed by its managed keys alone (the
+# object carries api_keys), and the deploy fails where LocalAI does not take them
+python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" "${LOCALAI_URL:-http://127.0.0.1:30286}" \
+  || { echo "LocalAI did not take the settings Louise depends on (above)"; exit 1; }
+python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" --check "${LOCALAI_URL:-http://127.0.0.1:30286}"
+say "6a''. the CPU references collections kept before the node's store, held to it (read-only)"
+# operator, 2026-11-22: "The CPU reference is per model, not per collection" — RAGE resolves it by
+# its key from the node's store alone (app/rage/reference.py). A collection's own copy names no
+# inputs and is never filed under a key; one the store does not hold is said here: that encoder's
+# validated runs go on, its next new run waits for `hold embedder cpu-reference`
+docker exec ix-louise-rag-worker-1 python -m app.louise dev cpu-reference-legacy \
+  || echo "NOTE: a collection keeps a CPU reference the node's store does not hold (above): its encoder's next new run is not gated until one is made for the node"
 say "6b. the secrets by path, the same identity"
 for c in ix-louise-rag-web-1 ix-louise-rag-worker-1; do
   docker exec "$c" sh -c 'test -z "${ADMIN_TOKEN+x}"' && echo "$c: no ADMIN_TOKEN value in the env" || { echo "$c: ADMIN_TOKEN still in the env"; exit 1; }
@@ -527,11 +605,29 @@ for i in $(seq 1 30); do c=$(curl -s -o /dev/null -w "%{http_code}" http://127.0
 echo "GET /ask -> $c"; [ "$c" = "$want" ]
 
 say "8. the GPU governor app from deploy/truenas-gpu-governor.yaml (hwmon writable, /config ro, TZ)"
-python3 - "$ROOT/src/deploy/truenas-gpu-governor.yaml" <<'PY'
+# THE CARD BY ITS ADDRESS (2026-11-23: card numbers swap across boots): the
+# colon-free links the file binds, made to point at the B70's PCI address
+# every deploy; a card not at that address stops here, the governor as it was
+GOVERNOR_GPU_PCI=${GOVERNOR_GPU_PCI:-0000:03:00.0}
+GOVERNOR_LINKS=/mnt/ssd5/apps/louise-gpu-governor
+mkdir -p "$GOVERNOR_LINKS"
+for pair in "tile0/gt0/freq0 gpufreq" "hwmon gpuhwmon"; do
+  set -- $pair
+  src="/sys/bus/pci/devices/$GOVERNOR_GPU_PCI/$1"
+  [ -d "$src" ] || { echo "governor: $src is not there: is the B70 at $GOVERNOR_GPU_PCI? (GOVERNOR_GPU_PCI)"; exit 1; }
+  ln -sfn "$src" "$GOVERNOR_LINKS/$2"
+  echo "governor: $GOVERNOR_LINKS/$2 -> $(readlink "$GOVERNOR_LINKS/$2")"
+done
+python3 - "$ROOT/src/deploy/truenas-gpu-governor.yaml" "$ROOT/src/deploy/16f" <<'PY'
 import sys, yaml
+sys.path.insert(0, sys.argv[2])
+import flatten_mounts as fm
 from truenas_api_client import Client
 want = yaml.safe_load(open(sys.argv[1]))
 with Client() as c:
+    # its /data/state from the louise-rag app's own /data, wherever /data is (storage-tiering.md §12)
+    want, said = fm.governor_config(want, c.call("app.config", fm.APP))
+    print("\n".join(said) or "gpu-governor: /data/state already the louise-rag app's")
     have = c.call("app.config", "louise-gpu-governor")
     s = want["services"]["gpu-governor"]
     print("volumes:", have["services"]["gpu-governor"].get("volumes"), "->", s["volumes"])

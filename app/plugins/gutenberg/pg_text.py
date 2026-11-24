@@ -20,7 +20,35 @@ _END = re.compile(r"\*\*\*\s*END OF (?:THE|THIS) PROJECT GUTENBERG"
 #: a PG header field line: "Credits: Produced by ...". Anchored and
 #: bounded so a colon inside prose ("Note: see below") in the body is not
 #: mistaken for one — the key is a short run of letters and spaces only.
-_HEADER_FIELD = re.compile(r"^([A-Za-z][A-Za-z ]{1,28}):\s*(.*)$")
+#: A colon that opens a URL is no field (parser 12): "Proofreading Team at
+#: http://www.pgdp.net" is the second line of a wrapped credit.
+_HEADER_FIELD = re.compile(r"^([A-Za-z][A-Za-z ]{1,28}):(?!//)\s*(.*)$")
+
+
+def fields_of_lines(lines) -> dict[str, str]:
+    """The `Key: value` fields of a PG header given as lines: a field runs
+    on over every following non-blank line that is not a field itself, and
+    a blank line ends it (parser 12, 2026-11-18). PG wraps a long credit
+    WITHOUT indenting it ("Produced by A, B and the Online" / "Distributed
+    Proofreading Team at https://www.pgdp.net"), and the first form of this
+    took only indented lines: 26,117 records kept "...and the Online" and
+    lost the rest of their credit (München's count of 79,658)."""
+    out: dict[str, str] = {}
+    key = None
+    for line in lines:
+        text = line.strip()
+        if not text:
+            key = None
+            continue
+        got = _HEADER_FIELD.match(text)
+        if got:
+            key = got.group(1).strip()
+            out[key] = got.group(2).strip()
+        elif key:
+            # a continuation line: a long credit wraps, and half a credit
+            # is not a credit
+            out[key] = f"{out[key]} {text}".strip()
+    return {k: v for k, v in out.items() if v}
 
 _CHAPTER = re.compile(
     r"^\s{0,6}("
@@ -85,6 +113,23 @@ _PRODUCED_BY = re.compile(
 #: names separated by commas and "and", but NOT inside a collective name
 #: ("the Online Distributed Proofreading Team" is one credit, not four).
 _NAME_SPLIT = re.compile(r",\s*and\s+|,\s*|\s+and\s+", re.I)
+#: where a credit's names end and a note about HOW the edition was made
+#: begins; the credit is cut at the EARLIEST of them (parser 12: the first
+#: in this list's order won, so "…Team at http://www.pgdp.net (This file was
+#: produced from images…" was cut at " from images" and kept "(This file
+#: was produced" in a name)
+_NOTE_STARTS = (" from page images", " from images", " with additional", " using scans", " from scans",
+                " at http", " at www", " (http", " (www", " (this file", " for project gutenberg")
+#: a trailing full stop that belongs to the name: an initial ("Christine D.")
+#: or a short title (parser 12: `strip(" .")` took it off)
+_KEEPS_STOP = re.compile(r"(?:^|\s)(?:[A-Z]|Jr|Sr|St|Dr|Mr|Mrs|Ms)\.$")
+
+
+def _name(n: str) -> str:
+    n = n.strip(" ,")
+    if n.endswith(".") and not _KEEPS_STOP.search(n):
+        n = n[:-1].rstrip(" ,")
+    return n
 
 
 def producers(credit: str) -> list[str]:
@@ -109,16 +154,34 @@ def producers(credit: str) -> list[str]:
     # book 17832's marc508 is "Produced by Ebooks Libres et Gratuits;
     # this text is also available in multiple formats at …", and the
     # first draft of this credited all of that as one contributor.
-    body = _PRODUCED_BY.sub("", credit.strip())
+    # ONE LINE: marc508 keeps PG's line breaks ("…and the Online\nDistributed
+    # Proofreading Team"), and a name holding a newline is a fragment
+    body = _PRODUCED_BY.sub("", " ".join(credit.split()))
     body = body.split(";")[0]                       # a trailing remark
-    for sep in (" from page images", " from images", " with additional",
-                " using scans", " from scans", " at http", " at www"):
-        cut = body.lower().find(sep)
-        if cut != -1:
-            body = body[:cut]
-            break
-    names = [n.strip(" .") for n in _NAME_SPLIT.split(body)]
+    low = body.lower()
+    cuts = [c for c in (low.find(sep) for sep in _NOTE_STARTS) if c != -1]
+    if cuts:
+        body = body[:min(cuts)]
+    names = [_name(n) for n in _NAME_SPLIT.split(body)]
     return list(dict.fromkeys(n for n in names if len(n) > 1))
+
+
+def merged_producers(credits) -> list[str]:
+    """The producers of several credit strings (marc508 first: it is PG's
+    credit verbatim; then the text header's), once each: a name given again
+    in another case is the same name, and a name that is the start of a
+    longer one in the same list ("the Online" of "the Online Distributed
+    Proofreading Team") is a fragment of a cut credit and goes (parser 12)."""
+    got: list[str] = []
+    seen: set[str] = set()
+    for credit in credits:
+        for n in producers(credit):
+            if n.casefold() not in seen:
+                seen.add(n.casefold())
+                got.append(n)
+    folded = [n.casefold() for n in got]
+    return [n for n, f in zip(got, folded)
+            if not any(o != f and o.startswith(f + " ") for o in folded)]
 
 
 def header_fields(path: Path) -> dict[str, str]:
@@ -150,20 +213,7 @@ def header_fields(path: Path) -> dict[str, str]:
         text = raw.decode("utf-8", errors="replace")
     m = _START.search(text)
     head = text[: m.start()] if m else text[:4000]
-    out: dict[str, str] = {}
-    key = None
-    for line in head.splitlines():
-        got = _HEADER_FIELD.match(line)
-        if got:
-            key = got.group(1).strip()
-            out[key] = got.group(2).strip()
-        elif key and line.startswith((" ", "\t")) and line.strip():
-            # a continuation line: a long credit wraps, and half a credit
-            # is not a credit
-            out[key] = f"{out[key]} {line.strip()}".strip()
-        elif not line.strip():
-            key = None
-    return {k: v for k, v in out.items() if v}
+    return fields_of_lines(head.splitlines())
 
 
 def read_clean(path: Path) -> str:

@@ -600,6 +600,25 @@ def prove_copy(root: Path, pred_name: str, name: str, *, vectors: bool = True,
     return out
 
 
+def ack_not_carried(root: Path, pred_name: str, name: str, codex: Codex) -> str | None:
+    """Why `carry_ack` would NOT carry the predecessor's acknowledgement to
+    `codex`, or None when it would — said without writing: `carry
+    --rechunked --dry-run` reads its target under the ack its --yes carries
+    before the re-key, and stops where the --yes would (invariant 9)."""
+    src = Path(root) / pred_name / "state" / "ack.json"
+    want = getattr(codex.license, "terms_sha256", None)
+    if not src.is_file():
+        return f"{pred_name} holds no acknowledgement — `louise hold collection ack {name}`"
+    try:
+        body = json.loads(src.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return f"{src} does not read"
+    if not want or body.get("terms_sha256") != want:
+        return (f"it acknowledges {str(body.get('terms_sha256'))[:23]}…, the Codex pins "
+                f"{str(want)[:23]}… — `louise hold collection ack {name}`")
+    return None
+
+
 def carry_ack(root: Path, pred_name: str, name: str, codex: Codex) -> str:
     """This peer's acknowledgement of the terms, kept for the re-created
     collection when it pins the very terms text its predecessor's ack
@@ -610,16 +629,11 @@ def carry_ack(root: Path, pred_name: str, name: str, codex: Codex) -> str:
     again by the operator (`hold collection ack`), never carried."""
     src = Path(root) / pred_name / "state" / "ack.json"
     dst = Path(root) / name / "state" / "ack.json"
-    want = getattr(codex.license, "terms_sha256", None)
     if not src.is_file():
         return "none held"
-    try:
-        body = json.loads(src.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return f"not carried: {src} does not read"
-    if not want or body.get("terms_sha256") != want:
-        return (f"not carried: it acknowledges {str(body.get('terms_sha256'))[:23]}…, the Codex pins "
-                f"{str(want)[:23]}… — `louise hold collection ack {name}`")
+    why = ack_not_carried(root, pred_name, name, codex)
+    if why:
+        return f"not carried: {why}"
     if dst.is_file() and dst.read_bytes() == src.read_bytes():
         return "present"
     dst.parent.mkdir(parents=True, exist_ok=True)

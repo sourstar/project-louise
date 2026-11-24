@@ -985,7 +985,10 @@ def test_a_verdict_measured_one_text_a_request_does_not_admit_a_batch(node, endp
 # ---- the stored CPU reference (operator, 2026-10-31; near-exact-runs.md §2) ------
 
 def _cpu_reference(root, codex, *, worst_row_to=None, role="document"):
-    from app.hold import cpu_reference as cpu_ref
+    """The CPU twin's reference for the space's inputs, in the NODE's store
+    through RAGE's API (app/rage/reference.py): every collection of these
+    inputs finds it there, none keeps a copy (operator, 2026-11-22)."""
+    from app.rage import reference as rage
     from tests.hold.test_embedder import perturbed
     items = run_check.calibration_items(root, "gutenberg", codex)
     texts = emb.gate_texts(codex, role, items)
@@ -1000,9 +1003,15 @@ def _cpu_reference(root, codex, *, worst_row_to=None, role="document"):
             vectors = perturbed(vectors, indices=(17,), to=worst_row_to)
         finally:
             te.DIM = old
-    cpu_ref.write(root, "gutenberg", role, run_id="sha256:" + "c0" * 32,
-                  run={"driver": "cpu", "engine": {}, "weights": R1_OBJ["weights"]},
-                  set_id=codex.space.calibration.set, vectors=vectors)
+    rage.put(codex, role, run_id="sha256:" + "c0" * 32,
+             run={"driver": "cpu", "engine": {}, "weights": R1_OBJ["weights"]}, vectors=vectors)
+
+
+def drop_cpu_reference(codex, role="document"):
+    """The node's store without the space's reference for the role."""
+    import shutil
+    from app.rage import reference as rage
+    shutil.rmtree(rage.store(codex, role, R1_OBJ["weights"]))
 
 
 def test_no_card_run_is_gated_without_a_stored_cpu_reference(node, endpoint):
@@ -1011,17 +1020,15 @@ def test_no_card_run_is_gated_without_a_stored_cpu_reference(node, endpoint):
     at all (a rule in the way, named with the command that makes one), and
     the card is not asked the set; until 2026-11-12 such a run passed without
     that half of the check (new-collection.md, "What the review found")."""
-    import shutil
-    from app.hold import cpu_reference as cpu_ref
     root, collection, codex = node
     for role in ("document", "query"):      # the space's query side is gated by the same look
-        shutil.rmtree(cpu_ref.directory(root, "gutenberg", role))
+        drop_cpu_reference(codex, role)
     con = db.connect(collection)
     before = endpoint.texts
     assert backend_gate.embed_allowed(con, collection) is False
     assert endpoint.texts - before < 16, "the set was never sent to the card (probes only)"
     assert statements_kept(root) == [], "no statement: nothing was measured"
-    with pytest.raises(emb.GateError, match="no stored CPU reference.*hold embedder cpu-reference gutenberg --model"):
+    with pytest.raises(emb.GateError, match="holds no CPU reference.*hold embedder cpu-reference gutenberg`"):
         run_check.validate(root, "gutenberg", codex, collections_mod.recipe_for(collection))
     _cpu_reference(root, codex)
     run_check.reset_cache()
@@ -1051,10 +1058,8 @@ def test_the_gate_is_published_while_it_runs_and_its_duration_kept_after(node, e
 
 def test_a_cpu_run_is_gated_without_a_reference_it_would_be_its_own(node, endpoint):
     """A run ON the CPU is the reference's own kind: nothing to hold it to."""
-    import shutil
-    from app.hold import cpu_reference as cpu_ref
     root, collection, codex = node
-    shutil.rmtree(cpu_ref.directory(root, "gutenberg", "document"))
+    drop_cpu_reference(codex)
     cpu_obj = {**R1_OBJ, "driver": "cpu"}
     cpu_run = digest(canonical_json(cpu_obj))
     endpoint.known[cpu_run] = cpu_obj

@@ -513,6 +513,19 @@ def synthetic_for(lang: str | None, voices: dict[str, str], profiles: list[dict]
     return None
 
 
+#: what a recorded voice is told to speak when no language is known: OmniVoice's
+#: auto ("none": the engine reads the language from the text), never the
+#: profile's own tag. LocalAI v4.11.0 (core/http/endpoints/localai/tts.go) uses a
+#: request's `language` and, where it has none, the profile's, which is the
+#: language the RECORDING is in ("it-IT"); OmniVoice conditions the whole
+#: synthesis on that one tag, and an English sentence came out with a thick
+#: Italian accent (operator, 2026-11-23: "change it accordingly to the language
+#: they have to speak")
+AUTO = "none"
+#: how much of the answer the page sends as `context` is read for its language
+CONTEXT_CHARS = 2000
+
+
 #: what a reader who is not an admin is told when no synthetic voice is held
 NO_SYNTHETIC = (b'{"error": {"message": "no synthetic voice is set on this node, and a recorded '
                 b'voice is read to an admin only"}}')
@@ -536,10 +549,15 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     if not text:
         return 400, b'{"error": {"message": "no text to speak once its citations are removed"}}', \
             "application/json", []
-    out = {**body, "input": text}
+    # `context`: the answer so far (app/static/voice.js), Louise's alone and
+    # never relayed. A sentence too short to tell its language is spoken in
+    # the language of the answer it is part of
+    context = str(body.get("context") or "")[:CONTEXT_CHARS]
+    out = {k: v for k, v in body.items() if k != "context"}
+    out["input"] = text
     if model:
         out["model"] = model
-    lang = language(text)
+    lang = language(text) or (language(context) if context else None)
     held = profiles(url)
     # the reader's voice — the request's (the Ask page's choice, a client's
     # own), else the one the asker's account keeps (app/users.py) — unless it
@@ -558,6 +576,8 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
             return 409, NO_SYNTHETIC, "application/json", []
     if voice:
         out["voice"] = voice
+        if str(voice).startswith(PROFILE_PREFIX) and not out.get("language"):
+            out["language"] = AUTO
     else:
         out.pop("voice", None)
     # THE NODE'S DIAL (module docstring): its steps where the request may not, or does not, name its own

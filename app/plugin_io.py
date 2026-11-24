@@ -413,6 +413,22 @@ def work_span(plugin, row) -> tuple[str, int] | None:
     return None
 
 
+def answers_parse_size(plugin) -> bool:
+    """Whether the plugin says what a row's parse reads (`parse_size`)."""
+    return callable(getattr(plugin, "parse_size", None))
+
+
+def parse_size(plugin, row) -> int | None:
+    """The bytes a parse of `row` reads, where they differ from its `size`
+    (the parse pool's memory estimate, app/parallel.py `peak_of`): a unit
+    holding a package its parse opens counts the package's members unpacked
+    (eurlex's Formex zips, P3 of the 2026-11-21 review). None: the row's
+    `size` is what its parse reads. Never the meaning of `size`, which is
+    discovery's change test."""
+    fn = getattr(plugin, "parse_size", None)
+    return fn(row) if callable(fn) else None
+
+
 class FiguresUnsupported(RuntimeError):
     """A plugin yielded figures and cannot hand over their bytes.
 

@@ -150,10 +150,14 @@ def notice(tree: dict[str, Any], lang3: str, celex: str | None = None) -> Notice
     subjects = [concept_id(u) for prop in sorted(work) if prop.startswith(CDM) and "is_about" in prop
                 for u in _ids(work, prop)]
     items: dict[str, list[Item]] = {}
+    stamps = [v.get("@value", "") for v in work.get(CMR_MODIFIED) or ()]
     if expr is not None:
         eg = expr[0]
         manifs = {g: p for g, p in gp.items()
                   if any(find(e) == eg for e in _ids(p, CDM + "manifestation_manifests_expression"))}
+        # the unit's own modification: its expression's and manifestations' too
+        for props in [expr[1], *manifs.values()]:
+            stamps += [v.get("@value", "") for v in props.get(CMR_MODIFIED) or ()]
         for mg, mp in sorted(manifs.items()):
             form = _first(mp, "manifestation_type") or ""
             listed = items.setdefault(form, [])
@@ -183,7 +187,8 @@ def notice(tree: dict[str, Any], lang3: str, celex: str | None = None) -> Notice
         date_publication=_first(work, "date_publication"),
         subjects=list(dict.fromkeys(subjects)),
         creators=list(dict.fromkeys(concept_id(u) for u in _ids(work, CDM + "work_created_by_agent"))),
-        relations=relations, items={f: v for f, v in items.items() if f}, whole=None)
+        relations=relations, items={f: v for f, v in items.items() if f}, whole=None,
+        modified=_latest([v for v in stamps if v]))
 
 
 def work_day(tree: dict[str, Any], celex: str | None = None) -> str | None:

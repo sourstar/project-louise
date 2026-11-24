@@ -172,7 +172,9 @@ def test_the_consolidation_is_another_version_of_the_same_work(corpus):
     # the amendment marks: which act changed which text
     mods = x["modifications"]
     assert {m["ACTIVE.DOC"] for m in mods if m["pi"] == "CLG.MDFO"} == {"32017R2321", "32018R0825"}
-    assert len(mods) == 70 and mods[0]["section"].startswith("Article 2")
+    # 72: every mark the files hold (70 until 2026-11-21: the two marking Annex
+    # Ia's insertion stood directly under a TITLE and were lost)
+    assert len(mods) == 72 and mods[0]["section"].startswith("Article 2")
     assert doc.issues == []
 
 
@@ -213,8 +215,11 @@ def test_the_body_is_picked_by_name_never_by_order():
         formex.parse(files)
     files = {p.name: p.read_bytes() for p in (FORMEX / ACT).iterdir()}
     del files["L_2016176EN.01005101.xml"]
-    with pytest.raises(formex.FormexError, match="names the annex"):
-        formex.parse(files)
+    # parser 5: a file the wrapper names and the manifestation does not hold
+    # is said (`missing`, the record's `item-not-held`), never the record refused
+    act = formex.parse(files)
+    assert act.missing == ["L_2016176EN.01005101.xml"]
+    assert all(a.file != "L_2016176EN.01005101.xml" for a in act.annexes) and act.articles
 
 
 def test_formex_6_names_and_an_item_no_annex_is_kept():
@@ -402,11 +407,19 @@ def test_an_end_before_the_start_is_an_issue(corpus):
     assert list(SOURCE.closures(doc)) == [], "an end before the start is contradicted by the start"
 
 
-def test_an_original_starts_at_its_entry_into_force_never_before_publication():
+def test_an_original_starts_at_its_entry_into_force_never_before_its_adoption():
+    """D1 (2026-11-21, choice B): a decision takes effect on notification
+    (Art. 297(2) TFEU), before its OJ publication; no act before it is
+    adopted."""
     assert src.original_start(["2016-07-20"], "2016-06-30") == "2016-07-20"
-    assert src.original_start(["2016-06-01", "2016-07-20"], "2016-06-30") == "2016-07-20"
-    assert src.original_start(["2016-06-01"], "2016-06-30") == "2016-06-30"
+    assert src.original_start(["2016-06-01", "2016-07-20"], "2016-06-30") == "2016-06-01"
+    assert src.original_start(["2016-06-01"], "2016-06-30") == "2016-06-01", "notified before published"
     assert src.original_start([], "2016-06-30") == "2016-06-30"
+    assert src.original_start(["2016-06-01"], "2016-06-30", "2016-05-20") == "2016-06-01"
+    assert src.original_start(["2016-05-01"], "2016-06-30", "2016-05-20") == "2016-06-30", \
+        "before its adoption: starts nothing, the publication does"
+    assert src.original_start(["2016-05-01", "2016-06-10"], "2016-06-30", "2016-05-20") == "2016-06-10"
+    assert src.original_start(["2016-05-01"], None, "2016-05-20") is None
 
 
 # ---- the platform's view ---------------------------------------------------------------------

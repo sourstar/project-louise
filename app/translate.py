@@ -40,7 +40,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
-from . import config, model_load
+from . import config, httpc, model_load
 from .rage import dispatch
 from .rage import keep as rage_keep
 
@@ -96,7 +96,7 @@ def _completion(request: dict, timeout: float, headers: dict[str, str] | None = 
         body["model"] = config.TRANSLATE_MODEL
     r = httpx.post(f"{config.TRANSLATE_URL}/v1/completions", json=body,
                    timeout=timeout, headers=headers or {})
-    r.raise_for_status()
+    httpc.raise_for_status(r)
     return json.loads(r.json()["choices"][0]["text"])
 
 
@@ -510,13 +510,13 @@ def _t5_completion(code: str, segment: str, timeout: float, headers: dict[str, s
     url = f"{config.TRANSLATE_URL}/v1/completions"
     if warm:
         r = httpx.post(url, json={**body, **rage_keep.warm_body()}, timeout=timeout, headers=headers or {})
-        r.raise_for_status()
+        httpc.raise_for_status(r)
     else:
         # named here: a segment runs on a pool thread, which carries no level
         with rage_keep.request(config.TRANSLATE_URL, config.TRANSLATE_MODEL or None, time.monotonic(),
                                level="translate", plugin="") as kept:
             r = httpx.post(url, json={**body, **kept.body}, timeout=timeout, headers=headers or {})
-            r.raise_for_status()
+            httpc.raise_for_status(r)
     return clean_up(r.json()["choices"][0]["text"])
 
 
@@ -671,7 +671,7 @@ def translate_reading(model: str, text: str, src: str, to: str) -> str | None:
     def call(timeout: float) -> dict:
         r = httpx.post(f"{config.TRANSLATE_URL}{path}", json=body, timeout=timeout,
                        headers=dispatch.level_headers())
-        r.raise_for_status()
+        httpc.raise_for_status(r)
         return r.json()
     try:
         model_load.ensure_loaded(
@@ -690,4 +690,4 @@ def _reading_warm(model: str, bound_s: float) -> None:
     path, body = _reading_request(model, "OK", "en", "it") or ("/v1/completions", {"model": model, "prompt": "OK"})
     r = httpx.post(f"{config.TRANSLATE_URL}{path}", json={**body, "max_tokens": 4},
                    timeout=bound_s, headers={dispatch.LEVEL_HEADER: "translate"})
-    r.raise_for_status()
+    httpc.raise_for_status(r)

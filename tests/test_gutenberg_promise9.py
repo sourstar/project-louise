@@ -382,3 +382,81 @@ def test_the_date_the_book_entered_pg_is_kept(tmp_path):
                                            locator=str(tmp_path))))
     assert doc.extra["issued"] == "1993-01-01"
     assert doc.date is None, "and it is NOT passed off as the work's date"
+
+
+# ---- parser 12 (2026-11-18): a wrapped credit, read whole and split right --
+# München's node count: 45,926 of 79,658 records held a producer fragment.
+# The five records below are the node's own samples (marc508 verbatim).
+
+_CREDITS_12 = {
+    16543: (("Produced by Michael Ciesielski, Christine D and the Online\n"
+             "Distributed Proofreading Team at https://www.pgdp.net"),
+            ["Michael Ciesielski", "Christine D", "the Online Distributed Proofreading Team"]),
+    19729: (("Produced by Christine D. and the Online Distributed\n"
+             "Proofreading Team at http://www.pgdp.net"),
+            ["Christine D.", "the Online Distributed Proofreading Team"]),
+    61525: (("Produced by Jeroen Hellingman and the Online Distributed\n"
+             "Proofreading Team at http://www.pgdp.net/ for Project\n"
+             "Gutenberg (This file was produced from images generously\n"
+             "made available by The Internet Archive)"),
+            ["Jeroen Hellingman", "the Online Distributed Proofreading Team"]),
+    30738: (("Produced by Carlo Traverso, Barbara Magni and the Online\n"
+             "Distributed Proofreading Team at http://www.pgdp.net (This\n"
+             "file was produced from images generously made available\n"
+             "by the Bibliothèque nationale de France (BnF/Gallica) at\n"
+             "http://gallica.bnf.fr)"),
+            ["Carlo Traverso", "Barbara Magni", "the Online Distributed Proofreading Team"]),
+    42881: (("Produced by Carlo Traverso, Claudio Paganelli, Barbara Magni and the "
+             "Online Distributed Proofreading Team (http://www.pgdp.net)"),
+            ["Carlo Traverso", "Claudio Paganelli", "Barbara Magni",
+             "the Online Distributed Proofreading Team"]),
+}
+
+
+def test_parser_12_a_wrapped_credit_names_whole_people():
+    """No name holds a newline, a URL or a note; an initial keeps its stop."""
+    from app.plugins.gutenberg import pg_text
+    for book, (marc508, want) in _CREDITS_12.items():
+        got = pg_text.producers(marc508)
+        assert got == want, (book, got)
+        assert not any("\n" in n or "http" in n or "(This" in n for n in got), book
+
+
+def test_parser_12_the_header_and_marc508_give_one_list_without_fragments():
+    """The text header used to be cut at its first line break ("…and the
+    Online"), and its split was added beside marc508's: the fragment and
+    the whole name both became producers."""
+    from app.plugins.gutenberg import pg_text
+    marc508, want = _CREDITS_12[16543]
+    cut_header = "Produced by Michael Ciesielski, Christine D and the Online"
+    assert pg_text.merged_producers([marc508, cut_header]) == want
+    assert pg_text.merged_producers(["Produced by The Online Distributed Proofreading Team",
+                                     "Produced by the Online Distributed Proofreading Team"]) == [
+        "The Online Distributed Proofreading Team"], "one name in two cases is one producer"
+
+
+def test_parser_12_a_header_field_runs_on_over_unindented_lines(tmp_path):
+    from app.plugins.gutenberg import pg_text
+    p = tmp_path / "pg16543.txt"
+    p.write_text("Title: A Book\n\nAuthor: Someone\n\n"
+                 "Credits: Produced by Michael Ciesielski, Christine D and the Online\n"
+                 "Distributed Proofreading Team at https://www.pgdp.net\n\n"
+                 "Release Date: May 1, 2005 [EBook #16543]\n\n"
+                 "*** START OF THE PROJECT GUTENBERG EBOOK A BOOK ***\nbody\n", encoding="utf-8")
+    head = pg_text.header_fields(p)
+    assert head["Credits"] == ("Produced by Michael Ciesielski, Christine D and the Online "
+                               "Distributed Proofreading Team at https://www.pgdp.net")
+    assert set(head) == {"Title", "Author", "Credits", "Release Date"}, \
+        "a URL's colon on a continuation line starts no field"
+
+
+def test_parser_12_an_epub_header_keeps_a_wrapped_credit(tmp_path):
+    from app.plugins.gutenberg import pg_epub
+    from tests.test_gutenberg_parser7 import build, page
+    p = build(tmp_path / "b.epub", [("a.xhtml", page(
+        "<p>Title: A Book</p><p>Credits: Produced by Carlo Traverso and the Online<br/>"
+        "Distributed Proofreading Team at http://www.pgdp.net</p>"
+        "<p>*** START OF THE PROJECT GUTENBERG EBOOK A BOOK ***</p><p>body</p>"))])
+    head = pg_epub.header_fields(p)
+    assert head["Credits"] == ("Produced by Carlo Traverso and the Online Distributed "
+                               "Proofreading Team at http://www.pgdp.net"), head

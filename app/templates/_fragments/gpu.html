@@ -85,7 +85,7 @@
      off an overcommitted card into host RAM, without an error to anyone
      (2026-09-20: two models died so) #}
   {% if d.pushed_off_processes %}
-  <div><span class="badge err" title="More of this model is in host RAM than on the card: the card was overcommitted and the driver moved its buffers out. It still answers, slower. Reloading the model brings it back once the card has room.">pushed off the card: {{ d.pushed_off_processes|map(attribute='label')|join(', ') }}</span></div>
+  <div><span class="badge err" title="More of this model is in host RAM than on the card: the card was overcommitted and the driver moved its buffers out. It still answers, slower. Reloading the model brings it back once the card has room.">pushed off the card: {% for p in d.pushed_off_processes %}{{ process_name(p) }}{% if not loop.last %}, {% endif %}{% endfor %}</span></div>
   {% endif %}
   {% if d.vram_total and not d.processes %}
   <div class="note">no model holds memory on this card</div>

@@ -278,3 +278,47 @@ def web_source_refusal(url: str) -> str | None:
     return ("accept the web-sources disclaimer in Louise first: "
             "`louise hold collection ack --web-sources` (04 §4.4)")
 
+
+
+#: a REFERENCE SOURCE's terms and acknowledgement (06 §6.5: "a yellow or red
+#: reference source is not synced before its acknowledgement is recorded, by
+#: the resolution of §4.4 and nothing re-implemented beside it"): the terms
+#: text byte-exact as `TERMS.txt` in the source's directory, the record
+#: `ack.json` beside it (`{"at": ..., "terms_sha256": "sha256:<hex>"}`). One
+#: acknowledgement is of a text: an ack recorded for these terms anywhere on
+#: this peer (`_peer_acknowledged`) counts, as it does for a collection.
+REF_TERMS, REF_ACK = "TERMS.txt", "ack.json"
+
+
+def ref_held_back(base: Path, source_id: str) -> str | None:
+    """Why a yellow or red reference source in `base` is not synced, or None."""
+    import json
+    digest = terms_sha256(Path(base) / REF_TERMS)
+    if digest is None:
+        return (f"{base}: no {REF_TERMS} — {source_id}'s terms, byte-exact, are owed before "
+                "its rows are used (invariant 9)")
+    try:
+        ack = json.loads((Path(base) / REF_ACK).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        ack = {}
+    recorded = str(ack.get("terms_sha256") or "").replace("sha256:", "")
+    if recorded == digest:
+        return None
+    try:
+        if digest in _peer_acknowledged():
+            return None
+    except Exception:   # noqa: BLE001 — no peer record readable: this directory's own record decides
+        pass
+    return (f"{base}: {source_id}'s terms in {REF_TERMS} are not acknowledged "
+            f"(louise dev refs-sync --ack {source_id}), so it is not synced (invariant 9)")
+
+
+def make_ref_ack(base: Path, now: str | None = None) -> dict:
+    """Record the acknowledgement of the terms in `base` (`ref_held_back`)."""
+    import json
+    digest = terms_sha256(Path(base) / REF_TERMS)
+    if digest is None:
+        raise FileNotFoundError(f"{Path(base) / REF_TERMS}: no terms text to acknowledge")
+    ack = {"at": now or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "terms_sha256": f"sha256:{digest}"}
+    (Path(base) / REF_ACK).write_text(json.dumps(ack, sort_keys=True) + "\n", encoding="utf-8")
+    return ack

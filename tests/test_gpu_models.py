@@ -175,3 +175,26 @@ def test_a_model_whose_pid_is_its_wrappers_is_placed_by_its_child():
     assert [r.model for r in cards["b70"]["rows"]] == ["vega-nemotron-3-embed-1b"]
     assert [r.model for r in cards["igpu"]["rows"]] == ["stt-igpu"], "its own pid first"
     assert cards["unplaced"] == []
+
+
+
+# ---- a card's process named by LocalAI's own list (the node, 2026-11-23:
+# "pushed off the card: ld.so": a LocalAI backend's command line names no model) ----
+
+def test_a_process_is_named_by_the_model_whose_backend_pid_it_is():
+    from app import gpu
+    rows = [gm.ModelRow("vega-qwen3", "b", GIB, (), pid=42), gm.ModelRow("vega-medcpt", "b", GIB, (), pid=7)]
+    own = gpu.GpuProcess(9, "llama-cpp-fallback", "llama-cpp-fallback", "localai", 1, 1, ns_pid=42)
+    assert gm.process_name(own, rows) == "vega-qwen3"
+    child = gpu.GpuProcess(10, "llama-cpp-fallback", "llama-cpp-fallback", "localai", 1, 1,
+                           ns_pid=99, ns_ancestors=(98, 7))
+    assert gm.process_name(child, rows) == "vega-medcpt", "a wrapper's model, by the nearest ancestor"
+
+
+def test_a_process_no_model_names_says_its_program_and_container():
+    from app import gpu
+    p = gpu.GpuProcess(9, "llama-cpp-fallback", "llama-cpp-fallback", "localai", 1, 1, ns_pid=5)
+    assert gm.process_name(p, []) == "llama-cpp-fallback in localai"
+    assert gm.process_name(gpu.GpuProcess(9, "ollama", "ollama", "host", 1, 1), None) == "ollama"
+    named = gpu.GpuProcess(9, "MedCPT-Article-Encoder-f16", "llama-server", "6bedda131c5e", 1, 1)
+    assert gm.process_name(named, []) == "MedCPT-Article-Encoder-f16", "a model its command line named"

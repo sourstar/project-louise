@@ -342,3 +342,19 @@ def test_records_vs_origin_compares_the_codexs_shape_on_both_sides(plates_shard)
     assert out.result == chk.PASS, out.why
     assert out.detail["failed"] == []
     assert out.detail["records"] >= 2
+
+
+def test_the_cap_admits_the_most_illustrated_real_book_and_the_document_says_the_same():
+    """08 §8.7, amended 2026-11-18 and 2026-11-19: the cap refuses no real
+    record. Counted over the whole gutenberg corpus at parser 12, the most
+    illustrated is gutenberg:61985 ("Harrods for Everything", 17,167
+    figures), which the build refused at 16,384; 47273's 4,464 was refused
+    at 4,096. 65,536 now, and docs/08 states the number the code applies."""
+    from pathlib import Path
+    from app.hold import figures as fig
+    from app.pack import build
+    for uid, n in (("gutenberg:47273", 4464), ("gutenberg:61985", 17167)):
+        build._refuse_too_many_figures({"uid": uid, "figures": [{}] * n})
+    assert fig.MAX_PER_RECORD == 65_536
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "08-adversarial.md").read_text(encoding="utf-8")
+    assert f"at most {fig.MAX_PER_RECORD:,} figures per record" in doc

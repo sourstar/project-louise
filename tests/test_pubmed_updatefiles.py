@@ -419,7 +419,8 @@ def test_a_new_pmid_appears_a_revision_reopens_and_a_delete_is_tombstoned(tmp_pa
         "updatefiles/pubmed26n0003.xml.gz#0", "09 §9.5's own form of an update file's origin"
     # the DeleteCitation: out of every index, tombstoned, its marks reset
     gone = rows["pubmed:31000002"]
-    assert withdrawn == ["pubmed:31000002"]
+    # before the tombstone commits and once more after it (discovery.py, defect 7)
+    assert withdrawn == ["pubmed:31000002"] * 2
     assert gone["error"] == DELETE_MARKER and (gone["rdf_done"], gone["fts_done"], gone["embed_done"]) == (0, 0, 0)
     assert split_locator(gone["path"])[0].name == "pubmed26n0001.xml.gz", \
         "the row keeps the unit that last supplied the record"

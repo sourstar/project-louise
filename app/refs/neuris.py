@@ -137,7 +137,8 @@ class NeurisRefSource:
     namespaces = NAMESPACES
     eli_jurisdiction = ELI_JURISDICTION
     #: a pinned provision's note, in German (app/ask/articles.py)
-    article_notes = ArticleNotes("geltende Fassung", "Fassung vom {day}", "letzte geltende Fassung")
+    article_notes = ArticleNotes("geltende Fassung", "Fassung vom {day}", "letzte geltende Fassung",
+                                 "Fassung bis {day}; seither geändert, die geänderte Fassung liegt nicht vor")
 
     def article_repealed(self, text: str) -> bool:
         return article_repealed(text)

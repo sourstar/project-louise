@@ -135,6 +135,11 @@ The cut differs, so the layer's version and the space_id move:
 
 The recipes state version 3.
 
+**Version 4 (2026-11-21), built and not shipped in any layer:** sentences
+and points in the 24 EU languages (P8 of the EUR-Lex review). It is a
+change of the shared space. What it changes, what it measures and what
+moving the space takes are in [legal-chunker-v4.md](legal-chunker-v4.md).
+
 **Open: the Codice civile's hierarchy.** Its 3,280 articles arrive as
 annexes named "CODICE CIVILE-art. N", with no partition. So their header
 names the act (the record's title) and the article, without Libro or Titolo:
@@ -471,7 +476,9 @@ chunks of up to 40,189 tokens, and the four-language run was OOM-killed twenty t
 - **French "Article premier".** French acts head article 1 "Article premier", which `rendition._ARTICLE`
   does not match. The first article is folded into the preamble, which explains most of French's
   shortfall. This is a parser defect in the eurlex plugin (the legal session's): fix it, with a parser
-  version, before French records are built.
+  version, before French records are built. FIXED in eurlex parser 5 (2026-11-18): "Article premier",
+  "Article 1er" and a single article's "unique / unico / único" head an article; LEMUR's French arm
+  re-runs on it.
 - **81 acts are too few** for a randomization test per language. `encoder_bakeoff fetch --suite
   lemur-<code>-full` takes every split (train + validation + test, about 6× the acts). Nothing is
   trained here, so every split is held-out data.

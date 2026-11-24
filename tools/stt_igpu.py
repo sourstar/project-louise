@@ -129,21 +129,41 @@ def pinned_cpu(model: dict[str, Any]) -> dict[str, Any]:
     return {**model, "backend": CPU_BACKEND}
 
 
-def igpu_twin(model: dict[str, Any], backend: str, env: dict[str, str]) -> dict[str, Any]:
-    """The same weights on a GPU build, under `<name>-igpu`, its device
-    pinned in `env`. Raises SystemExit for an unpinned device."""
+def is_parakeet(backend: str) -> bool:
+    """Any parakeet build: the alias, the CPU build, a GPU build, or a build
+    named for another stack that runs on the CPU (the node's
+    `intel-sycl-f16-parakeet-cpp`, stt-on-igpu.md §1)."""
+    return backend == ALIAS or backend.endswith("-" + ALIAS)
+
+
+def igpu_twin(model: dict[str, Any], backend: str, env: dict[str, str],
+              suffix: str = SUFFIX) -> dict[str, Any]:
+    """The same weights on a GPU build, under `<name><suffix>`, its device
+    pinned in `env`. The source may itself be a twin (2026-11-23: the B70's
+    from the iGPU's): its own card suffix is dropped from the name, and its
+    device pins are dropped where `env` names the new card's, so the twin is
+    never pinned to both. Raises SystemExit for an unpinned device."""
     if backend not in GPU_BACKENDS:
         raise SystemExit(f"--backend must be one of {', '.join(GPU_BACKENDS)}")
-    merged = {str(k): str(v) for k, v in (model.get("env") or {}).items()} | env
+    source = str(model.get("backend") or "")
+    if not is_parakeet(source):
+        raise SystemExit(f"{model['name']}: backend {source!r} is not a parakeet build; nothing written")
+    own = {str(k): str(v) for k, v in (model.get("env") or {}).items()}
+    if any(k in DEVICE_PINS for k in env):
+        own = {k: v for k, v in own.items() if k not in DEVICE_PINS}
+    merged = own | env
     if backend.startswith("rocm-"):
         merged.setdefault(*ROCM_OVERRIDE)
     if not any(merged.get(k) for k in DEVICE_PINS):
-        raise SystemExit("the device is not pinned: the Vulkan bundle also carries ANV (the B70) and "
-                         "lavapipe (the CPU), and either can be picked silently. Name the Radeon with "
-                         "--env, one of: " + ", ".join(DEVICE_PINS))
+        raise SystemExit("the device is not pinned: the Vulkan bundle carries RADV (the Radeon), ANV "
+                         "(the B70) and lavapipe (the CPU), and any can be picked silently. Name the card "
+                         "with --env, one of: " + ", ".join(DEVICE_PINS))
     name = str(model["name"])
-    return {**model, "name": name if name.endswith(SUFFIX) else name + SUFFIX, "backend": backend,
-            "env": dict(sorted(merged.items()))}
+    for known in (SUFFIX, suffix):
+        if known and name.endswith(known):
+            name = name[:-len(known)]
+            break
+    return {**model, "name": name + suffix, "backend": backend, "env": dict(sorted(merged.items()))}
 
 
 def _write_model(path: Path, model: dict[str, Any], comment: str) -> None:
@@ -153,18 +173,29 @@ def _write_model(path: Path, model: dict[str, Any], comment: str) -> None:
     os.replace(tmp, path)
 
 
-def write_yamls(source: dict[str, Any], out: Path, backend: str, env: dict[str, str]) -> list[Path]:
-    cpu, gpu = pinned_cpu(source), igpu_twin(source, backend, env)
+def write_yamls(source: dict[str, Any], out: Path, backend: str, env: dict[str, str],
+                suffix: str = SUFFIX) -> list[Path]:
+    """The twin, and, for a source on the alias or the CPU build, that source
+    pinned to the concrete CPU build (§4 step 3.1). A source on any other
+    parakeet build (a GPU twin, the node's SYCL-named CPU build) is left as
+    it is, and only the twin is written."""
+    gpu = igpu_twin(source, backend, env, suffix)
+    cpu = pinned_cpu(source) if str(source.get("backend") or "") in (ALIAS, CPU_BACKEND) else None
     out.mkdir(parents=True, exist_ok=True)
-    a, b = out / f"{cpu['name']}.yaml", out / f"{gpu['name']}.yaml"
-    _write_model(a, cpu, f"{cpu['name']}: the live STT, its backend pinned to the concrete CPU build\n"
-                         f"({CPU_BACKEND}, not the alias {ALIAS}): docs/notes/stt-on-igpu.md §4 step 3.1.\n"
-                         "JSON, which is YAML. Written by tools/stt_igpu.py yaml.")
-    _write_model(b, gpu, f"{gpu['name']}: {cpu['name']}'s weights on the processor's Radeon ({backend}),\n"
+    written = []
+    if cpu is not None:
+        a = out / f"{cpu['name']}.yaml"
+        _write_model(a, cpu, f"{cpu['name']}: the live STT, its backend pinned to the concrete CPU build\n"
+                             f"({CPU_BACKEND}, not the alias {ALIAS}): docs/notes/stt-on-igpu.md §4 step 3.1.\n"
+                             "JSON, which is YAML. Written by tools/stt_igpu.py yaml.")
+        written.append(a)
+    back = cpu["name"] if cpu is not None else str(source["name"])
+    b = out / f"{gpu['name']}.yaml"
+    _write_model(b, gpu, f"{gpu['name']}: {source['name']}'s weights on {backend},\n"
                          "the device pinned in env: docs/notes/stt-on-igpu.md §4 step 3.4.\n"
-                         f"Back to the CPU: louise node speech set --stt {cpu['name']}\n"
+                         f"Back: louise node speech set --stt {back}\n"
                          "JSON, which is YAML. Written by tools/stt_igpu.py yaml.")
-    return [a, b]
+    return written + [b]
 
 
 # ---------------------------------------------------------------- the readings
@@ -342,23 +373,41 @@ def words(text: str) -> list[str]:
     return text.split()
 
 
+def _clip(row: dict[str, Any]) -> str:
+    """A result row's clip: `clip`, or `file` in the older result files (the
+    iGPU's and the CPU's of 2026-11-11: on 2026-11-23 `diff` stopped on them
+    with KeyError 'clip')."""
+    for k in ("clip", "file"):
+        if row.get(k):
+            return str(row[k])
+    raise SystemExit(f"a result row names no clip (neither `clip` nor `file`): its keys are {sorted(row)}")
+
+
+def _text(row: dict[str, Any]) -> str:
+    for k in ("text", "transcript"):
+        if k in row:
+            return str(row[k] or "")
+    raise SystemExit(f"{_clip(row)}: a result row with no transcript (`text`): its keys are {sorted(row)}")
+
+
 def compare(ref: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
     """Per clip in both: equal transcripts or the word-level differences,
     and the two median times."""
-    theirs = {c["clip"]: c for c in other.get("clips", ())}
+    theirs = {_clip(c): c for c in other.get("clips", ())}
     rows, same = [], 0
     for c in ref.get("clips", ()):
-        o = theirs.get(c["clip"])
+        o = theirs.get(_clip(c))
         if o is None:
             continue
-        a, b = words(c["text"]), words(o["text"])
+        a, b = words(_text(c)), words(_text(o))
         diff = [{"op": op, "ref": " ".join(a[i1:i2]), "other": " ".join(b[j1:j2])}
                 for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes()
                 if op != "equal"]
         same += not diff
-        rows.append({"clip": c["clip"], "equal": not diff, "differences": diff,
-                     "ref_s": c["warm_median_s"], "other_s": o["warm_median_s"],
-                     "speed": round(c["warm_median_s"] / o["warm_median_s"], 2) if o["warm_median_s"] else None})
+        ref_s, other_s = c.get("warm_median_s"), o.get("warm_median_s")
+        rows.append({"clip": _clip(c), "equal": not diff, "differences": diff,
+                     "ref_s": ref_s, "other_s": other_s,
+                     "speed": round(ref_s / other_s, 2) if ref_s and other_s else None})
     return {"label": LABEL, "ref": ref.get("model"), "other": other.get("model"), "clips": rows,
             "equal": same, "compared": len(rows),
             "median_speed": (round(statistics.median(r["speed"] for r in rows if r["speed"]), 2)
@@ -380,12 +429,13 @@ def _env(pairs: list[str]) -> dict[str, str]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    y = sub.add_parser("yaml", help="the live STT pinned to the CPU build, and its -igpu twin")
-    y.add_argument("model", help="the live STT model's YAML ('-': standard input)")
+    y = sub.add_parser("yaml", help="the STT's twin on a GPU build (and a CPU source pinned to the CPU build)")
+    y.add_argument("model", help="the source model's YAML: the live STT or a twin ('-': standard input)")
     y.add_argument("--out", required=True)
     y.add_argument("--backend", default=GPU_BACKENDS[0], choices=GPU_BACKENDS)
     y.add_argument("--env", action="append", default=[], metavar="NAME=VALUE",
-                   help="the twin's env; one must pin the Radeon (" + ", ".join(DEVICE_PINS) + ")")
+                   help="the twin's env; one must pin the card (" + ", ".join(DEVICE_PINS) + ")")
+    y.add_argument("--suffix", default=SUFFIX, help=f"the twin's name suffix (default {SUFFIX}; -b70 for the B70)")
     b = sub.add_parser("bench", help="time the clips through one model")
     b.add_argument("clips")
     b.add_argument("--server", required=True, help="the node's LocalAI, e.g. http://127.0.0.1:30286")
@@ -402,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.cmd == "yaml":
         text = sys.stdin.read() if a.model == "-" else Path(a.model).read_text(encoding="utf-8")
-        for p in write_yamls(load_model(text), Path(a.out), a.backend, _env(a.env)):
+        for p in write_yamls(load_model(text), Path(a.out), a.backend, _env(a.env), a.suffix):
             print(p)
         return 0
     if a.cmd == "bench":

@@ -94,6 +94,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -108,8 +109,13 @@ NODE_MODELS = Path("/mnt/ssd5/apps/localai/models")
 NODE_CONTAINER_BACKENDS = "/backends"
 PROC = Path("/proc")
 #: The worker's `<LOUISE_ROOT>/collections` (LOUISE_ROOT unset, so DATA_DIR,
-#: `/data`: app/config.py louise_root) as the host sees it (deploy/truenas-app.yaml).
-NODE_COLLECTIONS = Path("/mnt/ssd4/apps/louise-rag/data/collections")
+#: `/data`: app/config.py louise_root) as the host sees it: `<the source of the
+#: worker container's /data bind>/collections`, asked of docker each run
+#: (`worker_collections`), never a path written here — /data moved off ssd4
+#: (storage-tiering.md §12, 2026-11-23), and a stale copy read would name too
+#: few engines and retire one in use.
+WORKER = "ix-louise-rag-worker-1"
+MOUNT_SOURCE = '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}'
 #: A collection's `shard` links to `/shards/<name>`, the worker's SHARDS_ROOT,
 #: which is this directory on the host (deploy/16f/flatten_mounts.py).
 NODE_SHARDS = Path("/mnt/tank/apps/louise-shard")
@@ -397,6 +403,22 @@ def codex_files(collections: Path, shards: Path, container_shards: str) -> list[
     return sorted((name, d / CODEX_FILE) for name, d in found.values())
 
 
+def worker_collections(run=subprocess.run) -> Path:
+    """`<the worker container's /data bind, on this host>/collections`
+    (`docker inspect`). Undecidable — so `--delete` refuses — when docker
+    names none: the worker not there, or not binding /data."""
+    try:
+        out = run(["docker", "inspect", WORKER, "--format", MOUNT_SOURCE],
+                  capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise Undecidable(f"the worker's /data is not known (docker inspect {WORKER}: {e})") from None
+    src = (out.stdout or "").strip()
+    if out.returncode != 0 or not src:
+        raise Undecidable(f"the worker's /data is not known (docker inspect {WORKER}: "
+                          f"{(out.stderr or '').strip() or 'no /data bind'})")
+    return Path(src) / "collections"
+
+
 def codex_engines(collections: Path, shards: Path,
                   container_shards: str) -> tuple[list[CodexEngine], list[str]]:
     """Every engine the node's Codexes name, and the collections whose Codex
@@ -664,7 +686,7 @@ def _free(path: Path) -> int:
 @dataclass(frozen=True)
 class Codexes:
     """Where the node's Codexes are, and where their engines are archived."""
-    collections: Path = NODE_COLLECTIONS
+    collections: Path | None = None          # None: the worker's, `worker_collections`
     shards: Path = NODE_SHARDS
     container_shards: str = NODE_CONTAINER_SHARDS
     archive: Path = NODE_ARCHIVE
@@ -688,9 +710,10 @@ def run(backends: Path, models: Path, container_backends: str, proc: Path,
     codexes: list[CodexEngine] | None = None
     if any(r.units for r in items):
         try:
-            codexes, read = codex_engines(codex.collections, codex.shards, codex.container_shards)
+            collections = codex.collections or worker_collections()
+            codexes, read = codex_engines(collections, codex.shards, codex.container_shards)
             name_codexes(items, codexes)
-            say(f"codexes: {codex_count(codexes, read)} under {codex.collections}"
+            say(f"codexes: {codex_count(codexes, read)} under {collections}"
                 f" and {codex.shards}{'' if codex.shards.is_dir() else ' (absent)'}; "
                 f"archives in {codex.archive}")
             check_archives(items, codex.archive)
@@ -765,8 +788,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="the backends path as LocalAI's container sees it "
                         f"({NODE_CONTAINER_BACKENDS})")
     p.add_argument("--proc", type=Path, default=PROC, help="the process table (/proc)")
-    p.add_argument("--collections", type=Path, default=NODE_COLLECTIONS,
-                   help=f"the worker's collections root, as this host sees it ({NODE_COLLECTIONS})")
+    p.add_argument("--collections", type=Path, default=None,
+                   help=f"the worker's collections root, as this host sees it (default: the source "
+                        f"of {WORKER}'s /data bind, /collections)")
     p.add_argument("--shards", type=Path, default=NODE_SHARDS,
                    help=f"the worker's SHARDs root, as this host sees it ({NODE_SHARDS})")
     p.add_argument("--container-shards", default=NODE_CONTAINER_SHARDS,

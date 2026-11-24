@@ -34,10 +34,13 @@ never displace each other. A version starts:
     the day the latest included amendment applies, not the day the text was
     produced (§4.2); Formex's INFO.CONSLEG START.DATE is kept and compared;
   * an original, at its ENTRY INTO FORCE as the CDM notice states it
-    (RESOURCE_LEGAL_DATE_ENTRY-INTO-FORCE), never before its publication in
-    the OJ, and at the publication where the notice states none
-    (`original_start` — Normattiva's rule, one rule for the three
-    jurisdictions, §4.2: entry into force, not application).
+    (RESOURCE_LEGAL_DATE_ENTRY-INTO-FORCE) — before its publication in the
+    OJ where the notice says so (D1 of the EUR-Lex5 review, 2026-11-21,
+    choice B: a decision takes effect on notification to its addressee,
+    Art. 297(2) TFEU; 129,887 acts), never before the act's own date (no
+    act enters into force before it is adopted) — and at the publication
+    where the notice states none (`original_start`; §4.2: entry into force,
+    not application).
 
 Consolidated texts have NO LEGAL EFFECT; only the Official Journal is
 authentic: every consolidated record says so (`authentic: false`).
@@ -83,6 +86,14 @@ plugin, because a verifier needs it to reproduce our records:
   * THE BODY BY NAME: the item the Formex wrapper (`….doc.xml`) names as
     DOC.MAIN.PUB, never the first or the second the origin lists (§7.1: the
     order differs between an act and its consolidation).
+  * A FORMEX PACKAGE IS FORMEX (2026-11-19): Cellar serves some
+    manifestations as ONE item, a zip of the wrapper, the body and the
+    figures (the OJ's act-by-act publication, 32024R1689
+    `OJABA_L_202401689_ENG.fmx4.zip`). The zip is held as served — the
+    bytes the origin gave, which records-vs-origin compares — and read
+    through (`formex.unpack`); the record's `items` name each member and
+    the package it came in. Before, `cellar.form_of` saw no wrapper among
+    the item names and read those acts from XHTML.
   * THE NON-INFERRED TREE beside the notice (parser 3, 2026-11-14:
     `Accept: application/rdf+xml;notice=non-inferred-tree`, rdf.py). München
     compared it triple by triple with the notice over 1,698 Italian acts:
@@ -238,6 +249,7 @@ EXTRA_KEYS = tuple(k for k in eli.EXTRA_KEYS if k != "eli_uri_schema") + (
     eli.IN_FORCE,
     # identity and the version this record is
     "celex", "work_celex", "language", "language_code", "text_language", "version_key", "valid_from",
+    "valid_from_provisional", "body_root",
     "validity_work", "authentic", "sector", "resource_type",
     # the dates and the force status, as the notice states them
     "date_document", "entry_into_force", "end_of_validity", "last_modified",
@@ -261,8 +273,12 @@ ISSUES = {
                           "Formex FAM.COMP; the notice's is the Work",
     "no-base-act": "a consolidated version names no act it is based on, in the notice or the "
                    "Formex; it is a Work of its own",
-    "entry-into-force-before-publication": "the notice's entry into force precedes the OJ publication; "
-                                           "validity starts at the publication",
+    "entry-into-force-before-publication": "the notice's entry into force precedes the OJ publication "
+                                           "(a decision takes effect on notification, Art. 297(2) "
+                                           "TFEU); validity starts at the entry into force",
+    "entry-into-force-before-adoption": "the notice states an entry into force before the act's own "
+                                        "date; that date starts nothing (no act is in force before "
+                                        "it is adopted)",
     "end-before-start": "the notice's end of validity precedes the version's start",
     "not-in-force-without-end": "the notice says the act is not in force and states no end of "
                                 "validity: it stays open-ended, labelled (under-closed)",
@@ -270,6 +286,15 @@ ISSUES = {
                                  "original, or the reverse; the CELEX decides the version",
     "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
                      "unit, its text is what the other pages give",
+    "start-from-document-date": "no publication and no entry into force is stated: the act's own date "
+                                "is its provisional start, and says so (valid_from_provisional)",
+    "no-start-of-validity": "no publication, entry into force or date of the act is stated: the record "
+                            "is held and takes no part in the validity filter",
+    "item-not-held": "the Formex wrapper names a file the expression's manifestation does not list: "
+                     "the record holds the rest, and names it",
+    "formex-wrapper-names-another-act": "the act's lone Formex wrapper names another CELEX as its "
+                                        "NO.CELEX, and the expression's own tree lists it as this act's: "
+                                        "the origin's listing is read (31958D1006(02), printed twice)",
     "formex-not-this-act": "the expression's Formex holds no wrapper of this act (none naming its "
                            "CELEX, or only other acts'): the text is read from the next form the "
                            "tree lists; the Formex items are held beside it",
@@ -339,14 +364,18 @@ def unit_files(unit: Path) -> list[os.DirEntry]:
                        and not e.name.endswith(".part")), key=lambda e: e.name)
 
 
-def original_start(entry_into_force: list[str], published: str | None) -> str | None:
+def original_start(entry_into_force: list[str], published: str | None,
+                   adopted: str | None = None) -> str | None:
     """An original's start of validity: the earliest entry into force the
-    notice states on or after its OJ publication; the publication where it
-    states none (nothing enters into force before it is published)."""
-    later = sorted(d for d in entry_into_force if not published or d >= published)
-    if later:
-        return later[0]
-    return published or (sorted(entry_into_force)[0] if entry_into_force else None)
+    notice states on or after the act's own date `adopted` — whether before
+    its OJ publication or after (D1, 2026-11-21, choice B: a decision takes
+    effect on notification, Art. 297(2) TFEU) — and the publication where it
+    states none such. An entry into force before the act's own date starts
+    nothing: no act is in force before it is adopted."""
+    stated = sorted(d for d in entry_into_force if not adopted or d >= adopted)
+    if stated:
+        return stated[0]
+    return published or (sorted(entry_into_force)[0] if entry_into_force and not adopted else None)
 
 
 def eli_data_uri(uri: str | None) -> str | None:
@@ -390,6 +419,38 @@ def _form_held(note, files: dict[str, bytes], skip: tuple[str, ...] = ()) -> str
     return None
 
 
+def wrapper_head(celex: str, entries: list[os.DirEntry]) -> bytes:
+    """The head (`_HEAD` bytes) of the act's own Formex wrapper among the
+    unit's files — inside its package where the manifestation is one zip
+    (formex.unpack). Raises FormexError where there is none of this act's."""
+    paths = {e.name: e.path for e in entries}
+    if any(formex.is_package(n) for n in paths):
+        held = {n: Path(p).read_bytes() for n, p in paths.items() if formex.is_package(n) or formex.is_wrapper(n)}
+        view = formex.unpack(held)[0]
+        return view[formex.own_wrapper(view, celex, view.__getitem__)][:_HEAD]
+    own = formex.own_wrapper(paths, celex, lambda n: Path(paths[n]).read_bytes())
+    with open(paths[own], "rb") as f:
+        return f.read(_HEAD)
+
+
+def _wrapper_by_content(celex: str, entries: list[os.DirEntry]) -> bytes | None:
+    """The head of the XML file whose content is this act's Formex wrapper
+    (root DOC: the only one, or the one naming the act as its NO.CELEX),
+    whatever its name; None where none is."""
+    heads = []
+    for e in entries:
+        if not e.name.lower().endswith(".xml"):
+            continue
+        with open(e.path, "rb") as f:
+            head = f.read(_HEAD)
+        if formex.root_tag(head[:formex._HEAD_BYTES]) == "DOC":
+            heads.append(head)
+    if len(heads) == 1:
+        return heads[0]
+    own = [h for h in heads if f"<NO.CELEX>{celex}</NO.CELEX>".encode() in h]
+    return own[0] if len(own) == 1 else None
+
+
 def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool = False) -> str | None:
     """The day the unit's id sorts under: a consolidation's CELEX date, an
     original's OJ publication date from its wrapper's head. An act without
@@ -398,15 +459,24 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
     m = _CONSOLIDATED.match(celex)
     if m:
         return formex.iso(m["date"])
-    paths = {e.name: e.path for e in entries}
     try:
-        own = formex.own_wrapper(paths, celex, lambda n: Path(paths[n]).read_bytes())
+        head = wrapper_head(celex, entries)
     except formex.FormexError:
-        own = None                         # no wrapper, or none this act's: its work's own day below
-    if own is not None:
-        with open(paths[own], "rb") as f:
-            got = _PUB_DATE.search(f.read(_HEAD))
-        return formex.iso(got.group(1).decode()) if got else None
+        head = None                        # no wrapper, or none this act's: its work's own day below
+    if head is not None:
+        got = _PUB_DATE.search(head)
+        if got:
+            return formex.iso(got.group(1).decode())
+        # A FILE UNDER THE WRAPPER'S NAME THAT IS NO WRAPPER (2026-11-21:
+        # 32013D0410's dump files, 24 languages: ANNEX VII as `….doc.xml`, the
+        # wrapper as the body's `.xml`): the day is read from the file that IS
+        # this act's wrapper by its content — the OJ day Cellar's own unit
+        # states, so the act's id stays when the unit is fetched again — and
+        # the act is LISTED, its parse refusing it with the reason, never left
+        # out of every scan with a warning; else the work's own day below
+        got = _PUB_DATE.search(_wrapper_by_content(celex, entries) or b"")
+        if got:
+            return formex.iso(got.group(1).decode())
     if tree_facts:
         for e in entries:
             if e.name == rdf_mod.TREE_FILE:
@@ -425,6 +495,18 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
 class EurlexSource:
     source_id = "eurlex"
     ISSUES = ISSUES
+    #: the base holds an act's ORIGINAL, its consolidations only as the
+    #: history slice fetched on request: a held amendment ends the original's
+    #: text (app/validity.py, chain rule 2; the EUR-Lex5 review's V3/V4).
+    #: Normattiva, LEGI and NeuRIS publish every version with its own dates
+    #: and do not declare it
+    VALIDITY_ENDS_AT_AMENDMENT = True
+    #: the parse pool's large-document lane (app/parallel.py): what a parse
+    #: of one unit holds per byte of its `size` (the unit's files, summed at
+    #: discovery). MEASURED 2026-11-19 (München, its own container): 32021R2017
+    #: el, 204,218,240 bytes, peak 5,248,708,608 to chunk (25.7x), 2,055,856,128
+    #: for its metadata (10.1x) — the larger, rounded up
+    PARSE_PEAK_PER_BYTE = 26
     ELI_PROFILE = PROFILE
     #: 09 §9.3's `profile`: the ELI implementation and the validity axis of
     #: one record per version per language (app/validity.py)
@@ -469,8 +551,19 @@ class EurlexSource:
     #: tree and the items — what the dump holds — and a notice a unit still
     #: holds is kept whole and read for nothing; subjects and authors are
     #: concept ids; the history slice (`history/lang=<l>/…`, `extra.history`).
-    #: Parser 3 is kept for the collection whose Codex names it (EurlexSourceV3)
-    PARSER_VERSION = 4
+    #: Parser 3 is kept for the collection whose Codex names it (EurlexSourceV3).
+    #: 5 on 2026-11-18 (EUR-Lex4's parse: 11,486 documents refused, and the
+    #: LEMUR dry run's French): a body that is not an act is read — an
+    #: agreement (AGR) as an act, a corrigendum (CORR) by its corrections, a
+    #: GENERAL document by its groups — every main file of a Special Edition
+    #: read, not the first; a file the wrapper names and the manifestation does
+    #: not hold said, not refused; a start of validity the origin does not
+    #: state provisional and said (the act's own date), or absent; "Article
+    #: premier" and a single article's heading are articles (rendition.py);
+    #: `extra.body_root`, `extra.valid_from_provisional`. Parser 4 is not
+    #: carried: EUR-Lex4, the one Codex naming it, published nothing and is
+    #: re-created as EUR-Lex5 (RULE 1, 02 §2.4 A1c).
+    PARSER_VERSION = 5
     #: the facts from the tree (4) or from the notice (3)
     TREE_FACTS = True
     #: 06 §6.2: Cellar keeps every OJ act and every consolidated version at
@@ -503,7 +596,7 @@ class EurlexSource:
         """This plugin parsing at `version`, for a collection whose Codex
         names it (`collections.plugin_at`): 4 is this one, 3 the one that read
         the facts from the notice (`EurlexSourceV3`)."""
-        return {4: self, 3: _V3}.get(int(version))
+        return {5: self, 3: _V3}.get(int(version))
 
     # ---- discovery ---------------------------------------------------------------------------
 
@@ -583,6 +676,49 @@ class EurlexSource:
             yield DocRef(source_id=self.source_id, native_id=str(nid), locator=locator,
                          mtime=mtime, size=size)
 
+    def superseded_ids(self, ref: DocRef) -> list[str]:
+        """The ids this unit could have had under another of its forms
+        (discovery retires a row held under one at this locator: one unit,
+        one document — 2026-11-21, the 37,695 EUR-Lex5 units held twice). A
+        unit is dated by its wrapper's OJ day where it holds one, by its
+        tree's work day otherwise: a unit that gained or lost its Formex
+        (a re-form into a package, a rendition replaced) moved between the
+        two. Both are computed; the other one is the answer."""
+        unit = Path(ref.locator)
+        celex, lang = unit.name, unit.parent.parent.name.partition("=")[2]
+        if lang not in LANGUAGES or _CONSOLIDATED.match(celex):
+            return []
+        try:
+            entries = unit_files(unit)
+        except OSError:
+            return []
+        days: set[str] = set()
+        try:
+            head = wrapper_head(celex, entries)
+            got = _PUB_DATE.search(head)
+            if got:
+                days.add(formex.iso(got.group(1).decode()))
+        except (formex.FormexError, OSError):
+            pass
+        for e in entries:
+            if e.name == rdf_mod.TREE_FILE:
+                try:
+                    with open(e.path, "rb") as f:
+                        d = from_tree.work_day(rdf_mod.loads(f.read()), celex)
+                except (OSError, ValueError):
+                    d = None
+                if d:
+                    days.add(d)
+        out = []
+        for d in sorted(x for x in days if x):
+            try:
+                nid = str(eli.expression_native_id(d, (celex, lang), version_key(celex)))
+            except ValueError:
+                continue
+            if nid != str(ref.native_id):
+                out.append(nid)
+        return out
+
     def ref_of_unit(self, unit: Path) -> DocRef | None:
         """The DocRef discovery gives one landed unit — its id from its day,
         CELEX, language and version, as `discover` computes it — or None
@@ -609,6 +745,38 @@ class EurlexSource:
         return DocRef(source_id=self.source_id, native_id=str(nid), locator=str(unit),
                       mtime=max(s.st_mtime_ns for s in stats) // 1_000_000_000,
                       size=sum(s.st_size for s in stats))
+
+    def parse_size(self, row) -> int | None:
+        """The bytes a parse of this unit reads, for the parse pool's memory
+        estimate (app/parallel.py `peak_of`; P3 of the 2026-11-21 review): its
+        files, and each Formex PACKAGE's members UNPACKED beside the package's
+        own bytes — `formex.unpack` holds both while it reads. The members'
+        sizes come from the zip's central directory (PKWARE APPNOTE §4.3.12,
+        read by the standard library's zipfile), no member inflated: one
+        scandir of the unit and, for a package, its directory read. A Formex
+        package deflates ~4.3x, so its `size` was a quarter of what its parse
+        holds. The row's `size` (DocRef.size) keeps its meaning: the unit's
+        files on disk, discovery's change test. None where the unit does not
+        read (the parse says why)."""
+        import zipfile
+        try:
+            entries = unit_files(Path(row["path"]))
+        except (OSError, KeyError, TypeError):
+            return None
+        total = 0
+        for e in entries:
+            try:
+                size = e.stat().st_size
+            except OSError:
+                continue
+            total += size
+            if formex.is_package(e.name):
+                try:
+                    with zipfile.ZipFile(e.path) as z:
+                        total += sum(i.file_size for i in z.infolist() if not i.is_dir())
+                except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError, ValueError):
+                    pass                # not a readable zip: read as the file it is
+        return total
 
     # ---- fetch and parse ---------------------------------------------------------------------
 
@@ -650,10 +818,26 @@ class EurlexSource:
         else:
             note = held
         found: list[Issue] = []
-        form = "fmx4" if any(formex.is_wrapper(n) for n in files) else _form_held(note, files)
+        # a Formex manifestation served as one zip is read through it, the zip
+        # held as served (formex.unpack; 32024R1689, 32015D1735)
+        try:
+            view, packed = formex.unpack(files)
+        except formex.FormexError as e:
+            raise UnindexableDocument(f"{unit}: {e}") from None
+        form = "fmx4" if any(formex.is_wrapper(n) for n in view) else _form_held(note, files)
+        # the Formex items the expression's own tree lists, a listed package's
+        # members with it: the origin's word on which files are this act's
+        # (formex.own_wrapper `listed`; 31958D1006(02))
+        tree_fmx = {it.name for it in note.items.get("fmx4", []) if it.name}
+        listed = tree_fmx | {m for m, pkg in packed.items() if pkg in tree_fmx}
         if form == "fmx4":
             try:
-                formex.own_wrapper(files, celex, files.__getitem__)
+                own = formex.own_wrapper(view, celex, view.__getitem__, listed, note.date_document)
+                labels = formex.wrapper_labels(view[own])
+                if labels and formex._act_of(celex) not in {formex._act_of(x) for x in labels}:
+                    found.append(Issue("formex-wrapper-names-another-act",
+                                       f"{own} names {', '.join(sorted(labels))}; the expression's tree lists "
+                                       f"it as {celex}'s, which is read"))
             except formex.FormexError as e:
                 # no wrapper of THIS act (München, 2026-11-16: 32011R0540 hr,
                 # 32004D0382 bg/ro …): its text from the next form the tree
@@ -666,7 +850,9 @@ class EurlexSource:
         stated_lang = notice_mod.CODE_OF.get(note.display_language or "", lang)
         try:
             if form == "fmx4":
-                act = formex.parse(files, celex)
+                act = formex.parse(view, celex, listed, note.date_document)
+                for name in act.missing:
+                    found.append(Issue("item-not-held", f"{act.wrapper_file} names {name}"))
             elif form in ("xhtml", "html"):
                 # in their names' order: an OJ item's name carries its page
                 # (`…01001401` page 14, `…01001501` page 15), the notice's order
@@ -729,16 +915,38 @@ class EurlexSource:
                 work = celex
         else:
             work = celex
-            published = act.publication_date
-            valid_from = original_start(note.entry_into_force, published)
-            early = [d for d in note.entry_into_force if published and d < published]
+            # the OJ date the Formex wrapper states, else the work's own
+            # publication date in its tree (parser 5: a Special Edition
+            # wrapper states PUBLICATION.REF.SE, not PUBLICATION.REF)
+            published = act.publication_date or note.date_publication
+            valid_from = original_start(note.entry_into_force, published, note.date_document)
+            adopted = note.date_document
+            before = [d for d in note.entry_into_force if adopted and d < adopted]
+            early = [d for d in note.entry_into_force if published and d < published and d not in before]
+            if before:
+                found.append(Issue("entry-into-force-before-adoption",
+                                   f"entry into force {before[0]}, the act of {adopted}"))
             if early:
                 found.append(Issue("entry-into-force-before-publication",
                                    f"entry into force {early[0]}, published {published}"))
+        # NO START STATED (parser 5; 3,415 units of 1958–62 read from HTML or a
+        # PDF, refused by parser 4): held, never refused (invariant 11). As
+        # NeuRIS parser 5 (operator, 2026-11-15: "we use the publishing date
+        # as draft"), a start the origin does not state is PROVISIONAL and
+        # says so: the act's own date where neither a publication nor an
+        # entry into force is stated (`valid_from_provisional`, on every
+        # result through validity.start_basis); with no date at all, the
+        # record takes no part in the validity filter, and says why.
+        provisional = None
+        if not valid_from and note.date_document:
+            valid_from = note.date_document
+            provisional = "the act's own date: no publication or entry into force is stated"
+            found.append(Issue("start-from-document-date", f"{celex}: {valid_from}"))
         if not valid_from:
-            raise UnindexableDocument(f"{unit}: no start of validity: no OJ date and no entry into force")
+            found.append(Issue("no-start-of-validity", f"{celex}: no publication, entry into force or "
+                                                       f"date of the act stated"))
         ends = [d for d in note.end_of_validity if d != OPEN_END]
-        if any(d < valid_from for d in ends):
+        if valid_from and any(d < valid_from for d in ends):
             found.append(Issue("end-before-start", f"end of validity {min(ends)}, start {valid_from}"))
         if note.in_force is False and not ends:
             found.append(Issue("not-in-force-without-end", celex))
@@ -776,6 +984,10 @@ class EurlexSource:
             "text_language": text_lang if text_lang != lang else None,
             "version_key": expr,
             "valid_from": valid_from,
+            "valid_from_provisional": provisional,
+            # the body's root as the Formex states it (parser 5: ACT,
+            # CONS.ACT, AGR, CORR, GENERAL …): what kind of document it is
+            "body_root": act.root if form == "fmx4" else None,
             "validity_work": f"{work}/{lang}",
             "authentic": False if consolidated else None,
             "sector": note.sector or celex[:1],
@@ -785,7 +997,9 @@ class EurlexSource:
             "end_of_validity": note.end_of_validity,
             "last_modified": note.last_modified,
             # the Formex manifestation, every assertion beside the text
-            "items": [{"name": n, "bytes": len(b)} for n, b in sorted(files.items())],
+            "items": [{"name": n, "bytes": len(b)} for n, b in sorted(files.items())]
+                     + [{"name": n, "bytes": view.size(n) if hasattr(view, "size") else len(view[n]),
+                         "in": packed[n]} for n in sorted(packed)],
             "body_file": act.body_file,
             "wrapper_file": act.wrapper_file,
             "formex_wrapper": act.wrapper,

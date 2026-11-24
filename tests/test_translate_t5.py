@@ -143,14 +143,28 @@ def test_the_target_codes_are_the_models_own_tokens(monkeypatch):
 def test_each_segment_is_one_raw_prompt_sent_with_the_others(monkeypatch):
     calls = []
     in_flight = _t5_server(monkeypatch, calls=calls, concurrent=True)
+    served = mt.httpx.post
+
+    def late(url, json=None, **kw):
+        # one segment reaches the server last, as under a loaded scheduler
+        # (staging, 2026-11-22): what is checked must not hang on arrival order
+        if json and json.get("prompt") == "<2de> short":
+            time.sleep(0.1)
+        return served(url, json=json, **kw)
+    monkeypatch.setattr(mt.httpx, "post", late)
     out = mt.translate([("The keeper lit the lamp. It burned.\n\nMorning came.", "fr"),
                         ("short", "de"), ("unknown target", "xx"), ("hello", "tl")])
     assert out[0] == "fr|THE KEEPER LIT THE LAMP. IT BURNED.\n\nfr|MORNING CAME."
     assert out[1] == "de|SHORT" and out[2] is None and out[3] == "fil|HELLO", \
         "an unknown target is None; a platform code reaches the model's token"
     prompts = [c[1]["prompt"] for c in calls if c[0] == "completions" and c[1]["prompt"] != "<2it> OK"]
-    assert prompts == ["<2fr> The keeper lit the lamp. It burned.", "<2fr> Morning came.",
-                       "<2de> short", "<2fil> hello"]
+    # EVERY SEGMENT ONCE, in whatever order the server received them: they are
+    # sent together, and the arrival order of concurrent requests is the
+    # scheduler's (staging at load ~20, 2026-11-22: "<2fil> hello" arrived
+    # before "<2de> short"). The order that matters, a text's segments in its
+    # own order, is the answer's: `out[0]` above
+    assert sorted(prompts) == sorted(["<2fr> The keeper lit the lamp. It burned.", "<2fr> Morning came.",
+                                      "<2de> short", "<2fil> hello"])
     assert in_flight["max"] >= 2, "a call's segments are in flight together (one wave on the server)"
     bodies = [c[1] for c in calls if c[0] == "completions" and c[1]["prompt"] != "<2it> OK"]
     assert all(b["top_k"] == 1 and b["seed"] == 0 and 0 < b["max_tokens"] <= 512 for b in bodies)

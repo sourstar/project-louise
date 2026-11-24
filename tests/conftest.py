@@ -4,10 +4,9 @@ Nothing here touches the real /data or /corpus; every test gets its own
 tmp_path-backed copy so tests never interfere with each other or with a real
 deployment.
 """
+import os
 import shutil
 from pathlib import Path
-
-import os
 
 import pytest
 
@@ -20,16 +19,70 @@ os.environ["LOUISE_RESIDENT"] = "0"
 
 FIXTURE_CORPUS = Path(__file__).parent / "fixtures" / "gutenberg-mini" / "corpus"
 
+#: the signals a command or a tool takes over for its stop (07 §7.7)
+_STOP_SIGNALS = tuple(getattr(__import__("signal"), n) for n in ("SIGTERM", "SIGINT", "SIGHUP", "SIGALRM")
+                      if hasattr(__import__("signal"), n))
+
+
+@pytest.fixture(autouse=True)
+def signal_handlers_are_restored():
+    """A test that runs a command or a tool IN THIS PROCESS (louise.main,
+    tools/measure/*.main) lets it install its own SIGTERM/SIGINT handler —
+    and most never put the previous one back, harmless in the process of
+    their own they run in in production. In the suite it LEAKED into every
+    later test (2026-11-18, the full ordered run: tests/test_stop_orphans
+    "DID NOT RAISE Stopped" and test_process_signals failed there and only
+    there, and the run's own SIGTERM surfaced as wikitext_identity's
+    KeyboardInterrupt 400 files later). Each test now ends with the handlers
+    it began with."""
+    import signal
+    saved = {s: signal.getsignal(s) for s in _STOP_SIGNALS}
+    yield
+    for s, h in saved.items():
+        if signal.getsignal(s) is not h and h is not None:
+            signal.signal(s, h)
+
+
+@pytest.fixture(autouse=True)
+def nothing_only_a_child_does_is_done_here():
+    """A pool's stand-in on threads runs the pool's initializer in THIS
+    process; what only a CHILD does must not run here, since nothing undoes
+    it for the rest of the session (2026-11-18, the full ordered run): the
+    parent watch (`parallel.watch_parent`, a thread that polls for ever) —
+    eight of them spun without pause in every later test that made
+    `time.sleep` a no-op, and the vega gate's 2.7 s took 30 min a test — and
+    the children's nice, +10 on pytest itself for every pool."""
+    import threading
+    before = {t.ident for t in threading.enumerate() if t.name == "parent-watch"}
+    nice = os.nice(0) if hasattr(os, "nice") else None
+    yield
+    started = [t for t in threading.enumerate()
+               if t.name == "parent-watch" and t.ident not in before]
+    now = os.nice(0) if hasattr(os, "nice") else None
+    if started or now != nice:
+        pytest.fail(f"this test did in the test process what only a pool's child does: "
+                    f"{len(started)} parent-watch thread(s) started, nice {nice} -> {now} "
+                    f"(run the pool's own initializer, not parallel.child_start's)",
+                    pytrace=False)
+
 
 @pytest.fixture(autouse=True)
 def fresh_worker_state():
     """Module-level cursors and memos are per PROCESS, so one test's
     completed walk must not decide the next test's selection (that leak
     is exactly the bug the re-index cursor's key had in production)."""
-    from app import (cpu_limit, encoder_timeouts, language_plan, parallel, sched, sizing,
-                     translate, worker)
-    from app.rage import dispatch
+    from app import (
+        cpu_limit,
+        encoder_timeouts,
+        language_plan,
+        parallel,
+        sched,
+        sizing,
+        translate,
+        worker,
+    )
     from app.bundles import genesis
+    from app.rage import dispatch
     dispatch.reset()
     encoder_timeouts.reset()
     language_plan.reset()
@@ -48,6 +101,9 @@ def fresh_worker_state():
     parallel.forget_prefetched()
     parallel.forget_users()
     parallel.reset_failures()
+    # the rows the lane deferred are asked, never waited for, again: one
+    # test's deferral must not decide the next test's wait
+    parallel.forget_deferred()
     # the node profile's cached limit and each collection's watch of it
     cpu_limit.reset()
     worker._cpu_watches.clear()
@@ -85,6 +141,17 @@ def no_served_weights_are_remembered():
     encoder_resolve.reset_cache()
     yield
     encoder_resolve.reset_cache()
+
+
+@pytest.fixture(autouse=True)
+def no_origin_is_asked_for_a_run(monkeypatch):
+    """A create that names no run asks the origin for its latest complete
+    one (app/hold/origin_run.py `determine`, (c)) — never the real origin in
+    a test: it lists no run here, unless a test gives its own fetchers
+    (tests/hold/test_run_determined.py)."""
+    from app.hold import origin_run
+    monkeypatch.setattr(origin_run, "_ask_origin", lambda: (
+        lambda spec, recs, **k: {r.rel_path: None for r in recs}, lambda spec: ()))
 
 
 @pytest.fixture(autouse=True)
@@ -159,6 +226,19 @@ def no_real_data_dir(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_memory_counter(tmp_path_factory, monkeypatch):
+    """No test reads the cgroup the suite runs in (app/oom_hold.py): a pool
+    test whose child dies would otherwise ask the real `memory.events`, and a
+    kill the kernel made elsewhere in the container would read as its own.
+    The baseline, the handler and the kill seen are per test."""
+    from app import oom_hold
+    monkeypatch.setattr(oom_hold, "CGROUP_DIR", str(tmp_path_factory.mktemp("no-cgroup") / "absent"))
+    oom_hold._reset()
+    yield
+    oom_hold._reset()
+
+
+@pytest.fixture(autouse=True)
 def the_real_node_store_is_never_touched():
     """app/node_state.py resolves `<LOUISE_ROOT or DATA_DIR>/state/node.sqlite`
     — on a node's volume, that node's LIVE mode. Two tests without
@@ -224,6 +304,14 @@ def serial_parse_pool(monkeypatch):
     # the gate on its own load (app/gate_twin.py) asks the model server's
     # config API, which no stand-in serves; its own tests opt in
     monkeypatch.setattr(config, "GATE_TWIN", False)
+    # the web's idle trim (app/idle_trim.py) starts no timer thread per
+    # TestClient; its own tests drive it. And the process's Lance role is the
+    # test's: a web started by one test does not share its Session with the next
+    from app import embeddings, idle_trim
+    monkeypatch.setattr(idle_trim, "_started", True)
+    monkeypatch.setattr(embeddings, "_shared", None)
+    monkeypatch.setattr(embeddings, "_session", None)
+    monkeypatch.setattr(embeddings, "_session_budget", 0)
 
 
 @pytest.fixture(autouse=True)
@@ -342,6 +430,7 @@ def _codex_template():
     Codex collection: the tree is content-addressed, so every copy is the
     same collection."""
     import tempfile
+
     from app.hold import collection as col
     from tests.hold.conftest import KEY, NOW, PLATFORM, fake_embed, fake_query_embed
     from tests.hold.test_template import recipe
@@ -398,6 +487,7 @@ def test_collection_files_name_an_encoder(request, monkeypatch):
     if request.node.get_closest_marker("strict_encoder"):
         return
     import dataclasses
+
     from app import collections as collections_mod
     real = collections_mod._load_one
 
@@ -454,6 +544,7 @@ def _legal_tokenizer():
     test that cuts a legi / neuris / eurlex record runs without the 17 MB
     file — the window is then a count of words."""
     from tokenizers import Tokenizer, models, pre_tokenizers
+
     from app import chunking_legal
     from app.plugins.wikidata import chunker as wd
     had = wd._tokenizers.get(chunking_legal.NEMOTRON_TOKENIZER)

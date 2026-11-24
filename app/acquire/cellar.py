@@ -160,10 +160,15 @@ def languages_of(flt: Filter) -> tuple[str, ...]:
     return tuple(sorted(got))
 
 
-def _stop_check() -> None:
+def _stop_requested() -> bool:
+    """Whether the stop bound to this thread (the pass's) is set."""
     handle = current_handle()
     stop = getattr(handle, "stop", None) if handle is not None else None
-    if stop is not None and stop.is_set():
+    return stop is not None and stop.is_set()
+
+
+def _stop_check() -> None:
+    if _stop_requested():
         raise TransferAborted("cellar: stopped between requests")
 
 
@@ -184,30 +189,52 @@ def _get(client: httpx.Client, url: str, headers: dict, what: str, *,
     Retry-After honoured) — then raised in words the engine's `transient`
     reads as a deferral."""
     from . import backoff
+
+    def once(hdrs: dict):
+        """(status, retry-after, None) for an episode's status, else
+        (None, None, the response); a non-ok status raises."""
+        with client.stream("GET", url, headers=hdrs, follow_redirects=follow) as r:
+            if backoff.retryable_status(r.status_code):
+                return r.status_code, r.headers.get("retry-after"), None
+            body = bytearray()
+            for chunk in r.iter_bytes(_CHUNK):
+                body += chunk
+                charge(len(chunk))
+            if r.status_code not in ok:
+                raise TransportError(f"cellar: {r.status_code} to {what} ({url})")
+            return None, None, httpx.Response(r.status_code, headers=r.headers, content=bytes(body),
+                                              request=r.request)
+
     r_ = backoff.Retry(what, _policy())
     for _ in r_:
         try:
-            with client.stream("GET", url, headers=headers, follow_redirects=follow) as r:
-                if backoff.retryable_status(r.status_code):
-                    r_.episode(f"{r.status_code} to {what}", retry_after=r.headers.get("retry-after"))
-                    continue
-                body = bytearray()
-                for chunk in r.iter_bytes(_CHUNK):
-                    body += chunk
-                    charge(len(chunk))
-                if r.status_code not in ok:
-                    raise TransportError(f"cellar: {r.status_code} to {what} ({url})")
-                return httpx.Response(r.status_code, headers=r.headers, content=bytes(body),
-                                      request=r.request)
+            try:
+                status, after, got = once(headers)
+            except httpx.DecodingError:
+                # a body its Content-Encoding does not decode ("Error -3 while
+                # decompressing data: incorrect header check"): asked again AT
+                # ONCE for the body as it is — `Accept-Encoding: identity`, RFC
+                # 9110 §12.5.3 — and WITHOUT cooling the endpoint: it answered;
+                # its coding of this one body failed. 2026-11-14/15, 3,258
+                # Italian units failing so were fetched whole when asked again;
+                # 2026-11-18, four Hungarian .html items failed eight times each,
+                # and as episodes they cooled Cellar for every worker until
+                # EUR-Lex4's pass deferred all its 5,977 units, round after round
+                # (München). Undecodable even as identity: the item's verdict,
+                # said, and the pass goes on.
+                try:
+                    status, after, got = once({**headers, "Accept-Encoding": "identity"})
+                except httpx.DecodingError as e:
+                    raise TransportError(f"cellar: {what}: its body does not decode as its "
+                                         f"Content-Encoding says, even asked for identity "
+                                         f"({type(e).__name__}: {e})"[:400]) from e
+            if got is None:
+                r_.episode(f"{status} to {what}", retry_after=after)
+                continue
+            return got
         except httpx.TimeoutException as e:
             r_.episode(f"connection timed out on {what}: {type(e).__name__}", cause=e)
         except httpx.TransportError as e:
-            r_.episode(f"{type(e).__name__} on {what}: {e}", cause=e)
-        except httpx.DecodingError as e:
-            # a body its Content-Encoding does not decode ("Error -3 while decompressing data:
-            # incorrect header check"): Cellar's episode, as a drop is — 3,258 Italian units marked
-            # failed over 2026-11-14/15 fetched whole when asked again. httpx's DecodingError is not
-            # a TransportError, so it was raised as the unit's error, out of every selection
             r_.episode(f"{type(e).__name__} on {what}: {e}", cause=e)
     r_.give_up("cellar: ")
 
@@ -235,6 +262,16 @@ def _window(year: int, languages: tuple[str, ...]) -> str:
             f"  FILTER(STR(?type) IN ({', '.join(chr(34) + f + chr(34) for f in FORMS)}))\n")
 
 
+#: A UNIT'S LAST MODIFICATION, as the listing reads it: the latest of its
+#: work's, its expression's and its manifestations' (2026-11-19: Cellar
+#: replaced 32015D1735's English Formex at 2026-11-19 and left the work's date
+#: at 2026-11-02 — the work's alone never saw it). The held side compares the
+#: same: `Notice.modified`, from the unit's tree (from_tree) or branch notice
+MODIFIED = ("OPTIONAL { { ?work cmr:lastModificationDate ?modified } UNION "
+            "{ ?expr cmr:lastModificationDate ?modified } UNION "
+            "{ ?manif cmr:lastModificationDate ?modified } }")
+
+
 def count_query(year: int, languages: tuple[str, ...]) -> str:
     return (_PREFIXES + "SELECT (COUNT(*) AS ?n) WHERE {\n SELECT DISTINCT ?celex ?language WHERE {\n"
             + _window(year, languages) + " }\n}")
@@ -248,7 +285,7 @@ def fingerprint_query(year: int, languages: tuple[str, ...]) -> str:
     return (_PREFIXES + "SELECT (COUNT(*) AS ?n) (MAX(?last) AS ?max) WHERE {\n"
             " SELECT ?celex ?language (MAX(?modified) AS ?last) WHERE {\n"
             + _window(year, languages)
-            + "  OPTIONAL { ?work cmr:lastModificationDate ?modified }\n"
+            + "  " + MODIFIED + "\n"
             + " }\n GROUP BY ?celex ?language\n}")
 
 
@@ -259,7 +296,7 @@ def page_query(year: int, languages: tuple[str, ...], offset: int, force: bool =
     return (_PREFIXES + "SELECT ?celex ?language (MAX(?modified) AS ?last)"
             + (" (SAMPLE(STR(?inforce)) AS ?force)" if force else "") + " WHERE {\n"
             + _window(year, languages)
-            + "  OPTIONAL { ?work cmr:lastModificationDate ?modified }\n"
+            + "  " + MODIFIED + "\n"
             + ("  OPTIONAL { ?work cdm:resource_legal_in-force ?inforce }\n" if force else "")
             + f"}}\nGROUP BY ?celex ?language\nORDER BY ?celex ?language\nLIMIT {PAGE} OFFSET {offset}")
 
@@ -583,16 +620,40 @@ def form_of(note) -> str | None:
     DOC.MAIN.PUB, and without one the unit was refused ("holds 0 Formex
     wrappers"; 82 Italian consolidations of 1976–79, München 2026-11-15).
     Where it is the only form, or an item is unnamed (the 300 Multiple
-    Choices path), it stays Formex as before."""
+    Choices path), it stays Formex as before. A PACKAGE — the manifestation
+    served as one zip (`formex.unpack`: 32024R1689, every act of the OJ's
+    act-by-act publication) — is Formex: its wrapper is inside, and skipping
+    it read those acts from XHTML (2026-11-19)."""
     from ..plugins.eurlex import formex
     listed = [f for f in FORMS if note.items.get(f)]
     for f in listed:
         if f == "fmx4" and len(listed) > 1:
             items = note.items["fmx4"]
-            if all(it.name for it in items) and not any(formex.is_wrapper(it.name) for it in items):
+            if all(it.name for it in items) and not any(formex.is_wrapper(it.name) or formex.is_package(it.name)
+                                                        for it in items):
                 continue
         return f
     return None
+
+
+def lacks_package(unit: Path, note) -> bool:
+    """Whether the held unit lacks the Formex package (formex.unpack: the
+    manifestation served as one zip) that `note` — its own tree's — lists as
+    the form to read: a unit landed while `form_of` read such a manifestation
+    as XHTML (2026-11-19, 32024R1689), to be re-formed."""
+    return bool(lacked_packages(unit, note))
+
+
+def lacked_packages(unit: Path, note) -> list[str]:
+    """The names of the Formex packages `lacks_package` finds missing, in
+    the tree's order: what the dump build records for a unit to re-form, so
+    the per-unit pass can see by a stat whether it is held since
+    (eurlex_dump.incomplete_due)."""
+    from ..plugins.eurlex import formex
+    if form_of(note) != "fmx4":
+        return []
+    return [it.name for it in note.items.get("fmx4", [])
+            if it.name and formex.is_package(it.name) and not (Path(unit) / it.name).is_file()]
 
 
 def _current_unit(dest: Path, note_now_mtime: int | None, form: str | None):
@@ -609,7 +670,7 @@ def _current_unit(dest: Path, note_now_mtime: int | None, form: str | None):
         note = notice_mod.parse(data)
     except (OSError, notice_mod.NoticeError):
         return None
-    held = _epoch(note.last_modified)
+    held = _epoch(note.modified or note.last_modified)
     form = form or form_of(note)
     if held is None or held < note_now_mtime or form is None:
         return None
@@ -714,7 +775,8 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
                 files[name] = r.content
         if form == "fmx4":
             try:
-                formex.own_wrapper(files, celex, files.__getitem__)
+                view = formex.unpack(files)[0]          # a package read through
+                formex.own_wrapper(view, celex, view.__getitem__)
             except formex.FormexError as e:
                 raise TransportError(f"cellar: {celex} ({code}): {e}") from None
             # a text in another language under this one's expression lands as
@@ -734,14 +796,17 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
 
 def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
                          client: httpx.Client | None = None,
-                         charge: Callable[[int], None] = budget.acquire_bytes) -> Fetched:
+                         charge: Callable[[int], None] = budget.acquire_bytes,
+                         trees=None, listed_mtime: int | None = None) -> Fetched:
     """A PARSER-4 unit of (CELEX, language) into `dest`, whole or not at all:
     the work's non-inferred tree scoped to the language (`tree.json`) and the
     items of the best form the TREE lists (`form_of` on `from_tree.notice`) —
     no notice (app/plugins/eurlex/from_tree.py: the tree holds every
     assertion about the act). One request for the tree and one per item. The
     unit the Data Dump builds (eurlex_dump.py) is this one, byte for byte:
-    what `records-vs-origin` re-fetches to check it."""
+    what `records-vs-origin` re-fetches to check it. `listed_mtime`: the
+    listing's date of the unit; a tree `trees` kept serves it only where
+    that tree dates the unit at least as late (review 2026-11-21, Q1)."""
     from ..plugins.eurlex import formex, from_tree, rdf
     from ..plugins.eurlex.source import LANGUAGES
     code = LANGUAGES[lang]
@@ -753,15 +818,47 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
         nonlocal moved
         moved += n
         charge(n)
+    #: the tree's parse, once per bytes (a kept tree is judged on it, then used)
+    parsed: dict[str, Any] = {}
+
+    def parse(data: bytes):
+        if parsed.get("data") is not data:
+            scoped = rdf.scope(_read_tree(data, celex), code)
+            try:
+                note = from_tree.notice(scoped, code, celex)
+            except from_tree.TreeError as e:
+                raise TransportError(f"cellar: the tree of {celex}: {e}") from None
+            parsed.update(data=data, scoped=scoped, note=note)
+        return parsed["scoped"], parsed["note"]
+
+    def current(data: bytes) -> bool:
+        """A KEPT TREE serves this unit only where its own latest
+        modification of the unit (the work's, the expression's and the
+        manifestations' — `Notice.modified`, as TreeUnits.fetch reads a held
+        one) is at least the listing's: the engine records the listing's
+        date as fetched, so a tree older than it would stand as current for
+        good. Where the listing states no date (the dump's incomplete list),
+        the window alone, as before."""
+        if listed_mtime is None:
+            return True
+        try:
+            note = parse(data)[1]
+        except TransportError:
+            return False
+        held = _epoch(note.modified or note.last_modified)
+        return held is not None and held >= listed_mtime
     try:
         url = resource_url(base, celex)
         t0 = time.monotonic()
-        scoped = rdf.scope(_read_tree(_tree(client, url, celex, count), celex), code)
-        tree_s = time.monotonic() - t0
-        try:
-            note = from_tree.notice(scoped, code, celex)
-        except from_tree.TreeError as e:
-            raise TransportError(f"cellar: the tree of {celex}: {e}") from None
+        # the tree is the WORK's, every language's in it (no Accept-Language):
+        # `trees` (work_trees.RecentTrees) serves one Cellar served for the
+        # work's other languages within the pass
+        if trees is not None:
+            data, tree_from = trees.get(celex, lambda: _tree(client, url, celex, count), current)
+        else:
+            data, tree_from = _tree(client, url, celex, count), "cellar"
+        scoped, note = parse(data)
+        tree_s = time.monotonic() - t0 if tree_from == "cellar" else 0.0
         form = form_of(note)
         listed = note.items.get(form) or [] if form else []
         if not listed or any(not it.name or not _NAME.match(it.name) for it in listed):
@@ -777,7 +874,8 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
                                   f"{it.name} of {celex} ({code})", charge=count).content
         if form == "fmx4":
             try:
-                formex.own_wrapper(files, celex, files.__getitem__)
+                view = formex.unpack(files)[0]          # a package read through
+                formex.own_wrapper(view, celex, view.__getitem__)
             except formex.FormexError as e:
                 # no wrapper of THIS act: the next form the tree lists is its
                 # text, beside the Formex items (`next_form`)
@@ -795,7 +893,8 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
         items_s = time.monotonic() - t0
         files[rdf.TREE_FILE] = rdf.dumps(scoped)
         _land(dest, files)
-        return Fetched(files={n: len(b) for n, b in files.items()}, moved=moved, tree_s=tree_s, items_s=items_s)
+        return Fetched(files={n: len(b) for n, b in files.items()}, moved=moved, tree_from=tree_from,
+                       tree_s=tree_s, items_s=items_s)
     except httpx.HTTPError as e:
         raise TransportError(f"cellar: {type(e).__name__}: {e}") from e
     finally:
@@ -1047,6 +1146,16 @@ class TreeInventory(CellarInventory):
     def _say(self, message: str) -> None:
         print(f"{time.strftime('%H:%M:%S')} [{self.name} info:cellar] {message}", flush=True)
 
+    def reports(self) -> list[str]:
+        """What the engine says as warnings of the collection after the
+        listing (spec.Inventory `reports`): each Data Dump folder whose
+        datadump.json does not read, once a day (eurlex_dump.unread_statements;
+        coordinator, 2026-11-21: never skipped silently). Nothing is held
+        back for it."""
+        from . import datadump, eurlex_dump
+        base = datadump.dumps().base
+        return eurlex_dump.unread_statements(base, self.corpus) if base is not None else []
+
     def _place(self, celex: str, lang: str, in_force: str | None) -> bool:
         from ..plugins.eurlex.source import HISTORY, unit_rel
         rel = unit_rel(lang, celex)
@@ -1061,7 +1170,8 @@ class TreeInventory(CellarInventory):
         Data Dump build recorded as listed and not held whole
         (eurlex_dump.INCOMPLETE), not held now and not tried — those of the
         profile's slices — with no listing at all; the complete listing once
-        none is left. A short listing is safe: nothing reads a unit absent
+        none is left, or once every one left waits out an episode (Q2:
+        eurlex_dump.incomplete_due). A short listing is safe: nothing reads a unit absent
         from it as gone from the origin (engine.py). Bulk first holds: the
         record exists only after the dump was used whole (`held_back`)."""
         from . import eurlex_dump, engine
@@ -1092,36 +1202,75 @@ class TreeUnits(CellarUnits):
         if dest.is_file() and remote.mtime is not None:
             try:
                 note = from_tree.notice(rdf.loads(dest.read_bytes()), LANGUAGES[unit["lang"]], unit["celex"])
-                held = _epoch(note.last_modified)
+                held = _epoch(note.modified or note.last_modified)
             except (OSError, ValueError, from_tree.TreeError):
                 held = None
-            if held is not None and held >= remote.mtime:
+            if held is not None and held >= remote.mtime and not self._reform(dest, remote, note):
                 self._count(Fetched(files={}, moved=0, tree_from="held"))
                 return 0
+        root = _corpus_of(dest, remote)
         try:
-            got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent)
+            from . import work_trees
+            got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent,
+                                       trees=work_trees.recent_for(root) if root is not None else None,
+                                       listed_mtime=remote.mtime)
         except TransportError as e:
             # a unit the dump lacked that Cellar does not give either: not
             # asked first again (eurlex_dump.mark_tried), so the complete
-            # listing has its turn; the endpoint going away is no verdict
+            # listing has its turn; the endpoint going away is no verdict,
+            # but a unit asked first waits out its episode before it is due
+            # again (eurlex_dump.mark_deferred; review 2026-11-21, Q2: one
+            # such unit kept the complete listing from ever running). A stop
+            # is neither
             from . import eurlex_dump
             from ..transfer.bucket import TransferAborted as _Aborted
-            if not _episode(e) and not isinstance(e, (TransferAborted, _Aborted)):
-                root = _corpus_of(dest, remote)
-                if root is not None:
+            if root is not None and not isinstance(e, (TransferAborted, _Aborted)):
+                if not _episode(e):
                     eurlex_dump.mark_tried(root, unit["lang"], unit["celex"], str(e))
+                elif remote.mtime is None:
+                    eurlex_dump.mark_deferred(root, unit["lang"], unit["celex"], str(e))
             raise
+        if remote.mtime is None and root is not None:
+            from . import eurlex_dump
+            eurlex_dump.mark_fetched(root, unit["lang"], unit["celex"])   # asked first once
         self._count(got)
         return got.moved
 
+    def _reform(self, dest: Path, remote: RemoteFile, note) -> bool:
+        """A held unit lacking the Formex package its tree lists is asked
+        again, once the dump build has re-formed this language's units from
+        the bulk (eurlex_dump.packages_read): what is still lacking then is
+        what the bulk does not give (bulk first)."""
+        from . import eurlex_dump
+        if not lacks_package(dest.parent, note):
+            return False
+        root = _corpus_of(dest, remote)
+        return root is not None and unit_of(remote)["lang"] in eurlex_dump.packages_read(root)
+
     def prepare(self, files: list[RemoteFile], pending: list[RemoteFile], collection,
                 endpoint: Endpoint) -> list[str]:
+        """A newer Data Dump built in before Cellar is asked (bulk first).
+        A newer dump that does not read, or whose build fails for any other
+        reason, HOLDS THE PASS BACK (spec.HeldBack, said why; review
+        2026-11-21, Q6): its failure was the engine's "bulk transport not
+        prepared" and the pass asked Cellar for every unit, the newer bulk
+        unused. A stop — the pass's, which the engine binds around prepare —
+        ends the build at its next chunk boundary and the pass with it (Q7:
+        none was read, and a SIGTERM waited for the whole build)."""
         from . import datadump, eurlex_dump
+        from .spec import HeldBack
         dumps = datadump.dumps()
         if dumps.base is None:
             return []
         langs = sorted({unit_of(f)["lang"] for f in pending if is_unit(f)})
-        eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs)
+        try:
+            eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs, stop=_stop_requested)
+        except (TransferAborted, HeldBack):
+            raise
+        except Exception as e:  # noqa: BLE001 — whatever stopped the bulk, Cellar waits for it
+            raise HeldBack(f"{getattr(collection, 'name', 'eurlex')}: a newer Data Dump of {', '.join(langs)} "
+                           f"was not built ({type(e).__name__}: {str(e)[:300]}); bulk first, so Cellar is "
+                           f"not asked for its units until it is") from e
         return []
 
 

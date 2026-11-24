@@ -166,12 +166,14 @@ class rewrite(maintenance):
     (2026-09-17) — after 40–51 minutes of work each, against an archive
     import committing about twice a second.
 
-    Builds and refreshes deliberately do NOT use this (amendment 52: Lance
-    is MVCC, a concurrent delete+add during `optimize()` is supported, and
-    those run often enough that standing writers down cost the collection
-    most of its life). A compaction is rare by construction — only when
-    `VECTOR_INDEX_COMPACT_FRAGMENTS` small fragments have accumulated — so
-    the exclusivity it needs is affordable."""
+    Refreshes deliberately do NOT use this (amendment 52: Lance is MVCC, a
+    concurrent delete+add during `optimize()` is supported, and they run
+    often enough that standing writers down cost the collection most of its
+    life). A compaction is rare by construction — only when
+    `VECTOR_INDEX_COMPACT_FRAGMENTS` small fragments have accumulated — and
+    so is a table's FIRST vector index build, once per table (2026-11-24:
+    legi_F's lost its one commit after 70 minutes to the embed writes), so
+    the exclusivity they need is affordable."""
 
     def __init__(self, collection, *, drain_s: float | None = None):
         super().__init__(collection)
@@ -354,9 +356,16 @@ def take_over_due(collection, st: dict | None) -> bool:
     behind a link into the build area, the node runs the collection (the
     maintainer skips a paused one, so case F's successor waits for its
     swap), and no write touched it for a whole pass (`_idle`). Tried again
-    a pass after a refusal (no room, a writer), not on every turn."""
+    a pass after a refusal (no room, a writer), not on every turn.
+
+    Only a link INTO THE BUILD AREA itself: a link to anywhere else — a
+    Lance root's folder while `LOUISE_LANCE_ROOT` is unset, say (storage-
+    tiering.md §12) — is never moved by itself, or a lost setting would copy
+    every searched table into its collection's folder unattended."""
     from . import vector_place
-    if vector_place.tier(collection.lance_dir) != vector_place.BUILD or not st:
+    lance = collection.lance_dir
+    if vector_place.tier(lance) != vector_place.BUILD or not st \
+            or not vector_place.in_area(vector_place.physical(lance)):
         return False
     last = _take_over_tried.get(str(collection.lance_dir))
     if last is not None and time.monotonic() - last < config.VECTOR_INDEX_REFRESH_S:
@@ -1421,7 +1430,14 @@ def ensure(collection, con=None, *, log=None, may_continue=None) -> dict | None:
                          f"({config.VECTOR_INDEX_TYPE}) — minutes to an hour on a large table; "
                          f"queries keep scanning meanwhile; this collection's vector writes "
                          f"wait (rdf/fts continue)")
-        with maintenance(collection):
+        # THE FIRST BUILD TAKES THE TABLE, as a compaction does (2026-11-24).
+        # It is one commit at the end of minutes to an hour; legi_F's, after
+        # 70 minutes over 2,207,323 rows, lost it to the collection's own
+        # embed commits ("Too many concurrent writers … retry_timeout of
+        # 30 s", 01:39:35Z) and was to start again from nothing. It happens
+        # once per table, so the writers' wait is affordable; a refresh, run
+        # often and short, keeps them going (amendment 52, `rewrite`)
+        with rewrite(collection):
             out = build(collection, log=log)
         if con is not None and out.get("built"):
             db.log_event(con, "info", "index",

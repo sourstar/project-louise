@@ -304,7 +304,7 @@ def test_acquire_only_holds_parsing_instead_of_calling_it_running(con, monkeypat
     _scope(monkeypatch, "all")
     got = health.inspect(con, Collection(), mode="acquire-only")
     rdf = next(s for s in got.stages if s.name == "rdf")
-    assert rdf.state == health.HELD and "acquire-only" in rdf.reason
+    assert rdf.state == health.HELD and '"download/seeding only"' in rdf.reason   # the label, never the key (RULE 2)
     assert not got.blocked(), "held is the operator's choice: never exit 1 for it"
 
 
@@ -350,7 +350,7 @@ def test_open_shards_on_an_acquire_only_node_are_held(archived):
     _docs(archived, 3, start=1_500_000)
     got = health.archive_gap(archived, Collection(archive="medcpt-pubmed"),
                              mode="acquire-only")
-    assert got.state == health.HELD and "acquire-only" in got.reason
+    assert got.state == health.HELD and '"download/seeding only"' in got.reason
 
 
 def test_a_rejected_shard_is_blocked_for_its_own_reason(archived):
@@ -505,7 +505,7 @@ def test_a_held_row_says_held_once(con, monkeypatch, archived):
     _scope(monkeypatch, "all")
     rdf = next(s for s in health.inspect(con, Collection(), mode="acquire-only").stages
                if s.name == "rdf")
-    assert rdf.state == health.HELD and "acquire-only" in rdf.reason
+    assert rdf.state == health.HELD and '"download/seeding only"' in rdf.reason   # the label, never the key (RULE 2)
     assert "held" not in rdf.reason
     _shard(archived, "1", "fetched")
     _docs(archived, 3, start=1_500_000)

@@ -291,6 +291,11 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
     from . import collection as col
 
     name, codex = col.resolve(Path(root), ref)
+    # PARTS THAT COULD NEVER BE FROZEN are never built: records naming a keyed
+    # unit need the run they are read in (09 §9.4 `origin_run`, §9.5), and a
+    # Codex naming none makes a snapshot that names none (München, 2026-11-17)
+    from . import origin_run
+    origin_run.refuse_without_run(codex, f"{name}: records build (nothing was built)")
     shard_dir, state_dir, staging = _paths(root, name)
     state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -319,8 +324,19 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
         if not held:
             log(f"[records build] {name}: manifest is empty, scanning {corpus_dir}")
             discovery.sync_collection(con, src)
+            held = con.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
     finally:
         con.close()
+    if not held:
+        # NOTHING TO BUILD IS A REFUSAL, never a build of nothing (the node,
+        # 2026-11-18: a re-creation script went on past a carry the worker
+        # refused, and this built 0 records into gutenberg.next, writing its
+        # build state and validation.json and exiting 0). Before a byte of
+        # staging is written: the empty corpus, and what fills it, named
+        raise RecordsError(
+            f"{name}: nothing to build — its manifest is empty and {corpus_dir} holds no document "
+            f"the scan finds. A re-creation's records come after its carry (`dev carry`), a new "
+            f"collection's after `records fetch` (07 §7.3); nothing was written")
 
     _claim_staging(staging, codex)
     frozen = _frozen_into(staging)
@@ -351,6 +367,10 @@ def build(root, ref: str, *, corpus_dir=None, snapshot_id: str | None = None,
         # beside the records (05 §5.7; 02 §2.7 amended 2026-11-12, RULE 1):
         # nothing else may differ
         other = [d for d in record_differences(from_codex, codex) if d not in ("slicing", "layers")]
+        # the run its records were read in, pinned by the target (09 §9.17;
+        # origin_run.admit_run_pin): the same record bytes
+        other = origin_run.admit_run_pin(root, from_name, from_codex, codex, other,
+                                         f"{name}: --records-from {from_name}")
         # A PARSER CHANGE whose moved lines the target's parser names
         # (2026-11-08, pubmed 8 → 9, RULE 1): the lines it says it would
         # write differently are parsed again, the rest taken byte for byte.
@@ -501,7 +521,7 @@ def local_collection(root, name: str, codex, *, corpus_dir=None):
     return local
 
 
-def _local_collection(root, name: str, codex, *, corpus_dir=None):
+def _local_collection(root, name: str, codex, *, corpus_dir=None, ack_dir=None):
     """This peer's LOCAL side of a Codex collection, as 07 §7.8 lays it out.
 
     A Codex says what a collection IS; the manifest, the text index and the
@@ -529,7 +549,9 @@ def _local_collection(root, name: str, codex, *, corpus_dir=None):
         fts_dir=Path(root) / name / "index",
         lance_dir=vector_place.table_dir(root, name),
         acquire_enabled=False,
-        license_ack=_ack_of(codex, state_dir),
+        # `ack_dir`: another collection's state, for `carry --rechunked --dry-run`
+        # alone — the target read under the ack its --yes carries (rechunk.py)
+        license_ack=_ack_of(codex, ack_dir or state_dir),
         # THE CODEX'S LAYERS, and the Codex itself — the worker's loader
         # passes both (app/collections.py) and this did not, so every stage
         # reaching a collection through here cut documents with the

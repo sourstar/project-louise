@@ -31,8 +31,13 @@ file is used, never recomputed.
   its answers to the sixteen fingerprint texts are byte-identical to the
   kept ones (RULE 1: reuse bytes that are provably identical). Otherwise it
   is computed, journalled, then kept beside the old one.
-- **The collection keeps its own copy**, which is what its gate reads
-  (`find`).
+- **No collection keeps a copy** (2026-11-22): the reference is resolved
+  by its key through RAGE's API, app/rage/reference.py, which every caller
+  uses.
+
+THE REFERENCE IS THE MODEL'S, NOT THE COLLECTION'S (operator, 2026-11-22):
+app/rage/reference.py is the one way to it — `resolve`, `store`, `put`,
+`twin`; this module keeps the files.
 """
 from __future__ import annotations
 
@@ -78,7 +83,10 @@ def request_timeout(ctx: int | None, in_flight: int) -> float:
     return CPU_S_PER_KTOKENS * windows * max(1, int(in_flight))
 
 
-def directory(root: Path, name: str, role: str) -> Path:
+def legacy_directory(root: Path, name: str, role: str) -> Path:
+    """Where a collection kept its references before the node's store
+    (2026-11-06) — read only by `app.rage.reference.legacy`, which holds
+    them to the store; nothing writes or resolves here."""
     return runs_mod.directory(root, name).parent / "cpu-reference" / role
 
 
@@ -86,21 +94,11 @@ def _file_in(d: Path, run_id: str) -> Path:
     return d / f"{run_id.split(':', 1)[-1]}.json"
 
 
-def _file(root: Path, name: str, role: str, run_id: str) -> Path:
-    return _file_in(directory(root, name, role), run_id)
-
-
-def write(root: Path, name: str, role: str, *, run_id: str, run: dict[str, Any],
-          set_id: str, vectors: Sequence[Sequence[float]]) -> Path:
-    """The reference, written whole (a temporary file, then a replace).
-    Refused unless `run` is a CPU run: a card's answers are what it checks."""
-    return write_in(directory(root, name, role), role, run_id=run_id, run=run,
-                    set_id=set_id, vectors=vectors)
-
-
 def write_in(d: Path, role: str, *, run_id: str, run: dict[str, Any], set_id: str,
              vectors: Sequence[Sequence[float]], extra: dict[str, Any] | None = None) -> Path:
-    """`write` into a directory: a collection's, or the node's store."""
+    """A reference written whole into a store directory (a temporary file,
+    then a replace). Refused unless `run` is a CPU run: a card's answers are
+    what it checks."""
     import numpy as np
     if run.get("driver") != "cpu":
         raise CodexError(f"the run {run_id[:23]}… is on {run.get('driver')!r}, not the CPU: "
@@ -135,47 +133,6 @@ def read(path: Path) -> CpuReference:
                         arr.tolist(), Path(path), doc.get("run_object") or {})
 
 
-def kept(root: Path, name: str, role: str, *, run_id: str, set_id: str,
-         count: int) -> Path | None:
-    """The reference `run_id` already made of this set, whole and readable,
-    or None. A run reproduces itself (invariant 12), so its answers to the
-    same set are these bytes: `hold embedder cpu-reference` skips the role."""
-    path = _file(root, name, role, run_id)
-    if not path.is_file():
-        return None
-    try:
-        ref = read(path)
-    except (OSError, ValueError, KeyError, CodexError):
-        return None
-    if ref.run_id != run_id or ref.set_id != set_id or len(ref.vectors) != count:
-        return None
-    return path
-
-
-def find(root: Path, name: str, role: str, *, weights: str, set_id: str,
-         count: int | None = None) -> CpuReference | None:
-    """The newest stored reference for these weights and this set, or None.
-    A file that cannot be read is passed over (a gate does not fail on it;
-    `louise hold embedder cpu-reference` makes it again)."""
-    d = directory(root, name, role)
-    if not d.is_dir():
-        return None
-    best: tuple[float, CpuReference] | None = None
-    for p in d.glob("*.json"):
-        try:
-            ref = read(p)
-        except (OSError, ValueError, KeyError, CodexError):
-            continue
-        if ref.weights != weights or ref.set_id != set_id:
-            continue
-        if count is not None and len(ref.vectors) != count:
-            continue
-        mtime = p.stat().st_mtime
-        if best is None or mtime > best[0]:
-            best = (mtime, ref)
-    return best[1] if best else None
-
-
 # ---- the pass, resumable (invariant 2) ---------------------------------------
 # gutenberg, 2026-11-02: the query role had 352 of 512 answers in memory when
 # one request came back after a 5 h `docker pause` with its VeGa receipt
@@ -195,18 +152,9 @@ class Deferred(Exception):
     that window is kept, and the pass defers (the journal stays)."""
 
 
-def journal(root: Path, name: str, role: str, *, run_id: str, set_id: str) -> Path:
-    """The role's journal: this run's answers to this set, one line a text."""
-    return journal_in(directory(root, name, role), run_id=run_id, set_id=set_id)
-
-
 def journal_in(d: Path, *, run_id: str, set_id: str) -> Path:
     tag = hashlib.sha256(set_id.encode("utf-8")).hexdigest()[:16]
     return d / f"{run_id.split(':', 1)[-1]}.{tag}.partial.jsonl"
-
-
-def discard_journal(root: Path, name: str, role: str, *, run_id: str, set_id: str) -> None:
-    journal(root, name, role, run_id=run_id, set_id=set_id).unlink(missing_ok=True)
 
 
 def _digest(text: Any) -> str:
@@ -218,13 +166,6 @@ def _digest(text: Any) -> str:
 def _f32(raw: bytes) -> list[float]:
     import numpy as np
     return np.frombuffer(raw, dtype="<f4").astype(float).tolist()
-
-
-def embed_resumable(root: Path, name: str, role: str, *, run_id: str, set_id: str,
-                    texts: Sequence[Any], embed, window: int = WINDOW,
-                    say=None) -> list[list[float]]:
-    return embed_resumable_in(directory(root, name, role), role, run_id=run_id, set_id=set_id,
-                              texts=texts, embed=embed, window=window, say=say)
 
 
 def embed_resumable_in(d: Path, role: str, *, run_id: str, set_id: str,
@@ -308,14 +249,16 @@ def node_key(*, weights: str, set_id: str, ctx: int, instruction: str | None, ro
     return key
 
 
-def node_directory(key: dict[str, Any]) -> Path:
+def node_directory(key: dict[str, Any], *, make: bool = True) -> Path:
     """`<LOUISE_ROOT>/state/cpu-reference/<digest of the key>/`, the key
-    written beside the files so a person can read what they answer."""
+    written beside the files so a person can read what they answer.
+    `make=False`: the path alone, nothing created (a gate's lookup)."""
     from app import config
     digest = hashlib.sha256(json.dumps(key, sort_keys=True).encode("utf-8")).hexdigest()[:32]
     d = config.louise_root() / "state" / "cpu-reference" / digest
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "key.json").write_text(json.dumps(key, sort_keys=True, indent=1), encoding="utf-8")
+    if make:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "key.json").write_text(json.dumps(key, sort_keys=True, indent=1), encoding="utf-8")
     return d
 
 
@@ -348,15 +291,6 @@ def node_find(d: Path, *, set_id: str, count: int, run_id: str | None = None) ->
 def _f4(vectors: Sequence[Sequence[float]]) -> bytes:
     import numpy as np
     return np.asarray(vectors, dtype="<f4").tobytes()
-
-
-def adopt_journal(old: Path, d: Path, *, run_id: str, set_id: str) -> None:
-    """A collection's journal from before the store (2026-11-06) is taken
-    over, never lost: the same run's answers to the same texts."""
-    new = journal_in(d, run_id=run_id, set_id=set_id)
-    if old.is_file() and not new.exists():
-        new.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(old, new)
 
 
 def obtain(d: Path, role: str, *, set_id: str, texts: Sequence[Any], run_id: str,

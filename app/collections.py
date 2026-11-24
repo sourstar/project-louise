@@ -17,7 +17,7 @@ from typing import Any
 
 from . import config, vector_place
 from .plugins import (deposit, embedded, eurlex, gutenberg, legi, neuris, normattiva, pubmed,
-                      wikidata, wikipedia)
+                      wikidata, wikipedia, wikisource)
 from .plugins.base import CorpusSource
 
 # `genome` and `packed` were boxed on 2026-09-14 and removed on 2026-11-01
@@ -34,6 +34,8 @@ PLUGIN_REGISTRY: dict[str, CorpusSource] = {
     "pubmed": pubmed.SOURCE,
     "wikidata": wikidata.SOURCE,
     "wikipedia": wikipedia.SOURCE,
+    # Wikisource's works, every language a slice (docs/notes/wikisource-design.md)
+    "wikisource": wikisource.SOURCE,
 }
 
 
@@ -1014,7 +1016,9 @@ def _current_run(codex, name: str, spec) -> str | None:
     return acquire_spec.pinned_snapshot(spec, codex.origin.spec)
 
 
-def _parse_slices(value: Any, where: str):
+def _parse_slices(value: Any, where: str, key: str = "slices"):
+    """`slices` (or, for `--set`, `share_slices` / `embed_slices`, named by
+    `key` in the refusal): "all" or a list of slice names of 09 §9.3."""
     if value == "all":
         return "all"
     if isinstance(value, list) and all(isinstance(v, str) and v for v in value):
@@ -1026,11 +1030,11 @@ def _parse_slices(value: Any, where: str):
             try:
                 shard_mod.check_slice(v)
             except Exception as e:   # noqa: BLE001 — the loader's errors are ValueErrors
-                raise ValueError(f"{where}: slices = {value!r}: {e}") from None
+                raise ValueError(f"{where}: {key} = {value!r}: {e}") from None
             if v not in out:
                 out.append(v)
         return tuple(out)
-    raise ValueError(f'{where}: slices is "all" or a list of slice values '
+    raise ValueError(f'{where}: {key} is "all" or a list of slice values '
                      f"(07 §7.8), got {value!r}")
 
 

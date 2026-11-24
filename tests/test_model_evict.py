@@ -30,6 +30,16 @@ NOW = time.time()          # the use rows are real epoch seconds
 H = 3600.0
 
 
+@pytest.fixture(autouse=True)
+def _now_is_taken_when_the_test_starts():
+    """NOW is the TEST's moment, not the module's collection: in the full
+    ordered suite a test runs ~30 min after its module is imported, and the
+    eviction's "last used 9.0 h ago", read against the real clock, said 9.4 h
+    (München's node run, 2026-11-18)."""
+    global NOW
+    NOW = time.time()
+
+
 class Runner:
     """LocalAI as the eviction sees it: `/system` with sizes and CPU, the
     reclaimer's setting, each model's pin, the backend shutdown — every

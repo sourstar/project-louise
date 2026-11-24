@@ -29,6 +29,7 @@ import base64
 import json
 import math
 import struct
+import time
 
 import httpx
 import pytest
@@ -191,6 +192,17 @@ class LocalAI:
                               headers={"content-type": "application/json"})
 
 
+class _NoSleep:
+    """The time module, but a sleep that returns at once."""
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    @staticmethod
+    def sleep(_s: float) -> None:
+        return None
+
+
 @pytest.fixture
 def vega(tmp_path, monkeypatch):
     v = Vega(tmp_path)
@@ -204,7 +216,11 @@ def vega(tmp_path, monkeypatch):
 def localai(vega, monkeypatch):
     la = LocalAI(vega)
     monkeypatch.setattr(embeddings.httpc, "post", la.post)
-    monkeypatch.setattr(embeddings.time, "sleep", lambda s: None)
+    # embeddings' OWN sleeps only: `embeddings.time` is the process's time
+    # module, and a no-op sleep there turned every background loop of the
+    # process into a spin (a leaked parent-watch thread: the gate's 2.7 s
+    # took 30 min a test in the full suite, 2026-11-18)
+    monkeypatch.setattr(embeddings, "time", _NoSleep())
     monkeypatch.setattr(config, "EMBED_BATCH", 16)
     monkeypatch.setattr(config, "EMBED_CONCURRENCY", 1)
     return la
@@ -411,12 +427,11 @@ def node(tmp_path, monkeypatch, localai):
     assert collections_mod.recipe_for(collection).api == "vega"
     # the CPU twin's reference for the run's weights (invariant 12): without
     # one no card run is gated (tests/test_run_check.py)
-    from app.hold import cpu_reference as cpu_ref
+    from app.rage import reference as rage
     items = run_check.calibration_items(root / "collections", "gutenberg", codex)
-    cpu_ref.write(root / "collections", "gutenberg", "document", run_id="sha256:" + "c0" * 32,
-                  run={"driver": "cpu", "engine": {}, "weights": R1_OBJ["weights"]},
-                  set_id=codex.space.calibration.set,
-                  vectors=opening(emb.gate_texts(codex, "document", items)))
+    rage.put(codex, "document", run_id="sha256:" + "c0" * 32,
+             run={"driver": "cpu", "engine": {}, "weights": R1_OBJ["weights"]},
+             vectors=opening(emb.gate_texts(codex, "document", items)))
     return root / "collections", collection, codex
 
 

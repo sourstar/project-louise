@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass
 
 import httpx
-from . import config, model_load, model_use
+from . import config, httpc, model_load, model_use
 from .rage import dispatch
 from .rage import keep as rage_keep
 from .rage.dispatch import Level
@@ -46,14 +46,14 @@ ANSWER_TOKENS = 1500
 MARGIN_TOKENS = 512
 CHARS_PER_TOKEN = 3.0
 #: how much of a refused request's body its error carries: the server's reason
-ERROR_BODY_CHARS = 300
+ERROR_BODY_CHARS = httpc.ERROR_BODY_CHARS
 
 #: LocalAI's (llama.cpp's) words for a prompt over the model's context
 _CONTEXT_WORDS = re.compile(r"request \((\d+) tokens\) exceeds the available context size "
                             r"\((\d+) tokens\)")
 
 
-class ChatRefused(httpx.HTTPStatusError):
+class ChatRefused(httpc.ModelRefused):
     """The chat endpoint answered an error: the status AND the server's reason
     (the first ERROR_BODY_CHARS of its body), where `raise_for_status` gave a
     bare "400 Bad Request" (München, 2026-11-16: the reason was "exceeds the
@@ -80,13 +80,7 @@ def refuse_on_error(r: httpx.Response) -> None:
         pass
     else:
         return
-    try:
-        r.read()
-        text = r.text
-    except Exception:                    # noqa: BLE001 — the status is still said
-        text = ""
-    reason = " ".join(text.split())[:ERROR_BODY_CHARS] or r.reason_phrase
-    message = f"{r.status_code} from {r.request.url}: {reason}"
+    message, text = httpc.refusal(r)
     m = _CONTEXT_WORDS.search(text)
     if m:
         raise ContextExceeded(message, request=r.request, response=r,

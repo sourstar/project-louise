@@ -200,6 +200,16 @@ class Sources:
         return got, unknown
 
 
+
+#: what a withheld leg means for the answer, by leg (05 §5.3): the vector leg
+#: alone leaves a text search; the text or catalogue leg missing leaves the
+#: others (the operator, 2026-11-23: a failed text leg is said, "A")
+LEG_WITHHELD_SAYS = {
+    "vector": "Searched on its text only",
+    "text": "Searched without its full-text index",
+    "catalog": "Searched without its catalogue",
+}
+
 def shown_search(query: str, result: dict[str, Any], sources: Sources, *,
                  translated: bool = True, question: str | None = None,
                  answer_lang: str | None = None, reads: list | None = None) -> str:
@@ -257,8 +267,8 @@ def shown_search(query: str, result: dict[str, Any], sources: Sources, *,
     for w in result.get("withheld", []) or []:
         blocks.append(f"Withheld here: {w.get('collection') or w.get('collection_id')} ({w.get('reason')})")
     for w in result.get("legs_withheld", []) or []:
-        blocks.append(f"Searched on its text only: {w.get('collection') or w.get('collection_id')} "
-                      f"({w.get('reason')})")
+        blocks.append(f"{LEG_WITHHELD_SAYS.get(w.get('leg'), 'Searched with a leg missing')}: "
+                      f"{w.get('collection') or w.get('collection_id')} ({w.get('reason')})")
     if result.get("unresolved"):
         blocks.append("No reference row for: " + ", ".join(map(str, result["unresolved"])))
     fetches = (result.get("history") or {}).get("fetches") or []
@@ -483,10 +493,19 @@ def _searched(call: Callable[[str, dict[str, Any]], Any], args: dict[str, Any], 
             "seconds": round(time.monotonic() - t0, 3)}
 
 
-def ask(question: str, *, collections: list[str] | None = None, history: list[dict[str, Any]] | None = None,
-        call: Callable[[str, dict[str, Any]], Any] | None = None, model=None,
-        max_rounds: int = MAX_ROUNDS, answer_lang: str | None = None,
-        passages: bool = False, speed: bool = False) -> dict[str, Any]:
+def ask(question: str, *, speed: bool = False, **kwargs: Any) -> dict[str, Any]:
+    """`_ask` under the reader's Quality/Speed: the historical reader runs in
+    its searches and its sources only under Quality (operator, 2026-11-18:
+    "Keep the word replacement under quality search only")."""
+    from app import reading
+    with reading.quality(not speed):
+        return _ask(question, speed=speed, **kwargs)
+
+
+def _ask(question: str, *, collections: list[str] | None = None, history: list[dict[str, Any]] | None = None,
+         call: Callable[[str, dict[str, Any]], Any] | None = None, model=None,
+         max_rounds: int = MAX_ROUNDS, answer_lang: str | None = None,
+         passages: bool = False, speed: bool = False) -> dict[str, Any]:
     """One question through the loop: `{answer, sources, cited, cited_unknown,
     turns: [{tool, arguments, by, result, error, seconds}], rounds,
     exhausted, model_s}`. `model(messages, tools) -> (content,
@@ -522,7 +541,8 @@ def ask(question: str, *, collections: list[str] | None = None, history: list[di
             if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
     scope = {"collections": list(collections)} if collections else {}
 
-    # Louise's search: the question as the Ask tab searches it
+    # Louise's search: the question as the Ask tab searches it — and every
+    # later search the model asks for — under the reader's Quality/Speed (`ask`)
     turns: list[dict[str, Any]] = [
         _searched(call, {"query": question, "translate": True, **scope}, "louise")]
 

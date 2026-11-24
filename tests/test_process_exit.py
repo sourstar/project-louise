@@ -186,3 +186,27 @@ def test_a_closed_stdout_is_a_quiet_exit_and_a_pipe_of_its_own_is_an_error(tmp_p
             assert err == "", "nothing to say: the reader had what it wanted"
         else:
             assert "BrokenPipeError" in err
+
+
+def test_a_thread_that_never_ends_holds_the_exit_only_for_the_bound(tmp_path):
+    """The node, 2026-11-19: gutenberg.next's refused build returned from main
+    and never exited — a parse pool's manager, outliving `parallel.discard`,
+    held `threading._shutdown` for two hours, twice. The exit is bounded: past
+    it the process says which threads still run, with their stacks, and
+    leaves with the code its work decided."""
+    import time
+    proc = _child(tmp_path, """
+        import sys, threading
+        from app import process_exit
+        process_exit.FINISH_BOUND_S = 1.0
+        threading.Thread(target=threading.Event().wait, name="stuck-manager").start()   # never ends
+        sys.stdout.write("refused")
+        process_exit.run(lambda: 2)
+    """)
+    t0 = time.monotonic()
+    out, err = proc.communicate(timeout=60)
+    assert proc.returncode == 2, err
+    assert time.monotonic() - t0 < 20, "left at the bound, not when the thread ended"
+    assert out == "refused"
+    assert "still running: stuck-manager; leaving with 2" in err
+    assert "Thread 0x" in err, "every stack, by faulthandler"

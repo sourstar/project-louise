@@ -137,6 +137,7 @@ def result_of(collection, ctx: dict[str, Any], hit: dict[str, Any], rank: int, *
         "producer_key": own_key if producer in (None, "local") else producer,
         "title": hit.get("title"), "authors": hit.get("authors"), "lang": hit.get("lang"),
         "first_published": hit.get("first_published"),
+        "first_published_by": hit.get("first_published_by"),
         "figures": ctx["figures"], "reranked": reranked,
         "credits": ctx.get("credits") or [],
     }

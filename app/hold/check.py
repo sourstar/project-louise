@@ -394,19 +394,25 @@ def _chunks_part(tree: str, codex, path: str, name: str, chunks: int,
     p = Path(tree) / path
     if not p.is_file():
         return None, []
-    seen, failed = 0, []
-    pairs: list[tuple[str, str]] = []
-    for r in pack_records.iter_records(p):
-        seen += 1
-        row = {"uid": r["uid"], "native_id": r.get("native_id", 0)}
-        sections = [tuple(x) for x in r.get("sections") or []]
-        pairs.extend((c["id"], c["text"]) for c in
-                     layers_mod.chunks_for_document(codex, row, sections, title=r.get("title")))
-    if len(pairs) != chunks:
-        failed.append(f"{name}:chunks={len(pairs)} not {chunks}")
-    if rec.chunks_root(pairs) != chunks_root:
+    failed: list[str] = []
+    n = {"records": 0, "chunks": 0}
+
+    def pairs():
+        # ONE RECORD AT A TIME, hashed as cut (2026-11-17): every chunk's
+        # text of the part was held for one root, ~6 KB a record here
+        for r in pack_records.iter_records(p):
+            n["records"] += 1
+            row = {"uid": r["uid"], "native_id": r.get("native_id", 0)}
+            sections = [tuple(x) for x in r.get("sections") or []]
+            for c in layers_mod.chunks_for_document(codex, row, sections, title=r.get("title")):
+                n["chunks"] += 1
+                yield c["id"], c["text"]
+    root = rec.chunks_root(pairs())
+    if n["chunks"] != chunks:
+        failed.append(f"{name}:chunks={n['chunks']} not {chunks}")
+    if root != chunks_root:
         failed.append(f"{name}:chunks_root")
-    return seen, failed
+    return n["records"], failed
 
 
 def check_roots(ctx: Ctx) -> Outcome:
@@ -435,6 +441,12 @@ def check_roots(ctx: Ctx) -> Outcome:
                                                     r.root) for r in rels])):
         if ok is not None and not ok:
             failed.append(f"relations/{r.slice}/{r.n:05d}")
+    # THE SELECTION RULES an annotations Codex pins (09 §9.4, operator
+    # 2026-11-23: "A"): carried in the SHARD and hashing to their pins, or
+    # what the claims are about cannot be read from the copy
+    if getattr(ctx.codex, "annotates", None) is not None:
+        from . import annotations as ann_mod
+        failed += ann_mod.select_failures(ctx.shard_tree, ctx.codex)
     if not held:
         return Outcome("roots", INCONCLUSIVE,
                        why="this peer holds none of the snapshot's shards")
@@ -802,11 +814,23 @@ def verdict(line: bytes, got: bytes) -> str:
     return "failed"
 
 
+class OriginAway(FileNotFoundError):
+    """A record's origin unit cannot be re-fetched, and the origin said why
+    (it does not answer, it no longer serves the run, the copy that places
+    the unit is not there): UNREACHABLE, a deferral, its reason said in the
+    outcome. A plain FileNotFoundError is a unit not there, as before."""
+
+
 def _compared_here(reparse, items):
     """`Ctx.reparse_many` in this process, one record at a time."""
     for uid, locator, line in items:
         try:
             got = reparse(uid, locator)
+        except OriginAway as e:
+            # the origin's own reason travels, and is said where none was
+            # reached (app/acquire/block_origin.py)
+            yield uid, "unreachable", (str(e) or None)
+            continue
         except FileNotFoundError:
             yield uid, "unreachable", None
             continue
@@ -947,17 +971,24 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
     # that had every reason to believe 1.6M records had drifted from
     # PubMed, and the collection's own records were perfect.
     failed, moved, changed, errored, unreachable, compared = [], [], [], [], 0, 0
+    # WHY, where the origin said: the first reason an unreachable or a changed
+    # record came with (an origin away, a run no longer served, a block whose
+    # bytes are not the copy's — app/acquire/block_origin.py), said in the
+    # outcome; a verdict's own "changed" carries none
+    why_unreachable = why_changed = None
     for uid, outcome, error in (ctx.reparse_many(chosen()) if ctx.reparse_many is not None
                                 else _compared_here(ctx.reparse, chosen())):
         compared += 1
         if outcome == "unreachable":
             unreachable += 1
+            why_unreachable = why_unreachable or error
         elif outcome == "errored":
             errored.append(error)
         elif outcome == "moved":
             moved.append(uid)
         elif outcome == "changed":
             changed.append(uid)
+            why_changed = why_changed or error
         elif outcome == "failed":
             failed.append(uid)
     if errored and not failed:
@@ -975,7 +1006,8 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
                         "origin": "unreachable"},
                        ctx.seed, _shard_ids(ctx.codex, ran),
                        why=f"none of the {compared} sampled record(s) could "
-                           f"be re-fetched from the origin given")
+                           f"be re-fetched from the origin given"
+                           + (f": {why_unreachable}" if why_unreachable else ""))
     reach = _reach(ctx, per_group, compared_in, group_of, shared_of, keep, passed, in_part)
     reproduced = compared - unreachable - len(errored) - len(changed)
     if not failed and changed and (reproduced <= 0
@@ -993,7 +1025,8 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
             ctx.seed, _shard_ids(ctx.codex, ran),
             why=f"{len(changed)} of {compared} sampled record(s) changed at the origin "
                 f"since the build (more than {CHANGED_AT_ORIGIN_SHARE:.0%} of those "
-                f"re-parsed), so the sample proves nothing either way" + reach)
+                f"re-parsed), so the sample proves nothing either way"
+                + (f" — first: {why_changed}" if why_changed else "") + reach)
     said = ""
     if bound:
         said = (f" — read {bound['origin_units']} of the {bound['origin_units_sampled']} "
@@ -1035,8 +1068,10 @@ def check_records_vs_origin(ctx: Ctx) -> Outcome:
                           if moved else "")
                        + (f", {len(changed)} changed at the origin (their origin unit "
                           f"revised since the build: not reproducible, no evidence against "
-                          f"them)" if changed else "")
-                       + (f", {unreachable} not there" if unreachable else "")
+                          f"them" + (f"; first: {why_changed}" if why_changed else "") + ")"
+                          if changed else "")
+                       + (f", {unreachable} not there" + (f" ({why_unreachable})" if why_unreachable else "")
+                          if unreachable else "")
                        # named, never folded into the count above: a record
                        # that could not be read is not a record that agreed
                        + (f", {len(errored)} unreadable ({errored[0]})"

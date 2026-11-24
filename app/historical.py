@@ -196,22 +196,37 @@ class Read:
     rules: list[str] = field(default_factory=list)
     translation_in: int | None = None    # the source number of its other version
     modern: bool = False                 # that version is a modern one, same language
+    #: the readings of its period applied to the model's copy (app/reading.py):
+    #: their version, "" where none applied
+    glossary: str = ""
+    #: what dated it, for a source read by its year ("its author's dates
+    #: (1265–1321)"; app/reading.py `Year.by`)
+    by: str = ""
+    #: whom the readings applied are from, TLIO's disclaimer with it
+    #: (app/reading.py `credits`); shown in the badge
+    credits: list[str] = field(default_factory=list)
 
     def badge(self) -> str:
         """The source's badge: what the reader sees beside it — the stage,
         by what (the claim's method, 09 §9.5), and what was done."""
-        out = f"{self.stage}, {BY.get(self.why, 'by ' + self.why)}"
+        out = f"{self.stage}, " + (f"by {self.by}" if self.why == "year" and self.by
+                                   else BY.get(self.why, "by " + self.why))
         if self.rules:
             out += ", spelling modernised for the model"
+        if self.glossary:
+            out += ", old words read with its period's glossary"
         if self.translation_in:
             out += (f", read with its modern version [{self.translation_in}]" if self.modern
                     else f", read with its translation [{self.translation_in}]")
+        if self.credits:
+            out += " (" + "; ".join(self.credits) + ")"
         return out
 
 
 #: what the badge says the stage was found by
 BY = {"matcher": "by its text", "wikidata": "by Wikidata", "human": "by hand",
       "text": "by this passage", "question": "by this passage and the question",
+      "year": "by its publication year",
       "language code": "by its language code"}
 #: a claim's stage, named in plain words: the canonical ids the claims use
 STAGE_NAMES: dict[str, str] = {
@@ -228,11 +243,19 @@ def markers(reader: Reader, text: str) -> int:
             + sum(len(p.findall(text)) for p in reader.patterns))
 
 
-def modernise(reader: Reader, text: str) -> tuple[str, list[str]]:
+#: B's hand-written h- word list: where a year triggers the glossary, its
+#: attested pairs take this rule's place (architecture, 2026-11-18, point 5)
+H_RULE = "h- (huomo → uomo)"
+
+
+def modernise(reader: Reader, text: str, skip: frozenset[str] = frozenset()) -> tuple[str, list[str]]:
     """B: the text with the period's spelling modernised, and the rules that
-    changed something. A copy for the model to read; nothing else."""
+    changed something. A copy for the model to read; nothing else. `skip`:
+    rules not applied (B's h- list where the glossary read the text)."""
     applied = []
     for r in reader.rules:
+        if r.name in skip:
+            continue
         if r.table is not None:
             table = r.table
             new = r.pattern.sub(lambda m: _keep_case(m.group(1), table[m.group(1).lower()]), text)
@@ -335,31 +358,73 @@ def read_sources(numbered: Iterable[tuple[int, dict[str, Any]]], question: str,
     numbered = list(numbered)
     period = asks_about_period(question)
     pairs = _translations(numbered, answer_lang)
+    glossed = _glossary(numbered)
     shown: dict[int, tuple[str, str]] = {}
     reads: list[Read] = []
     for n, h in numbered:
         got = stage_of(h, period_asked=period)
-        if got is None:
+        g = glossed.get(n)
+        if got is None and g is None:
             continue
+        if got is None:
+            # read by its year alone: the glossary's trigger (operator, 2026-11-18)
+            got = (READERS.get(_lang(h)), f"{_LANG_NAMES.get(_lang(h), _lang(h))} of {g[0]}", "year")
         reader, stage, why = got
-        text = str(h.get("text") or "")
+        text = g[1] if g is not None else str(h.get("text") or "")
         applied: list[str] = []
         if reader is not None:
-            text, applied = modernise(reader, text)
+            text, applied = modernise(reader, text, frozenset({H_RULE}) if g is not None else frozenset())
         suffix = f" · «{stage}»"
         year = first_published(h)
         if year is not None:
             suffix += f" · first published {year}"
         if applied:
             suffix += " · spelling modernised for reading (" + ", ".join(applied) + ")"
+        if g is not None and g[2]:
+            by = getattr(g[0], "by", "")
+            suffix += " · old words read with its period's glossary, [in brackets]" + (f", dated by {by}" if by else "")
         other = pairs.get(n)
         if other is not None:
             suffix += (f" · a modern version of it is source [{other[0]}]" if other[1]
                        else f" · a translation of it is source [{other[0]}]")
         shown[n] = (suffix, text)
         reads.append(Read(n, stage, why, applied, other[0] if other else None,
-                          bool(other and other[1])))
+                          bool(other and other[1]), g[2] if g is not None else "",
+                          getattr(g[0], "by", "") if g is not None else "",
+                          list(g[3]) if g is not None else []))
     return shown, reads
+
+
+_LANG_NAMES = {"it": "Italian"}
+
+
+def _lang(h: dict[str, Any]) -> str:
+    return str(h.get("lang") or "").lower()[:2]
+
+
+def _glossary(numbered: list[tuple[int, dict[str, Any]]]) -> dict[int, tuple[int, str, str, list[str]]]:
+    """{n: (the record's year, the text with its period's readings, their
+    version)} for the sources whose record states a year a reading holds,
+    in the reading's language (app/reading.py). Nothing on any failure: no
+    reading is the text as it was."""
+    from . import reading
+    if not reading.quality_on():
+        return {}                               # under Speed: the glossary never runs (operator)
+    try:
+        hits = [h for _n, h in numbered]
+        years = reading.years(hits)
+        if not years:
+            return {}
+        found = reading.lookup(reading.words_of(str(hits[i].get("text") or "") for i in years))
+    except Exception:   # noqa: BLE001 — the glossary is a help, never the answer's failure
+        return {}
+    out = {}
+    for i, y in years.items():
+        n, h = numbered[i]
+        text, used = reading.apply(str(h.get("text") or ""), y, found, reading.CHAT, lang=_lang(h))
+        if used:
+            out[n] = (y, text, found.version, reading.credits(r.source for r in used))
+    return out
 
 
 def said(reads: list[Read]) -> str:
@@ -415,7 +480,6 @@ DENSITY_DATED = 0.5
 CONFIDENCE, CONFIDENCE_DATED = "0.8", "0.9"
 #: PG's own summary stating a first publication ("… published in 1605"):
 #: marc520, as app/ask/works.py `first_published` (München's #695) reads it
-_PUBLISHED = re.compile(r"\b(?:first\s+)?published\s+in\s+(1[0-9]{3})\b", re.IGNORECASE)
 
 
 def medieval_markers(reader: Reader, text: str) -> int:
@@ -430,13 +494,131 @@ def _record_text(record: dict[str, Any]) -> str:
     return "\n".join(str(s[1]) for s in record.get("sections") or [] if len(s) > 1)
 
 
+#: a translation STATED by the record's own title or summary (architecture,
+#: 2026-11-18: "its title, subtitle, marc500 or marc520 STATES it").
+#: Counted on the node's 1,112 Italian gutenberg records: 4 match, 2 of them
+#: without a trl credit (54167 "…in Italiana tradotto", 40326 "Traduzione di
+#: …"); PG's RDF holds no marc041, 240 or 500 for them.
+_STATED = re.compile(r"\b(?:tradott[oa]|traduzion[ei]|versione\s+di|recat[oa]\s+in|volgarizzament[oi]|"
+                     r"translated|translation)\b", re.IGNORECASE)
+
+
+#: a translation stated by the record's FRONT MATTER — its title page, what
+#: PG transcribed of it (architecture's ruling, 2026-11-18): read only there,
+#: never deep in the body, where "tradotta dal regno dei sogni" is a figure
+_LANGS = (r"(?:l')?(?:inglese|francese|tedesco|latino|greco|spagnuolo|spagnolo|portoghese|russo|ebraico|"
+          r"arabo|olandese|svedese|danese|polacco|english|french|german|latin|greek|spanish)")
+#: a title page STATES a translation in one of two ways (architecture,
+#: 2026-11-18, narrowed after the node: 62038 and 56500's front matter only
+#: TALKED ABOUT volgarizzamenti): its TYPE, in capitals, case-sensitive —
+_FRONT_CAPS = re.compile(r"\b(?:VOLGARIZZAT[A-Z]*|VOLGARIZZAMENT[A-Z]*|VERSIONE\s+ITALIANA|TRADOTT[A-Z]*|"
+                         r"TRANSLATED)\b")
+#: — or a statement with its AGENT or SOURCE, in any case
+_FRONT = re.compile(r"(?:\btranslated\s+by\b"
+                    r"|\btradott[oaie]\s+(?:da|dal|dalla|dallo|dall['’])\s*(?:" + _LANGS + r"\b|(?-i:[A-ZÀ-Ý])[\w'’.-]+)"
+                    r"|\bvolgarizzat[oaie]\s+(?:da|dal|dalla|dallo|dall['’]|per)\b"
+                    r"|\bversione\s+italiana\s+(?:di|da|del|dal)\b"
+                    r"|\brecat[oaie]\s+in\s+(?:italiano|lingua|volgare)\b)", re.IGNORECASE)
+#: the front matter read where a record has no "Front matter" section: its
+#: first characters
+FRONT_CHARS = 5000
+
+
+#: a front-matter statement counts only ABOUT THIS RECORD (architecture,
+#: 2026-11-18): its own title's first two significant words, or one of its
+#: authors' surnames, within NEAR characters before or after it — a
+#: publisher's list of other books on the title page (41600: "VENICE by
+#: Pompeo Molmenti. Translated by Alethea Wiel") is not about the record
+NEAR = 400
+_SKIP = frozenset("il lo la i gli le l un una uno di del della dello dei degli delle da dal dalla dallo dai "
+                  "in a al alla allo ai e ed o per con su the an of and to by".split())
+
+
+def _fold(text: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)).lower()
+
+
+def _anchors(record: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(the title's first two significant words, the authors' surnames), folded."""
+    words = [w for w in re.findall(r"[^\W\d_]+", _fold(str(record.get("title") or ""))) if w not in _SKIP]
+    names = [str(a.get("name") or "") for a in (record.get("extra") or {}).get("creators_detail") or []
+             if isinstance(a, dict) and str(a.get("role") or "") in ("aut", "author", "cre", "creator")]
+    names += [str(c) for c in record.get("creators") or []]
+    surnames = {_fold(n.split(",")[0]).strip().split()[-1] for n in names if n.strip() and n.split(",")[0].strip()}
+    return tuple(words[:2]), tuple(sorted(s for s in surnames if len(s) > 2))
+
+
+def _near(front: str, m: re.Match, anchors: tuple[tuple[str, ...], tuple[str, ...]]) -> bool:
+    """The record's own title words (both) or an author's surname within NEAR of the match."""
+    return _has_anchor(front[max(0, m.start() - NEAR): m.end() + NEAR], anchors)
+
+
+def _has_anchor(text: str, anchors: tuple[tuple[str, ...], tuple[str, ...]]) -> bool:
+    window = _fold(text)
+    has = lambda w: re.search(r"\b" + re.escape(w) + r"\b", window) is not None
+    title, surnames = anchors
+    return bool((title and all(has(w) for w in title)) or any(has(s) for s in surnames))
+
+
+def _near_lines(front: str, m: re.Match, anchors: tuple[tuple[str, ...], tuple[str, ...]]) -> bool:
+    """A statement with its agent is about this record when the record's
+    anchor stands on the statement's own line or on the nearest NON-BLANK
+    line before it — a wrapped title page ("…by Sir Walter Scott,⏎Translated
+    by Gaetano Barbieri") is one statement; a publisher's list ("RAVENNA by
+    Corrado Ricci.⏎⏎VENICE by Pompeo Molmenti. Translated by Alethea Wiel."),
+    one book an entry, is not about the record its other entries name
+    (41600). Blank lines are skipped: they separate entries, never one
+    statement's halves."""
+    lines = front.split("\n")
+    pos = 0
+    for k, line in enumerate(lines):
+        if pos + len(line) >= m.start():
+            break
+        pos += len(line) + 1
+    own = lines[k] if lines else ""
+    before = next((lines[j] for j in range(k - 1, -1, -1) if lines[j].strip()), "")
+    return _has_anchor(own, anchors) or _has_anchor(before, anchors)
+
+
+def front_matter(record: dict[str, Any]) -> str:
+    """The record's "Front matter" section where it has one (pg_text,
+    pg_epub), else the first FRONT_CHARS of its text."""
+    secs = record.get("sections") or []
+    for sec in secs:
+        if isinstance(sec, (list, tuple)) and len(sec) >= 2 and str(sec[0]).strip().lower() == "front matter":
+            return str(sec[1])
+    return " ".join(str(sec[1]) for sec in secs if isinstance(sec, (list, tuple)) and len(sec) >= 2)[:FRONT_CHARS]
+
+
 def is_translation(record: dict[str, Any]) -> bool:
-    """A translator among the record's credits (09 §9.5 `creators` and
-    gutenberg's `extra.creators_detail`, MARC relator `trl`)."""
+    """The record's OWN CORPUS says it is a translation (architecture,
+    2026-11-18): a translator among its credits (09 §9.5 `creators` and
+    gutenberg's `extra.creators_detail`, MARC relator `trl`); its title or
+    its summary (marc500, marc520) stating it; or its FRONT MATTER stating
+    it — in title-page capitals ("VOLGARIZZAMENTO", "VERSIONE ITALIANA",
+    "TRADOTTO", "TRANSLATED") or with its agent or source ("Translated by",
+    "tradotto dal francese", "volgarizzato da", "versione italiana di",
+    "recato in italiano"); a preface only talking of volgarizzamenti is not — Scott's Lammermoor (42881),
+    with no credit and no summary saying so, is caught by its title page's
+    "Translated by Gaetano Barbieri". A record none of these marks is read
+    as an original."""
     for a in (record.get("extra") or {}).get("creators_detail") or []:
         if isinstance(a, dict) and a.get("role") in ("trl", "translator"):
             return True
-    return bool(_TRANSLATED.search(" ".join(map(str, record.get("creators") or []))))
+    if _TRANSLATED.search(" ".join(map(str, record.get("creators") or []))):
+        return True
+    marc = (record.get("extra") or {}).get("marc") or {}
+    stated = [str(record.get("title") or ""), *(str(x) for k in ("500", "520") for x in (marc.get(k) or []))]
+    if _STATED.search(" ".join(stated)):
+        return True
+    front = front_matter(record)
+    anchors = _anchors(record)
+    # rule 1, title-page capitals: the record's anchor within NEAR characters;
+    # rule 2, a statement with its agent: on its own line or the nearest
+    # non-blank line before it (architecture, 2026-11-18)
+    return (any(_near(front, m, anchors) for m in _FRONT_CAPS.finditer(front))
+            or any(_near_lines(front, m, anchors) for m in _FRONT.finditer(front)))
 
 
 def record_first_published(record: dict[str, Any]) -> int | None:
@@ -446,11 +628,11 @@ def record_first_published(record: dict[str, Any]) -> int | None:
     if got is not None:
         return got
     marc = (record.get("extra") or {}).get("marc") or {}
-    for v in (marc.get("520") or marc.get(520) or []) if isinstance(marc, dict) else []:
-        m = _PUBLISHED.search(json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v)
-        if m:
-            return int(m.group(1))
-    return None
+    from app.ask import works
+    # THE one definition of a stated first publication (architecture, 2026-11-18)
+    return works.stated_first_published([v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+                                         for v in ((marc.get("520") or marc.get(520) or [])
+                                                   if isinstance(marc, dict) else [])])
 
 
 def stage_claim(record: dict[str, Any], contributor: str) -> dict[str, Any] | None:

@@ -122,14 +122,212 @@ class EditionFacts:
     #: the WORK's first publication as the origin states it (PG's summary,
     #: marc520: "… is a novel published in 1920"); never the edition's year
     first_published: int | None = None
+    #: a translator among the record's credits (MARC relator `trl`,
+    #: historical.is_translation): its text is not the work's original
+    #: language, so the original's first publication dates no word of it
+    translated: bool = False
+    #: the authors' LIFETIME (architecture's ruling, 2026-11-18, on the
+    #: operator's "Author's birth/death places the book in time pretty
+    #: precisely (assume a date in the middle)"): the earliest birth to the
+    #: latest death of the AUTHORS (roles aut, cre) — of the WORK, a
+    #: translation's too, never its translators' — from the record's own
+    #: `extra.creators_detail`; None for an anthology (midpoints more than
+    #: LIVED_SPREAD apart) or where a creator lacks a year (never guessed)
+    lived: tuple[int, int] | None = None
+    #: their dates as shown: "1265–1321", several joined by ", "
+    lived_span: str = ""
+    #: the CENTURY the summary states ("written in the early 14th century",
+    #: marc520; operator, 2026-11-18: "The century publication date is
+    #: equally important, don't we parse it?"), as a span of years, and its
+    #: words as stated ("early 14th century")
+    century: tuple[int, int] | None = None
+    century_text: str = ""
+    #: the summary (marc520) is PG's own machine-written one, ending "(This is
+    #: an automatically generated summary.)": every year read from it says so
+    #: (architecture, 2026-11-18; 1,087 of the node's 1,091 Italian summaries)
+    summary_auto: bool = False
+    #: the record's WORK among its volumes: its authors' PG agent ids and its
+    #: title without volume markers (`volume_key`); "" without an author id
+    volume_group: str = ""
 
 
 #: "published in 1920", "first published in 1605", "originally published in
 #: 1813" — the summary's own statement of the work's first publication
 #: (München's scan of 2,498 PG catalogue records, 2026-11-16: ~10 % state it;
 #: marc906/marc260 are the transcribed EDITION's year, Don Quixote 1928 vs 1605)
-_FIRST_PUBLISHED = re.compile(r"\b(?:first\s+|originally\s+)?published\s+(?:in\s+)?(1[4-9]\d\d|20\d\d)\b",
+_FIRST_PUBLISHED = re.compile(r"\b(?:first\s+|originally\s+)?published\s+(?:in\s+)?(1\d\d\d|20\d\d)\b",
                               re.IGNORECASE)
+#: ONE definition of a stated first publication, for both its readers
+#: (`edition_facts` here, `historical.record_first_published`; architecture,
+#: 2026-11-18): 1000-2099 — the two patterns read 1400-2099 and 1000-1999
+#: and so disagreed on every medieval and every modern year
+def stated_first_published(summaries) -> int | None:
+    for s in summaries or []:
+        m = _FIRST_PUBLISHED.search(str(s))
+        if m:
+            return int(m.group(1))
+    return None
+
+
+#: an anthology: creators' midpoints further apart than this give no year
+LIVED_SPREAD = 50
+
+#: PG's machine-written summary, as it signs itself
+AUTO_SUMMARY = "(This is an automatically generated summary.)"
+#: a volume marker (architecture, 2026-11-18): Vol./Volume/Tomo/Parte/Libro/
+#: Book with a Roman or Arabic numeral, or a numeral alone at the end
+_VOL_MARK = re.compile(r"(?i)[\s,.;:–—-]*\b(?:vol(?:ume)?|tomo|parte|libro|book)\b\.?\s*(?:[ivxlcdm]+|\d+)\b\.?"
+                       r"|[\s,.;:–—-]+(?:[ivxlcdm]+|\d+)\.?\s*$")
+
+
+def volume_key(title: str, agent_ids) -> str:
+    """One work's key across its volumes: the authors' agent ids and the title
+    with its volume markers stripped; "" without an author id."""
+    ids = sorted({str(a) for a in agent_ids if a})
+    if not ids:
+        return ""
+    t = _VOL_MARK.sub(" ", str(title or ""))
+    t = re.sub(r"[^\w]+", " ", t.lower()).strip()
+    return "|".join(ids) + "|" + t
+
+
+def lifetime(record: dict[str, Any], translated: bool) -> tuple[tuple[int, int] | None, str]:
+    """(the creators' lifetime, their dates shown): the translators' for a
+    translation, the authors' (aut, cre) otherwise — never editors,
+    illustrators, commentators or annotators. Several within LIVED_SPREAD
+    of each other (by their midpoints): the earliest birth to the latest
+    death; wider, an anthology: None. A creator of the role without both
+    years: None, never guessed."""
+    roles = ("trl", "translator") if translated else ("aut", "author", "cre", "creator")
+    lives, spans = [], []
+    for a in (record.get("extra") or {}).get("creators_detail") or []:
+        if not isinstance(a, dict) or str(a.get("role") or "") not in roles:
+            continue
+        try:
+            b, d = int(str(a.get("birth") or "").strip()), int(str(a.get("death") or "").strip())
+        except ValueError:
+            return None, ""
+        if b > d:
+            return None, ""
+        lives.append((b, d))
+        spans.append(f"{b}–{d}")
+    if not lives:
+        return None, ""
+    mids = [(b + d) // 2 for b, d in lives]
+    if max(mids) - min(mids) > LIVED_SPREAD:
+        return None, ""
+    return (min(b for b, _d in lives), max(d for _b, d in lives)), ", ".join(spans)
+
+
+_ORDINAL_WORDS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6, "seventh": 7,
+                  "eighth": 8, "ninth": 9, "tenth": 10, "eleventh": 11, "twelfth": 12, "thirteenth": 13,
+                  "fourteenth": 14, "fifteenth": 15, "sixteenth": 16, "seventeenth": 17, "eighteenth": 18,
+                  "nineteenth": 19, "twentieth": 20, "twenty-first": 21}
+_ORD = r"(\d{1,2})(?:st|nd|rd|th)|(" + "|".join(sorted(_ORDINAL_WORDS, key=len, reverse=True)) + r")"
+#: "early 14th century", "the mid-15th century", "late nineteenth century",
+#: "14th–15th century", "the 16th century"
+_CENTURY = re.compile(r"\b(?:(early|mid|middle|late)[\s-]+)?(?:" + _ORD + r")(?:\s*(?:[-–]|to|or|and)\s*(?:"
+                      + _ORD + r"))?[\s-]+centur(?:y|ies)\b", re.IGNORECASE)
+
+
+#: the words that make a century the WORK's (architecture, 2026-11-18,
+#: approved): its writing, composition or publication — "written", "composed",
+#: "created", "penned", "compiled", "published", "printed", "first performed"
+#: (a play's composition), "from the Nth century"
+_CONTEXT = re.compile(r"(?i)\b(written|composed|created|penned|produced|crafted|compiled|published|printed|"
+                      r"first\s+performed|from)\b")
+#: a writing verb GOVERNING the century: within a few words, then in /
+#: during / around / circa before it (München's before/after on the node,
+#: 2026-11-18: "written during the late 19th century", "composed in verse
+#: during the early 16th century" are writing, though "during" alone is
+#: setting) — the setting words apply only where no writing verb governs
+_GOVERNED = re.compile(r"(?i)\b(written|composed|created|penned|produced|crafted|compiled|published|printed|"
+                       r"first\s+performed)\b(?:\s+[\w'’,-]+){0,4}?\s+(?:in|during|around|circa|c\.|about)"
+                       r"\s+(?:the\s+)?$")
+#: never its setting or subject: "set in", "set during", "takes place",
+#: "during", "about", "of" immediately before the century (17850 "historical
+#: novel set in the 16th century", 68090 "Set in 17th-century Netherlands")
+_SETTING = re.compile(r"(?i)\b(?:set\s+in|set\s+during|takes?\s+place(?:\s+in)?|during|about|of)\s+(?:the\s+)?$")
+_PUBLISHED_WORDS = ("published", "printed")
+
+
+def century_statement(summaries) -> tuple[tuple[int, int] | None, str, str]:
+    """(the span, the words, the kind) of the first century the summary
+    states AS THE WORK'S: in a writing, composition or publication context
+    of its sentence, never its setting or subject, never an adjectival
+    "Nth-century <noun>". The kind: "published" (published, printed) or
+    "written" (the others); "edition" where the sentence speaks of an
+    edition. The Nth is (N-1)00-(N-1)99; early its first third, mid its
+    second, late its last; "Nth-Mth" from the first's start to the last's end."""
+    for s in summaries or []:
+        text = str(s)
+        for m in _CENTURY.finditer(text):
+            start = max(text.rfind(".", 0, m.start()), text.rfind("!", 0, m.start()),
+                        text.rfind("?", 0, m.start())) + 1
+            pre = text[start:m.start()]
+            governed = _GOVERNED.search(pre)
+            if not governed and _SETTING.search(pre):
+                continue                                    # its setting or subject, never its date
+            after = text[m.end():m.end() + 2]
+            if "-centur" in m.group(0).lower() and re.match(r"\s\w", after):
+                continue                                    # "a 14th-century poem": adjectival
+            ctx = [governed.group(1).lower()] if governed else [c.group(1).lower() for c in _CONTEXT.finditer(pre)]
+            if not ctx:
+                continue                                    # no writing or publication said
+            end = text.find(".", m.end())
+            sentence = text[start:end if end >= 0 else len(text)]
+            kind = ("edition" if re.search(r"(?i)\bedition\b", sentence)
+                    else "published" if ctx[-1] in _PUBLISHED_WORDS else "written")
+            q = (m.group(1) or "").lower()
+            n = int(m.group(2)) if m.group(2) else _ORDINAL_WORDS[m.group(3).lower()]
+            last = (int(m.group(4)) if m.group(4) else _ORDINAL_WORDS[m.group(5).lower()]) \
+                if (m.group(4) or m.group(5)) else n
+            lo, hi = (n - 1) * 100, (last - 1) * 100 + 99
+            if last == n and q:
+                lo, hi = {"early": (lo, lo + 33), "mid": (lo + 34, lo + 66), "middle": (lo + 34, lo + 66),
+                          "late": (lo + 67, lo + 99)}[q]
+            return (lo, hi), m.group(0).strip(), kind
+    return None, "", ""
+
+
+def stated_century(summaries) -> tuple[tuple[int, int] | None, str]:
+    """(the span, the words) of `century_statement`."""
+    span, words, _kind = century_statement(summaries)
+    return span, words
+
+
+#: the origin-issues code (app/issues.py; operator, 2026-11-18: "Add these
+#: inconsistencies to the report but before double check for postumous
+#: publications"), reported by gutenberg's parse through the year rule's own
+#: functions
+SUMMARY_DATE_OUTSIDE_LIFE = "summary-date-outside-life"
+
+
+def summary_date_outside_life(record: dict[str, Any]) -> str | None:
+    """Why the summary's date contradicts the author's lifetime, or None. A
+    date before the author's birth; a date after death the summary says was
+    WRITTEN, with no edition in its sentence. Never a posthumous PUBLICATION
+    (the summary speaks of publication, or the edition's own year falls
+    inside the stated span)."""
+    marc = (record.get("extra") or {}).get("marc") or {}
+    life, span_text = lifetime(record, False)
+    if not life:
+        return None
+    summaries = marc.get("520") or []
+    first = stated_first_published(summaries)
+    if first is not None and first < life[0]:
+        return f"the summary says first published in {first}; the author lived {span_text}"
+    span, words, kind = century_statement(summaries)
+    if span is None:
+        return None
+    edition = _YEAR.search(str(record.get("date") or ""))
+    if edition and span[0] <= int(edition.group(1)) <= span[1]:
+        return None                                         # the edition's century, not the work's
+    if span[1] < life[0]:
+        return f"the summary says '{words}' ({kind}); the author lived {span_text}"
+    if span[0] > life[1] and kind == "written":
+        return f"the summary says '{words}' (written); the author lived {span_text}"
+    return None
 
 
 #: an abridgement, by the edition's own words — never "unabridged"
@@ -154,16 +352,21 @@ def edition_facts(record: dict[str, Any]) -> EditionFacts:
         publisher = re.split(r"[,;]|\b\d{4}\b", imprint.split(":", 1)[1])[0]
     publisher = re.sub(r"[^\w ]", "", publisher.lower()).strip()
     year = _YEAR.search(imprint) or _YEAR.search(str(record.get("date") or ""))
-    first = None
-    for s in marc.get("520") or []:
-        m = _FIRST_PUBLISHED.search(str(s))
-        if m:
-            first = int(m.group(1))
-            break
+    first = stated_first_published(marc.get("520"))
+    from app import historical
+    translated = historical.is_translation(record)
+    lived, span = lifetime(record, False)            # the WORK's authors, a translation's too
+    century, century_text = stated_century(marc.get("520"))
+    auto = any(AUTO_SUMMARY in str(x) for x in (marc.get("520") or []))
+    authors = [a.get("agent_id") for a in extra.get("creators_detail") or []
+               if isinstance(a, dict) and str(a.get("role") or "") in ("aut", "author", "cre", "creator")]
+    group = volume_key(str(record.get("title") or ""), authors)
     return EditionFacts(abridged=bool(_ABRIDGED.search(words)),
                         better_as=tuple(_BETTER.findall(str(extra.get("description") or ""))),
                         publisher=publisher, year=int(year.group(1)) if year else None,
-                        first_published=first)
+                        first_published=first, translated=translated, lived=lived, lived_span=span,
+                        century=century, century_text=century_text, summary_auto=auto,
+                        volume_group=group)
 
 
 def edition_order(candidates: Sequence[tuple[int, str, str | None]], facts: dict[str, EditionFacts],
@@ -603,18 +806,29 @@ def facts_for(collection, want: Sequence[str], *, root: Path | None = None) -> d
 
 #: the rule `edition_facts` applies; a change to it is a new file name, so a
 #: facts file never outlives the rule that wrote it (invariant 3)
-FACTS_VERSION = 2          # 2 (2026-11-16): first_published
+FACTS_VERSION = 12         # 2 (2026-11-16): first_published; 3: translated; 4: lived, century; 5: a stated
+                           # translation; 6: summary_auto, volume_group; 7: the century in context only;
+                           # 8: a writing verb governs (during, produced, crafted); 9: front matter;
+                           # 10: front matter narrowed (capitals, or agent/source); 11: about this record, traduzioni;
+                           # 12: an agent statement by its line
 
 
 def _decode(v) -> EditionFacts:
-    return EditionFacts(bool(v[0]), tuple(v[1]), str(v[2]), v[3], v[4] if len(v) > 4 else None)
+    return EditionFacts(bool(v[0]), tuple(v[1]), str(v[2]), v[3], v[4] if len(v) > 4 else None,
+                        bool(v[5]) if len(v) > 5 else False, tuple(v[6]) if len(v) > 6 and v[6] else None,
+                        str(v[7]) if len(v) > 7 else "", tuple(v[8]) if len(v) > 8 and v[8] else None,
+                        str(v[9]) if len(v) > 9 else "", bool(v[10]) if len(v) > 10 else False,
+                        str(v[11]) if len(v) > 11 else "")
 
 
 def _make(records: Iterable[dict[str, Any]]) -> dict[str, Any]:
     out = {}
     for r in records:
         f = edition_facts(r)
-        out[str(r["uid"])] = [f.abridged, list(f.better_as), f.publisher, f.year, f.first_published]
+        out[str(r["uid"])] = [f.abridged, list(f.better_as), f.publisher, f.year, f.first_published,
+                              f.translated, list(f.lived) if f.lived else None, f.lived_span,
+                              list(f.century) if f.century else None, f.century_text, f.summary_auto,
+                              f.volume_group]
     return out
 
 
@@ -645,7 +859,12 @@ def _facts_read(tree: Path, shard, uid: str) -> EditionFacts | None:
     from app.pack import records as pack_records
     path = Path(tree) / shard_mod.shard_path(shard.slice, shard.n)
     try:
-        return edition_facts(pack_records.read_fields(path, uid, ("title", "date", "extra")))
+        # a FRAME part (gutenberg's) is read whole anyway: its sections too, for
+        # the front matter that marks a translation (historical.is_translation),
+        # as the part's facts file reads it; a Parquet part never decompresses
+        # its books' sections for this (967 ms a search, München 2026-10-22)
+        fields = ("title", "date", "extra") if pack_records.is_parquet(path) else ("title", "date", "extra", "sections")
+        return edition_facts(pack_records.read_fields(path, uid, fields))
     except (KeyError, OSError, ValueError):
         return None
 
@@ -688,6 +907,10 @@ def attach_first_published(collection, hits: list[dict[str, Any]], *, root: Path
         return
     plugin = getattr(collection, "plugin", None)
     for h in hits:
-        y = first_published(plugin, facts.get(_uid(h)))
+        f = facts.get(_uid(h))
+        y = first_published(plugin, f)
         if y:
             h["first_published"] = y
+            if f is not None and f.first_published == y and f.summary_auto:
+                # the year is read from PG's machine-written summary: shown so (architecture, 2026-11-18)
+                h["first_published_by"] = "PG's automatic summary"

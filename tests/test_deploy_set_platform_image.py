@@ -14,6 +14,11 @@ _spec.loader.exec_module(spi)
 
 OLD = "sha256:" + "85" * 32
 NEW = "sha256:" + "29" * 32
+_spec = importlib.util.spec_from_file_location("set_commands", _PATH.with_name("set_commands.py"))
+sc = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(sc)
+#: what deploy/truenas-app.yaml says web and worker run
+WANTED = sc.wanted()
 
 
 def a_config():
@@ -59,7 +64,7 @@ def test_the_output_names_the_variable_and_never_another_value(monkeypatch, caps
             calls.append(method)
             if method == "app.config":
                 return a_config() if calls.count("app.config") == 1 else spi.apply(a_config(), NEW) and \
-                    {"services": {s: {"environment": {spi.KEY: NEW}} for s in spi.SERVICES}}
+                    {"services": {s: {"environment": {spi.KEY: NEW}, "command": WANTED[s]} for s in spi.SERVICES}}
             return None
     monkeypatch.setitem(sys.modules, "truenas_api_client", types.SimpleNamespace(Client=Client))
     assert spi.main(["x", NEW]) == 0
@@ -146,3 +151,108 @@ def test_an_update_the_worker_did_not_take_is_said(monkeypatch, capsys):
     monkeypatch.setitem(sys.modules, "truenas_api_client", types.SimpleNamespace(Client=Client))
     assert spi.main(["x", NEW]) == 1
     assert "did not take ['GPU_PROBE_URL']" in capsys.readouterr().err
+
+
+# --- the commands (set_commands.py, 2026-11-20) --------------------------------
+
+
+def test_the_file_states_the_worker_guard_and_the_web_runs_its_image_cmd():
+    """#779: the worker run by its guard (the OOM hold). The deploy never
+    applied the file, so the command reached no node until München set it by
+    hand at 8c56161."""
+    assert WANTED == {"web": None, "worker": ["python", "-m", "app.worker_guard"]}
+
+
+def test_the_files_command_is_set_and_nothing_else_moves():
+    cfg = a_config()
+    cfg["services"]["worker"]["command"] = ["python", "-m", "app.worker"]
+    changes, notes = sc.apply(cfg, WANTED)
+    assert changes == ["worker  command ['python', '-m', 'app.worker'] -> ['python', '-m', 'app.worker_guard']"]
+    assert notes == [] and cfg["services"]["worker"]["command"] == WANTED["worker"]
+    assert "command" not in cfg["services"]["web"] and cfg["services"]["gpu-probe"] == {"command": ["x"]}
+    assert cfg["services"]["worker"]["environment"][spi.KEY] == OLD, "the commands alone"
+    assert sc.apply(cfg, WANTED) == ([], []), "already there: nothing to change"
+    assert sc.missing(cfg, WANTED) == []
+
+
+def test_a_live_command_the_file_does_not_state_is_said_and_left():
+    cfg = a_config()
+    cfg["services"]["web"]["command"] = ["uvicorn", "app.api:app"]
+    changes, notes = sc.apply(cfg, WANTED)
+    assert notes == ["web     command ['uvicorn', 'app.api:app'] is not in truenas-app.yaml: left"]
+    assert cfg["services"]["web"]["command"] == ["uvicorn", "app.api:app"] and len(changes) == 1
+
+
+def test_a_config_or_a_file_it_does_not_recognise_changes_nothing(tmp_path):
+    cfg = a_config()
+    del cfg["services"]["worker"]
+    with pytest.raises(ValueError, match="no worker service"):
+        sc.apply(cfg, WANTED)
+    assert "command" not in cfg["services"]["web"]
+    with pytest.raises(ValueError, match="services"):
+        sc.apply({}, WANTED)
+    bad = tmp_path / "truenas-app.yaml"
+    bad.write_text("services:\n  worker:\n    command: python -m app.worker_guard\n")
+    with pytest.raises(ValueError, match="not a list of words"):
+        sc.wanted(bad)
+
+
+def _client(calls, state, *, lose_command=False):
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def call(self, method, *args, **kw):
+            import copy
+            calls.append(method)
+            if method == "app.update":
+                state["cfg"] = copy.deepcopy(args[1]["custom_compose_config"])
+                if lose_command:
+                    state["cfg"]["services"]["worker"].pop("command", None)
+                return None
+            return copy.deepcopy(state["cfg"])
+    return Client
+
+
+def test_the_command_rides_the_images_update(monkeypatch, capsys):
+    """One `app.update`: the guard's module does not exist in an older image,
+    so the command never arrives on its own."""
+    import sys
+    import types
+    calls: list[str] = []
+    state = {"cfg": a_config()}
+    monkeypatch.setitem(sys.modules, "truenas_api_client", types.SimpleNamespace(Client=_client(calls, state)))
+    assert spi.main(["x", NEW]) == 0
+    out = capsys.readouterr().out
+    assert calls == ["app.config", "app.update", "app.config"]
+    assert "worker  command None -> ['python', '-m', 'app.worker_guard']" in out
+    assert state["cfg"]["services"]["worker"]["command"] == WANTED["worker"]
+    assert state["cfg"]["services"]["worker"]["environment"][spi.KEY] == NEW
+    calls.clear()
+    assert spi.main(["x", NEW]) == 0 and calls == ["app.config"] and "unchanged" in capsys.readouterr().out
+
+
+def test_an_image_already_set_still_updates_to_take_the_command(monkeypatch, capsys):
+    import sys
+    import types
+    calls: list[str] = []
+    cfg = a_config()
+    for s in spi.SERVICES:
+        cfg["services"][s]["environment"][spi.KEY] = NEW
+    state = {"cfg": cfg}
+    monkeypatch.setitem(sys.modules, "truenas_api_client", types.SimpleNamespace(Client=_client(calls, state)))
+    assert spi.main(["x", NEW]) == 0 and "app.update" in calls
+
+
+def test_a_command_the_update_did_not_take_is_said(monkeypatch, capsys):
+    import sys
+    import types
+    calls: list[str] = []
+    state = {"cfg": a_config()}
+    monkeypatch.setitem(sys.modules, "truenas_api_client",
+                        types.SimpleNamespace(Client=_client(calls, state, lose_command=True)))
+    assert spi.main(["x", NEW]) == 1
+    assert "did not take: ['worker']" in capsys.readouterr().err

@@ -233,10 +233,21 @@ def test_index_show_and_build_over_the_vector_table(isolated_config, monkeypatch
     monkeypatch.setattr(vector_index, "build",
                         lambda c, index_type=None, partitions=None, log=None:
                         built.append(("vector", index_type, partitions)) or {"built": True, "type": "ivf_flat"})
+    monkeypatch.setattr(vector_index, "build_lang", lambda c, log=None: built.append(("lang",)) or {"built": True})
+    monkeypatch.setattr(vector_index, "stats", lambda c: {"lang_indexed": True})
     assert louise.main(["hold", "index", "build", "gutenberg", "--vector", "--type", "ivf_flat",
                         "--partitions", "4", "--root", root]) == 0
     lance = Path(root) / "gutenberg" / "lance"
     assert built == [("book_id", lance), ("vector", "ivf_flat", 4)], "the collection's own table"
+    # 2026-11-24: Normattiva's hand build left the lang bitmap out; one missing is built
+    built.clear()
+    monkeypatch.setattr(vector_index, "stats", lambda c: {"lang_indexed": False})
+    assert louise.main(["hold", "index", "build", "gutenberg", "--vector", "--root", root]) == 0
+    assert [b[0] for b in built] == ["book_id", "lang", "vector"]
+    built.clear()
+    monkeypatch.setattr(vector_index, "stats", lambda c: {"lang_indexed": None})
+    assert louise.main(["hold", "index", "build", "gutenberg", "--vector", "--root", root]) == 0
+    assert [b[0] for b in built] == ["book_id", "vector"], "no lang column: none to build"
 
 
 # ---- vectors import --retry -------------------------------------------------------

@@ -240,13 +240,30 @@ def _utc(t: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime(t))
 
 
+def held_paused() -> set[str] | None:
+    """The collections paused on their own (node_state), read from the node's
+    store without creating anything; an empty set where there is no store,
+    None where it cannot be read."""
+    from app import node_state
+    return node_state.peek(node_state.paused_collections, set(), error=None)
+
+
+#: what `summary` says of a paused collection's scheduled check
+HELD_PAUSED = "held: the collection is paused; its scheduled check waits for `louise node resume {name}`"
+
+
 def summary(root: Path, name: str, codex=None) -> dict[str, Any] | None:
     """What `hold collection show` displays of the last scheduled check;
-    for an interrupted one, the same in plain words (`note`)."""
+    for an interrupted one, the same in plain words (`note`); for a paused
+    collection, that its check is held (`held`)."""
     got = last(root, name)
+    paused = held_paused()
+    held = HELD_PAUSED.format(name=name) if paused is not None and name in paused else None
     if got is None:
-        return None
+        return {"held": held} if held else None
     out = {k: got.get(k) for k in ("time", "snapshot_id", "outcome", "exit", "secs")}
+    if held:
+        out["held"] = held
     if got.get("peak_rss"):
         out["peak_rss"] = got["peak_rss"]
     if got.get("outcome") == INTERRUPTED:
@@ -543,12 +560,28 @@ def turn(*, stop: Callable[[], bool], log: Callable[[str], None], now: float | N
         return None
     root = collections_mod.louise_root() / "collections"
     try:
-        collections = collections_mod.load_all()
+        # EVERY COLLECTION IT HOLDS (03 §3.2), the ANNOTATIONS ones too (02
+        # §2.10: held, checked and shared like any collection). `load_all`
+        # leaves them out — nothing for the worker's stages — and until
+        # 2026-11-18 so did this turn: wikipedia-articles sat in quarantine,
+        # "roots not yet run on this peer", with no attestation at all, until
+        # someone typed `hold check` (the node, München)
+        collections = [*collections_mod.load_all(), *collections_mod.load_annotations()]
     except Exception:   # noqa: BLE001 — the next beat
+        return None
+    # A COLLECTION PAUSED ON ITS OWN IS HELD AT EVERY STAGE (07 §7.3, §7.8),
+    # its scheduled check too: read once a turn, never per collection. A
+    # store that cannot be read runs no check this beat — which are paused
+    # is not known, and a check of one would run beside the operator's own
+    # (München, 2026-11-17: wikidata.next's check in its own container)
+    paused = held_paused()
+    if paused is None:
         return None
     for c in sorted(collections, key=lambda c: c.name):
         if stop():
             return None
+        if c.name in paused:
+            continue
         codex = getattr(c, "codex", None)
         if codex is None:
             continue

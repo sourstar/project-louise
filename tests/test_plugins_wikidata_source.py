@@ -11,9 +11,20 @@ from pathlib import Path
 
 import pytest
 
+from app import parallel
 from app.plugins.base import DiscoverState
 from app.plugins.wikidata import dump as dump_mod, ids, pack, textify
 from app.plugins.wikidata.source import WikidataSource, find_dumps, split_locator
+
+
+@pytest.fixture(autouse=True)
+def _files_cache_floor_not_this_tests(monkeypatch):
+    """The files cache's free-space floor (derived.STAGE_FREE, 10 % of the
+    disk) is tests/test_derived_staged.py's. Here it read THIS machine's
+    disk: a run that filled it past 90 % skipped the copy these tests read
+    (2026-11-22, a sandbox at 11 % free). A copy still has to fit."""
+    from app import derived
+    monkeypatch.setattr(derived, "STAGE_FREE", 0.0)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "wikidata-mini"
 
@@ -164,8 +175,12 @@ def _profile(monkeypatch, *cores):
 
 class _CountingPool:
     """ProcessPoolExecutor's stand-in on threads (a monkeypatch cannot reach
-    a spawned child): counts the jobs running at once. The initializer runs
-    once in-process, except the children's nice."""
+    a spawned child): counts the jobs running at once. The pool's OWN
+    initializer runs once in-process; what only a child does is not run in
+    the test's process: `parallel.child_start`'s parent watch (a thread that
+    lives as long as the process — eight of them spun in every later test
+    that made `time.sleep` a no-op, the vega gate 2.7 s → 30 min a test,
+    2026-11-18) and the children's nice (+10 on pytest itself, every pool)."""
     import threading as _t
     peak = 0
     #: a job waits (≤ 0.25 s) until this many run at once: a LOWER bound on
@@ -178,6 +193,8 @@ class _CountingPool:
         from concurrent.futures import ThreadPoolExecutor
         self._ex = ThreadPoolExecutor(max_workers=max_workers)
         self._lock, self._now = self._t.Lock(), 0
+        if initializer is parallel.child_start:
+            initializer, initargs = initargs[0], initargs[1:]
         if initializer is not None and initializer is not pack._child_nice:
             initializer(*initargs)
 
@@ -212,6 +229,8 @@ def test_the_pack_pass_runs_no_more_than_the_profile_s_cores(tmp_path, monkeypat
     pack.build(serial, languages=("en", "fr"), chunk=2, workers=1)
     monkeypatch.setattr(pack, "SUB", 1)
     monkeypatch.setattr(pack, "ProcessPoolExecutor", _CountingPool)
+    # the codes and names initializers nice their child: here, the test
+    monkeypatch.setattr(pack, "_child_nice", lambda: None)
     _CountingPool.peak = 0
     _profile(monkeypatch, 1)
     assert pack.build(limited, languages=("en", "fr"), chunk=2, workers=4)["complete"]

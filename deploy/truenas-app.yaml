@@ -189,9 +189,18 @@ services:
       DISCOVER_INTERVAL_MIN: '360'
       # ── platform ──
       ADMIN_TOKEN_FILE: /run/louise/admin/admin-token
+      # glibc's cap on its per-thread heaps, for the web too (operator,
+      # 2026-11-22: the web "should be less than 1GB"): 1,780 -> 983 MiB anon
+      # warm on the same queries (München, the live image). The worker sets
+      # its own below; its reasons are there
+      MALLOC_ARENA_MAX: '2'
     volumes:
       - /mnt/tank/media/public/books/project_gutenberg:/corpus:ro
-      - /mnt/ssd4/apps/louise-rag/data:/data
+      # /data on ssd3, its searched vector tables on ssd4 (storage-tiering.md §12,
+      # 2026-11-23); the Lance root's bind and LOUISE_LANCE_ROOT are the deploy's
+      # (deploy/16f/flatten_mounts.py lance_root)
+      - /mnt/ssd3/louise-data:/data
+      - /mnt/ssd4/apps/louise-rag/data/lance:/data/lance
       - /mnt/ssd4/apps/louise-rag/config:/config
       - /mnt/ssd4/apps/louise-rag/secrets/public:/run/louise/public:ro
       - /mnt/ssd4/apps/louise-rag/secrets/admin:/run/louise/admin:ro
@@ -212,7 +221,9 @@ services:
       nofile:
         soft: 65536
         hard: 524288
-    command: ['python', '-m', 'app.worker']
+    # the worker run by its guard: kept down after a memory kill until released
+    # (app/worker_guard.py, app/oom_hold.py; operator, 2026-11-19)
+    command: ['python', '-m', 'app.worker_guard']
     init: true                  # reaps rsync's orphaned children — see web
     environment:
       <<: *env
@@ -229,7 +240,8 @@ services:
       MALLOC_ARENA_MAX: '2'
     volumes:
       - /mnt/tank/media/public/books/project_gutenberg:/corpus:ro
-      - /mnt/ssd4/apps/louise-rag/data:/data
+      - /mnt/ssd3/louise-data:/data
+      - /mnt/ssd4/apps/louise-rag/data/lance:/data/lance
       - /mnt/ssd4/apps/louise-rag/config:/config
       - /mnt/ssd4/apps/louise-rag/secrets:/run/louise:ro
     stop_grace_period: 120s

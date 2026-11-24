@@ -128,6 +128,15 @@ class CertifierConfig:
 
 
 @dataclass(frozen=True)
+class WebConfig:
+    """`[web]` (07 §7.8, added 2026-11-22). `idle_trim_s`: after this many
+    seconds without a question, the web gives back the heap it freed, once
+    (app/idle_trim.py; operator, 2026-11-22: the web under 1 GB, "after 15
+    minutes without a question", configurable); 0 never."""
+    idle_trim_s: int = 900
+
+
+@dataclass(frozen=True)
 class AskConfig:
     """`[ask]` (07 §7.8): the reranker's latency bound (05 §5.6). A list
     the reranker cannot order inside it keeps its fused order and says
@@ -322,6 +331,7 @@ class PlatformConfig:
     trust: TrustConfig = TrustConfig()
     admission: AdmissionConfig = AdmissionConfig()
     ask: AskConfig = AskConfig()
+    web: WebConfig = WebConfig()
     models: ModelsConfig = ModelsConfig()
     speech: SpeechConfig = SpeechConfig()
     certifier: CertifierConfig = CertifierConfig()
@@ -676,6 +686,16 @@ def _load_one(path: Path) -> PlatformConfig:
         ask_raw, "latency_budget_ms", AskConfig().latency_budget_ms),
         translate_share=float(share))
 
+    web_raw = raw.get("web", {}) or {}
+    if not isinstance(web_raw, dict):
+        raise schedule_mod.ScheduleError("web must be a table (07 §7.8)")
+    idle_trim_s = web_raw.get("idle_trim_s", WebConfig().idle_trim_s)
+    if isinstance(idle_trim_s, bool) or not isinstance(idle_trim_s, int) or idle_trim_s < 0:
+        raise schedule_mod.ScheduleError(
+            f"web.idle_trim_s: seconds without a question before the web gives back its freed "
+            f"memory, 0 or more (0 = never), got {idle_trim_s!r} (07 §7.8)")
+    web_cfg = WebConfig(idle_trim_s=idle_trim_s)
+
     models_raw = raw.get("models", {}) or {}
     if not isinstance(models_raw, dict):
         raise schedule_mod.ScheduleError("models must be a table (07 §7.8)")
@@ -775,6 +795,7 @@ def _load_one(path: Path) -> PlatformConfig:
                           trust=TrustConfig(space_authors=tuple(authors)),
                           admission=admission,
                           ask=ask,
+                          web=web_cfg,
                           models=models,
                           speech=speech,
                           title=title_raw.strip(),

@@ -36,6 +36,7 @@
     louise node health [<collection>] [--errors]
     louise dev genesis recheck <collection> | recount <collection> [--yes]
     louise dev carry <from> <to> [--copy] [--keep producer:ARCHIVE] [--rebuilt|--reconcile|--resign|--recut] [--yes]
+    louise dev carry <from> <to> --rechunked [--dry-run | --yes] [--window N] [--processes N]
 
 The previous tree (`python -m app.cli`, 07 §7.6) is retired (2026-10-08):
 every name it had that is still useful is one of these.
@@ -125,6 +126,10 @@ def cmd_create(a) -> int:
         if a.encoder:                      # refused before anything is created
             model_keys(a.encoder, embed_model=keys["embed_model"],
                        query_model=keys["query_model"])
+        # A DATED-DUMP CODEX NAMES ITS RUN (09 §9.17; München, 2026-11-17: the
+        # parser-3 wikidata Codex, the live one with its parser and image
+        # changed, carried `{"files": null}` and its snapshot named no run)
+        spec = _whole_codex_run(a.root, spec, getattr(a, "run", None), a.name)
         # its NAME and its query side as given (2026-11-08: pubmed's parser-9
         # re-creation — a whole Codex named "pubmed-<hex>", its MedCPT query
         # endpoint dropped), and the MEMBERS it names copied from the held
@@ -144,10 +149,54 @@ def cmd_create(a) -> int:
                               api=getattr(a, "api", None),
                               embed_model=getattr(a, "embed_model", None),
                               query_model=getattr(a, "query_model", None),
-                              calibration_from=getattr(a, "calibration_from", None))
+                              calibration_from=getattr(a, "calibration_from", None),
+                              run=getattr(a, "run", None))
     print(f"held: {held}", file=sys.stderr)
     print(codex.collection_id)
     return 0
+
+
+def _run_for(root, plugin: str, recipe_spec: dict | None, run: str | None, name: str | None,
+             say=None):
+    """`run` as given; else, where the recipe's origin names no files and the
+    plugin's origin publishes dated dumps, the run the system DETERMINES
+    (RULE 2; `origin_run.determine`: the corpus's complete run, a
+    re-creation's predecessor's, the origin's latest complete one), said on
+    stderr and to `say` (the Library's notice) in plain words — or refused
+    saying what is missing and what would supply it."""
+    from app.hold import origin_run
+    origin_run.UNDETERMINED.set(None)            # this create's own reason only
+    if run or (recipe_spec or {}).get("files"):
+        return run
+    from app.acquire.specs import ACQUIRE_REGISTRY
+    if not origin_run.spec_dated(ACQUIRE_REGISTRY.get(plugin)):
+        return run
+    try:
+        found, why = origin_run.determine(Path(root) if root else _default_root(), plugin, name)
+    except origin_run.RunUndetermined as e:
+        # refused where the Codex is made (template.pin_dated_spec), in these words
+        origin_run.UNDETERMINED.set(str(e))
+        return run
+    line = f"run: {found} — {why}; its files written into origin.spec (09 §9.17)"
+    print(line, file=sys.stderr)
+    if say is not None:
+        say(line)
+    return found
+
+
+def _whole_codex_run(root, spec: dict, run: str | None, name: str | None) -> dict:
+    """A whole Codex given as the recipe (`create --recipe codex.json`, no
+    plugin), its run pinned for a plugin whose origin publishes dated dumps
+    (template.pin_dated), from `--run` or the re-creation's; the Codex as it
+    is for any other plugin."""
+    from app.hold import template as tpl
+    origin = spec.get("origin")
+    plugin = spec.get("plugin")
+    if not isinstance(origin, dict) or not isinstance(plugin, str):
+        return spec
+    run = _run_for(root, plugin, origin.get("spec"), run, name)
+    pinned = tpl.pin_dated_spec(plugin, origin.get("spec"), run)
+    return spec if pinned is origin.get("spec") else {**spec, "origin": {**origin, "spec": pinned}}
 
 
 def create_deposit(root, name: str, *, platform_image: str | None = None,
@@ -248,9 +297,11 @@ def cmd_create_annotations(a) -> int:
     # the claims file is streamed by path, never read whole (12.3 M claims: 4 GB)
     targets = ann.resolve_targets(a.root, Path(a.claims), a.annotates, a.from_snapshot)
     container = getattr(a, "container", None) or "jsonl"
+    selects = annotation_selects(getattr(a, "select", None), len(targets))
     if getattr(a, "dry_run", False):
-        _print(ann.preview(a.root, targets=targets, container=container,
-                           claims=Path(a.claims), annotator=a.annotator))
+        _print(ann.preview(a.root, targets=targets, container=container, selects=selects,
+                           claims=Path(a.claims), annotator=a.annotator,
+                           repin=bool(getattr(a, "repin", False))))
         return 0
     key = None
     try:
@@ -260,10 +311,12 @@ def cmd_create_annotations(a) -> int:
         print("no node key: the snapshot is written unsigned, and `signature` stays "
               "inconclusive until a key signs it", file=sys.stderr)
     codex, snap = ann.create(
-        a.root, a.name, targets=targets, container=container,
+        a.root, a.name, targets=targets, container=container, selects=selects,
+        select_rules=ann.select_rules(getattr(a, "select", None) or ()),
         claims=Path(a.claims), platform_image=preflight_create({}, a.platform_image),
         title=a.title, summary=a.summary, annotator=a.annotator, snapshot_id=a.snapshot,
-        key=key, now=_utc_now(), log=lambda m: print(m, file=sys.stderr))
+        key=key, now=_utc_now(), log=lambda m: print(m, file=sys.stderr),
+        repin=bool(getattr(a, "repin", False)))
     print(codex.collection_id)
     return 0
 
@@ -357,6 +410,19 @@ def cmd_annotations_update(a) -> int:
                      since=None if getattr(a, "whole", False) else {})
     _print(got.to_dict())
     return 0
+
+
+def annotation_selects(select, n_targets: int):
+    """`--select FILE`, once per --annotates in the same order, `-` for a target
+    the claims take whole (09 §9.3, amended 2026-11-18): each file pinned as
+    {id, version, sha256}; None when no --select is given."""
+    from app.hold import annotations as ann
+    if not select:
+        return None
+    if len(select) != n_targets:
+        raise CodexError(f"create annotations names {n_targets} target(s) and {len(select)} --select: "
+                         f"one --select per --annotates, in the same order, '-' for a target taken whole")
+    return [None if s == "-" else ann.select_of(Path(s)) for s in select]
 
 
 def annotation_targets(annotates, from_snapshot) -> list[tuple[str, str]]:
@@ -523,7 +589,8 @@ def create_from(root, plugin: str, recipe: dict, *, platform_image: str | None =
                 query_encoder: str | None = None, name: str | None = None,
                 calibration_set: str | None = None, api: str | None = None,
                 embed_model: str | None = None, query_model: str | None = None,
-                calibration_from: str | None = None, embed: str = "off"):
+                calibration_from: str | None = None, embed: str = "off",
+                run: str | None = None, say=None):
     """`hold collection create <plugin> --recipe FILE` — for the command
     line and for its route alike (07 §7.4: the web interface is a client of
     the same function, not a second implementation). Returns the Codex and
@@ -547,6 +614,9 @@ def create_from(root, plugin: str, recipe: dict, *, platform_image: str | None =
     # SHA-256 of nothing, and the live gutenberg Codex carries exactly that
     # placeholder (found 2026-09-14), so no identity may name no build again.
     platform_image = preflight_create(recipe, platform_image)
+    # THE RUN A DATED-DUMP CODEX NAMES (09 §9.17): `--run`, else a
+    # re-creation's predecessor's; the recipe's own `files` first
+    run = _run_for(root, plugin, (recipe.get("origin") or {}).get("spec"), run, name, say=say)
     # A SLICING THE PLUGIN DERIVES AT CREATION (wikidata's family map,
     # pack-format.md §2 amended 2026-10-24): the block goes into the Codex,
     # the map into the SHARD. A recipe that states its own slicing keeps it
@@ -619,7 +689,8 @@ def create_from(root, plugin: str, recipe: dict, *, platform_image: str | None =
                                    # RULE 1: a held twin's document-side reference reused
                                    calibration_from=(col.shard_dir_of(
                                        Path(root), col.resolve(root, calibration_from)[0])
-                                       if calibration_from else None))
+                                       if calibration_from else None),
+                                   run=run)
     if space_from and (codex.space.envelope,
                        codex.space.calibration.vectors) != drifted:
         print(f"warning: --space-from {space_from} recorded reference "
@@ -663,7 +734,10 @@ def cmd_collection_new(a) -> int:
                 recipe that states none takes it.
       make      create (07 §7.3), or the collection already made, held to the
                 measured tolerance.
-      cpu-reference  written from the store entry calibrate made.
+      cpu-reference  INHERITED where the node's store holds the space's key
+                (operator, 2026-11-22; app/rage/reference.py), else made once
+                for the node; the CPU twin is the encoder's model with -cpu
+                unless --cpu-model names it (RULE 2).
       gate      `hold embedder check`.
     The measurement is kept as `<collection>/state/calibration.json`, the
     run's progress as `<LOUISE_ROOT>/state/new/<name>.json`. Embedding is not
@@ -752,9 +826,6 @@ def cmd_collection_new(a) -> int:
         raise CodexError(f"{a.recipe}: the space names a question encoder (space.query.encoder): that is "
                          f"case B of docs/notes/new-collection.md, whose question side is measured too, "
                          f"and the workflow does not run it yet (phase 3). Nothing was asked or measured")
-    if not a.cpu_model:
-        raise CodexError("--cpu-model names the encoder's CPU twin (gpu_layers 0, the device "
-                         "hidden): the tolerance and the CPU reference are measured against it")
     if re_create:
         _recreate_encoder(a)
     elif source is not None:
@@ -763,6 +834,11 @@ def cmd_collection_new(a) -> int:
         raise CodexError("--encoder URL names the endpoint of the recipe's encoder")
     api = check_api(a.api)
     model = model_keys(a.encoder, embed_model=a.embed_model)[0]
+    # THE CPU TWIN IS DETERMINED (RULE 2; operator, 2026-11-22): the encoder's
+    # name with -cpu where none is given, held below to a CPU run of the
+    # recipe's own weights
+    from app.rage import reference as rage_reference
+    a.cpu_model = a.cpu_model or rage_reference.twin(model)
     inputs = {"plugin": a.plugin, "recipe": given, "name": a.name, "encoder": a.encoder, "api": api,
               "embed_model": model, "cpu_model": a.cpu_model, "platform_image": a.platform_image}
     if re_create:
@@ -995,12 +1071,16 @@ def _new_reference_and_gate(a, run, name: str, say) -> tuple[int, bool]:
     `(rc, stopped)` — stopped when the CPU reference did not exit 0. Each runs
     in this process and its write lock is released when it returns
     (`_sub_command`): normattiva's swap, 2026-11-07, found the collection held
-    by the gate of its own run."""
+    by the gate of its own run. The new collection INHERITS the reference
+    where the node holds it for her space's inputs (operator, 2026-11-22: "A
+    collection then inherits the reference cpu model upon creation if already
+    present on the node"): `cpu-reference` resolves it through RAGE's API and
+    asks no twin (app/rage/reference.py)."""
     import argparse
-    run.at("cpu-reference", "from the node's store")
+    run.at("cpu-reference", "the node's, inherited where it holds the space's key; else made once for the node")
     with _sub_command():
         rc = cmd_embedder_cpu_reference(argparse.Namespace(root=a.root, collection=name, model=a.cpu_model,
-                                                           query_model=None, again=False, refresh=True))
+                                                           query_model=None, again=False))
     if rc != 0:
         say(f"stopped at cpu-reference: it exited {rc}")
         return rc, True
@@ -1183,6 +1263,8 @@ def _sister_new(a, say) -> int:
     _space_from_encoder(a, source_name)
     api = check_api(a.api)
     model = model_keys(a.encoder, embed_model=a.embed_model)[0]
+    from app.rage import reference as rage_reference
+    a.cpu_model = a.cpu_model or rage_reference.twin(model)      # RULE 2, as `new`
     inputs = {"plugin": a.plugin, "name": a.name, "sister_of": her_sister.collection_id,
               "space_from": source_name, "space_id": source.space_id, "encoder": a.encoder, "api": api,
               "embed_model": model, "cpu_model": a.cpu_model, "recut": recut,
@@ -1686,6 +1768,10 @@ def _new_dry_run(a, run, recipe: dict, pred, dry, changed: list[str], existing, 
         out(f"  vectors     built in the build area, {vector_place.home(made_as)}; "
             + ("moved to the data pool at the swap" if re_create else
                f"`louise hold vectors move {made_as} --to hot` when it takes over"))
+    elif existing is None and vector_place.hot_applies(a.root):
+        vector_place.hot_mounted()
+        out(f"  vectors     built in the Lance root, {vector_place.hot_home(made_as)} "
+            f"(no build area: LOUISE_BUILD_DIR is unset)")
     elif existing is None:
         out(f"  vectors     built beside the collection, {vector_place.table_dir(a.root, made_as)} "
             f"(no build area: LOUISE_BUILD_DIR is unset, or this is not the node's root)")
@@ -2061,9 +2147,10 @@ def _recreate_take_over(root: Path, name: str, codex, say) -> dict:
 
     from app import node_state, vector_place
     from app.hold import lock as lock_mod, records as rec
-    if vector_place.tier(vector_place.table_dir(root, name)) != vector_place.BUILD \
-            and not vector_place.begun(lock_mod.state_dir(root, name)):
-        return {"nothing": "the vector table is on the data pool"}
+    link = vector_place.table_dir(root, name)
+    in_area = vector_place.tier(link) == vector_place.BUILD and vector_place.in_area(vector_place.physical(link))
+    if not in_area and not vector_place.begun(lock_mod.state_dir(root, name)):
+        return {"nothing": "the vector table is on the data pool"}   # or not in the build area: never moved here
     if name not in node_state.paused_collections() and node_state.worker_state() != "paused":
         raise CodexError(f"swap: {name} is not paused, and its vector table moves from the build area "
                          f"now: `louise node pause {name}`, then run this again")
@@ -2539,11 +2626,19 @@ def _held_file(root, name: str) -> Path:
 def _inherited_encoder(root, sister: cx.Codex, her_sister: cx.Codex,
                        space_from: cx.Codex | None) -> dict:
     """A sister derived with no --encoder: the [encoder] of the collection
-    whose SPACE she is in — her sister's, or the `--space-from` source's —
-    from its file; that endpoint already serves her space. `{}` when she is
-    in neither's (the file then names none, and says so)."""
+    whose ENCODER she has — her sister's, or the `--space-from` source's —
+    from its file; that endpoint already serves her encoder. The same space
+    has it, and so has a space that differs from it only outside the
+    encoder and its query side: a layers-only sister, M1's successor at
+    chunker v4 (2026-11-23: legi_F.next was refused for want of an
+    [encoder] its sister's file named). `{}` when she shares neither's
+    encoder (the file then names none, and says so)."""
+    def serves(source: cx.Codex) -> bool:
+        return source.space_id == sister.space_id or (
+            source.space.encoder == sister.space.encoder and source.space.query == sister.space.query)
+
     for source in (her_sister, space_from):
-        if source is None or source.space_id != sister.space_id:
+        if source is None or not serves(source):
             continue
         path = _held_file(root, col.name_of(root, source.collection_id))
         if not path.is_file():
@@ -2553,7 +2648,7 @@ def _inherited_encoder(root, sister: cx.Codex, her_sister: cx.Codex,
             return {"encoder": enc["url"], "query_encoder": enc.get("query_url"),
                     "api": enc.get("api") or "openai", "embed_model": enc.get("embed_model"),
                     "query_model": enc.get("query_model")}
-    print(f"note: {sister.collection_id[:23]}… is in a space no collection held here "
+    print(f"note: {sister.collection_id[:23]}… has an encoder no collection held here "
           f"serves, and no --encoder was given: its file names no [encoder] and is "
           f"refused until one is added (07 §7.8)", file=sys.stderr)
     return {}
@@ -3442,7 +3537,12 @@ def cmd_dev_eurlex_dump(a) -> int:
     held ones the dump holds; the dump is `EURLEX_DATADUMP_DIR` unless --dump.
     `--carry-from`: then an earlier corpus's units the dump did not give are
     linked in without their notice (RULE 1), in the base or the history
-    slice. Resumable: a landed unit is never written again."""
+    slice. Resumable: a landed unit is never written again. SIGTERM or
+    SIGINT: the build stops at its next chunk boundary, what it built landed
+    and its chunks recorded, the stamp unwritten, exit 130; the next run
+    resumes after the chunks done (invariant 2; review 2026-11-21, Q7)."""
+    import signal
+    import threading
     from app.acquire import datadump, eurlex_dump
     from app import collections as collections_mod
     c = collections_mod.by_name(a.collection)
@@ -3461,11 +3561,110 @@ def cmd_dev_eurlex_dump(a) -> int:
         from app.acquire import cellar
         langs = cellar.held_languages(c)
     corpus = Path(c.corpus_dir)
-    out: dict = {"built": {l: dict(n) for l, n in
-                           eurlex_dump.build(dump, corpus, langs, log=say).items()}}
+    stop = threading.Event()
+    before = {sig: signal.signal(sig, lambda *_: stop.set()) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        built = eurlex_dump.build(dump, corpus, langs, log=say, stop=stop.is_set)
+    except eurlex_dump.BuildRunning as e:
+        say(f"[eurlex-dump] {e}")
+        return 3                            # deferred: another build of the corpus holds it
+    except eurlex_dump.Stopped as e:
+        say(f"[eurlex-dump] {e}")
+        return 130
+    finally:
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
+    out: dict = {"built": {l: dict(n) for l, n in built.items()}}
     if a.carry_from:
         out["carried"] = dict(eurlex_dump.carry(Path(a.carry_from), corpus, log=say))
     _print(out)
+    return 0
+
+
+def cmd_dev_retire_superseded(a) -> int:
+    """`louise dev retire-superseded <collection> [--yes]`: a unit held under
+    two ids keeps the one it has now; the other rows are retired from every
+    index and tombstoned (app/hold/identity.py; 2026-11-21, EUR-Lex5's
+    37,695). A dry run without --yes; with it, the collection's write lock."""
+    from app.hold import identity
+    name, _ = col.resolve(a.root, a.collection)
+    if a.yes:
+        _take_write_lock(a.root, name, "louise dev retire-superseded", exit_code=2)
+    say = lambda m: print(m, file=sys.stderr)              # noqa: E731
+    _print({"retire_superseded": identity.retire_superseded(a.root, name, apply_it=a.yes, log=say)})
+    return 0
+def cmd_dev_cpu_reference_legacy(a) -> int:
+    """`louise dev cpu-reference-legacy` (operator, 2026-11-22: "The CPU
+    reference is per model, not per collection"): what each collection kept
+    under its own state before the node's store (2026-11-06), held to the
+    store RAGE resolves from (app/rage/reference.py `legacy`). Read-only:
+    such a copy names no inputs, so it is never filed under a key. Exit 1
+    when a copy is one the store does not hold (`unproven`: that encoder's
+    next new run is not gated until `hold embedder cpu-reference` makes it
+    for the node) or holds otherwise (`differs`), 0 otherwise."""
+    from app.hold import collection as col
+    from app.rage import reference as rage_reference
+    rows = [rage_reference.legacy(a.root, name, codex)
+            for name, codex in col._held(a.root) if codex.space is not None]
+    rows = [r for r in rows if r["identical"] or r["differs"] or r["unproven"] or r["refused"]]
+    _print({"collections": rows, "identical": sum(r["identical"] for r in rows),
+            "unproven": sum(len(r["unproven"]) for r in rows),
+            "differs": sum(len(r["differs"]) for r in rows)})
+    return 1 if any(r["unproven"] or r["differs"] for r in rows) else 0
+
+
+def cmd_dev_rederive(a) -> int:
+    """`louise dev rederive <collection> [--yes] [--again]`: every document's
+    derived marks reset, so the worker parses each again at the collection's
+    parser and writes its validity, catalogue and text-index rows again
+    (app/hold/carry.py `rederive`; the A1c repair where no source snapshot is
+    left, 2026-11-19). A dry run without --yes; its vectors are kept."""
+    from app.hold import carry as carry_mod
+    say = lambda m: print(m, file=sys.stderr)              # noqa: E731
+    if getattr(a, "release", False):
+        # `--first`'s hold lifted: the held rows back in every stage's selection
+        if a.verify or a.again:
+            print("louise dev rederive: --release takes no --verify or --again", file=sys.stderr)
+            return 2
+        keep = Path(a.ids).read_text(encoding="utf-8").splitlines() if a.ids else None
+        _print({"release": carry_mod.release_first(a.root, a.collection, apply=a.yes, keep=keep, log=say)})
+        return 0
+    if getattr(a, "first", False) and not a.ids:
+        print("louise dev rederive: --first holds every row but the ones --ids FILE lists; it takes --ids",
+              file=sys.stderr)
+        return 2
+    if a.ids:
+        # the documents a list names: a uid or a document's path a line (the
+        # EUR-Lex units check's --list-included); their embedding too where
+        # the collection holds no records
+        if a.verify or a.again or a.every != 1 or a.limit is not None:
+            print("louise dev rederive: --ids derives the listed documents again; it takes no --verify, "
+                  "--again, --every or --limit", file=sys.stderr)
+            return 2
+        import signal
+        import threading
+        stop = threading.Event()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, lambda *_: stop.set())
+        lines = Path(a.ids).read_text(encoding="utf-8").splitlines()
+        out = carry_mod.rederive_listed(a.root, a.collection, lines, apply=a.yes, stop=stop, log=say,
+                                        retry_errors=bool(getattr(a, "retry_errors", False)),
+                                        first=bool(getattr(a, "first", False)))
+        _print({"rederive": out})
+        return 130 if stop.is_set() else 0
+    if a.verify:
+        # pubmed, wikidata: only what differs from what the worker would derive now
+        import signal
+        import threading
+        from app.hold import derived_check
+        stop = threading.Event()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, lambda *_: stop.set())
+        out = derived_check.verify(a.root, a.collection, apply=a.yes, every=a.every, limit=a.limit,
+                                   again=a.again, stop=stop, log=say)
+        _print({"verify": out})
+        return 130 if stop.is_set() else 0
+    _print({"rederive": carry_mod.rederive(a.root, a.collection, apply=a.yes, again=a.again, log=say)})
     return 0
 
 
@@ -3484,6 +3683,11 @@ def cmd_dev_carry(a) -> int:
         for name in sorted({from_name, to_name}):
             _take_write_lock(a.root, name, "louise dev carry", exit_code=2)
     say = lambda m: print(m, file=sys.stderr)              # noqa: E731
+    if getattr(a, "rechunked", False):
+        return _dev_carry_rechunked(a, from_name, to_name, say)
+    if getattr(a, "dry_run", False):
+        raise CodexError("--dry-run is --rechunked's whole pass with nothing written; every other carry's "
+                         "dry run is the command without --yes")
     if getattr(a, "predecessor_rows", False):
         _print({"predecessor_rows": carry_mod.keep_predecessor_rows(a.root, from_name, to_name,
                                                                     apply=a.yes, log=say)})
@@ -3548,6 +3752,109 @@ def cmd_dev_carry(a) -> int:
     return 0
 
 
+#: what `dev carry --rechunked` takes nothing else with: each is another carry
+_NOT_WITH_RECHUNKED = ("keep", "rebuilt", "recut", "resliced", "unembedded", "reconcile", "resign", "scan",
+                       "predecessor_rows", "share_origin")
+
+
+def _dev_carry_rechunked(a, from_name: str, to_name: str, say) -> int:
+    """`louise dev carry <from> <to> --rechunked [--dry-run | --yes]` (A1k,
+    PROPOSED 2026-11-21; app/hold/rechunk.py): into a successor whose space
+    differs only by its layers' chunker version. Without --yes, the refusals
+    and the plan; with --dry-run, the whole pass — per language, the chunks
+    carried, to embed and dropped — writing nothing; with --yes (both write
+    locks, taken above), the manifest copied, the licence acknowledgement
+    carried, then the re-key, resumable, SIGTERM at a window boundary (exit
+    130). Always copies: the source keeps everything until its forget."""
+    import signal
+    import threading
+
+    from app.hold import carry as carry_mod, rechunk, recreate
+    others = [f"--{f.replace('_', '-')}" for f in _NOT_WITH_RECHUNKED if getattr(a, f, None)]
+    if others:
+        raise CodexError(f"--rechunked moves the layers' version alone: no {', '.join(others)} with it")
+    if getattr(a, "dry_run", False) and a.yes:
+        raise CodexError("--dry-run writes nothing and --yes writes: one or the other")
+    window = int(getattr(a, "window", None) or rechunk.WINDOW)
+    processes = getattr(a, "processes", None)
+    if getattr(a, "dry_run", False):
+        _print({"rechunked": rechunk.rekey(a.root, from_name, to_name, apply=False, window=window,
+                                           processes=processes, log=say)})
+        return 0
+    if not a.yes:
+        _print({"carry": carry_mod.carry(a.root, from_name, to_name, copy=True, rechunked=True, apply=False,
+                                         log=say)})
+        say("[carry] then the re-key writes every vector whose text the new version cuts again under its new "
+            "id; `--dry-run` counts it per language, `--yes` does both (A1k)")
+        return 0
+    stop = threading.Event()
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    for sig in before:
+        signal.signal(sig, lambda *_: stop.set())
+    try:
+        out: dict = {"carry": carry_mod.carry(a.root, from_name, to_name, copy=True, rechunked=True,
+                                              apply=True, log=say)}
+        # the acknowledgement BEFORE the re-key, which uses the target's data (invariant 9)
+        _, to_codex = col.resolve(a.root, to_name)
+        out["ack"] = recreate.carry_ack(a.root, from_name, to_name, to_codex)
+        say(f"[carry] licence acknowledgement: {out['ack']}")
+        out["rechunked"] = rechunk.rekey(a.root, from_name, to_name, apply=True, window=window,
+                                         processes=processes, stop=stop, log=say)
+    finally:
+        for sig, handler in before.items():
+            signal.signal(sig, handler)
+    _print(out)
+    return 130 if stop.is_set() else 0
+
+
+def cmd_dev_pin_run(a) -> int:
+    """`louise dev pin-run <collection> [--run R] [--dry-run | --yes]`
+    (app/hold/pin_run.py; München, 2026-11-17): an UNPUBLISHED collection
+    whose dated-dump Codex names no run, given the Codex that names the run
+    its records were read in — its snapshot frozen again over the same
+    parts, re-signed, and what named the old id re-pointed. The plan without
+    --yes, and always with --dry-run (refusals included); with --yes, under
+    the collection's write lock. Refused (exit 2) for anything published or
+    shared, and for a file naming the old id the pass does not know."""
+    from app.hold import pin_run
+    name, _ = col.resolve(a.root, a.collection)
+
+    def say(m: str) -> None:
+        print(m, file=sys.stderr)
+    if getattr(a, "dry_run", False) or not a.yes:
+        under_way = pin_run.under_way(a.root, name)
+        if under_way is not None:
+            say(f"[pin-run] {name}: a pin to run {under_way['run']} is under way at step {under_way['step']} "
+                f"({under_way['from'][:23]}… -> {under_way['to'][:23]}…); `--yes` finishes it; nothing written")
+            _print({"under_way": under_way})
+            return 0
+        out = pin_run.plan(a.root, name, run=a.run)
+        same = out["space_id"]["from"] == out["space_id"]["to"]
+        removed = out["removed"]
+        say(f"[pin-run] {name}: would pin run {out['run']} ({'; '.join(out['run_said_by'])}): "
+            f"{out['from'][:23]}… -> {out['to'][:23]}…, space {'unchanged' if same else 'MOVED'}; "
+            f"snapshot {out['snapshot']['id']} ({out['snapshot']['parts']:,} parts, "
+            f"{out['snapshot']['records']:,} records, {out['snapshot']['bytes'] / 2**20:,.1f} MiB) written "
+            f"again with origin_run beside the old until the swap ({out['snapshot']['bytes'] / 2**20:,.1f} MiB "
+            f"more for a moment), re-signed; {len(out['naming'])} small file(s) naming the old id, each "
+            f"known (swept in {out['swept_s']:.1f} s); removed: its sidecar, "
+            f"{len(removed['attestations'])} attestation(s) of the old id"
+            f"{', the note of an origin check that could not run' if removed['origin_attempt'] else ''}; "
+            f"the run's files in the corpus: {len(out['dump']['held'])} held, {len(out['dump']['missing'])} "
+            f"missing; nothing written (--yes does it)")
+        _print({"plan": out})
+        return 0
+    _take_write_lock(a.root, name, "louise dev pin-run", exit_code=2)
+    key = None
+    try:
+        from app.bundles import keys as node_keys
+        key = node_keys.load_signing_key()
+    except Exception as e:                              # noqa: BLE001 — an unsigned peer still works
+        say(f"note: unsigned — {e}")
+    _print({"pin_run": pin_run.apply(a.root, name, run=a.run, key=key, now=_utc_now(), log=say)})
+    return 0
+
+
 def cmd_embedder_run(a) -> int:
     """`hold embedder run --encoder URL [--api A] [--model M] [--query] [--pair]`
     (07 §7.3; docs/notes/v5-migration.md G5): the run the endpoint states now
@@ -3602,6 +3909,21 @@ def cmd_embedder_tree_diff(a) -> int:
         for line in trees.lines(d):
             print(line)
     return 0 if not (d["added"] or d["removed"] or d["changed"]) else 1
+
+
+def cmd_node_release_oom(a) -> int:
+    """`node release-oom --cause TEXT | --diagnostic TEXT` (07 §7.3): the
+    worker's OOM hold lifted, naming which (app/oom_hold.py); its guard
+    starts the worker within HOLD_POLL_S. Exit 2 where no hold is in force."""
+    from app import oom_hold
+    try:
+        out = oom_hold.release(cause=a.cause, diagnostic=a.diagnostic)
+    except ValueError as e:
+        print(f"louise node release-oom: {e}", file=sys.stderr)
+        return 2
+    _print({"released": out["released"].get("at"), **{k: out[k] for k in ("cause", "diagnostic") if k in out},
+            "says": "the worker's guard starts it again within seconds"})
+    return 0
 
 
 def cmd_node_show(a) -> int:
@@ -3691,7 +4013,7 @@ def cmd_node_resident(a) -> int:
 
 #: The web process `node start` runs beside the worker: the image's own
 #: command (Dockerfile), so one node started either way serves the same app.
-WEB_COMMAND = ("-m", "uvicorn", "app.api:app", "--host", "0.0.0.0")
+WEB_COMMAND = ("-m", "app.web_main", "app.api:app", "--host", "0.0.0.0")
 WEB_STOP_WAIT_S = 30.0
 
 
@@ -4476,8 +4798,22 @@ def cmd_show(a) -> int:
     # "woke 2 annotations (snapshot 2026-11)"; as an annotations collection,
     # "woken by wikipedia 2026-11 — running, started 03:12"
     out["cascade"] = _cascade_state(a.root, name, codex)
+    # the historical reader (app/reading.py; RULE 2): its tables, or that none
+    # is synced and what supplies them — for a collection whose plugin dates
+    # its records (gutenberg), absent otherwise
+    from app import reading
+    line = reading.status([getattr(codex, "plugin", None) or _plugin_of(codex)])
+    if line:
+        out["historical_reading"] = line
     _print(out)
     return 0
+
+
+def _plugin_of(codex) -> str | None:
+    try:
+        return codex.get("plugin") if isinstance(codex, dict) else getattr(codex, "plugin", None)
+    except Exception:   # noqa: BLE001
+        return None
 
 
 def _cascade_state(root, name: str, codex) -> dict | None:
@@ -5463,8 +5799,12 @@ def cmd_vectors_reembed(a) -> int:
 def cmd_vectors_move(a) -> int:
     """`hold vectors move <collection> --to hot|build [--apply]` (07 §7.3;
     storage-tiering.md §8, operator 2026-11-07): the collection's vector
-    table moved between the data pool (`hot`, where searches read it) and
-    the build area (`build`, LOUISE_BUILD_DIR) — app/vector_place.py. A dry
+    table moved between the data pool (`hot`, where searches read it: beside
+    the collection, or in the Lance root, LOUISE_LANCE_ROOT, where one is
+    set) and the build area (`build`, LOUISE_BUILD_DIR) — app/vector_place.py.
+    With a Lance root set, `--to hot` of a table that is still the directory
+    beside its collection ADOPTS it into the root by a rename, nothing
+    copied (storage-tiering.md §12, operator 2026-11-23: "A"). A dry
     run by default: the bytes, the room on the destination, the time at the
     rates measured on the node, and the bytes the source's removal frees
     (exit 2 when it would be refused). `--apply` needs the collection paused
@@ -5758,11 +6098,11 @@ def run_check(a):
         except emb.GateDeferred:
             pass
 
-    origin_dir = _check_origin(a, codex)
     # the run the snapshot's records were read from: an origin naming a unit
     # by the origin's own key is resolved in it (09 §9.5, amended 2026-11-17)
     from app.hold import origin_run as origin_run_mod
     run = origin_run_mod.run_of(codex, snapshot)
+    origin_dir = _check_origin(a, codex, local=local, run=run)
     report = chk.run(
         a.root, name, codex, snapshot, seed=seed,
         checks=a.checks.split(",") if a.checks else None, sample=a.sample,
@@ -5856,18 +6196,77 @@ def cmd_check(a) -> int:
     return 0 if report.ok else 1
 
 
-def _check_origin(a, codex):
+def _check_origin(a, codex, *, local=None, run: str | None = None):
     """The origin `hold check` re-parses from: the one given (`--origin`);
     else the Codex's own network origin, which `_reparse_from` reaches with
     none given; else, for the nightly check (`--origin-else`), the copy this
     node keeps — a re-parse that proves the parser and the copy agree and is
-    said so (`check.Ctx.origin_is_copy`), never a pass of records-vs-origin."""
+    said so (`check.Ctx.origin_is_copy`), never a pass of records-vs-origin.
+
+    A DATED ONE-STREAM BZIP2 DUMP (app/acquire/block_origin.py) is asked by
+    its blocks, which the copy's block index finds: the index is loaded, or
+    built here — never on the worker's round path — on the cores the node
+    allows. The nightly check builds it for at most `NIGHTLY_BUILD_S` and,
+    while it is not whole, re-parses the kept copy as before and says why
+    (the next night resumes the build); any other check builds it whole. A
+    stop (SIGTERM, SIGINT) ends the build at its next step, its state
+    written, and the command exits 130 (invariant 2)."""
     given = getattr(a, "origin_dir", None)
     if given:
         return given
     fallback = getattr(a, "origin_else", None)
-    if fallback and _member_origin(codex) is None:
+    mo = _member_origin(codex)
+    if mo is not None and callable(getattr(mo, "prepare", None)):
+        import time
+
+        from app import bz2_blocks
+        from app.acquire import block_origin
+        wanted = (str(a.checks).split(",") if getattr(a, "checks", None)
+                  else list(getattr(getattr(codex, "validation", None), "checks", None) or ()))
+        if not {"records-vs-origin", "image-equivalence"} & set(wanted):
+            return None                     # nothing re-parsed from the origin: no index to build
+        copy = fallback or _kept_copy_dir(a, local)
+        deadline = time.monotonic() + block_origin.NIGHTLY_BUILD_S if fallback else None
+        with _graceful_stop() as stop:
+            try:
+                why = mo.prepare(copy, run, stop=stop.is_set, deadline=deadline,
+                                 log=lambda m: print(m, file=sys.stderr))
+            except bz2_blocks.Incomplete as e:
+                print(f"note: {e}", file=sys.stderr)
+                raise Stopped("SIGTERM") from None
+        if why is not None:
+            print(f"note: records-vs-origin cannot ask the origin by its blocks: {why}"
+                  + ("; the copy this node keeps is re-parsed meanwhile" if fallback else ""), file=sys.stderr)
+            if fallback:
+                return fallback
+        return None
+    if fallback and mo is None:
         return fallback
+    return None
+
+
+def _kept_copy_dir(a, local):
+    """The copy this node keeps of a collection's origin, for a check by hand
+    (the nightly names it, `--origin-else`): the local side's corpus where it
+    names one, the collection's file's (`collections.by_name`), else the
+    collection's own `<root>/<name>/origin` (collections.origin_dir) — the
+    first that is a directory, or None."""
+    from pathlib import Path
+
+    from app import collections as collections_mod
+    name = getattr(local, "name", None) or getattr(a, "collection", None)
+    found = [getattr(local, "corpus_dir", None)]
+    try:
+        c = collections_mod.by_name(name) if name else None
+    except Exception:                                   # noqa: BLE001 — another place to look, not a fault
+        c = None
+    found.append(getattr(c, "corpus_dir", None))
+    root = getattr(a, "root", None)
+    found.append((Path(root) if root is not None else collections_mod.louise_root() / "collections")
+                 / str(name) / "origin")
+    for d in found:
+        if d and Path(d).is_dir():
+            return Path(d)
     return None
 
 
@@ -5943,6 +6342,15 @@ def _reparse_from(codex, name: str, origin_dir, *, run: str | None = None):
         mo = _member_origin(codex)
         if mo is None:
             return None
+        if mo.base is None:
+            # a block origin with no copy to place its records in (it says
+            # why): nothing re-fetched, each record unreachable for that reason
+            why = getattr(mo, "why_not", None) or "the origin cannot be read here"
+
+            def unplaced(uid: str, locator: str) -> bytes:
+                from app.hold.check import OriginAway
+                raise OriginAway(why)
+            return unplaced
         base, prepare = mo.base, mo.materialise
     # THE CODEX COMES WITH IT. 03 §3.2 asks for the origin "re-parsed with
     # the Codex's toolchain", and two of the things that decides are in the
@@ -5999,7 +6407,15 @@ def _reparse_many_from(codex, name: str, origin_dir, *, run: str | None = None):
 
     from app import parallel
     if not origin_dir:
-        return None
+        # a one-stream dump asked by its blocks (app/acquire/block_origin.py):
+        # the blocks compared here, under this process's budget, and the
+        # records whose blocks are the origin's re-parsed from the copy in
+        # the pool — the comparison below, over the copy
+        mo = _member_origin(codex)
+        with_local = getattr(mo, "many_with", None)
+        if with_local is None or getattr(mo, "base", None) is None:
+            return None
+        return with_local(_reparse_many_from(codex, name, mo.base, run=run))
     collection = _reparse_collection(codex, name, origin_dir)
 
     def many(items):
@@ -6036,13 +6452,14 @@ def _member_origin(codex):
     (app/acquire/member_origin.py) or its documents' files
     (app/acquire/file_origin.py): `_reparse_from`, `_origin_unit_from` and
     `_weigh_from` share its listings and its temporary base."""
-    from app.acquire import file_origin, member_origin, unit_origin
+    from app.acquire import block_origin, file_origin, member_origin, unit_origin
     key = getattr(codex, "collection_id", id(codex))
     if key not in _member_origins:
-        # by what the spec declares: zip members, a mirror tree, or a unit
-        # its UnitFetcher fetches again (app/acquire/unit_origin.py)
+        # by what the spec declares: zip members, a mirror tree, a unit its
+        # UnitFetcher fetches again (app/acquire/unit_origin.py), or the
+        # blocks of a dated one-stream bzip2 dump (app/acquire/block_origin.py)
         _member_origins[key] = (member_origin.for_codex(codex) or file_origin.for_codex(codex)
-                                or unit_origin.for_codex(codex))
+                                or unit_origin.for_codex(codex) or block_origin.for_codex(codex))
     return _member_origins[key]
 
 
@@ -6396,37 +6813,106 @@ def _embedder_check_runs(a, name, codex) -> int:
     return worst
 
 
+def _cpu_reference_check(root, names: list[str] | None) -> int:
+    """`hold embedder cpu-reference [<collection>] --check` (München,
+    2026-11-24, after an engine cut-over backed out at its first gate for a
+    reference the node had never made): per collection held (or the one
+    named), per role its space declares, whether the gate would find its CPU
+    reference — the same `reference.resolve` the gate asks, which creates
+    nothing on a miss — and, where not, the command that makes it. Read-only.
+    Exit 0 when every role finds one, 1 otherwise. A run that states other
+    weights than its Codex is the one case it cannot see: the gate resolves
+    by the run's stated weights."""
+    from app import run_check
+    from app.hold import collection as col
+    from app.rage import reference as rage_reference
+    held = ([col.resolve(root, n) for n in names] if names is not None else col.list_named(root))
+    rows: list[dict] = []
+    for name, codex in held:
+        if getattr(codex, "space", None) is None:
+            # an annotations collection embeds nothing: no gate, no reference
+            # (2026-11-24: gutenberg-book-editions crashed the first --check)
+            rows.append({"collection": name, "found": None, "why": "no space: it embeds nothing"})
+            continue
+        roles = [("document", codex.space.encoder.weights)]
+        if codex.space.query.encoder is not None:
+            roles.append(("query", codex.space.query.encoder.weights))
+        try:
+            count = len(run_check.calibration_items(root, name, codex))
+        except Exception as e:   # noqa: BLE001 — said for the collection, the others still read
+            rows.append({"collection": name, "space": getattr(codex, "space_id", None), "found": False,
+                         "why": f"its calibration set does not read: {type(e).__name__}: {e}"})
+            continue
+        for role, weights in roles:
+            got = rage_reference.resolve(codex, role, weights, count)
+            rows.append({"collection": name, "space": getattr(codex, "space_id", None), "role": role, "weights": weights,
+                         "found": got is not None,
+                         **({"path": str(got.path)} if got is not None else
+                            {"make": f"louise hold embedder cpu-reference {name}",
+                             "key": rage_reference.key(codex, role, weights)})})
+    missing = sum(1 for r in rows if r["found"] is False)
+    _print({"references": rows, "missing": missing})
+    return 1 if missing else 0
+
+
 def cmd_embedder_cpu_reference(a) -> int:
-    """`hold embedder cpu-reference <collection> --model M [--query-model Q]`
+    """`hold embedder cpu-reference <collection> [--model M] [--query-model Q]`
     (operator, 2026-10-31; docs/notes/near-exact-runs.md §2): the 512
     calibration items as the encoder's CPU TWIN embeds them, kept so that
     every gate compares its run with them without the CPU's hours. The twin
     must state a CPU run and give back its own bytes (the sixteen fingerprint
-    texts, one at a time, again in reverse order). Exit 0 when kept, 1 when
-    the twin is not reproducible, 2 when it is not a CPU run, 3 when it could
-    not be asked."""
+    texts, one at a time, again in reverse order). PER MODEL, NOT PER
+    COLLECTION (operator, 2026-11-22): kept once in the node's store by its
+    key, through RAGE's API (app/rage/reference.py); a role whose key the
+    store holds is taken from it, whichever collection made it, and no twin
+    is asked. The twin is the encoder's model with -cpu unless --model names
+    it, and must run the space's weights. Exit 0 when kept, 1 when the twin is
+    not reproducible, 2 when it is not a CPU run of the space's weights, 3
+    when it could not be asked."""
     import httpx
 
     from app import config, embeddings, encoder_use, run_check
     from app.hold import collection as col, cpu_reference as cpu_ref, embedder as emb
-    name, codex = col.resolve(a.root, a.collection)
-    if not a.model:
-        print("louise: --model names the encoder's CPU twin (gpu_layers 0, the device "
-              "hidden): a CPU reference is the CPU's answers", file=sys.stderr)
+    from app.rage import reference as rage_reference
+    if getattr(a, "check", False):
+        return _cpu_reference_check(a.root, [a.collection] if a.collection else None)
+    if not a.collection:
+        print("louise: hold embedder cpu-reference names a collection (or --check, for all of them)",
+              file=sys.stderr)
         return 2
-    roles = ["document"] + (["query"] if a.query_model else [])
+    name, codex = col.resolve(a.root, a.collection)
     if a.query_model and codex.space.query.encoder is None:
         print(f"louise: {name}: --query-model names a query side, and this space has none",
               file=sys.stderr)
         return 2
     try:
-        recipe = _as_candidate(_recipe_for(codex, name), a)
+        base = _recipe_for(codex, name)
+        # THE CPU TWIN IS DETERMINED (RULE 2; operator, 2026-11-22): the
+        # encoder's own name with -cpu where none is given, held below to a
+        # CPU run of the space's own weights
+        if not a.model:
+            a.model = rage_reference.twin(base.model)
+        if codex.space.query.encoder is not None and not a.query_model:
+            a.query_model = rage_reference.twin(base.query_model or base.model)
+        roles = ["document"] + (["query"] if a.query_model else [])
+        recipe = _as_candidate(base, a)
     except emb.GateDeferred as e:
         print(f"louise: deferred: {e}", file=sys.stderr)
         return 3
     items = run_check.calibration_items(a.root, name, codex)
     for role in roles:
         query = role == "query"
+        # THE NODE HOLDS IT ALREADY (operator, 2026-11-22: "A collection then
+        # inherits the reference cpu model upon creation if already present on
+        # the node"): resolved by the space's key through RAGE's API, the one
+        # lookup every gate makes; no twin asked. `--again` makes it anew
+        want = (codex.space.query.encoder.weights if query and codex.space.query.encoder
+                else codex.space.encoder.weights)
+        held = None if getattr(a, "again", False) else rage_reference.resolve(codex, role, want, len(items))
+        if held is not None:
+            print(f"kept  {role}  run {held.run_id[:23]}…  {len(held.vectors)} vectors  "
+                  f"(inherited: the node's store holds it for these inputs: {held.path})")
+            continue
         try:
             # the twin leased for the role's whole pass: one call is the 512
             # items on the CPU, hours, past any lease renewed per batch
@@ -6438,22 +6924,14 @@ def cmd_embedder_cpu_reference(a) -> int:
                     print(f"louise: {role}: the model states a run on {stated.driver!r}, not the "
                           f"CPU: a CPU reference is made by the CPU twin", file=sys.stderr)
                     return 2
-                # A ROLE THIS RUN ALREADY KEPT IS NOT MADE AGAIN (RULE 1: the same
-                # run on the same set gives the same bytes, invariant 12). Before
-                # this, a pass stopped in its query role redid the document role's
-                # 6.7 h on its next start (gutenberg, 2026-11-02)
+                # A TWIN IS THE SAME WEIGHTS: a reference of others would be kept
+                # under their key, where no gate of this space looks
+                if stated.weights != want:
+                    print(f"louise: {role}: {recipe.query_model if query else recipe.model} runs weights "
+                          f"{str(stated.weights)[:23]}…, the space's are {str(want)[:23]}…: a CPU twin "
+                          f"is the same weights", file=sys.stderr)
+                    return 2
                 set_id = codex.space.calibration.set
-                if getattr(a, "again", False):
-                    cpu_ref.discard_journal(a.root, name, role, run_id=stated.run_id,
-                                            set_id=set_id)
-                # `refresh` (`hold collection new`): the collection's copy is
-                # written again from the node's store, never trusted as it is
-                done = (None if getattr(a, "again", False) or getattr(a, "refresh", False) else
-                        cpu_ref.kept(a.root, name, role, run_id=stated.run_id,
-                                     set_id=set_id, count=len(items)))
-                if done is not None:
-                    print(f"kept already  {role}  run {stated.run_id[:23]}…  {done}")
-                    continue
                 texts = emb.gate_texts(codex, role, items)
                 # ONE TEXT A REQUEST, each bounded by the space's window: the
                 # collection's `[encoder] batch` is the card's (wikidata's 16
@@ -6465,20 +6943,13 @@ def cmd_embedder_cpu_reference(a) -> int:
                 embed = run_check.answers(cpu, query=query, name=name, timeout=timeout)
                 one = run_check.answers(cpu, how="one", query=query, name=name,
                                         timeout=timeout)
-                # THE NODE'S STORE (operator, 2026-11-06): what `hold embedder
-                # calibrate` or another collection of this encoder already
-                # made is taken, never made again; journalled a window at a
-                # time, so a stop costs the window in flight (gutenberg's query
-                # role lost 352 answers, 2026-11-02)
-                instruction = (getattr(recipe, "document_instruction", None) if role == "document"
-                               else getattr(codex.space.query, "instruction", None))
-                store = cpu_ref.node_directory(cpu_ref.node_key(
-                    weights=stated.weights, set_id=set_id, ctx=recipe.ctx,
-                    instruction=instruction, role=role,
-                    cut=getattr(recipe, "cut", "characters")))
-                cpu_ref.adopt_journal(cpu_ref.journal(a.root, name, role, run_id=stated.run_id,
-                                                      set_id=set_id),
-                                      store, run_id=stated.run_id, set_id=set_id)
+                # THE NODE'S STORE, BY ITS KEY, through RAGE's API (operator,
+                # 2026-11-06 and 2026-11-22): what `hold embedder calibrate` or
+                # another collection of this encoder already made is taken
+                # (this run's file, or carried when its sixteen fingerprint
+                # answers are its bytes), never made again; journalled a
+                # window at a time, so a stop costs the window in flight
+                store = rage_reference.store(codex, role, stated.weights)
                 got = cpu_ref.obtain(store, role, set_id=set_id, texts=texts,
                                      run_id=stated.run_id,
                                      run={"driver": stated.driver, "engine": stated.engine,
@@ -6495,9 +6966,9 @@ def cmd_embedder_cpu_reference(a) -> int:
         except cpu_ref.NotReproducible as e:
             print(f"louise: {e}", file=sys.stderr)
             return 1
-        path = cpu_ref.write(a.root, name, role, run_id=got.run_id, run=got.run,
-                             set_id=set_id, vectors=got.vectors)
-        print(f"kept  {role}  run {got.run_id[:23]}…  {len(got.vectors)} vectors  {path}  "
+        # the node's store only: every collection of this key finds it there
+        # (app/rage/reference.py), none keeps a copy
+        print(f"kept  {role}  run {got.run_id[:23]}…  {len(got.vectors)} vectors  "
               f"({got.how}; the node's store: {got.path})")
     return 0
 
@@ -6923,7 +7394,8 @@ def cmd_records_show(a) -> int:
 def cmd_index_build(a) -> int:
     """`hold index build <collection> [--text | --vector]` (07 §7.3): the
     vector table's indexes now — the book_id index every delete-then-insert
-    write filters on, then the vector index queries probe (app/vector_index.py,
+    write filters on, the lang bitmap a language filter reads, then the
+    vector index queries probe (app/vector_index.py,
     as `index vector build` built them). The text index is the worker's fts
     stage's, shard by shard as documents land; nothing rebuilds it on
     demand, so `--text` says so (exit 2) rather than pretending."""
@@ -6945,6 +7417,12 @@ def cmd_index_build(a) -> int:
     if not out.get("built"):
         print(f"louise: book_id index not built: {out.get('reason')}", file=sys.stderr)
         return 1
+    # the lang BITMAP too, as the worker's pass builds it after the book_id
+    # index (2026-11-24: Normattiva's hand build left it out, and a language
+    # filter read every row until the worker's next pass). `is False`: a
+    # table without the column has none to build
+    if (vector_index.stats(local) or {}).get("lang_indexed") is False:
+        vector_index.build_lang(local, log=log)
     out = vector_index.build(local, index_type=a.type, partitions=a.partitions, log=log)
     if not out.get("built"):
         print(f"louise: vector index not built: {out.get('reason')}", file=sys.stderr)
@@ -7237,6 +7715,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = nverbs.add_parser("show", help="state per collection, the current stage, the last round's cost, "
                                       "the overrides in force, the verbs running under the node")
     p.set_defaults(fn=cmd_node_show)
+    p = nverbs.add_parser("release-oom", help="lift the hold a memory kill put on the worker (operator, "
+                                             "2026-11-19): name the cause determined or the diagnostic added")
+    rel = p.add_mutually_exclusive_group(required=True)
+    rel.add_argument("--cause", default=None, help="what it was processing and its measured peak, in words")
+    rel.add_argument("--diagnostic", default=None, help="what was added that will name it the next time")
+    p.set_defaults(fn=cmd_node_release_oom)
     p = nverbs.add_parser("resume", help="the node, or one collection")
     p.add_argument("collection", nargs="?", default=None)
     p.set_defaults(fn=cmd_node_resume)
@@ -7376,8 +7860,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--encoder", default=None, metavar="URL",
                    help="the endpoint of the recipe's encoder (required; with --re-create, the "
                         "predecessor's file's unless given)")
-    p.add_argument("--cpu-model", required=True, metavar="NAME",
-                   help="its CPU twin (gpu_layers 0): the tolerance and the CPU reference")
+    p.add_argument("--cpu-model", default=None, metavar="NAME",
+                   help="its CPU twin (gpu_layers 0): the tolerance and the CPU reference (default: the "
+                        "encoder's name with -cpu, held to a CPU run of the same weights)")
     p.add_argument("--platform-image", default=None)
     p.add_argument("--re-create", dest="re_create", action="store_true",
                    help="case F: re-create the collection held under --name (RULE 1): its parts, "
@@ -7438,6 +7923,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "envelope the new Codex reuses (RULE 1): its space must be the "
                         "recipe's but for the query side, the document engine included; "
                         "only the query side is embedded")
+    p.add_argument("--run", default=None, metavar="YYYYMMDD",
+                   help="for a plugin whose origin publishes dated dumps (wikipedia, wikidata): the "
+                        "FIRST run the collection's records are built from, written into "
+                        "origin.spec.files with delta.mode dated-dumps (09 §9.17) where the recipe "
+                        "names none; a re-creation <name>.next takes the run <name> holds")
     # `create annotations` (02 §2.10): claims about another collection's records
     p.add_argument("--annotates", default=None, metavar="COLLECTION", action="append",
                    help="create annotations: the collection the claims are about (id, prefix or name); "
@@ -7446,9 +7936,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--from-snapshot", default=None, dest="from_snapshot", metavar="ID", action="append",
                    help="create annotations: the target snapshot the claims are checked against "
                         "and hold from (the Codex's annotates.from_snapshot); one per --annotates")
+    p.add_argument("--select", default=None, metavar="FILE", action="append",
+                   help="create annotations: the rule file choosing which of the target's records the "
+                        "claims are about (09 §9.3, amended 2026-11-18; TOML with id and version), "
+                        "pinned in the Codex by its sha256; one per --annotates, '-' for a target "
+                        "taken whole")
     p.add_argument("--container", default=None, choices=("jsonl", "parquet"),
                    help="create annotations: the record parts' container (09 §9.5, 2026-10-20); "
                         "jsonl unless said, and parquet is declared but not yet written")
+    p.add_argument("--repin", action="store_true",
+                   help="create annotations: the claims' own pins dropped and each pinned anew against the "
+                        "targets, as an update re-checks them — for a re-created target whose records' text "
+                        "moved (a new parser); what moved is said by method, and --dry-run says it first")
     p.add_argument("--claims", default=None, metavar="FILE",
                    help="create annotations: JSON Lines, one claim per line (09 §9.5, amended "
                         "2026-10-09)")
@@ -7907,9 +8406,14 @@ def build_parser() -> argparse.ArgumentParser:
     p = everbs.add_parser("cpu-reference",
                           help="keep the calibration set as the encoder's CPU twin embeds it "
                                "(every gate compares its run with it)")
-    root_arg(p); p.add_argument("collection")
-    p.add_argument("--model", metavar="NAME", help="the CPU twin's model name")
-    p.add_argument("--query-model", metavar="NAME", help="the query side's CPU twin")
+    root_arg(p); p.add_argument("collection", nargs="?")
+    p.add_argument("--check", action="store_true",
+                   help="read-only: per collection (every one held where none is named) and role, whether "
+                        "the gate would find its CPU reference, and the command that makes a missing one")
+    p.add_argument("--model", metavar="NAME", help="the CPU twin's model name (default: the encoder's "
+                                                    "with -cpu, held to a CPU run of the same weights)")
+    p.add_argument("--query-model", metavar="NAME", help="the query side's CPU twin (default: its "
+                                                          "encoder's with -cpu, where the space has one)")
     p.add_argument("--again", action="store_true",
                    help="make a role again even where this run already kept it")
     p.set_defaults(fn=cmd_embedder_cpu_reference)
@@ -8103,7 +8607,9 @@ def build_parser() -> argparse.ArgumentParser:
                                "source removed; a dry run unless --apply (the collection paused)")
     root_arg(p); p.add_argument("collection")
     p.add_argument("--to", required=True, choices=("hot", "build"),
-                   help="hot: beside the collection, where searches read it; build: the build area")
+                   help="hot: where searches read it, beside the collection or in the Lance root "
+                        "(LOUISE_LANCE_ROOT: a table beside its collection is adopted by a rename); "
+                        "build: the build area")
     p.add_argument("--apply", action="store_true",
                    help="move it (the collection must be paused); without it, what it would move, "
                         "the room, the time and the bytes freed")
@@ -8331,6 +8837,44 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--carry-from", dest="carry_from", default=None,
                    help="an earlier eurlex corpus: its units the dump did not give, linked in")
     p.set_defaults(fn=cmd_dev_eurlex_dump)
+    p = dverbs.add_parser("retire-superseded", help="a unit held under two ids keeps the one it has now; "
+                                                    "the others leave every index, tombstoned (one unit, "
+                                                    "one document); writes only with --yes")
+    root_arg(p)
+    p.add_argument("collection")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(fn=cmd_dev_retire_superseded)
+    p = dverbs.add_parser("cpu-reference-legacy", help="the CPU references collections kept before the "
+                                                      "node's store, held to it (read-only): exit 1 when "
+                                                      "one is not in the store")
+    root_arg(p)
+    p.set_defaults(fn=cmd_dev_cpu_reference_legacy)
+    p = dverbs.add_parser("rederive", help="every document derived again at the collection's parser "
+                                           "(validity, catalogue, text index; its vectors kept): the "
+                                           "A1c repair where no source snapshot is left; writes only with --yes")
+    root_arg(p)
+    p.add_argument("collection")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--again", action="store_true", help="start over when an earlier rederive finished")
+    p.add_argument("--verify", action="store_true",
+                   help="only the documents whose chunks, fields or validity row differ from what the "
+                        "worker would derive now (app/hold/derived_check.py; on the parse pool, resumable)")
+    p.add_argument("--every", type=int, default=1, metavar="N", help="with --verify: one document in N (a sample)")
+    p.add_argument("--limit", type=int, default=None, metavar="N", help="with --verify: at most N documents")
+    p.add_argument("--ids", default=None, metavar="FILE",
+                   help="only the documents FILE lists, a uid or a document's path a line (the EUR-Lex "
+                        "units check's --list-included); their embedding too where the collection holds no "
+                        "records")
+    p.add_argument("--retry-errors", action="store_true",
+                   help="with --ids: a listed document's error cleared too, so its unit is read again "
+                        "(never a superseded row's); the restart's problem slice")
+    p.add_argument("--first", action="store_true",
+                   help="with --ids: every OTHER row held out of every stage until --release, so the "
+                        "listed are derived first (EUR-Lex's restart: the problem slice first)")
+    p.add_argument("--release", action="store_true",
+                   help="the rows --first held back in every stage's selection, the scope applied again; "
+                        "with --ids FILE the rows FILE lists stay held (EUR-Lex's units to re-form)")
+    p.set_defaults(fn=cmd_dev_rederive)
     p = dverbs.add_parser("carry", help="a collection's manifest, text index and vector table into a new "
                                         "collection with the same records (amendment A1); writes "
                                         "only with --yes (both collections' locks)")
@@ -8373,8 +8917,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scan", action="store_true",
                    help="with --keep: one pass over the vector table instead of a walk by "
                         "document — for a table too large to visit document by document")
+    p.add_argument("--rechunked", action="store_true",
+                   help="into a successor whose space differs ONLY by its layers' chunker version (A1k, "
+                        "proposed): the manifest copied with every embed and index mark emptied, then every "
+                        "vector whose chunk text the new version cuts again written under its new id; the "
+                        "rest is the embed stage's. Always copies")
+    p.add_argument("--dry-run", action="store_true", dest="dry_run",
+                   help="with --rechunked: the whole pass, per language — chunks carried, to embed, "
+                        "dropped — and nothing written")
+    p.add_argument("--window", type=int, default=None, metavar="N",
+                   help="with --rechunked: documents (rowids) a task of the parse pool (default 500)")
+    p.add_argument("--processes", type=int, default=None, metavar="N",
+                   help="with --rechunked: fewer processes than the node profile allows, never more")
     p.add_argument("--yes", action="store_true", help="do it; without it, the checks and the plan")
     p.set_defaults(fn=cmd_dev_carry)
+    p = dverbs.add_parser("pin-run", help="an unpublished collection whose dated-dump Codex names no run "
+                                          "given the Codex naming the run its records were read in, its "
+                                          "snapshot frozen again; the plan without --yes")
+    root_arg(p); p.add_argument("collection")
+    p.add_argument("--run", default=None, metavar="YYYYMMDD",
+                   help="the run its records were read in, where nothing held says it (else checked "
+                        "against what does)")
+    p.add_argument("--dry-run", action="store_true", help="the plan and its refusals; nothing written "
+                                                          "(also without --yes)")
+    p.add_argument("--yes", action="store_true", help="do it, under the collection's write lock")
+    p.set_defaults(fn=cmd_dev_pin_run)
     p = dverbs.add_parser("genesis", help="one-shot repairs of an archive's ledger; writes")
     gverbs = p.add_subparsers(dest="what", required=True)
     p = gverbs.add_parser("recheck", help="reopen final shards that still have documents the archive "
@@ -8538,8 +9105,15 @@ def main(argv=None) -> int:
         print(f"louise: {root} is not a directory; --root is "
               f"<LOUISE_ROOT>/collections (07 §7.8)", file=sys.stderr)
         return 2
+    from app import parallel
     try:
         return _run_releasing(a)
+    except parallel.MemoryKilled as e:
+        # a parse-pool child killed for memory (app/oom_hold.py): the pass is
+        # not run again until the cause is known — 137, which
+        # deploy/supervise-pass.sh holds (operator, 2026-11-19)
+        print(f"louise: {e} — exit 137", file=sys.stderr)
+        return 137
     except KeyboardInterrupt as e:
         # SIGTERM (`Stopped`) or SIGINT: what was in hand finished or rolled
         # back, nothing half-written; run the same command again (07 §7.7)

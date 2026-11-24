@@ -36,6 +36,13 @@ EVERY PATH HERE THAT DELETES A DOCUMENT'S LAST ROW then sets its
 2026-11-07): a version with the mark cleared is what the Library paints grey
 as "an earlier version, searched until re-embedded" (app/status.py
 SUPERSEDED). `--unembedded` does it for the whole target manifest.
+
+`--rechunked` (A1k, proposed 2026-11-21, adopted by architecture 2026-11-23;
+docs/notes/legal-chunker-v4.md §4.3): into a collection with the same records
+whose space differs ONLY by its layers' chunker VERSION. This module checks it
+and copies the manifest as a relayered sister's (A1i: every embed and index
+mark emptied, re-pinned); app/hold/rechunk.py then writes every vector whose
+chunk text the new version cuts again under its new chunk id.
 """
 from __future__ import annotations
 
@@ -49,7 +56,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .codex import TOKEN_CUT, Codex, CodexError
-from .seed import latest_snapshot, refuse_unless_same_records
+from .seed import latest_snapshot, refuse_unless_same_records, snapshot_ids
 
 MARKER = "carry.json"
 MANIFEST = "manifest.sqlite"
@@ -103,6 +110,65 @@ def space_differences(a: Codex, b: Codex) -> list[str]:
                 "document.instruction": s.document_instruction}
     fa, fb = fn(a), fn(b)
     return [k for k in fa if fa[k] != fb[k]]
+
+
+def layers_version_only(a: Codex, b: Codex) -> str | None:
+    """A1k: None when `b`'s layers are `a`'s with only their chunkers'
+    VERSION moved (the same number of layers, each the same chunker id,
+    params, rule and input, at least one version other); else why not, in
+    words. The chunk ids carry the version (`<uid>:<seq>:<version>`, 06 §6.3)
+    and `space_id` the layers (09 §9.3), so such a space is another space whose
+    function from cleaned text to vectors is the same one (02 §2.4)."""
+    la, lb = list(a.layers), list(b.layers)
+    if len(la) != len(lb):
+        return f"{len(la)} layer(s) and {len(lb)}: the layer list is fixed at creation"
+    moved = 0
+    for i, (x, y) in enumerate(zip(la, lb)):
+        cx, cy = x.chunker.to_dict(), y.chunker.to_dict()
+        vx, vy = cx.pop("version", None), cy.pop("version", None)
+        if (cx, x.rule, x.form) != (cy, y.rule, y.form):
+            return (f"layer {i} differs in more than its version ({cx} {x.rule!r} {x.form!r} → "
+                    f"{cy} {y.rule!r} {y.form!r})")
+        moved += vx != vy
+    return None if moved else "the layers are the same: there is nothing to re-chunk"
+
+
+def held_here(state: Path) -> bool:
+    """Does THIS process hold the collection's write lock (07 §7.7)? The
+    lock file is flocked and names this pid on this host (app/hold/lock.py
+    writes both; a probe from here contends, as any other opener does)."""
+    import socket
+
+    from . import lock as lock_mod
+    who = lock_mod.holder(Path(state))
+    return bool(who) and who.get("pid") == os.getpid() and who.get("host") == socket.gethostname()
+
+
+def refuse_without_locks(root: Path, names, what: str) -> None:
+    """A writer that needs both collections' write locks refuses, writing
+    nothing, unless this process holds every one (`louise dev carry --yes`
+    takes them in name order)."""
+    from . import lock as lock_mod
+    missing = [n for n in sorted(set(names)) if not held_here(lock_mod.state_dir(Path(root), n))]
+    if missing:
+        raise CodexError(f"{what}: this process does not hold the write lock of {', '.join(missing)} "
+                         f"(07 §7.7: one writer per collection, both held); `louise dev carry ... --yes` "
+                         f"takes them. Nothing was written")
+
+
+def refuse_unless_pinned(lance: Path, manifest: Path, src: Codex, from_name: str) -> None:
+    """The source's vector table is its Codex's space and width, or nothing
+    says what its vectors are: refused (every carry that takes vectors)."""
+    from app import spaces
+    pinned, _dim = _pin(manifest)
+    lance_dim = spaces.known_lance_dim(lance)
+    if pinned not in (None, src.space_id) or (pinned is None and lance_dim is not None):
+        raise CodexError(
+            f"carry: {from_name}'s vector table is pinned to {str(pinned)[:23]}…, not its "
+            f"Codex's space {src.space_id[:23]}…; nothing says what its vectors are")
+    if lance_dim not in (None, src.space.dim):
+        raise CodexError(f"carry: {from_name}'s vector table is {lance_dim}-dimensional "
+                         f"and its space is {src.space.dim}")
 
 
 def _part_entries(snap) -> dict[str, list]:
@@ -619,12 +685,71 @@ def unembedded_why_not(lance: Path, manifest: Path) -> str | None:
     return None
 
 
+#: where a carry keeps the target's own collection file it replaced
+FILE_BEFORE_CARRY = ".toml.before-carry"
+
+
+def carry_file(root, from_name: str, to_name: str, collection_id: str, *,
+               log: Callable[[str], None] = print) -> str:
+    """THE PREDECESSOR'S COLLECTION FILE, CARRIED (07 §7.8; the node,
+    2026-11-19: gutenberg.next, carried --rebuilt, kept the file `create`
+    writes — `slices = []`, `embed = "off"` — where gutenberg held
+    "all"/"all", and was swapped into place so; München set both by hand). A
+    re-creation of the SAME collection at a new parser (`rebuilt`, A1c) or a
+    new cut (`recut`, A1e) holds what its predecessor held: every key of the
+    predecessor's file, its codex the target's and `embed` "off" until the
+    operator turns it on — `recreate.carried_file`, the rule `hold collection
+    new --re-create`'s swap already follows. The target's own file is kept
+    beside it (`FILE_BEFORE_CARRY`). A predecessor file that does not carry
+    by its two lines is said, and left for the operator; never a guess."""
+    from . import deposit, recreate
+    src = deposit.held_file(Path(root), from_name)
+    dst = deposit.held_file(Path(root), to_name)
+    if not src.is_file():
+        log(f"[carry] {to_name}: {from_name} has no collection file here ({src}); its own kept")
+        return f"not carried: {from_name} has no collection file here"
+    try:
+        body, mode = recreate.carried_file(src.read_text(encoding="utf-8"), collection_id)
+    except CodexError as e:
+        log(f"[carry] {to_name}: its collection file is NOT carried — {e}; set it by hand from {src}")
+        return f"not carried: {e}"
+    if dst.is_file():
+        if dst.read_text(encoding="utf-8") == body:
+            return "carried (already)"
+        os.replace(dst, dst.with_name(dst.name.removesuffix(".toml") + FILE_BEFORE_CARRY))
+    tmp = dst.with_suffix(".toml.carry")
+    tmp.write_text(body, encoding="utf-8")
+    os.replace(tmp, dst)
+    log(f"[carry] {to_name}: collection file carried from {from_name} (its slices, kinds, sharing, "
+        f"encoder, reranker); embed \"off\" — {from_name} embedded {mode!r}: "
+        f"`louise hold config apply {to_name} --set embed={mode}` after the swap")
+    return f"carried from {from_name}; embed off (was {mode!r})"
+
+
 def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool = False,
           keep: str | None = None, rebuilt: bool = False, recut: bool = False,
           resliced: bool = False, unembedded: bool = False, sister: bool = False,
-          relayered: bool = False, log: Callable[[str], None] = print) -> dict[str, Any]:
+          relayered: bool = False, rechunked: bool = False,
+          log: Callable[[str], None] = print) -> dict[str, Any]:
     """Carry `from_ref`'s manifest, text index and vector table into `to_ref`
     (G1). `apply=False` checks everything and writes nothing.
+
+    `rechunked` (A1k, adopted 2026-11-23; the shared legal space from
+    `legal_article` 3 to 4, docs/notes/legal-chunker-v4.md): the target's
+    Codex is the source's with its layers' chunker VERSION moved and nothing
+    else that decides a record or the function — `record_differences` "layers"
+    alone and `layers_version_only`, `space_differences` empty (nothing
+    crossed: no query instruction, no cut). The source keeps everything
+    (`copy` required) and its table must be its space's; the target is empty;
+    with `apply`, this process holds both write locks. The manifest is copied
+    as a relayered sister's (A1i's `_sister_reset`: every embed mark and
+    version, every index mark and count, the chunk-hash holders, the queues,
+    the bundles and the gate's state emptied), the catalogue index copied (a
+    function of the same rows), the space re-pinned. No vector crosses here:
+    `hold.rechunk.rekey` writes each one whose text the new version cuts
+    again, under its new id, and marks a document embedded once all of its
+    chunks carried. A second run after it finished changes nothing — the
+    reset would undo the re-key's marks.
 
     `unembedded` (A1h, 2026-10-31; wikidata from jina-v3 to bge-m3, nothing
     embedded or published): the source holds NO vector, so the target's space
@@ -683,11 +808,22 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     `content_hash` in the two snapshots."""
     from . import collection as col
     from .seed import record_differences, records_slicing
-    from app import spaces
 
     root = Path(root)
     from_name, src = col.resolve(root, from_ref)
     to_name, to = col.resolve(root, to_ref)
+    # nothing is carried INTO a Codex whose records name a keyed unit and
+    # which names no run to read it in (09 §9.5, §9.17; München, 2026-11-17)
+    from . import origin_run
+    origin_run.refuse_without_run(to, f"carry into {to_name} (nothing was written)")
+    if rechunked and (sister or relayered or unembedded or resliced or rebuilt or keep or recut):
+        raise CodexError("carry --rechunked moves the layers' version alone: no --sister, --relayered, "
+                         "--unembedded, --resliced, --rebuilt, --keep or --recut with it")
+    if rechunked and not copy:
+        raise CodexError("carry --rechunked copies: the source keeps its manifest and its vectors, "
+                         "which the re-key reads (hold/rechunk.py)")
+    if rechunked and apply:
+        refuse_without_locks(root, (from_name, to_name), "carry --rechunked")
     if sister and (unembedded or resliced or rebuilt or keep or recut):
         raise CodexError("carry --sister carries no vector: no --unembedded, --resliced, --rebuilt, "
                          "--keep or --recut with it")
@@ -719,6 +855,9 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
             raise CodexError("carry: the source and the target are one collection")
         other = [d for d in record_differences(src, to) if d not in RECORDS_REBUILT
                  and not (d == "origin" and origin_only_adds(src, to))]
+        # the origin with the run pinned that the source's records were read
+        # in (09 §9.17; wikidata parser 2 -> 3, whose live Codex names none)
+        other = origin_run.admit_run_pin(root, from_name, src, to, other, "carry --rebuilt")
         if other:
             raise CodexError(
                 f"carry --rebuilt: {to.collection_id} and {src.collection_id} differ in "
@@ -737,6 +876,27 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
                 f"carry --sister --relayered: {to.collection_id} and {src.collection_id} differ in "
                 f"{', '.join(other)}, which decide record bytes (02 §2.7) — only the layers and the "
                 f"facets may differ besides the encoder's side, and nothing is carried")
+    elif rechunked:
+        if src.collection_id == to.collection_id:
+            raise CodexError("carry: the source and the target are one collection")
+        other = [d for d in record_differences(src, to) if d != "layers"]
+        if [f.to_dict() for f in src.facets] != [f.to_dict() for f in to.facets]:
+            other.append("facets")
+        if other:
+            raise CodexError(
+                f"carry --rechunked: {to.collection_id} and {src.collection_id} differ in "
+                f"{', '.join(other)} — only the layers' chunker version may differ (A1k), and "
+                f"nothing is carried")
+        why = layers_version_only(src, to)
+        if why:
+            raise CodexError(f"carry --rechunked: {why} (A1k moves the chunker version alone); nothing "
+                             f"is carried")
+        fn = space_differences(src, to)
+        if fn:
+            raise CodexError(
+                f"carry --rechunked: the spaces differ in {', '.join(fn)} as well: the vectors carried "
+                f"by their text are the same function's only (A1k crosses nothing else); nothing is "
+                f"carried")
     else:
         refuse_unless_same_records(src, to, "carry --sister" if sister else
                                    "carry --unembedded" if unembedded else "carry")
@@ -802,7 +962,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
             f"table cross into a space that differs only by ENGINE or by a declared input "
             f"form (02 §2.4, 03 §3.5); any other difference is another function, and its "
             f"vectors are embedded again, never carried")
-    if not rebuilt and not resliced and not unembedded and not relayered:
+    if not rebuilt and not resliced and not unembedded and not relayered and not rechunked:
         a, b = latest_snapshot(root, from_name), latest_snapshot(root, to_name)
         if _part_entries(a) != _part_entries(b):
             raise CodexError(
@@ -830,24 +990,24 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
         claim["sister"] = True
     if relayered:
         claim["relayered"] = True
+    if rechunked:
+        claim["rechunked"] = True
     held = json.loads(marker.read_text(encoding="utf-8")) if marker.is_file() else None
     if held is not None and {k: held.get(k) for k in claim} != claim:
         raise CodexError(f"{marker} records another carry ({held}); this one is {claim}")
 
     plan: dict[str, Any] = {**claim, "from_name": from_name, "to_name": to_name,
                             "space_id": to.space_id, "apply": apply}
+    if rechunked and held is not None and held.get("done"):
+        # A1k: the re-key marks documents embedded after this carry; its reset
+        # run again would undo them. The re-key resumes from its own cursor
+        log(f"[carry] {from_name} → {to_name}: the manifest was carried earlier (--rechunked); "
+            f"the re-key resumes from its cursor")
+        return {**plan, "carried": "earlier"}
     if held is None:
         if not sp["manifest"].is_file():
             raise CodexError(f"carry: {from_name} has no manifest at {sp['manifest']}")
-        pinned, _dim = _pin(sp["manifest"])
-        lance_dim = spaces.known_lance_dim(sp["lance"])
-        if pinned not in (None, src.space_id) or (pinned is None and lance_dim is not None):
-            raise CodexError(
-                f"carry: {from_name}'s vector table is pinned to {str(pinned)[:23]}…, not its "
-                f"Codex's space {src.space_id[:23]}…; nothing says what its vectors are")
-        if lance_dim not in (None, src.space.dim):
-            raise CodexError(f"carry: {from_name}'s vector table is {lance_dim}-dimensional "
-                             f"and its space is {src.space.dim}")
+        refuse_unless_pinned(sp["lance"], sp["manifest"], src, from_name)
         if unembedded:
             why = unembedded_why_not(sp["lance"], sp["manifest"])
             if why:
@@ -871,7 +1031,9 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
                 f"({plan['documents']} documents), index/"
                 + (" (no vector: the target makes its own table, A1h)" if unembedded else
                    " (no vector: the source keeps its own, the target embeds in its space, A1i)"
-                   if sister else " and lance/")
+                   if sister else " (its catalogue alone; then the re-key writes every vector whose "
+                   "text the new version cuts again under its new id, A1k)" if rechunked else
+                   " and lance/")
                 + (", state/bundles and state/share — the bundles, coverage rows and torrents "
                    "too (A1f: the same document vectors)" if shares and not copy else "")
                 + f", and re-pin to {to.space_id[:23]}…; nothing written (--yes)")
@@ -887,7 +1049,8 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
 
     done: dict[str, Any] = {}
     # A1h: no vector crosses spaces; the target's table is its own, of its width
-    for k in (() if relayered else ("index",) if unembedded or sister else ("lance", "index")):
+    # (A1k: the re-key writes the target's, row by row; its text index is cut again)
+    for k in (() if relayered or rechunked else ("index",) if unembedded or sister else ("lance", "index")):
         if k == "index" and sister:
             # a sister's text index is her sister's byte for byte: LINKED,
             # never copied (operator, 2026-11-10: sisters share one text
@@ -907,6 +1070,11 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
         done["dropped"] = [f"index/{ask_facets.CACHE}/{ask_facets.MARKER}"]
     if relayered:
         done["index"] = "not carried (her layers cut other chunks: the worker indexes, A1i)"
+    if rechunked:
+        # the text index stores chunk ids, so it is cut again; the catalogue
+        # (title, authors, subjects by `documents.rowid`, app/catalog.py) is a
+        # function of the manifest rows copied with it: the same bytes (RULE 1)
+        done["index"] = _carry_catalogue(sp["index"], tp["index"])
     if not copy:
         # a source whose table was in the build area keeps a link to nothing
         from app import vector_place
@@ -958,13 +1126,16 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     # and what is derived from that corpus, the space and the manifest, where
     # what it is keyed on is the target's too (München, 2026-11-17: by hand)
     plan["derived"] = derived_state(root, from_name, to_name, src, to, rebuilt=rebuilt, apply=True, log=log)
-    if sister:
+    if sister or rechunked:
         # A1i: the source's vectors stayed with it; nothing in the copy may
-        # still say this collection holds one
-        plan["reset"] = _sister_reset(tp["manifest"], relayered=relayered,
+        # still say this collection holds one (A1k: until the re-key writes
+        # them under their new ids and marks each document whose every chunk
+        # it carried — in the safe direction, a mark only after its rows)
+        plan["reset"] = _sister_reset(tp["manifest"], relayered=relayered or rechunked,
                                       log=lambda m: log(f"[carry] {to_name}: {m}"))
         log(f"[carry] {to_name}: nothing of {from_name}'s vectors is said held here: "
-            + ", ".join(f"{k} {v}" for k, v in plan["reset"].items()) + " (A1i)")
+            + ", ".join(f"{k} {v}" for k, v in plan["reset"].items())
+            + (" (A1k: the re-key follows)" if rechunked else " (A1i)"))
     if unembedded:
         # A1h: the source holds NO vector (`unembedded_why_not` proved it), so
         # no document of the target holds an earlier version's vectors,
@@ -995,8 +1166,12 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     if same and not shares:
         final.update(same_space=True, predecessors=_predecessors_of(sp["state"], src.collection_id))
     marker.write_text(json.dumps(final, sort_keys=True), encoding="utf-8")
+    if rebuilt or recut or rechunked:
+        plan["collection_file"] = carry_file(root, from_name, to_name, to.collection_id, log=log)
     log(f"[carry] {from_name} → {to_name}: manifest {done['manifest']}, index/ "
-        f"{done['index']}, lance/ {done.get('lance', 'not carried (A1i)' if sister else 'not carried (A1h)')}"
+        f"{done['index']}, lance/ "
+        + done.get('lance', 'not carried (A1i)' if sister else
+                   'written by the re-key, row by row (A1k)' if rechunked else 'not carried (A1h)')
         + (f", state/bundles {done.get('bundles')}, state/share {done.get('share')}" if shares and not copy else "")
         + f"; space re-pinned to {to.space_id[:23]}…; {cleared} coverage row(s) of {from_name} "
         + ("re-keyed to it (A1f)" if shares else "kept unkeyed (provenance, never its coverage)"
@@ -1013,8 +1188,30 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
            f"collection new`, case J); the worker indexes every document again (A1i)" if relayered else
            f"use: its CPU reference and gate (`hold collection new`, case J); its documents are "
            f"embedded in its own space (A1i)" if sister else
+           f"use: the re-key (`dev carry {from_name} {to_name} --rechunked --yes`), the gate for "
+           f"{to_name}'s space and `hold check {to_name} --checks vectors-sample` (A1k)" if rechunked else
            f"use: `hold check {to_name} --checks vectors-sample` (amendment A1)"))
     return plan
+
+
+def _carry_catalogue(src_index: Path, dst_index: Path) -> str:
+    """The source's catalogue index (`index/_catalog`, app/catalog.py) copied
+    whole into the target's `index/` — a reflink where the filesystem has one,
+    to a hidden name renamed into place, so a stop leaves it whole or absent.
+    Repeatable: one already there is an earlier run's."""
+    from app import catalog
+    src, dst = src_index / catalog.DIRNAME, dst_index / catalog.DIRNAME
+    if dst.exists():
+        return "catalogue present"
+    if not src.is_dir():
+        return "no catalogue to carry: the maintainer builds it"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.carry")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    _copy_tree(src, tmp)
+    os.replace(tmp, dst)
+    return "catalogue copied; the text index is cut again (A1k)"
 
 
 # ---- the derived state a successor takes (RULE 1, 2026-11-17) ---------------
@@ -1058,37 +1255,28 @@ DERIVED = ("cpu-reference", "archive ids (the plugin's carry_state)", "scan curs
 
 def _carry_cpu_reference(root: Path, from_name: str, to_name: str, src: Codex, to: Codex, *,
                          apply: bool) -> dict[str, Any]:
-    from . import cpu_reference as cpu_ref
+    """THE REFERENCE IS THE MODEL'S, NOT THE COLLECTION'S (operator,
+    2026-11-22): nothing is copied, nothing written. The node's store holds
+    it by its key (app/rage/reference.py), where the new one's gate finds it
+    — the same space, the same key. What the old collection kept before the
+    store (2026-11-06) is said, held to the store (`legacy`): a copy the
+    store does not hold is never filed under a key it does not name."""
+    from app.rage import reference as rage_reference
     out: dict[str, Any] = {"carried": 0, "present": 0, "refused": []}
-    base = Path(root) / from_name / "state" / "cpu-reference"
-    if not base.is_dir():
-        return {**out, "why": "none kept"}
-    if src.space is None or to.space is None or src.space_id != to.space_id:
+    if src.space is None or to.space is None:
+        return {**out, "why": "not carried: the spaces differ, and the reference is the space's encoder's"}
+    if src.space_id != to.space_id and (space_differences(src, to) or layers_version_only(src, to)):
+        # A1k: two spaces that differ by the layers' chunker version alone have
+        # one encoder side, so one reference — under the store's one key (the
+        # encoder side and the calibration set, checked below)
         return {**out, "why": "not carried: the spaces differ, and the reference is the space's encoder's"}
     if src.space.calibration.set != to.space.calibration.set:
         return {**out, "why": f"not carried: the calibration set moved ({src.space.calibration.set[:23]}… → "
                               f"{to.space.calibration.set[:23]}…), and the reference is of the set"}
-    for d in sorted(p for p in base.iterdir() if p.is_dir()):
-        for f in sorted(d.glob("*.json")):
-            try:
-                ref = cpu_ref.read(f)
-            except (OSError, ValueError, KeyError, CodexError) as e:
-                out["refused"].append(f"{d.name}/{f.name}: {e}"[:160])
-                continue
-            if ref.role != d.name or ref.set_id != to.space.calibration.set:
-                out["refused"].append(f"{d.name}/{f.name}: of another role or set")
-                continue
-            dst = cpu_ref.directory(Path(root), to_name, d.name) / f.name
-            if dst.is_file() and dst.read_bytes() == f.read_bytes():
-                out["present"] += 1
-                continue
-            out["carried"] += 1
-            if apply:
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
-                shutil.copyfile(f, tmp)
-                os.replace(tmp, dst)
-    return out
+    got = rage_reference.legacy(Path(root), from_name, src)
+    return {**out, "present": got["identical"], "unproven": got["unproven"], "differs": got["differs"],
+            "refused": got["refused"],
+            "why": "the node's store holds it by its key: nothing to copy into the collection"}
 
 
 def _carry_cursors(root: Path, from_name: str, to_name: str, src: Codex, to: Codex, *,
@@ -1138,6 +1326,8 @@ def derived_state(root, from_name: str, to_name: str, src: Codex, to: Codex, *, 
         n = v.get("carried")
         n = len(n) if isinstance(n, list) else n
         said.append(f"{k} {n}" + (f" ({v['why']})" if v.get("why") else "")
+                    + (f", {len(v['unproven'])} kept by the collection alone, not in the node's store"
+                       if v.get("unproven") else "")
                     + (f", {v['present']} already there" if v.get("present") else "")
                     + (f", {v['stale']} of shards no longer there left" if v.get("stale") else "")
                     + (f", {len(v['refused'])} refused" if v.get("refused") else ""))
@@ -1148,6 +1338,11 @@ def derived_state(root, from_name: str, to_name: str, src: Codex, to: Codex, *, 
 # ---- A1c: reconcile a rebuilt target --------------------------------------
 
 RECONCILE_KEY = "carry_reconcile"
+#: a document's marks, reset where what the worker derived from its own parse
+#: is the old parser's (2026-11-19): the rdf stage writes its validity and
+#: catalogue rows again, the fts stage its text-index rows (delete-then-
+#: insert, keyed on the document); its vectors are reconcile's to keep or not
+REDERIVE_MARKS = "rdf_done=0, fts_done=0"
 
 
 def _content_of(root: Path, name: str) -> dict[str, tuple[str, str | None]]:
@@ -1185,12 +1380,28 @@ def _digest(v: str | None) -> bytes | None:
     return None if v is None else hashlib.blake2b(v.encode("utf-8"), digest_size=16).digest()
 
 
-def _part_content(path: str, with_origin: bool) -> list[tuple[str, bytes | None, str | None]]:
+#: a record's provenance, not what its parse gave (`_parsed_digest`)
+_PROVENANCE = ("origin", "origin_hash", "content_hash")
+
+
+def _parsed_digest(r: dict) -> bytes:
+    """What the PARSE gave a record — every field but its provenance — as a
+    digest (2026-11-19, the A1c defect: NeuRIS5's provisional starts live in
+    `extra`, outside `content_hash`, and the worker's validity and text-index
+    rows, derived from its own parse, kept parser 4's: 51 documents out of
+    the in-force filter, Normattiva ~1.5 % with parser 9's "— null"
+    headings in its text index)."""
+    line = {k: v for k, v in r.items() if k not in _PROVENANCE}
+    return _digest(json.dumps(line, sort_keys=True, ensure_ascii=False, separators=(",", ":"))) or b""
+
+
+def _part_content(path: str, with_origin: bool) -> list[tuple[str, bytes | None, str | None, bytes]]:
     """One part's (uid, content digest, origin_hash — the target's only: the
-    source's is never read), in the part's order — a pool task
-    (`parallel.each_part`), module-level so it pickles."""
+    source's is never read —, parse digest), in the part's order — a pool
+    task (`parallel.each_part`), module-level so it pickles."""
     from app.pack import records as pack_records
-    return [(r["uid"], _digest(r.get("content_hash")), r.get("origin_hash") if with_origin else None)
+    return [(r["uid"], _digest(r.get("content_hash")), r.get("origin_hash") if with_origin else None,
+             _parsed_digest(r))
             for r in pack_records.iter_records(Path(path))]
 
 
@@ -1203,7 +1414,8 @@ def _content_table(root: Path, from_name: str, to_name: str, log: Callable[[str]
     path = _paths(root, to_name)["state"] / CONTENT_DB
     sides = ((_BEFORE, from_name, latest_snapshot(root, from_name)),
              (_AFTER, to_name, latest_snapshot(root, to_name)))
-    key = json.dumps([[n, s.snapshot_id] for _side, n, s in sides])
+    # "v2": the parse digest (`lh`) beside the content; a table of v1 is made again
+    key = json.dumps(["v2"] + [[n, s.snapshot_id] for _side, n, s in sides])
     con = sqlite3.connect(path)
     try:
         con.execute("PRAGMA journal_mode=WAL")
@@ -1214,7 +1426,7 @@ def _content_table(root: Path, from_name: str, to_name: str, log: Callable[[str]
             con.execute("DROP TABLE IF EXISTS content")
             con.execute("DROP TABLE IF EXISTS parts")
         con.execute("INSERT OR REPLACE INTO meta VALUES('for', ?)", (key,))
-        con.execute("CREATE TABLE IF NOT EXISTS content(side INTEGER, uid TEXT, ch BLOB, oh TEXT, "
+        con.execute("CREATE TABLE IF NOT EXISTS content(side INTEGER, uid TEXT, ch BLOB, oh TEXT, lh BLOB, "
                     "PRIMARY KEY(side, uid)) WITHOUT ROWID")
         con.execute("CREATE TABLE IF NOT EXISTS parts(side INTEGER, path TEXT, "
                     "PRIMARY KEY(side, path)) WITHOUT ROWID")
@@ -1230,8 +1442,8 @@ def _content_table(root: Path, from_name: str, to_name: str, log: Callable[[str]
             tasks = [(str(d / p), side == _AFTER) for p in todo]
             for n, (part, rows) in enumerate(zip(todo, parallel.each_part(_part_content, tasks)), 1):
                 con.execute("BEGIN")
-                con.executemany("INSERT OR REPLACE INTO content VALUES(?,?,?,?)",
-                                [(side, u, ch, oh) for u, ch, oh in rows])
+                con.executemany("INSERT OR REPLACE INTO content VALUES(?,?,?,?,?)",
+                                [(side, u, ch, oh, lh) for u, ch, oh, lh in rows])
                 con.execute("INSERT INTO parts VALUES(?,?)", (side, part))
                 con.execute("COMMIT")
                 if n % 200 == 0:
@@ -1242,14 +1454,14 @@ def _content_table(root: Path, from_name: str, to_name: str, log: Callable[[str]
     return path
 
 
-def _content_window(con, side: int, uids: list[str]) -> dict[str, tuple[bytes | None, str | None]]:
-    out: dict[str, tuple[bytes | None, str | None]] = {}
+def _content_window(con, side: int, uids: list[str]) -> dict[str, tuple[bytes | None, str | None, bytes | None]]:
+    out: dict[str, tuple[bytes | None, str | None, bytes | None]] = {}
     for i in range(0, len(uids), 500):
         part = uids[i:i + 500]
-        for u, ch, oh in con.execute(
-                f"SELECT uid, ch, oh FROM content WHERE side=? AND uid IN ({','.join('?' * len(part))})",
+        for u, ch, oh, lh in con.execute(
+                f"SELECT uid, ch, oh, lh FROM content WHERE side=? AND uid IN ({','.join('?' * len(part))})",
                 [side, *part]):
-            out[u] = (ch, oh)
+            out[u] = (ch, oh, lh)
     return out
 
 
@@ -1327,6 +1539,14 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
             rehash = [(after[r["uid"]][1], r["uid"]) for r in rows
                       if r["uid"] in after and after[r["uid"]][1]
                       and r["txt_hash"] != after[r["uid"]][1]]
+            # WHAT THE WORKER DERIVED FROM ITS OWN PARSE (2026-11-19): a record
+            # whose parse moved — any field, not only the content — has its
+            # validity, catalogue and text-index rows from the old parser:
+            # derived again (`rederived`), its vectors kept where its content
+            # did not move
+            rederive = [r["uid"] for r in rows
+                        if r["uid"] not in after or r["uid"] not in before
+                        or after[r["uid"]][2] != before[r["uid"]][2]]
             pending = state.get("pending") or {}
             if pending.get("rowid") != last:
                 # step 1: marked not done (and rehashed) FIRST — a document
@@ -1338,10 +1558,27 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
                     con.execute(f"UPDATE documents SET embed_done=0 WHERE uid IN ({marks})", part)
                     con.execute(f"DELETE FROM chunk_verification WHERE uid IN ({marks})", part)
                 con.executemany("UPDATE documents SET txt_hash=? WHERE uid=?", rehash)
-                pending = {"rowid": last, "reset": len(stale), "rehashed": len(rehash)}
+                for i in range(0, len(rederive), 500):
+                    part = rederive[i:i + 500]
+                    con.execute(f"UPDATE documents SET {REDERIVE_MARKS} WHERE uid IN ({','.join('?' * len(part))})",
+                                part)
+                # their validity rows go with the marks (architecture, 2026-11-19:
+                # the old parser's row never served meanwhile); the rdf stage
+                # writes the new parser's
+                from app import validity as validity_mod
+                vday = validity_mod.today(coll)      # `shown` on the collection's day
+                for uid in rederive:
+                    validity_mod.forget(con, uid, day=vday)
+                pending = {"rowid": last, "reset": len(stale), "rehashed": len(rehash),
+                           "rederived": len(rederive)}
                 db.set_control(con, RECONCILE_KEY,
                                json.dumps({**state, "pending": pending}, sort_keys=True))
                 con.execute("COMMIT")
+            # step 2a: the text-index and catalogue rows of those derived again
+            # (their vectors are step 2's to keep or not); repeatable
+            if rederive:
+                from app import unindexable
+                unindexable.withdraw_many(con, coll, rederive, vectors=False)
             # step 2: their rows, under the vector write lock
             if stale:
                 books = sorted({int(r["native_id"]) for r in stale})
@@ -1355,7 +1592,8 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
             # step 3: the cursor
             state = {"rowid": last, "kept": state["kept"] + len(same),
                      "reset": state["reset"] + pending["reset"],
-                     "rehashed": state["rehashed"] + pending["rehashed"], "done": False,
+                     "rehashed": state["rehashed"] + pending["rehashed"],
+                     "rederived": state.get("rederived", 0) + pending.get("rederived", 0), "done": False,
                      "pair": pair}
             con.execute("BEGIN IMMEDIATE")
             db.set_control(con, RECONCILE_KEY, json.dumps(state, sort_keys=True))
@@ -1368,13 +1606,258 @@ def reconcile(root, from_ref: str, to_ref: str, *, window: int = WINDOW,
     for suffix in ("", "-wal", "-shm"):
         Path(str(side_path) + suffix).unlink(missing_ok=True)
     out = {"collection": to_name, "kept": state["kept"], "reset": state["reset"],
-           "rehashed": state["rehashed"], "records_before": counts.get(_BEFORE, 0),
-           "records_after": counts.get(_AFTER, 0)}
+           "rehashed": state["rehashed"], "rederived": state.get("rederived", 0),
+           "records_before": counts.get(_BEFORE, 0), "records_after": counts.get(_AFTER, 0)}
     log(f"[carry] {to_name}: {state['kept']} document(s) keep their vectors (same "
         f"content_hash as {from_name}), {state['reset']} to embed again, "
+        f"{state.get('rederived', 0)} whose parse moved derived again (validity, catalogue, text index), "
         f"{state['rehashed']} txt_hash(es) set to their record's origin_hash. Before use: "
         f"`hold check {to_name} --checks vectors-sample` (A1c)")
     return out
+
+
+REDERIVE_KEY = "carry_rederive"
+
+
+def rederive(root, name: str, *, apply: bool = False, again: bool = False, window: int = 50_000,
+             log: Callable[[str], None] = print) -> dict[str, Any]:
+    """THE REPAIR where no source snapshot is left to compare with (2026-11-19:
+    NeuRIS5's source was forgotten): every document's derived marks reset
+    (`REDERIVE_MARKS`), so the worker parses each again at the collection's
+    own parser and writes its validity, catalogue and text-index rows again —
+    by the book, as a fresh scan would. Vectors untouched: they are the
+    records' (reconcile kept them by content). A window of rows a
+    transaction, resumable from its cursor; the dry run counts."""
+    from . import collection as col
+    from app import db
+    root = Path(root)
+    name, codex = col.resolve(root, name)
+    manifest = _paths(root, name)["manifest"]
+    con = sqlite3.connect(manifest)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        total = int(con.execute("SELECT COUNT(*) FROM documents").fetchone()[0])
+        if not apply:
+            return {"collection": name, "documents": total, "would_reset": total,
+                    "marks": REDERIVE_MARKS}
+        fresh = {"rowid": 0, "reset": 0, "done": False}
+        state = _cursor(con, REDERIVE_KEY, [codex.collection_id], fresh)
+        if again:
+            state = {**fresh, "pair": [codex.collection_id]}
+        while not state.get("done"):
+            row = con.execute("SELECT MAX(rowid) FROM (SELECT rowid FROM documents WHERE rowid > ? "
+                              "ORDER BY rowid LIMIT ?)", (state["rowid"], window)).fetchone()
+            if row is None or row[0] is None:
+                state["done"] = True
+            con.execute("BEGIN IMMEDIATE")
+            if not state.get("done"):
+                n = con.execute(f"UPDATE documents SET {REDERIVE_MARKS} WHERE rowid > ? AND rowid <= ?",
+                                (state["rowid"], int(row[0]))).rowcount
+                state = {**state, "rowid": int(row[0]), "reset": state["reset"] + n}
+            db.set_control(con, REDERIVE_KEY, json.dumps(state, sort_keys=True))
+            con.execute("COMMIT")
+        log(f"[carry] {name}: {state['reset']} document(s) to derive again at its parser "
+            f"(validity, catalogue, text index); its vectors kept")
+        return {"collection": name, "documents": total, "reset": state["reset"], "done": True}
+    finally:
+        con.close()
+
+
+def _unit_key(path: str) -> str:
+    """A document's path as it lies under its slice folder (`lang=<code>/…`,
+    `history/lang=<code>/…`), else the path itself: the same unit named from
+    another mount (the worker's /data, a pass's /corpus) is the same key."""
+    parts = Path(os.path.normpath(path)).parts
+    for i, part in enumerate(parts):
+        if part.startswith("lang="):
+            start = i - 1 if i and parts[i - 1] == "history" else i
+            return "/".join(parts[start:])
+    return os.path.normpath(path)
+
+
+#: `rederive --ids FILE --first`: the hold on every other live row, while the
+#: listed are derived first (operator, 2026-11-22, "A, problem slice first")
+FIRST_KEY = "rederive_first"
+
+
+def rederive_listed(root, name: str, lines: list[str], *, apply: bool = False, stop=None,
+                    log: Callable[[str], None] = print, retry_errors: bool = False,
+                    first: bool = False) -> dict[str, Any]:
+    """THE DOCUMENTS A LIST NAMES derived again (2026-11-20, EUR-Lex5: the
+    36,393 units the units check lists as holding an included Formex document,
+    `--list-included`, whose text parser 5 now reads where it stands — Annex I
+    of 32021R1971, 0 to 20.6 M characters — with no parser bump, RULE 1).
+    A line is a uid or a document's path (the check's unit paths; matched
+    under its slice folder, `_unit_key`, whatever the mount).
+
+    Each document's rdf/fts marks are reset, as `rederive` does. Where the
+    collection holds NO RECORDS its vectors are its own chunks' (EUR-Lex5
+    embeds four languages from the worker's cut), so an embedded document's
+    `embed_done` is reset too, and the embed stage replaces its vectors
+    (`embeddings.upsert_book`: delete, then insert) — what discovery does to
+    a document whose bytes changed. Where it holds records, its vectors are
+    the records' and stay. Marks only, as `derived_check.verify`: a document
+    stays in search until its stages replace its rows. Safe to run again —
+    it resets again; the dry run counts.
+
+    `first` (operator, 2026-11-22: "A, problem slice first"; EUR-Lex's "any
+    further run has to start from the problematic parts"): every OTHER row in
+    scope is HELD out of every stage's selection (`in_scope` = db.SCOPE_HELD:
+    the stages select `in_scope=1`, the scope pass widens only 0), the hold
+    recorded in the manifest's control (FIRST_KEY), until `release_first`.
+    The listed are then the only work the worker has. A hold already
+    standing refuses another, so two lists never mix."""
+    from app import db
+    from . import collection as col
+    from .derived_check import _begin
+    root = Path(root)
+    name, _codex = col.resolve(root, name)
+    wanted = {ln.strip() for ln in lines if ln.strip()}
+    keys = {_unit_key(w) for w in wanted}
+    # whether the collection holds records at all — asked of the snapshots'
+    # presence (`seed.snapshot_ids`), never by catching `latest_snapshot`'s
+    # refusal, which a snapshot that does not load raises too (München,
+    # 2026-11-20: EUR-Lex5 holds none, and `latest_snapshot` refuses there)
+    records = bool(snapshot_ids(root, name))
+    manifest = _paths(root, name)["manifest"]
+    con = sqlite3.connect(manifest, timeout=60)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        if first and db.get_control(con, FIRST_KEY):
+            raise CodexError(f"rederive --first: {name} holds rows already "
+                             f"({db.get_control(con, FIRST_KEY)}); `--release` them first")
+        hit: list[str] = []
+        named: set[str] = set()
+        embedded = 0
+        others: list[int] = []              # with `first`: the rowids held
+        # one walk of the manifest: the list is matched in memory, never a
+        # `path IN (…)` per window, which no index answers
+        for row in con.execute("SELECT rowid, uid, path, embed_done, in_scope FROM documents"):
+            k = _unit_key(row["path"]) if row["path"] else None
+            if row["uid"] in wanted or (k is not None and k in keys):
+                hit.append(row["uid"])
+                named.add(row["uid"] if row["uid"] in wanted else k)
+                embedded += row["embed_done"] == 1
+            elif first and row["in_scope"] == 1:
+                others.append(row["rowid"])
+        unmatched = len(wanted) - len({w for w in wanted if w in named or _unit_key(w) in named})
+        marks = REDERIVE_MARKS + ("" if records else
+                                  ", embed_done=CASE WHEN embed_done=1 THEN 0 ELSE embed_done END")
+        if retry_errors:
+            # `--retry-errors` (2026-11-22, the EUR-Lex5 restart's problem
+            # slice): a LISTED document's error cleared, so the reader the
+            # review corrected reads its unit again (C9: units refused for
+            # another act's wrapper were the act's own). A tombstone — a row
+            # discovery or retire-superseded retired — keeps its error
+            marks += (", error=CASE WHEN error LIKE 'superseded%' THEN error ELSE NULL END, "
+                      "retries=CASE WHEN error LIKE 'superseded%' THEN retries ELSE 0 END")
+        out = {"collection": name, "listed": len(wanted), "documents": len(hit), "unmatched": unmatched,
+               "embedded": embedded, "vectors": "kept: the records'" if records else
+               "embedded again: the collection holds no records", "marks": marks}
+        if first:
+            out["held"] = len(others)
+        if not apply:
+            return {**out, "would_reset": len(hit)}
+        if first:
+            # THE HOLD BEFORE THE RESET: a stop between them leaves the rest
+            # held and the listed not yet pending, which a run again completes
+            for i in range(0, len(others), 500):
+                part = others[i:i + 500]
+                _begin(con, stop)
+                con.execute(f"UPDATE documents SET in_scope={db.SCOPE_HELD} WHERE rowid IN "
+                            f"({','.join('?' * len(part))}) AND +in_scope=1", part)
+                con.execute("COMMIT")
+            _begin(con, stop)
+            db.set_control(con, FIRST_KEY, json.dumps({"listed": len(hit), "held": len(others),
+                                                       "since": int(time.time())}))
+            con.execute("COMMIT")
+            log(f"[carry] {name}: {len(others)} document(s) held out of every stage until `--release`")
+        reset = 0
+        for i in range(0, len(hit), 500):
+            if stop is not None and stop.is_set():
+                break
+            part = hit[i:i + 500]
+            _begin(con, stop)
+            reset += con.execute(f"UPDATE documents SET {marks} WHERE uid IN ({','.join('?' * len(part))})",
+                                 part).rowcount
+            con.execute("COMMIT")
+        log(f"[carry] {name}: {reset} listed document(s) to derive again at its parser"
+            + ("; its vectors kept (the records')" if records else
+               f"; {embedded} embedded one(s) embedded again (no records: its vectors are its chunks')"))
+        return {**out, "reset": reset, "done": reset == len(hit)}
+    finally:
+        con.close()
+
+
+def release_first(root, name: str, *, apply: bool = False, keep: list[str] | None = None,
+                  log: Callable[[str], None] = print) -> dict[str, Any]:
+    """`rederive --release`: the rows `--first` held go back into the
+    stages' selection (in_scope 1), the collection's scope applied again
+    (discovery.apply_scope: what its scope keeps out stays out), the hold's
+    control row removed. Indexed (idx_documents_scope, in_scope = the held
+    value), a window a transaction. Nothing held: said, nothing written.
+
+    `keep` (`--release --ids FILE`): the rows FILE lists (a uid or a unit's
+    path a line) STAY held, every other one goes back, and the hold stands
+    for them — EUR-Lex's units to re-form, whose package comes from Cellar
+    over days: released with the rest they would be derived from their old
+    form and again when re-formed (RULE 1). A later `--release` frees them."""
+    from app import db, discovery
+    from . import collection as col
+    from .derived_check import _begin
+    root = Path(root)
+    name, _codex = col.resolve(root, name)
+    con = sqlite3.connect(_paths(root, name)["manifest"], timeout=60)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        hold = db.get_control(con, FIRST_KEY)
+        held = con.execute(f"SELECT COUNT(*) FROM documents WHERE in_scope={db.SCOPE_HELD}").fetchone()[0]
+        out = {"collection": name, "hold": json.loads(hold) if hold else None, "held": int(held)}
+        if not apply or (not hold and not held):
+            return out
+        released = 0
+        if keep:
+            wanted = {ln.strip() for ln in keep if ln.strip()}
+            keys = {_unit_key(w) for w in wanted}
+            go = [r["rowid"] for r in con.execute(
+                f"SELECT rowid, uid, path FROM documents WHERE in_scope={db.SCOPE_HELD}")
+                if not (r["uid"] in wanted or (r["path"] and _unit_key(r["path"]) in keys))]
+            for i in range(0, len(go), 500):
+                part = go[i:i + 500]
+                _begin(con, None)
+                released += con.execute(f"UPDATE documents SET in_scope=1 WHERE rowid IN "
+                                        f"({','.join('?' * len(part))}) AND +in_scope={db.SCOPE_HELD}",
+                                        part).rowcount
+                con.execute("COMMIT")
+            still = int(held) - released
+            _begin(con, None)
+            discovery.apply_scope(con)
+            state = json.loads(hold) if hold else {}
+            db.set_control(con, FIRST_KEY, json.dumps({**state, "held": still, "kept": len(wanted)}))
+            con.execute("COMMIT")
+            log(f"[carry] {name}: {released} held document(s) back; {still} kept held")
+            return {**out, "released": released, "kept_held": still}
+        while True:
+            _begin(con, None)
+            ids = [r[0] for r in con.execute(f"SELECT rowid FROM documents WHERE in_scope={db.SCOPE_HELD} "
+                                             f"LIMIT 500")]
+            if not ids:
+                con.execute("COMMIT")
+                break
+            released += con.execute(f"UPDATE documents SET in_scope=1 WHERE rowid IN "
+                                    f"({','.join('?' * len(ids))})", ids).rowcount
+            con.execute("COMMIT")
+        _begin(con, None)
+        discovery.apply_scope(con)
+        con.execute("DELETE FROM control WHERE key=?", (FIRST_KEY,))
+        con.execute("COMMIT")
+        log(f"[carry] {name}: {released} held document(s) back in the stages' selection")
+        return {**out, "released": released}
+    finally:
+        con.close()
 
 
 def _reconciled_by_proof(root: Path, to_name: str, to: Codex, src: Codex, proof: dict[str, Any],

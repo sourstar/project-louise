@@ -43,10 +43,17 @@ def _base() -> Path:
     return derived.place_kept(KIND, root) or (root / derived.BESIDE / KIND)
 
 
+#: the rows' shape: each row's date is the unit's latest (work, expression,
+#: manifestations — cellar.MODIFIED, 2026-11-19), no longer the work's alone.
+#: A window kept in the old shape is never read for the new one: its rows'
+#: dates would hide a manifestation replaced under an unchanged window maximum
+SHAPE = "unit-modified"
+
+
 def _path(endpoint: str, year: int, languages: tuple[str, ...], force: bool = False) -> Path:
     # parser 4's rows carry each work's in-force (cellar.page_query `force`):
     # kept apart, never read for a listing of the other shape
-    key = hashlib.sha256((f"{endpoint.rstrip('/')}|{year}|{','.join(languages)}"
+    key = hashlib.sha256((f"{endpoint.rstrip('/')}|{year}|{','.join(languages)}|{SHAPE}"
                           + ("|force" if force else "")).encode()).hexdigest()[:24]
     return _base() / f"{year:04d}" / f"{key}.json.gz"
 

@@ -253,28 +253,23 @@ def test_a_check_that_reached_no_dump_layer_record_says_so(isolated_config, data
         assert "in part" in o.why and "archive 0 of" in o.why and "NO ARCHIVE-LAYER" in o.why
 
 
-def test_records_check_shards_runs_the_named_parts_alone(wiki, capsys, tmp_path):
+def test_records_check_shards_runs_the_named_parts_alone(wiki, capsys):
     """`hold records check --shards SLICE/NNNNN …` (07 §7.3): an operator
-    verifies the parts named, in place of the seeded sample.
-
-    The origin given is a directory of its own, not the corpus the node
-    keeps: a re-parse from the kept copy is INCONCLUSIVE by rule and never a
-    pass (`_is_kept_copy`, d1905f1, tests/hold/test_check.py) — this test and
-    that rule were written the same day on two branches, and on main the
-    test asked the kept copy for a pass."""
-    import shutil
+    verifies the parts named, in place of the seeded sample."""
     root, corpus, _codex, snap = wiki
     names = [f"{s.slice}/{s.n:05d}" for s in snap.shards]
     want = names[3:5]
-    origin = tmp_path / "the-origin"
-    shutil.copytree(corpus, origin)
-    rc = louise.main(["hold", "records", "check", "wikipedia", "--root", str(root), "--origin", str(origin),
+    rc = louise.main(["hold", "records", "check", "wikipedia", "--root", str(root), "--origin", str(corpus),
                       "--seed", "00" * 32, "--json", "--shards", *want])
     assert rc == 0
     import json
     report = json.loads(capsys.readouterr().out)
     (rvo,) = [c for c in report["checks"] if c["check"] == "records-vs-origin"]
-    assert rvo["result"] == "pass" and rvo["detail"]["records"] == rvo["detail"]["compared"] == 8
+    # the fixture's origin is the copy this node keeps: a re-parse of it is
+    # INCONCLUSIVE, never a pass (d1905f1, 03 §3.2) — the parts named alone
+    # are still what was compared, and every record of them reproduced
+    assert rvo["result"] == "inconclusive" and rvo["detail"]["origin"] == "kept copy"
+    assert rvo["detail"]["records"] == rvo["detail"]["compared"] == rvo["detail"]["copy_reproduced"] == 8
     # and the comma form `hold check --shards` takes
     rc = louise.main(["hold", "records", "check", "wikipedia", "--root", str(root), "--origin", str(corpus),
                       "--seed", "00" * 32, "--json", "--shards", ",".join(want)])

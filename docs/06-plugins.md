@@ -50,7 +50,38 @@ class CorpusSource(Protocol):
     # by key, in either order of arrival, to the end of that Work's chain
     # (docs/notes/normattiva-multivigenza-review.md §3.2, case 2).
     def closures(self, doc: CanonicalDoc) -> Iterator[tuple[str, str]]: ...
+
+    # ---- adopted from the EUR-Lex5 review (*amended 2026-11-23*, architecture;
+    # docs/notes/rag-engine-handoff-2026-11-21.md §1). Each read with a default:
+    # a plugin without it behaves as before.
+
+    # optional: the ids this unit was HELD UNDER before, where its id derives
+    # from something that can change (a form, a day). Discovery retires a
+    # row held under one of them at the same locator — out of every index,
+    # its validity forgotten, tombstoned with the reason (one unit, one
+    # document; app/discovery.py, `louise dev retire-superseded`)
+    def superseded_ids(self, ref: DocRef) -> list[str]: ...
+
+    # optional: the bytes a parse of this row reads, where the row's `size`
+    # misleads (a zip's members unpacked, from its central directory) — the
+    # parse pool's memory admission (app/plugin_io.py `parse_size`). None:
+    # the row's size
+    def parse_size(self, row) -> int | None: ...
+
+    # optional class attribute, for a validity axis whose base holds
+    # ORIGINALS, not every version: a held amendment ends the text it
+    # replaced (05 §5.1, chain rule 2; app/validity.py). Kept in the manifest
+    # (`validity_changes_end`); a collection whose origin dates every version
+    # leaves it False and keeps the origin's word
+    VALIDITY_ENDS_AT_AMENDMENT: bool = False
 ```
+
+An acquisition's `UnitFetcher.prepare` may raise `spec.HeldBack` (*amended
+2026-11-23*): a bulk the pass must use first is there and cannot be used,
+so the pass ends for that collection, deferred and said, and the origin's
+per-unit API is never asked (CLAUDE.md, bulk first). A legal reference
+source's `ArticleNotes.changed` gives the words for a text amended since
+its held version (app/ask/articles.py).
 
 **The backend template** (*amended 2026-10-30*, operator: "All collections
 must share the same kind of backend … any collection must fall in a
@@ -800,6 +831,19 @@ value)`, on a column the table declares in `indexes`. A reference source may shi
 §5.2 describes — `resolve(query) → entities`, `expand(entity) →
 entities` — as a pure function of the query text and the tables' current
 content; a resolver never returns a bare symbol.
+
+*Amended 2026-11-18* (architecture's ruling; docs/notes/historical-languages.md):
+**readings** of historical forms are reference sources, one per origin —
+`wikisource-readings` (green: spellings and their modern forms, both
+attested in it.wikisource's proofread scan pages dated by print year) and
+`tlio` (red: TLIO's forms before 1400 with their lemma and definition,
+synced only once its terms are acknowledged). A table row is a pair in
+TEI P5's `<orig>`/`<reg>` vocabulary (app/refs/readings.py): `orig`, `reg`
+where a modern form is attested, `kind` `replace` or `gloss`, `lemma`,
+`gloss`, `lang`, `period_from`..`period_to`, `method`. No Codex: its
+version is `ref_version` and a digest of the synced table. A form that is
+itself a 1900s word gives no row. Applied at ask time only, to the copies
+the reranker (05 §5.6) and the chat model read, by the record's own year.
 
 ## 6.6 From a plugin to a collection
 

@@ -85,15 +85,24 @@ def test_the_loop_follows_the_claim_and_restores_on_stop(tmp_path, store, monkey
                 return
             time.sleep(0.02)
         raise AssertionError(what)
-    until(lambda: gpu.governor()["state"] == "running", "the governor never said it runs")
-    with dispatch.interactive(dispatch.Level.CHAT):
-        until(lambda: _min(d) == 1400, "the clock was not held while a chat ran")
-        until(lambda: gpu.governor().get("pinned") is True, "the tab did not see it held")
-    until(lambda: _min(d) == 400, "the clock was not let go after the chat")
-    with dispatch.interactive(dispatch.Level.QUERY):
-        until(lambda: _min(d) == 1400, "held again")
+    # THE THREAD IS STOPPED WHATEVER FAILS (2026-11-23): a wait that timed out
+    # under load left it running past the test, writing heartbeats into the
+    # REAL node store once isolated_config was gone, and every later test
+    # that guards the store failed with it
+    try:
+        until(lambda: gpu.governor()["state"] == "running", "the governor never said it runs")
+        with dispatch.interactive(dispatch.Level.CHAT):
+            until(lambda: _min(d) == 1400, "the clock was not held while a chat ran")
+            until(lambda: gpu.governor().get("pinned") is True, "the tab did not see it held")
+        until(lambda: _min(d) == 400, "the clock was not let go after the chat")
+        with dispatch.interactive(dispatch.Level.QUERY):
+            until(lambda: _min(d) == 1400, "held again")
+            stop.set()
+            t.join(5)
+    finally:
         stop.set()
         t.join(5)
+    assert not t.is_alive(), "the governor's thread ended"
     assert _min(d) == 400, "a stopping governor gives the clock back"
     assert gpu.governor()["state"] == "absent", "a stopped governor is not running"
 

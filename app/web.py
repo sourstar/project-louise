@@ -1119,7 +1119,8 @@ def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
     from . import question_card
     cols = _question_collections(body.collections)
     question_card.before_search(cols, speed=body.speed)
-    with mt.speed(body.speed):
+    from . import reading
+    with mt.speed(body.speed), reading.quality(not body.speed):
         result = _ask_result(body)
     question_card.after_search(cols, speed=body.speed)
     _say_search_timings(body, result)
@@ -2942,6 +2943,27 @@ def _annotation_methods(root, collection) -> list[dict]:
     return out
 
 
+#: a local archive's shard files, counted per corpus path: (when, how many)
+_shard_totals: dict[str, tuple[float, int]] = {}
+#: how long a count stands: the files change when an archive lands, never per view
+_SHARD_TOTAL_TTL_S = 300.0
+
+
+def _local_shard_total(collection, list_shards) -> int:
+    """How many shard files a local archive's corpus holds, walked at most
+    once a `_SHARD_TOTAL_TTL_S` per corpus path (keyed on the path, never
+    the name). The card walked the whole corpus for `*.parquet` on every
+    view: 1.57 s of a warm Library under load (München, 2026-11-22)."""
+    key = str(collection.corpus_dir)
+    now = time.time()
+    hit = _shard_totals.get(key)
+    if hit is not None and now - hit[0] < _SHARD_TOTAL_TTL_S:
+        return hit[1]
+    n = len(list_shards(collection))
+    _shard_totals[key] = (now, n)
+    return n
+
+
 def _genesis_state(con, collection, counts=None, fetched=None) -> dict | None:
     """Provenance visibility for pre-embedded data: is a genesis archive
     declared, how much of the collection did it cover — and, for a REMOTE
@@ -2981,7 +3003,7 @@ def _genesis_state(con, collection, counts=None, fetched=None) -> dict | None:
         "FROM genesis_imports WHERE archive=?",
         (collection.genesis_archive,)).fetchone()
     if archive is not None and archive.local:
-        shard_total = len(_local_shards(collection))
+        shard_total = _local_shard_total(collection, _local_shards)
     else:
         shard_total = len(archive.shards) if archive else 0
     # Computed for BOTH kinds: a remote archive WAITS on it (shards apply
@@ -3784,11 +3806,18 @@ def _p2p_summary(collection) -> dict | None:
 
     OFF THE REQUEST PATH, as the document counts are: the last value is
     served at once and refreshed behind it, one refresh per collection at a
-    time, at most once a `_P2P_TTL_S`. A cold cache waits
-    `_COUNTS_COLD_WAIT_S`, then the card renders without the line. On the
-    request path, every bundle gutenberg accepted made the next view
-    recompute coverage over 1,639 parts — 6-14 s each, every 1-3 min, and
-    seven views stacked on the same rebuild (München, 2026-10-27)."""
+    time, at most once a `_P2P_TTL_S`. On the request path, every bundle
+    gutenberg accepted made the next view recompute coverage over 1,639
+    parts — 6-14 s each, every 1-3 min, and seven views stacked on the same
+    rebuild (München, 2026-10-27).
+
+    A COLD CACHE NEVER WAITS (2026-11-22): it starts the refresh and says
+    the line is being counted (`P2P_COUNTING`). It used to wait
+    `_COUNTS_COLD_WAIT_S` for a line that, on the big collections, takes
+    minutes: 2 s per card on every view while the refresh ran, 8.55 s of a
+    warm 14.9 s page (München's measurement, gutenberg, pubmed, wikidata
+    and wikipedia). The line is the card's second detail, never worth a
+    wait."""
     codex = getattr(collection, "codex", None)
     if codex is None or getattr(codex, "space", None) is None:
         return None
@@ -3800,14 +3829,11 @@ def _p2p_summary(collection) -> dict | None:
             _p2p_refresh_async(collection, key)
         return hit[1]
     _p2p_refresh_async(collection, key)
-    deadline = now + _COUNTS_COLD_WAIT_S
-    while time.time() < deadline:
-        hit = _p2p_cache.get(key)
-        if hit is not None:
-            return hit[1]
-        time.sleep(0.05)
-    return None
+    return P2P_COUNTING
 
+
+#: what a card shows while its p2p line is first counted
+P2P_COUNTING: dict = {"counting": True}
 
 _p2p_refreshing: dict[str, float] = {}
 _p2p_lock = threading.Lock()
@@ -4236,6 +4262,8 @@ def _effective_config() -> dict:
         "transfer.segments_per_file": pc.transfer.segments_per_file,
         "ask.latency_budget_ms": pc.ask.latency_budget_ms,
         "ask.translate_share": f"{pc.ask.translate_share:.0%}",
+        # the resolution the web's timer reads (app/idle_trim.py `timeout_s`)
+        "web.idle_trim_s": _idle_trim_said(),
     }
     if pc.embed_defaults:
         # still parsed, so an older platform.toml loads — and said to be
@@ -4252,6 +4280,12 @@ def _effective_config() -> dict:
              "bandwidth override (state/node.sqlite, expires)":
                  _rate(override) if override else "(none)"}
     return {"tier1": tier1, "tier2": tier2, "tier2_platform": tier2_platform, "tier3": tier3}
+
+
+def _idle_trim_said() -> str:
+    from . import idle_trim
+    s = idle_trim.timeout_s()
+    return "never" if s <= 0 else f"{s:.0f} s without a question"
 
 
 def _ping(url: str) -> bool:
@@ -4513,4 +4547,6 @@ def system_gpu_fragment(request: Request):
     return TEMPLATES.TemplateResponse(request, "_fragments/gpu.html",
                                        probed
                                        | {"governor": gpu.governor(), "cards": cards,
-                                          "models": models, "model_bar": gpu_models.bar})
+                                          "models": models, "model_bar": gpu_models.bar,
+                                          "process_name": lambda p: gpu_models.process_name(
+                                              p, models.get("rows"))})

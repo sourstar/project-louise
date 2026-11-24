@@ -503,8 +503,9 @@ def _create(args: dict[str, Any]) -> dict[str, Any]:
     recipe = tomllib.loads(recipe) if isinstance(recipe, str) else dict(recipe)
     root = louise._default_root()
     root.mkdir(parents=True, exist_ok=True)
+    notices: list[str] = []
     with dispatch.working_as(Level.QUERY):
-        codex, held = louise.create_from(root, args["plugin"], recipe,
+        codex, held = louise.create_from(root, args["plugin"], recipe, say=notices.append,
                                          platform_image=args.get("platform_image"),
                                          space_from=args.get("space_from"),
                                          encoder=args.get("encoder"),
@@ -516,6 +517,10 @@ def _create(args: dict[str, Any]) -> dict[str, Any]:
                                          embed=args.get("embed") or "off")
     out = {"exit": 0, "collection_id": codex.collection_id, "name": held.stem,
            "held": str(held), "cli": args.get("cli", "")}
+    if notices:
+        # what the system determined for the reader (RULE 2): the run a dated
+        # origin's collection is built from, and why, in plain words
+        out["notice"] = " ".join(notices)
     # what the file takes (07 §7.8): the node's decision for a create from its
     # own recipe (RULE 2, 2026-10-25) — written as `share fetch` writes a take
     slices = args.get("slices") or []

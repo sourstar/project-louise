@@ -131,7 +131,8 @@ def test_the_held_space_is_copied_its_reference_reused_and_nothing_measured(tmp_
     assert recipe["layers"] == ARTICLE and recipe["space"]["tolerance"] == "0.999995"
     assert "envelope" not in recipe["space"] and "vectors" not in recipe["space"]["calibration"], \
         "the computed fields do not travel: the reference is reused by calibration_from"
-    assert steps["cpu_args"].refresh and steps["cpu_args"].collection == "neuris"
+    assert steps["cpu_args"].collection == "neuris" and not steps["cpu_args"].again, \
+        "the node's reference for the space, inherited by the command (app/rage/reference.py)"
     assert json.loads((tmp_path / "neuris" / "state" / "calibration.json").read_text()) == \
         {"tolerance": "0.999995"}, "the space's measurement, beside the copy"
     prog = json.loads((tmp_path / "louise" / "state" / "new" / "neuris.json").read_text())
