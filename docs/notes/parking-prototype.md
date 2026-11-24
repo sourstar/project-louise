@@ -20,8 +20,9 @@ measure exactly that.
 
 Patch: `deploy/localai/patches/staged/0015-llama-cpp-park-weights.patch`
 (one llama.cpp patch, 632 lines in 11 files). Engine:
-`staged/parking-prototype.series` — the fixes' candidate and this patch —
-installed BESIDE the live engine, never swapped.
+`staged/parking-prototype.series` — the fixes' candidate, this patch and a
+test switch for the pool's refusal (0016, §4) — installed BESIDE the live
+engine, never swapped.
 
 ## 2. How it works
 
@@ -98,6 +99,7 @@ lines of the library: below 4 only the server's two are printed).
 | R3, parking, timed | as R2 without `GGML_SYCL_PARK_VERIFY` | the same | per cycle: `parked … in X ms (the copy, the release)`, `unparked … in Y ms (the commit, the copy)`, `context created in Z ms`, the request's own time against R0's |
 | the floor | R3's process, parked, idle 10 s | — | the card's counter and the process's own, as the other floors were read (the stand-in read 319 MiB) |
 | a refusal (with 0013's filled card) | R3's process, parked | one request on the full card, one after room is made | 503 "the weights cannot come back to the device", the pid unchanged; then 200 and V |
+| THE POOL'S REFUSAL (staged 0013), provoked | a RERANKER copy, direct, `GGML_SYCL_POOL_REFUSE=2`; and a control copy without it | one pair, then twelve long documents three times | the first two long requests refused: 5xx, "the device refused … for the pool" in the log, the pid unchanged; the third served, its scores the control's |
 
 **The first thing the run says** is whether a load works at all with the
 weights behind mapped memory: the upload at load goes through the same
@@ -108,6 +110,27 @@ the design this avoided (rebasing every pointer), not built.
 **What decides step 2:** R3's un-park plus context against R0's context
 alone — the design note derived 0.3 to 0.9 s for a parked F16 model — the
 bytes equal in every cycle, and the floor.
+
+**Why the last row is here.** 0013 is in the engine swapped on 2026-11-24
+and its refusal was NOT provoked on the card: filled to 31,701 of 32,002
+MiB with three other models loaded, every request was served, the driver
+paging an idle neighbour out (566 MiB) instead of refusing (München).
+Filling further means starving the host, which the protocol forbids. Staged
+0016 (`GGML_SYCL_POOL_REFUSE=N`, in this engine only) raises the device's
+exception where the pool grows, so everything after it — the unwinding in
+the middle of a graph, the queue drained, the request's error, the process
+alive — runs on the real card. A pool's first commit is never refused: the
+model loads and warms up.
+
+**The driver, read (intel/compute-runtime, release 26.05,
+`level_zero/core/source/context/context_imp.cpp`).** `mapVirtualMem`
+registers the mapped range as a device allocation of its own kind
+(`reservedDeviceMemory`, `insertSVMAlloc`) and makes it resident;
+`unMapVirtualMem` removes it, after which the same address can be mapped
+again; a size must be a whole number of the pages chosen for it (the
+engine's 2 MiB granularity, as the pool's commits already are). That is
+what the prototype relies on: copies and kernels find the weights as they
+find any device memory. Read, not run.
 
 ## 5. Open
 

@@ -21,6 +21,7 @@ NOTE = (ROOT / "docs" / "notes" / "parking-prototype.md").read_text(encoding="ut
 STANDIN = ROOT / "tools" / "measure" / "park_cpu_standin.patch"
 CPU_TEST = ROOT / "tools" / "measure" / "park_cpu_test.py"
 INNER = "backend/cpp/llama-cpp/patches/0015-park-weights.patch"
+REFUSE = STAGED / "0016-llama-cpp-sycl-pool-refuse-switch.patch"
 SWITCHES = ("GGML_SYCL_PARKABLE", "GGML_SYCL_PARK_VERIFY", "LLAMA_SERVER_PARK_WEIGHTS")
 
 
@@ -92,18 +93,47 @@ def test_the_addresses_stay_and_a_full_device_refuses():
     assert "could not be %s again after part %zu failed" in code and "could not be %s again after buffer %zu failed" in code
 
 
-def test_its_engine_is_the_fixes_candidate_and_this_patch_never_the_live_series():
-    assert _lines(SERIES) == _lines(STAGED / "engine-fixes.series") + ["staged/" + PATCH.name]
+def test_its_engine_is_the_fixes_candidate_and_its_two_patches_never_the_live_series():
+    assert _lines(SERIES) == _lines(STAGED / "engine-fixes.series") + ["staged/" + PATCH.name, "staged/" + REFUSE.name]
     build = ROOT / "deploy" / "localai" / "llama-cpp" / "build.sh"
     names = [subprocess.run(["sh", str(build), "sycl_f16", "/nonexistent"], capture_output=True, text=True, cwd=ROOT,
                             env=dict(os.environ, SERIES_FILE=str(s), NAME_ONLY="1")).stdout.strip()
              for s in (SERIES, STAGED / "engine-fixes.series", PATCHES / "series")]
     assert len(set(names)) == 3 and all(len(n) == 12 for n in names), names
-    assert PATCH.name not in (PATCHES / "series").read_text(encoding="utf-8")
+    live = (PATCHES / "series").read_text(encoding="utf-8")
+    assert PATCH.name not in live and REFUSE.name not in live
+    assert REFUSE.name not in (STAGED / "engine-fixes.series").read_text(encoding="utf-8"), \
+        "the engine that is swapped and gated carries no test switch"
     head = SERIES.read_text(encoding="utf-8")
     assert "INSTALLED BESIDE THE LIVE ENGINE AND NEVER SWAPPED" in head
     readme = (STAGED / "README.md").read_text(encoding="utf-8")
     assert PATCH.name in readme and "NEVER RUN ON A CARD" in readme
+
+
+def test_the_pool_s_refusal_can_be_provoked_without_starving_the_card():
+    """Staged 0013 was not provoked on the card (2026-11-24: at 31,701 of 32,002 MiB the driver paged a neighbour
+    out instead of refusing). 0016 refuses a pool's GROWTH on demand, raising what the device raises, so the path
+    after it is the real one; a pool's first commit is left alone or no model would load."""
+    text = REFUSE.read_text(encoding="utf-8")
+    assert text.startswith("From 0000000000000000000000000000000000000000 ")
+    message = text[:text.index("\n---\n")]
+    assert re.search(r"^Assisted-by: ", message, re.M)
+    assert not re.search(r"^(Signed-off-by|Co-Authored-By):", message, re.M | re.I)
+    assert re.findall(r"^diff --git a/(\S+)", text, re.M) == ["backend/cpp/llama-cpp/patches/0016-sycl-pool-refuse-switch.patch"]
+    inner = "\n".join(_added(text[text.index("\n---\n"):]))
+    code = "\n".join(_added(inner))
+    assert "std::atomic<int> g_ggml_sycl_pool_refuse{0};" in code, "off unless asked"
+    assert 'ggml_sycl_get_env("GGML_SYCL_POOL_REFUSE", 0)' in code
+    assert "if (pool_size > 0 && g_ggml_sycl_pool_refuse > 0 && g_ggml_sycl_pool_refuse.fetch_sub(1) > 0) {" in code
+    assert "throw sycl::exception(sycl::make_error_code(sycl::errc::memory_allocation)," in code, \
+        "the device's own kind of exception, raised inside the try the fix catches"
+    # in the patch it is placed before the device is asked, inside 0013's try
+    assert re.search(r"^ +try \{\n(\+.*\n)+ +phys\.emplace\(dev, ctx, reserve_size\);", inner, re.M)
+    readme = (STAGED / "README.md").read_text(encoding="utf-8")
+    assert REFUSE.name in readme and "NOT PROVOKED" in readme and "31,701 of 32,002 MiB" in readme
+    room = (ROOT / "docs" / "notes" / "room-on-the-card.md").read_text(encoding="utf-8")
+    assert "NOT PROVOKED" in room and "GGML_SYCL_POOL_REFUSE=N" in room
+    assert "| THE POOL'S REFUSAL (staged 0013), provoked |" in NOTE and "GGML_SYCL_POOL_REFUSE=2" in NOTE
 
 
 def test_the_note_says_what_ran_without_a_card_and_what_the_node_measures():

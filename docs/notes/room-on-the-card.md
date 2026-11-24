@@ -150,6 +150,18 @@ from an encoder as a deferral (app/embeddings.py `_endpoint_error`), never
 an error on a document. A model with context on demand then frees its
 context and makes a new one at the next request.
 
+**On the card, 2026-11-24 (München, engine 9ea95e93a83c, the five steps
+below): NOT PROVOKED.** The card filled to 31,701 of 32,002 MiB (the 35B,
+MADLAD, a reranker and an on-demand encoder), then three requests to the
+on-demand copy and two rerank requests of twelve long documents: all
+served, the same vector, no pid lost, no refusal in any log — the driver
+paged a neighbour out (the counter fell 566 MiB) instead. So the refusal
+this fixes needs neighbours the driver cannot evict (this morning's were
+the withdrawn USM-by-use experiment's), and a filled card does not give
+it. Its path is exercised deterministically instead: staged 0016,
+`GGML_SYCL_POOL_REFUSE=N`, in the parking prototype's engine
+(parking-prototype.md §4). The fix is in the engine swapped that night.
+
 **Compiled here, never run; its test is on the card** (compiled 2026-11-24
 with Intel's compiler, oneAPI 2025.3.3, installed in the cloud session: the
 engine's SYCL backend builds and links with it. The test is München's, on

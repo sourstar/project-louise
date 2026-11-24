@@ -1,0 +1,103 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 24 Nov 2026 20:08:19 +0000
+Subject: [PATCH] test(llama-cpp): a switch that refuses a SYCL pool commit, to
+ test the refusal on a real device
+
+Carried as a llama.cpp patch beside the others
+(patches/0016-sycl-pool-refuse-switch.patch), after the pool's refusal and
+the parking prototype.
+
+"A device-memory refusal during a request fails that request, not the
+backend" could not be shown by filling the card: at 31,701 of 32,002 MiB,
+with three other models loaded, every request was served - the driver pages
+an idle neighbour out before it refuses. GGML_SYCL_POOL_REFUSE=N in a
+model's environment refuses the next N commits that grow a pool with the
+exception a full device raises, so the whole path after it runs on the real
+device: the request answered with an error, the backend's process alive,
+the next request served. A pool's first commit is never refused: the model
+loads. Unset, nothing changes.
+
+STAGED, for a test engine. Compiles (icpx 2025.3.3); not run where it was
+written.
+
+Assisted-by: Claude Code
+---
+ .../0016-sycl-pool-refuse-switch.patch        | 65 +++++++++++++++++++
+ 1 file changed, 65 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0016-sycl-pool-refuse-switch.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0016-sycl-pool-refuse-switch.patch b/backend/cpp/llama-cpp/patches/0016-sycl-pool-refuse-switch.patch
+new file mode 100644
+index 0000000..421d690
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0016-sycl-pool-refuse-switch.patch
+@@ -0,0 +1,65 @@
++sycl: GGML_SYCL_POOL_REFUSE - a refused pool commit, on demand, for its test
++
++The refusal of a pool commit (the patch before the parking one) fails the
++graph instead of the process. Its test needs a device that refuses, and a
++card cannot be made to on demand: filled to 31,701 of 32,002 MiB (an Intel
++Arc Pro B70, three other models loaded) every request was still served -
++the driver paged an idle neighbour out rather than refuse.
++
++GGML_SYCL_POOL_REFUSE=N refuses the next N commits that GROW a pool: a
++sycl::exception with errc::memory_allocation is raised where the device's
++own would be, so everything after it is the path under test - the pool's
++translation, the unwinding of the temporaries in the middle of a graph, the
++queue drained, GGML_STATUS_ALLOC_FAILED, the request's error, the process
++alive and the next request served. A pool's first commit is never refused,
++so the model loads and warms up. Unset, nothing changes; set, the start-up
++log says so as a warning.
++
++Compiles with icpx 2025.3.3; not run where it was written (no device).
++---
++diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
++index 720db24..a9599ca 100644
++--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
++@@ -114,6 +114,9 @@ int g_ggml_sycl_enable_vmm = 1;
++ // mapped into a reserved virtual range, GGML_SYCL_PARK_VERIFY=1 reads each unparked buffer back and compares it
++ int g_ggml_sycl_parkable = 0;
++ int g_ggml_sycl_park_verify = 0;
+++// for the TEST of a refused pool commit, which a card cannot be made to give on demand (its driver pages an idle
+++// neighbour out first): GGML_SYCL_POOL_REFUSE=N refuses the next N commits that GROW a pool, as a full device does
+++std::atomic<int> g_ggml_sycl_pool_refuse{0};
++ int g_ggml_sycl_enable_fusion = 1;
++ int g_ggml_sycl_enable_esimd = 1;
++ int g_ggml_sycl_mmvq_wide = 1;
++@@ -450,6 +453,7 @@ static void ggml_check_sycl() try {
++         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
++         g_ggml_sycl_parkable = ggml_sycl_get_env("GGML_SYCL_PARKABLE", 0);
++         g_ggml_sycl_park_verify = ggml_sycl_get_env("GGML_SYCL_PARK_VERIFY", 0);
+++        g_ggml_sycl_pool_refuse = ggml_sycl_get_env("GGML_SYCL_POOL_REFUSE", 0);
++         g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
++         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
++         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
++@@ -600,6 +604,10 @@ static void ggml_check_sycl() try {
++ #endif
++         GGML_LOG_INFO("  GGML_SYCL_PARKABLE: %d\n", g_ggml_sycl_parkable);
++         GGML_LOG_INFO("  GGML_SYCL_PARK_VERIFY: %d\n", g_ggml_sycl_park_verify);
+++        if (g_ggml_sycl_pool_refuse > 0) {
+++            GGML_LOG_WARN("  GGML_SYCL_POOL_REFUSE: %d - the next commits that grow a pool are REFUSED, for a test\n",
+++                          g_ggml_sycl_pool_refuse.load());
+++        }
++ 
++         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FUSION: %d\n", g_ggml_sycl_enable_fusion);
++         GGML_LOG_INFO("  GGML_SYCL_UPLOAD_STAGING_SLOTS: %d\n", g_ggml_sycl_upload_staging_slots);
++@@ -2465,6 +2473,12 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
++             // allocate more physical memory
++             std::optional<sycl::ext::oneapi::experimental::physical_mem> phys;
++             try {
+++                // the test's refusal: only where a pool GROWS (a load's first commit is left alone, so the model loads),
+++                // and raised as the device raises its own, so that everything after this line is the path under test
+++                if (pool_size > 0 && g_ggml_sycl_pool_refuse > 0 && g_ggml_sycl_pool_refuse.fetch_sub(1) > 0) {
+++                    throw sycl::exception(sycl::make_error_code(sycl::errc::memory_allocation),
+++                                          "GGML_SYCL_POOL_REFUSE: refused for the test, the device was not asked");
+++                }
++                 phys.emplace(dev, ctx, reserve_size);
++             } catch (const sycl::exception & e) {
++                 // nothing of the pool has changed yet: this graph fails, and a later one may ask again
+-- 
+2.43.0
+

@@ -1435,7 +1435,12 @@ two older pools.
 **Tested.** Compiled here 2026-11-24 with Intel's compiler (oneAPI 2025.3.3: the
 engine's SYCL backend builds and links with it), never run. On the card (docs/notes/room-on-the-card.md
 §4): the device filled, a model asked — the request refused, the process
-alive, the same model answering afterwards.
+alive, the same model answering afterwards. **Run 2026-11-24 (München):
+not provoked** — at 31,701 of 32,002 MiB every request was served, the
+driver paging a neighbour out instead of refusing. The path is exercised
+with a test switch instead, `GGML_SYCL_POOL_REFUSE=N` (staged
+`0016-llama-cpp-sycl-pool-refuse-switch.patch`, in the parking
+prototype's engine; parking-prototype.md §4).
 
 ### B19 and P15 (staged). The backend calls `exit()` inside its signal handler
 
@@ -1484,7 +1489,10 @@ never returns: it is gone at once with status 1, and the same child leaving
 through `exit(1)` is still there a second later. The test is standalone,
 so `backend/cpp/run-unit-tests.sh` picks it up by its name; compiled and run
 here with that script's flags. The backend itself was not built here: the
-change in `grpc-server.cpp` is one include and one call. It applies on the
+change in `grpc-server.cpp` is one include and one call. **On the card,
+2026-11-24 (München, engine 9ea95e93a83c): PASS** — ten double SIGTERMs on
+a direct bge-m3 copy, the process gone after 52–155 ms each, the
+second-interrupt line once each. It applies on the
 series alone and beside each of 0009–0013. An engine build with it is the
 operator's word to München; it can ride the next one.
 
