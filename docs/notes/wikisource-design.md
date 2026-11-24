@@ -35,14 +35,35 @@ meet only at ask time, through a two-target annotations collection.
 **Decided: A.** Recorded beside the plugin as "THE ORIGIN FORM, and why"
 (invariant 11, its test).
 
-**How a record verifies.** The record's `origin` names the work's
-main-namespace page ids in the run (`<wiki>/pages-articles-multistream.xml.bz2#<id>`,
-as Wikipedia's parser 6). `extra.pages` lists every page used, in reading
-order: page id, revision id, the dump's `<sha1>`, namespace, and for a
-`Page:` its proofreading level. `origin_hash` is taken over those revisions'
-texts in that order. `records-vs-origin`:
-- while the run is served: it re-reads the covering bz2 blocks by Range
-  (the block origin, #752) and re-parses;
+**How a record verifies.** The record's `origin` names its page — the
+work's main-namespace page, an author's — in the run-free name of each of
+the four files its unit is read from, joined by `|`:
+`<wiki>/pages-articles-multistream.xml.bz2#<id>`, then the run's
+page_props, categorylinks and linktarget alike (Wikipedia's parser-6 form;
+`app/plugins/wikisource/locate.py`). `extra.pages` lists every page used, in
+reading order: page id, revision id, the dump's `<sha1>`, namespace, and for
+a `Page:` its proofreading level. `origin_hash` is taken over those
+revisions' texts in that order, then their rows of the three tables.
+
+*Built 2026-11-24*: the keyed origin (`origin_key`, the five hooks of
+app/keyed_origin.py). `records-vs-origin` resolves a record in the
+snapshot's run under an origin base (`local_of`), fetches and parses it
+again and compares the whole line. The base is a download of the run
+(`hold check --origin DIR`), as Wikipedia's is.
+
+*Not built, and not reuse as this note first said*: no reader of a
+multistream dump by Range exists. The block origin (#752,
+app/acquire/block_origin.py) is wikidata's alone: it wants a single-file
+layout and the plugin's `origin_lines`, and Wikipedia's and Wikisource's
+specs are `container-files`. Wikipedia itself is checked against a local
+base only (app/plugins/wikipedia/weigh.py says so). So, of the two ways
+below, both are new work:
+- while the run is served: read the covering bz2 streams by Range (their
+  offsets are in the run's index) and the three tables whole (about 45 MB
+  for it), then re-parse. It needs an origin class for container-files
+  multistream, and a weigher that counts a unit by its streams with the
+  index and the tables shared; until then a unit weighs the run's files
+  whole and a sample is compared in part;
 - after the run is gone from dumps.wikimedia.org: it fetches the same
   revision ids from the wiki's API, one batched `prop=revisions` request per
   record, through the transfer budget (invariant 5). Each revision's content
@@ -206,8 +227,14 @@ Wikidata carries a genre (P136) on fewer than 5 % of sitelinked items. So:
    - *Missing or refused tables*: a run missing a table, or holding one the
      reader refuses, is deferred as the container's report.
    - `PARSER_VERSION` stays 1: no collection exists.
-   - Not yet: `origin_of` (the keyed origin naming the tables) and
-     records-vs-origin.
+   - *The keyed origin* (2026-11-24): `origin_of`, `local_of`,
+     `origin_files`, `run_of_locator`, `carried_origin` (locate.py). A
+     verifier's own download of the run gives the same record and the same
+     `origin_hash`; the same origin read in a later run moves it
+     (tests/test_wikisource_origin.py).
+   - Not yet: records-vs-origin through `hold check` on a collection (step
+     2 makes the first one); the reader by Range and the one by revision id
+     (§1: both new work); the weigher.
 2. **The collection**, it first:
    - `hold collection create` from a recipe (the dated run pinned);
    - the acknowledgement;
