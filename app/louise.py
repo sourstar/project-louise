@@ -7346,7 +7346,8 @@ def cmd_records_show(a) -> int:
 def cmd_index_build(a) -> int:
     """`hold index build <collection> [--text | --vector]` (07 §7.3): the
     vector table's indexes now — the book_id index every delete-then-insert
-    write filters on, then the vector index queries probe (app/vector_index.py,
+    write filters on, the lang bitmap a language filter reads, then the
+    vector index queries probe (app/vector_index.py,
     as `index vector build` built them). The text index is the worker's fts
     stage's, shard by shard as documents land; nothing rebuilds it on
     demand, so `--text` says so (exit 2) rather than pretending."""
@@ -7368,6 +7369,12 @@ def cmd_index_build(a) -> int:
     if not out.get("built"):
         print(f"louise: book_id index not built: {out.get('reason')}", file=sys.stderr)
         return 1
+    # the lang BITMAP too, as the worker's pass builds it after the book_id
+    # index (2026-11-24: Normattiva's hand build left it out, and a language
+    # filter read every row until the worker's next pass). `is False`: a
+    # table without the column has none to build
+    if (vector_index.stats(local) or {}).get("lang_indexed") is False:
+        vector_index.build_lang(local, log=log)
     out = vector_index.build(local, index_type=a.type, partitions=a.partitions, log=log)
     if not out.get("built"):
         print(f"louise: vector index not built: {out.get('reason')}", file=sys.stderr)
