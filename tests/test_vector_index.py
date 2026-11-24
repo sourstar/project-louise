@@ -504,10 +504,41 @@ def test_a_compaction_takes_the_table_and_writers_defer(isolated_config, tmp_pat
     assert worker._vector_writes_allowed(c) is True, "and run again after it"
 
 
+def test_a_first_build_takes_the_table_and_a_refresh_does_not(collection, monkeypatch):
+    """2026-11-24: legi_F's first build, 70 minutes over 2,207,323 rows, lost
+    its one commit to the collection's own embed writes ("Too many concurrent
+    writers … retry_timeout of 30 s"). The first build stands the writers
+    down as a compaction does; a refresh keeps them going."""
+    from app import worker
+    _fill(collection, 300)
+    monkeypatch.setattr(config, "VECTOR_INDEX_MIN_ROWS", 200)
+    monkeypatch.setattr(config, "VECTOR_INDEX_TYPE", "ivf_flat")
+    monkeypatch.setattr(vector_index, "partitions_for", lambda rows: 4)
+    assert vector_index.ensure(collection)["kind"] == "btree"         # book_id first
+    seen = []
+    real = vector_index.build
+
+    def watched(c, **kw):
+        seen.append(worker._vector_writes_allowed(c))
+        return real(c, **kw)
+    monkeypatch.setattr(vector_index, "build", watched)
+    assert vector_index.ensure(collection)["built"]
+    assert seen == [False], "writers stood down for the first build"
+    assert worker._vector_writes_allowed(collection) is True, "and run again after it"
+    refreshed = []
+    real_refresh = vector_index.refresh
+    monkeypatch.setattr(vector_index, "refresh", lambda c, con=None, log=None: (
+        refreshed.append(worker._vector_writes_allowed(c)), real_refresh(c, con, log=log))[1])
+    _fill(collection, 100, start=300)
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_ROWS", 50)
+    monkeypatch.setattr(config, "VECTOR_INDEX_REFRESH_FRACTION", 0.0)
+    vector_index.ensure(collection)
+    assert refreshed == [True], "a refresh keeps the writers going"
+
 def test_only_a_rewrite_stands_the_writers_down(isolated_config, tmp_path):
-    """A build or a refresh must not: they run often, Lance is MVCC, and
-    standing down for each left the collection idle most of its life
-    (2026-08-28). Only the compaction is exclusive."""
+    """A refresh must not: it runs often, Lance is MVCC, and standing down
+    for each left the collection idle most of its life (2026-08-28). A
+    compaction and a first build are the exclusive ones (`rewrite`)."""
     from app import collections as collections_mod, vector_index, worker
     c = collections_mod.Collection(
         name="c", plugin="gutenberg", profile=None, embed_mode_default=None,

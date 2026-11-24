@@ -442,6 +442,13 @@ taught, in order:
    by `docker exec` in the worker: legi_F's records build there shared the worker's
    cgroup, a pool child was killed, and the worker was held 74 minutes. The build
    still ended whole: a killed child's part is handed out again.
+7b. `hold index build <name>.next --vector`, its own capped container, <name>.next
+   paused, before the swap. The re-key writes every row fresh, so the new table has no
+   vector index, and every search scans it flat until one exists: Normattiva's 7.96 M
+   rows 22-24 s a query, legi_F's 2.2 M 5-6 s, against 0.1-0.5 s with ivf_pq
+   (2026-11-24). The worker's pass would build it about an hour after the swap, one step
+   a pass. legi_F's build in the worker lost its one commit to the embed writes after 70
+   minutes; since then a first build stands the writers down (vector_index `rewrite`).
 8. `forget <name> --yes`, `rename <name>.next <name>` (the pause moves with the name),
    `node resume <name>`, then `hold config apply <name> --set embed=<the predecessor's>`,
    the operator's own value. EUR-Lex5 stops before this step, paused for its restart.
