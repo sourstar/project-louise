@@ -70,9 +70,38 @@ def test_a_stream_spaces_what_its_chunks_split():
     ("The Divine Comedy was written by Dante in the early fourteenth century.", "en"),
     ("Die Göttliche Komödie ist das Hauptwerk von Dante und wird in der Schule gelesen.", "de"),
     ("Dante.", None),
+    # München, 2026-11-24, #721's first hour live: no language, so the Italian voice read it
+    ("Das Dekret tritt am Tag nach seiner Veröffentlichung im Amtsblatt in Kraft.", "de"),
+    ("Der Vertrag wurde 1957 in Rom unterzeichnet.", "de"),
+    ("Goethe wurde 1749 in Frankfurt geboren.", "de"),
+    ("Die Verordnung gilt ab dem ersten Januar.", "de"),
+    ("Il decreto entra in vigore il giorno successivo alla pubblicazione.", "it"),
+    ("L'articolo 5 stabilisce i diritti dell'interessato.", "it"),
+    ("Dante nacque a Firenze nel 1265.", "it"),
+    ("The regulation enters into force on the day after its publication.", "en"),
+    ("Dante was born in Florence in 1265.", "en"),
+    ("Le décret entre en vigueur le lendemain de sa publication au Journal officiel.", "fr"),
+    ("Dante est né à Florence en 1265.", "fr"),
+    ("El decreto entra en vigor el día siguiente al de su publicación.", "es"),
+    ("O decreto entra em vigor no dia seguinte ao da sua publicação.", "pt"),
+    # one word is no language: a title, a name, a place and a year
+    ("Die Hard", None), ("The Guardian", None), ("Le Monde", None), ("Los Angeles", None),
+    ("Roma, 1957.", None), ("OK", None),
+    # a word two languages share does not decide between them
+    ("They will die in the war.", "en"),
 ])
 def test_the_language_is_told_by_its_commonest_words(text, lang):
-    assert speech.language(text) == lang
+    assert speech.language(text) == lang, speech.language_scores(text)
+
+
+def test_no_sentence_is_given_the_wrong_language_for_want_of_words():
+    """Too short to tell is None — the answer it is part of then says
+    (`context`) — never a neighbour's language: a wrong language is a wrong
+    voice and a wrong reading of every number."""
+    close = ["Dante nació en Florencia en 1265.",                       # es 1.0, fr 1.0
+             "L'article 5 fixe les droits de la personne concernée."]   # fr, with es close behind
+    for text in close:
+        assert speech.language(text) in (None, "es" if "nació" in text else "fr"), speech.language_scores(text)
 
 
 def test_one_voice_for_every_language():

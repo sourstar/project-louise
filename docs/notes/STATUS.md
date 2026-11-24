@@ -43,6 +43,13 @@ measured (published figures disagree).
   not use, the oldest real use first, and never from one of its own
   (`question_card.load_ahead`; ask-card-workflow.md, "Ahead of the stage"). The gain is
   NOT measured: München takes a cold question's timeline before and after, on an unloaded node.
+- **A German sentence read in the Italian voice** (München, #721's first hour live). A reader who is not
+  an admin hears the synthetic voice of the sentence's language, and the language is told by its commonest
+  words: twenty a language, and "Das Dekret tritt am Tag nach seiner Veröffentlichung im Amtsblatt in
+  Kraft." holds one of them. No language, so the first voice named. The lists are some seventy words a
+  language now, a word common to several counts a share for each, and a language is named only with a lead
+  over the next; too short to tell is still None, and the answer the sentence is part of says. lingua-py is
+  the named standard and a new dependency: the operator's word first (app/speech.py).
 - **Measured on a busy node, published, withdrawn, taken again.** The first load timings for the parking
   note were taken with the worker paused and nothing else (operator: "Your measurements are garbage");
   measuring.md §10 had asked for an unloaded system since 11-03. The retake (node paused 28 minutes, the
