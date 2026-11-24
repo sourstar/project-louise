@@ -1600,11 +1600,19 @@ def _rss_anon() -> int | None:
     return None
 
 
+#: this process's give-back threshold: TRIM_ABOVE_BYTES, raised past what a
+#: give-back could not free (held objects, not free heap), so a child whose
+#: heap is held is collected again only once it has grown TRIM_ABOVE_BYTES / 2
+#: beyond it, never on every part
+_trim_floor = TRIM_ABOVE_BYTES
+
+
 def _give_back() -> tuple[int, int] | None:
-    """(before, after) when this process held more than TRIM_ABOVE_BYTES and
+    """(before, after) when this process held more than its threshold and
     gave back what it could; None otherwise. Never raises."""
+    global _trim_floor
     before = _rss_anon()
-    if before is None or before < TRIM_ABOVE_BYTES:
+    if before is None or before < _trim_floor:
         return None
     try:
         import ctypes
@@ -1614,14 +1622,23 @@ def _give_back() -> tuple[int, int] | None:
     except (OSError, AttributeError):
         return None
     after = _rss_anon()
-    return (before, after) if after is not None else None
+    if after is None:
+        return None
+    _trim_floor = (TRIM_ABOVE_BYTES if before - after >= TRIM_SAY_BYTES
+                   else max(TRIM_ABOVE_BYTES, after + TRIM_ABOVE_BYTES // 2))
+    return before, after
 
 
 def _compute_heavy(kind: str, collection, rows: list[dict]) -> list[tuple[bool, object]]:
-    """`_compute`, then the child gives back what the part freed — for a
-    part that reserved an estimate (a plugin declaring its peak), never for
-    the light parts of the others, where the collect would cost more than
-    it gives."""
+    """`_compute`, then the child gives back what the part freed, EVERY part
+    (2026-11-24). Only parts with an estimate (a plugin declaring its peak,
+    EUR-Lex) did: every other plugin's children kept their peak heap for
+    life, and Normattiva's full fts re-index at chunker v4 grew twelve of
+    them to 1.6-1.75 GB. With the main process and a light compaction's
+    Lance child, that crossed the worker's 24 GB cap, and the kernel killed
+    one. Below the threshold it is one read of /proc/self/status; past it a
+    collect and a trim, said when they free TRIM_SAY_BYTES, and raised past
+    what they cannot free (`_trim_floor`)."""
     out = _compute(kind, collection, rows)
     got = _give_back()
     if got is not None and got[0] - got[1] >= TRIM_SAY_BYTES:
@@ -1968,7 +1985,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                     # a LARGE part in a process of its own, bounded by the room
                     # granted; every other part in the shared pool
                     f = (_LaneTask(kind, collection, part, _allowance(need)) if peak else
-                         ex.submit(_compute_heavy if need else _compute, kind, collection, part))
+                         ex.submit(_compute_heavy, kind, collection, part))
                 except BaseException:
                     for give in gives:
                         give()
@@ -2124,7 +2141,7 @@ def _submit(ex, kind, collection, part):
     """A part to the pool, or None — broken, or stopped by another caller
     meanwhile — and then it is computed in-process."""
     try:
-        return ex.submit(_compute, kind, collection, part)
+        return ex.submit(_compute_heavy, kind, collection, part)
     except RuntimeError as e:
         _note_failure(e, ex)
         return None

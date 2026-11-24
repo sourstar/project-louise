@@ -120,6 +120,7 @@ STREAM = """
         config.PARSE_TASKS_PER_CHILD = {per_child}
         config.PARSE_TIMEOUT_S = {timeout}
         parallel._compute = compute
+        parallel._compute_heavy = compute      # what the pool submits for every part (2026-11-24)
         pages = ([{{"n": p * 8 + j}} for j in range(8)] for p in range(10_000))
         stream = parallel.compute_pages("chunks", Collection(), pages)
         got = []

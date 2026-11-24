@@ -426,7 +426,25 @@ def test_a_heavy_part_gives_back_what_it_freed_and_says_it(monkeypatch, capsys):
     assert parallel._give_back() is None, "below the threshold: nothing collected"
 
 
-def test_only_a_part_with_an_estimate_runs_the_give_back(fake_compute, monkeypatch):
+def test_a_heap_that_is_held_is_not_collected_on_every_part(monkeypatch):
+    """A child whose 1.6 GB are held objects frees nothing: its threshold is
+    raised past what is left, and it is collected again only once it has
+    grown half a threshold beyond it."""
+    collected = []
+    monkeypatch.setattr(parallel, "_trim_floor", parallel.TRIM_ABOVE_BYTES)
+    rss = {"v": 1_600 * 2 ** 20}
+    monkeypatch.setattr(parallel, "_rss_anon", lambda: rss["v"])
+    import gc
+    monkeypatch.setattr(gc, "collect", lambda: collected.append(1) or 0)
+    assert parallel._give_back() == (1_600 * 2 ** 20, 1_600 * 2 ** 20)
+    assert parallel._give_back() is None and len(collected) == 1, "held: not collected again"
+    rss["v"] = 1_600 * 2 ** 20 + parallel.TRIM_ABOVE_BYTES // 2
+    assert parallel._give_back() is not None and len(collected) == 2, "grown past it: collected"
+
+def test_every_part_runs_the_give_back(fake_compute, monkeypatch):
+    """2026-11-24: only a part with an estimate did, and every other plugin's
+    children kept their peak heap for life: twelve of Normattiva's fts at
+    1.6-1.75 GB, a kernel kill in the worker's 24 GB."""
     seen: list = []
 
     class P(_HeldPool):
@@ -437,7 +455,7 @@ def test_only_a_part_with_an_estimate_runs_the_give_back(fake_compute, monkeypat
     monkeypatch.setattr(parallel, "pool_memory", lambda: None)
     parallel.compute("fts", _coll(), _rows([MID, MID]))
     parallel.compute("fts", _coll(k=False), _rows([MID, MID]))
-    assert set(seen[:2]) == {"_compute_heavy"} and set(seen[2:]) == {"compute"}, seen
+    assert set(seen) == {"_compute_heavy"}, seen
 
 
 # --- the lane's own process (2026-11-20, after the second hold) ---------------------

@@ -3057,7 +3057,9 @@ def _vector_writes_allowed(collection, con=None) -> bool:
     `vector_store_contended` turns into a deferral: the document is
     untouched and retried, never errored.
 
-    A COMPACTION is the one exception (2026-09-18). It rewrites fragments,
+    A COMPACTION, and a table's FIRST vector index build (2026-11-24:
+    legi_F's lost its one commit after 70 minutes to its own embed writes),
+    are the exceptions (2026-09-18). A compaction rewrites fragments,
     so a writer committing underneath takes its commit away rather than
     merely racing it: three of wikipedia's passes died that way in two
     days, 40–51 minutes of work each, against an archive import committing
