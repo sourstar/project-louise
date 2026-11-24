@@ -20,6 +20,12 @@ measured (published figures disagree).
 
 ### 2026-11-21
 
+- **2026-11-24, omnivoice on our backend — evaluated, nothing changed** (operator: "I would like to have only one
+  backend"). omnivoice.cpp builds unchanged against our engine's ggml and gives the same audio on the CPU (68 of
+  159,120 samples off by one unit); its own ggml fork is ours a few days older on SYCL. Four ways, with their costs,
+  in [omnivoice-on-our-backend.md](omnivoice-on-our-backend.md): the same engine as a second package (two build
+  arguments, recommended now), one binary (a carried patch in `grpc-server.cpp`), a native model (Qwen3-TTS, which
+  our backend already serves, no patch), a port into llama.cpp. Waiting for the operator's choice.
 - **2026-11-24, "Engine now, chat later" (operator): the new engine is adopted, the chat model decided after the
   POC.** The cut-over's order is in [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §5:
   BACKOUT first; the wrapper `vega-louise-llama-cpp` repointed at `c3294e050ff2`, MADLAD and the nemotron reranker
