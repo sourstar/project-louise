@@ -188,8 +188,9 @@ moves models for a question, with today's loads and unloads. RAGE's claim
 
 ## 5. What is measured first
 
-Each decides a part of the design. What is already held is in §5.1; the
-rest is not known today.
+Each decides a part of the design. What was already held is in §5.1; the
+split of a load (1) and the parked floor (5), read on the node the same
+day, are in §5.2. The rest is not known today.
 
 1. **A cold load's 7.5–8.7 s, split:** the process start, the file read
    (page cache cold and warm), the device's start, the copy, the first pass.
@@ -208,10 +209,10 @@ rest is not known today.
    parse pool idle) it is not measured: the paused node's figure is the
    nearest one held.
 5. **What a parked process still holds on the card:** its device context
-   and compiled kernels, with no weights. Not measured: LocalAI stops a
-   backend's process when it unloads, so no such process exists today. The
-   empty card reads 25 MiB. It decides how many models beyond the card
-   really fit.
+   and compiled kernels, with no weights. LocalAI stops a backend's process
+   when it unloads, so no such process exists today; two stand-ins are read
+   in §5.2 (0.3 to 0.7 GiB). The empty card reads 25 MiB. It decides how
+   many models beyond the card really fit.
 
 ### 5.1 What the node already holds (München, 2026-11-24)
 
@@ -232,8 +233,9 @@ first answer, the weights in the page cache, the card not full.
   takes 8.1 s. So most of a load is not the copy. This is read off totals of
   different models on different paths, not a split: the split (a load with
   `verbosity:4`, an encoder and MADLAD) confirms or corrects it.
-- If it holds, parking saves most of a load: what remains is the copy, a
-  fraction of a second for an encoder.
+- It holds, and the split says why (§5.2). It also corrects what parking
+  saves: the copy is a fraction of a second, but a part as large as the
+  process's start comes after the copy, and a parked model may pay it again.
 - The copy's rate: 16.2 GiB/s host to B70 by the expert-cache tuner's fit
   (backend-qualification-2026-11-21.md, phase 4, row 7), so about 0.2 s for
   a 2.7 GB model. Memory the DRIVER brings back is slower: 4.2 GiB of
@@ -242,9 +244,71 @@ first answer, the weights in the page cache, the card not full.
   load on a new engine); later loads read the cache.
 - A file out of the page cache costs far more than anything else (40.8 s
   against 8.1 s): parked weights held in host RAM are what avoids it.
-- Not held: the split itself (1), a load beside a working encoder (2), the
-  busy share with two encoders (3). Host memory per minute (4) is being
-  logged since 2026-11-24, for seven days.
+- Not held: a load beside a working encoder (2), the busy share with two
+  encoders (3). Host memory per minute (4) is being logged since
+  2026-11-24, for seven days.
+
+### 5.2 A load, split, and the parked floor (München, 2026-11-24)
+
+Test copies of two models on the live engine (c3294e), `verbosity: 4`, the
+node paused, the file in the page cache, 14:29–14:34Z. Four loads of each,
+the range. Seconds on the engine's own clock, from the backend process's
+"Server listening".
+
+| part of a cold load | qwen3-embedding-4b (2,375 MiB on the card) | MADLAD f16 (5,109 MiB) | a parked process pays it again |
+|---|---|---|---|
+| "Server listening" → LocalAI's load call | 2.03–2.05 | 2.01–2.07 | no |
+| the file's header and vocabulary | 0.09 | 0.45–0.60 | no |
+| the weights, read and copied to the card | 0.42–0.50 (4.6–5.5 GiB/s) | 0.83–0.92 (5.4–6.0 GiB/s) | yes: this is the un-park |
+| the context's buffers | 0.02 | 0.01 | yes, as context on demand already does per request |
+| buffers → "model loaded": the warm-up run and the canary | 1.8 | 2.85–3.06 | NOT KNOWN |
+| the first answer | in the total | 0.38–0.96 | — |
+| **the client, request to first answer** | **4.51–4.58** | **6.67–7.93** | |
+| the same request with the model loaded | 0.02–0.03 | 0.87–0.89 | |
+
+- **The copy is the smallest part,** a tenth of a load. Its rate is 4.6 to
+  6.0 GiB/s, the read from the page cache and the copy together (§5.1's
+  16.2 GiB/s was a fit, for the copy alone). One load of each, right after
+  another model had been unloaded, took 1.82 s and 2.05 s for the same step
+  (1.3 and 2.4 GiB/s): not explained.
+- **2.0 s of every load pass before the engine is asked anything:** the
+  backend listens, and LocalAI's load call reaches it 2.0 s later, the same
+  for both models. No engine work is in it. If it is LocalAI's wait for a
+  new backend to answer, it comes off EVERY cold load by a setting or a
+  small patch, parking or not, and is done first. To be read in LocalAI's
+  source; nothing here says what it is.
+- **The part after the buffers is as large as the start,** and it is the
+  model's first use: the warm-up run and the canary, where ggml-sycl
+  rewrites the weights on the card (§3.1). A parked process keeps its
+  compiled kernels; whether it runs the rewrite again is §8's choice. So an
+  un-park costs between the copy alone and the copy with that part:
+
+  | | cold today | un-park, at best | un-park, the first use paid again |
+  |---|---|---|---|
+  | qwen3-embedding-4b | 4.5 s | 0.45 s | 2.3 s |
+  | MADLAD | 6.7–7.9 s | 0.9 s | 3.9 s |
+
+- **Parking itself, card to RAM, copies nothing.** The weights never change
+  and their host copy is the file in the page cache: a park frees the
+  card's buffers. Not timed apart, since an unload today takes the process
+  down.
+- "The totals do not grow with the size" (§5.1) is these two parts: a fixed
+  2.0 s, and a first use that grows less than the weights.
+
+The floor of a parked process, by two stand-ins (each process's own fdinfo;
+the card was NOT otherwise empty, one live backend held 2.5 to 4.4 GB):
+- a process holding the device with no weights on it (a medcpt-query copy,
+  `gpu_layers 0`, context on demand, idle after one request): 308 MiB of
+  card, 235 MiB of GTT (host memory the driver maps), RSS 237 MB;
+- a bge-m3 copy with context on demand, idle after one request, its 577 MiB
+  of weights on the card: 1,312 MiB of card and 880 of GTT, so 735 MiB
+  beyond its weights.
+
+So a parked process costs between 0.3 GiB (the first never computed on the
+card) and 0.7 GiB (what the second holds beyond its weights, unless a park
+also frees the engine's pools). Ten parked models are 3 to 7 GiB of the
+card's 32. With one process per model THE FLOOR, not the weights, bounds how
+many models a node serves; step 1 reads the real one.
 
 ## 6. The order, each step on the operator's word
 
@@ -254,6 +318,14 @@ first answer, the weights in the page cache, the card not full.
 | 1. the engine parks one encoder (bge-m3, 621 MiB) | Tensor | N park cycles give the same bytes; timed apart: the park, the un-park (allocate, copy, reorder), the first request after; the parked process's floor on the card read |
 | 2. LocalAI's parked state, its two calls, the RAM budget; the wrapper | Tensor, then upstream | a parked model answers after an un-park; the gates pass on the build |
 | 3. the question's plan on the two calls (`question_card`) | architecture | a cold question's first word within a second or two of the warm one's, measured on the node |
+
+WHAT STEP 0 SAYS SO FAR (§5.2): go, and the gain is smaller than the totals
+suggested. Parking takes a 4.5 s load to between 0.45 and 2.3 s, and a 7 s
+load to between 0.9 and 3.9 s; where in that range is the rewrite at first
+use, which step 1 times. Before step 1, two readings that cost nothing: what
+LocalAI does in the 2.0 s before its load call, and the engine's lines
+between the buffers and "model loaded". Still to measure: a load beside a
+working encoder (2), a question's timeline on the live engine (3).
 
 Each step is a deploy of its own. Each can stop there and still be worth
 having. In the serving scenario step 2 alone gives most of the gain: a
@@ -290,7 +362,12 @@ Existing tools, and why they are not the answer by themselves:
 - What is parked: the file's bytes (the reorder runs again at each
   un-park) or the reordered bytes read back once (§3.1).
 - One process per model is LocalAI's shape: what a parked process costs in
-  host RAM beyond its weights.
+  host RAM beyond its weights (RSS 237 MB for the stand-in of §5.2), and on
+  the card (0.3 to 0.7 GiB each, §5.2): whether a park frees the engine's
+  pools, and whether several models could share one process's device
+  context, which is not LocalAI's shape today.
+- The 2.0 s between a backend's "Server listening" and LocalAI's load call
+  (§5.2): what it is, and whether a setting removes it.
 - The chat model's prompt cache across a park.
 - Page mode once parking exists: kept as the fallback for a backend that
   cannot park, or retired.
