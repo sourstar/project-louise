@@ -216,6 +216,11 @@ _LANG_DIR = re.compile(r"^lang=(?P<lang>[a-z]{2})$")
 #: the wrapper's PUBLICATION.REF date, read from its head at discovery
 _PUB_DATE = re.compile(rb"<PUBLICATION\.REF\b[^>]*>.*?<DATE\s+ISO=\"(\d{8})\"", re.S)
 _HEAD = 16 << 10
+#: a held file the reader never parses: its bytes are held, ~3 bytes a byte
+#: at the parse's peak (2026-11-24, step 5a), never the 26 of text
+FIGURES = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".eps")
+#: what a figure, or a package's own bytes, counts of its size in `parse_size`
+FIGURE_SHARE = 6
 
 #: The EU's ELI (eli-legal-plugins.md §5.3; legal-fr-de-eu.md §4.3): the
 #: Publications Office's register, by type, year and natural number; the
@@ -505,7 +510,11 @@ class EurlexSource:
     #: of one unit holds per byte of its `size` (the unit's files, summed at
     #: discovery). MEASURED 2026-11-19 (München, its own container): 32021R2017
     #: el, 204,218,240 bytes, peak 5,248,708,608 to chunk (25.7x), 2,055,856,128
-    #: for its metadata (10.1x) — the larger, rounded up
+    #: for its metadata (10.1x) — the larger, rounded up. A byte of TEXT: a
+    #: figure is weighted down by `parse_size` (2026-11-24, step 5a). Not
+    #: lowered: 32021R2017 el's package (62.6 MB of XML unpacked) peaked at
+    #: 1.23 GB in `fts` after the chunker's bounded spans, 19.6x with the
+    #: process's own floor, and one unit does not set a figure
     PARSE_PEAK_PER_BYTE = 26
     ELI_PROFILE = PROFILE
     #: 09 §9.3's `profile`: the ELI implementation and the validity axis of
@@ -757,7 +766,24 @@ class EurlexSource:
         package deflates ~4.3x, so its `size` was a quarter of what its parse
         holds. The row's `size` (DocRef.size) keeps its meaning: the unit's
         files on disk, discovery's change test. None where the unit does not
-        read (the parse says why)."""
+        read (the parse says why).
+
+        WEIGHTED BY HOW THE PARSE HOLDS EACH BYTE (2026-11-24, München's step
+        5a, peak RSS of `metadata` and `fts` in their own 12 GiB container, one
+        process): the plugin's PARSE_PEAK_PER_BYTE (26) is what a byte of TEXT
+        costs; a FIGURE costs ~3 bytes a byte, held as bytes and never parsed.
+        Counted at 26, a unit of TIFF figures was refused as TooLarge forever,
+        its text never held (invariant 11): 32015R2446R(01) de, 911.5 MB of
+        TIFFs, estimated 23.7 GB, peaked at 2.7 GB; 32021R0776 it, 610.8 MB,
+        1.85 GB; 32020R1209 it, 353 MB, 1.10 GB; 32024R1679R(01) da, an 815 MB
+        package of figures, parse_size 3.6 GB (93.8 GB estimated), 2.52 GB. So:
+          * a file the reader reads as text (any but a figure), and a package's
+            text members (`formex._read_whole`), count whole;
+          * a figure held loose, and a package's own bytes (read whole once),
+            count 1/FIGURE_SHARE: 26/6 = 4.3 bytes a byte against the ~3
+            measured;
+          * a figure inside a package counts its first bytes, which is all
+            `formex.unpack` reads of it."""
         import zipfile
         try:
             entries = unit_files(Path(row["path"]))
@@ -769,13 +795,17 @@ class EurlexSource:
                 size = e.stat().st_size
             except OSError:
                 continue
-            total += size
             if formex.is_package(e.name):
                 try:
                     with zipfile.ZipFile(e.path) as z:
-                        total += sum(i.file_size for i in z.infolist() if not i.is_dir())
+                        infos = [i for i in z.infolist() if not i.is_dir()]
+                    total += -(-size // FIGURE_SHARE)
+                    total += sum(i.file_size if formex._read_whole(i.filename)
+                                 else min(i.file_size, formex._HEAD_BYTES) for i in infos)
+                    continue
                 except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError, ValueError):
                     pass                # not a readable zip: read as the file it is
+            total += -(-size // FIGURE_SHARE) if e.name.lower().endswith(FIGURES) else size
         return total
 
     # ---- fetch and parse ---------------------------------------------------------------------
