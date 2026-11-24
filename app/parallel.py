@@ -847,9 +847,16 @@ def _compute(kind: str, collection, rows: list[dict]) -> list[tuple[bool, object
         from .pack.build import compute_records
         return compute_records(kind, collection, rows)
     out: list[tuple[bool, object]] = []
+    # THE WORKER WRITES DOWN WHAT IT PARSES IN ITS OWN PROCESS (app/parse_journal.py):
+    # a document on which the parse never ends holds the process, the dead-man's
+    # switch ends it, and its successor must not walk into the same document. A
+    # no-op in a child and in any process that keeps no journal
+    from . import parse_journal
+    where = parse_journal.where_of(collection)
     for row in rows:
         try:
-            out.append((True, _one(kind, collection, row)))
+            with parse_journal.parsing(where, row.get("uid"), kind):
+                out.append((True, _one(kind, collection, row)))
         except Exception as e:   # noqa: BLE001 — recorded per document by the caller
             out.append((False, {"type": type(e).__name__, "msg": str(e)[:500]}))
     return out
@@ -1921,8 +1928,8 @@ def _no_answer(bound_s: float) -> tuple[bool, object]:
 
 
 def _isolated(kind: str, collection, parts: list[list[dict]], k: float,
-              cannot: Callable[[list[dict]], list[tuple[bool, object]]] | None = None
-              ) -> tuple[list[list[tuple[bool, object]]], int]:
+              cannot: Callable[[list[dict]], list[tuple[bool, object]]] | None = None,
+              were: str = "were in flight") -> tuple[list[list[tuple[bool, object]]], int]:
     """The answers of the parts that were IN FLIGHT when their pool failed,
     none of them computed in this process, and how many documents did not
     come back alone (each an error on itself). A row whose estimate reaches
@@ -1944,8 +1951,8 @@ def _isolated(kind: str, collection, parts: list[list[dict]], k: float,
         if light:
             groups.append([part[ri] for ri in light])
             where.append((pi, light))
-    print(f"{_hms()} [parse pool] {name}: {sum(len(g) for g in groups)} document(s) of {len(groups)} part(s) were in "
-          f"flight: parsed again in processes of their own, {ISOLATE_AT_ONCE} at a time, none in this one",
+    print(f"{_hms()} [parse pool] {name}: {sum(len(g) for g in groups)} document(s) of {len(groups)} part(s) "
+          f"{were}: parsed again in processes of their own, {ISOLATE_AT_ONCE} at a time, none in this one",
           file=sys.stderr, flush=True)
     failed = 0
 
@@ -2076,6 +2083,32 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
         rest = iter(compute(kind, collection, [r for r, g in zip(plain, known) if not g]))
         bound = float(config.PARSE_TIMEOUT_S) + ISOLATE_START_S
         return [_no_answer(bound) if g else next(rest) for g in known]
+    from . import parse_journal
+    if parse_journal.any_suspect():
+        # A SUSPECT — in progress in the worker's own process when that process
+        # ended (app/parse_journal.py) — is parsed ALONE, in a process of its
+        # own, never here and never beside others in the pool: what comes back
+        # decides, its answer or an error on it. A heavy one is left to the
+        # large lane, which is a process of its own already
+        k0 = peak_per_byte(collection)
+        where = parse_journal.where_of(collection)
+        sus = [parse_journal.strikes(where, r.get("uid")) > 0 and peak_of(k0, r) < IN_PROCESS_PEAK_BYTES
+               for r in plain]
+        if any(sus):
+            alone, _failed = _isolated(kind, collection, [[r] for r, s in zip(plain, sus) if s], 0.0,
+                                       were="were in progress in the worker's own process when it last ended")
+            alone_it = iter(alone)
+            rest = iter(compute(kind, collection, [r for r, s in zip(plain, sus) if not s]))
+            out_s: list[tuple[bool, object]] = []
+            for r, s in zip(plain, sus):
+                if not s:
+                    out_s.append(next(rest))
+                    continue
+                got = next(alone_it)[0]
+                if got[0] or not (isinstance(got[1], dict) and got[1].get("type") in ("MemoryWait", "Stopped")):
+                    parse_journal.resolved(where, r.get("uid"))     # answered for good, either way
+                out_s.append(got)
+            return out_s
     ex = pool()
     k = peak_per_byte(collection)
     if k:

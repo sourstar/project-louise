@@ -154,6 +154,11 @@ report the interval, not just the point; measure at the depth the system uses
 
 ## 9. Added 2026-11-02 (gutenberg's CPU reference)
 
+- **`docker pause` of the WORKER or the WEB for longer than its dead-man's
+  switch ends it at the unpause** (app/deadman.py, 2026-11-24; exit 142,
+  restarted by its policy): the switch's clock is the wall's. The worker's
+  is 600 s, the web's 120 s. To free them for longer, `louise node pause`
+  (the mode) or a stop; or `LOUISE_DEADMAN_S=0` for the time.
 - **`docker pause` is not lossless for a VeGa client.** A request in flight
   comes back after the pause, but VeGa keeps a receipt for a limited time.
   A pause longer than that leaves the answer with no receipt, so it is not

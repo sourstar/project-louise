@@ -16,6 +16,9 @@ os.environ["LOUISE_WARMUP"] = "0"
 # nor does the worker's resident keeper run in a test's worker
 # (app/resident.py): the tests of it call its beat themselves
 os.environ["LOUISE_RESIDENT"] = "0"
+# nor is the dead-man's switch armed in the test process by a worker or a web
+# started inside it (app/deadman.py): its own tests arm it in a child
+os.environ["LOUISE_DEADMAN_S"] = "0"
 
 FIXTURE_CORPUS = Path(__file__).parent / "fixtures" / "gutenberg-mini" / "corpus"
 
@@ -106,6 +109,9 @@ def fresh_worker_state():
     parallel.forget_deferred()
     # nor the rows that did not come back alone from a process of their own
     parallel.forget_gone_alone()
+    # nor a journal of what this process parses, nor a suspect of one before it
+    from app import parse_journal
+    parse_journal.reset()
     # the give-back threshold is raised by a part whose heap is held: in a
     # whole-suite process an earlier in-process part left it past the heap a
     # later test states (2026-11-24, the Tensor session's full run)

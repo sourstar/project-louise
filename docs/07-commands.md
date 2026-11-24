@@ -1905,6 +1905,7 @@ sensible its own behaviour looks.
 | 130 | interrupted after a clean commit (SIGTERM or SIGINT) |
 | 137 | a process of the pass's cgroup was killed for memory — the pass itself, or a parse-pool child, whose parts are then not computed again (`parallel.MemoryKilled`); `deploy/supervise-pass.sh` holds it until `deploy/release-oom.sh` names the cause or the diagnostic (operator, 2026-11-19; added the same day) |
 | 75 | the worker alone: it stopped at its units after a memory kill in its cgroup, the OOM hold written; its guard keeps it down until `node release-oom` (added 2026-11-19) |
+| 142 | the worker or the web alone: its dead-man's switch. One thread held the process for `LOUISE_DEADMAN_S` (600 s for the worker, 120 s for the web; 0 switches it off), so nothing else in it could run; every thread's stack is on stderr before it, and its restart policy starts it again. What the worker was parsing in its own process is read at that start (`state/parsing.journal`, `state/parse-suspects.json`) and parsed elsewhere (added 2026-11-24) |
 
 A command never exits 1 for a deferral and never 0 for a failure. The
 message on stderr names the unit — the part, the document, the bundle,
