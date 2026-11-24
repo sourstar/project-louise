@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 24 Nov 2026 12:04:08 +0000
+Subject: [PATCH] feat(llama-cpp): GGML_SYCL_USM_SYSTEM=2, a model paged to the
+ card by use
+
+Carried as a llama.cpp patch beside the others
+(patches/0013-sycl-usm-system-by-use.patch). ggml-sycl's system
+allocations (GGML_SYCL_USM_SYSTEM=1: a buffer of 4 GiB or more is host
+memory the card reads through shared virtual memory) put the whole model
+in video memory all the same: the load copies every tensor on the card,
+and the first token rewrites every expert tensor whole. Measured on an
+Intel Arc Pro B70 with Qwen3.6-35B-A3B: 21.7 GiB in video memory by the
+driver's count, of which the process's own counters show 3.2.
+
+With the value 2 the weights of such a buffer are written from the host
+and its expert tensors are not reordered, so a page reaches the card when
+a kernel first reads it and the experts no token selects stay in host
+memory. The value 1 is unchanged.
+
+STAGED, for a measurement: not compiled where it was written, never run.
+What it is for, and the rows that say whether it does it, are in
+docs/notes/backend-qualification-2026-11-21.md (the Louise repository).
+
+Assisted-by: Claude Code
+---
+ .../patches/0013-sycl-usm-system-by-use.patch | 86 +++++++++++++++++++
+ 1 file changed, 86 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0013-sycl-usm-system-by-use.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0013-sycl-usm-system-by-use.patch b/backend/cpp/llama-cpp/patches/0013-sycl-usm-system-by-use.patch
+new file mode 100644
+index 0000000..22fdab6
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0013-sycl-usm-system-by-use.patch
+@@ -0,0 +1,86 @@
++sycl: GGML_SYCL_USM_SYSTEM=2 pages a system allocation to the card by use
++
++With GGML_SYCL_USM_SYSTEM=1 a buffer of 4 GiB or more is host memory the
++card reads through shared virtual memory - and yet the whole model is in
++video memory as soon as it is loaded (measured on an Arc Pro B70 with a
++22 GB mixture-of-experts model: 21.7 GiB by the driver's own count), for
++two reasons, both in this file:
++
++- the load writes every tensor with a copy that runs ON THE CARD
++  (set_tensor: stream->memcpy), so the card faults in every page;
++- the first token reorders each expert tensor whole (opt_for_reorder_id ->
++  reorder_qw), reading and rewriting every expert of every layer, the ones
++  no token selects included.
++
++GGML_SYCL_USM_SYSTEM=2 leaves both out for such a buffer: the weights are
++written from the host, and an expert tensor keeps the layout it was loaded
++in (the kernels take either layout). A page then reaches the card when a
++kernel first reads it; an expert no token selects stays in host memory.
++The dense weights are reordered as before - every token reads them.
++
++1 behaves as it did. 2 is for measuring: the expert kernels on the plain
++layout are the slower ones, and what the driver does with such pages when
++another process needs the card is its own policy.
++
++Not compiled where it was written (no SYCL compiler there): three small
++changes, each beside the code it guards.
++---
++diff --git a/docs/backend/SYCL.md b/docs/backend/SYCL.md
++index 8649fca..e6705b1 100644
++--- a/docs/backend/SYCL.md
+++++ b/docs/backend/SYCL.md
++@@ -840,7 +840,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
++ | GGML_SYCL_SPARSE_FA_MARGIN | [0,..] default:256 | Set the margin value for Sparse Flash-attention.|
++ | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
++ | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
++-| GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
+++| GGML_SYCL_USM_SYSTEM | 0 (default), 1 or 2 | With 2, the buffer is paged to the GPU by use: weights are written from the host and expert tensors are not reordered, so a page reaches the GPU when a kernel first reads it and unselected experts stay in host memory (slower expert kernels; measure). With 1: enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
++ | GGML_SYCL_BMG_VRAM_CHECK | 1 (default) or 0 | Workaround for BMG (Arc B-series) GPUs, where the Level Zero driver accepts device allocations beyond VRAM and moves the overflow to system RAM, which can exhaust host memory when a model does not fit (e.g. `-ngl 999`, see https://github.com/intel/compute-runtime/issues/1047). When enabled, a model or split buffer that does not fit in the device's free memory is refused and the model load fails with an error. Set to 0 to disable. |
++ 
++ 1. <a id="sycl-graph-footnote"></a>SYCL Graph support (`GGML_SYCL_ENABLE_GRAPH=1`) is limited to single-GPU workloads and may also depend on the model architecture and kernels in use.
++diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
++index d3797f8..4888a11 100644
++--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
++@@ -785,6 +785,15 @@ static bool ggml_backend_buffer_is_sycl(ggml_backend_buffer_t buffer) {
++     return buffer->buft->iface.get_name == ggml_backend_sycl_buffer_type_get_name;
++ }
++ 
+++// GGML_SYCL_USM_SYSTEM=2: a system allocation is paged to the card BY USE. Its weights are written from the host
+++// and no pass rewrites a whole expert tensor, so a page reaches the card when a kernel first reads it and the
+++// experts no token selects stay in host memory. With =1 every page is written, and the experts rewritten, by
+++// kernels on the card: the whole buffer is in video memory once the model is loaded and has answered.
+++static bool ggml_sycl_buffer_paged_by_use(ggml_backend_buffer_t buffer) {
+++    return g_ggml_sycl_usm_system >= 2 && buffer != nullptr && ggml_backend_buffer_is_sycl(buffer) &&
+++           ((const ggml_backend_sycl_buffer_context *) buffer->context)->is_usm_system;
+++}
+++
++ static void
++ ggml_backend_sycl_buffer_free_buffer(ggml_backend_buffer_t buffer) try {
++     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
++@@ -882,6 +891,13 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
++     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
++     ggml_sycl_set_device(ctx->device);
++ 
+++    // paged by use: the buffer is host memory, written here from the host. A copy run on the card would fault
+++    // every page of the model in at load
+++    if (ggml_sycl_buffer_paged_by_use(buffer)) {
+++        memcpy((char *) tensor->data + offset, data, size);
+++        return;
+++    }
+++
++     // copy through pinned memory so the device never reads mmap()ed pages directly
++     // chunks pipeline on the in-order compute queue, so no drain per tensor is needed
++     if (ggml_sycl_buffer_init_staging(ctx)) {
++@@ -5090,6 +5106,11 @@ static void opt_for_reorder_id(ggml_backend_sycl_context * ctx, const ggml_tenso
++     if (!g_ggml_sycl_enable_optimize || !ctx->opt_feature.reorder) {
++         return;
++     }
+++    // paged by use: the reorder reads and rewrites EVERY expert of the tensor on the card, which would bring them
+++    // all in at the first token. The tensor keeps the layout it was loaded in; the kernels take either
+++    if (ggml_sycl_buffer_paged_by_use(src0->buffer)) {
+++        return;
+++    }
++     if (src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_Q3_K && src0->type != GGML_TYPE_Q4_K &&
++         src0->type != GGML_TYPE_Q5_K && src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_MXFP4) {
++         return;
+-- 
+2.43.0
+

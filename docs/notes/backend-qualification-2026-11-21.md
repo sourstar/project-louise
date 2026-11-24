@@ -849,6 +849,69 @@ what to give back. Open before any of that is worth an hour: the
 newcomer's exit, and whether the driver gives such pages back to a model
 that asks for ordinary memory.
 
+**Paging by use — where it stands (the operator, later that day: "we spoke
+about paging and history of the experts' usage for preloading and paging
+policy").** Not built and not measured: Test A was its precondition, no
+more. Read in the engine since:
+
+- a SECOND thing brings every page to the card whatever the load does: at
+  the first token the engine reorders each layer's expert tensor WHOLE
+  (`opt_for_reorder_id` → `reorder_qw`, for Q3_K to Q6_K, Q8_0 and MXFP4),
+  reading and rewriting the experts nobody selected with the rest;
+- the idea has the numbers on its side — measured, phase 4's tuner: a
+  cache of 1.9 GiB took 64 % of the expert reads and one of 5.6 GiB 90 %,
+  of 18.7 GiB of experts. A third of the experts do nine tenths of the
+  work;
+- the engine counts expert use only inside its `cpu_moe` cache
+  (`llama-moe-cache.cpp`); resident, nothing counts, so a history needs
+  that count added before it has anything to save.
+
+**Staged for the measurement: `staged/0012-llama-cpp-sycl-usm-by-use.patch`**
+— `GGML_SYCL_USM_SYSTEM=2`: for a system allocation the weights are written
+from the host and the expert tensors keep the layout they were loaded in
+(the kernels take either). 21 lines in `ggml-sycl.cpp`; the value 1 is as
+measured. NOT compiled here (no SYCL compiler) and never run.
+
+| | pros | cons |
+|---|---|---|
+| **measure it** (an engine build with the patch, one window of the rows below) | says in one evening whether the idea can work at all on this card and driver: how much of the model ordinary use brings to the card, at what speed, and what a neighbour's load does | an engine build (27 min last time) and a card window; an experimental driver path that killed a neighbour once; the expert kernels on the plain layout are slower by an amount nobody knows |
+| build the history first | nothing waits on the node | three more engine pieces (the count, its file, the preload and give-back) on a base that may not page at all |
+| the history for the cache that already works (`cpu_moe`): expert counts saved at unload, the hottest loaded first | small; measured need — the cache's first answers after a load were 2.09 s / 39.7 tok/s against 0.7–0.9 s / 52–70 warm | keeps the cache's costs: 19.3 GiB of host memory, 84 tok/s at best with 8 GiB |
+| leave it (today) | nothing to do | the 35B stays a choice between a toll at each change of model and a slower model |
+
+Recommendation: measure it. If the operator says nothing, the patch stays
+staged and nothing runs.
+
+**The rows (München's, on the operator's word there).** The 35B's copy
+with `GGML_SYCL_USM_SYSTEM=2`, the rest as Test A, `verbosity:4`; at every
+step the driver's `vram0_mm`, MemAvailable, the process's counters, and the
+backend's ring tailed each second during a load:
+
+1. the load, before any request: seconds, and video memory — it should be
+   near nothing;
+2. the first answer (128-token prompt): first token, decode, video memory
+   after — the dense weights and the first experts arriving;
+3. five answers, the fixed prompt: medians, video memory after each, and
+   whether the text equals copy A's (other kernels: it may not, at
+   temperature 0.7);
+4. **twenty different questions** (the chat contest's): video memory after
+   each. Where it levels off is the number the whole idea rests on;
+5. the 2,048-token prompt: prefill, video memory after;
+6. warm, the fixed prompt five times: against 100.4 tok/s resident;
+7. the neighbours of part 2, each loaded and asked: does each load, or
+   exit as one did in Test A (its last lines kept this time); what the
+   35B's share of video memory does; then the 35B again — first token,
+   decode;
+8. unloaded: video memory back to 25 MiB.
+
+Stop at any abort or kernel line, and under the host-memory floor. What
+follows from it: a level well under 21.7 GiB at near-resident speed, and
+neighbours that load — then the history is worth building (the count of
+selected experts in this mode, saved at unload; the hottest brought in at
+load; the least used given back when the keeper asks). Everything on the
+card after twenty questions, or neighbours that die — the idea ends there,
+and the history can still serve the cache (the table's third row).
+
 | configuration that fit | sum MiB | free MiB | host RAM | refusals |
 |---|---|---|---|---|
 | | | | | |
