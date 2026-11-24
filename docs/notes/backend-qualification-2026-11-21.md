@@ -976,7 +976,8 @@ adds `GGML_SYCL_REORDER_EXPERTS` (default 1 = today) so that the two
 layouts can be compared on the model as it normally runs — the same test
 copy, the switch 1 then 0, both prompts five times each: first token,
 prefill and decode, and the answers read for sense (other kernels round
-otherwise: the texts will differ, as they did here). Not compiled here.
+otherwise: the texts will differ, as they did here). Compiled here
+2026-11-24 (Intel's compiler installed in the cloud session), never run.
 
 | | pros | cons |
 |---|---|---|

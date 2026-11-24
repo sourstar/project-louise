@@ -150,8 +150,10 @@ from an encoder as a deferral (app/embeddings.py `_endpoint_error`), never
 an error on a document. A model with context on demand then frees its
 context and makes a new one at the next request.
 
-**Not compiled here; its test is on the card** (München's, on the
-operator's word there), an engine built with the patch:
+**Compiled here, never run; its test is on the card** (compiled 2026-11-24
+with Intel's compiler, oneAPI 2025.3.3, installed in the cloud session: the
+engine's SYCL backend builds and links with it. The test is München's, on
+the operator's word there), an engine built with the patch:
 1. fill the device — the test copies of this morning's runs, the card at
    its last MiB (the driver's count);
 2. ask a model whose context is made on demand (the nemotron-embed copy)

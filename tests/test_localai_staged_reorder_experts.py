@@ -2,7 +2,7 @@
 staged/0012-…): one comparison on the card, nothing changed by default.
 
 docs/notes/backend-qualification-2026-11-21.md §3, "THE EIGHT ROWS". The
-patch cannot be compiled where it is written, so what is held here is its
+patch compiles where it is written (2026-11-24) and cannot run there, so what is held here is its
 shape — the default is today's behaviour, one place is guarded — and that
 the experiment it replaces is gone from `staged/` with its verdict
 written."""
