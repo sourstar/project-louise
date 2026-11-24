@@ -228,3 +228,22 @@ def test_the_lookup_by_a_second_id_is_an_index_search(store):
         plan = " ".join(r[3] for r in store.con.execute(
             f"EXPLAIN QUERY PLAN SELECT * FROM atto WHERE {col}=?", ("x",)))
         assert f"USING INDEX idx_atto_{col}" in plan, plan
+
+
+def test_the_acts_index_holds_only_what_the_resolver_reads(store):
+    """2026-11-24 (fts_child_memory.py on the node): every parse child built
+    this index from every `atto` row whole — title, ELI, AKN path,
+    publication — ~390 MB in each of twelve, the worker's 24 GB crossed. The
+    index holds the three fields resolve reads, asks the store for the six
+    columns it needs, and resolves as before."""
+    from app.refs import normattiva as nm
+    nm.invalidate_cache()
+    index = nm._acts_index(store)
+    kept = [r for rows in index.values() for r in rows]
+    assert kept and all(set(r) == set(nm._ACT_KEPT) for r in kept)
+    got = nm.CitationResolver().resolve("ai sensi della legge 31 ottobre 2003, n. 306", store)
+    assert [e.entity_id for e in got] == ["urn:nir:stato:legge:2003-10-31;306"]
+    assert got[0].label.startswith("LEGGE 31 ottobre 2003, n. 306")
+    with pytest.raises(ValueError, match="no column"):
+        store.rows("atto", columns=("urn", "nope"))
+    nm.invalidate_cache()
