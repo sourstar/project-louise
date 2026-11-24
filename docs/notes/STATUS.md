@@ -23,8 +23,10 @@ measured (published figures disagree).
 - **More models than the card holds: parking — DESIGNED, nothing built** (operator: "it is a matter of
   allowing use cases that today we couldn't afford"; "Both engines"). A model parked in host RAM and put
   back on the card by a copy, after Clockwork (OSDI 2020): the mechanism in the engine, the lifecycle and
-  two calls in LocalAI, the foresight in RAGE. Four measurements come first (a cold load's split, the
-  copy's rate, the card's busy share with two encoders, the host RAM in the busy hours). The note:
+  two calls in LocalAI, the question's plan in Louise (`question_card`). The scenario is SERVING on a node
+  that ingests nothing (operator, the same day): a cold question's first word took 42.4 s against 14.3 s
+  warm (11-09), and the aim is that it costs the same. Measurements come first (a cold load's split, the
+  copy's rate, a parked process's floor on the card, a question's timeline cold and warm). The note:
   [models-beyond-the-card.md](models-beyond-the-card.md).
 
 ### 2026-11-23
