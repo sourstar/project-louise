@@ -190,6 +190,14 @@ moves models for a question, with today's loads and unloads. RAGE's claim
 - The page knows the collections chosen before Ask is pressed: preparing
   their encoders then is a later refinement, measured first.
 - Louise uses the two calls and nothing else (invariant 7).
+- BUILT ON TODAY'S LOADS (2026-11-24, operator: "I want the preemptive
+  model load to be implemented"): `question_card.load_ahead` is this plan
+  with the warm request in place of "prepare". Every model the question
+  meets is loaded ahead, in the order of use, four at a time, each only
+  into room measured on the card; the room is made first from the models
+  the question does not use, never from one it uses
+  (ask-card-workflow.md, "Ahead of the stage"). With step 2 the same plan
+  calls "prepare", and a load becomes a copy.
 - No corpus schedule changes. Planned turns between corpus encoders are
   out of this note's scope.
 
@@ -483,7 +491,8 @@ every time was high; the "0.3 to 0.7 GiB a parked model" was wrong.
 | 0. the four measurements | München | the numbers are in this note; go or no go |
 | 1. the engine parks one encoder (bge-m3, 621 MiB) | Tensor | N park cycles give the same bytes; timed apart: the park, the un-park (allocate, copy, reorder), the first request after; the parked process's floor on the card read |
 | 2. LocalAI's parked state, its two calls, the RAM budget; the wrapper; the health-check poll at ~50 ms (operator, 2026-11-24) | Tensor, then upstream | a parked model answers after an un-park; the gates pass on the build |
-| 3. the question's plan on the two calls (`question_card`) | architecture | a cold question's first word within a second or two of the warm one's, measured on the node |
+| 3a. the question's plan on today's loads (`question_card.load_ahead`) | architecture | BUILT 2026-11-24; a cold question's timeline before and after, measured on the node |
+| 3b. the same plan on the two calls | architecture | a cold question's first word within a second or two of the warm one's, measured on the node |
 
 WHAT STEP 0 SAYS (§5.2, the unloaded node): a cold load is 4.3 to 6.6 s,
 and almost none of it is the copy. 2.0 s are LocalAI's wait, 1.5 to 3.5 s

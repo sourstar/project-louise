@@ -565,8 +565,8 @@ def warm_behind(collection, recipe: "collections_mod.EmbedRecipe | None" = None)
     return model_load.warm_behind(recipe.url, recipe.model, standing_aside, caller=_warm_caller())
 
 
-def warm_side(collection, *, query: bool,
-              recipe: "collections_mod.EmbedRecipe | None" = None) -> float | None:
+def warm_side(collection, *, query: bool, recipe: "collections_mod.EmbedRecipe | None" = None,
+              caller: str | None = None) -> float | None:
     """Load one side's model — the document encoder, or the query encoder
     a search asks (`_side`) — when its runner says it is not loaded: the
     resident keeper's preload (app/resident.py; operator, 2026-11-08: "If
@@ -586,9 +586,9 @@ def warm_side(collection, *, query: bool,
     def standing_aside(bound_s: float):
         dispatch.stand_aside(side.url, bound_s)
         return warm(bound_s)
+    who = caller or f"resident {'query ' if query else ''}encoder"
     return model_load.ensure_loaded(side.url, side.model, standing_aside,
-                                    caller=f"resident {'query ' if query else ''}encoder "
-                                           f"({getattr(collection, 'name', '?')})")
+                                    caller=f"{who} ({getattr(collection, 'name', '?')})")
 
 
 def _request_vouched(batch: list[Item], timeout: float,
