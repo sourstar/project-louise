@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 STAGED = ROOT / "deploy" / "localai" / "patches" / "staged"
 OMNIVOICE = STAGED / "0009-llama-cpp-omnivoice.patch"
 VOICE_MODES = STAGED / "0010-llama-cpp-tts-voice-modes.patch"
+PROFILE_OPT_IN = STAGED / "0011-config-voice-cloning-opt-in-unknown-backend.patch"
+ACTIONS = (ROOT / "docs" / "notes" / "localai-bugs.md").read_text(encoding="utf-8")
 NOTE = (ROOT / "docs" / "notes" / "omnivoice-on-our-backend.md").read_text(encoding="utf-8")
 GATE_TOOL = (ROOT / "tools" / "measure" / "omnivoice_port_gate.py").read_text(encoding="utf-8")
 HOOKS = (ROOT / "tools" / "measure" / "omnivoice_reference_hooks.patch").read_text(encoding="utf-8")
@@ -43,7 +45,7 @@ def _pipeline() -> str:
 def test_the_staged_patches_are_mails_under_localai_s_policy():
     """As the series' patches (tests/test_localai_patches.py): `git am`
     applies them, no agent signs off, the assistance is said."""
-    for path in (OMNIVOICE, VOICE_MODES):
+    for path in (OMNIVOICE, VOICE_MODES, PROFILE_OPT_IN):
         text = path.read_text(encoding="utf-8")
         assert text.startswith("From 0000000000000000000000000000000000000000 "), path.name
         assert re.search(r"^Subject: \[PATCH\] \S", text, re.M), path.name
@@ -98,6 +100,28 @@ def test_a_request_through_localai_can_set_the_seed_the_steps_and_the_guidance()
     section = NOTE[NOTE.index("## 10. "):]
     assert """`params: {"seed": "0"}`""" in section, "the card gate's request names its seed"
     assert """`params: {"flow_steps": "16"}`""" in section, "and §11 says how 16 steps are asked for"
+
+
+def test_a_model_on_our_engine_may_be_given_a_voice_profile_by_its_own_word():
+    """localai-bugs.md B17, found on the card: LocalAI refused a saved voice
+    profile by the backend's NAME before it read the model's
+    `tts.voice_cloning`. The server patch honours the field for a backend
+    its table does not know — and for nothing else; it touches the server
+    only, so it applies with or without the two llama.cpp patches."""
+    patch = PROFILE_OPT_IN.read_text(encoding="utf-8")
+    touched = set(re.findall(r"^diff --git a/(\S+)", patch, re.M))
+    assert touched == {"core/config/backend_capabilities.go", "core/config/backend_capabilities_test.go"}
+    added = "\n".join(_added(patch))
+    assert re.search(r"if capability == nil \{\s+if cfg\.Backend != \"\" && cfg\.VoiceCloning != nil && "
+                     r"\*cfg\.VoiceCloning \{\s+return referenceVoiceCloning\(\)", added)
+    for case in ("is refused without the model's word, as before", "stays refused on an explicit false",
+                 "does not open a known backend that cannot clone"):
+        assert case in added, f"LocalAI's test file holds: {case}"
+    # the operator's list of what is owed upstream names the defect and its fix, with the file
+    assert "| B17 | defect |" in ACTIONS and "### B17. " in ACTIONS
+    row = re.search(r"^\| \*\*P13 \(staged\)\*\* \|.*$", ACTIONS, re.M)
+    assert row and PROFILE_OPT_IN.name in row.group(0) and "to file upstream" in row.group(0)
+    assert "### P13 (staged). " in ACTIONS
 
 
 def test_the_reference_s_hooks_are_the_ones_the_gate_tool_names():

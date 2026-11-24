@@ -642,6 +642,19 @@ Recommendation: the first, once München says whether the node already runs
 a LocalAI server of its own build (asked). If the operator says nothing:
 the port stays a test model and speech stays as it is.
 
+**Decided the same hour.** München: the node's server IS built from our
+series (`/local-ai --version` reads `v5.0.1-1-g105104c32`, and `GET /system`
+lists load options: P1 is live). The operator, to München: "Patch LocalAI
+and add the improvement to the list of the fixes I have at some point
+send". Staged as `0011-config-voice-cloning-opt-in-unknown-backend.patch`
+(localai-bugs.md P13): 17 lines in `VoiceCloningForModel`, LocalAI's own
+`core/config` tests passing with six new cases, applying on v5.0.1 + P1 as
+on the whole series. On the node it is a server rebuild and a restart of
+LocalAI (every model unloads) — München's, in a quiet moment, then: the
+test model with `tts.voice_cloning: true` answers a profile request with
+audio, the live speech model still does, a llama.cpp chat model still
+refuses.
+
 **Still to come from the same window:** the recorded-voice rows on both
 backends, today's backend's own-voice rows, the words check of every clip,
 the rest of the port's lines.
