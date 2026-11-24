@@ -130,11 +130,15 @@ def no_runner_says_what_it_holds(monkeypatch):
     test runs as against a runner that cannot say — exactly the behaviour
     before the warm existed — unless it fakes a runner itself
     (tests/test_model_load.py)."""
-    from app import model_load
+    from app import model_load, resident
     model_load.reset()
+    # what the keeper noted of a model at rest comes from those readings, and
+    # is per process too: one test's must not be the next one's weights
+    resident._rested.clear()
     monkeypatch.setattr(model_load, "_fetch_system", lambda server: None)
     yield
     model_load.reset()
+    resident._rested.clear()
 
 
 @pytest.fixture(autouse=True)

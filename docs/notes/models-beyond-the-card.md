@@ -517,12 +517,11 @@ Existing tools, and why they are not the answer by themselves:
   host RAM beyond its weights, and on the card (319 MiB each, §5.2), and
   whether several models could share one process's device context, which is
   not LocalAI's shape today.
-- The keeper learns an on-demand model's weights as the fewest reading
-  over 0.3 of its largest, and keeps it for ever: a reading taken mid-load
-  or partly paged is remembered as the weights. Nemotron: 2,229 MiB
-  counted, 2,513 held at rest (§5.2). Its weights and its context still sum
-  to its largest, so the total holds. Being fixed in app/resident.py: learnt
-  only from a process at rest, and replaced at the next such reading.
+- (Fixed 2026-11-24.) The keeper learnt an on-demand model's weights as the
+  fewest reading over 0.3 of its largest, kept for ever: nemotron 2,229 MiB
+  counted, 2,513 held at rest (§5.2). They are now what its process holds
+  at rest, the latest time it was seen so (shared-context.md, "the two
+  budgets").
 - For a quantized model, what parking keeps (§3.1): the card's bytes copied
   back, or the file read again with every tensor's flag cleared.
 - The chat model's prompt cache across a park.
