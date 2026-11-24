@@ -81,7 +81,11 @@ busy; one question then paid two chat cold starts of 11–15 s, and the
 back-off backed off the chat itself. So the set is fitted to a budget
 first, which the system decides (RULE 2: no list typed):
 
-    budget = threshold × total − max(the working margin, the reserve) − the eviction penalty
+    budget = threshold × total − the growth measured − the shared context budget − the eviction penalty
+
+  TWO BUDGETS (operator, 2026-11-24): this one is for WEIGHTS, and the shared
+  context budget is kept beside it (`shared_context`, CONTEXTS_AT_ONCE): a
+  model loaded with `context_on_demand` counts here at its weights alone.
 
   and the set is counted AT REST: each model at the bytes its load left it
   holding, before a request grows its buffers.
@@ -284,6 +288,23 @@ DEFAULT_MARGIN = 3072 * MIB
 #: second, 3,262 MiB (docs/notes/shared-context.md §2, the card record of
 #: 2026-11-10/11); a margin measured above it counts instead
 CONTEXT_RESERVE = 3262 * MIB
+#: TWO BUDGETS (operator, 2026-11-24: "I meant separate 'models and weights'
+#: from the context, because we use a 'shared' context and it has to be
+#: considered in a separated budget"). A model loaded with `context_on_demand`
+#: makes its context per request and gives it back: the card's free memory is
+#: the pool every such model draws on. So such a model counts in the WEIGHTS
+#: budget at its weights alone, and the SHARED CONTEXT BUDGET is kept free
+#: beside it: the contexts of the CONTEXTS_AT_ONCE largest such models of the
+#: set, never less than CONTEXT_RESERVE. Two at once: the card record of
+#: 2026-11-10/11 had two corpus encoders running in the same second 21.7 % of
+#: the day and three or more 0.16 % (docs/notes/shared-context.md §2)
+CONTEXTS_AT_ONCE = 2
+#: an on-demand model idles at its WEIGHTS: 0.48, 0.57 and 0.47 of its running
+#: size on the three measured (qwen3-embedding-4b 2,737 of 5,685 MiB,
+#: nemotron-3-embed-1b 2,512 of 4,404, bge-m3 621 of 1,335; München, 11-12 and
+#: 11-23), under REST_FLOOR by design. A reading under this share of the
+#: largest is a model partly off the card, not its weights
+ON_DEMAND_REST_FLOOR = 0.3
 #: the eviction penalty halves after each this long without another eviction
 PENALTY_HALVING_S = 2 * 3600.0
 #: A READING BELOW THIS SHARE OF THE MODEL'S LARGEST IS NOT "AT REST" — the
@@ -793,28 +814,59 @@ def _rest_size(r: Resident, mem: Memory) -> int | None:
     if r.key in mem.elsewhere:
         return 0
     if model_load.context_on_demand(r.server, r.model):
-        # A model loaded with `context_on_demand` holds its weights and creates
-        # its context per request (docs/notes/idle-context-brief.md §1.3): its
-        # FEWEST bytes are the weights alone, which is no size it can work at.
-        # It counts at its running size, so what it gives back while idle is
-        # HEADROOM on the card and never budget for another preload — that
-        # memory is spoken for the moment the model's next request arrives.
-        # NEVER SEEN WORKING (the review of 2026-11-12): its largest reading is
-        # then its weights alone, ~2 GB short of what its first request
-        # creates; it counts as a model never seen — at the set's median —
-        # until a reading shows it working.
-        least = model_load.least_vram(r.server, r.model)
-        if largest is not None and least and largest <= least * (1 + ON_DEMAND_RUNNING_GROWTH):
-            return None
-        return largest
+        # A model loaded with `context_on_demand` holds its weights and makes
+        # its context per request (docs/notes/idle-context-brief.md §1.3). IT
+        # COUNTS AT ITS WEIGHTS (operator, 2026-11-24, the two budgets above):
+        # its context is the shared context budget's, kept free beside the
+        # weights budget (`shared_context`), so the memory its next request
+        # takes is spoken for there and never handed to another preload.
+        # Until 2026-11-24 it counted at its running size (the review of
+        # 2026-11-12): the three on the node were counted 5,554 MiB above what
+        # they held, and that many MiB of weights stayed off the card.
+        got = [v for v in (mem.rest.get(r.key), model_load.rest_vram(r.server, r.model),
+                           model_load.least_vram(r.server, r.model))
+               if _whole(v, largest, ON_DEMAND_REST_FLOOR)]
+        return min(got) if got else largest
     got = [v for v in (mem.rest.get(r.key), model_load.rest_vram(r.server, r.model)) if _whole(v, largest)]
     return min(got) if got else largest
 
 
-def _whole(rest: int | None, largest: int | None) -> bool:
-    """A reading the model gave WHOLE on the card: at least REST_FLOOR of
-    the most it was seen holding (none known: taken as it is)."""
-    return bool(rest) and (not largest or rest >= REST_FLOOR * largest)
+def _whole(rest: int | None, largest: int | None, floor: float = REST_FLOOR) -> bool:
+    """A reading the model gave WHOLE on the card: at least `floor` (REST_FLOOR;
+    ON_DEMAND_REST_FLOOR for a model that idles at its weights) of the most
+    it was seen holding (none known: taken as it is)."""
+    return bool(rest) and (not largest or rest >= floor * largest)
+
+
+def _rest_floor(server: str, model: str) -> float:
+    from app import model_load
+    return ON_DEMAND_REST_FLOOR if model_load.context_on_demand(server, model) else REST_FLOOR
+
+
+def _context_size(r: Resident, mem: Memory) -> int | None:
+    """The context an on-demand model makes per request and gives back: the
+    most it was seen holding less its weights. None for a model that keeps
+    its context (it is in its own sizes), one on another card, and one never
+    seen with its context — LocalAI's `size_vram` shows an on-demand model's
+    weights alone (the node, 2026-11-23: bge-m3 651 MB idle and working), so
+    only a reading from before the option, kept in the file, tells it."""
+    from app import model_load
+    if r.key in mem.elsewhere or not model_load.context_on_demand(r.server, r.model):
+        return None
+    largest, weights = _size(r, mem), _rest_size(r, mem)
+    if not largest or not weights or largest <= weights * (1 + ON_DEMAND_RUNNING_GROWTH):
+        return None
+    return largest - weights
+
+
+def shared_context(want: Iterable[Resident], mem: Memory,
+                   floor: int = CONTEXT_RESERVE) -> tuple[int, tuple[tuple[str, int], ...]]:
+    """THE SHARED CONTEXT BUDGET for the set, and the contexts it is made of:
+    the CONTEXTS_AT_ONCE largest known contexts of its on-demand models,
+    never less than `floor` (CONTEXT_RESERVE: a context never seen is held by
+    it — the largest seen so far is 2,948 MiB)."""
+    known = sorted(((c, r.model) for r in want if (c := _context_size(r, mem))), reverse=True)[:CONTEXTS_AT_ONCE]
+    return max(int(floor), sum(c for c, _ in known)), tuple((m, c) for c, m in known)
 
 
 def _last_used() -> dict[tuple[str, str], float]:
@@ -853,13 +905,16 @@ class Plan:
     measured: bool
     median: int | None
     penalty: int = 0
+    #: the shared context budget (`shared_context`), and the contexts it is made of
     reserve: int = 0
+    contexts: tuple[tuple[str, int], ...] = ()
 
     @property
     def kept(self) -> int:
-        """What the budget keeps free under the line for working memory: the
-        margin, never less than the reserve."""
-        return max(self.margin, self.reserve)
+        """What is kept under the line beside the weights: the growth measured
+        (the margin: what the models that keep their buffers grew by, and
+        anything else on the card) AND the shared context budget."""
+        return self.margin + self.reserve
 
     @property
     def budget(self) -> int | None:
@@ -876,11 +931,17 @@ class Plan:
                "the default: nothing measured in the last "
                f"{MARGIN_WINDOW_S / 3600:.0f} h")
         pen = f" − {self.penalty // MIB:,} MiB for evictions" if self.penalty else ""
-        kept = (f"margin {self.margin // MIB:,} MiB, {how}" if self.margin >= self.reserve else
-                f"the working memory's reserve {self.reserve // MIB:,} MiB (the margin, "
-                f"{self.margin // MIB:,} MiB {how}, is under it)")
-        return (f"the budget is {max(0, self.budget) // MIB:,} MiB (the {self.threshold:.2f} line "
-                f"{self.line // MIB:,} MiB − {kept}{pen})")
+        return (f"the budget is {max(0, self.budget) // MIB:,} MiB for weights (the {self.threshold:.2f} "
+                f"line {self.line // MIB:,} MiB − growth {self.margin // MIB:,} MiB, {how} − the shared "
+                f"context budget {self.reserve // MIB:,} MiB, {self.context_says()}{pen})")
+
+    def context_says(self) -> str:
+        """What the shared context budget is made of, in words."""
+        made = sum(c for _, c in self.contexts)
+        if self.contexts and made >= self.reserve:
+            return " + ".join(f"{m} {c // MIB:,}" for m, c in self.contexts)
+        return ("its floor" + (f" (the contexts known, {made // MIB:,} MiB, are under it)" if self.contexts
+                               else ": no on-demand context is known"))
 
 
 def _ago(seconds: float) -> str:
@@ -914,15 +975,15 @@ def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
     ranked = sorted(want, key=order)
     margin, measured = mem.margin(now)
     penalty = mem.penalty_now(now) + int(reserved)
-    keep = CONTEXT_RESERVE if reserve is None else int(reserve)
+    keep, contexts = shared_context(want, mem, CONTEXT_RESERVE if reserve is None else int(reserve))
     line = None if not mem.total else int(threshold * mem.total)
-    budget = None if line is None else line - max(margin, keep) - penalty
+    budget = None if line is None else line - margin - keep - penalty
     uses: dict[int, list[float]] = {}
     for r in ranked:
         if used.get(r.key) is not None:
             uses.setdefault(tier_of(r)[0], []).append(used[r.key])
     taken, placed = 0, []
-    head = Plan((), line, threshold, margin, measured, median, penalty, keep)
+    head = Plan((), line, threshold, margin, measured, median, penalty, keep, contexts)
     for rank, r in enumerate(ranked, 1):
         tier, size, need, t = tier_of(r)[0], sizes[r.key], counted[r.key], used.get(r.key)
         seen = ("on another card: costs this one nothing" if r.key in mem.elsewhere else
@@ -949,7 +1010,7 @@ def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
                       + " — loaded at its first request, then left to the reclaimer's LRU")
             fits, why = False, f"not preloaded — {head.says()}; {detail}"
         placed.append(Placed(r, rank, tier, size, _size(r, mem), need, t, fits, why, detail))
-    return Plan(tuple(placed), line, threshold, margin, measured, median, penalty, keep)
+    return Plan(tuple(placed), line, threshold, margin, measured, median, penalty, keep, contexts)
 
 
 def _plan_now(want: Iterable[Resident], mem: Memory | None = None) -> Plan:
@@ -986,10 +1047,12 @@ def unreserve(key: tuple[str, str]) -> None:
 
 def _held_now(servers: Iterable[str], mem: Memory) -> dict[tuple, int] | None:
     """Every model the set's runners hold, {(model, pid) or (server, model):
-    its bytes AT REST} — the fewest of this reading, this process's and the
-    file's — read fresh; None when one cannot say or gives no sizes."""
+    (its bytes AT REST, its bytes in this reading, the context it makes on
+    demand — 0 for one that keeps its own, or whose context was never seen)}
+    — at rest: the fewest of this reading, this process's and the file's —
+    read fresh; None when one cannot say or gives no sizes."""
     from app import model_load
-    out: dict[tuple, int] = {}
+    out: dict[tuple, tuple[int, int, int]] = {}
     for s in sorted(set(servers)):
         got = model_load.held_sizes(s, max_age_s=0.0)
         if got is None:
@@ -997,16 +1060,17 @@ def _held_now(servers: Iterable[str], mem: Memory) -> dict[tuple, int] | None:
         for m, (pid, size) in got.items():
             k = (m, pid) if pid is not None else (s, m)
             largest = max([size] + [v for v in (mem.sizes.get((s, m)), model_load.size_vram(s, m)) if v])
-            whole = [v for v in (size, mem.rest.get((s, m)), model_load.rest_vram(s, m)) if _whole(v, largest)]
+            # an on-demand model at its weights, as `_rest_size` counts it: its
+            # context is the shared budget's, taken out of the sample by the
+            # caller (`_remember`), never counted in the model and in the margin
+            floor = _rest_floor(s, m)
+            whole = [v for v in (size, mem.rest.get((s, m)), model_load.rest_vram(s, m))
+                     if _whole(v, largest, floor)]
             # a model partly off the card counts whole: what it will hold again once used
             rest = (min(whole) if whole else largest) if size else 0
-            if size and model_load.context_on_demand(s, m):
-                # as `_rest_size` counts it: at its running size. Counted at its
-                # idle size here, its context would be the margin's "growth"
-                # each time it works — and the budget would pay for it twice,
-                # once in the model's size and once in the margin
-                rest = largest
-            out[k] = max(rest, out.get(k, 0))
+            context = (_context_size(Resident(s, m, (), ()), mem) or 0) if size else 0
+            was = out.get(k, (0, 0, 0))
+            out[k] = (max(rest, was[0]), max(int(size or 0), was[1]), max(context, was[2]))
     return out
 
 
@@ -1052,9 +1116,22 @@ def _remember(want: list[Resident]) -> Memory:
         if before is not None and after is not None and card is not None:
             held = dict(before)
             for k, v in after.items():
-                held[k] = max(v, held.get(k, 0))
+                was = held.get(k, (0, 0, 0))
+                held[k] = (max(v[0], was[0]), max(v[1], was[1]), max(v[2], was[2]))
             # a model on another card: its bytes are not in this card's count
-            sample = max(0, card[1] - sum(v for k, v in held.items() if k[1] not in there))
+            mine = [v for k, v in held.items() if k[1] not in there]
+            at_rest, read_now = sum(v[0] for v in mine), sum(v[1] for v in mine)
+            # WHAT THE CARD HOLDS BEYOND LOCALAI'S OWN COUNT OF ITS MODELS is
+            # taken for the contexts the loaded on-demand models have live at
+            # this sample — as far as CONTEXTS_AT_ONCE of them can make —
+            # and stays out of the growth: LocalAI counts such a model at its
+            # weights, working or not (the node, 2026-11-23), and its context
+            # has the shared budget apart, so counted here too a working
+            # encoder's context would be kept twice. Anything past that is
+            # growth, as before (a load in flight, a program outside LocalAI)
+            beyond = max(0, card[1] - read_now)
+            live = sum(sorted((v[2] for v in mine), reverse=True)[:CONTEXTS_AT_ONCE])
+            sample = max(0, card[1] - at_rest - min(beyond, live))
         if card is not None:
             moved = _where(servers, here, there)
     now = _wall()
@@ -1071,15 +1148,19 @@ def _remember(want: list[Resident]) -> Memory:
             v = _size(r, mem)
             if v is not None and v > mem.sizes.get(r.key, -1):
                 mem.sizes[r.key] = v
-        for k in [k for k, v in mem.rest.items() if not _whole(v, mem.sizes.get(k))]:
+        for k in [k for k, v in mem.rest.items() if not _whole(v, mem.sizes.get(k), _rest_floor(*k))]:
             del mem.rest[k]                            # read while partly off the card: not at rest
         for r in want:
             if r.key in mem.elsewhere:
                 continue
             largest = mem.sizes.get(r.key)
-            v = model_load.rest_vram(r.server, r.model)
-            if _whole(v, largest) and v < mem.rest.get(r.key, v + 1):
-                mem.rest[r.key] = v
+            floor = _rest_floor(r.server, r.model)
+            # an on-demand model's weights are its fewest reading of all (kept
+            # in the file too: a restart counts it at its weights at once)
+            for v in (model_load.rest_vram(r.server, r.model),
+                      model_load.least_vram(r.server, r.model) if floor != REST_FLOOR else None):
+                if _whole(v, largest, floor) and v < mem.rest.get(r.key, v + 1):
+                    mem.rest[r.key] = v
         if card is not None and card[0] != mem.total:
             mem.total = card[0]
         if sample is not None:
@@ -1514,11 +1595,11 @@ def show() -> dict[str, Any]:
                               if p.measured else
                               f"the default {DEFAULT_MARGIN // MIB:,} MiB: nothing measured in the last "
                               f"{MARGIN_WINDOW_S / 3600:.0f} h"),
-                   "reserve_mib": p.reserve // MIB,
-                   "reserve": (f"{p.reserve // MIB:,} MiB kept for working memory whatever the margin "
-                               f"(operator, 2026-11-23, B); "
-                               + ("the margin is above it and counts" if p.margin >= p.reserve else
-                                  "it counts, the margin being under it")),
+                   "context_budget_mib": p.reserve // MIB,
+                   "context_budget": (f"{p.reserve // MIB:,} MiB kept beside the weights for the shared "
+                                      f"context the on-demand models draw on (operator, 2026-11-24): "
+                                      f"{p.context_says()}; never under {CONTEXT_RESERVE // MIB:,} MiB"),
+                   "contexts_mib": {m: c // MIB for m, c in p.contexts},
                    "penalty_mib": p.penalty // MIB,
                    "penalty": (f"{p.penalty // MIB:,} MiB for the reclaimer's evictions of preloaded models, "
                                f"the last at "

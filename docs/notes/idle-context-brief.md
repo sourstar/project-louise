@@ -303,7 +303,11 @@ them.
   `REST_FLOOR` takes the idle one for a model partly off the card. First
   deployment: the released memory is HEADROOM, not budget — the keeper
   counts an opted-in model at its running size, by rule (it reads the
-  option from `/system`, P1), with its test. Making the dispatcher admit
+  option from `/system`, P1), with its test. *Changed 2026-11-24 (operator:
+  the weights and the shared context are two budgets): an opted-in model
+  counts at its weights, and its context is the shared context budget's,
+  kept free beside the weights (shared-context.md, "the two budgets").*
+  Making the dispatcher admit
   contexts against the card is a change to WHAT RUNS WHEN:
   docs/notes/scheduling.md §6 binds it.
 
