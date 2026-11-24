@@ -39,11 +39,17 @@ work is done. The node at 13:05Z (the live files and the keeper's file):
 | OpenVINO, torch, omnivoice-cpp, the iGPU's models | not llama.cpp | dar-legal-it 5,187 | — | torch's own: what dar-legal-it keeps of a corpus pass (1.8 GB on 11-09) |
 | the OmniVoice port | refused by the patch (a model with a second model file) | — | — | nothing: its decoding context is already made per request |
 
-**What it gives.** Counted today and not held: 5,685 − 2,737 + 4,404 −
+**What it gives.** Counted at 13:05Z and not held: 5,685 − 2,737 + 4,404 −
 2,512 + 1,335 − 621 = **5,554 MiB** (M, on three dates) — the keeper's
-budget (26,990 MiB, 23,457 taken at 13:05Z) believes the three embedders
-hold their contexts. The correction is the keeper's rule, the architecture
-session's. With the others opted in: about 3 GiB more (E). At work the set
+budget (26,990 MiB, 23,457 taken) believed the three embedders held their
+contexts. **Settled the same afternoon** (the operator, to the
+architecture session: "I meant separate 'models and weights' from the
+context, because we use a 'shared' context and it has to be considered in
+a separated budget"; cdeea12, on main as #847): the keeper has TWO budgets
+— the weights, each on-demand model counted at what it holds idle (2,737 /
+2,512 / 621 MiB), and beside them one shared context budget of 4,840 MiB,
+the two largest contexts (2,948 + 1,892). Deployed on the operator's word
+to München. With the others opted in: about 3 GiB more (E). At work the set
 adds what runs in the same second — 3,262 MiB at most, 2,221 at p95 (M, 24
 h of the card's record, shared-context.md §2), which is the keeper's
 working-memory reserve.

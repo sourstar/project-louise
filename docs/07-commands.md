@@ -412,9 +412,10 @@ louise node
   pins                                                                 the models Louise holds pinned in LocalAI now, with their holders, the restores left failing and the pin failures (state/model-pins.json); read-only (added 2026-11-09)
   resident show                                                        the models the worker preloads on the card for Ask (a trial): `[models] keep_ask_resident`
                                                                        and `preload_speech` (§7.8), the node's mode and whether it preloads, the budget (the line,
-                                                                       the working margin — measured over 6 h, or the 3.0 GiB default — never less than the working
-                                                                       memory's reserve, 3,262 MiB (2026-11-23), the eviction penalty, and
-                                                                       what is left), each model in priority order with its rank, tier, roles, collections, loaded
+                                                                       the growth measured over 6 h, or the 3.0 GiB default, the shared context budget — the two
+                                                                       largest contexts of the set's on-demand models, never under 3,262 MiB, kept beside the
+                                                                       weights; operator, 2026-11-24 — the eviction penalty, and what is left for weights; a model
+                                                                       loaded with context_on_demand counts at its weights), each model in priority order with its rank, tier, roles, collections, loaded
                                                                        state, at-rest and largest size, in the budget or not and why, last use, and pin holders
                                                                        (an embed batch's, the operator's; never the preload's); and how a load that does not fit
                                                                        gets its room (`[models] make_room`, §7.8: in "page" the host's available memory against
