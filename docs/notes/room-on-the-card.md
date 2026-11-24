@@ -98,6 +98,8 @@ What the rule is careful about, each from a measurement or a review:
 
 **On the node, before the setting is turned on** (München's, on the
 operator's word there; nothing here does it):
+0. the engine's refusal fix (§4) in the live engine — the architecture
+   session's condition: until then a full card can kill a live request;
 1. this code deployed — inert while the file says nothing;
 2. in every llama.cpp model's file `GGML_SYCL_BMG_VRAM_CHECK=0` and
    `GGML_SYCL_HOST_PINNED_MEM_2G=1` (S5's two switches; the second so that
@@ -112,10 +114,43 @@ operator's word there; nothing here does it):
    for 30 minutes, the card over its size, no abort and no kernel line.
 
 **What would let the bound rise:** a row on the node with the largest
-on-demand context created on a card committed further over; and an engine
-that REFUSES a context it cannot reserve instead of dying — the design of
-context on demand says "refused, never an abort" (idle-context-brief.md
-§1.2), the pool underneath aborts.
+on-demand context created on a card committed further over.
+
+## 4. The engine must refuse, not die — a defect of the live engine
+
+*The architecture session, 2026-11-24, on the death München saw: "a defect
+of the live engine, against idle-context-brief.md §1.2's own contract:
+'refused, never an abort'. Page mode only makes it likely; any full card
+can reach it … Until that fix is in, page mode should not be switched on."*
+
+Where it dies: ggml-sycl's pool commits device memory for the ops'
+temporaries WHILE A GRAPH RUNS, under `SYCL_CHECK`
+(`ggml_sycl_pool_vmm::alloc`, `phys.emplace`): a refusal aborts the
+process. A model's own buffers fail softly — it is this one path. The fix
+is staged, `staged/0013-llama-cpp-sycl-pool-refusal.patch` (localai-bugs.md
+B18 / P14): the pool throws, the graph fails with
+`GGML_STATUS_ALLOC_FAILED`, llama.cpp's decode returns -2, its server
+answers that request "Compute error." and goes on; Louise reads any 5xx
+from an encoder as a deferral (app/embeddings.py `_endpoint_error`), never
+an error on a document. A model with context on demand then frees its
+context and makes a new one at the next request.
+
+**Not compiled here; its test is on the card** (München's, on the
+operator's word there), an engine built with the patch:
+1. fill the device — the test copies of this morning's runs, the card at
+   its last MiB (the driver's count);
+2. ask a model whose context is made on demand (the nemotron-embed copy)
+   for work, and load another beside it: each request is REFUSED (HTTP
+   5xx, "Compute error." or a load that fails with its reason), the
+   backend's log carries "the device refused … for the pool", and **the
+   backend's pid is the same afterwards**;
+3. free the card: the same model answers, with no load in between (its
+   weights never left), and its vectors are the bytes of before;
+4. the engine's own checks as for any engine (the series' tests, the
+   encoders' gates): nothing of a computation changes.
+
+Until it is in the live engine, `make_room = "page"` stays off (step 0 of
+§3's list).
 
 **Not built:** paging for the keeper's preloads (a preload beyond the card
 would only be loaded to be paged out), a rule for which model the driver
