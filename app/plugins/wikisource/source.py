@@ -39,16 +39,21 @@ spaces), sorted. The work page's Wikidata item is `extra.wikidata` and the
 key `wikidata:Q…`; its other properties are `extra.page_props` (Wikipedia's
 parser 5). An author's record takes its page's alike.
 
-A record names its pages, never bytes: `origin` is
-`<wiki>/pages-articles-multistream.xml.bz2#<work page id>` (Wikipedia's
-parser-6 form), read in the run the snapshot names; `extra.pages` lists
-every page used in reading order with its revision id and the dump's
-`sha1`; `origin_hash` is over those pages as ElementTree writes them
-(Wikipedia's `page_bytes`), then each page's rows of page_props and
-categorylinks and the linktarget rows they name, as the decompressed tables
-hold them (`frame`) — so every field the record keeps of a page is covered.
-(`origin_of`, naming the tables beside the dump in that keyed form, comes
-with records-vs-origin, design step 1, not built yet.)
+A record names its page, never bytes: `origin` is the work's (or the
+author's) page id in the run-free name of each of the four files its unit
+is read from — `<wiki>/pages-articles-multistream.xml.bz2#<page id>`, then
+the run's page_props, categorylinks and linktarget alike, joined by `|`
+(locate.py; Wikipedia's parser-6 form) — read in the run the snapshot names
+(`origin_key`, app/keyed_origin.py); `extra.pages` lists every page used in
+reading order with its revision id and the dump's `sha1`; `origin_hash` is
+over those pages as ElementTree writes them (Wikipedia's `page_bytes`), then
+each page's rows of page_props and categorylinks and the linktarget rows
+they name, as the decompressed tables hold them (`frame`) — so every field
+the record keeps of a page is covered. `records-vs-origin` resolves a
+record in that run under an origin base, fetches and parses it again, and
+compares the whole line (app/hold/check.py). A base to read is a download
+of the run: no reader of this origin by Range exists yet, nor one of a
+revision by its id once the run is gone (design note §1).
 
 Locator (this node's, in the manifest): `<dump path>::<work page id>`; the
 discovery signature covers the dump and the run's three tables.
@@ -63,11 +68,13 @@ from pathlib import Path
 
 from app import derived
 from app.backend import OriginForm, Template
+from app.keyed_origin import KeyedOrigin
 from ... import chunking
 from ..base import (CanonicalDoc, DiscoverState, DocRef, Erasure, Issue, LicenseClass, Modality, Mutability,
                     PROTOCOL_VERSION, PrivacyClass, RawDoc)
 from ..wikipedia import page_props as pp
-from . import dump as dump_mod, index as index_mod, proofread, render, tables as tables_mod, work
+from . import (dump as dump_mod, index as index_mod, locate, proofread, render, tables as tables_mod,
+               work)
 
 #: the collection's languages, their order fixed for the life of its ids
 LANGS = ("it", "en", "fr", "de", "es")
@@ -205,6 +212,14 @@ class WikisourceSource:
     PARSER_VERSION = 1
     #: 06 §6.2: every page's earlier revisions stay fetchable by revision id
     origin_versions = "history"
+    #: A RECORD'S ORIGIN NAMES ITS PAGE, resolved in the snapshot's run
+    #: (app/keyed_origin.py; locate.py). The unit — the work's subpages, the
+    #: scan pages it transcludes — is found through the works index the node
+    #: builds of the run's dump, as discovery found it: `built`
+    origin_key = KeyedOrigin(key="the record's page id (a work's page, an author's)",
+                             index="the run's multistream index, and the works index the node builds of its dump",
+                             built=True, since=1)
+    origin_names_run = False
     modality = Modality.TEXT
     erasure = Erasure.RETRACTABLE
     native_id_order = "numeric"
@@ -337,6 +352,58 @@ class WikisourceSource:
         rows = tables_mod.rows_for(tables_mod.tables_of(dump), [p.id for p in pages])
         data = frame(pages, rows)
         return RawDoc(ref=ref, raw_hash=hashlib.blake2b(data, digest_size=16).hexdigest(), data=data)
+
+    # ---- the record's origin, by page (app/keyed_origin.py; locate.py) ------------
+
+    def origin_of(self, locator: str, native_id, base) -> str:
+        """09 §9.5's `origin` for a manifest row: its page in the run-free
+        names of the dump and the run's three tables — a pure function of
+        the document's id and its locator's wiki."""
+        from app import plugin_io
+        if native_id is None:
+            raise ValueError("a wikisource origin names its page: the record's native id is needed beside "
+                             "its locator")
+        dump, page_id = split_locator(locator)
+        if plugin_io.relative_to_base(dump, Path(base)) is None:
+            raise plugin_io.OriginOutsideBase(f"{dump} is not under the origin base {base}")
+        lang, pid = decode_native_id(int(native_id))
+        wiki = dump.name.split("-")[0]
+        if pid != page_id or wiki != f"{lang}wikisource":
+            raise ValueError(f"{locator}: the locator names page {page_id} of {wiki}, the record is page "
+                             f"{pid} of {lang}wikisource")
+        return locate.origin(wiki, pid)
+
+    def local_of(self, origin: str, base, run: str | None) -> tuple[Path, str]:
+        """`origin` read back as the manifest locator discovery writes
+        (`<dump of the run>::<page id>`) under `base`: what `fetch` reads.
+        A run whose dump is here and does not hold the page is said
+        (`PageNotInRun`); one whose dump is not here is the caller's to find
+        missing."""
+        wiki, pid = locate.read(origin)
+        dump = locate.run_file(Path(base), wiki, locate.need_run(run, origin), locate.DUMP_UNIT)
+        if dump.is_file():
+            works = index_mod.Works(index_mod.ensure(dump))
+            try:
+                if works.by_id(pid) is None:
+                    raise locate.PageNotInRun(f"{origin}: run {run}'s dump does not hold page {pid}")
+            finally:
+                works.close()
+        return dump, f"{dump}::{pid}"
+
+    def origin_files(self, origin: str, base, run: str | None) -> list[Path]:
+        """The files `origin`'s unit is read from in `run`: the dump and the
+        run's three tables. No index is read (records-vs-origin's bound)."""
+        wiki, _pid = locate.read(origin)
+        run_ = locate.need_run(run, origin)
+        return [locate.run_file(Path(base), wiki, run_, unit) for unit in locate.UNITS]
+
+    def run_of_locator(self, locator: str) -> str | None:
+        return locate.run_of_locator(locator)
+
+    def carried_origin(self, origin: str, native_id, version: int) -> str | None:
+        """No parser before this one wrote a record: a line is carried only
+        from itself."""
+        return origin if int(version) == self.PARSER_VERSION else None
 
     # ---- the record ---------------------------------------------------------------
 

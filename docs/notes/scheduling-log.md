@@ -3269,3 +3269,90 @@ after a failure).
 occurs): any "[parse pool] … were in flight: parsed again in processes of
 their own" line, with the seconds to the stage's next commit, and whether a
 "did not come back from a process of its own" line names a document.
+
+**AFTER (München, live 15e84e9 since 19:43Z, the pattern's fix #858 with
+it).** EUR-Lex5.next resumed at 21:41:33Z after the evening's pass: hu
+32007L0019 and its two corrigenda indexed within the first minute
+(fts_done 1; 36, 4 and 4 chunks), no error. In that time no "[parse pool]
+TimeoutError", no "in flight" and no "did not come back" line: the fallback
+has not run on the node, as expected with the pattern fixed. The count of
+the pool's failure lines per collection over the first hour is München's to
+add.
+
+## 2026-11-24 — the text index's look-ahead walks a carried collection's rows too
+
+**SCENARIO.** EUR-Lex5.next, step 6 of its re-creation (Legal): every
+document carried, so embedded already, its metadata (rdf) and its text index
+(fts) both pending and interleaved on its pipeline thread; a slice of heavy
+acts (annexes of 7 MB of Formex a file, packages of figures). Profile night,
+12 cores; pool 11 children; FTS_OVERLAP=1, FTS_BATCH_DOCS=100. Beside it:
+wikidata's index maintainer (74 % of the index turns), legi_F, the
+collection's own startup scan walking ~970 k unit directories on the SATA
+SSD the stages read (sde, 66 % busy; Legal's fix for that walk is 38720e9a
+and goes out in the same deploy — it is not a scheduling change). Live build
+15e84e9. München, read-only.
+
+**BEFORE** (21:55:43–22:09:44Z, 841 s of wall, the worker's own lines):
+- fts 12,495 documents in 613 s of stage time (73 % of the wall), 374 s of
+  it waiting for its batch's parse; rdf 12,460 documents in 252 s (30 %).
+  About 890 documents a minute (550 in the half hour before).
+- The 21 printed fts batches: 4,804 documents / 80,618 chunks, 264 s =
+  parse 186.5 + index 76 + the rest 1; a batch 6–552 documents, parse
+  0.5–16.7 s, index 0.9–5.8 s. PARSED AHEAD: 0 of 21.
+- The slowest batch of the hour: 3 documents / 318 chunks, 49.9 s, parse
+  49.3 — sk and es of 32008R0149, 13.96 and 13.95 MB, and a 38 KB decision.
+  Alone, in a container of its own (Legal), the sk act's `fts` takes 10 s
+  (tokenizer 3.7, Formex 4.6, the manifest read 1.2, entity tagging 0.6).
+  In the 13 s before that commit five children each ended an fts part of
+  40.0–53.3 MB ("[parse pool] child N gave back …"): some 240 MB parsed for
+  a batch that wrote 28 MB. The largest fts parts of the half hour: 271.4,
+  254.3, 254.0, 253.9, 253.8 MB.
+- py-spy, 10 dumps of "pipeline-EUR-Lex5.next": 8 in `parallel.compute` ←
+  `fts_for_rows` ← `stage_fts` (worker.py:1018), 2 in `fts.index_books`. No
+  thread named fts-ahead in any.
+- The pool's children, 60 s at 1 Hz: S 637, R 71, D 12 child-seconds (88 %,
+  9 %, 1 %); CPU gained per child 0–22 s; ages 128–524 s; no line of a pool
+  thrown away, rebuilt or off, no large-lane line. Pool 5.0 of 11 slots in
+  flight over 601 s. Unit costs: fts 6.0 ms/doc, rdf 24.5 ms/doc.
+
+**The cause.** The look-ahead walked the rows not yet embedded only
+(`_FTS_NEXT … embed_done=0`; a batch holding an embedded row dropped the
+chain). A carried collection has no such row (scheduling.md, pitfall 22).
+Two costs, not one: the thread waits for its own batch's parse; and the
+peers parsed past the chunk cap are thrown away and parsed again, because
+it is the look-ahead that carries them into the next batch. A batch parses
+as many rows as the MEDIAN document would fill it with and writes up to
+the cap, which two long acts reach: 240 MB parsed, 28 MB written. (My
+first reading of that batch — both acts in one part, one after the other —
+was refuted by the pool's own lines.)
+
+**The change.** A chain walks one class of the scope index's order, not yet
+embedded or embedded (`lookahead.Chain.kind`); the batch across the two
+starts none. No new query shape (`_FTS_NEXT` takes the class as a
+parameter: the same index prefix, plan-checked for both at 1, 500 and 4,000
+rows), no new wait. `tools/sched_measure.sh` counts the batches parsed
+ahead.
+
+**What the tests give.** tests/test_fts_overlap.py, a collection of 80
+embedded rows: one parse a document and ONE parse started by the pipeline
+thread (the first batch's), against one per batch on the unfixed code.
+
+**EXPECTED, to be held against the AFTER.** The thread's own work per
+cycle (rdf 252 s + fts index and marks 239 s = 491 s of the 841) is what
+the parse can hide behind: the parse wait should fall from 374 s toward
+the excess of a straggler over that work, the wall toward 500–560 s for the
+same documents (1.5–1.7x), and the batch lines read "parsed ahead" for all
+but the first after a start and the one after a class change. The pool's
+CPU for the same documents should FALL (nothing parsed twice): each batch
+line now says "; N more parsed, carried to the next batch" or "thrown
+away", and `tools/sched_measure.sh` sums the documents thrown away — near
+0 after, unknown before (dozens a batch in the heavy stretches, by the
+pool's lines). The 1.5–1.7x is a floor if the repeated parses were a large
+share.
+
+**AFTER, to read on the node** (the same 15 minutes of lines, the same
+slice if it is still in the heavy years — say which years): `bash
+tools/sched_measure.sh 15` for the count parsed ahead and the parse seconds
+in each kind; fts and rdf stage seconds and documents; ms/doc for both; the
+children's states for 60 s; ten dumps of the pipeline thread. Believe
+ms/doc and the parse seconds, not docs/s: the slice moves.

@@ -295,7 +295,7 @@ receipt again is acknowledged, another one refused. **HTTP:** `GET
 **Bounds.** Receipts: 600 s, at most 100,000 (≈65 MB), 1,024 ids a read,
 1 MiB a line. Wrapper: the receipt acknowledged within 2 s or the call fails
 UNAVAILABLE (`VeGa unavailable`, which `client.is_deferral` reads); the
-weights hash 1,800 s; a stop's grace 12 s, the whole stop, under the 15 s after which LocalAI kills a backend it stopped; a backend LocalAI told already is left 2 s to go by itself before the wrapper signals it (2026-11-24).
+weights hash 1,800 s; a stop's grace 12 s, the whole stop, under the 15 s after which LocalAI kills a backend it stopped; a backend LocalAI told already is left 2 s to go by itself before the wrapper signals it (2026-11-24, #856 — whose own description said a wrapper change keeps every run id: wrong, the wrapper's code is in the engine's `image` since 2026-10-31, so its rollout gated every vega space again).
 
 **The run** is the model pool's identity computed by the backend's parent: `name`
 `localai/<metadata name>` (else the directory's), `variant` null. **`image`

@@ -430,7 +430,10 @@ def wrapper_head(celex: str, entries: list[os.DirEntry]) -> bytes:
     (formex.unpack). Raises FormexError where there is none of this act's."""
     paths = {e.name: e.path for e in entries}
     if any(formex.is_package(n) for n in paths):
-        held = {n: Path(p).read_bytes() for n, p in paths.items() if formex.is_package(n) or formex.is_wrapper(n)}
+        # a package by its path: its central directory, its text members and
+        # its figures' heads are read, never the whole zip (formex.unpack)
+        held = {n: (Path(p) if formex.is_package(n) else Path(p).read_bytes()) for n, p in paths.items()
+                if formex.is_package(n) or formex.is_wrapper(n)}
         view = formex.unpack(held)[0]
         return view[formex.own_wrapper(view, celex, view.__getitem__)][:_HEAD]
     own = formex.own_wrapper(paths, celex, lambda n: Path(paths[n]).read_bytes())

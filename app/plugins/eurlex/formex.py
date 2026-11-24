@@ -211,7 +211,7 @@ def is_package(name: str) -> bool:
     return bool(_PACKAGE.search(name or ""))
 
 
-def unpack(files: dict[str, bytes]) -> tuple[dict[str, bytes], dict[str, str]]:
+def unpack(files: dict[str, Any]) -> tuple[dict[str, bytes], dict[str, str]]:
     """The manifestation's files as the reader takes them: every item, and
     each package's members in its place. The package stays HELD as the
     origin served it (invariant 11: the unit is what Cellar gave, and
@@ -222,17 +222,29 @@ def unpack(files: dict[str, bytes]) -> tuple[dict[str, bytes], dict[str, str]]:
     each member's CRC-32 checked. A member that is not one plain file name,
     a package over PACKAGE_MAX, or a member whose name an item of other
     bytes already holds is refused: the reading must be one the origin's
-    bytes determine."""
+    bytes determine. A value is a file's bytes, or a package's PATH (read
+    from its file, never whole: see below)."""
     import io
+    import os
     import zipfile
-    out = Members({n: b for n, b in files.items() if not (is_package(n) and b[:4] == _ZIP_MAGIC)})
+    # A PACKAGE GIVEN AS ITS PATH (2026-11-24, step 6 of EUR-Lex5.next's
+    # restart: discovery's `wrapper_head` read every package WHOLE to date the
+    # unit, figures included — up to 815 MB a unit, the first walk past 27
+    # minutes on the SSD the stages share): the zip opened from its file, so
+    # only what is read below leaves the disk, its central directory, its text
+    # members and its figures' first bytes. The same checks, the same answers;
+    # an I/O error of the file is an OSError, as reading it whole raised.
+    magic = {n: _magic(b) for n, b in files.items() if is_package(n)}
+    out = Members({n: (b if isinstance(b, bytes) else _whole(b)) for n, b in files.items()
+                   if magic.get(n) != _ZIP_MAGIC})
     came: dict[str, str] = {}
     for name in sorted(files):
         data = files[name]
-        if not (is_package(name) and data[:4] == _ZIP_MAGIC):
+        if magic.get(name) != _ZIP_MAGIC:
             continue
+        is_path = not isinstance(data, bytes)
         try:
-            with zipfile.ZipFile(io.BytesIO(data)) as z:
+            with zipfile.ZipFile(os.fspath(data) if is_path else io.BytesIO(data)) as z:
                 infos = [i for i in z.infolist() if not i.is_dir()]
                 # WHAT IS READ is bounded, not what is held (2026-11-22, München:
                 # 27 EUR-Lex5 packages refused "over 1 GiB" were TIFF figures,
@@ -257,9 +269,26 @@ def unpack(files: dict[str, bytes]) -> tuple[dict[str, bytes], dict[str, str]]:
                     out[i.filename] = got
                     out.sizes[i.filename] = i.file_size
                     came[i.filename] = name
-        except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError) as e:
+        except (zipfile.BadZipFile, zipfile.LargeZipFile, EOFError) as e:
+            raise FormexError(f"{name}: not a readable zip: {e}") from None
+        except OSError as e:
+            if is_path:
+                raise                   # the file did not read: as its read_bytes raised
             raise FormexError(f"{name}: not a readable zip: {e}") from None
     return out, came
+
+
+def _magic(data) -> bytes:
+    """A file's first four bytes, from its bytes or its path."""
+    if isinstance(data, bytes):
+        return data[:4]
+    with open(data, "rb") as f:
+        return f.read(4)
+
+
+def _whole(path) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
 
 
 class Members(dict):

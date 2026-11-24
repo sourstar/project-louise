@@ -524,10 +524,20 @@ def _compute_bounded(kind: str, collection, rows: list[dict], allowance: int | N
 
 
 def _lane_executor() -> ProcessPoolExecutor:
-    """One process, one task, gone after it."""
-    return ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"),
-                               initializer=_child_init, initargs=(_knobs(), _base_nice()),
-                               max_tasks_per_child=1)
+    """One process, one task, gone after it.
+
+    THE POOL'S OWN CLASS (`_Executor`), since 2026-11-24. Its child retires
+    after its one task, and its executor is let go of the moment the answer
+    is read (`shutdown(wait=False)`: `_processes` is None from there). 3.12's
+    manager thread then asks the executor to replace the retired child, and
+    the standard library's `_adjust_process_count` reads `len(None)`: a
+    TypeError in the manager thread, which dies before it closes the
+    executor's queues. München, the live worker: 80 tracebacks in fifteen
+    minutes, one a large part, in a slice of packages of figures. `_Executor`
+    leaves an executor that is shut down alone, as 3.13 does."""
+    return _Executor(max_workers=1, mp_context=multiprocessing.get_context("spawn"),
+                     initializer=_child_init, initargs=(_knobs(), _base_nice()),
+                     max_tasks_per_child=1)
 
 
 class _LaneTask:
@@ -1659,9 +1669,14 @@ def _compute_heavy(kind: str, collection, rows: list[dict]) -> list[tuple[bool, 
     out = _compute(kind, collection, rows)
     got = _give_back()
     if got is not None and got[0] - got[1] >= TRIM_SAY_BYTES:
+        # the collection and the rows, since 2026-11-24: five parts of 40-53 MB
+        # ended in the 13 s before a batch of THREE documents, and the line
+        # could not say whose they were (CLAUDE.md: every log line names its
+        # collection)
         print(f"{_hms()} [parse pool] child {os.getpid()} gave back {(got[0] - got[1]) / 2 ** 20:.0f} MB after "
               f"a {kind} part of {sum(int(r.get('size') or 0) for r in rows) / 2 ** 20:.1f} MB "
-              f"({got[0] / 2 ** 30:.2f} -> {got[1] / 2 ** 30:.2f} GB resident)", file=sys.stderr, flush=True)
+              f"({len(rows)} row{'s' if len(rows) != 1 else ''} of {getattr(collection, 'name', '?')}; "
+              f"{got[0] / 2 ** 30:.2f} -> {got[1] / 2 ** 30:.2f} GB resident)", file=sys.stderr, flush=True)
     return out
 
 

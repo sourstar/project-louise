@@ -169,9 +169,12 @@ class Chain:
     commits them. It would also move the selection off the writer's thread
     (the docstring above)."""
 
-    def __init__(self, cursor: int) -> None:
+    def __init__(self, cursor: int, kind: int = 0) -> None:
         #: the highest key (a rowid) ever held: the next rows are after it
         self.cursor = cursor
+        #: what its rows have in common, in their holder's words (the text
+        #: index: the class of the scope index its rows are walked in)
+        self.kind = kind
         #: set when a link was abandoned out of the middle: the rows after it
         #: are not all held, so the chain must not be extended from its cursor
         self.broken = False

@@ -261,9 +261,13 @@ def test_a_search_frees_the_card_around_itself_and_the_page_s_activity_keeps_the
     monkeypatch.setattr(web, "_question_collections", lambda names: ["gutenberg"])
     monkeypatch.setattr(question_card, "before_search",
                         lambda cols, speed=False: steps.append(("before", cols)))
+    ahead = question_card.Ahead()
+    monkeypatch.setattr(question_card, "load_ahead",
+                        lambda cols, speed=False: steps.append(("ahead", cols, speed)) or ahead)
     monkeypatch.setattr(question_card, "after_search",
-                        lambda cols, speed=False: steps.append(("after", cols, speed)))
-    monkeypatch.setattr(web, "_ask_result", lambda body: steps.append(("search",)) or {"hits": [], "timings": {}})
+                        lambda cols, speed=False, ahead=None: steps.append(("after", cols, speed, ahead.stopped())))
+    monkeypatch.setattr(web, "_ask_result",
+                        lambda body: steps.append(("search", ahead.stopped())) or {"hits": [], "timings": {}})
     held = []
 
     @contextmanager
@@ -275,7 +279,10 @@ def test_a_search_frees_the_card_around_itself_and_the_page_s_activity_keeps_the
     r = c.post("/ask/relay", json={"kind": "search", "search": {"query": "balene", "speed": True}})
     job = relay.get(r.json()["id"], "guest:None")
     _wait(lambda: job.state == relay.DONE)
-    assert steps == [("before", ["gutenberg"]), ("search",), ("after", ["gutenberg"], True)]
+    # the question's models load AHEAD while the search runs, and stop being
+    # started when it ends (operator, 2026-11-24; question_card.load_ahead)
+    assert steps == [("before", ["gutenberg"]), ("ahead", ["gutenberg"], True), ("search", False),
+                     ("after", ["gutenberg"], True, True)]
     held.clear()
     got = c.post("/ask/active")
     assert got.status_code == 200 and got.json() == {"linger_s": 300.0} and held == [None]

@@ -190,6 +190,14 @@ moves models for a question, with today's loads and unloads. RAGE's claim
 - The page knows the collections chosen before Ask is pressed: preparing
   their encoders then is a later refinement, measured first.
 - Louise uses the two calls and nothing else (invariant 7).
+- BUILT ON TODAY'S LOADS (2026-11-24, operator: "I want the preemptive
+  model load to be implemented"): `question_card.load_ahead` is this plan
+  with the warm request in place of "prepare". Every model the question
+  meets is loaded ahead, in the order of use, four at a time, each only
+  into room measured on the card; the room is made first from the models
+  the question does not use, never from one it uses
+  (ask-card-workflow.md, "Ahead of the stage"). With step 2 the same plan
+  calls "prepare", and a load becomes a copy.
 - No corpus schedule changes. Planned turns between corpus encoders are
   out of this note's scope.
 
@@ -397,11 +405,26 @@ freed (`keep_context_ms` 0, the log's last line "context freed"), idle 8 s:
 | vega-bge-m3 | 896 MiB | 828 + 67 | 99 |
 | vega-nemotron-3-embed-1b | 2,513 MiB | 2,446 + 67 | 99 |
 
-- **A parked process holds 319 MiB of the card.** Two readings agree: the
-  process with no weights, and bge-m3's 896 less its 577 of weights. 67 of
-  it is a second DRM client every llama.cpp backend has.
-- Ten parked models are 3.2 GiB of the card's 32. With one process per model
-  THE FLOOR, not the weights, bounds how many models a node serves.
+- **A parked process holds 319 MiB of the card, 8 s after its last
+  request.** Two readings agree: the process with no weights, and bge-m3's
+  896 less its 577 of weights. 67 of it is a second DRM client every
+  llama.cpp backend has.
+- **LEFT IDLE FOR MINUTES IT HOLDS LESS: the driver moves it to system
+  memory** (München, the same evening, 19:48Z and 19:49Z, 4.7 and 5.7
+  minutes after the last request, the card at about 26 of 32 GiB): bge-m3
+  613 MiB on the card where it held 896, qwen3-embedding-4b 2,498 where it
+  held 2,727. About 215–225 MiB of the first client and the 65–67 MiB of
+  the second had left the card and showed as GTT instead (bge-m3's 99 MiB
+  of GTT became 354, qwen's 213 became 306). Moved, not freed, and brought
+  back at the next request at the driver's rate (2.4–3.4 GiB/s, §5.1).
+  LocalAI's `size_vram` is the VRAM of both clients, so it says the same.
+  So on a card under pressure the floor of an idle process tends toward its
+  weights alone, at the price of host memory: the driver already does for
+  a process's own buffers what parking would do for its weights. Whether a
+  process with no weights goes to nothing is not read yet.
+- Ten parked models are at most 3.2 GiB of the card's 32. With one process
+  per model THE FLOOR, not the weights, bounds how many models a node
+  serves; how far idle time lowers it is the reading above.
 - Nemotron's 2,513 is the figure of 11-23 (2,512). The keeper counted it at
   2,229, a partial reading remembered as its weights: §8.
 
@@ -468,7 +491,8 @@ every time was high; the "0.3 to 0.7 GiB a parked model" was wrong.
 | 0. the four measurements | München | the numbers are in this note; go or no go |
 | 1. the engine parks one encoder (bge-m3, 621 MiB) | Tensor | N park cycles give the same bytes; timed apart: the park, the un-park (allocate, copy, reorder), the first request after; the parked process's floor on the card read |
 | 2. LocalAI's parked state, its two calls, the RAM budget; the wrapper; the health-check poll at ~50 ms (operator, 2026-11-24) | Tensor, then upstream | a parked model answers after an un-park; the gates pass on the build |
-| 3. the question's plan on the two calls (`question_card`) | architecture | a cold question's first word within a second or two of the warm one's, measured on the node |
+| 3a. the question's plan on today's loads (`question_card.load_ahead`) | architecture | BUILT 2026-11-24; a cold question's timeline before and after, measured on the node |
+| 3b. the same plan on the two calls | architecture | a cold question's first word within a second or two of the warm one's, measured on the node |
 
 WHAT STEP 0 SAYS (§5.2, the unloaded node): a cold load is 4.3 to 6.6 s,
 and almost none of it is the copy. 2.0 s are LocalAI's wait, 1.5 to 3.5 s
