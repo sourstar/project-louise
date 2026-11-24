@@ -179,6 +179,22 @@ llama.cpp copies (the check refuses a load onto a full card).
 - **S4, the cliff, once and bounded.** A nemotron batch while the 35B
   answers the 2k prompt: both figures; under a quarter of the alone figure
   is the cliff, recorded, the pair stopped.
+- **S5, a partial swap (operator, 2026-11-24: "while idle, just move some GB
+  to make only the necessary room").** The driver moves whole allocations,
+  and the 35B's weights are ONE of 18.5 GiB (phase 2's refusal line:
+  "cannot allocate 18543 MiB: 0 MiB already allocated"), so as it loads
+  today it leaves the card whole or not at all. The engine has a switch that
+  splits them: `GGML_SYCL_HOST_PINNED_MEM_2G=1` caps a buffer at 2 GiB
+  (`ggml_backend_sycl_buffer_type_get_max_size`), and ggml then lays the
+  weights over about ten buffers the driver can move one by one. Upstream
+  documents it as affecting start-up time and "need more test"; its note that
+  allocations above 2 GiB "serialize host-to-device copies with compute" may
+  also bear on the 16.2 GiB/s upload rate measured in phase 4. Rows: the
+  35B with that env alone on the card — load time, the two prompts (against
+  phase 4's row 1), the number and sizes of its allocations; then S1 and S2
+  again with it: how many MiB of the 35B go to the host when a small model
+  needs room (expected: about what is needed, not 18.5 GiB), and what its
+  next answer pays to bring them back.
 - Then everything unloaded, pins and settings restored, the GTT back at its
   baseline, the live set reloaded.
 If the window is short, S1 and S2 come first: the measured swap time is the
