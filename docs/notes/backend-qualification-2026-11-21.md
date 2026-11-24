@@ -808,5 +808,21 @@ The keeper's context reserve and the reclaimer's line at 0.98 (the
 operator's B, with the architecture session) are another change: not in the
 same step, so that what the thirty minutes show belongs to one of them.
 
+**State on the node when the order arrived (München, 2026-11-24):** nothing
+started; the window and the NeuRIS choice are with the operator. The keeper
+change (reserve 3,262 MiB, reclaimer 0.98, deploy 8030ea0) is live since
+00:30Z and its watch is over (budget 28,740 MiB). Another deploy waits for
+the operator's word — architecture's 7f118736, after a worker OOM hold at
+01:46Z — and the cut-over goes AFTER it and its check: one change per
+watch. Step 4 may be moot: that night's migration put NeuRIS, legi_F and
+Normattiva on chunker v4 in ONE space (`sha256:a5630843fdc709ae…`) whose
+calibration reference was embedded at NeuRIS's derive, and on the live
+engine NeuRIS is admitted under the same validated run as the other two
+(`sha256:1f09a0e553ea2dfd…`). Whether the new engine's run still needs the
+per-model reference resolution is München's question to architecture.
+Phase 3's evidence for nemotron is the engine's (bit-identical runs, the
+live engine's bytes) and holds for the new space; its gate runs on that
+space at the cut-over like any other.
+
 **After it**: phase 5, the POC, on the adopted engine — the live set as it
 is, the 35B as the only test copy in place of the 9B — in a later window.
