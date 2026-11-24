@@ -866,7 +866,8 @@ more. Read in the engine since:
   (`llama-moe-cache.cpp`); resident, nothing counts, so a history needs
   that count added before it has anything to save.
 
-**Staged for the measurement: `staged/0012-llama-cpp-sycl-usm-by-use.patch`**
+**Written for the measurement, and deleted after it (below):
+`staged/0012-llama-cpp-sycl-usm-by-use.patch`** (edc48d6 has it)
 — `GGML_SYCL_USM_SYSTEM=2`: for a system allocation the weights are written
 from the host and the expert tensors keep the layout they were loaded in
 (the kernels take either). 21 lines in `ggml-sycl.cpp`; the value 1 is as
@@ -912,41 +913,78 @@ load; the least used given back when the keeper asks). Everything on the
 card after twenty questions, or neighbours that die — the idea ends there,
 and the history can still serve the cache (the table's third row).
 
-**FIRST READINGS (München, 2026-11-24 ~13:00Z, on the operator's "Go"; the
-run still going, the full rows to follow).** Engine
-`louise-sycl-f16-llama-cpp-271bff744c28-stack-7c301a7ba437` (the series +
-staged 0012; built 12:20–12:39Z, it compiles).
+**THE EIGHT ROWS (München, 2026-11-24 12:45–13:10Z, on the operator's
+"Go").** Engine `louise-sycl-f16-llama-cpp-271bff744c28-stack-7c301a7ba437`
+(the series + the patch; it compiles), the 35B's test copy with
+`GGML_SYCL_USM_SYSTEM=2`, node paused, web stopped; no abort, no kernel
+line. Files on the node: `/root/measure/usm-by-use/rows/` (`rows.jsonl`,
+`samples.txt` — video memory and MemAvailable every 0.5 s — and the dying
+backend's ring).
 
-| step | the driver's video memory | host MemAvailable | time, speed |
+| row | the driver's video memory | host MemAvailable | time, speed |
 |---|---|---|---|
-| the load | 2.3 → 3.3 GiB for 80 s: the weights stay in HOST memory, as written | 24.5 → about 5 GB, lowest 4.8 | — |
-| the first answer | 3.3 → 8.3 → 14.4 → 21.3 → **21.7 GiB in about 30 s** | back to 23 GB | first token 110.8 s after the load began |
-| five answers, the fixed prompt | 21,567–21,691 MiB (the process's counters 3,204 / 714) | | first token 0.247–0.273 s, 93.6–97.3 tok/s (100.4 resident) |
+| before | 25 MiB | 24.5 GB | |
+| 1 — the load | 2.4 → 3.3 GiB over 80 s: the weights stay in HOST memory, as written | down to 4.9–5.5 GB, **lowest 4,551 MiB** | |
+| 2 — the first answer | 3.3 → 8.3 → 14.4 → 21.3 → **21.7 GiB in about 30 s** | back to 23 GB | first token 110.8 s from the request, the load included; 69.8 tok/s |
+| 3 — the fixed prompt, four more | 21,643–21,691 MiB (the process's counters 3,204 / 714) | | 0.247–0.273 s; 93.6–97.3 tok/s; **0 of 5 texts equal copy A's** (sensible Italian, another wording) |
+| 4 — twenty different questions | 21,727 → 21,773 MiB: flat, it was everything already | | 0.148–0.201 s; 92.6–97.3 then 100.6–101.1 tok/s for the last sixteen |
+| 5 — the 2,048-token prompt | 21,807 MiB | | first token **1.798 s** (copy A: 2.500); 98.6 tok/s |
+| 6 — warm, the fixed prompt ×5 | | 23.2 GB | 0.234–0.243 s (copy A: 0.280); **100.8–101.1 tok/s** (100.4) |
+| 7 — the neighbours | MADLAD loads (8.70 s, 0.36 warm; 29,029 MiB), the reranker loads (7.51 s, 0.03; 32,206, the card full) | 21.0 GB | **nemotron-embed's backend dies on load**; then the 35B 1.065 s to the first token, the next 0.230 s, 101.0 tok/s |
+| 8 — unloaded | 25 MiB | 25.1 GB | |
 
-The five texts all differ from copy A's — sensible Italian in another
-wording: the expert kernels on the plain layout round otherwise, and the
-sampling follows.
+**The whole model is on the card after ONE answer.** The load does what
+the patch meant; the use does not, and not for a reason in the engine: a
+prompt of 128 tokens makes 128 selections in every layer, and between them
+they name almost every expert. The tuner's figure said as much — a cache
+holding 30 % of the experts still missed 10 % of the reads: the less-used
+experts are read all the time, each a little. A page is the wrong unit for
+that. Without a policy that takes pages back, by-use paging ends where
+resident starts, after 111 s instead of 8 and with the host at 4.5 GB on
+the way; with one, every prompt would page the cold two thirds in again at
+the 2.4–3.4 GiB/s measured for coming back (S5). The engine's cache answers
+a miss ON THE CPU, from host memory, moving nothing — which is why it holds
+84 tok/s with a third of the experts on the card.
 
-**What it says, on the first answer already: the whole model is on the card
-after ONE answer.** The load does what the patch meant; the use does not,
-and not for a reason in the engine: a prompt of 128 tokens makes 128
-selections in every layer, and between them they name almost every expert.
-The tuner's figure said as much — a cache holding 30 % of the experts
-still missed 10 % of the reads: the less-used experts are read all the
-time, each a little. A page is the wrong unit for that. Without a policy
-that takes pages back, by-use paging ends where resident starts, after 111
-s instead of 8 and with the host at 4.8 GB on the way; with one, every
-prompt would page the cold two thirds in again at the 2.4–3.4 GiB/s
-measured for coming back (S5). The engine's cache answers a miss ON THE
-CPU, from host memory, moving nothing — which is why it holds 84 tok/s
-with a third of the experts on the card.
+**And such pages do not make room for a neighbour** — Test A's open
+question, answered by row 7. While nemotron-embed loaded, the driver did
+take about 3.5 GiB of the 35B back to host memory (its counters 382 /
+3,569; the host 3.3 GB lower), and the newcomer died all the same, its last
+lines kept this time: `level_zero backend failed with error: 39
+(UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)` at `ggml-sycl.cpp:2147`, `alloc`,
+`phys.emplace(dev, ctx, reserve_size)` — the reservation of its context on
+demand. With ordinary 2 GiB buffers (S5) the same three neighbours all
+loaded.
 
-So, provisionally (rows 4–8 still to come): **paging the experts by use is
-not the way to hold fewer of them on the card; the cache is.** The usage
-history keeps its use there (the choices table's third row: the cache
-warm from its first answer). The room for the rest of the set comes from
-the context on demand on every model and from paging whole idle models
-instead of unloading them.
+**So the idea ends here**, by the rule set before the run: paging the
+35B's experts by use is not the way to hold fewer of them on the card —
+the cache is — and memory of this kind may not share a card with models
+that load beside it. The patch is deleted from `staged/` as its row said.
+What stays of the operator's idea: the usage history for the cache (its
+first answers after a load were 2.09 s / 39.7 tok/s against 0.7–0.9 s /
+52–70 warm), and, for the rest of the set, the context on demand on every
+model and whole idle models paged instead of unloaded.
+
+**One thing the run showed that nobody was looking for.** With the expert
+tensors left in the layout they were loaded in, the model was not slower
+and started sooner: the 2,048-token prompt in 1.798 s against 2.500 and
+2.480 (resident; Test A on the same kind of memory, reordered), the short
+one in 0.234–0.243 s against 0.280, at 100.8–101.1 tok/s against 100.4.
+One run, one figure for the long prompt, on memory allocated another way:
+not yet a measurement. `staged/0012-llama-cpp-sycl-reorder-experts-switch.patch`
+adds `GGML_SYCL_REORDER_EXPERTS` (default 1 = today) so that the two
+layouts can be compared on the model as it normally runs — the same test
+copy, the switch 1 then 0, both prompts five times each: first token,
+prefill and decode, and the answers read for sense (other kernels round
+otherwise: the texts will differ, as they did here). Not compiled here.
+
+| | pros | cons |
+|---|---|---|
+| **compare the two layouts** (an engine build, four rows) | if it holds, the 35B starts a long prompt a quarter sooner for one line in its file — and so may any MoE model on this backend | a build and a short card window for what may be an artefact of that run |
+| leave it (today) | nothing to do | a possible quarter of the 35B's prefill left unread |
+
+Recommendation: compare, the next time an engine is built for anything
+else. If the operator says nothing, the patch stays staged.
 
 | configuration that fit | sum MiB | free MiB | host RAM | refusals |
 |---|---|---|---|---|
