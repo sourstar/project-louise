@@ -326,8 +326,11 @@ live = set(os.environ['LIVE_NAMES'].split())
 if live:
     assert live <= set(names), ('the live code loads', sorted(live - set(names)), 'and the staged does not')
 else:   # annotations collections are not pipeline collections
+    # by name regardless of case: a collection's local name is the operator's
+    # ("Normattiva" since M1's swap, 2026-11-24, failed a deploy's staging)
+    low = {x.lower() for x in names}
     for n in ('gutenberg', 'normattiva', 'pubmed', 'wikidata', 'wikipedia'):
-        assert n in names or n + '.next' in names, (n, names)
+        assert n in low or n + '.next' in low, (n, names)
 assert not c.refusals(), c.refusals()
 "
 docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
