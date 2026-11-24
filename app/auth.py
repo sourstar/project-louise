@@ -55,6 +55,14 @@ def account(v: "Viewer | None") -> str | None:
     if v is None or v.master or v.role not in ("user", "admin") or not v.name:
         return None
     return v.name
+
+
+def admin(v: "Viewer | None") -> bool:
+    """Whether a viewer is an admin: the admin token, or a user whose role is
+    `admin` — who alone is read to in a recorded voice (app/voice.py)."""
+    return v is not None and v.role == "admin"
+
+
 USER_COOKIE = "louise_token"
 
 

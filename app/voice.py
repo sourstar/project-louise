@@ -13,13 +13,22 @@ the Ask page, `louise node speech show` and the System page's GPU panel.
     stt_model = "whisper-large-v3"   # speech to text: POST /v1/audio/transcriptions
     vad_model = "silero-vad"         # voice activity: POST /v1/vad, a clip trimmed to its speech
     tts_model = "omnivoice-cpp"      # text to speech: POST /v1/audio/speech
-    tts_voice = "localai://voice-profiles/1c834741"
+    tts_voice = "localai://voice-profiles/<id>"            # an admin's, when none is chosen
+    synthetic_voices = "it=<voice>, en=<voice>"            # everyone else's, by language
 
-THE VOICE IS THE READER'S CHOICE among the node's (operator, 2026-11-11:
-"Add a configuration tab, there the user can choose philippe or
-valentina"): `voices` lists the voice profiles the model server holds —
-each a recorded person, by name — and the node's `tts_voice` as the one
-used when the reader chose none. The model stays the node's.
+A RECORDED VOICE IS THE ADMIN'S ONLY (operator, 2026-11-16: "limit the
+cloned voices to the admin account … For the users account allow only
+synthetic voices according to the language spoken"). An admin — the admin
+token, or a user whose role is `admin` — chooses among the voice profiles
+the model server holds (each a recorded person, by name), and hears the
+node's `tts_voice` when none is chosen. Every other reader — a user, a
+guest — hears the SYNTHETIC voice the node names for the language the
+answer is in (`synthetic_voices`), chooses none, and is never read to in a
+recorded one: a voice the request or the account names is not used, and
+where the node names no synthetic voice the answer is not read aloud for
+them (`offered` says why). Which voices are synthetic is the node's word,
+in its own platform.toml; nothing here names a recorded voice. The model
+stays the node's.
 
 A model unset is a voice the page does not offer: no button, no form, and
 nothing asks. `offered` says why in the operator's words, with the command
@@ -47,7 +56,8 @@ from app import config, httpc, platform_config
 from app.platform_config import SPEECH_KEYS, SpeechConfig
 
 #: the command line's word for each key (`node speech set --stt …`)
-FLAGS = {"stt_model": "--stt", "vad_model": "--vad", "tts_model": "--tts", "tts_voice": "--voice"}
+FLAGS = {"stt_model": "--stt", "vad_model": "--vad", "tts_model": "--tts", "tts_voice": "--voice",
+         "synthetic_voices": "--synthetic"}
 #: `GET /v1/models` of the model server, for `show`: a typo is seen at once
 LIST_TIMEOUT_S = 5.0
 #: what the browser needs before it lets a page open the microphone
@@ -81,6 +91,20 @@ def settings_or_none() -> SpeechConfig:
         return SpeechConfig()
 
 
+class NotAllowed(ValueError):
+    """A choice this reader may not make: a voice, for a reader who is not an
+    admin (theirs follows the answer's language)."""
+
+
+def synthetic(s: SpeechConfig | None = None) -> dict[str, str]:
+    """The synthetic voice of each language (`[speech] synthetic_voices`),
+    in the order written; {} when none is set or the file does not load."""
+    try:
+        return platform_config.synthetic_voices((s if s is not None else settings()).synthetic_voices)
+    except LOAD_ERRORS:
+        return {}
+
+
 def _offer(model: str | None, what: str, flag: str) -> dict[str, Any]:
     if model:
         return {"available": True, "why": None}
@@ -88,29 +112,44 @@ def _offer(model: str | None, what: str, flag: str) -> dict[str, Any]:
             "why": f"no {what} model is set on this node: `louise node speech set {flag} <model>`"}
 
 
-def offered() -> dict[str, Any]:
+def offered(admin: bool = True) -> dict[str, Any]:
     """What the Ask page offers: voice `input` (the microphone) and `output`
     (the answer read aloud), each `available` or not and `why` not, in the
-    operator's words. Never raises."""
+    operator's words. For a reader who is not an admin (`admin` False) the
+    answer is read aloud only in a synthetic voice, so only where the node
+    names one. Never raises."""
     try:
         s = settings()
     except LOAD_ERRORS as e:
         why = f"{platform_config.platform_path()} does not load ({e})"
         return {"input": {"available": False, "why": why}, "output": {"available": False, "why": why}}
+    output = _offer(s.tts_model, "text-to-speech", FLAGS["tts_model"])
+    if output["available"] and not admin and not synthetic(s):
+        output = {"available": False,
+                  "why": "no synthetic voice is set on this node, and a recorded voice is read to an "
+                         f"admin only: `louise node speech set {FLAGS['synthetic_voices']} "
+                         f"\"it=<voice>, en=<voice>\"`"}
     return {"input": _offer(s.stt_model, "speech-to-text", FLAGS["stt_model"])
             | {"trimmed": bool(s.stt_model and s.vad_model)},
-            "output": _offer(s.tts_model, "text-to-speech", FLAGS["tts_model"])}
+            "output": output}
 
 
-def voices(account: str | None = None) -> dict[str, Any]:
+def voices(account: str | None = None, admin: bool = True) -> dict[str, Any]:
     """The voices the Ask page offers the reader: `{"voices": [{name, voice,
     language}], "default": voice, "account": {name, voice} | None}` — the
     model server's voice profiles in the order they were recorded, the one
     used when the reader chose none (the node's `tts_voice`, else the first
     recorded; app/speech.py `voice_for`), and, for a reader with an account,
     the voice it keeps (app/users.py; None: the node's). Nothing when the
-    node reads no answer aloud. Never raises."""
+    node reads no answer aloud. FOR A READER WHO IS NOT AN ADMIN, nothing to
+    choose: the voice follows the answer's language (`by_language`, the
+    languages the node has a synthetic voice for). Never raises."""
     from app import speech, users
+    if not admin:
+        return {"voices": [], "default": None,
+                "account": {"name": account, "voice": None} if account else None,
+                "by_language": list(synthetic()) if (offered(admin=False).get("output") or {})
+                .get("available") else []}
     mine = {"name": account, "voice": users.voice_of(account)} if account else None
     offer = offered().get("output") or {}
     if not offer.get("available"):
@@ -127,13 +166,20 @@ def voices(account: str | None = None) -> dict[str, Any]:
     return {"voices": out, "default": speech.voice_for(node.tts_voice or None, found), "account": mine}
 
 
-def choose(account: str | None, voice: str | None) -> dict[str, Any]:
+def choose(account: str | None, voice: str | None, admin: bool = True) -> dict[str, Any]:
     """An account's voice set from the Ask page (`POST /ask/voice`): one of
     `voices`' or None for the node's. Raises ValueError for a reader with no
-    account (the browser keeps its choice) or a voice the node does not offer."""
+    account (the browser keeps its choice) or a voice the node does not offer,
+    NotAllowed for a voice chosen by a reader who is not an admin."""
     from app import users
     if not account:
         raise ValueError("no account: this browser keeps the voice")
+    if not admin:
+        if voice:
+            raise NotAllowed("this account's voice follows the language of the answer; "
+                             "only an admin chooses a voice")
+        users.set_voice(account, None)
+        return voices(account, admin=False)
     if voice and voice not in {v["voice"] for v in voices(account)["voices"]}:
         raise ValueError(f"{voice!r} is not one of the node's voices")
     users.set_voice(account, voice or None)
@@ -159,10 +205,12 @@ def show() -> dict[str, Any]:
     the server lists each model."""
     s = settings()
     values = {k: getattr(s, k) for k in SPEECH_KEYS}
-    models = sorted({v for k, v in values.items() if v and k != "tts_voice"})
+    models = sorted({v for k, v in values.items() if v and k not in ("tts_voice", "synthetic_voices")})
     listed = models_listed(server(), models) if models else {}
     out: dict[str, Any] = {"file": str(platform_config.platform_path()), "server": server(),
                            "speech": values, "offered": offered(), "listed": listed,
+                           "synthetic": synthetic(s),
+                           "offered_to_readers": offered(admin=False)["output"],
                            "note": MICROPHONE_NOTE}
     if listed is None:
         out["listed_note"] = f"the model server at {server()} did not answer GET /v1/models"

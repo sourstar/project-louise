@@ -501,14 +501,27 @@ GIL with it. Rule 2's own remedy had turned a hung child into a hung worker.
   most two processes at a time, PARSE_TIMEOUT_S + 10 s each; for the node's
   case about 4.5 minutes of ONE collection's stage, bounded and stoppable,
   against 21 minutes of everything;
-- STILL OPEN: a parse that runs in the worker's process from the start (a
-  batch of one light row, the pool off, the embed path's own chunking) has
-  no child to hang in. A document that hangs there holds the worker, and
-  nothing in the process can stop a C call. What would: a dead-man's switch
-  outside the GIL (`faulthandler.dump_traceback_later(..., exit=True)`,
-  re-armed by a thread that needs the GIL) and a journal of what was being
-  parsed, read at the restart. Not built: it changes what the worker does
-  on its own, the operator's to decide.
+- a parse that runs in the worker's process FROM THE START (a batch of one
+  light row, the pool off, the embed path's own chunking) has no child to
+  hang in, and nothing in a process can stop a C call. Operator, 2026-11-24:
+  "Do everything". Two things, built the same day:
+  * a DEAD-MAN'S SWITCH (app/deadman.py): the interval timer sends SIGALRM
+    after `LOUISE_DEADMAN_S` (600 s; the web 120 s), the standard library's
+    fault handler prints every thread's stack and the signal ends the
+    process (exit 142), and a thread that needs the GIL sets the timer again
+    every sixth of it. While anything can run it never fires. The restart
+    policy starts the process again;
+  * a JOURNAL of what the worker parses in its own process
+    (app/parse_journal.py: a slot per thread, one `pwrite` before and after,
+    no fsync). At a start, what the process before left in progress is a
+    SUSPECT: `parallel.compute` parses it alone in a process of its own,
+    never here, and what comes back decides. Where it cannot be parsed
+    elsewhere (the embed path), it is tried once more and refused at its
+    second time (`ParseHeld`, the document's error).
+  Cost: two `pwrite`s a document parsed in-process (microseconds), nothing
+  in a child. A process FROZEN FROM OUTSIDE for longer than the switch
+  (`docker pause`, SIGSTOP) leaves at its thaw: stop it instead
+  (measuring.md §9).
 The lesson: when a wait gets a bound, ask what the fallback does with the
 thing that was being waited for. If it does the same work in a place that
 cannot be bounded, the bound moved the hang, it did not remove it.

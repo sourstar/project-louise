@@ -44,6 +44,11 @@ from . import idle_trim, node_state, speech
 
 STATIC = Path(__file__).parent / "static"
 
+#: seconds one thread may hold the web process before it leaves by itself
+#: (LOUISE_DEADMAN_S overrides it, as the worker's)
+WEB_DEADMAN_S = 120.0
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from . import fdlimit
@@ -53,6 +58,11 @@ async def lifespan(app: FastAPI):
     # given back after a while without a question (app/idle_trim.py; platform.toml [web] idle_trim_s)
     embeddings.use_web_caches()
     idle_trim.start()
+    # a web process one thread holds leaves by itself (app/deadman.py): a
+    # question's text goes through every citation resolver in this process.
+    # Two minutes here: nothing it does holds the GIL in one call for seconds
+    from . import deadman
+    deadman.arm(default=WEB_DEADMAN_S, who="the web")
     try:
         # PER-COLLECTION (invariant 1): one collection whose space does not
         # match is not served, and the node keeps the rest. The web process
@@ -1136,11 +1146,15 @@ async def audio_speech(request: Request):
     header = request.headers.get("louise-reading")
     reading, n = speech.reading_turn(header)
     last = speech.reading_last(header)
-    # the voice the asker's account keeps, where the request names none
+    # the voice the asker's account keeps, where the request names none — an
+    # admin's; anyone else hears the synthetic voice of the text's language
     from . import auth, users
-    mine = users.voice_of(auth.account(getattr(request.state, "viewer", None)))
+    viewer = getattr(request.state, "viewer", None)
+    admin = auth.admin(viewer)
+    mine = users.voice_of(auth.account(viewer)) if admin else None
     status, content, ctype, timing = await run_in_threadpool(
-        lambda: speech.synthesize_timed(body, reading=reading, n=n, last=last, account_voice=mine))
+        lambda: speech.synthesize_timed(body, reading=reading, n=n, last=last, account_voice=mine,
+                                        admin=admin))
     from . import transcribe
     headers = {"Server-Timing": transcribe.server_timing(timing)} if timing else {}
     return Response(content=content, status_code=status, media_type=ctype, headers=headers)

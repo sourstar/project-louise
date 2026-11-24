@@ -1257,8 +1257,13 @@ reader needs at the command line:
   server (CHAT_URL's), with models that are the NODE's choice, never a
   reader's (RULE 2): `--stt` speech to text (`POST /v1/audio/transcriptions`),
   `--vad` voice activity (LocalAI's `POST /v1/vad`), `--tts` text to speech
-  (`POST /v1/audio/speech`), `--voice` its voice for every language (unset,
-  the server's first voice profile). One resolution (`app/voice.py`
+  (`POST /v1/audio/speech`), `--voice` an admin's voice for every language
+  (unset, the server's first voice profile), `--synthetic "it=<voice>,
+  en=<voice>"` the synthetic voice of each language that every other reader
+  hears (*amended 2026-11-16*, operator: "limit the cloned voices to the
+  admin account … For the users account allow only synthetic voices
+  according to the language spoken"; unset, the answer is read aloud to
+  admins only). One resolution (`app/voice.py`
   `settings`) for every reader of them. A model unset is a voice the page
   does not offer: no button, nothing asked; `show` says why, with the
   `set` that supplies it. `set` writes desired state into the file
@@ -1900,6 +1905,7 @@ sensible its own behaviour looks.
 | 130 | interrupted after a clean commit (SIGTERM or SIGINT) |
 | 137 | a process of the pass's cgroup was killed for memory — the pass itself, or a parse-pool child, whose parts are then not computed again (`parallel.MemoryKilled`); `deploy/supervise-pass.sh` holds it until `deploy/release-oom.sh` names the cause or the diagnostic (operator, 2026-11-19; added the same day) |
 | 75 | the worker alone: it stopped at its units after a memory kill in its cgroup, the OOM hold written; its guard keeps it down until `node release-oom` (added 2026-11-19) |
+| 142 | the worker or the web alone: its dead-man's switch. One thread held the process for `LOUISE_DEADMAN_S` (600 s for the worker, 120 s for the web; 0 switches it off), so nothing else in it could run; every thread's stack is on stderr before it, and its restart policy starts it again. What the worker was parsing in its own process is read at that start (`state/parsing.journal`, `state/parse-suspects.json`) and parsed elsewhere (added 2026-11-24) |
 
 A command never exits 1 for a deferral and never 0 for a failure. The
 message on stderr names the unit — the part, the document, the bundle,
@@ -2159,10 +2165,14 @@ variable, a file, a log line or a message.
              # System page's Models panel writes them, with [translate] reading and [speech] (amended 2026-11-15,
              # operator: "I want them to be editable from the page for quick testing")
 [speech]     stt_model = "whisper-large-v3"   vad_model = "silero-vad"   tts_model = "omnivoice-cpp"
-             tts_voice = "localai://voice-profiles/1c834741"
+             tts_voice = "localai://voice-profiles/<id>"   synthetic_voices = "it=<voice>, en=<voice>"
              # the Ask page's voice, on CHAT_URL's model server (§7.4 "Speech"; added 2026-11-07): speech to text,
              # voice activity (a clip trimmed to its speech, silence never transcribed), text to speech and its
-             # voice. Each optional: a model unset is a voice the page does not offer. `node speech set` writes here
+             # voice. Each optional: a model unset is a voice the page does not offer. `node speech set` writes here.
+             # A RECORDED VOICE IS AN ADMIN'S ONLY (amended 2026-11-16, operator): `tts_voice` and a voice chosen
+             # are read to an admin (the admin token, a user of role admin); every other reader hears the
+             # synthetic voice of the answer's language (`synthetic_voices`, the first named where its language
+             # has none), chooses none, and with none set is not read to (`node speech show` says so)
 [certifier]  valid_from = "2026-10-07T00:00:00Z"        # this node as a certifier (09 §9.11): from when its own key certifies, and
              # revoked_at = "…"                          # when it was revoked — the anchor document it serves at
                                                         # /.well-known/louise-certifier.json says so; the collections listed there are

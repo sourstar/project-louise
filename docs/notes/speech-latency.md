@@ -51,13 +51,13 @@ From its own documentation ([PyPI](https://pypi.org/project/omnivoice/)):
 
 The gap is too large for steps alone. In order of likelihood:
 1. the backend runs on the CPU, not the card;
-2. the Philippe profile's reference clip is longer than 10 s;
+2. the voice profile's reference clip is longer than 10 s;
 3. 32 steps where 16 would do.
 
 ## Asked of the node
 
 - The omnivoice model YAML: device, `num_step`, any speed parameter.
-- The Philippe profile's reference clip length.
+- The voice profile's reference clip length.
 - One fixed 200-character Italian sentence, 3 times one at a time and 3
   times two at once: synth and audio from `Server-Timing`, and whether the
   card or the CPU is busy meanwhile.
