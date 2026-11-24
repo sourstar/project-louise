@@ -535,3 +535,28 @@ Recommendation: nothing changes — 32 guided steps — and the 16-step file
 joins the sentences the operator listens to at §10 step 5, where the card's
 own seconds say whether halving them is worth a hearing. If the operator
 says nothing: 32 steps.
+
+**The operator, the same day: "I already know the difference, implement it,
+controlling quality over speed is useful."** Built in Louise as the node's
+dial, not a reader's choice and on no page (RULE 2):
+
+- `[speech] tts_steps` in platform.toml (07 §7.8), a whole number 1–1024,
+  written by `louise node speech set --steps N`; `--steps ""` gives the
+  model its own steps again. The file is read at every sentence, so the
+  dial holds from the next one — no restart, mid-answer included;
+- the relay (`app/speech.py`) sends it with every sentence as
+  `params.flow_steps`. A request's own value is kept for an admin and
+  dropped for every other reader (a guest could otherwise ask the card for
+  1,024 steps a sentence); a kept clip is keyed on its steps;
+- a model that answers that it has no steps is asked the same sentence
+  again without them, with one line in the node's log: a reading is never
+  lost to the dial.
+
+What it needs to take effect on the node: this commit deployed, AND the
+speech model on the port with the second staged patch (§10) — today's
+`omnivoice-cpp` backend reads `seed` and `ref_text` among a request's
+parameters and nothing else, so it speaks at 32 steps whatever is set, and
+says nothing; `louise node speech show` says so beside the value. Unset,
+nothing changes for anyone. Not built: a rule that picks the steps by
+itself (the first sentence of an answer fast, the rest whole) — the dial
+first, the card's seconds and the operator's ear before a rule.

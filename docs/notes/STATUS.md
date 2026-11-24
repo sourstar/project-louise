@@ -46,8 +46,13 @@ measured (published figures disagree).
   nothing that keeps the audio shortens. Kept, audio unchanged byte for byte: a slot reuses the last clip's frames
   (2.1–2.6 s a sentence here, every sentence after the first of an answer), the scoring on the caller's threads and
   without the decoded slots (0.9 → 0.4 s); taken out for want of a measured gain: states for target rows only. A
-  line per request says where its time went — the card's proportions will not be the CPU's. Left: the card —
-  München's, in a window, with the operator's ear on the two voices (§10 of the note).
+  line per request says where its time went — the card's proportions will not be the CPU's. **The node's dial
+  between speed and quality (operator: "controlling quality over speed is useful"):** `[speech] tts_steps`,
+  written by `louise node speech set --steps N` and in force from the next sentence with no restart; sent as
+  `params.flow_steps`, a request's own an admin's only, a model without steps asked again without them. Inert on
+  today's `omnivoice-cpp` backend, which does not read the field: it needs the port and the second staged patch,
+  which now also passes a request's seed and guidance (§10, §11). Left: the card — München's, in a window, with
+  the operator's ear on the two voices (§10 of the note); München is building the test engine for the timing rows.
 - **2026-11-24, "Engine now, chat later" (operator): the new engine is adopted, the chat model decided after the
   POC.** The cut-over's order is in [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §5:
   BACKOUT first; the wrapper `vega-louise-llama-cpp` repointed at `c3294e050ff2`, MADLAD and the nemotron reranker

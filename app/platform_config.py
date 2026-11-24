@@ -198,9 +198,32 @@ class SpeechConfig:
     #: — synthetic voices, never a recorded person's: "it=<voice>, en=<voice>"
     #: (`synthetic_voices`, app/voice.py `synthetic`)
     synthetic_voices: str | None = None
+    #: the steps the text-to-speech model decodes a sentence in, as its digits
+    #: ("16"): fewer is a sooner clip and another audio. Unset, the model's own
+    #: (OmniVoice: 32). The node's dial between speed and quality (operator,
+    #: 2026-11-24; `tts_steps`, app/speech.py)
+    tts_steps: str | None = None
 
 
-SPEECH_KEYS = ("stt_model", "vad_model", "tts_model", "tts_voice", "synthetic_voices")
+SPEECH_KEYS = ("stt_model", "vad_model", "tts_model", "tts_voice", "synthetic_voices", "tts_steps")
+#: the most steps a sentence may be asked in: the model server's own bound
+#: (llama.cpp's `flow_steps`)
+TTS_STEPS_MAX = 1024
+
+
+def tts_steps(value: Any) -> str | None:
+    """`[speech] tts_steps` read: a whole number from 1 to TTS_STEPS_MAX,
+    written as a number or as its digits, returned as its digits (the model
+    server takes a request's parameters as strings). Raises ScheduleError
+    for anything else — a step count is never guessed from a typo."""
+    if value is None:
+        return None
+    text = str(value).strip() if isinstance(value, (int, str)) and not isinstance(value, bool) else ""
+    if not (text.isascii() and text.isdigit()) or not 1 <= int(text) <= TTS_STEPS_MAX:
+        raise schedule_mod.ScheduleError(
+            f"speech.tts_steps is the number of steps a sentence is decoded in, a whole number "
+            f"from 1 to {TTS_STEPS_MAX}, got {value!r}")
+    return str(int(text))
 
 
 def synthetic_voices(text: str | None) -> dict[str, str]:
@@ -781,12 +804,13 @@ def _speech(raw: Any) -> SpeechConfig:
         raise schedule_mod.ScheduleError(
             f"[speech]: unknown key(s) {', '.join(unknown)}; it takes {', '.join(SPEECH_KEYS)} "
             f"(`louise node speech set` writes them)")
+    steps = tts_steps(raw.get("tts_steps"))             # a number, not a name
     for k, v in raw.items():
-        if not isinstance(v, str) or not v.strip():
+        if k != "tts_steps" and (not isinstance(v, str) or not v.strip()):
             raise schedule_mod.ScheduleError(
                 f"speech.{k} is a model's (or a voice's) name, a non-empty string, got {v!r}")
     synthetic_voices(raw.get("synthetic_voices"))       # refused at load, not at a reading
-    return SpeechConfig(**{k: raw[k].strip() for k in raw})
+    return SpeechConfig(**{k: raw[k].strip() for k in raw if k != "tts_steps"}, tts_steps=steps)
 
 
 def _deposit(raw: Any, path: Path) -> DepositConfig:
