@@ -454,6 +454,11 @@ def _stamp(refs: RefLookup):
     return tuple(sorted((r["source_id"], r["ref_version"], r["synced_at"]) for r in refs.rows("ref_meta")))
 
 
+#: the acts index's key, and the fields `CitationResolver.resolve` reads
+_ACT_KEY = ("tipo", "numero", "anno")
+_ACT_KEPT = ("urn", "data", "denominazione")
+
+
 def _acts_index(refs: RefLookup) -> dict:
     """`atto` keyed by (tipo, numero, anno), built once per reference-data
     version — the gene resolver's reasoning (`_symbol_index`)."""
@@ -468,15 +473,23 @@ def _acts_index(refs: RefLookup) -> dict:
         return cached[1]
     index: dict = {}
     try:
-        rows = refs.rows("atto")
+        try:
+            rows = refs.rows("atto", columns=_ACT_KEY + _ACT_KEPT)
+        except TypeError:   # a RefLookup without `columns` (a test's double): every column
+            rows = refs.rows("atto")
     except Exception:   # noqa: BLE001 — a store without the table (never synced): no acts
         rows = []
     for r in rows:
         key = (r["tipo"], str(r["numero"] or "").lower(), r["anno"])
-        index.setdefault(key, []).append(r)
+        # WHAT THE RESOLVER READS, AND NOTHING ELSE (2026-11-24): every parse
+        # child builds this index, and holding each act's whole row — its
+        # title, ELI, AKN path, publication — was ~390 MB in each of twelve,
+        # the worker's 24 GB cap crossed (fts_child_memory.py on the node)
+        kept = {k: r.get(k) for k in _ACT_KEPT}
+        index.setdefault(key, []).append(kept)
         # every act also by number and year alone, whatever its form: a dated
         # citation whose form is not the origin's finds it by its date
-        index.setdefault(("*",) + key[1:], []).append(r)
+        index.setdefault(("*",) + key[1:], []).append(kept)
     if stamp is not None:
         with _index_lock:
             _index_cache = (stamp, index)

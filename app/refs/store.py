@@ -229,11 +229,18 @@ class RefStore:
         self._owner: dict[str, str] = {t.name: s.source_id for s in schemas for t in s.tables}
 
     def rows(self, table: str, where: dict | None = None, *,
-             order_by: str | None = None, limit: int | None = None) -> list[dict]:
+             order_by: str | None = None, limit: int | None = None,
+             columns: tuple[str, ...] | None = None) -> list[dict]:
         """`order_by` is SQL the caller composes from its own constants, never
         from a query's text; `limit` bounds what is materialised — the point
-        of both (resolver.expand_bounded)."""
-        sql, params = f"SELECT * FROM {table}", []
+        of both (resolver.expand_bounded). `columns`: only these, each one of
+        the table's (2026-11-24: an index built over a whole table in every
+        parse child held every column of every row)."""
+        if columns:
+            unknown = set(columns) - self.columns(table)
+            if unknown:
+                raise ValueError(f"{table}: no column {sorted(unknown)}")
+        sql, params = f"SELECT {', '.join(columns) if columns else '*'} FROM {table}", []
         if where:
             sql += " WHERE " + " AND ".join(f"{k}=?" for k in where)
             params = list(where.values())

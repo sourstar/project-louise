@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import dataclasses
 
+import json
+
 import pytest
 
 from app.hold import calibration as cal
@@ -739,3 +741,27 @@ def test_the_twin_is_the_encoders_model_with_cpu_and_must_run_its_weights(monkey
     run, asked = _command(monkeypatch, tmp_path, _space(ctx=4096), "g2", twin_weights="v")
     assert run(model="vega-other-cpu") == 2 and asked["texts"] == []
     assert rage.twin("vega-nemo") == "vega-nemo-cpu" and rage.twin("vega-nemo-cpu") == "vega-nemo-cpu"
+
+
+def test_check_says_which_roles_would_find_their_reference_and_makes_nothing(monkeypatch, tmp_path, capsys):
+    """München, 2026-11-24: an engine cut-over backed out at its first gate,
+    with the web down, for a reference the node had never made (bge-m3). The
+    check reads what the gate would resolve, asks no twin, writes nothing."""
+    from types import SimpleNamespace
+
+    from app import louise
+    run, asked = _command(monkeypatch, tmp_path, _space(), "gutenberg")
+    check = lambda: louise.cmd_embedder_cpu_reference(SimpleNamespace(  # noqa: E731
+        root=tmp_path, collection="gutenberg", model=None, query_model=None, again=False, check=True))
+    before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*"))
+    assert check() == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["missing"] == 1 and out["references"][0]["role"] == "document"
+    assert out["references"][0]["make"] == "louise hold embedder cpu-reference gutenberg"
+    assert asked == {"stated": [], "texts": []} and sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*")) == before, \
+        "no twin asked, nothing written"
+    assert run() == 0                                                  # made once for the node
+    capsys.readouterr()
+    assert check() == 0
+    found = json.loads(capsys.readouterr().out)["references"][0]
+    assert found["found"] is True and "path" in found
