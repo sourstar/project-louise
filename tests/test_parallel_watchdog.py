@@ -13,6 +13,7 @@ docker's 120 s grace). Now a stop is honoured at part boundaries and bounds
 every wait inside it."""
 from __future__ import annotations
 
+import re
 import threading
 import time
 from concurrent.futures import Future
@@ -183,7 +184,11 @@ def test_a_document_that_does_not_come_back_alone_is_an_error_on_it(here, own, m
     assert time.monotonic() - t0 < 5, "bounded: twice the timeout, not for ever"
     health = parallel.health()
     assert health["failures"] == 0 and health["disabled"] is False, "the document's failure, not the pool's"
-    assert "document e:3 did not come back from a process of its own" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "document e:3 did not come back from a process of its own" in err
+    # the pool's lines say WHEN and WHERE (the node's line of 2026-11-24 said neither)
+    line = next(ln for ln in err.splitlines() if "[parse pool] TimeoutError" in ln)
+    assert re.match(r"\d\d:\d\d:\d\d \[parse pool\] TimeoutError in fts of eurlex: ", line), line
     # LEFT PENDING as a peer, it comes back, in the end as its batch's only
     # row: one light row is computed in this process — not this one. It is
     # answered as it was, with no pool, no process and nothing computed here
