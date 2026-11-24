@@ -278,6 +278,34 @@ in `deploy/watchdog/README.md`).
 - **Priority**: query steps outrank corpus embedding (`app/rage/dispatch.py` levels).
   Corpus work stands aside on the whole card while a person's query step holds the
   claim.
+- **LocalAI's SERVER is our build, and this is its recipe** (as München ran it
+  2026-11-21/22 for P1 and 2026-11-24 with P13; until then it was in nobody's
+  repository — `deploy/localai/llama-cpp/build.sh` builds the llama.cpp BACKEND only):
+  1. the tree: `git clone https://github.com/mudler/LocalAI`, checked out at the
+     series' base (`v5.0.1`, `dd5780a`), then the patches that touch the server by
+     `git am`, in order — `deploy/localai/patches/0001-system-list-load-options.patch`
+     (P1), then `staged/0011-config-voice-cloning-opt-in-unknown-backend.patch` (P13).
+     On the node: `/mnt/ssd3/louise-build/core-p1-v5/src-clone`;
+  2. the build: `docker build --target builder -t louise-localai-p13-builder:v5.0.1 .`
+     — LocalAI's own Dockerfile, its `builder` stage; only `/build/local-ai` is taken;
+  3. the patch's own tests, inside the builder: `docker run --rm -w /build --entrypoint
+     sh louise-localai-p13-builder:v5.0.1 -c "go test -tags nosqlite,purego_utp
+     ./core/config/"` (`./pkg/model/` for P1);
+  4. the image, three lines: `FROM quay.io/go-skynet/local-ai:v5.0.1-gpu-intel` /
+     `COPY --from=louise-localai-p13-builder:v5.0.1 /build/local-ai /local-ai` /
+     a `LABEL` naming the patches and the base; tagged
+     `louise-localai:v5.0.1-gpu-intel-p1-p13`;
+  5. the check: `docker run --rm --entrypoint /local-ai <image> --version` reads
+     `v5.0.1-<commits past the tag>-g<the build tree's HEAD>` — `v5.0.1-1-g105104c32`
+     with P1, `v5.0.1-2-gac69f2840` with P1 and P13 (the hash is the build tree's own:
+     check the count and `git log`);
+  6. the swap (`localai-v5-swap.sh`, on the node): the TrueNAS app pins the tag
+     `quay.io/go-skynet/local-ai:v5.0.0-gpu-intel`, so the built image is tagged with
+     that name locally, the previous one kept under its `louise-localai:…` tag as the
+     way back, and the app redeployed — LocalAI restarts and every model unloads —
+     then `--version`, `GET /system` still listing `load_options`, and the settings
+     check (`deploy/vega/stage/localai_settings.py --check`).
+  State on 2026-11-24: the P1+P13 image is BUILT, not swapped.
 
 ## 9. The GPU governor
 
