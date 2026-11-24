@@ -8,7 +8,10 @@ touched the counters. Now the transport polls its growing .part file each
 second and credits the delta (bucket.note_granted): pure accounting, no
 token math — pacing stays the lease's job.
 """
+import shutil
 import time
+
+import pytest
 
 from app.acquire import budget
 from app.acquire.spec import Endpoint, RemoteFile, Transport
@@ -27,6 +30,8 @@ def test_note_granted_counts_without_touching_tokens():
         "accounting must not double-charge the budget the lease already paid"
 
 
+@pytest.mark.skipif(shutil.which("rsync") is None,
+                    reason="rsync is not installed: this test runs the real program (the node's image has it)")
 def test_local_rsync_fetch_is_accounted(tmp_path, monkeypatch, isolated_config):
     """A real (local-path) rsync fetch must report its bytes. Local rsync
     needs no daemon, so this exercises the genuine subprocess + .part flow."""
