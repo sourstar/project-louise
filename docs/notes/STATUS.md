@@ -18,6 +18,15 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-24
+
+- **More models than the card holds: parking — DESIGNED, nothing built** (operator: "it is a matter of
+  allowing use cases that today we couldn't afford"; "Both engines"). A model parked in host RAM and put
+  back on the card by a copy, after Clockwork (OSDI 2020): the mechanism in the engine, the lifecycle and
+  two calls in LocalAI, the foresight in RAGE. Four measurements come first (a cold load's split, the
+  copy's rate, the card's busy share with two encoders, the host RAM in the busy hours). The note:
+  [models-beyond-the-card.md](models-beyond-the-card.md).
+
 ### 2026-11-23
 
 - **ssd4 for LanceDB only: the Lance root (`LOUISE_LANCE_ROOT`), operator "A" — built, not deployed.**
