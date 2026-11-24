@@ -247,3 +247,28 @@ def test_the_acts_index_holds_only_what_the_resolver_reads(store):
     with pytest.raises(ValueError, match="no column"):
         store.rows("atto", columns=("urn", "nope"))
     nm.invalidate_cache()
+
+
+def test_a_citation_s_acts_are_read_by_their_year_and_no_child_holds_the_table(store, monkeypatch):
+    """2026-11-24: twelve parse children each held the whole `atto` table
+    (~224 MB kept to three fields, 1.0-1.25 GiB a child on the node). A
+    citation now reads its year's acts through SQLite's index on `anno`: the
+    same act, the whole-table index never built, the year's query on the
+    index, and no more than _YEARS_HELD years kept."""
+    from app.refs import normattiva as nm
+    nm.invalidate_cache()
+    monkeypatch.setattr(nm, "_acts_index", lambda refs: (_ for _ in ()).throw(AssertionError("the table index")))
+    got = nm.CitationResolver().resolve("ai sensi della legge 31 ottobre 2003, n. 306", store)
+    assert [e.entity_id for e in got] == ["urn:nir:stato:legge:2003-10-31;306"]
+    assert got[0].label.startswith("LEGGE 31 ottobre 2003, n. 306")
+    plan = " ".join(r[3] for r in store.con.execute(
+        "EXPLAIN QUERY PLAN SELECT tipo, numero, urn, data, denominazione FROM atto WHERE anno=? ORDER BY rowid",
+        (2003,)))
+    assert "idx_atto_anno" in plan, plan
+    monkeypatch.setattr(nm, "_YEARS_HELD", 2)
+    stamp = nm._stamp(store)
+    for year in (1990, 1991, 1992, 2003):
+        nm._acts_of_year(store, year, stamp)
+    assert len(nm._years) == 2 and (stamp, 2003) in nm._years, "the last years asked, bounded"
+    nm.invalidate_cache()
+    assert not nm._years

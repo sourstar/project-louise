@@ -6829,6 +6829,11 @@ def _cpu_reference_check(root, names: list[str] | None) -> int:
     held = ([col.resolve(root, n) for n in names] if names is not None else col.list_named(root))
     rows: list[dict] = []
     for name, codex in held:
+        if getattr(codex, "space", None) is None:
+            # an annotations collection embeds nothing: no gate, no reference
+            # (2026-11-24: gutenberg-book-editions crashed the first --check)
+            rows.append({"collection": name, "found": None, "why": "no space: it embeds nothing"})
+            continue
         roles = [("document", codex.space.encoder.weights)]
         if codex.space.query.encoder is not None:
             roles.append(("query", codex.space.query.encoder.weights))
@@ -6845,7 +6850,7 @@ def _cpu_reference_check(root, names: list[str] | None) -> int:
                          **({"path": str(got.path)} if got is not None else
                             {"make": f"louise hold embedder cpu-reference {name}",
                              "key": rage_reference.key(codex, role, weights)})})
-    missing = sum(1 for r in rows if not r["found"])
+    missing = sum(1 for r in rows if r["found"] is False)
     _print({"references": rows, "missing": missing})
     return 1 if missing else 0
 

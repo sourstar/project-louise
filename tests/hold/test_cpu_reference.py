@@ -765,3 +765,19 @@ def test_check_says_which_roles_would_find_their_reference_and_makes_nothing(mon
     assert check() == 0
     found = json.loads(capsys.readouterr().out)["references"][0]
     assert found["found"] is True and "path" in found
+
+
+def test_check_passes_over_a_collection_that_embeds_nothing(monkeypatch, tmp_path, capsys):
+    """München, 2026-11-24: the first --check on the node crashed on an
+    annotations collection (gutenberg-book-editions), whose Codex has no
+    space. It embeds nothing, so there is nothing to find: said, not missing."""
+    from types import SimpleNamespace
+
+    from app import louise
+    from app.hold import collection as col
+    monkeypatch.setattr(col, "list_named", lambda root: [("gutenberg-book-editions", SimpleNamespace(space=None))])
+    assert louise.cmd_embedder_cpu_reference(SimpleNamespace(
+        root=tmp_path, collection=None, model=None, query_model=None, again=False, check=True)) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"references": [{"collection": "gutenberg-book-editions", "found": None,
+                                   "why": "no space: it embeds nothing"}], "missing": 0}
