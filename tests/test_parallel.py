@@ -391,6 +391,29 @@ def test_a_build_under_a_changing_profile_writes_the_serial_bytes(isolated_confi
         assert (pooled_dir / s["path"]).read_bytes() == (serial_dir / s["path"]).read_bytes(), s["path"]
 
 
+def _own_processes(monkeypatch) -> list:
+    """`parallel._lane_executor` as a stand-in: a part handed to a process of
+    its own is computed by the REAL compute at once (no process is started
+    in these tests), and recorded."""
+    from concurrent.futures import Future
+    real = parallel._compute
+    ran: list = []
+
+    class Own:
+        def submit(self, fn, kind, collection, part, allowance):
+            ran.append(len(part))
+            f = Future()
+            f.set_running_or_notify_cancel()
+            f.set_result(real(kind, collection, part))
+            return f
+
+        def shutdown(self, wait=True, cancel_futures=False):
+            pass
+    monkeypatch.setattr(parallel, "_lane_executor", Own)
+    monkeypatch.setattr(parallel, "ISOLATE_START_S", 0.0)
+    return ran
+
+
 def test_a_pool_that_does_not_answer_never_blocks_the_caller(isolated_config, tmp_path,
                                                               corpus_dir, monkeypatch):
     """Regression (2026-08-28, found with py-spy on the live node): the
@@ -398,10 +421,14 @@ def test_a_pool_that_does_not_answer_never_blocks_the_caller(isolated_config, tm
     the futures never completing — so the collection stopped dead and a
     SIGTERM could not have been honoured either. The pool is an
     OPTIMISATION: a batch it does not answer within PARSE_TIMEOUT_S is
-    computed in-process, and the pool is rebuilt."""
+    answered without it, and the pool is rebuilt. Since 2026-11-24 the
+    parts that were in flight are parsed again in processes of their own
+    (here a stand-in), never in the caller's: one of them may be what a
+    child hung on."""
     c, rows = _gutenberg(tmp_path, corpus_dir)
     expected = parallel.compute("chunks", c, rows)      # serial truth
     parallel.reset_failures()
+    _own_processes(monkeypatch)
 
     class DeadFuture:
         def result(self, timeout=None):
@@ -418,7 +445,7 @@ def test_a_pool_that_does_not_answer_never_blocks_the_caller(isolated_config, tm
     monkeypatch.setattr(config, "PARSE_TIMEOUT_S", 0.2)
     monkeypatch.setattr(parallel, "pool", lambda: DeadPool())
     got = parallel.compute("chunks", c, rows)
-    assert got == expected, "the batch is computed in-process, correctly"
+    assert got == expected, "the batch is answered without the pool, correctly"
     assert parallel.health()["failures"] == 1
 
     # it keeps working, and after PARSE_MAX_FAILURES it stops trying children
@@ -827,9 +854,10 @@ def test_the_pool_reads_the_next_page_before_the_caller_takes_this_one(isolated_
 def test_a_part_that_stalls_costs_only_itself_and_what_finished_is_kept(isolated_config, tmp_path,
                                                                       corpus_dir, monkeypatch):
     """The timeout bounds the wait for the NEXT answer, not the page: a
-    stalled part is computed in-process after PARSE_TIMEOUT_S without
-    progress, and every part that did answer is used, not computed again
-    (15 whole pages were thrown away and re-parsed serially in 18 h)."""
+    stalled part is parsed again after PARSE_TIMEOUT_S without progress — in
+    a process of its own since 2026-11-24, never in this one — and every
+    part that did answer is used, not computed again (15 whole pages were
+    thrown away and re-parsed serially in 18 h)."""
     from concurrent.futures import Future
     c, rows = _gutenberg(tmp_path, corpus_dir)
     rows = (rows * 20)[:24]
@@ -853,11 +881,13 @@ def test_a_part_that_stalls_costs_only_itself_and_what_finished_is_kept(isolated
     monkeypatch.setattr(config, "PARSE_PROCESSES", 3)
     monkeypatch.setattr(config, "PARSE_TIMEOUT_S", 0.3)
     monkeypatch.setattr(parallel, "pool", lambda: Pool())
+    alone = _own_processes(monkeypatch)
     monkeypatch.setattr(parallel, "_compute", counting)
     parallel.reset_failures()
     parallel.forget_users()
     assert list(parallel.compute_pages("chunks", c, iter(pages))) == truth
-    assert len(inprocess) == 1, f"only the stalled part was computed in-process: {inprocess}"
+    assert inprocess == [], f"nothing that was in flight is computed in this process: {inprocess}"
+    assert len(alone) >= 1, "the stalled part, in a process of its own"
     assert parallel.health()["failures"] == 1
     parallel.reset_failures()
 
