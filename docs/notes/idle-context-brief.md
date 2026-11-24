@@ -705,6 +705,11 @@ probable or open.
   fdinfo counts (app/gpu_memory.py), before anything depends on it. The
   weights of the Ask set fit without it through this patch (§1.5) — with
   TODAY's chat; not with the 35B (two bullets down).
+  **MEASURED 2026-11-24 (backend-qualification-2026-11-21.md, phase 5, S5):** with the engine's 2 GiB buffers
+  (`GGML_SYCL_HOST_PINNED_MEM_2G=1`, no cost alone on the card) the 35B gives back only what a small model needs
+  (4.2 GiB of its 21.7) and pays +1.25 to +1.76 s to its first token when it returns, the small models +0.2 to
+  +0.4 s; the next call of each is warm. Coming back runs at 2.4–3.4 GiB/s — five times slower than an upload
+  (16.2 GiB/s): the estimates above were too low by that factor for the step back.
 - **The other way to hold more model than the card, and what the latest
   llama.cpp offers — checked 2026-11-21** (operator: "check latest
   llama.cpp"; master b12600 of 2026-11-20 read against OUR PIN `ddf48f8`,

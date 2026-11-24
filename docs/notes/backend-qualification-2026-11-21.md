@@ -656,6 +656,59 @@ What phase 4 says:
 
 ### Phase 5 — the POC
 
+**S5, the swap arm (München, 2026-11-24 08:08–08:14Z; M). Engine
+`c3294e050ff2`, the node paused, web stopped; logs
+`/root/measure/cutover-c3294e/{log.txt,s5/,s5p2/}`.**
+
+*Part 1 — what the 2 GiB buffers cost with nothing else on the card.* Copy
+A as the model is, copy B with `GGML_SYCL_HOST_PINNED_MEM_2G=1`, loaded A B
+A B:
+
+| | load to first token | 128-token prompt: first token / prefill / decode | 2048-token prompt | VRAM | GTT |
+|---|---|---|---|---|---|
+| A, second load | 8.10 s | 0.280 s / 499.8 / 100.4 tok/s | 2.500 s / 824.4 / 98.0 | 21,782 MiB | 198 MiB |
+| B, second load | 8.27 s | 0.280 s / 499.3 / 100.6 | 2.499 s / 824.8 / 98.0 | 21,782 MiB | 486 MiB |
+
+(First loads 40.8 s and 17.2 s: the page cache, not the option.) The five
+short answers, text for text: B = A in both pairs, and each copy equals
+itself. **The option costs nothing measurable but 288 MiB of host memory.**
+Not obtained: the list of allocations (the engine's memory trace goes
+through the backend's log filter: the model option `verbosity`, not
+LocalAI's debug switch). The proof that the weights are split is part 2.
+
+*Part 2 — the card overcommitted, copy B only (the operator cancelled the
+single-buffer pass).* The 35B, then MADLAD, the reranker and nemotron-embed
+on top, each asked in turn, two rounds; the VRAM check off on the copies,
+everything pinned. VRAM / GTT in MiB per process:
+
+| step | time | what moved |
+|---|---|---|
+| the 35B alone, warm | first token 0.279 s, 99.2 tok/s | 21,747 / 454 |
+| MADLAD, reranker, nemotron loaded (8.1, 7.4, 5.8 s cold) | warm 0.35, 0.03, 0.02 s | at the third load the 35B gave **4,232 MiB** (17,216 / 4,685) — what was needed, not its 18.5 GiB |
+| the 35B asked again | first token **2.040 s** (+1.76), decode 98.1; the next answer 0.277 s, 99.3 | the 35B back (21,147 / 755); MADLAD pushed out by 5.4 GiB (1,828 / 6,032) |
+| round 2: MADLAD, reranker, nemotron | first request 0.77, 0.24, 0.34 s (+0.42, +0.21, +0.32) | each comes back, the one idle longest goes: the reranker, then nemotron, then 4.2 GiB of the 35B |
+| round 2: the 35B | first token **1.523 s** (+1.25), 98.5; the next 0.279 s, 100.1 | as after round 1 |
+
+No abort, no kernel line; MemAvailable 39.4 GB at the start, 28.6 GB at the
+lowest. Against the proposed bar (phase 5, above): (a) no abort; (b) +1.76 s
+and +1.25 s, under 2 s; (c) the next answer warm, 99–100 tok/s; (d) the
+small models +0.2 to +0.4 s; (e) 4.2 GiB given for a card over by about
+3.5 GiB. **None of the five is met: by that bar the numbers are good.**
+
+What the measurement corrects: bringing memory back is SLOW next to an
+upload — 4.2 GiB in 1.25–1.76 s is 2.4–3.4 GiB/s, where a plain upload ran
+at 16.2 GiB/s and the estimate for this step was 0.2–0.4 s. And the driver
+chooses its victim by idleness and by whole buffers: MADLAD, without the
+option, lost 5.4 GiB at once. So a set over the card by 3.5 GiB costs, per
+round of an Ask in which every model works once, about 0.2–0.4 s on each
+small model and 1.3–1.8 s on the 35B: 2–3 s a round, nothing when the same
+model answers twice running, and no decode speed.
+
+**The offloaded arm, on the operator's word to München the same hour
+("Measure now the experts caching option"):** the same sequence with the
+35B as `cpu_moe` with an 8 GiB cache, then 4 GiB, no overcommit — running;
+its rows go here beside S5's.
+
 | configuration that fit | sum MiB | free MiB | host RAM | refusals |
 |---|---|---|---|---|
 | | | | | |
