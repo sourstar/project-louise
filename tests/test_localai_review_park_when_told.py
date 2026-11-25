@@ -58,7 +58,8 @@ def test_it_is_a_mail_under_localai_s_policy_and_carries_one_engine_patch():
         "CMakeLists.txt", "grpc-server.cpp", "park_reply.h", "park_reply_test.cpp", "prepare.sh",
         "patches/0022-server-park-when-told.patch")}
     assert set(re.findall(r"^diff --git a/(\S+)", _inner(), re.M)) == {
-        "common/common.cpp", "common/common.h", "ggml/src/ggml-sycl/ggml-sycl.cpp", "include/llama.h",
+        "common/common.cpp", "common/common.h", "ggml/include/ggml-backend.h", "ggml/src/ggml-backend-impl.h",
+        "ggml/src/ggml-backend.cpp", "ggml/src/ggml-sycl/ggml-sycl.cpp", "include/llama.h", "src/llama-context.cpp",
         "src/llama-model.cpp", "src/llama-model.h", "tools/server/README.md", "tools/server/server-common.cpp",
         "tools/server/server-common.h", "tools/server/server-context.cpp", "tools/server/server-context.h",
         "tools/server/server-task.cpp", "tools/server/server-task.h", "tools/server/server.cpp",
@@ -136,10 +137,10 @@ def test_which_code_each_outcome_is():
 def test_every_request_rpc_answers_the_refusal_by_its_type_and_nothing_else_moves():
     server = _sections()[BACKEND + "grpc-server.cpp"]
     added, removed = _added(server), _removed(server)
-    # PredictStream, Predict, Embedding, Rerank, TTS, TTSStream, Score, the slot cache, a decision's default - and
-    # the repeated LoadModel
-    assert added.count("grpc_status_of_request_error(") == 10 + 1       # and its own definition
-    assert removed.count("grpc::StatusCode::INTERNAL") == 8, "each was INTERNAL; the decision's switch had a bare default"
+    # PredictStream (its first result, and every later one), Predict, Embedding, Rerank, TTS, TTSStream, Score, the
+    # slot cache, a decision's default, a realtime session (twice) - and the repeated LoadModel
+    assert added.count("grpc_status_of_request_error(") == 13 + 1       # and its own definition
+    assert removed.count("grpc::StatusCode::INTERNAL") == 10, "each was INTERNAL; the decision's switch had a bare default"
     assert "default: return grpc_status_of_request_error(results.error->to_json(), error->err_msg);" in added
     # the canary's trailer on an Embedding is still said: a real canary failure is not a room refusal
     assert "CONTEXT_CANARY_TRAILER" not in removed
@@ -170,7 +171,10 @@ def test_free_status_and_the_return_exist_only_where_the_engine_can_park():
     for said in ("server_task_result_ptr runPark(bool park)", "grpc::Status Free(", "grpc::Status Status("):
         assert said in guarded, said
     assert guarded.count("ctx_server.get_meta().can_park") == 2
-    assert guarded.count('grpc::Status(grpc::StatusCode::UNIMPLEMENTED,') == 2, "a model that cannot park: as before"
+    # no model, or a model that cannot park: Unimplemented as before (Free, twice; Status)
+    assert guarded.count('grpc::Status(grpc::StatusCode::UNIMPLEMENTED,') == 3
+    # the first load running is "not now": never Unimplemented, which tells the caller this backend cannot park
+    assert 'return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "busy: the model is loading");' in guarded
     # the return: only for a model that can park, the load lock released first, the message after
     back = server[server.index("load_lock.unlock();"):server.index("result->set_message(llama_grpc::LOAD_ALREADY_LOADED);")]
     assert "#if LOCALAI_HAS_PARK" in back and "runPark(false)" in back and "grpc_status_of_request_error(" in back
@@ -188,7 +192,7 @@ def test_the_engine_parks_when_told_and_never_by_itself():
     # one added line among the tasks that need no context (the `return false` after it is the function's own)
     assert re.search(r"^\+\s+case SERVER_TASK_TYPE_PARK:\n \s+return false;", inner, re.M), \
         "a park needs no context: none is created for it"
-    park = added[added.index("void process_park(const server_task & task) {"):added.index("CONTEXT_NOT_UNPARKED, // the parked weights could not come back")]
+    park = added[added.index("void process_park(const server_task & task) {"):added.index("void context_not_acquired(bool was_parked) {")]
     assert park.index("if (!can_park) {") < park.index("slot.is_processing()") < park.index("context_release();") \
         < park.index("weights_park()")
     assert '"busy: a request is running, the model stays on the device", ERROR_TYPE_UNAVAILABLE' in park
@@ -202,7 +206,13 @@ def test_the_engine_parks_when_told_and_never_by_itself():
 def test_one_type_for_no_room_and_the_canary_no_longer_takes_it_for_a_wrong_context():
     added = _added(_inner())
     assert re.search(r'case ERROR_TYPE_NO_ROOM_ON_DEVICE:\n\s+type_str = "no_room_on_device";\n\s+code = 503;', added)
-    assert "return ret == -2 ? ERROR_TYPE_NO_ROOM_ON_DEVICE : ERROR_TYPE_SERVER;" in added
+    # ONLY the backend's own allocation failure is a refusal: -2 is also the host's output buffer and the memory
+    # module's failures, which no later call mends (parking-step-2.md §6, the table of llama_process)
+    assert "#define LLAMA_PROCESS_NO_MEMORY (-4)" in added
+    assert added.count("case GGML_STATUS_ALLOC_FAILED: return LLAMA_PROCESS_NO_MEMORY;") == 2, "encode and decode"
+    assert "return ret == LLAMA_PROCESS_NO_MEMORY ? ERROR_TYPE_NO_ROOM_ON_DEVICE : ERROR_TYPE_SERVER;" in added
+    assert added.count("no_memory = ret == LLAMA_PROCESS_NO_MEMORY;") == 2, "the canary's encode and its decode"
+    assert "ret == -2" not in added
     assert "static enum error_type error_type_of_process(int32_t ret) {" in added
     assert added.count("error_type_of_process(ret)") == 2, "the decode and the encode"
     assert "COMMON_CANARY_NO_MEMORY," in added
@@ -212,6 +222,83 @@ def test_one_type_for_no_room_and_the_canary_no_longer_takes_it_for_a_wrong_cont
         "a context that cannot be created, counted nowhere as a canary that failed"
     load = added[added.index("case COMMON_CANARY_NO_MEMORY:\n"):]
     assert "return false;" in load[:load.index("}")], "at the load it fails the load: never served unchecked"
+
+
+def test_a_return_that_fails_is_never_answered_as_a_device_that_is_full():
+    """The reading's first finding: park and unpark returned a bool, and every false was "no room" - bytes read back
+    that were not the ones parked, any exception of the device. A corruption retried for ever, and under the verify
+    switch read as the refusal test passing."""
+    added = _added(_inner())
+    assert "GGML_BACKEND_PARK_NO_MEMORY = 1," in added and "GGML_BACKEND_PARK_FAILED    = 2," in added
+    # the device's own word for an allocation it could not make, and nothing else, is a refusal
+    assert "const bool no_memory = e.code() == sycl::errc::memory_allocation;" in added
+    assert "return no_memory ? GGML_BACKEND_PARK_NO_MEMORY : GGML_BACKEND_PARK_FAILED;" in added
+    # bytes that came back wrong: FAILED, the buffer parked again with its contents intact on the host
+    inner = _inner()
+    assert re.search(r"mem->release\(\);\n \s+ggml_sycl_memtrace_del\(ctx->dev_ptr\);\n-\s+return false;\n\+\s+return GGML_BACKEND_PARK_FAILED;", inner)
+    # the server answers the two apart, at an order and at a request
+    assert added.count("case GGML_BACKEND_PARK_NO_MEMORY:") == 2 and added.count("case GGML_BACKEND_PARK_FAILED:") == 2
+    assert "return CONTEXT_UNPARK_FAILED;" in added
+    assert added.count('"the weights could not be brought back to the device: a failure, not a refusal - "') == 2
+    failed = added[added.index("case CONTEXT_UNPARK_FAILED:\n                    send_error("):]
+    assert "ERROR_TYPE_SERVER" in failed[:failed.index("return true;")]
+    # and the pool's commit, live since 0014, is held to the same test: any other exception is not survived as a refusal
+    pool = added[added.index("if (e.code() != sycl::errc::memory_allocation) {"):]
+    assert "throw;" in pool[:pool.index("}")]
+
+
+def test_a_request_never_parks():
+    """The reading's second finding: the request that brought the weights back and was then refused its context
+    parked them again - a second copy per refused request, by a park whose own failure was not read."""
+    inner = _inner()
+    added, removed = _added(inner), _removed(inner)
+    assert removed.count("weights_park(); // a request that is refused leaves the device as it found it") == 1, \
+        "the prototype's re-park is REMOVED"
+    assert "weights_park(); // a request that is refused" not in added
+    acquire = added[added.index("void context_not_acquired(bool was_parked) {"):added.index("CONTEXT_NOT_UNPARKED, //")]
+    assert acquire.index("if (park_weights) {") < acquire.index("weights_park() != GGML_BACKEND_PARK_OK"), \
+        "only the measuring switch parks by itself, and it reads what happened"
+    assert "they stay on the device" in acquire
+    assert added.count("context_not_acquired(was_parked);") == 4, "the test's failure, the creation, the canary refused, the canary wrong"
+    # the counts are of weights that left and came back, never of attempts: both are after the success
+    park = added[added.index("enum ggml_backend_park_status weights_park() {"):added.index("enum ggml_backend_park_status weights_unpark() {")]
+    assert park.index("if (status != GGML_BACKEND_PARK_OK) {") < park.index("metrics.n_weights_park += 1;")
+    assert "metrics.n_no_room += 1;" in added and '"no_room_refusals_total",' in added
+
+
+def test_already_loaded_is_said_only_to_the_options_that_are_loaded():
+    """The reading's seventh finding, and the dangerous one for invariant 12: the backend compared the NAME alone, so
+    the same name under other options un-parked and answered success while the old options went on computing."""
+    server = _added(_sections()[BACKEND + "grpc-server.cpp"])
+    assert "backend::ModelOptions loaded_options;" in server and "loaded_options.CopyFrom(*request);" in server
+    repeat = server[server.index("const std::string differ = fields_that_differ(loaded_options, *request);"):]
+    refused = repeat[:repeat.index("// Same model: a repeated request is not a reload.")]
+    assert "return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, error_msg);" in refused
+    assert "runPark" not in refused, "refused before anything is brought back"
+    # the fields are NAMED, never their values: options can carry credentials (invariant 8)
+    reporter = server[server.index("class FieldNameReporter"):server.index("static std::string fields_that_differ(")]
+    assert "names.insert(std::string(path.front().field->name()));" in reporter
+    for value in ("DebugString", "ShortDebugString", "Utf8DebugString", "SerializeAsString", "ReportDifferencesToString"):
+        assert value not in server, value
+    header = _added(_sections()[BACKEND + "park_reply.h"])
+    assert "did not load again" in header and "they differ in: " in header
+
+
+def test_a_stream_that_fails_after_its_first_chunk_fails():
+    """Pre-existing in LocalAI's backend, found by the reading: only the stream's FIRST result was tested for an
+    error; a later one was written as an empty reply and the stream ended OK - a truncated answer as a complete one."""
+    server = _added(_sections()[BACKEND + "grpc-server.cpp"])
+    later = server[server.index("// An error AFTER the first chunk."):]
+    assert "return grpc_status_of_request_error(error_json, error_json.value(\"message\", \"Error occurred\"));" in later[:700]
+    assert server.index("if (result->is_error()) {\n                // An error AFTER the first chunk.") > 0
+
+
+def test_status_keeps_the_process_s_own_memory_where_the_monitor_reads_it():
+    server = _added(_sections()[BACKEND + "grpc-server.cpp"])
+    status = server[server.index("grpc::Status Status("):server.index("#endif // LOCALAI_HAS_PARK")]
+    assert "memory->set_total(virtual_bytes);" in status and '["rss"] = resident_bytes;' in status
+    assert '["parked_host"] = m.weights_parked ? m.park_size : 0;' in status and '["no_room"]     = m.n_no_room;' in status
+    assert "set_total(m.weights_parked" not in status, "total was 0 for a model on the device: the monitor read it as its memory"
 
 
 def test_the_refusal_switch_touches_only_a_return_and_at_its_last_piece():
@@ -226,7 +313,8 @@ def test_the_refusal_switch_touches_only_a_return_and_at_its_last_piece():
 
 def test_the_note_says_what_differs_from_the_design_and_what_was_not_measured():
     section = NOTE[NOTE.index("## 6. The engine part, as built"):]
-    for said in ("FAILED_PRECONDITION", "Where it differs from §3.1", "COMMON_CANARY_NO_MEMORY", "33 of 33", "48 of 48",
-                 "no_room_on_device: the weights cannot come back", "AMENDED",
-                 "17 of 17", "NOT measured: anything on a card", "park_told.py cycles", "What an unpatched LocalAI does"):
+    for said in ("FAILED_PRECONDITION", "Where it differs from §3.1", "COMMON_CANARY_NO_MEMORY", "49 of 49", "56 of 56",
+                 "no_room_on_device: the weights cannot come back", "SECOND CUT", "LLAMA_PROCESS_NO_MEMORY",
+                 "What changes for EVERY model", "Under today's server", "errc::memory_allocation",
+                 "19 of 19", "NOT measured: anything on a card", "park_told.py cycles", "What an unpatched LocalAI does"):
         assert said in section, said

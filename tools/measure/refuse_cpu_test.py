@@ -64,8 +64,11 @@ for label, args in (("the context kept", park.BASE), ("context on demand, a keep
           status == 200 and got == base, f"HTTP {status} after {len(refused)} refused")
     text = s.text()
     check(f"{label}: both refusals happened and the server said so",
-          text.count("DEV: the CPU stand-in refuses") == 2 and ("Compute error." in text or "canary" in text),
-          f"{text.count('DEV: the CPU stand-in refuses')} refusals, {text.count('Compute error.')} compute-error lines")
+          text.count("DEV: the CPU stand-in refuses") == 2 and ("Compute error" in text or "canary" in text),
+          f"{text.count('DEV: the CPU stand-in refuses')} refusals, {text.count('Compute error')} compute-error lines")
+    if "--told" in sys.argv:
+        check(f"{label}: each refused request was counted", s.metric("no_room_refusals_total") >= len(refused) >= 1,
+              f"{s.metric('no_room_refusals_total'):.0f} counted, {len(refused)} requests refused")
     status, got = s.embed()
     check(f"{label}: and it goes on reproducing itself", status == 200 and got == base and s.proc.poll() is None)
     s.stop()

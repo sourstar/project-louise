@@ -266,6 +266,8 @@ def main() -> int:
     check("still parked, the same process", s.metric("weights_parked") == 1 and s.proc.poll() is None)
     status, got = s.embed()
     check("the next request is served, the baseline's vectors", status == 200 and got == base and s.metric("weights_parked") == 0)
+    check("both refusals were counted, and nothing else", s.metric("no_room_refusals_total") == 2
+          and s.metric("weights_parks_total") == 1 and s.metric("weights_unparks_total") == 1)
     s.stop()
 
     # I. a model that cannot park says so, and is left alone
@@ -329,6 +331,39 @@ def main() -> int:
     check("told again, it parks", status == 200 and body.get("parked") is True and s.metric("weights_parked") == 1)
     status, got = s.embed()
     check("and comes back as ever", status == 200 and got == base)
+    s.stop()
+
+    # L. a return that FAILS is not a refusal (the device failed, or the bytes read back are not the ones parked):
+    # a fault, 500 - never 503, never counted as no room, never a request to send again - and the model stays parked
+    s = Server(binary, model, BASE + ON_DEMAND, dict(told, GGML_CPU_PARK_TEST_BROKEN="2"))
+    s.post("/park")
+    status, body = s.post("/unpark")
+    check("told to come back and the return FAILS: 500 server_error, not a refusal",
+          status == 500 and _type(body) == "server_error" and "a failure, not a refusal" in str(body), f"HTTP {status}: {str(body)[:150]}")
+    status, body = s.embed(TEXTS[:1])
+    check("a request whose return FAILS: 500 server_error, never 503",
+          status == 500 and _type(body) == "server_error" and "a failure, not a refusal" in str(body), f"HTTP {status}: {str(body)[:150]}")
+    check("the model is still parked, its weights intact aside; nothing was counted as a refusal or a return",
+          s.metric("weights_parked") == 1 and s.metric("no_room_refusals_total") == 0 and s.metric("weights_unparks_total") == 0
+          and s.proc.poll() is None)
+    status, got = s.embed()
+    check("when the return works again the model answers the baseline", status == 200 and got == base)
+    s.stop()
+
+    # M. A REQUEST NEVER PARKS: the weights came back for a request whose context is then refused - they STAY on the
+    # device, are not copied out again, and the next request copies nothing
+    s = Server(binary, model, BASE + ON_DEMAND, dict(told, LLAMA_SERVER_CTX_CREATE_FAIL="1"))
+    s.wait_for("context freed in", 1)
+    s.post("/park")
+    status, body = s.embed(TEXTS[:1])
+    check("the weights come back, the context is refused: 503 no_room_on_device", status == 503 and _type(body) == "no_room_on_device"
+          and s.count("weights unparked in") == 1, f"HTTP {status}: {str(body)[:120]}")
+    check("the weights STAY on the device: no second park, no second copy", s.metric("weights_parked") == 0
+          and s.metric("weights_parks_total") == 1 and s.count("the buffer poisoned") == 1
+          and s.count("they stay on the device") >= 1, f"poisoned {s.count('the buffer poisoned')} times")
+    status, got = s.embed()
+    check("the next request answers the baseline and brings nothing back again", status == 200 and got == base
+          and s.metric("weights_unparks_total") == 1 and s.metric("no_room_refusals_total") == 1)
     s.stop()
 
     failed = [name for name, ok, _ in results if not ok]

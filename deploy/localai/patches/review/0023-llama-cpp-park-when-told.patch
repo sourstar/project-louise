@@ -19,31 +19,52 @@ and no new one:
 - LoadModel for the model the process already holds brings the weights
   back, then answers what it always answered, byte for byte: "Model
   already loaded". Not parked, it is the no-op it was.
-- a request to a parked model brings the weights back by itself.
-- Status says where the weights are: memory.total is their bytes held in
-  host memory now, the breakdown "parked", "park_size", "parks", "unparks".
+- a request to a parked model brings the weights back by itself, and they
+  then stay on the device: a request never parks.
+- Status says where the weights are. memory.total stays what a caller
+  reads for a backend with no Status - the process's virtual size, as
+  LocalAI's own sample, with "rss" - and the breakdown adds "parked",
+  "park_size", "parked_host", "parks", "unparks" and "no_room".
+
+"Model already loaded" is said only to the options that ARE loaded. This
+backend compared the model's NAME alone, so a LoadModel under the same
+name and other options was answered success while the old options went on
+computing - harmless while nothing sent a second LoadModel, not once that
+call is how a parked model comes back. The options of the load are kept;
+a repeat that differs is refused FAILED_PRECONDITION, nothing is brought
+back or loaded, and the message names the FIELDS that differ, never their
+values: load options can carry credentials.
 
 A model that cannot park answers Free and Status with Unimplemented, as
 this backend always did: the caller stops the process, and samples it, as
-before. Free while a request runs answers FailedPrecondition "busy" - it
-is for now, where Unimplemented is for good - and the model stays on the
-device.
+before. Free while a request runs, or while the first load runs, answers
+FailedPrecondition "busy" - it is for now, where Unimplemented is for good
+- and the model stays as it is. A park that cannot copy the weights out
+answers Internal, and they stay on the device.
 
 One status for "the device has no room now". When parked weights cannot
-come back, when a context cannot be created, or when the device refuses
-memory in the middle of a graph, the request - Predict, PredictStream,
-Embedding, Rerank, TTS, Score, the slot cache, a decision - and a repeated
-LoadModel are answered RESOURCE_EXHAUSTED, where they were INTERNAL like a
-fault. Nothing is wrong with the request or the model; the model stays as
-it was (parked, if it was), and the same request can be sent again. Not
-UNAVAILABLE, which LocalAI reads as a backend it can no longer reach.
-Every other error is INTERNAL, as before.
+come back, when a context cannot be created, or when the backend cannot
+allocate memory for a graph, the request - Predict, PredictStream,
+Embedding, Rerank, TTS, Score, the slot cache, a decision, a realtime
+session - and a repeated LoadModel are answered RESOURCE_EXHAUSTED, where
+they were INTERNAL like a fault. Nothing is wrong with the request or the
+model; the same request can be sent again. Not UNAVAILABLE, which LocalAI
+reads as a backend it can no longer reach. A return that FAILS - the
+device failing, or bytes read back that are not the ones parked - is
+INTERNAL: it is never answered as a refusal. Every other error is
+INTERNAL, as before.
 
 RESOURCE_EXHAUSTED has other meanings on this wire - a stream that is
 busy, a message over the size limit, a rate-limited upstream - so the
 refusal also says its type at the head of its message, where a caller
 that maps statuses can tell it from them without a list of messages:
 "no_room_on_device: the weights cannot come back to the device now".
+
+A stream that fails after its first chunk FAILS. PredictStream tested
+only its first result for an error; a later one was written as one more
+reply - an empty one, its JSON has no content - and the stream then ended
+OK: a generation cut short by any failure was delivered as a complete
+answer. It now ends with the error's status, as at the first result.
 
 The messages and the codes are in park_reply.h, tested without a model
 (park_reply_test.cpp): a proxy in front of a backend tells a return from a
@@ -52,25 +73,31 @@ checkout (LOCALAI_HAS_PARK), so a fork without the llama.cpp patch builds
 this file as before, Free and Status unimplemented.
 
 Checked without a device, on a CPU build of this backend with a stand-in
-for a device that parks, refuses and fails to park (a dev patch, in no
-build): 33 of 33 over gRPC - a model that cannot park answers as before;
-Free, Status and LoadModel as above; the first vectors bit for bit over 12
-cycles, returned by LoadModel and by the request; a refused return is
-RESOURCE_EXHAUSTED "no_room_on_device: ..." with the model still parked
-and the next request served; a park that fails is INTERNAL with nothing
-parked; some 300 calls of Free beside live requests, each done or refused
-busy, every request's vectors intact. NOT run: any of it on a device, or through LocalAI's server, which
-today calls Free only before it stops a process.
+for a device that parks, refuses, fails and cannot park (a dev patch, in
+no build): 49 of 49 over gRPC - a model that cannot park answers as
+before; the same name under other options is refused with the fields
+named and nothing of their contents, parked or not; Free, Status and
+LoadModel as above; the first vectors bit for bit over 12 cycles; a
+refused return is RESOURCE_EXHAUSTED "no_room_on_device: ..." with the
+model still parked and the next request served; a FAILED return is
+INTERNAL, still parked, counted as no refusal; weights that came back for
+a request whose context is refused stay, one park and one copy in all; a
+park that fails is INTERNAL with nothing parked; some 300 calls of Free
+beside live requests, each done or refused busy, every request's vectors
+intact; a stream refused a graph after its first chunk ends
+RESOURCE_EXHAUSTED and the next one is whole. NOT run: any of it on a
+device, or through LocalAI's server, which today calls Free only before
+it stops a process.
 
 Assisted-by: Claude Code
 ---
- backend/cpp/llama-cpp/CMakeLists.txt          |   6 +
- backend/cpp/llama-cpp/grpc-server.cpp         | 169 +++-
- backend/cpp/llama-cpp/park_reply.h            |  77 ++
- backend/cpp/llama-cpp/park_reply_test.cpp     |  65 ++
- .../patches/0022-server-park-when-told.patch  | 806 ++++++++++++++++++
- backend/cpp/llama-cpp/prepare.sh              |  13 +
- 6 files changed, 1125 insertions(+), 11 deletions(-)
+ backend/cpp/llama-cpp/CMakeLists.txt          |    6 +
+ backend/cpp/llama-cpp/grpc-server.cpp         |  276 +++-
+ backend/cpp/llama-cpp/park_reply.h            |   94 ++
+ backend/cpp/llama-cpp/park_reply_test.cpp     |   76 +
+ .../patches/0022-server-park-when-told.patch  | 1334 +++++++++++++++++
+ backend/cpp/llama-cpp/prepare.sh              |   13 +
+ 6 files changed, 1786 insertions(+), 13 deletions(-)
  create mode 100644 backend/cpp/llama-cpp/park_reply.h
  create mode 100644 backend/cpp/llama-cpp/park_reply_test.cpp
  create mode 100644 backend/cpp/llama-cpp/patches/0022-server-park-when-told.patch
@@ -93,10 +120,18 @@ index 663ca11..111eef0 100644
      target_include_directories(passthrough_options_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
      target_compile_features(passthrough_options_test PRIVATE cxx_std_17)
 diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
-index f8d69d0..7534de3 100644
+index f8d69d0..c878fa6 100644
 --- a/backend/cpp/llama-cpp/grpc-server.cpp
 +++ b/backend/cpp/llama-cpp/grpc-server.cpp
-@@ -118,6 +118,41 @@
+@@ -96,6 +96,7 @@
+ #include <grpcpp/grpcpp.h>
+ #include <grpcpp/health_check_service_interface.h>
+ #include <grpcpp/security/server_credentials.h>
++#include <google/protobuf/util/message_differencer.h>
+ #include <regex>
+ #include <algorithm>
+ #include <atomic>
+@@ -118,6 +119,98 @@
  
  #include "parent_watch.h" // best-effort parent-death backstop (see header)
  #include "second_signal.h" // a second signal leaves at once, without exit() (see header)
@@ -112,6 +147,63 @@ index f8d69d0..7534de3 100644
 +        case llama_grpc::ParkCode::Internal:           break;
 +    }
 +    return grpc::StatusCode::INTERNAL;
++}
++
++// The NAMES of the top-level fields in which two messages differ, never their
++// values: load options can carry credentials, and this goes into an error
++// message and a log.
++class FieldNameReporter : public google::protobuf::util::MessageDifferencer::Reporter {
++public:
++    using SpecificField = google::protobuf::util::MessageDifferencer::SpecificField;
++    std::set<std::string> names;
++
++    void ReportAdded(const google::protobuf::Message &, const google::protobuf::Message &,
++                     const std::vector<SpecificField> & path) override { note(path); }
++    void ReportDeleted(const google::protobuf::Message &, const google::protobuf::Message &,
++                       const std::vector<SpecificField> & path) override { note(path); }
++    void ReportModified(const google::protobuf::Message &, const google::protobuf::Message &,
++                        const std::vector<SpecificField> & path) override { note(path); }
++
++private:
++    void note(const std::vector<SpecificField> & path) {
++        if (!path.empty() && path.front().field != nullptr) {
++            names.insert(std::string(path.front().field->name()));
++        } else {
++            names.insert("(a field this backend does not know)");
++        }
++    }
++};
++
++// "" if the two messages are the same; else the names of the fields that are not
++static std::string fields_that_differ(const google::protobuf::Message & a, const google::protobuf::Message & b) {
++    google::protobuf::util::MessageDifferencer differencer;
++    FieldNameReporter reporter;
++    differencer.ReportDifferencesTo(&reporter);
++    if (differencer.Compare(a, b)) {
++        return "";
++    }
++    return llama_grpc::join_names(reporter.names);
++}
++
++// The memory of this process, as LocalAI samples a backend that has no Status
++// of its own: its virtual size and its resident set. false where it cannot be
++// read (not Linux).
++static bool process_memory(uint64_t & virtual_bytes, uint64_t & resident_bytes) {
++#if defined(__linux__)
++    std::ifstream statm("/proc/self/statm");
++    uint64_t size_pages = 0, resident_pages = 0;
++    if (!(statm >> size_pages >> resident_pages)) {
++        return false;
++    }
++    const uint64_t page = (uint64_t) sysconf(_SC_PAGESIZE);
++    virtual_bytes  = size_pages * page;
++    resident_bytes = resident_pages * page;
++    return true;
++#else
++    (void) virtual_bytes;
++    (void) resident_bytes;
++    return false;
++#endif
 +}
 +
 +static std::string error_type_of(const json & error) {
@@ -138,7 +230,52 @@ index f8d69d0..7534de3 100644
  
  
  using grpc::Server;
-@@ -2597,6 +2632,97 @@ public:
+@@ -1880,7 +1973,7 @@ public:
+             if (result->is_error()) {
+                 const std::string msg = json_value(result->to_json(), "message", std::string("server error"));
+                 send_error("server_error", msg, true);
+-                return grpc::Status(grpc::StatusCode::INTERNAL, msg);
++                return grpc_status_of_request_error(result->to_json(), msg);
+             }
+         }
+         send_event("session.created", rts::session_meta(input_rate, output_rate, rts::default_voices(), voice));
+@@ -1907,6 +2000,7 @@ public:
+                 const json j = result->to_json();
+                 send_error("server_error", json_value(j, "message", std::string("server error")), true);
+                 fatal_message = json_value(j, "message", std::string("server error"));
++                fatal_error   = j;
+                 fatal         = true;
+                 break;
+             }
+@@ -1922,7 +2016,7 @@ public:
+         reader.join();
+ 
+         if (!fatal_message.empty()) {
+-            return grpc::Status(grpc::StatusCode::INTERNAL, fatal_message);
++            return grpc_status_of_request_error(fatal_error, fatal_message);
+         }
+         if (peer.gone()) {
+             return grpc::Status(grpc::StatusCode::CANCELLED, "client closed the stream");
+@@ -1957,6 +2051,7 @@ private:
+     int64_t                       seq = 0;
+     std::atomic<bool>             fatal{false};
+     std::string                   fatal_message;
++    json                          fatal_error; // the error object it came from, for the status' code
+     std::atomic<bool>             client_done{false};
+ 
+     // the response being produced, shared by the reader and the result loop
+@@ -2555,6 +2650,10 @@ private:
+     // it does not change, and the context it was read from may be gone
+     // between two requests (context_on_demand). Written under LoadModel.
+     enum llama_pooling_type loaded_pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
++    // The options of the load, kept to answer a LoadModel for the model this
++    // process already holds: "already loaded" is said only to the options
++    // that ARE loaded. Written under LoadModel.
++    backend::ModelOptions loaded_options;
+     // Serializes LoadModel. ctx_server.load_model() ends with init(), which
+     // must run once per server_context: a second call rebuilds the slots and
+     // the queue callbacks while the main loop uses them, and replaces the
+@@ -2597,6 +2696,115 @@ public:
          return Status::OK;
      }
  
@@ -171,7 +308,16 @@ index f8d69d0..7534de3 100644
 +        auto auth = checkAuth(context);
 +        if (!auth.ok()) return auth;
 +
-+        if (!loaded_model || !ctx_server.get_meta().can_park) {
++        if (!loaded_model) {
++            // While the first load runs the answer is "not now", not "never":
++            // Unimplemented tells the caller this backend cannot park at all.
++            std::unique_lock<std::mutex> load_lock(load_model_mutex, std::try_to_lock);
++            if (!load_lock.owns_lock()) {
++                return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "busy: the model is loading");
++            }
++            return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "llama-cpp: no model is loaded, nothing to free");
++        }
++        if (!ctx_server.get_meta().can_park) {
 +            return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "llama-cpp: this model cannot park, stop the process to free the device");
 +        }
 +
@@ -190,11 +336,14 @@ index f8d69d0..7534de3 100644
 +        return Status::OK;
 +    }
 +
-+    // Status of a model that can park: where its weights are. memory.total is
-+    // the bytes of them held in HOST memory now (0 while they are on the
-+    // device); the breakdown says "parked" (0 or 1), "park_size" (the bytes
-+    // that park, which the device must have room for when they come back) and
-+    // how many times they left and came back. A model that cannot park
++    // Status of a model that can park: where its weights are. memory.total
++    // stays what a caller reads there for a backend with no Status - the
++    // process's virtual size, as LocalAI's own sample of it, with "rss" in
++    // the breakdown - and the breakdown adds: "parked" (0 or 1), "park_size"
++    // (the bytes that park, which the device must have room for when they
++    // come back), "parked_host" (those bytes while they are in host memory,
++    // else 0), how many times they left and came back, and "no_room", the
++    // requests answered that the device was full. A model that cannot park
 +    // answers Unimplemented, as this backend always did, and the caller
 +    // samples the process as before.
 +    grpc::Status Status(ServerContext* context, const backend::HealthMessage* /*request*/, backend::StatusResponse* response) override {
@@ -224,11 +373,17 @@ index f8d69d0..7534de3 100644
 +        const server_metrics & m = res_metrics->metrics;
 +        response->set_state(res_metrics->n_processing_slots > 0 ? backend::StatusResponse::BUSY : backend::StatusResponse::READY);
 +        auto * memory = response->mutable_memory();
-+        memory->set_total(m.weights_parked ? m.park_size : 0);
-+        (*memory->mutable_breakdown())["parked"]    = m.weights_parked ? 1 : 0;
-+        (*memory->mutable_breakdown())["park_size"] = m.park_size;
-+        (*memory->mutable_breakdown())["parks"]     = m.n_weights_park;
-+        (*memory->mutable_breakdown())["unparks"]   = m.n_weights_unpark;
++        uint64_t virtual_bytes = 0, resident_bytes = 0;
++        if (process_memory(virtual_bytes, resident_bytes)) {
++            memory->set_total(virtual_bytes);
++            (*memory->mutable_breakdown())["rss"] = resident_bytes;
++        }
++        (*memory->mutable_breakdown())["parked"]      = m.weights_parked ? 1 : 0;
++        (*memory->mutable_breakdown())["park_size"]   = m.park_size;
++        (*memory->mutable_breakdown())["parked_host"] = m.weights_parked ? m.park_size : 0;
++        (*memory->mutable_breakdown())["parks"]       = m.n_weights_park;
++        (*memory->mutable_breakdown())["unparks"]     = m.n_weights_unpark;
++        (*memory->mutable_breakdown())["no_room"]     = m.n_no_room;
 +        return Status::OK;
 +    }
 +#endif // LOCALAI_HAS_PARK
@@ -236,12 +391,23 @@ index f8d69d0..7534de3 100644
      grpc::Status LoadModel(ServerContext* context, const backend::ModelOptions* request, backend::Result* result) override {
          auto auth = checkAuth(context);
          if (!auth.ok()) return auth;
-@@ -2615,8 +2741,27 @@ public:
+@@ -2615,8 +2823,38 @@ public:
          }
          if (loaded_model) {
              if (loaded_model_identity == request->model()) {
 -                // Same model: a repeated request is a no-op, not a reload.
 -                result->set_message("Model already loaded");
++                // "Already loaded" is said only to the options that ARE
++                // loaded. The same name under other options is another load,
++                // which one process does not do: answering success to it
++                // would tell the caller its options are the ones computing.
++                const std::string differ = fields_that_differ(loaded_options, *request);
++                if (!differ.empty()) {
++                    const std::string error_msg = llama_grpc::other_options_message(loaded_model_identity, differ);
++                    result->set_message(error_msg);
++                    result->set_success(false);
++                    return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, error_msg);
++                }
 +                // Same model: a repeated request is not a reload. For a model
 +                // that was parked (Free) it is the way back: the weights
 +                // return to the device first, and the answer is the same
@@ -266,7 +432,15 @@ index f8d69d0..7534de3 100644
                  result->set_success(true);
                  return Status::OK;
              }
-@@ -3284,7 +3429,7 @@ public:
+@@ -2757,6 +2995,7 @@ public:
+         //ctx_server.init();
+         result->set_message("Loading succeeded");
+         result->set_success(true);
++        loaded_options.CopyFrom(*request);
+         loaded_model = true;
+         loaded_model_identity = request->model();
+         loaded_pooling_type = ctx_server.get_meta().pooling_type;
+@@ -3284,7 +3523,7 @@ public:
              // made it the first content chunk: LocalAI streamed the error text
              // as assistant output on an HTTP 200 instead of failing the request.
              json error_json = first_result->to_json();
@@ -275,7 +449,23 @@ index f8d69d0..7534de3 100644
          }
  
          // Lambda to build a Reply from JSON + attach chat deltas from a result.
-@@ -3890,7 +4035,8 @@ public:
+@@ -3408,6 +3647,15 @@ public:
+             if (result == nullptr) {
+                 break;
+             }
++            if (result->is_error()) {
++                // An error AFTER the first chunk. It was written as one more
++                // reply - its JSON has no content, so an empty one - and the
++                // stream then ended OK: a generation cut short by a failure
++                // was delivered as a complete answer. It ends the stream as
++                // what it is, like an error at the first result.
++                const json error_json = result->to_json();
++                return grpc_status_of_request_error(error_json, error_json.value("message", "Error occurred"));
++            }
+ 
+             json res_json = result->to_json();
+             if (res_json.is_null()) {
+@@ -3890,7 +4138,8 @@ public:
          } else if (all_results.error) {
              std::cout << "[DEBUG] Error in results: " << all_results.error->to_json().value("message", "") << std::endl;
              reply->set_message(all_results.error->to_json().value("message", ""));
@@ -285,7 +475,7 @@ index f8d69d0..7534de3 100644
          } else {
              std::cout << "[DEBUG] Received " << all_results.results.size() << " results" << std::endl;
              if (all_results.results.size() == 1) {
-@@ -4080,7 +4226,7 @@ public:
+@@ -4080,7 +4329,7 @@ public:
              if (llama_grpc::is_context_canary_failure(message)) {
                  context->AddTrailingMetadata(llama_grpc::CONTEXT_CANARY_TRAILER, "failed");
              }
@@ -294,7 +484,7 @@ index f8d69d0..7534de3 100644
          }
  
          // Extract the embeddings typed, straight from the task results (no
-@@ -4173,7 +4319,8 @@ public:
+@@ -4173,7 +4422,8 @@ public:
          if (all_results.is_terminated) {
              return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
          } else if (all_results.error) {
@@ -304,7 +494,7 @@ index f8d69d0..7534de3 100644
          }
  
          // Collect responses
-@@ -4392,7 +4539,7 @@ public:
+@@ -4392,7 +4642,7 @@ public:
                  return grpc::Status(grpc::StatusCode::CANCELLED, "TTS request cancelled");
              }
              if (res->is_error()) {
@@ -313,7 +503,7 @@ index f8d69d0..7534de3 100644
              }
              auto * tts_res = dynamic_cast<server_task_result_tts *>(res.get());
              if (tts_res == nullptr) {
-@@ -4470,7 +4617,7 @@ public:
+@@ -4470,7 +4720,7 @@ public:
                  return grpc::Status(grpc::StatusCode::CANCELLED, "TTS request cancelled");
              }
              if (res->is_error()) {
@@ -322,7 +512,7 @@ index f8d69d0..7534de3 100644
              }
              auto * tts_res = dynamic_cast<server_task_result_tts *>(res.get());
              if (tts_res == nullptr) {
-@@ -4598,7 +4745,7 @@ public:
+@@ -4598,7 +4848,7 @@ public:
                      case ERROR_TYPE_INVALID_REQUEST:
                      case ERROR_TYPE_EXCEED_CONTEXT_SIZE: code = grpc::StatusCode::INVALID_ARGUMENT; break;
                      case ERROR_TYPE_NOT_SUPPORTED: code = grpc::StatusCode::UNIMPLEMENTED; break;
@@ -331,7 +521,7 @@ index f8d69d0..7534de3 100644
                  }
                  return grpc::Status(code, error->err_msg);
              }
-@@ -4812,7 +4959,7 @@ public:
+@@ -4812,7 +5062,7 @@ public:
                  return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
              }
              if (all_results.error) {
@@ -340,7 +530,7 @@ index f8d69d0..7534de3 100644
                      all_results.error->to_json().value("message", "Error in receiving score results"));
              }
              if (all_results.results.size() != 1) {
-@@ -5018,7 +5165,7 @@ public:
+@@ -5018,7 +5268,7 @@ public:
          }
          if (res->is_error()) {
              drop_reserved();
@@ -351,10 +541,10 @@ index f8d69d0..7534de3 100644
          if (slot_res == nullptr) {
 diff --git a/backend/cpp/llama-cpp/park_reply.h b/backend/cpp/llama-cpp/park_reply.h
 new file mode 100644
-index 0000000..d776363
+index 0000000..99fb6b6
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/park_reply.h
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,94 @@
 +// Parking: the words and the status codes the backend answers with.
 +//
 +// A model whose weights can leave the device (llama.cpp's llama_model_park)
@@ -367,6 +557,7 @@ index 0000000..d776363
 +// Standard library only.
 +#pragma once
 +
++#include <set>
 +#include <string>
 +
 +namespace llama_grpc {
@@ -431,13 +622,29 @@ index 0000000..d776363
 +    return message.compare(0, head.size(), head) == 0;
 +}
 +
++// LoadModel for the model the process holds, under OTHER options than the
++// ones it was loaded with. It names the fields that differ and never their
++// values: load options can carry credentials.
++inline std::string join_names(const std::set<std::string> & names) {
++    std::string out;
++    for (const std::string & name : names) {
++        out += (out.empty() ? "" : ", ") + name;
++    }
++    return out;
++}
++
++inline std::string other_options_message(const std::string & model, const std::string & fields) {
++    return "llama-cpp: this process holds model \"" + model + "\" under other options than these (they differ in: " +
++           fields + "); it did not load again - restart the backend process to load the model with them";
++}
++
 +} // namespace llama_grpc
 diff --git a/backend/cpp/llama-cpp/park_reply_test.cpp b/backend/cpp/llama-cpp/park_reply_test.cpp
 new file mode 100644
-index 0000000..da1984a
+index 0000000..8f37b0d
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/park_reply_test.cpp
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,76 @@
 +// Unit test for the words and codes of parking (park_reply.h).
 +//
 +// Build & run standalone (standard library only):
@@ -500,21 +707,32 @@ index 0000000..da1984a
 +          !llama_grpc::is_no_room_message("it said no_room_on_device: somewhere inside"),
 +          "a busy stream, an empty message, the words elsewhere in a message: not the refusal");
 +
++    // the same name under other options: the fields are named, in a fixed order, and nothing else of them
++    check(llama_grpc::join_names({ "Options", "ContextSize", "NGPULayers" }) == "ContextSize, NGPULayers, Options",
++          "the fields that differ are named in a fixed order");
++    check(llama_grpc::join_names({}).empty(), "no field differs: nothing is named");
++    const std::string other = llama_grpc::other_options_message("bge-m3", "ContextSize, Options");
++    check(other.find("\"bge-m3\"") != std::string::npos && other.find("ContextSize, Options") != std::string::npos &&
++          other.find("did not load again") != std::string::npos,
++          "a repeat under other options is told which model, which fields, and that nothing was loaded");
++    check(other != llama_grpc::LOAD_ALREADY_LOADED && other.find(llama_grpc::LOAD_ALREADY_LOADED) == std::string::npos,
++          "and it never contains the message that says loaded");
++
 +    fprintf(stderr, failures == 0 ? "all passed\n" : "%d FAILED\n", failures);
 +    return failures == 0 ? 0 : 1;
 +}
 diff --git a/backend/cpp/llama-cpp/patches/0022-server-park-when-told.patch b/backend/cpp/llama-cpp/patches/0022-server-park-when-told.patch
 new file mode 100644
-index 0000000..7957e1a
+index 0000000..983794b
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0022-server-park-when-told.patch
-@@ -0,0 +1,806 @@
+@@ -0,0 +1,1334 @@
 +server: a model parks when it is told to, and one answer for "the device has no room now"
 +
 +0015 let a model's weights leave the device and come back (llama_model_park),
 +and parked them each time the context was freed - a switch to measure with.
-+This makes parking an ORDER, and gives the refusals of a full device one
-+name.
++This makes parking an ORDER, gives the refusals of a full device one name,
++and keeps a refusal apart from a failure all the way down.
 +
 +Parking when told. With --context-on-demand and weight buffers that can park:
 +- SERVER_TASK_TYPE_PARK, run by the server's own thread between two requests.
@@ -522,51 +740,90 @@ index 0000000..7957e1a
 +  for - who tells is who manages the device's memory - and the weights leave.
 +  Told to come back: they return; the next request creates its context as
 +  ever. While a request runs the model is not parked ("busy"). Never a half
-+  state: llama_model_park / unpark leave the model as it was when they
-+  cannot.
-+- a request to a parked model brings the weights back by itself (0015), and
-+  the model then STAYS on the device: between two requests nothing parks.
++  state: llama_model_park / unpark leave the model as it was when they do
++  not succeed.
++- a request to a parked model brings the weights back by itself (0015).
++- A REQUEST NEVER PARKS. 0015 parked again when the request that brought
++  the weights back was then refused its context: a second copy of the
++  weights for every refused request, by a park whose own failure was not
++  read. Once back they stay on the device; where they are is said
++  (llamacpp:weights_parked), and who manages the device parks again. The
++  counts are of weights that left and came back, not of attempts.
 +- POST /park, POST /unpark on llama-server; llama_model_park_size(); the
 +  server's meta says can_park; /metrics says weights_parked,
 +  weights_park_bytes and the two counts.
 +- LLAMA_SERVER_PARK_WEIGHTS stays what it was, a measuring switch.
 +
++A refusal is not a failure. park and unpark returned a bool, and a caller
++took every false for a device with no room: an unpark whose bytes, read
++back from the device, were NOT the ones parked (GGML_SYCL_PARK_VERIFY), and
++any exception of the device while it committed, were answered "try again
++later" - for ever, and under the verify switch a corruption would have read
++as a refusal. They now say why (enum ggml_backend_park_status):
++- NO_MEMORY: the device could not allocate - the extension's own word for
++  it, an exception with errc::memory_allocation (sycl_ext_oneapi_virtual_mem:
++  "If the constructor is unable to allocate the required memory ... throws
++  an exception with errc::memory_allocation") - or the host could not, for a
++  park. Nothing changed; a later call may succeed.
++- FAILED: anything else. The model stays parked, its weights intact on the
++  host, and the request is answered as a fault (500 server_error), never as
++  a device that is full.
++The pool's refused commit (0014, 0018) is held to the same test: only
++errc::memory_allocation fails the graph and lets the process go on; any
++other exception of the device leaves as every other one leaves this backend.
++
 +One answer for no room. ERROR_TYPE_NO_ROOM_ON_DEVICE, HTTP 503, type
-+"no_room_on_device", for every way a request finds the device full at that
-+moment:
-+- parked weights that cannot come back (was 503 unavailable_error, under
-+  the message of a context);
-+- a context that cannot be created (was 503 unavailable_error);
-+- a graph the device refused memory for, llama_process() -2 (was 500
-+  server_error "Compute error.", like a fault);
++"no_room_on_device", counted in llamacpp:no_room_refusals_total:
++- parked weights the device has no room for (was 503 unavailable_error,
++  under the message of a context);
++- a context that cannot be created (was 503 unavailable_error). It was
++  created with these very parameters at the load, so what fails later is
++  the device's or the host's memory at that moment;
++- a graph the backend could not allocate memory for. llama_process returned
++  -2 for it - and -2 for four other things that no later call mends: the
++  host's output buffer (encode and decode), the memory module failing to
++  begin a batch, its unexpected status, its own compute failure. It now
++  returns LLAMA_PROCESS_NO_MEMORY (-4) for GGML_STATUS_ALLOC_FAILED alone,
++  and only that is a refusal (was 500 server_error "Compute error.", like a
++  fault; the other four stay 500);
 +- and the same refusal when the graph is the CANARY of a context being
 +  created: it was answered "context canary failed" and counted in
 +  context_canary_failures_total, as if the context had computed something
 +  wrong. The canary now says COMMON_CANARY_NO_MEMORY: at a request it is a
-+  context that cannot be created, counted nowhere as a failure; at the load
-+  it fails the load, where it left the model served unchecked for the life
-+  of the process ("the context canary cannot be computed for this model").
-+Nothing is wrong with the request or the model in any of them: the same
-+request may be sent again.
++  context that cannot be created, counted nowhere as a canary that failed;
++  at the load it fails the load, where it left the model served unchecked
++  for the life of the process ("the context canary cannot be computed for
++  this model").
++Nothing is wrong with the request or the model in any of them. What the
++server CANNOT tell is a device full at that moment from a request that will
++never fit: it does not see the device's other tenants. It counts, and who
++sends the request again bounds its own retries.
 +
 +For the test of a refused return, which a card cannot be made to give on
 +demand: GGML_SYCL_PARK_REFUSE=N refuses the next N commits that bring a
 +parked buffer back, at the buffer's last piece, raised as the device raises
-+its own - so what was committed before it is released as after a real one.
++its own (errc::memory_allocation) - so what was committed before it is
++released as after a real one.
 +
-+Checked without a device. tools/server/tests: 25 passed (a model that
-+cannot park answers 501 and is left alone; the creation refused is
-+no_room_on_device). On a CPU stand-in for a device that parks, refuses and
-+loses bytes (a dev patch, in no engine): 43 of 43 through /park and /unpark
-+- the first vectors bit for bit after each of 10 parks told, a kept context
-+freed by the order, the two refusals, 501 for a model that cannot, and orders to park
-+beside live requests, each done or refused busy with every request's
-+vectors intact; 17 of 17 graph refusals, every one 503 no_room_on_device,
-+none counted as a canary that failed. ggml-sycl.cpp compiles with icpx.
-+NOT run: any of it on a device.
++Checked without a device. tools/server/tests: 25 passed. On a CPU stand-in
++for a device that parks, refuses, fails and loses bytes (a dev patch, in no
++engine), through /park and /unpark: 56 of 56 - the first vectors bit for
++bit after each of 10 parks told; a kept context freed by the order; a
++refused return 503 with the model still parked; a FAILED return 500, still
++parked, not counted as a refusal; weights that came back for a request
++whose context is then refused STAY, with one park and one copy in all; a
++park that fails leaves the weights on the device; 501 for a model that
++cannot; orders to park beside live requests, each done or refused busy,
++every request's vectors intact. 19 of 19 graph refusals: every one 503
++no_room_on_device, counted, none taken for a canary that failed.
++ggml-sycl.cpp compiles with icpx. NOT run: any of it on a device - and no
++device has yet been SEEN to refuse a commit, so that its exception carries
++errc::memory_allocation is the extension's specification and the runtime's
++source, not an observation: one that carried another code would be
++answered as a failure, loudly, and logged with its code.
 +---
 +diff --git a/common/common.cpp b/common/common.cpp
-+index e6c5181..021bb76 100644
++index e6c5181..fa081a2 100644
 +--- a/common/common.cpp
 ++++ b/common/common.cpp
 +@@ -1467,8 +1467,10 @@ static const char * const COMMON_CANARY_TEXT       = "The quick brown fox jumps
@@ -589,7 +846,7 @@ index 0000000..7957e1a
 +-        ok = llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get()) == 0;
 ++        const int32_t ret = llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get());
 ++        ok        = ret == 0;
-++        no_memory = ret == -2;
+++        no_memory = ret == LLAMA_PROCESS_NO_MEMORY;
 +         if (llama_model_has_decoder(model)) {
 +             llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
 +             if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
@@ -600,7 +857,7 @@ index 0000000..7957e1a
 +-        ok = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
 ++        const int32_t ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
 ++        ok        = ret == 0;
-++        no_memory = ret == -2;
+++        no_memory = ret == LLAMA_PROCESS_NO_MEMORY;
 +     }
 + 
 +     if (ok) {
@@ -633,21 +890,123 @@ index 0000000..7957e1a
 +         return COMMON_CANARY_MISMATCH;
 +     }
 +diff --git a/common/common.h b/common/common.h
-+index f3da483..9a98611 100644
++index f3da483..0f97b98 100644
 +--- a/common/common.h
 ++++ b/common/common.h
 +@@ -1028,6 +1028,9 @@ enum common_canary_status {
 +     COMMON_CANARY_OK,       // recorded, or reproduced
 +     COMMON_CANARY_NONE,     // the output cannot be computed for this model: nothing is recorded, nothing is checked
 +     COMMON_CANARY_MISMATCH, // the same input did not give the same values
-++    // the device had no memory for the canary's graph (llama_process: -2): nothing is known of the context's output,
+++    // the device had no memory for the canary's graph (LLAMA_PROCESS_NO_MEMORY): nothing is known of the context's output,
 ++    // and nothing is wrong with it - a refusal of the moment, which a context created later may not meet
 ++    COMMON_CANARY_NO_MEMORY,
 + };
 + 
 + // note: defines the model, context, samplers, ets. lifetimes
++diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
++index 3293616..36ea7d1 100644
++--- a/ggml/include/ggml-backend.h
+++++ b/ggml/include/ggml-backend.h
++@@ -71,11 +71,20 @@ extern "C" {
++ 
++     // Parking: the device memory of a buffer released while its contents are kept on the host and its addresses stay
++     // valid; unparking puts the contents back at the same addresses. Nothing may use the buffer in between.
++-    // can_park: the buffer (every part of a multi-buffer) supports it. park/unpark return false and leave the buffer
++-    // as it was when they cannot; parking a parked buffer or unparking one that is not are no-ops that return true.
+++    // can_park: the buffer (every part of a multi-buffer) supports it. park/unpark leave the buffer as it was when
+++    // they do not succeed, and say WHY: a caller must tell a device with no room now from a failure. Parking a
+++    // parked buffer or unparking one that is not are no-ops that succeed.
+++    enum ggml_backend_park_status {
+++        GGML_BACKEND_PARK_OK        = 0,
+++        // no memory for it now - the device's when unparking, the host's when parking. Nothing is wrong with the
+++        // buffer, and the same call may succeed later
+++        GGML_BACKEND_PARK_NO_MEMORY = 1,
+++        // anything else: the device failed, or what came back is not what left. Trying again is not expected to help
+++        GGML_BACKEND_PARK_FAILED    = 2,
+++    };
++     GGML_API bool                           ggml_backend_buffer_can_park      (ggml_backend_buffer_t buffer);
++-    GGML_API bool                           ggml_backend_buffer_park          (ggml_backend_buffer_t buffer);
++-    GGML_API bool                           ggml_backend_buffer_unpark        (ggml_backend_buffer_t buffer);
+++    GGML_API enum ggml_backend_park_status  ggml_backend_buffer_park          (ggml_backend_buffer_t buffer);
+++    GGML_API enum ggml_backend_park_status  ggml_backend_buffer_unpark        (ggml_backend_buffer_t buffer);
++ 
++     // What the buffers this thread is about to allocate are for: a backend reads it in alloc_buffer, where the usage
++     // set by ggml_backend_buffer_set_usage is not known yet (weights that can park are allocated differently).
++diff --git a/ggml/src/ggml-backend-impl.h b/ggml/src/ggml-backend-impl.h
++index 4709a63..032d7b4 100644
++--- a/ggml/src/ggml-backend-impl.h
+++++ b/ggml/src/ggml-backend-impl.h
++@@ -79,11 +79,11 @@ extern "C" {
++         // (optional) parking: release the device memory of the buffer and keep its contents and its ADDRESSES.
++         // park() saves the contents and frees the memory behind the buffer's address range; unpark() commits memory at
++         // the same addresses and restores the contents, so every tensor, view and extra that refers to the buffer stays
++-        // valid across the two. Nothing may read or write the buffer in between. Both return false, leaving the buffer
++-        // as it was, when they cannot (unpark: the device has no room). A backend that cannot keep addresses leaves
++-        // them NULL.
++-        bool         (*park)         (ggml_backend_buffer_t buffer);
++-        bool         (*unpark)       (ggml_backend_buffer_t buffer);
+++        // valid across the two. Nothing may read or write the buffer in between. Both leave the buffer as it was
+++        // when they do not succeed, and say why (enum ggml_backend_park_status: no memory now, or a failure). A
+++        // backend that cannot keep addresses leaves them NULL.
+++        enum ggml_backend_park_status (*park)   (ggml_backend_buffer_t buffer);
+++        enum ggml_backend_park_status (*unpark) (ggml_backend_buffer_t buffer);
++     };
++ 
++     struct ggml_backend_buffer {
++diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
++index b49b957..ad62e61 100644
++--- a/ggml/src/ggml-backend.cpp
+++++ b/ggml/src/ggml-backend.cpp
++@@ -1170,35 +1170,36 @@ bool ggml_backend_buffer_can_park(ggml_backend_buffer_t buffer) {
++     return !parts.empty();
++ }
++ 
++-// park (or unpark) every part; if one cannot, the parts already done are put back as they were
++-static bool ggml_backend_buffer_park_all(ggml_backend_buffer_t buffer, bool park) {
+++// park (or unpark) every part; if one does not succeed, the parts already done are put back as they were, and its
+++// status - no memory now, or a failure - is the buffer's
+++static enum ggml_backend_park_status ggml_backend_buffer_park_all(ggml_backend_buffer_t buffer, bool park) {
++     if (!ggml_backend_buffer_can_park(buffer)) {
++-        return false;
+++        return GGML_BACKEND_PARK_FAILED;
++     }
++     const std::vector<ggml_backend_buffer_t> parts = ggml_backend_buffer_parts(buffer);
++     for (size_t i = 0; i < parts.size(); i++) {
++-        const bool ok = park ? parts[i]->iface.park(parts[i]) : parts[i]->iface.unpark(parts[i]);
++-        if (ok) {
+++        const enum ggml_backend_park_status status = park ? parts[i]->iface.park(parts[i]) : parts[i]->iface.unpark(parts[i]);
+++        if (status == GGML_BACKEND_PARK_OK) {
++             continue;
++         }
++         for (size_t j = 0; j < i; j++) {
++-            const bool back = park ? parts[j]->iface.unpark(parts[j]) : parts[j]->iface.park(parts[j]);
++-            if (!back) {
+++            const enum ggml_backend_park_status back = park ? parts[j]->iface.unpark(parts[j]) : parts[j]->iface.park(parts[j]);
+++            if (back != GGML_BACKEND_PARK_OK) {
++                 // half of a buffer on the device and half not: nothing above can use it, and nothing can repair it
++                 GGML_ABORT("%s: part %zu of a buffer could not be %s again after part %zu failed\n", __func__, j,
++                            park ? "unparked" : "parked", i);
++             }
++         }
++-        return false;
+++        return status;
++     }
++-    return true;
+++    return GGML_BACKEND_PARK_OK;
++ }
++ 
++-bool ggml_backend_buffer_park(ggml_backend_buffer_t buffer) {
+++enum ggml_backend_park_status ggml_backend_buffer_park(ggml_backend_buffer_t buffer) {
++     return ggml_backend_buffer_park_all(buffer, true);
++ }
++ 
++-bool ggml_backend_buffer_unpark(ggml_backend_buffer_t buffer) {
+++enum ggml_backend_park_status ggml_backend_buffer_unpark(ggml_backend_buffer_t buffer) {
++     return ggml_backend_buffer_park_all(buffer, false);
++ }
++ 
 +diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
-+index 67cafad..56750da 100644
++index 67cafad..b362f95 100644
 +--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
 ++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
 +@@ -118,6 +118,9 @@ int g_ggml_sycl_park_verify = 0;
@@ -679,7 +1038,18 @@ index 0000000..7957e1a
 +         if (g_ggml_sycl_pool_refuse > 0) {
 +             GGML_LOG_WARN("  GGML_SYCL_POOL_REFUSE: %d - the next commits that grow a pool are REFUSED, for a test\n",
 +                           g_ggml_sycl_pool_refuse.load());
-+@@ -802,6 +810,14 @@ struct ggml_sycl_parkable_mem {
++@@ -795,24 +803,37 @@ struct ggml_sycl_parkable_mem {
++ 
++     bool committed() const { return !mappings.empty(); }
++ 
++-    // physical memory behind the whole range; false, with nothing committed, when the device refuses it
++-    bool commit() {
+++    // physical memory behind the whole range. When it does not succeed nothing is committed, and the status says
+++    // why: NO_MEMORY when the device could not allocate it - the extension's own word for it, an exception with
+++    // errc::memory_allocation - and FAILED for any other exception, which is the device failing, not a full one
+++    ggml_backend_park_status commit() {
++         GGML_ASSERT(!committed());
++         try {
 +             mappings.reserve((size + PIECE - 1) / PIECE);
 +             for (size_t off = 0; off < size; off += PIECE) {
 +                 const size_t n = std::min(PIECE, size - off);
@@ -694,28 +1064,255 @@ index 0000000..7957e1a
 +                 sycl::ext::oneapi::experimental::physical_mem phys(dev, ctx, n);
 +                 void * ptr = phys.map(addr + off, n, sycl::ext::oneapi::experimental::address_access_mode::read_write);
 +                 mappings.push_back({ std::move(phys), ptr });
++             }
++         } catch (const sycl::exception & e) {
++-            GGML_LOG_ERROR("%s: the device refused memory for a parkable buffer (%zu of %zu MiB committed): %s\n", __func__,
++-                           mappings.size() * PIECE / (1024 * 1024), size / (1024 * 1024), e.what());
+++            const bool no_memory = e.code() == sycl::errc::memory_allocation;
+++            GGML_LOG_ERROR("%s: %s for a parkable buffer (%zu of %zu MiB committed): %s (%s, %d)\n", __func__,
+++                           no_memory ? "the device refused memory" : "the device FAILED, it did not refuse",
+++                           mappings.size() * PIECE / (1024 * 1024), size / (1024 * 1024), e.what(),
+++                           e.code().category().name(), e.code().value());
++             release();
++-            return false;
+++            return no_memory ? GGML_BACKEND_PARK_NO_MEMORY : GGML_BACKEND_PARK_FAILED;
++         }
++-        return true;
+++        return GGML_BACKEND_PARK_OK;
++     }
++ 
++     // unmap exactly what was mapped, before the physical memory goes: its destructor does not unmap
++@@ -1366,12 +1387,12 @@ static void ggml_sycl_park_copy(sycl::queue & q, void * dst, const void * src, s
++ }
++ 
++ // the contents to host memory, then the device memory released; the buffer's addresses stay reserved
++-static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
+++static ggml_backend_park_status ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
++     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
++     ggml_sycl_parkable_mem * mem = ctx->parkable.get();
++     GGML_ASSERT(mem != nullptr);
++     if (!mem->committed()) {
++-        return true; // parked already
+++        return GGML_BACKEND_PARK_OK; // parked already
++     }
++     ggml_sycl_set_device(ctx->device);
++ 
++@@ -1386,7 +1407,7 @@ static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
++     if (mem->host == nullptr) {
++         GGML_LOG_ERROR("%s: no host memory for the %.2f MiB of %s, it stays on the device\n", __func__,
++                        buffer->size / 1024.0 / 1024.0, ctx->name.c_str());
++-        return false;
+++        return GGML_BACKEND_PARK_NO_MEMORY;
++     }
++     ggml_sycl_park_copy(*ctx->stream, mem->host, ctx->dev_ptr, buffer->size);
++     const int64_t t_copied = ggml_time_us();
++@@ -1411,29 +1432,33 @@ static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
++                   __func__, ctx->name.c_str(), buffer->size / 1024.0 / 1024.0,
++                   (t_end - t_start - (t_summed - t_copied)) / 1000.0, (t_copied - t_start) / 1000.0,
++                   (t_end - t_summed) / 1000.0, said, mem->n_park);
++-    return true;
+++    return GGML_BACKEND_PARK_OK;
++ }
++ catch (sycl::exception const & exc) {
++     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
++     std::exit(1);
++ }
++ 
++-// device memory at the same addresses, then the contents back; false, the buffer left parked, if the device has no room
++-static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
+++// device memory at the same addresses, then the contents back. When it does not succeed the buffer is left parked,
+++// its contents intact on the host: NO_MEMORY if the device has no room now, FAILED if the device failed or if what it
+++// holds after the copy is not what was parked (GGML_SYCL_PARK_VERIFY) - never to be taken for a full device
+++static ggml_backend_park_status ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
++     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
++     ggml_sycl_parkable_mem * mem = ctx->parkable.get();
++     GGML_ASSERT(mem != nullptr);
++     if (mem->committed()) {
++-        return true; // not parked
+++        return GGML_BACKEND_PARK_OK; // not parked
++     }
++     GGML_ASSERT(mem->host != nullptr);
++     ggml_sycl_set_device(ctx->device);
++ 
++     const int64_t t_start = ggml_time_us();
++-    if (!mem->commit()) {
++-        GGML_LOG_WARN("%s: no room on the device for the %.2f MiB of %s, it stays parked\n", __func__,
+++    const ggml_backend_park_status committed = mem->commit();
+++    if (committed != GGML_BACKEND_PARK_OK) {
+++        GGML_LOG_WARN("%s: %s for the %.2f MiB of %s, it stays parked\n", __func__,
+++                      committed == GGML_BACKEND_PARK_NO_MEMORY ? "no room on the device" : "the device failed",
++                       buffer->size / 1024.0 / 1024.0, ctx->name.c_str());
++-        return false;
+++        return committed;
++     }
++     ggml_sycl_memtrace_add(GGML_SYCL_MEM_BUFFER, ctx->dev_ptr, mem->size);
++     const int64_t t_committed = ggml_time_us();
++@@ -1457,7 +1482,7 @@ static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
++                                ctx->name.c_str());
++                 mem->release();
++                 ggml_sycl_memtrace_del(ctx->dev_ptr);
++-                return false;
+++                return GGML_BACKEND_PARK_FAILED;
++             }
++             snprintf(said, sizeof(said), ", read back: the same bytes");
++         }
++@@ -1469,7 +1494,7 @@ static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
++     GGML_LOG_INFO("%s: %s unparked, %.2f MiB to the device in %.1f ms (the commit %.1f, the copy %.1f)%s\n", __func__,
++                   ctx->name.c_str(), buffer->size / 1024.0 / 1024.0, (t_copied - t_start) / 1000.0,
++                   (t_committed - t_start) / 1000.0, (t_copied - t_committed) / 1000.0, said);
++-    return true;
+++    return GGML_BACKEND_PARK_OK;
++ }
++ catch (sycl::exception const & exc) {
++     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
++@@ -1565,7 +1590,7 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
++                 GGML_LOG_ERROR("%s: can't reserve %zu Bytes of virtual memory: %s\n", __func__, size, e.what());
++                 return nullptr;
++             }
++-            if (!mem->commit()) {
+++            if (mem->commit() != GGML_BACKEND_PARK_OK) {
++                 GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on device\n", __func__, size);
++                 return nullptr;
++             }
++@@ -2502,6 +2527,14 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
++                 }
++                 phys.emplace(dev, ctx, reserve_size);
++             } catch (const sycl::exception & e) {
+++                if (e.code() != sycl::errc::memory_allocation) {
+++                    // not a refusal: the device failed. It is no graph's to survive and no request's to send again -
+++                    // it leaves as every other exception of the device leaves this backend
+++                    GGML_LOG_ERROR("%s: the device FAILED committing %zu MiB for the pool, it did not refuse: %s (%s, %d)\n",
+++                                   __func__, reserve_size / (1024 * 1024), e.what(), e.code().category().name(),
+++                                   e.code().value());
+++                    throw;
+++                }
++                 // nothing of the pool has changed yet: this graph fails, and a later one may ask again
++                 GGML_LOG_ERROR("%s: the device refused %zu MiB for the pool (%zu MiB committed): %s\n", __func__,
++                                reserve_size / (1024 * 1024), pool_size / (1024 * 1024), e.what());
 +diff --git a/include/llama.h b/include/llama.h
-+index e4ccb13..23fb907 100644
++index e4ccb13..da49dfb 100644
 +--- a/include/llama.h
 ++++ b/include/llama.h
-+@@ -663,6 +663,9 @@ extern "C" {
++@@ -652,17 +652,29 @@ extern "C" {
++     // Returns the total size of all the tensors in the model in bytes
++     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
++ 
+++    // llama_process / llama_encode / llama_decode: the backend could not allocate memory for the graph - its
+++    // buffers at allocation, or the device's own refusal while it computed (GGML_STATUS_ALLOC_FAILED). It had the
+++    // value -2 of every other failure before a graph is computed (the output buffer of the host, the memory
+++    // module's own): a caller could not tell a device full at that moment from them.
+++    #define LLAMA_PROCESS_NO_MEMORY (-4)
+++
++     // Parking: the weights leave the device and stay in host memory, the model and everything that refers to its
++     // tensors stay valid; unparking copies them back. A model may be parked only while NO context of it exists, and
++     // a context can be created again only after it is unparked.
++     // can_park:  every weight buffer on a device supports it (ggml_backend_buffer_can_park), and there is one
++-    // park:      false, with the model left on the device, if a buffer cannot be parked
++-    // unpark:    false, with the model left parked, if the device has no room for the weights now
++-    // Parking a parked model and unparking one that is not are no-ops that return true. Not thread-safe.
+++    // park:      when it does not succeed the model is left on the device
+++    // unpark:    when it does not succeed the model is left parked, its weights intact on the host
+++    // Both say why they did not succeed (enum ggml_backend_park_status): NO_MEMORY - the host's for a park, the
+++    // device's for an unpark - which a later call may not meet, or FAILED: the device failed, or what came back
+++    // is not what left. A caller must not take the second for the first.
+++    // Parking a parked model and unparking one that is not are no-ops that succeed. Not thread-safe.
++     LLAMA_API bool llama_model_can_park (const struct llama_model * model);
 +     LLAMA_API bool llama_model_is_parked(const struct llama_model * model);
-+     LLAMA_API bool llama_model_park     (struct llama_model * model);
-+     LLAMA_API bool llama_model_unpark   (struct llama_model * model);
++-    LLAMA_API bool llama_model_park     (struct llama_model * model);
++-    LLAMA_API bool llama_model_unpark   (struct llama_model * model);
+++    LLAMA_API enum ggml_backend_park_status llama_model_park  (struct llama_model * model);
+++    LLAMA_API enum ggml_backend_park_status llama_model_unpark(struct llama_model * model);
 ++    // the bytes that leave the device when the model parks - held on the host meanwhile, and what the device must
 ++    // have room for when it comes back; 0 for a model that cannot park
 ++    LLAMA_API uint64_t llama_model_park_size(const struct llama_model * model);
 + 
 +     // Get the default chat template. Returns nullptr if not available
 +     // If name is NULL, returns the default chat template
++@@ -1014,6 +1026,8 @@ extern "C" {
++     //    2 - aborted     (processed ubatches will remain in the context's memory)
++     //   -1 - invalid input batch
++     // < -1 - fatal error (processed ubatches will remain in the context's memory)
+++    //   -4 - among them: the backend could not allocate memory for the graph (LLAMA_PROCESS_NO_MEMORY). The
+++    //        device was full at that moment; nothing is wrong with the batch, and the same call may succeed later
++     DEPRECATED(LLAMA_API int32_t llama_decode(
++             struct llama_context * ctx,
++               struct llama_batch   batch),
++diff --git a/src/llama-context.cpp b/src/llama-context.cpp
++index 8626e12..ff59ae6 100644
++--- a/src/llama-context.cpp
+++++ b/src/llama-context.cpp
++@@ -1985,7 +1985,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
++     if (!res) {
++         switch (status) {
++             case GGML_STATUS_ABORTED:      return  2;
++-            case GGML_STATUS_ALLOC_FAILED: return -2;
+++            case GGML_STATUS_ALLOC_FAILED: return LLAMA_PROCESS_NO_MEMORY;
++             case GGML_STATUS_FAILED:       return -3;
++             case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
++         }
++@@ -2404,7 +2404,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
++ 
++             switch (status) {
++                 case GGML_STATUS_ABORTED:      return  2;
++-                case GGML_STATUS_ALLOC_FAILED: return -2;
+++                case GGML_STATUS_ALLOC_FAILED: return LLAMA_PROCESS_NO_MEMORY;
++                 case GGML_STATUS_FAILED:       return -3;
++                 case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
++             }
 +diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-+index f79efcc..0a2e9cf 100644
++index f79efcc..8331269 100644
 +--- a/src/llama-model.cpp
 ++++ b/src/llama-model.cpp
-+@@ -4078,6 +4078,18 @@ bool llama_model::park_all(bool park) {
-+     return true;
++@@ -4046,43 +4046,56 @@ bool llama_model::is_parked() const {
++     return pimpl->parked;
 + }
 + 
++-// park (or unpark) every buffer; if one cannot, those already done are put back as they were
++-bool llama_model::park_all(bool park) {
+++// park (or unpark) every buffer; if one does not succeed, those already done are put back as they were, and its
+++// status - no memory now, or a failure - is the model's
+++enum ggml_backend_park_status llama_model::park_all(bool park) {
++     if (pimpl->parked == park) {
++-        return true;
+++        return GGML_BACKEND_PARK_OK;
++     }
++     std::vector<ggml_backend_buffer_t> bufs;
++     if (!park_buffers(bufs)) {
++         LLAMA_LOG_WARN("%s: the model's weights cannot be parked\n", __func__);
++-        return false;
+++        return GGML_BACKEND_PARK_FAILED;
++     }
++     for (size_t i = 0; i < bufs.size(); i++) {
++-        const bool ok = park ? ggml_backend_buffer_park(bufs[i]) : ggml_backend_buffer_unpark(bufs[i]);
++-        if (ok) {
+++        const enum ggml_backend_park_status status = park ? ggml_backend_buffer_park(bufs[i]) : ggml_backend_buffer_unpark(bufs[i]);
+++        if (status == GGML_BACKEND_PARK_OK) {
++             continue;
++         }
++-        LLAMA_LOG_WARN("%s: buffer %zu of %zu (%s, %.2f MiB) could not be %s\n", __func__, i + 1, bufs.size(),
+++        LLAMA_LOG_WARN("%s: buffer %zu of %zu (%s, %.2f MiB) could not be %s: %s\n", __func__, i + 1, bufs.size(),
++                        ggml_backend_buffer_name(bufs[i]), ggml_backend_buffer_get_size(bufs[i]) / 1024.0 / 1024.0,
++-                       park ? "parked" : "unparked");
+++                       park ? "parked" : "unparked", status == GGML_BACKEND_PARK_NO_MEMORY ? "no memory for it now" : "it FAILED");
++         for (size_t j = 0; j < i; j++) {
++-            const bool back = park ? ggml_backend_buffer_unpark(bufs[j]) : ggml_backend_buffer_park(bufs[j]);
++-            if (!back) {
+++            const enum ggml_backend_park_status back = park ? ggml_backend_buffer_unpark(bufs[j]) : ggml_backend_buffer_park(bufs[j]);
+++            if (back != GGML_BACKEND_PARK_OK) {
++                 // some weights on the device and some not: no context could be created on this model again
++                 GGML_ABORT("%s: buffer %zu could not be %s again after buffer %zu failed\n", __func__, j + 1,
++                            park ? "unparked" : "parked", i + 1);
++             }
++         }
++-        return false;
+++        return status;
++     }
++     pimpl->parked = park;
++-    return true;
+++    return GGML_BACKEND_PARK_OK;
++ }
++ 
++-bool llama_model::park() {
 ++uint64_t llama_model::park_size() const {
 ++    std::vector<ggml_backend_buffer_t> bufs;
 ++    if (!park_buffers(bufs)) {
@@ -728,10 +1325,26 @@ index 0000000..7957e1a
 ++    return size;
 ++}
 ++
-+ bool llama_model::park() {
+++enum ggml_backend_park_status llama_model::park() {
 +     return park_all(true);
 + }
-+@@ -4102,6 +4114,10 @@ bool llama_model_unpark(llama_model * model) {
++ 
++-bool llama_model::unpark() {
+++enum ggml_backend_park_status llama_model::unpark() {
++     return park_all(false);
++ }
++ 
++@@ -4094,14 +4107,18 @@ bool llama_model_is_parked(const llama_model * model) {
++     return model->is_parked();
++ }
++ 
++-bool llama_model_park(llama_model * model) {
+++enum ggml_backend_park_status llama_model_park(llama_model * model) {
++     return model->park();
++ }
++ 
++-bool llama_model_unpark(llama_model * model) {
+++enum ggml_backend_park_status llama_model_unpark(llama_model * model) {
 +     return model->unpark();
 + }
 + 
@@ -743,19 +1356,32 @@ index 0000000..7957e1a
 +     const auto key = name ? LLM_KV(model->arch, name)(LLM_KV_TOKENIZER_CHAT_TEMPLATE)
 +         : LLM_KV(model->arch)(LLM_KV_TOKENIZER_CHAT_TEMPLATE);
 +diff --git a/src/llama-model.h b/src/llama-model.h
-+index af6baa9..1dda38b 100644
++index af6baa9..874a748 100644
 +--- a/src/llama-model.h
 ++++ b/src/llama-model.h
-+@@ -1033,6 +1033,7 @@ struct llama_model {
++@@ -1031,8 +1031,9 @@ struct llama_model {
++     // parking, see llama_model_park() in llama.h
++     bool can_park() const;
 +     bool is_parked() const;
-+     bool park();
-+     bool unpark();
++-    bool park();
++-    bool unpark();
+++    enum ggml_backend_park_status park();
+++    enum ggml_backend_park_status unpark();
 ++    uint64_t park_size() const;
 + 
 +     // the record of the experts used, kept beyond a context (llama-moe-record.h): its own mutex guards it
 +     struct llama_moe_record_store & moe_record() const;
++@@ -1081,7 +1082,7 @@ protected:
++ 
++     // the weight buffers that park, and both directions of it
++     bool park_buffers(std::vector<ggml_backend_buffer_t> & out) const;
++-    bool park_all(bool park);
+++    enum ggml_backend_park_status park_all(bool park);
++ };
++ 
++ llama_model * llama_model_create(llm_arch arch, const llama_model_params & params);
 +diff --git a/tools/server/README.md b/tools/server/README.md
-+index b054b6f..8447a96 100644
++index b054b6f..a9cc250 100644
 +--- a/tools/server/README.md
 ++++ b/tools/server/README.md
 +@@ -2626,7 +2626,7 @@ This is the `keep_alive` of other runners applied to the context instead of the
@@ -767,7 +1393,7 @@ index 0000000..7957e1a
 + - The cached prompt of a slot lives in the KV cache and is freed with it: a conversation whose context was freed evaluates its prompt again. Give its requests a `keep_context_ms` as long as the pause expected before the next one, or none at all.
 + - `/health`, `/props`, `/models`, `/metrics`, `/slots`, tokenization and detokenization do not need the context and do not create it.
 + - The context is created with the parameters of the first load: the same size, batch sizes and device placement, without fitting them again to the memory that is free at that moment.
-+@@ -2638,6 +2638,23 @@ Notes:
++@@ -2638,6 +2638,25 @@ Notes:
 + 
 + A result of `/embedding` (the non-OpenAI route, which returns its results as they are) carries `context_create_ms` when the context was created for it: the time its creation took.
 + 
@@ -780,11 +1406,13 @@ index 0000000..7957e1a
 ++- **a request to a parked model brings the weights back by itself**, then creates its context: no client has to know the model was parked.
 ++- a model parks only when it is told to: between two requests its weights stay on the device.
 ++- if the device has no room for the weights when they must come back, the request (or `POST /unpark`) is answered with error `503` (`no_room_on_device`), the model stays parked, and a later request is served. Nothing is ever half on the device.
+++- a return that FAILS is not a refusal: if the device fails, or if what it holds after the copy is not what was parked (`GGML_SYCL_PARK_VERIFY=1`), the answer is error `500` (`server_error`) and the model stays parked, its weights intact in host memory. It is never answered as a device that is full.
+++- **a request never parks.** Once the weights are back they stay on the device, even if the request that brought them back is then refused its context: the weights are not copied out again, and `llamacpp:weights_parked` says where they are.
 ++- a model that cannot park - no context on demand, or weights that cannot leave the device - answers `POST /park` and `POST /unpark` with `501` (`not_supported_error`) and is left as it is.
 ++
-++Error `503` with type `no_room_on_device` is one answer for every way a request finds the device full at that moment: parked weights that cannot come back, a context that cannot be created, and a computation the device refused memory for (which was error `500`, "Compute error."). Nothing is wrong with the request or with the model, and the same request can be sent again.
+++Error `503` with type `no_room_on_device` is one answer for every way a request finds the device full at that moment: parked weights that cannot come back, a context that cannot be created, and a computation the backend could not allocate memory for (`llama_process` returning `LLAMA_PROCESS_NO_MEMORY`; it was error `500`, "Compute error."). Nothing is wrong with the request or with the model, and the same request can be sent again. The server cannot tell a device that is full now from a request that will never fit - it does not see the device's other tenants - so a client that sends the request again bounds its own retries; `llamacpp:no_room_refusals_total` counts them.
 ++
-++`GET /metrics` reports `llamacpp:weights_parked` (1 while the weights are off the device), `llamacpp:weights_park_bytes` (the bytes that park, 0 for a model that cannot), `llamacpp:weights_parks_total` and `llamacpp:weights_unparks_total`.
+++`GET /metrics` reports `llamacpp:weights_parked` (1 while the weights are off the device), `llamacpp:weights_park_bytes` (the bytes that park, 0 for a model that cannot), `llamacpp:weights_parks_total` and `llamacpp:weights_unparks_total` (the times the weights left and came back, not the attempts), and `llamacpp:no_room_refusals_total`.
 ++
 ++`LLAMA_SERVER_PARK_WEIGHTS=1` is a measuring switch: the weights are parked each time the context is freed, without being told.
 ++
@@ -807,7 +1435,7 @@ index 0000000..7957e1a
 +     return json {
 +         {"code", code},
 +diff --git a/tools/server/server-common.h b/tools/server/server-common.h
-+index 3ec548f..a189a41 100644
++index 3ec548f..417943f 100644
 +--- a/tools/server/server-common.h
 ++++ b/tools/server/server-common.h
 +@@ -67,6 +67,10 @@ enum error_type {
@@ -821,7 +1449,7 @@ index 0000000..7957e1a
 + };
 + 
 + // thin wrapper around common_grammar_trigger with (de)serialization functions
-+@@ -574,6 +578,12 @@ struct server_metrics {
++@@ -574,6 +578,14 @@ struct server_metrics {
 +     // context canary: whether the contexts created are checked, and those that did not reproduce it
 +     bool     ctx_canary        = false;
 +     uint64_t n_ctx_canary_fail = 0;
@@ -831,11 +1459,13 @@ index 0000000..7957e1a
 ++    uint64_t park_size        = 0;
 ++    uint64_t n_weights_park   = 0;
 ++    uint64_t n_weights_unpark = 0;
+++    // requests (and orders to come back) answered "no room on the device now"
+++    uint64_t n_no_room        = 0;
 + 
 +     void init() {
 +         t_start = ggml_time_us();
 +diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-+index ce8e3fc..906305e 100644
++index ce8e3fc..7971e68 100644
 +--- a/tools/server/server-context.cpp
 ++++ b/tools/server/server-context.cpp
 +@@ -1186,11 +1186,12 @@ private:
@@ -855,7 +1485,7 @@ index 0000000..7957e1a
 + 
 +     int n_empty_consecutive = 0;
 + 
-+@@ -1237,12 +1238,19 @@ private:
++@@ -1237,12 +1238,21 @@ private:
 +             case SERVER_TASK_TYPE_SLOT_GET:
 +             case SERVER_TASK_TYPE_GET_LORA:
 +             case SERVER_TASK_TYPE_SET_LORA:
@@ -866,45 +1496,66 @@ index 0000000..7957e1a
 +         }
 +     }
 + 
-++    // what a failed llama_process() says of the device: -2 is a graph the device had no memory for
-++    // (GGML_STATUS_ALLOC_FAILED) - a refusal of the moment, not a fault of the request or of the model
+++    // what a failed llama_process() says of the device: LLAMA_PROCESS_NO_MEMORY is a graph the backend could not
+++    // allocate memory for (GGML_STATUS_ALLOC_FAILED) - a refusal of the moment, not a fault of the request or of the
+++    // model. Every other failure is a fault: -2 is also the host's output buffer and the memory module's own
+++    // failures, which no later call is expected to mend
 ++    static enum error_type error_type_of_process(int32_t ret) {
-++        return ret == -2 ? ERROR_TYPE_NO_ROOM_ON_DEVICE : ERROR_TYPE_SERVER;
+++        return ret == LLAMA_PROCESS_NO_MEMORY ? ERROR_TYPE_NO_ROOM_ON_DEVICE : ERROR_TYPE_SERVER;
 ++    }
 ++
 +     // free the context and what is bound to it, keep the model
 +     void context_release() {
 +         GGML_ASSERT(ctx_tgt != nullptr);
-+@@ -1275,21 +1283,87 @@ private:
++@@ -1270,26 +1280,126 @@ private:
++                 (ggml_time_us() - t_start) / 1000.0, (ggml_time_ms() - t_ctx_created) / 1000.0);
++ 
++         if (park_weights) {
++-            weights_park();
+++            weights_park(); // the measuring switch: said in the log when it could not
++         }
 +     }
 + 
-+     // no context is left: the weights leave the device as well; if they cannot, they stay and the model works as before
++-    // no context is left: the weights leave the device as well; if they cannot, they stay and the model works as before
 +-    void weights_park() {
-++    bool weights_park() {
+++    // no context is left: the weights leave the device as well; when they do not, they stay and the model works as
+++    // before. The counts are of weights that LEFT and that came BACK, never of attempts
+++    enum ggml_backend_park_status weights_park() {
 +         GGML_ASSERT(ctx_tgt == nullptr);
 + 
 +         const int64_t t_start = ggml_time_us();
-+         if (!llama_model_park(model_tgt)) {
-+             SRV_WRN("%s", "the weights could not be parked, they stay on the device\n");
-++            return false;
++-        if (!llama_model_park(model_tgt)) {
++-            SRV_WRN("%s", "the weights could not be parked, they stay on the device\n");
+++        const enum ggml_backend_park_status status = llama_model_park(model_tgt);
+++        if (status != GGML_BACKEND_PARK_OK) {
+++            SRV_WRN("the weights could not be parked (%s), they stay on the device\n",
+++                    status == GGML_BACKEND_PARK_NO_MEMORY ? "no host memory for them" : "it FAILED");
+++            return status;
 ++        }
 ++        metrics.weights_parked  = true;
 ++        metrics.n_weights_park += 1;
 ++        SRV_INF("weights parked in %.2f ms (%" PRIu64 " so far)\n", (ggml_time_us() - t_start) / 1000.0, metrics.n_weights_park);
-++        return true;
+++        return status;
 ++    }
 ++
-++    // the weights come back; false, the model left parked, if the device has no room for them now
-++    bool weights_unpark() {
+++    // the weights come back. When they do not the model is left parked, and the status says which it is: the device
+++    // has no room for them NOW, or the return FAILED (the device failed, or what it holds is not what was parked) -
+++    // a fault, never to be answered as a device that is full
+++    enum ggml_backend_park_status weights_unpark() {
 ++        const int64_t t_start = ggml_time_us();
-++        if (!llama_model_unpark(model_tgt)) {
+++        const enum ggml_backend_park_status status = llama_model_unpark(model_tgt);
+++        if (status == GGML_BACKEND_PARK_NO_MEMORY) {
 ++            SRV_WRN("%s", "the weights cannot come back to the device, is the memory they need available?\n");
-++            return false;
+++            return status;
+++        }
+++        if (status != GGML_BACKEND_PARK_OK) {
+++            SRV_ERR("%s", "the weights could NOT be brought back to the device: a failure, not a refusal. The model stays parked\n");
+++            return status;
 ++        }
 ++        metrics.weights_parked    = false;
 ++        metrics.n_weights_unpark += 1;
 ++        SRV_INF("weights unparked in %.2f ms (%" PRIu64 " so far)\n", (ggml_time_us() - t_start) / 1000.0, metrics.n_weights_unpark);
-++        return true;
+++        return status;
 ++    }
 ++
 ++    // SERVER_TASK_TYPE_PARK. Told to park: the context is freed whatever keep its last task asked - the one who
@@ -941,50 +1592,105 @@ index 0000000..7957e1a
 ++            if (ctx_tgt != nullptr) {
 ++                context_release(); // with LLAMA_SERVER_PARK_WEIGHTS this parks already
 ++            }
-++            if (!llama_model_is_parked(model_tgt) && !weights_park()) {
+++            if (!llama_model_is_parked(model_tgt) && weights_park() != GGML_BACKEND_PARK_OK) {
 ++                send_error(task, "the weights could not be parked, they stay on the device (is there host memory for them?)",
 ++                           ERROR_TYPE_SERVER);
 ++                return;
 ++            }
 ++            res->t_ms = (ggml_time_us() - t_start) / 1000.0;
 ++        } else if (!task.park && was_parked) {
-++            if (!weights_unpark()) {
-++                send_error(task, "the weights cannot come back to the device now", ERROR_TYPE_NO_ROOM_ON_DEVICE);
-++                return;
+++            switch (weights_unpark()) {
+++                case GGML_BACKEND_PARK_OK:
+++                    break;
+++                case GGML_BACKEND_PARK_NO_MEMORY:
+++                    send_error(task, "the weights cannot come back to the device now", ERROR_TYPE_NO_ROOM_ON_DEVICE);
+++                    return;
+++                case GGML_BACKEND_PARK_FAILED:
+++                    send_error(task, "the weights could not be brought back to the device: a failure, not a refusal - "
+++                                     "the model stays parked, see the server log", ERROR_TYPE_SERVER);
+++                    return;
 ++            }
 ++            res->t_ms = (ggml_time_us() - t_start) / 1000.0;
 ++        }
 ++
 ++        res->parked = llama_model_is_parked(model_tgt);
 ++        queue_results.send(std::move(res));
+++    }
+++
+++    // a context could not be had for a request that found the weights parked and brought them back: they STAY on
+++    // the device (see context_acquire). Only the measuring switch parks by itself, whenever no context is left -
+++    // and then says so if it could not
+++    void context_not_acquired(bool was_parked) {
+++        if (!was_parked) {
+++            return;
+++        }
+++        if (park_weights) {
+++            if (weights_park() != GGML_BACKEND_PARK_OK) {
+++                SRV_WRN("%s", "LLAMA_SERVER_PARK_WEIGHTS: the weights are on the device after a request that was refused\n");
+++            }
+++            return;
+++        }
+++        SRV_INF("%s", "the weights came back for a request that could not have its context: they stay on the device\n");
 +     }
 + 
 +     enum context_acquire_result {
 +         CONTEXT_ACQUIRED,
 +-        CONTEXT_NOT_CREATED, // it could not be created
-++        CONTEXT_NOT_UNPARKED, // the parked weights could not come back: the model is still parked
+++        CONTEXT_NOT_UNPARKED, // the device has no room for the parked weights now: the model is still parked
+++        CONTEXT_UNPARK_FAILED, // their return FAILED - not a refusal: the model is still parked
 ++        CONTEXT_NOT_CREATED,  // it could not be created
 +         CONTEXT_NOT_SAME,    // it was created and did not reproduce the canary of the load: discarded
 +     };
 + 
-+@@ -1308,14 +1382,8 @@ private:
++@@ -1300,41 +1410,55 @@ private:
 + 
++         const int64_t t_start = ggml_time_us();
++ 
++-        if (ctx_create_fail > 0) {
++-            ctx_create_fail--;
++-            SRV_WRN("%s", "LLAMA_SERVER_CTX_CREATE_FAIL: failing the creation of the context\n");
++-            return CONTEXT_NOT_CREATED;
++-        }
++-
 +         // parked weights come back first; a device with no room for them refuses the request as it refuses a context
+++        // A REQUEST NEVER PARKS: once the weights are back they stay, whatever happens to the context after - no
+++        // second copy of them for a request that is refused, and no park that could itself fail inside a refusal.
+++        // Where they are is said truthfully (llamacpp:weights_parked), and who manages the device parks again
 +         const bool was_parked = llama_model_is_parked(model_tgt);
-+-        if (was_parked) {
++         if (was_parked) {
 +-            const int64_t t_unpark = ggml_time_us();
 +-            if (!llama_model_unpark(model_tgt)) {
 +-                SRV_WRN("%s", "the weights cannot come back to the device, is the memory they need available?\n");
 +-                return CONTEXT_NOT_CREATED;
-+-            }
+++            switch (weights_unpark()) {
+++                case GGML_BACKEND_PARK_OK:
+++                    break;
+++                case GGML_BACKEND_PARK_NO_MEMORY:
+++                    return CONTEXT_NOT_UNPARKED;
+++                case GGML_BACKEND_PARK_FAILED:
+++                    return CONTEXT_UNPARK_FAILED;
++             }
 +-            n_weights_unpark += 1;
 +-            SRV_INF("weights unparked in %.2f ms (%" PRIu64 " so far)\n", (ggml_time_us() - t_unpark) / 1000.0, n_weights_unpark);
-++        if (was_parked && !weights_unpark()) {
-++            return CONTEXT_NOT_UNPARKED;
+++        }
+++
+++        // the test's failure, where a real one happens: after the weights are back, at the creation itself
+++        if (ctx_create_fail > 0) {
+++            ctx_create_fail--;
+++            SRV_WRN("%s", "LLAMA_SERVER_CTX_CREATE_FAIL: failing the creation of the context\n");
+++            context_not_acquired(was_parked);
+++            return CONTEXT_NOT_CREATED;
 +         }
 + 
 +         if (!common_init_context_from_params(*llama_init, params_base)) {
-+@@ -1329,12 +1397,24 @@ private:
++             SRV_WRN("%s", "failed to create the context, is the memory it needs available?\n");
++-            if (was_parked) {
++-                weights_park(); // a request that is refused leaves the device as it found it
++-            }
+++            context_not_acquired(was_parked);
++             return CONTEXT_NOT_CREATED;
++         }
++ 
 +         if (metrics.ctx_canary) {
 +             // before any task runs on it: a context that does not reproduce the canary of the load is not used
 +             bool same;
@@ -1005,14 +1711,23 @@ index 0000000..7957e1a
 ++                // it is the refusal of a context that cannot be created, and is not counted as a canary that failed
 ++                llama_init->free_context();
 ++                SRV_WRN("%s", "the device had no memory for the canary of the context created, it is discarded\n");
-++                if (was_parked) {
-++                    weights_park();
-++                }
+++                context_not_acquired(was_parked);
 ++                return CONTEXT_NOT_CREATED;
 +             }
 +             if (ctx_canary_fail > 0) {
 +                 ctx_canary_fail--;
-+@@ -1659,6 +1739,11 @@ private:
++@@ -1346,9 +1470,7 @@ private:
++                 metrics.n_ctx_canary_fail += 1;
++                 SRV_ERR("the context created does not reproduce the canary of the load, it is discarded (%" PRIu64 " so far)\n",
++                         metrics.n_ctx_canary_fail);
++-                if (was_parked) {
++-                    weights_park();
++-                }
+++                context_not_acquired(was_parked);
++                 return CONTEXT_NOT_SAME;
++             }
++         }
++@@ -1659,6 +1781,11 @@ private:
 +                     SRV_ERR("%s", "the model does not give the same output twice for the same input: the context canary cannot "
 +                                   "be recorded. start with --no-context-canary to serve it without the check\n");
 +                     return false;
@@ -1024,7 +1739,7 @@ index 0000000..7957e1a
 +             }
 +         }
 + 
-+@@ -1956,6 +2041,13 @@ private:
++@@ -1956,6 +2083,13 @@ private:
 +                 SRV_WRN("%s", "LLAMA_SERVER_PARK_WEIGHTS: the weights of this model cannot be parked on this backend, ignored\n");
 +                 park_weights = false;
 +             }
@@ -1038,7 +1753,7 @@ index 0000000..7957e1a
 +             if (park_weights) {
 +                 SRV_INF("%s", "parking: when the context is freed the weights leave the device, the next request brings them back\n");
 +             }
-+@@ -2379,7 +2471,7 @@ private:
++@@ -2379,7 +2513,7 @@ private:
 +         const int32_t ret = llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_ENCODE, batch_enc.get());
 +         if (ret != 0) {
 +             for (auto * slot : wave) {
@@ -1047,12 +1762,28 @@ index 0000000..7957e1a
 +                 slot->release();
 +             }
 +             return;
-+@@ -3710,8 +3802,11 @@ private:
++@@ -2812,6 +2946,11 @@ private:
++         if (type == ERROR_TYPE_EXCEED_CONTEXT_SIZE) {
++             GGML_ASSERT(n_ctx > 0 && n_prompt_tokens > 0);
++         }
+++        if (type == ERROR_TYPE_NO_ROOM_ON_DEVICE) {
+++            // counted: the server cannot tell a device that is full NOW from a request that will never fit - it does
+++            // not see the device's other tenants - so whoever sends the request again needs a number to bound it by
+++            metrics.n_no_room += 1;
+++        }
++ 
++         auto res = std::make_unique<server_task_result_error>();
++         res->id              = id_task;
++@@ -3710,8 +3849,15 @@ private:
 +             switch (context_acquire()) {
 +                 case CONTEXT_ACQUIRED:
 +                     break;
 ++                case CONTEXT_NOT_UNPARKED:
 ++                    send_error(task, "the weights cannot come back to the device now, the memory they need may be in use: try again later", ERROR_TYPE_NO_ROOM_ON_DEVICE);
+++                    return true;
+++                case CONTEXT_UNPARK_FAILED:
+++                    send_error(task, "the weights could not be brought back to the device: a failure, not a refusal - "
+++                                     "the model stays parked, see the server log", ERROR_TYPE_SERVER);
 ++                    return true;
 +                 case CONTEXT_NOT_CREATED:
 +-                    send_error(task, "the context cannot be created now, the memory it needs may be in use: try again later", ERROR_TYPE_UNAVAILABLE);
@@ -1060,7 +1791,7 @@ index 0000000..7957e1a
 +                     return true;
 +                 case CONTEXT_NOT_SAME:
 +                     send_error(task, "context canary failed: the context created for this request did not reproduce the output of the load's "
-+@@ -3896,6 +3991,10 @@ private:
++@@ -3896,6 +4042,10 @@ private:
 +                 {
 +                     // do nothing
 +                 } break;
@@ -1071,7 +1802,18 @@ index 0000000..7957e1a
 +             case SERVER_TASK_TYPE_METRICS:
 +                 {
 +                     int n_processing_slots = 0;
-+@@ -5538,7 +5637,7 @@ private:
++@@ -5528,7 +5678,9 @@ private:
++ 
++                 if (ret < -1) {
++                     // TODO: update slot state based on llama_memory_seq_pos_min() and llama_memory_seq_pos_max()
++-                    err = "Compute error.";
+++                    err = ret == LLAMA_PROCESS_NO_MEMORY
+++                        ? "Compute error: the device had no memory for this computation, try again later."
+++                        : "Compute error.";
++                 }
++ 
++                 // TODO: handle ret == 2 (abort) when we start aborting
++@@ -5538,7 +5690,7 @@ private:
 + 
 +                     for (auto & slot : slots) {
 +                         if (slot.is_processing()) {
@@ -1080,7 +1822,7 @@ index 0000000..7957e1a
 +                             slot.release();
 + 
 +                             // note: it's complicated to keep track of how much of the current batch has been
-+@@ -6095,6 +6194,7 @@ server_context_meta server_context::get_meta() const {
++@@ -6095,6 +6247,7 @@ server_context_meta server_context::get_meta() const {
 +         /* json_ui_settings        */ impl->json_ui_settings,
 +         /* slot_n_ctx              */ impl->n_ctx_slot(),
 +         /* pooling_type            */ impl->pooling_type,
@@ -1088,7 +1830,7 @@ index 0000000..7957e1a
 + 
 +         /* chat_params             */ impl->chat_params,
 +         /* chat_template_caps      */ common_chat_templates_get_caps(impl->chat_params.tmpls.get()),
-+@@ -7497,6 +7597,38 @@ void server_routes::init_routes() {
++@@ -7497,6 +7650,38 @@ void server_routes::init_routes() {
 +         return res;
 +     };
 + 
@@ -1149,10 +1891,10 @@ index 0000000..7957e1a
 +     // to be used in router mode
 +     json get_model_info() const;
 +diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
-+index 74e2d99..8e8dcf6 100644
++index 74e2d99..4346646 100644
 +--- a/tools/server/server-task.cpp
 ++++ b/tools/server/server-task.cpp
-+@@ -1624,6 +1624,14 @@ std::string server_task_result_metrics::to_metrics() {
++@@ -1624,6 +1624,18 @@ std::string server_task_result_metrics::to_metrics() {
 +             "context_canary_failures_total",
 +             "Context on demand: contexts discarded because they did not reproduce the canary of the load",
 +             (double) metrics.n_ctx_canary_fail
@@ -1164,10 +1906,14 @@ index 0000000..7957e1a
 ++            "weights_unparks_total",
 ++            "Parking: number of times the weights came back to the device",
 ++            (double) metrics.n_weights_unpark
+++        }, {
+++            "no_room_refusals_total",
+++            "Requests answered no_room_on_device: the device had no memory for them at that moment",
+++            (double) metrics.n_no_room
 +         },
 +     };
 + 
-+@@ -1656,6 +1664,14 @@ std::string server_task_result_metrics::to_metrics() {
++@@ -1656,6 +1668,14 @@ std::string server_task_result_metrics::to_metrics() {
 +             "context_canary",
 +             "Context on demand: 1 while each context created is held to the canary of the load",
 +             metrics.ctx_canary ? 1.0 : 0.0

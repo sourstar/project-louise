@@ -45,9 +45,11 @@ class Script:
         return "OK", SimpleNamespace(message="parked", success=True, metadata=meta), "", 0.05
 
     def status(self):
-        return "OK", {"state": "READY", "parked": int(self.parked), "park_size": 100, "total": 100 if self.parked else 0}
+        return "OK", {"state": "READY", "parked": int(self.parked), "park_size": 100, "total": 4096,
+                      "parked_host": 100 if self.parked else 0}
 
-    def load(self, model):
+    def load(self, model, **options):
+        self.options = options
         self.calls.append("load")
         if self.cycle in self.refuse_load_at:
             if not self.stays_parked:
@@ -66,7 +68,8 @@ class Script:
 
 def test_cycles_returned_by_loadmodel_are_counted_and_timed():
     b = Script()
-    out = park_told.cycles(b, "m", 3, "load", say=lambda _: None)
+    out = park_told.cycles(b, "m", 3, "load", say=lambda _: None, options={"ContextSize": 512})
+    assert b.options == {"ContextSize": 512}, "the return by LoadModel repeats the options of the load"
     assert (out["cycles"], out["same"], out["refused"], out["wrong"]) == (3, 3, 0, [])
     assert out["park_ms"] == [41.0, 42.0, 43.0], "the park as the ENGINE timed it, from Free's metadata"
     assert out["return_ms"] == [20.0, 20.0, 20.0] and out["first_ms"] == [70.0, 70.0, 70.0]
@@ -119,11 +122,23 @@ def test_the_tool_s_two_messages_are_the_patch_s_byte_for_byte():
     assert re.search(r'^\+inline constexpr const char \* FREE_PARKED = "(.*)";$', header, re.M).group(1) == park_told.PARKED
 
 
+def test_the_options_of_a_repeat_are_read_from_what_system_says_localai_sent(tmp_path):
+    pytest.importorskip("grpc_tools")
+    b = park_told.Backend("127.0.0.1:1")
+    path = tmp_path / "load_options.json"
+    # /system prints the options with their proto names
+    path.write_text(json.dumps({"Model": "m", "ModelFile": "/models/m.gguf", "ContextSize": 512, "Embeddings": True,
+                                "Options": ["context_on_demand:true"]}))
+    options = b.options_from(str(path))
+    assert options == {"ModelFile": "/models/m.gguf", "ContextSize": 512, "Embeddings": True,
+                       "Options": ["context_on_demand:true"]}, "everything but the name, which the verb takes itself"
+
+
 def test_the_stubs_come_from_the_repository_s_own_proto_and_name_the_calls_it_uses():
     pytest.importorskip("grpc_tools")
     _grpc, pb, pb_grpc = park_told.stubs(None)
     stub = pb_grpc.BackendStub(_grpc.insecure_channel("127.0.0.1:1"))
-    for call in ("Health", "Free", "LoadModel", "Embedding", "Status"):
+    for call in ("Health", "Free", "LoadModel", "Embedding", "Status", "PredictStream"):
         assert hasattr(stub, call), call
     assert pb.ModelOptions(Model="m", ModelFile="f", Embeddings=True, Options=["context_on_demand:true"]).Model == "m"
     assert "metadata" in pb.Result.DESCRIPTOR.fields_by_name, "Free's answer carries the bytes parked there"

@@ -255,36 +255,44 @@ Each part's patch is sent for review before it is staged.
   host — 575 MiB for bge-m3, about 2.2 GiB for nemotron, about 6 for MADLAD.
   On 11-24 the node had 4.7 GB available at its worst hour.
 
-## 6. The engine part, as built — FOR REVIEW (2026-11-25)
+## 6. The engine part, as built — FOR REVIEW, SECOND CUT (2026-11-25)
 
 `deploy/localai/patches/review/0023-llama-cpp-park-when-told.patch`: in no
 series, built by nobody, until the architecture session has read it. It
-applies after staged 0022 (`engine-lang.series`'s lines).
+applies after staged 0022 (`engine-lang.series`'s lines). The first cut
+(ddc2fa1) was read independently for the architecture session; what that
+reading found, and what was done about each finding, is the table below. The
+server part stopped until this part is right.
 
 **What it is.** §3.1, with LocalAI's two calls and no new one:
 
 | the call | the model can park | it cannot (no context on demand, or weights that stay) |
 |---|---|---|
-| `Free` | the context is freed whatever keep it had, the weights leave: OK, message `parked`, metadata `{"parked":true,"park_size":…,"ms":…}`. Parked already: the same answer, nothing done | `UNIMPLEMENTED`, as today: the caller stops the process |
-| `Free` while a request runs | `FAILED_PRECONDITION`, "busy: …": the model stays | — |
-| `LoadModel`, the model already held | the weights come back if they were away, then `Model already loaded`, the bytes the wrapper keys on | `Model already loaded`, today's no-op |
-| a request to a parked model | brings the weights back by itself, creates its context, answers; the model then STAYS on the device | — |
-| `Status` | `READY`/`BUSY`; `memory.total` = the weights' bytes in HOST memory now; breakdown `parked` (0/1), `park_size`, `parks`, `unparks` | `UNIMPLEMENTED`, as today: LocalAI samples the process |
+| `Free` | the context is freed whatever keep it had, the weights leave: OK, message `parked`, metadata `{"parked":true,"park_size":…,"ms":…}`. Parked already: the same answer, nothing done. No host memory for the copy: `INTERNAL`, the weights stay on the device | `UNIMPLEMENTED`, as today: the caller stops the process |
+| `Free` while a request runs, or while the first load runs | `FAILED_PRECONDITION`, "busy: …": the model stays | — (during the first load: the same `FAILED_PRECONDITION`) |
+| `LoadModel`, the model already held, WITH THE OPTIONS OF ITS LOAD | the weights come back if they were away, then `Model already loaded`, the bytes the wrapper keys on | `Model already loaded`, today's no-op |
+| `LoadModel`, the same name under OTHER options | `FAILED_PRECONDITION`, nothing brought back or loaded, the differing FIELDS named and never their values | the same |
+| a request to a parked model | brings the weights back by itself, creates its context, answers. The model then STAYS on the device: a request never parks | — |
+| `Status` | `READY`/`BUSY`; `memory.total` = the process's virtual size and `rss`, as LocalAI's own sample of a backend with no `Status`; breakdown `parked` (0/1), `park_size`, `parked_host`, `parks`, `unparks`, `no_room` | `UNIMPLEMENTED`, as today: LocalAI samples the process |
 | no room when the weights must come back | `RESOURCE_EXHAUSTED`, message `no_room_on_device: the weights cannot come back to the device now`, the model still parked, the next request served | — |
+| the return FAILS (the device fails, or the bytes read back are not the ones parked) | `INTERNAL`, "a failure, not a refusal": the model stays parked, its weights intact on the host. Never answered as a refusal | — |
 
 **One answer for "the device has no room now".** A new error type in
-llama.cpp's server (`no_room_on_device`, HTTP 503), which the backend answers
-as gRPC `RESOURCE_EXHAUSTED` on every request RPC and on the repeated
-`LoadModel`: parked weights that cannot come back; a context that cannot be
-created; a graph the device refused memory for (`llama_process` −2).
+llama.cpp's server (`no_room_on_device`, HTTP 503, counted in
+`llamacpp:no_room_refusals_total`), which the backend answers as gRPC
+`RESOURCE_EXHAUSTED` on every request RPC and on the repeated `LoadModel`:
+parked weights the device has no room for; a context that cannot be created;
+a graph the backend could not allocate memory for.
 
-**AMENDED once since it was sent (2026-11-25, found writing the server part): the refusal says its type at the head of
-its message.** `RESOURCE_EXHAUSTED` has other meanings on LocalAI's wire — a stream that is busy (`pkg/grpc/motion.go`,
-`tts_live.go`), a message over gRPC's size limit (`core/backend/embeddings.go` rewrites it as "conversation too long"), a
-rate-limited upstream (`localai-proxy`) — so LocalAI's HTTP layer could not have mapped the bare code to "no room" without
-calling those the same. Every refusal of the moment now reads `no_room_on_device: <what happened>`, built by ONE function in
-the backend and told by `is_no_room_message` (`park_reply.h`); the code is unchanged, and so is everything else in the
-patch. The llama.cpp half did not move.
+**The refusal says its type at the head of its message** (the first cut's one
+amendment, found writing the server part). `RESOURCE_EXHAUSTED` has other
+meanings on LocalAI's wire — a stream that is busy (`pkg/grpc/motion.go`,
+`tts_live.go`), a message over gRPC's size limit (`core/backend/embeddings.go`
+rewrites it as "conversation too long"), a rate-limited upstream
+(`localai-proxy`) — so LocalAI's HTTP layer could not have mapped the bare
+code to "no room" without calling those the same. Every refusal of the moment
+reads `no_room_on_device: <what happened>`, built by ONE function in the
+backend and told by `is_no_room_message` (`park_reply.h`).
 
 | | pros | cons |
 |---|---|---|
@@ -292,57 +300,157 @@ patch. The llama.cpp half did not move.
 | a gRPC trailer, as the canary's | not in the message | LocalAI's client makes a fresh call per RPC with no place that reads trailers: every call site would have to ask for them |
 | the bare code | nothing to add | a busy stream and an oversized message answered "no room on the device" |
 
+**THE INDEPENDENT READING OF THE FIRST CUT, FINDING BY FINDING** (the
+architecture session's; its numbers):
+
+| | the finding | in the second cut |
+|---|---|---|
+| 1 | every failed return was "no room" — bytes read back that were not the ones parked (`GGML_SYCL_PARK_VERIFY`), any exception of the device: a corruption retried for ever, and read as the refusal test passing | park and unpark say WHY (`ggml_backend_park_status`): `NO_MEMORY` only for `errc::memory_allocation` — the extension's own word, "If the constructor is unable to allocate the required memory … throws an exception with `errc::memory_allocation`" — and `FAILED` for anything else, answered 500 / `INTERNAL`, the model parked and intact. The pool's commit, LIVE since 0014, is held to the same test: any other exception is not survived as a refusal |
+| 2 | a refused request to a parked model parked it again, ignoring that park's own result: a second copy of the weights per refused request, and a model that could be left on the device while the caller believed it parked | A REQUEST NEVER PARKS. Once back the weights stay; where they are is said (`Status`, `llamacpp:weights_parked`); the counts are of weights that left and came back, not of attempts. The measuring switch keeps its rule and reads what happened |
+| 3 | under TODAY's server a refusal on embeddings is rewritten "conversation too long…" | "Under today's server", below; the server part stops that rewrite for a refusal |
+| 4 | −2 and any context-creation failure meant "retry" for every model; a graph that never fits is deferred for ever | `llama_process` returns `LLAMA_PROCESS_NO_MEMORY` (−4) for the backend's allocation failure ALONE (the table below); the other −2 stay faults. What the engine cannot know — never against not now — is stated and counted, below |
+| 5 | refusals that did not surface: a stream after its first chunk; the realtime RPC; the canary at the first load; OmniVoice's own decodes | the stream and the realtime RPC: fixed (the stream's was a truncated answer delivered as complete, for ANY error, pre-existing). The other two: stated limits, below |
+| 6 | `Status` reported total 0 for a model on the device, where `/backend/monitor` read the process's memory | total is the process's virtual size again, with `rss`; the park's bytes are in the breakdown only |
+| 7 | "Model already loaded" compared the NAME alone: the same name under other options un-parked and answered success while the old options computed — the dangerous one for invariant 12 | the backend keeps the options of its load and refuses a repeat that differs, `FAILED_PRECONDITION`, before anything is brought back, naming the fields and never their values (invariant 8). The wrapper's own refusal (#882) is the second lock |
+| 8 | not inert for a model that cannot park | "What changes for EVERY model", below: the gate must cover it |
+| 9 | counters and logs | parks/unparks count orders; `no_room_refusals_total` and `Status`'s `no_room`; −4's message says what it is; `Free` during the first load is `FAILED_PRECONDITION` |
+
+**`llama_process` at the pin (78e0529 + the series), every way it does not
+return 0** — read in `src/llama-context.cpp`:
+
+| returns | where | what it is | answered |
+|---|---|---|---|
+| 1 | decode: the memory module found no slot for the batch | the context is full | retried with a smaller batch, then "Context size has been exceeded" |
+| 2 | encode, decode: `GGML_STATUS_ABORTED` | the abort callback | as before |
+| −1 | encode, decode: the batch itself | invalid input | 500 "Invalid input batch." |
+| −2 | encode, decode: `output_reserve` came short | the HOST's output buffer | 500 `server_error`: a fault |
+| −2 | decode: `memory->init_batch` gave nothing | the memory module could not begin the batch | 500: a fault |
+| −2 | decode: `LLAMA_MEMORY_STATUS_NO_UPDATE` | a status that should not happen | 500: a fault |
+| −2 | decode: `LLAMA_MEMORY_STATUS_FAILED_COMPUTE` | the memory module's own computation failed | 500: a fault |
+| −3 | encode, decode: `GGML_STATUS_FAILED` | the graph failed | 500: a fault |
+| **−4** (was −2) | encode, decode: `GGML_STATUS_ALLOC_FAILED` — the graph's buffers could not be allocated, or the device refused memory while it computed (the pool's refusal) | **the device was full at that moment** | **503 `no_room_on_device`** |
+
+**What the engine cannot know: never against not now.** A graph that cannot
+fit the card at all returns −4 at every attempt, as one that would fit a
+minute later: the engine does not see the card's other tenants. It does not
+guess. It counts (`llamacpp:no_room_refusals_total`, `Status`'s `no_room`),
+LocalAI's 503 carries `Retry-After`, and WHO SENDS THE REQUEST AGAIN BOUNDS
+ITS OWN RETRIES — Louise's clients as they bound a parse that never fits (the
+architecture session's side). A context's creation that fails is answered
+the same way on this reasoning: it was created with these very parameters at
+the load, so what fails later is memory at that moment, the device's or the
+host's.
+
+**What changes for EVERY model the day this engine runs** — a model that
+cannot park included; the gate must cover it:
+
+| | before | with this engine |
+|---|---|---|
+| a context that cannot be created (context on demand) | gRPC `INTERNAL`; llama.cpp 503 `unavailable_error` | `RESOURCE_EXHAUSTED` "no_room_on_device: …"; 503 `no_room_on_device` |
+| a graph the backend cannot allocate memory for | `INTERNAL` "Compute error."; 500 | `RESOURCE_EXHAUSTED` "no_room_on_device: Compute error: the device had no memory for this computation, try again later."; 503; `llama_process` −4 where it was −2 |
+| a new context's canary refused for memory | "context canary failed", counted as a canary failure | a context that cannot be created; not counted |
+| the canary refused for memory AT THE LOAD | a warning, the model served unchecked | the load fails (`INTERNAL`, as every load's failure) |
+| an exception of the device in the pool's commit that is NOT an allocation failure | survived as a refusal | the backend leaves, as for every other exception of the device |
+| a stream that meets an error after its first chunk | ends OK, the answer cut short | ends with the error's status |
+| the same name loaded again under other options | "Model already loaded" | `FAILED_PRECONDITION`, the fields named |
+| `Free`, `Status` | `UNIMPLEMENTED` before any check | the token is checked first, then `UNIMPLEMENTED` as before |
+| `/metrics` | — | five more series (`weights_parked`, `weights_park_bytes`, `weights_parks_total`, `weights_unparks_total`, `no_room_refusals_total`) |
+| llama.cpp's own `POST /park`, `/unpark` | 404 | 501 |
+
+**Under today's server** — the interval between this engine and the server
+part, for a client of LocalAI's HTTP. Every status is still HTTP 500 (today's
+server maps no gRPC code); what moves is the text, and one rewrite:
+
+| the request | the 500's message today | with this engine under today's server |
+|---|---|---|
+| embeddings, the context cannot be created | `rpc error: code = Internal desc = the context cannot be created now, …` | `conversation too long for per-token embeddings (gRPC message limit exceeded): rpc error: code = ResourceExhausted desc = no_room_on_device: the context cannot be created now, …` — LocalAI's own rewrite of ANY `RESOURCE_EXHAUSTED` on that route (`core/backend/embeddings.go`). The head is still in it: a client keys on `no_room_on_device: `, not on the words before |
+| the same on chat, rerank, speech | `rpc error: code = Internal desc = …` | `rpc error: code = ResourceExhausted desc = no_room_on_device: …` |
+| the slot cache | HTTP 500 | HTTP 507: that route maps `RESOURCE_EXHAUSTED` itself |
+| a failover chain | the next target is tried for `INTERNAL` | the same for `RESOURCE_EXHAUSTED` (`core/services/failover/classify.go` takes both) |
+
+Louise keys on "context canary failed" for a canary, and that message and its
+trailer did not move. What its clients do with the other 500s is the
+architecture session's; the server part answers 503 `no_room_on_device` and
+stops the rewrite for a refusal.
+
 **Where it differs from §3.1 — ALL FIVE ACCEPTED by the architecture session (2026-11-25), the canary's as "the more
-important half: a model served unchecked behind a warning is the artefact invariant 12 exists against". The patch's own
-reading is still under way; nothing is staged before its findings:**
+important half: a model served unchecked behind a warning is the artefact invariant 12 exists against":**
 
 | | §3.1 said | built | why |
 |---|---|---|---|
 | `Free` under a running request | "anything else → Unimplemented" | `FAILED_PRECONDITION` busy | Unimplemented means "this backend cannot park", for good; busy is for now. The server part takes the next candidate and never stops a model for it (agreed 11-25) |
 | `Status` | says parked and the host's bytes | only for a model that can park; one that cannot stays `UNIMPLEMENTED` | LocalAI's `/backend/monitor` falls back to sampling the process when `Status` is unimplemented: answering for every model would have changed that endpoint for all of them |
-| the return by `LoadModel` | "the weights come back" | the weights only; the context is the next request's, as with context on demand | a context created for nobody is freed at the next idle tick anyway; `/backend/prepare` (step 3) may ask for more |
+| the return by `LoadModel` | "the weights come back" | the weights only; the context is the next request's, as with context on demand | a context created for nobody is freed at the next idle tick anyway; whether `/backend/prepare` asks for the context too is decided by a row (what a creation costs after a return) |
 | automatic parking | removed | `LLAMA_SERVER_PARK_WEIGHTS` kept as the measuring switch it was, off by default — a measuring switch, never set in a live model's file | the rows of §3.1 can be run through today's LocalAI, which has no caller of `Free` but its stop path |
-| a compute refusal at llama.cpp's own HTTP | (not said) | 503 `no_room_on_device`, where it was 500 `server_error` "Compute error." | one fact, one answer. Through LocalAI's HTTP nothing changes until the server part maps the gRPC code (today every backend error is 500) |
+| a compute refusal at llama.cpp's own HTTP | (not said) | 503 `no_room_on_device`, where it was 500 `server_error` "Compute error." | one fact, one answer |
 
-**Found on the way, fixed in it: the canary took a room refusal for a wrong
-context.** With context on demand and the canary on — every encoder — the
-first graph of a context created on a full card IS the canary. Refused for
-memory, it was answered `503 unavailable_error` "context canary failed" and
-counted in `context_canary_failures_total`: a determinism failure that never
-happened. The canary now says `COMMON_CANARY_NO_MEMORY`: at a request it is a
-context that cannot be created (`no_room_on_device`, counted nowhere as a
-failure); at the LOAD it fails the load, where before it left the model
-served UNCHECKED for the life of the process behind one warning line.
+**The canary took a room refusal for a wrong context** (found writing the
+first cut; the fifth point accepted). With context on demand and the canary
+on — every encoder — the first graph of a context created on a full card IS
+the canary. Refused for memory, it was answered `503 unavailable_error`
+"context canary failed" and counted in `context_canary_failures_total`: a
+determinism failure that never happened. The canary now says
+`COMMON_CANARY_NO_MEMORY`: at a request it is a context that cannot be
+created (`no_room_on_device`, counted nowhere as a canary that failed); at
+the LOAD it fails the load, where before it left the model served UNCHECKED
+for the life of the process behind one warning line.
 
 **What an unpatched LocalAI does with it.** Today's server calls `Free` only
 before it stops a process. For a model that can park — none until a model's
 file says `GGML_SYCL_PARKABLE=1` — that stop now parks first: E, about 0.04 s
 and 575 MiB of host memory for bge-m3, 0.4 s and 6 GiB for MADLAD (§3.4, 1),
-freed when the process dies a moment later. Harmless for the copies of the
-rows; the reason the server part's stop path skips `Free` for such a model.
+freed when the process dies a moment later; and a `Free` that meets a running
+request is logged "Error freeing GPU resources" before the stop, where
+Unimplemented was a debug line. Harmless for the copies of the rows; the
+reason the server part's stop path skips `Free` for such a model.
 ACCEPTABLE ONLY BECAUSE no live model sets `GGML_SYCL_PARKABLE=1` before the server part is live
 (the architecture session, 2026-11-25); tests/test_localai_review_park_when_told.py holds
 every staged model file to it.
 
+**Stated limits — known, not built:**
+
+- **No device has been SEEN to refuse a commit.** That its exception carries
+  `errc::memory_allocation` is the extension's specification and the runtime's
+  source (intel/llvm `physical_mem_impl.hpp`: out of resources, of host or of
+  device memory → `memory_allocation`; anything else → `runtime`), not an
+  observation on the node, where the driver pages before it refuses. A refusal
+  that carried another code would be answered as a FAILURE — loudly, logged
+  with its code — never retried in silence. The test switches raise
+  `memory_allocation` by construction.
+- **OmniVoice's own decodes are not typed**: a graph refused inside the speech
+  pipeline is still "TTS generation failed", `INTERNAL`. The port takes no
+  context on demand and does not park (§3.1's last row).
+- **The canary refused for memory at the FIRST load** fails the load as
+  `INTERNAL`, as every load that fails: a load is retried by its caller's own
+  rule, not as a request's deferral.
+- **Options a caller changes on purpose between a load and its repeat** — a
+  credential a finalizer rotates — are other options: the repeat is refused,
+  and the caller stops the process and loads afresh. None on this node.
+- **A realtime session idle between two turns when `Free` arrives** was not
+  judged by the reading and is not run here.
+
 **MEASURED, on CPU builds, the device a stand-in** (`tools/measure/
 park_cpu_standin.patch`: a weight buffer that copies its bytes aside and
-poisons itself, refuses, or loses them — in no engine):
+poisons itself, refuses, FAILS, cannot park, or loses its bytes — in no
+engine):
 
 | what | how | result |
 |---|---|---|
-| the backend's gRPC handlers, compiled against the patched engine | `tools/measure/park_told.py selftest` | 33 of 33 on the amended patch (29 of 29 when it was first cut; four added since for a park that FAILS — no host memory for the copy: `Free` answers `INTERNAL`, nothing is parked, the model answers, the next `Free` parks): a model that cannot park answers as before; `Free`, `Status`, `LoadModel` as the table; the first vectors bit for bit over 12 cycles (6 returned by `LoadModel`, 6 by the request); a refused return `RESOURCE_EXHAUSTED`, still parked, the next served; 302 calls of `Free` beside live requests — 151 parked, 151 busy, every request's vectors intact |
-| llama.cpp's own server | `tools/measure/park_cpu_test.py` | 48 of 48 (43 of 43 when the patch was cut — 17 of step 1, 26 told; five added for a park that fails: 500 `server_error`, the weights on the device, the model answering) |
-| a refused graph | `tools/measure/refuse_cpu_test.py … --told` | 17 of 17: every refusal 503 `no_room_on_device`, none counted as a canary that failed, the same process, the next request the control's vectors |
+| the backend's gRPC handlers, compiled against the patched engine | `tools/measure/park_told.py selftest … --chat-gguf` | 49 of 49: a model that cannot park answers as before; the same name under other options refused, the fields named and nothing of their contents, parked or not; `Free`, `Status`, `LoadModel` as the table; the first vectors bit for bit over 12 cycles; a refused return `RESOURCE_EXHAUSTED` `no_room_on_device: …`, still parked, the next served; a FAILED return `INTERNAL`, still parked, counted as no refusal; weights that came back for a request whose context is refused stay — one park, one copy; a park that fails `INTERNAL`, nothing parked; some 300 calls of `Free` beside live requests, each done or refused busy, every request intact; a stream refused a graph after its first chunk ends `RESOURCE_EXHAUSTED`, the next one whole |
+| llama.cpp's own server | `tools/measure/park_cpu_test.py` | 56 of 56 (17 of step 1, the rest told: the same cases over `/park` and `/unpark`) |
+| a refused graph | `tools/measure/refuse_cpu_test.py … --told` | 19 of 19: every refusal 503 `no_room_on_device`, counted, none taken for a canary that failed, the same process, the next request the control's vectors |
 | llama.cpp's server tests | `tools/server/tests/unit/test_park_weights.py`, `test_context_on_demand.py` | 25 passed |
-| the messages and codes | `park_reply_test.cpp`, standalone | all passed; the bytes of `Model already loaded` pinned |
-| `ggml-sycl.cpp` with `GGML_SYCL_PARK_REFUSE` | icpx, the one object | compiles |
+| the messages and codes | `park_reply_test.cpp`, standalone; compiled and run from the patch by the repository's own test | all passed; the bytes of `Model already loaded` pinned |
+| `ggml-sycl.cpp` | icpx, the one object | compiles |
 
 **NOT measured: anything on a card.** After the review, on COPIES, with
-`GGML_SYCL_PARK_VERIFY=1` (the card's bytes read back at every return), the
-rows of §3.1 — München's, each through the backend's own address:
+`GGML_SYCL_PARK_VERIFY=1` (the card's bytes read back at every return — a
+mismatch now FAILS the row, `INTERNAL`, where it would have read as a
+refusal), the rows of §3.1 — München's, each through the backend's own
+address:
 
-    python3 -I tools/measure/park_told.py cycles ADDR <model> -n 20                 # the return by LoadModel
     python3 -I tools/measure/park_told.py cycles ADDR <model> -n 20 --return request
+    python3 -I tools/measure/park_told.py cycles ADDR <model> -n 20 --return load --options <its load_options of GET /system>
     # a refused return: GGML_SYCL_PARK_REFUSE=2 in the copy's env, then the same line:
     # two cycles REFUSED (RESOURCE_EXHAUSTED, still parked), the rest served
 
