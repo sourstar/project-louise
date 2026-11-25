@@ -45,10 +45,19 @@ measured (published figures disagree).
     (3 x the slowest cold start: 300 s), from this one reading. He then set query mode's budget (down 6.2
     MB/s, up 1.2 MB/s): "node in query mode (budget changed)", no restart. THE CARD IN QUERY MODE: 31,544 MiB
     used of 32 GiB with twelve models loaded — the 35B and every model of Ask — over the reclaimer's 0.95 line,
-    and three "resident: not preloaded — the budget is 19,545 MiB for weights" lines in six minutes (their
-    text asked of München). The budget unloads nothing, so nothing left the card; the next load anywhere
-    evicts the model used least recently. This is the case parking is for (parking-step-2.md): not solved
-    today. No reading of the card from before the switch.
+    and three "resident: not preloaded" lines in six minutes. THE KEEPER'S BUDGET THERE (its own lines): the
+    0.98 line 32,002 MiB − 6,480 of growth measured over the last 6 h (embedding hours) − 5,304 for the two
+    embedders' working contexts (qwen3-embedding-4b 3,195 + nemotron 2,109) − 919 of eviction penalty =
+    19,298 MiB for weights. The 35B counts 17,247 of it (size 21,449; at 15:58:24Z, "never used here", it
+    did not fit at 21,416 and was itself "not preloaded"), the TTS fits behind it (1,672), and EVERYTHING
+    ELSE OF ASK is out — MADLAD 4,850, rerank-nemotron 2,465, qwen3-embedding-4b 2,736, nemotron 2,295,
+    bge-m3 900, the two medcpt — "loaded at its first request, then left to the reclaimer's LRU". So in
+    query mode the keeper guarantees two models; the rest stay while nothing needs their room and come back
+    at a reload's price (5–24 s each on the cold row). The budget unloads nothing, so nothing left the card.
+    OPEN, asked of München: whether the 35B itself was ever made to give way — room is made from the model
+    used least recently, a never-used one first, and nothing exempts the mode's own chat model
+    (`model_evict.make_room`). This is the case parking is for (parking-step-2.md): not solved today. No
+    reading of the card from before the switch.
   - *The French answer, BEFORE on the 35B*: his question with four of his hits pinned, query_lang 'it', the
     code live (old prompt), in query mode — three answers byte for byte the same (sha 10ed4c650136, 2,676
     chars), ITALIAN. So the old prompt fails on the 9B (the single French run of 14:22Z) and not on the 35B;
