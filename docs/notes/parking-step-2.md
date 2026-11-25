@@ -1,6 +1,7 @@
 # Parking, step 2: LocalAI parks where it unloads (design, 2026-11-25)
 
-*For the architecture session's review; nothing here is built. Operator,
+*REVIEWED by the architecture session 2026-11-25 (its answers are §4, the five
+things it asked the note to add are §3.4); nothing here is built. Operator,
 2026-11-25, to the choice "build step 2, designed with the architecture
 session first": "I accept your recommendations for all the decisions above".
 It is `models-beyond-the-card.md` §6 step 2 — "LocalAI's parked state, its
@@ -93,8 +94,10 @@ back and compared at every cycle):
   stopped FOR ROOM today — the memory reclaimer, the LRU limit, a load's
   eviction — LocalAI calls `Free`; success with `parked` keeps the process
   and marks the model parked; anything else stops it, as today. A parked
-  model counts nothing against the card and stays out of the LRU's count of
-  loaded models. An explicit `/backend/shutdown` still stops the process.
+  model stays out of the LRU's count of loaded models, and counts against
+  the card what its process still holds there (§3.4, 3). An explicit
+  `/backend/shutdown` still stops the process — and does not park it first
+  (§3.4, 1).
 - **A request to a parked model** goes to its process, which un-parks
   itself; LocalAI marks it loaded again.
 - **Two HTTP calls for a caller that knows what comes next** (step 3,
@@ -102,14 +105,17 @@ back and compared at every cycle):
   {"model"}` — the second un-parks a parked model (`LoadModel` on the live
   process) and loads one that is not loaded. `/system` says each model's
   state and its host bytes.
-- **A host-memory budget for parked models** (a runtime setting): the sum
-  of their host bytes may not pass it; over it, the least recently used
-  parked model is stopped for real. The default is 0 — nothing is parked
-  until a node says how much.
+- **The host's memory decides each park, when it happens** (§3.4, 5): one
+  runtime setting, the host's floor for parking. Before a park LocalAI reads
+  MemAvailable; if what would be left after the weights are copied is under
+  the floor, the model is stopped instead. Unset — the default — nothing is
+  parked. No static budget: the host at 15:00 is not the host at 03:00.
 - **The readiness poll** (R6; operator, 2026-11-24: "Patch localAI when
   clockwork is implemented"): a started backend's health is asked every
   50 ms instead of every 2 s. It is what a cold load still pays once a
-  parked return costs milliseconds.
+  parked return costs milliseconds. THE PATCH'S FIRST COMMIT, SEPARABLE
+  (the architecture session): it gives up to two seconds on every cold load
+  whether or not anything parks.
 
 ### 3.3 VeGa and invariant 12 (`models-beyond-the-card.md` §4, unchanged)
 
@@ -122,33 +128,129 @@ back and compared at every cycle):
   untouched today. `LoadModel` is intercepted — the wrapper states a run
   at a load — so a repeated `LoadModel` with the options of the first must
   be let through as the SAME run, not stated as a second one, and one with
-  other options refused as today. That is a change in the wrapper, and its
-  packages are rebuilt.
+  other options refused as today. Today a repeated LoadModel drops the
+  wrapper's `loaded`, hashes the weights and the tree again, restarts its
+  counts and probes the tokenizer again, and an Embedding arriving meanwhile
+  is refused "no run is stated" (the architecture session, which builds the
+  change). IT RIDES THE ENGINE PART: the wrapper's files are inside what a
+  run id hashes (München, from 2026-11-24: rebuilding the wrapper alone
+  moved every vega run id and cost 61 minutes of gates), so a changed
+  wrapper is a new run for every encoder and is gated with the park engine,
+  never deployed on its own.
 
-## 4. What I need the architecture session to choose
+### 3.4 What the review asked the note to say (the architecture session, 2026-11-25)
 
-| | choices | pros | cons |
-|---|---|---|---|
-| A. who decides to park | LocalAI alone, at every eviction for room | every client gains; nothing for Louise to do until step 3 | LocalAI evicts by least recent use, not by a question's plan |
-| | the keeper too, with the two HTTP calls (step 3) | Louise parks what the question will not use and prepares what it will | step 3's work; needs the calls of §3.2 first |
-| B. the host-memory budget | a LocalAI setting, the node's number | one place; LocalAI enforces it for every client | a second number beside the keeper's floor (`page_floor_gib`), to be kept consistent by hand |
-| | the keeper's own floor decides, LocalAI's budget left large | one rule for host memory, the one page mode already uses | LocalAI's own evictions (no keeper involved) are then bounded only loosely |
-| C. page mode once parking exists | both: paging the default safety net, parking for what is evicted | paging needs nothing of anyone; parking gives the card back for real, where paging holds it committed up to 3 GiB over | two mechanisms to explain |
-| | parking only, page mode retired | one mechanism | a backend that cannot park falls back to a full unload; the default just built is thrown away |
-| D. the order of the builds | engine first (its rows on copies), then the server, then the keeper | each is a deploy of its own and can stop there | a third pass after tonight's two |
+**1. A park is not the prelude to a kill.** LocalAI calls `Free` before it
+stops a process today, and `Free(HealthMessage)` carries nothing to say
+which it is. LocalAI is the one that knows, so LocalAI decides: a model's
+file says it parks (a model-config key, `park: true`, beside the engine's
+own switches in its `env`); for such a model the STOP path does not call
+`Free` at all — stopping the process frees the card, as it does for every
+backend that has no `Free` — and the PARK path is the only caller. A LocalAI
+that does not know the key (upstream's, or the distributed worker's unload)
+calls `Free` and keeps the process: that parks, which is what the worker
+meant. What a stop would cost if it did park first — E, from bge-m3's
+measured rate (575 MiB copied out in 39.5 ms, 14.5 GiB/s): about 0.4 s and
+6 GiB of host memory for MADLAD, and the 9B in proportion to what it holds
+on the card. Both are M in the engine part's rows: the rate for a quantized
+model and for buffers in pieces is not yet known.
 
-My recommendations: A both, LocalAI first; B a LocalAI setting whose default
-is 0, set on the node from the keeper's floor; C both; D engine, server,
-keeper. If nothing is said I design to these and send each part's patch for
-review before it is staged.
+**2. `/system` says the state, in a shape the keeper builds against.** A
+parked model stays in `loaded_models` — it has a live process — with:
+
+```json
+{"id": "vega-bge-m3", "process": {"pid": 4711},
+ "state": "parked",
+ "parks": true,
+ "size_vram": 336592896,
+ "parked": {"size_host": 602931200, "size_vram_needed": 602931200, "since": "2026-11-25T06:25:29Z"},
+ "load_options": {}, "load_options_hash": "…"}
+```
+
+- `state`: `"loaded"` or `"parked"`. Absent on a server without the patch:
+  a client reads absent as loaded.
+- `parks`: the model's file says it can be parked — what the keeper reads to
+  choose `/backend/park` over `/backend/shutdown`.
+- `size_vram`: UNCHANGED in meaning — the device memory its process holds
+  NOW, as the driver accounts it. For a parked model that is the residual.
+- `parked.size_host`: its weights' bytes held on the host.
+- `parked.size_vram_needed`: what coming back commits on the card again —
+  the room a client must see before it sends a request to a parked model.
+
+A client that makes room (Louise's `ensure_loaded`, `model_evict`) must not
+take a model listed here as on the card: `state: "parked"` is a load of
+`size_vram_needed` bytes that costs milliseconds, and room is made for it
+as for a load. The keeper's change, due WITH the server part.
+
+**3. A parked process still holds card memory.** 321 MiB for bge-m3; ten
+parked models are 3 GiB. Nobody has to estimate it: `size_vram` is the
+driver's own count for the process and keeps saying it. LocalAI's reclaimer
+counts it as it counts any process; the keeper's budget takes a parked
+model at its `size_vram`, a loaded one as today.
+
+**4. A refused return, as a client meets it.** When the weights cannot come
+back — the card refused — the request is answered and the model stays
+parked. Through LocalAI today that is HTTP 500, `rpc error: code = Internal
+desc = …`, which no client can tell from a fault. With the server part:
+
+```
+HTTP 503
+Retry-After: 2
+{"error": {"code": 503, "type": "no_room_on_device",
+           "message": "vega-bge-m3: the weights cannot come back to the device now"}}
+```
+
+from the backend's gRPC `RESOURCE_EXHAUSTED` — the code LocalAI's own
+backends answer for "backend is busy"; not `UNAVAILABLE`, which LocalAI
+reads as a backend it can no longer reach (`pkg/model/connection_errors.go`). The same status and type answer the two
+refusals the engine already has — a context that cannot be created, and a
+pool commit refused in the middle of a graph (today HTTP 500 "Compute
+error.") — because all three are one fact: the card had no room at that
+moment. A load that times out stays what it is (HTTP 500, another type).
+For every client it is a DEFERRAL, never an error written to a document;
+the clients' tests are the architecture session's.
+
+**5. The host is not static.** 4.7 GB were available at the node's worst
+hour. A budget of N GiB granted at 03:00 is wrong at 15:00, so there is no
+budget: LocalAI reads MemAvailable before EACH park and parks only if the
+floor holds after it; otherwise it stops the model, as today (§3.2). The
+floor is one runtime setting, default unset, NEVER SET BY HAND: the keeper
+writes it through `/api/settings`, as it writes the reclaimer's threshold,
+from the node's one host-memory number — which now differs by mode (embed
+mode, chat mode: main e231c4f1), and only Louise knows the mode.
+
+## 4. Agreed with the architecture session (2026-11-25)
+
+| | agreed | why, and what it changes |
+|---|---|---|
+| the two calls | LocalAI's own: `Free` parks, a repeated `LoadModel` un-parks | no new RPC |
+| A. who decides to park | BOTH — and the keeper's first half ships WITH the server part, not in step 3 | on this node the one that evicts for room is Louise (`model_evict` → `/backend/shutdown`, the least recently used; LocalAI's reclaimer at 0.95 is only the net). With LocalAI alone step 2 would park almost nothing here. So with the server part the keeper's evictor calls `/backend/park` where the server offers it and the model parks, `/backend/shutdown` otherwise. Only the PREPARE half — the load ahead calling `/backend/prepare` — is step 3 |
+| B. the host's memory | one LocalAI setting, default unset, written by the keeper, never by hand | one number for host memory, and it differs by mode; and it is a FLOOR checked at each park, not a budget (§3.4, 5) |
+| C. page mode beside parking | BOTH, and which happens when is one sentence: over the card by at most `page_over_gib` with the host above its floor → the driver pages; otherwise room is made → park where the model can, stop where it cannot | they answer different questions |
+| D. the order | engine, server, keeper | with A's amendment (the evictor's verb rides the server part) and the wrapper riding the ENGINE part (§3.3) |
+
+The builds, then:
+
+1. **The engine part** — the backend's `Free` and repeated `LoadModel`, the
+   refusal switch, gRPC `RESOURCE_EXHAUSTED` for the three refusals; WITH
+   the wrapper's repeated-LoadModel change (the architecture session's).
+   One engine, one gating; its rows on copies (§3.1's table).
+2. **The server part** — first commit the readiness poll; then the parked
+   state, the two endpoints, `/system`'s shape, the floor, HTTP 503
+   `no_room_on_device`. WITH the keeper's two changes: a parked model is
+   not counted as on the card, and the evictor parks. A server build, no
+   gate.
+3. **Step 3** — the question's plan calls `/backend/prepare`.
+
+Each part's patch is sent for review before it is staged.
 
 ## 5. What it costs
 
 - One more engine after the paging-default one (the backend's two calls,
-  the refusal switch), and every gate again.
+  the refusal switch, the wrapper's change with it), and every gate again.
 - A LocalAI server patch larger than the three we carry: a state in the
   loader, two endpoints, a setting. Its tests are LocalAI's own suite, as
   for P13 and P19.
-- Host memory, by the budget: a parked model holds its card bytes on the
+- Host memory, above the floor: a parked model holds its card bytes on the
   host — 575 MiB for bge-m3, about 2.2 GiB for nemotron, about 6 for MADLAD.
   On 11-24 the node had 4.7 GB available at its worst hour.
