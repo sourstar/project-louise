@@ -20,6 +20,106 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **THE KEEPER COUNTED THE LARGE CHAT MODEL AT 13,275 MiB OF ITS 21,449 — a reading taken with a slice of it
+  in host memory — and preloaded into the 8 GiB it thought it had (`resident._rest_size`; München's readings
+  in query mode, 16:44–16:47Z).** A model that keeps its context was counted at the FEWEST bytes any reading
+  gave over half its largest (REST_FLOOR, the rule of 2026-11-09, made when partial readings were 0.007–0.38
+  of the whole and whole ones 0.75–1.0), and the fewest was kept in the file for ever. In query mode the card
+  held 45 GiB of models on 32: xe kept 13,332 MiB of them in host memory (gtt), six models read under 2 MiB on
+  the card, and the idle 35B was caught at 0.62. The budget (19,171 MiB) then admitted MADLAD and others; the
+  card's counter went 31,544 -> 32,285 -> 32,417 MiB, over its 0.98 line; each MiB added put more of the idle
+  models out. NOTHING FAILED and LocalAI evicted nothing: the driver pages by use, which is close to what the
+  operator described for this mode ("embedders paging") — but nobody chose it, and the keeper could not see it.
+  THE RULE NOW: a model that keeps its context rests at what its LOAD left — the first steady reading of a
+  load the worker saw begin (`model_load.rest_of_load`), replacing the file's; a smaller reading of the same
+  process later is the model partly off the card, never its rest. A worker that started with the model loaded
+  keeps the file's figure, or learns one once from a reading taken on a calm beat (the card at most 90 % full
+  and nothing over-committed). WHILE THE CARD IS OVER-COMMITTED — a model reads short of its own floor on the
+  card, or what the models take AT REST is more than the card's total; never the sum of their largest sizes,
+  which is over the card on a node where everything rests on it — nothing is learnt from a reading, no
+  at-rest size and no margin sample, and one line says so ("resident: THE CARD IS OVER-COMMITTED — … model(s)
+  read short on the card (…), and the models LocalAI holds take … MiB at rest against the card's … MiB"). The file's at-rest sizes and margin peaks of the
+  old rule are dropped at the first read (`REST_BASIS`, `MARGIN_BASIS`): each model counts at its largest
+  until it is known again. IT CHANGES WHAT THE KEEPER BELIEVES AND SAYS, NOT WHAT IS ON THE CARD (the budget
+  unloads nothing). Open, the operator's: whether query mode should let the driver page on purpose or keep
+  the card under its line — waiting on München's two prices (a page-in against a reload). TWO MORE, in the
+  same change: a chat model over the budget is still "not preloaded", but its bytes are TAKEN — its room is
+  handed to nobody (at 15:58:24Z the 35B was out of the budget at 21,416 MiB and the budget filled with the
+  models below it, on the card beside it); and no DOCUMENT encoder is in the set where the node embeds
+  nothing (`resident.node_embeds`: medcpt-article-ov was preloaded in query mode at 16:30Z, "for resident
+  encoder (pubmed)"). With all three, on the node in query mode: the 35B counted at 21,449 MiB, over the
+  budget, nothing below it preloaded, nothing unloaded — the models already on the card stay, by use.
+  THE TWO PRICES (München, 16:48:54–16:49:49Z, the card over its line, gtt 13.3 GiB): the 35B answers at
+  the SAME speed as on an unloaded card (p0chat: decode 98.8 and 97.2 tok/s against phase 0's 99.6 and 97.3;
+  ttft 0.286 s and 2.505 s against 0.292 and 2.512); and a search whose query encoder was wholly in host
+  memory paid 0.2–0.3 s for it in its dense step (Normattiva-DAR 397 ms against 174 on the second search;
+  NeuRIS 366 against 78; pubmed none seen) — against the 5–24 s of a cold start. Each page-in put something
+  else out at once (MADLAD 5,635 -> 3,590 MiB, the other embedder to 0, and on the third search 2 GiB of the
+  35B). So paging by the driver is what makes this mode work today, and it is cheap; whether to rely on it on
+  purpose is the operator's (the node's rule says "unload"). ALSO MEASURED there: the document encoder is
+  unloaded at every question ("a person's question holds the card; corpus encoder(s) unloaded in 0.2 s") and
+  loaded again by the keeper 44 s later (5.8 s), in a mode that never embeds — the third change ends it.
+
+- **THE NODE, 2026-11-25 afternoon (München's rows): the engine 619655e5833b live, the cold preload row, the
+  operator's first switch to QUERY MODE, and the French answer's BEFORE on the large chat model.**
+  - *The engine.* 619655e5833b (engine-stream's series + 0028) live since 15:18:30Z; the pass ended 15:52:00Z,
+    the node paused 5,573 s. Five gates exact with identical fingerprints (wikipedia 109 s, gutenberg 2,046 s,
+    pubmed's query side 92 s, NeuRIS 530 s, wikidata 534 s); 20 unloads clean; MADLAD 379/379 identical to the
+    11-22 rebuilt-engine run; the reranker 20/20 lists equal to phase 0, max |delta| 0.0; the 9B within 1 % of
+    phase 0. 0028: a canary refused for MEMORY answers "the context cannot be created now, the memory it needs
+    may be in use: try again later" — HTTP 500 through LocalAI, no "context canary failed", nothing counted as a
+    mismatch, the next requests served with the same vector. In the app that answer is an `EndpointBusy`
+    (`embeddings._endpoint_error`: every 5xx that is not the canary's or VeGa's words) — a deferral, no document
+    touched, no run set aside: read in the code, not yet seen through the worker. 0025: a stream cut mid-way
+    ends with an SSE error object then [DONE] (7 of 155 chunks), the next stream whole. 0022: "en-GB" read as
+    language en; the wav bytes are not stable run to run, so no sha comparison (with Tensor).
+  - *The cold preload row* (the resume after the pass, 3e6b6cc): scheduling-log.md, "a collection's embedding
+    waits for the keeper's preload". Held 34–55 s on an emptied card, CANARY 0, GateDeferred 0; the twenty
+    seconds before the keeper's beat at a resume are real (four embedders cold-started for corpus embedding in
+    them) and are what #900 closes — in deploy 51ae16c.
+  - *His first switch to query mode*, from the System page, 15:56:21Z, on 3e6b6cc: "node in query mode (custom
+    -> query): chat model louise-chat-qwen3.6-35b-a3b", "node mode running -> acquire-only: runs fetch, seed",
+    the 9B unloaded and the 35B loaded by 15:58:01Z — "loaded in 99.2 s (for chat; load bound 120 s)". THE
+    BOUND WAS THE NODE'S DEFAULT: the 35B is in no profile, so a load one fifth slower would have timed out at
+    the switch and again at his first question. `app/model_loads.json` now carries it by the file's own rule
+    (3 x the slowest cold start: 300 s), from this one reading. He then set query mode's budget (down 6.2
+    MB/s, up 1.2 MB/s): "node in query mode (budget changed)", no restart. THE CARD IN QUERY MODE: 31,544 MiB
+    used of 32 GiB with twelve models loaded — the 35B and every model of Ask — over the reclaimer's 0.95 line,
+    and three "resident: not preloaded" lines in six minutes. THE KEEPER'S BUDGET THERE (its own lines): the
+    0.98 line 32,002 MiB − 6,480 of growth measured over the last 6 h (embedding hours) − 5,304 for the two
+    embedders' working contexts (qwen3-embedding-4b 3,195 + nemotron 2,109) − 919 of eviction penalty =
+    19,298 MiB for weights. The 35B counts 17,247 of it (size 21,449; at 15:58:24Z, "never used here", it
+    did not fit at 21,416 and was itself "not preloaded"), the TTS fits behind it (1,672), and EVERYTHING
+    ELSE OF ASK is out — MADLAD 4,850, rerank-nemotron 2,465, qwen3-embedding-4b 2,736, nemotron 2,295,
+    bge-m3 900, the two medcpt — "loaded at its first request, then left to the reclaimer's LRU". So in
+    query mode the keeper guarantees two models; the rest stay while nothing needs their room and come back
+    at a reload's price (5–24 s each on the cold row). The budget unloads nothing, so nothing left the card.
+    OPEN, asked of München: whether the 35B itself was ever made to give way — room is made from the model
+    used least recently, a never-used one first, and nothing exempts the mode's own chat model
+    (`model_evict.make_room`). This is the case parking is for (parking-step-2.md): not solved today. No
+    reading of the card from before the switch.
+  - *The French answer, BEFORE on the 35B*: his question with four of his hits pinned, query_lang 'it', the
+    code live (old prompt), in query mode — three answers byte for byte the same (sha 10ed4c650136, 2,676
+    chars), ITALIAN. So the old prompt fails on the 9B (the single French run of 14:22Z) and not on the 35B;
+    the AFTER on the 9B needs the node out of query mode, which is his.
+  - EUR-Lex5.next stands still in query mode (531,751 rdf and 1,089 fts pending): his mode, not a stall. The
+    stalled-stage report (#904) says nothing of it — no step is started in query mode, so nothing is tried.
+
+- **A search nobody waits for stops BETWEEN two lists of one reranker, not after the last
+  (`retrieval._rerank_lists`).** München's finding beside the operator's French answer: a search replaced by a
+  second press went on for 9 s inside the rerank of its lists (17.9 s for them all) while the second search
+  queued behind it on the same reranker (`parallel:1`) — and it is what the Abort button waits for too. Lists
+  that share a reranker go one after another (2026-11-10), and nothing looked at the caller between them. A
+  checkpoint before each list: the call in flight still ends (one HTTP call cannot be interrupted), the next
+  is not made. Bound after it: one list's rerank (9.6 s budget) instead of all of them. NOT measured on the
+  node: the reading is München's own pair — the seconds from a second press to "cancelled" in the web log,
+  with three or more collections on one reranker.
+- **fts needs no time bound of its own for a large unit, on today's numbers (the open half of the two-lanes
+  work).** The bound a large part's answer is waited for is the parse's: 120 s + 1.24 µs a byte
+  (`LARGE_SECONDS_PER_BYTE`). fts on the node cost 0.76–1.10 µs a byte per large unit with the lane's
+  tokenizer threads (three units at 70, 85 and 86 s; Legal's profile), so a 136 MB unit has 288 s for some 90.
+  Nothing is built; revisit only if a large fts part is ever let go for time.
+
 - **A stage that makes no progress says so by itself (`app/stage_progress.py`; the lessons, row G3 — the
   monitor's "hang" and "done not rising").** The worker's step executor notes each step (when it started, on
   which document, whether it ended with a commit: two dictionary writes a step), and a watcher thread says,
