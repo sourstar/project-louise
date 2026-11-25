@@ -36,6 +36,19 @@ measured (published figures disagree).
   out under the default collection's name ("[EUR-Lex5.next info:chat]" for a gutenberg answer) — `chat` is
   a node stage now; and a search replaced by a second press took 9 s to stop (its next checkpoint, inside
   the rerank) — what the Abort button will also wait for.
+
+- **The slice-scope pass runs ALONE where the stages wait for it (`worker.PASS_ONLY`; scheduling.md pitfall
+  27; the Legal session's finding).** EUR-Lex5.next's release reset the pass to row 0 of 1,025,283 and the
+  stages' wait asked — as the morning's fix had built it — for a scan: 627,868 released rows stood eighteen
+  minutes behind a corpus walk with nothing to find, for a pass of fourteen seconds. The wait now asks for
+  the pass by itself (it reads the manifest, not the corpus); a real scan takes a queued pass's place and is
+  never lost to one. AFTER owed at the next release.
+- **Also from the afternoon:** the legal chunker's `_windows` reads only its cuts' offsets (the Legal
+  session; 8.96 s -> 7.87 s on a 19.6 M-character sentence off the node, the same windows — the rest of
+  that time is the encode, so the "17 s of Python steps" read from the profile was mostly encode inside the
+  walk); the preload hold covers the seconds between a RESUME and the keeper's next beat (an engine swap's
+  resume is the cold start that matters); a rescan is offered in query mode ("The rescan all collections
+  remains usable from any profile"), its dialog saying that what it finds is parsed in embed mode.
 - **THE TOKENIZER THREADS, MEASURED LIKE FOR LIKE: 1.31x ON A LARGE TEXT UNIT (the Legal session's profile,
   the same afternoon; it corrects the entry below).** fts of fr 32018R0688 (92,328,556 bytes) on the live
   tree, one unit, 4 CPUs: 94 s with one tokenizer thread, 72 s with four (the lane ran it in 70 s);
