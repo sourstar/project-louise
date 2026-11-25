@@ -20,6 +20,46 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **THE KEEPER COUNTED THE LARGE CHAT MODEL AT 13,275 MiB OF ITS 21,449 — a reading taken with a slice of it
+  in host memory — and preloaded into the 8 GiB it thought it had (`resident._rest_size`; München's readings
+  in query mode, 16:44–16:47Z).** A model that keeps its context was counted at the FEWEST bytes any reading
+  gave over half its largest (REST_FLOOR, the rule of 2026-11-09, made when partial readings were 0.007–0.38
+  of the whole and whole ones 0.75–1.0), and the fewest was kept in the file for ever. In query mode the card
+  held 45 GiB of models on 32: xe kept 13,332 MiB of them in host memory (gtt), six models read under 2 MiB on
+  the card, and the idle 35B was caught at 0.62. The budget (19,171 MiB) then admitted MADLAD and others; the
+  card's counter went 31,544 -> 32,285 -> 32,417 MiB, over its 0.98 line; each MiB added put more of the idle
+  models out. NOTHING FAILED and LocalAI evicted nothing: the driver pages by use, which is close to what the
+  operator described for this mode ("embedders paging") — but nobody chose it, and the keeper could not see it.
+  THE RULE NOW: a model that keeps its context rests at what its LOAD left — the first steady reading of a
+  load the worker saw begin (`model_load.rest_of_load`), replacing the file's; a smaller reading of the same
+  process later is the model partly off the card, never its rest. A worker that started with the model loaded
+  keeps the file's figure, or learns one once from a reading taken on a calm beat (the card at most 90 % full
+  and nothing over-committed). WHILE THE CARD IS OVER-COMMITTED — a model reads short of its own floor on the
+  card, or what the models take AT REST is more than the card's total; never the sum of their largest sizes,
+  which is over the card on a node where everything rests on it — nothing is learnt from a reading, no
+  at-rest size and no margin sample, and one line says so ("resident: THE CARD IS OVER-COMMITTED — … model(s)
+  read short on the card (…), and the models LocalAI holds take … MiB at rest against the card's … MiB"). The file's at-rest sizes and margin peaks of the
+  old rule are dropped at the first read (`REST_BASIS`, `MARGIN_BASIS`): each model counts at its largest
+  until it is known again. IT CHANGES WHAT THE KEEPER BELIEVES AND SAYS, NOT WHAT IS ON THE CARD (the budget
+  unloads nothing). Open, the operator's: whether query mode should let the driver page on purpose or keep
+  the card under its line — waiting on München's two prices (a page-in against a reload). TWO MORE, in the
+  same change: a chat model over the budget is still "not preloaded", but its bytes are TAKEN — its room is
+  handed to nobody (at 15:58:24Z the 35B was out of the budget at 21,416 MiB and the budget filled with the
+  models below it, on the card beside it); and no DOCUMENT encoder is in the set where the node embeds
+  nothing (`resident.node_embeds`: medcpt-article-ov was preloaded in query mode at 16:30Z, "for resident
+  encoder (pubmed)"). With all three, on the node in query mode: the 35B counted at 21,449 MiB, over the
+  budget, nothing below it preloaded, nothing unloaded — the models already on the card stay, by use.
+  THE TWO PRICES (München, 16:48:54–16:49:49Z, the card over its line, gtt 13.3 GiB): the 35B answers at
+  the SAME speed as on an unloaded card (p0chat: decode 98.8 and 97.2 tok/s against phase 0's 99.6 and 97.3;
+  ttft 0.286 s and 2.505 s against 0.292 and 2.512); and a search whose query encoder was wholly in host
+  memory paid 0.2–0.3 s for it in its dense step (Normattiva-DAR 397 ms against 174 on the second search;
+  NeuRIS 366 against 78; pubmed none seen) — against the 5–24 s of a cold start. Each page-in put something
+  else out at once (MADLAD 5,635 -> 3,590 MiB, the other embedder to 0, and on the third search 2 GiB of the
+  35B). So paging by the driver is what makes this mode work today, and it is cheap; whether to rely on it on
+  purpose is the operator's (the node's rule says "unload"). ALSO MEASURED there: the document encoder is
+  unloaded at every question ("a person's question holds the card; corpus encoder(s) unloaded in 0.2 s") and
+  loaded again by the keeper 44 s later (5.8 s), in a mode that never embeds — the third change ends it.
+
 - **THE NODE, 2026-11-25 afternoon (München's rows): the engine 619655e5833b live, the cold preload row, the
   operator's first switch to QUERY MODE, and the French answer's BEFORE on the large chat model.**
   - *The engine.* 619655e5833b (engine-stream's series + 0028) live since 15:18:30Z; the pass ended 15:52:00Z,
