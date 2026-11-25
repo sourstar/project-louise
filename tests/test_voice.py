@@ -393,3 +393,64 @@ def test_every_field_the_page_reports_is_one_the_node_keeps():
     sent = set(re.findall(r"(\w+):", block.split("return {", 1)[1]))
     sent |= {"stop", "vad", "chars"}            # added where the clip is written down
     assert sent <= set(web.VOICE_REPORT_KEYS), sorted(sent - set(web.VOICE_REPORT_KEYS))
+
+
+# ---- a reading's times in the node's log (operator, on a phone, 2026-11-25: "the voice starts very late
+# after the answer begins" — and a phone has no console to read `louiseVoice.timeline()` from)
+
+READING = {"first_word": 2400, "last_word": 9100, "started": [2450], "taps": [], "by_itself": True, "blocked": False,
+           "count": 7, "lang": "it", "ua": "Mozilla/5.0 (Linux; Android 15) Chrome/142 Mobile",
+           "sentences": [{"chars": 62, "cut": 3100, "sent": 3110, "got": 6000, "synth": 2510, "audio": 4100,
+                          "play": 6050, "end": 10150, "text": "Dante nacque a Firenze."},
+                         {"chars": 80, "cut": 3900, "sent": 6010, "got": 8700, "synth": 2600, "audio": 5200,
+                          "play": 11400, "end": 16600}]}
+
+
+def test_a_readings_times_are_one_line_saying_where_the_wait_went(isolated_config, monkeypatch):
+    from app import model_pins
+    lines = []
+    monkeypatch.setattr(model_pins, "node_event", lambda level, text: lines.append((level, text)))
+    c = TestClient(api.app)
+    assert c.post("/ask/voice/timeline", json=READING).status_code == 204
+    (level, text), = lines
+    assert level == "info" and text.startswith("voice: reading (guest, it) — ")
+    assert "the answer's first word 2.4 s after Ask" in text and "the reading started at 2.5 s (by itself)" in text
+    assert "FIRST SOUND at 6.0 s, 3.6 s after the first word" in text
+    assert ("sentence 1 (62 chars): cut 0.7 s after the first word, asked for 0.0 s later, here 2.9 s after that "
+            "(the node made it in 2.5 s, 4.1 s of sound), played 0.1 s after it arrived") in text
+    assert "the longest silence between two sentences 1.2 s" in text and "7 sentence(s)" in text
+    assert "Dante" not in text and "Firenze" not in text, "times only: never a word of the answer"
+    numbers = json.loads(text.split(" — ")[2])
+    assert numbers["first_word"] == 2400 and numbers["sentences"][0] == {
+        "chars": 62, "cut": 3100, "sent": 3110, "got": 6000, "synth": 2510, "audio": 4100, "play": 6050, "end": 10150}
+    assert text.endswith("Chrome/142 Mobile")
+
+
+def test_a_reading_that_played_nothing_says_so(isolated_config, monkeypatch):
+    from app import model_pins
+    lines = []
+    monkeypatch.setattr(model_pins, "node_event", lambda level, text: lines.append((level, text)))
+    c = TestClient(api.app)
+    silent = {**READING, "blocked": True, "by_itself": False, "taps": [5000], "started": [5000],
+              "sentences": [{"chars": 62, "cut": 3100, "sent": 3110, "got": 6000, "synth": 2510, "audio": 4100}]}
+    assert c.post("/ask/voice/timeline", json=silent).status_code == 204
+    text = lines[-1][1]
+    assert "NO SOUND WAS PLAYED — the browser did not let the page play" in text and "(a tap)" in text
+    assert c.post("/ask/voice/timeline", json={"sentences": "x" * 10, "first_word": "soon", "ua": 7}).status_code == 204
+    assert "the answer's first word ? after Ask" in lines[-1][1], "what is not a number is not a time"
+    assert c.post("/ask/voice/timeline", content=b"x" * 9000).status_code == 413
+    assert c.post("/ask/voice/timeline", json=[1]).status_code == 400
+
+
+def test_the_page_sends_a_readings_times_once_when_it_ends():
+    from pathlib import Path
+    from app import web
+    js = (Path(web.__file__).parent / "static" / "voice.js").read_text(encoding="utf-8")
+    block = js[js.index("function reportReading(r)"):js.index("function stopReading()")]
+    assert "r.reported" in block and "'/ask/voice/timeline'" in block and "keepalive: true" in block
+    stop = js[js.index("function stopReading()"):js.index("function play(r, url)")]
+    assert stop.index("reportReading(r)") < stop.index("reading = null"), "before the reading is let go"
+    sent = set(re.findall(r"(\w+):", block.split("const body = {", 1)[1].split("};", 1)[0]))
+    assert sent <= {"first_word", "last_word", "started", "taps", "sentences", "count", "by_itself", "blocked",
+                    "lang", "ua"}, sent
+    assert "text" not in sent and "answer" not in sent

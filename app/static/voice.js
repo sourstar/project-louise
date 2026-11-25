@@ -495,8 +495,29 @@
     player.src = SILENT; player.play().catch(() => {});
   }
 
+  // A READING'S TIMES GO TO THE NODE'S LOG when it ends (operator, on a
+  // phone, 2026-11-25: "the voice starts very late after the answer
+  // begins" — and a phone has no console to read `timeline()` from): the
+  // numbers only, never a word of the answer; once a reading, and only for
+  // one that played or tried to (POST /ask/voice/timeline).
+  const TIMELINE_SENTENCES = 12;
+  function reportReading(r) {
+    if (r.reported || !times.started.length) return;
+    r.reported = true;
+    try {
+      const t = window.louiseVoice.timeline();
+      const body = { first_word: t.first_word, last_word: t.last_word, started: t.started.slice(0, 4),
+                     taps: t.taps.slice(0, 4), sentences: t.sentences.slice(0, TIMELINE_SENTENCES),
+                     count: t.sentences.length, by_itself: !t.taps.length, blocked: !!r.blocked,
+                     lang: r.lang || null, ua: navigator.userAgent };
+      fetch('/ask/voice/timeline', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
+                                     body: JSON.stringify(body) }).catch(() => {});
+    } catch (e) { /* the report is never in the way */ }
+  }
+
   function stopReading() {
     const r = reading; if (!r) return;
+    reportReading(r);
     reading = null; r.ctl.abort();             // the fetches in flight with it
     if (player) { player.pause(); player.removeAttribute('src'); }
     if (r.wake) r.wake();

@@ -1304,13 +1304,24 @@ def _say_overcommitted(over: tuple[int, int, tuple[str, ...]] | None) -> None:
         before, _over_said = _over_said, over
     if over is not None and before is None:
         short = over[2]
-        _say("warn", f"resident: THE CARD IS OVER-COMMITTED — "
+        # WHERE THE RULE IN FORCE PAGES (query mode, operator 2026-11-25; or
+        # `make_room = "page"`) this is the card as it is meant to be: said,
+        # not warned of. Anywhere else nobody chose it
+        try:
+            from app import model_evict
+            expected = model_evict.rule()[0] == "page"
+        except Exception:   # noqa: BLE001 — the rule unread: a warning, as before
+            expected = False
+        _say("info" if expected else "warn", f"resident: THE CARD IS OVER-COMMITTED — "
                      + (f"{len(short)} model(s) read short on the card ({', '.join(short[:6])}"
                         f"{' …' if len(short) > 6 else ''}), and " if short else "")
                      + f"the models LocalAI holds take {over[0] // MIB:,} MiB at rest against the card's "
                        f"{over[1] // MIB:,} MiB: the driver keeps the difference in host memory and brings a "
-                       f"model back when it is used. No at-rest size and no margin is learnt from readings "
-                       f"taken now; the budget stands on what was learnt before")
+                       f"model back when it is used"
+                       + (" — the rule in force here (the driver pages; nothing is unloaded while the host "
+                          "has memory)" if expected else "")
+                       + ". No at-rest size and no margin is learnt from readings taken now; the budget "
+                         "stands on what was learnt before")
     elif over is None and before is not None:
         _say("info", f"resident: the card holds its models whole again (they took {before[0] // MIB:,} MiB "
                      f"at rest against the card's {before[1] // MIB:,} MiB)")
