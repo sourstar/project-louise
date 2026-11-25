@@ -1411,3 +1411,247 @@ def test_the_shared_budget_is_the_two_largest_contexts_never_under_its_floor(mon
         in p.says()
     # one alone, under the floor: the floor
     assert resident.shared_context(want[2:], mem) == (resident.CONTEXT_RESERVE, (("vega-bge-m3", 714 * MIB),))
+
+
+# ---- AS ITS LOAD LEFT IT (2026-11-25) ---------------------------------------
+#
+# The node in query mode, München's readings: 45 GiB of models on a 32 GiB
+# card, 13.3 GiB of them in host memory (gtt), six models at under 2 MiB on
+# the card — and the 35B, 21,449 MiB loaded, counted by the keeper at 13,275:
+# a reading taken while a slice of it was out, 0.62 of its largest, over
+# REST_FLOOR and so "at rest", the fewest ever seen and so kept for ever. The
+# budget held 8 GiB the card did not have and the keeper preloaded into them.
+
+def _rows(monkeypatch, held: dict[str, tuple[int, int]]) -> None:
+    """LocalAI's `/system` from a table a test edits: {model: (pid, MiB)}."""
+    from app import httpc
+    inner = httpc.get
+    monkeypatch.setattr(model_load, "_fetch_system", REAL_FETCH)
+
+    def get(url, **kw):
+        if url.endswith("/system"):
+            rows = [{"id": m, "size_vram": mib * MIB, "process": {"pid": pid}}
+                    for m, (pid, mib) in sorted(held.items())]
+            return SimpleNamespace(status_code=200, json=lambda: {"loaded_models": rows})
+        return inner(url, **kw)
+    monkeypatch.setattr(httpc, "get", get)
+
+
+def _read() -> None:
+    with model_load._lock:
+        model_load._systems.clear()
+    assert model_load.held_sizes(SERVER, max_age_s=0.0) is not None
+
+
+def test_what_a_load_left_is_its_first_steady_reading_and_a_smaller_one_never_lowers_it(node, monkeypatch):
+    _a_minute_a_reading(monkeypatch)
+    held = {"louise-chat": (7, 6_000)}
+    _rows(monkeypatch, held)
+    _read()
+    _read()
+    assert model_load.rest_of_load(SERVER, "louise-chat") is None, \
+        "this process started with it loaded: it did not see what the load left"
+    held["big"] = (41, 9_000)                       # a load begins under this process's eyes
+    _read()
+    held["big"] = (41, 17_000)
+    _read()
+    held["big"] = (41, 21_449)
+    _read()
+    assert model_load.rest_of_load(SERVER, "big") is None, "its bytes moved at every reading: still loading"
+    _read()
+    assert model_load.rest_of_load(SERVER, "big") == 21_449 * MIB, "the same bytes a minute later"
+    held["big"] = (41, 13_275)                      # the driver put a slice of it in host memory
+    _read()
+    _read()
+    assert model_load.rest_of_load(SERVER, "big") == 21_449 * MIB, "the same process, fewer bytes: not at rest"
+    assert model_load.rest_vram(SERVER, "big") == 13_275 * MIB, \
+        "the fewest reading over half the largest: what the keeper counted until 2026-11-25"
+    held["big"] = (55, 20_000)                      # loaded again: another process
+    _read()
+    assert model_load.rest_of_load(SERVER, "big") is None
+    _read()
+    assert model_load.rest_of_load(SERVER, "big") == 20_000 * MIB
+    del held["big"]
+    _read()
+    assert model_load.rest_of_load(SERVER, "big") is None, "gone: nothing is said of a load that is over"
+
+
+def test_a_reading_taken_with_a_slice_in_host_memory_never_lowers_what_a_model_rests_at(tmp_path, node, monkeypatch):
+    said: list[tuple[str, str]] = []
+    resident.set_log(lambda level, text: said.append((level, text)))
+    _a_minute_a_reading(monkeypatch)
+    held = {"louise-chat": (7, 21_449), "louise-translate": (8, 7_900)}
+    node.held |= set(held)
+    _rows(monkeypatch, held)
+    card = _card(monkeypatch, 32_656, 29_349)
+    _beat([])
+    chat = (SERVER, "louise-chat")
+    assert resident.read_memory().rest[chat] == 21_449 * MIB, \
+        "never learnt, the card holding everything whole: what its process holds, read twice the same"
+    peaks = dict(resident.read_memory().peaks)
+    # three more models and the card is over its total: the driver pages, and the idle 35B is read short
+    held |= {"vega-a": (9, 5_000), "vega-b": (10, 4_000), "vega-c": (11, 3_000)}
+    _beat([])                                         # each seen whole once
+    held["louise-chat"] = (7, 13_275)
+    held["vega-c"] = (11, 1)
+    card["used"] = 32_417
+    _beat([])
+    mem = resident.read_memory()
+    assert mem.rest[chat] == 21_449 * MIB, "0.62 of its largest, over the floor — and still not at rest"
+    assert (SERVER, "vega-c") not in mem.rest or mem.rest[(SERVER, "vega-c")] > 1 * MIB
+    p = resident._plan_now([_r("louise-chat", "chat")])
+    assert p.placed[0].counted == 21_449 * MIB, "the budget counts the card's bytes, not the ones in host memory"
+    over = [t for level, t in said if level == "warn" and "OVER-COMMITTED" in t]
+    assert len(over) == 1, "said when the three loads made it so — the beat before a model read short"
+    assert "take 41,349 MiB at rest against the card's 32,656 MiB" in over[0], said
+    got = resident._overcommitted([SERVER], resident.read_memory(), (32_656 * MIB, 32_417 * MIB))
+    assert got == (41_349 * MIB, 32_656 * MIB, ("vega-c",)), "both signs: the sum, and the model read short"
+    assert resident.read_memory().peaks == peaks or max(resident.read_memory().peaks.values()) == max(peaks.values()), \
+        "no margin is sampled from a card that holds part of its models elsewhere"
+    _beat([])
+    assert len([t for _l, t in said if "OVER-COMMITTED" in t]) == 1, "said once, not every beat"
+    for m in ("vega-a", "vega-b", "vega-c"):
+        del held[m]
+    held["louise-chat"] = (7, 21_449)
+    card["used"] = 29_349
+    _beat([])
+    assert any("holds its models whole again" in t for _l, t in said), said
+    resident.set_log(lambda level, text: None)
+
+
+def test_nothing_is_learnt_of_a_model_first_met_on_an_over_committed_card(tmp_path, node, monkeypatch):
+    _a_minute_a_reading(monkeypatch)
+    resident._write_memory(resident.Memory(
+        sizes={(SERVER, "louise-chat"): 21_449 * MIB, (SERVER, "louise-translate"): 8_005 * MIB,
+               (SERVER, "vega-a"): 5_000 * MIB}, total=32_656 * MIB))
+    resident.reset()
+    held = {"louise-chat": (7, 13_275), "louise-translate": (8, 5_635), "vega-a": (9, 5_000)}
+    node.held |= set(held)
+    _rows(monkeypatch, held)
+    _card(monkeypatch, 32_656, 32_417)
+    _beat([])
+    mem = resident.read_memory()
+    assert (SERVER, "louise-chat") not in mem.rest and (SERVER, "louise-translate") not in mem.rest, \
+        "the card at 99 % and no model reading short: a slice of one may be out, so nothing is learnt now"
+    p = resident._plan_now([_r("louise-chat", "chat"), _r("louise-translate", "translation")])
+    assert [x.counted // MIB for x in p.placed] == [21_449, 8_005], "each at its largest until it is known"
+
+
+def test_a_load_the_keeper_saw_replaces_what_the_file_remembered(tmp_path, node, monkeypatch):
+    _a_minute_a_reading(monkeypatch)
+    chat = (SERVER, "louise-chat")
+    resident._write_memory(resident.Memory(sizes={chat: 21_449 * MIB}, rest={chat: 13_275 * MIB},
+                                           total=32_656 * MIB))
+    resident.reset()
+    held = {"louise-translate": (8, 7_900)}
+    _rows(monkeypatch, held)
+    card = _card(monkeypatch, 32_656, 7_900)
+    want = [_r("louise-chat", "chat")]
+    resident._remember(want)                          # the model is not loaded
+    assert resident.read_memory().rest[chat] == 13_275 * MIB
+    held["louise-chat"] = (9, 21_449)                 # the mode's switch loads it
+    card["used"] = 29_349
+    resident._remember(want)
+    assert resident.read_memory().rest[chat] == 21_449 * MIB, "as its load left it, replacing the file's"
+
+
+def test_at_rest_sizes_kept_under_the_fewest_reading_rule_are_not_read(tmp_path, node):
+    now = 1_800_000_000.0
+    chat = (SERVER, "louise-chat")
+    resident._write_memory(resident.Memory(sizes={chat: 21_449 * MIB}, rest={chat: 13_275 * MIB},
+                                           total=32_656 * MIB, peaks={int(now // 600 * 600): 6_480 * MIB}))
+    raw = json.loads(resident.memory_path().read_text())
+    assert raw["rest_basis"] == resident.REST_BASIS
+    raw.pop("rest_basis")                                             # the file the node holds today
+    raw["margin_basis"] = 2
+    resident.memory_path().write_text(json.dumps(raw))
+    mem = resident.read_memory()
+    assert mem.rest == {} and mem.peaks == {} and mem.sizes[chat] == 21_449 * MIB, \
+        "the largest sizes are kept; a rest that may be a paged reading, and the margin measured against it, are not"
+    p = resident.plan([_r("louise-chat", "chat")], mem, threshold=0.98, used={}, now=now)
+    assert p.placed[0].counted == 21_449 * MIB
+
+
+def test_a_chat_model_over_the_budget_is_not_preloaded_and_its_room_is_handed_to_nobody(tmp_path, node):
+    # the node in query mode, 15:58:24Z: "louise-chat-qwen3.6-35b-a3b — chat — rank 1 of 13 … the models placed
+    # above it take 0 MiB and it needs 21,416 MiB" of a budget of 19,545 — "not preloaded", and the budget
+    # then filled with the models below it, on the card beside the 35B the mode had loaded
+    now = 1_800_000_000.0
+    chat, madlad, tts = (SERVER, "louise-chat"), (SERVER, "louise-translate"), (SERVER, "omnivoice")
+    mem = resident.Memory(sizes={chat: 21_449 * MIB, madlad: 8_005 * MIB, tts: 2_867 * MIB},
+                          total=32_656 * MIB, peaks={int(now // 600 * 600): 6_480 * MIB},
+                          penalty=919 * MIB, penalty_at=now)
+    p = resident.plan([_r("louise-chat", "chat"), _r("louise-translate", "translation"),
+                       _r("omnivoice", "text to speech")], mem, threshold=0.98, used={}, now=now)
+    first = p.placed[0]
+    assert first.resident.model == "louise-chat" and first.counted == 21_449 * MIB
+    assert max(0, 32_002 - 6_480 - resident.CONTEXT_RESERVE // MIB - 919) < 21_449, "it does not fit the budget"
+    assert not first.fits and "it needs 21,449 MiB" in first.detail, "still not preloaded: the budget's word"
+    assert "its room is kept for it" in first.detail
+    assert [x.fits for x in p.placed[1:]] == [False, False], "nothing is preloaded into room the chat model holds"
+    assert all("the models placed above it take 21,449 MiB" in x.detail for x in p.placed[1:])
+
+
+def test_a_chat_model_that_fits_is_placed_as_any_other(tmp_path, node):
+    now = 1_800_000_000.0
+    chat, madlad = (SERVER, "louise-chat"), (SERVER, "louise-translate")
+    mem = resident.Memory(sizes={chat: 5_790 * MIB, madlad: 8_005 * MIB}, total=32_656 * MIB)
+    p = resident.plan([_r("louise-chat", "chat"), _r("louise-translate", "translation")], mem,
+                      threshold=0.98, used={}, now=now)
+    assert [x.fits for x in p.placed] == [True, True]
+    assert all(x.why.startswith("in the budget") for x in p.placed)
+
+
+def test_no_document_encoder_is_in_the_set_where_the_node_embeds_nothing(tmp_path, node):
+    # the node in query mode, 16:30Z: "cold start: vega-medcpt-article-ov … (for resident encoder (pubmed))"
+    pubmed = _with(_collection(tmp_path, "pubmed"), "vega-medcpt-article-ov", "all", query_model="vega-medcpt-query")
+    books = _with(_collection(tmp_path, "gutenberg"), "vega-qwen3-embedding-4b", "all")
+    both = resident.wanted([pubmed, books], embed_mode=_mode)
+    roles = {r.model: r.roles for r in both}
+    assert "encoder" in roles["vega-medcpt-article-ov"] and "encoder" in roles["vega-qwen3-embedding-4b"]
+    none = {r.model: r.roles for r in resident.wanted([pubmed, books], embed_mode=_mode, embeds=False)}
+    assert "vega-medcpt-article-ov" not in none, "a document-only encoder: no question uses it"
+    assert none["vega-medcpt-query"] == ("query encoder",)
+    assert none["vega-qwen3-embedding-4b"] == ("query encoder",), "the same model answers the questions: it stays"
+    node_state.set_worker_state("acquire-only", by="query mode")
+    assert resident.node_embeds() is False and resident.node_embeds("running") is True
+
+
+def test_thirteen_models_at_rest_on_a_card_that_holds_them_are_not_over_committed(tmp_path, node, monkeypatch):
+    """The sum of their LARGEST sizes is over the card — each includes its
+    working context — and that is not over-commitment: at rest they fit
+    (the node in embed mode, 28.4 of 32.7 GiB). The margin is sampled."""
+    said: list[tuple[str, str]] = []
+    resident.set_log(lambda level, text: said.append((level, text)))
+    _a_minute_a_reading(monkeypatch)
+    rest = {"louise-chat": 5_790, "louise-translate": 7_900} | {f"vega-{i}": 1_400 for i in range(11)}
+    largest = {m: int(v * 1.6) for m, v in rest.items()}
+    resident._write_memory(resident.Memory(
+        sizes={(SERVER, m): v * MIB for m, v in largest.items()},
+        rest={(SERVER, m): v * MIB for m, v in rest.items()}, total=32_656 * MIB))
+    resident.reset()
+    assert sum(largest.values()) > 32_656 > sum(rest.values())
+    held = {m: (100 + i, v) for i, (m, v) in enumerate(sorted(rest.items()))}
+    node.held |= set(held)
+    _rows(monkeypatch, held)
+    _card(monkeypatch, 32_656, sum(rest.values()) + 700)
+    _beat([])
+    assert not [t for _l, t in said if "OVER-COMMITTED" in t], said
+    assert resident.read_memory().margin(resident._wall()) == (700 * MIB, True), "the growth is sampled as before"
+    resident.set_log(lambda level, text: None)
+
+
+def test_an_over_committed_card_is_said_not_warned_of_where_the_rule_in_force_pages(tmp_path, node, monkeypatch):
+    # the operator, 2026-11-25: "A for paging" — in query mode the card holding more than its size is the
+    # card as it is meant to be; München's first line after 881caff was at "warn"
+    from app import node_mode
+    for mode, level in (("query", "info"), ("embed", "warn")):
+        resident.reset()
+        said: list[tuple[str, str]] = []
+        resident.set_log(lambda lv, text: said.append((lv, text)))
+        node_mode.switch(mode, by="test")
+        resident._say_overcommitted((48_090 * MIB, 32_656 * MIB, ("vega-bge-m3",)))
+        (lv, text), = [x for x in said if "OVER-COMMITTED" in x[1]]
+        assert lv == level, mode
+        assert ("the rule in force here" in text) == (mode == "query")
+    resident.set_log(lambda level, text: None)

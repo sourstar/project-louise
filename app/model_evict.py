@@ -92,8 +92,15 @@ unload, 1.3–1.8 s on the 35B. So, in "page":
   (deploy/vega/stage/localai_settings.py follows the setting): a card
   holding more than its size reads full at every tick. Its threshold stays,
   for this module's and the keeper's line.
-What it does NOT do: choose the victim, page the keeper's preloads, or
-answer for memory the driver cannot move.
+- IN QUERY MODE IT IS THE RULE, WHATEVER THE FILE SAYS (operator,
+  2026-11-25: "A for paging"): every load pages — the keeper's own too — and
+  the bound over the card is lifted; the host's floor and a context's worth
+  above it stay (`rule`, where the day's measurements are). The mode is the
+  large chat model with every model of Ask beside it, and they are more
+  than the card: the driver holds the idle ones in host memory and a
+  question brings its own back in tenths of a second.
+What it does NOT do: choose the victim, page the keeper's preloads outside
+query mode, or answer for memory the driver cannot move.
 
 Nothing here unloads for being idle: only a load that needs the room asks
 (operator, 2026-11-08: "nothing is evicted only because it's idle, only if
@@ -236,16 +243,46 @@ def host_available() -> int | None:
     return None
 
 
-def rule() -> tuple[str, int, int]:
+def query_mode() -> bool:
+    """Whether the node is in QUERY mode (app/node_mode.py); unreadable: not."""
+    try:
+        from app import node_mode
+        return node_mode.current() == node_mode.QUERY
+    except Exception:   # noqa: BLE001 — unread: the file's rule
+        return False
+
+
+def rule() -> tuple[str, int, int | None]:
     """(`[models] make_room`, the host floor, the most over the card — both
     in bytes) as the node's file says now; a file that does not load is
-    today's rule."""
+    today's rule.
+
+    IN QUERY MODE THE RULE IS "page", WHATEVER THE FILE SAYS, FOR EVERY LOAD,
+    AND WITH NO BOUND OVER THE CARD BUT THE HOST'S FLOOR (operator,
+    2026-11-25: "A for paging" — in query mode nothing is unloaded to make
+    room while system memory allows; the third value is then None). It is
+    what the mode was described as ("chat mode in which the 35B model is used
+    (system RAM mostly consumed by chat model and embedders paging)") and
+    what the node did that day by itself: about 45 GiB of models on 32, 13.3
+    to 14.9 GiB in the driver's gtt, the 35B at the speed of an unloaded card
+    (decode 98.8 and 97.2 tok/s against 99.6 and 97.3), a query encoder
+    wholly in host memory back in 0.2–0.3 s against 5–24 s for a cold start,
+    nothing evicted and no backend lost in two hours. THE TWO THINGS THE
+    BOUND WAITED FOR (the module's docstring: "raised by a measurement, the
+    engine's refusal made survivable by a patch") are those: that
+    measurement, and engine 619655e5833b's 0028 — a context the card cannot
+    hold is refused ("try again later", a deferral in every client), no
+    longer a dead backend. Outside query mode the file's rule and its
+    measured 3 GiB stand: embedding makes contexts all day, and what was
+    measured there is S5's 3.5 GiB."""
     from app import platform_config
     try:
         m = platform_config.load().models
-        return m.make_room, m.page_floor_gib * GIB, m.page_over_gib * GIB
     except Exception:   # noqa: BLE001 — unread: nothing changes
         return "unload", 0, 0
+    if query_mode():
+        return "page", m.page_floor_gib * GIB, None
+    return m.make_room, m.page_floor_gib * GIB, m.page_over_gib * GIB
 
 
 def committed(server: str) -> int | None:
@@ -280,9 +317,10 @@ def _page(server: str, *, need: int, free: int, total: int, used: int, t: float,
     held = committed(server)
     # what the driver counts now stands under the sum: memory on the card that is no model of this runner
     over = None if held is None else max(held, used) + need - total
-    why = ("the runner gives no sizes to count the card's commitment from" if over is None else
+    why = ("the runner gives no sizes to count the card's commitment from" if over is None and over_max is not None
+           else
            f"the card would be committed {over // MIB:,} MiB over its size, past the {over_max // MIB:,} MiB "
-           f"that were measured to hold" if over > over_max else
+           f"that were measured to hold" if over_max is not None and over > over_max else
            "the host's memory cannot be read" if avail is None else
            f"the host has {avail // MIB:,} MiB available and would be under its floor of {floor // MIB:,} MiB "
            f"plus a context's {reserve // MIB:,}" if avail - short - reserve < floor else None)
@@ -293,7 +331,9 @@ def _page(server: str, *, need: int, free: int, total: int, used: int, t: float,
     _paged.update(keys)
     _say("info", f"card: nothing unloaded for {for_what} — {need // MIB:,} MiB needed, {max(0, free) // MIB:,} "
                  f"MiB free under the {t:.2f} line; the driver pages {short // MIB:,} MiB of idle models' memory "
-                 f"to the host ({avail // MIB:,} MiB available, floor {floor // MIB:,}) (operator, 2026-11-24)")
+                 f"to the host ({avail // MIB:,} MiB available, floor {floor // MIB:,}) "
+                 + ("(query mode: nothing is unloaded while the host has memory — operator, 2026-11-25)"
+                    if over_max is None else "(operator, 2026-11-24)"))
     return Outcome(True, need, free, why="paged", paged=short)
 
 
@@ -357,7 +397,8 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
         free = int(t * total) - used
         if need <= free:
             return Outcome(True, need, free)
-        if page:
+        # in query mode every load pages, the keeper's own too (`rule`)
+        if page or query_mode():
             paged = _page(server, need=need, free=free, total=total, used=used, t=t, for_what=for_what,
                           loading=tuple(exclude))
             if paged is not None:

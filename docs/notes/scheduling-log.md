@@ -3554,6 +3554,29 @@ still held the models — the preload's one cold start was vega-medcpt-article-o
 The row that proves the hold is a start on a COLD card: the first worker start
 after the model server itself restarts (the engine swap). Still owed.
 
+**THE COLD ROW** (München; the resume after the engine pass, 15:52:02Z, the
+card emptied by the swap to 619655e5833b; the code live was 3e6b6cc, where the
+hold did not yet cover a resume's first seconds — #900). Local times.
+"16:52:02 node mode paused -> running". IN THE GAP, before the keeper's beat:
+four cold starts "for corpus embedding" — vega-qwen3-embedding-4b 6.0 s
+(16:52:10), nemotron 10.0 s (:13), bge-m3 10.2 s (:14), medcpt-article-ov
+12.2 s (:16) — and "embedding enabled" for wikipedia and NeuRIS at 16:52:15,
+all before "16:52:22 … preloading 13 model(s) for Ask". The first "embedding
+waits: the keeper is still loading the models of Ask after the node's resume"
+at 16:52:23 (legi_F), then :24, :26, :27, :43, :45. The keeper's nine loads —
+medcpt-query 7.0 s, dar-legal-it 23.8, the 9B 7.9, madlad 12.1, tts 9.6,
+rerank-nemotron 7.8, rerank-medcpt 5.3, parakeet 5.7, silero 2.4 — the last at
+16:53:14. "embedding goes on" 16:53:15–19: HELD 34–55 s. A second round of
+waits at 16:53:23–26 around one more load (medcpt-article-ov 5.1 s, pubmed's
+resident encoder), on again 16:53:28–31. CANARY lines 0; GateDeferred 0;
+wikidata had embedded 5,693 chunks by 16:54:27.
+READING: on a cold card the hold costs the backlog under a minute and no run
+is set aside (BEFORE: forty minutes of gutenberg). The twenty seconds between
+the resume and the keeper's beat are the gap #900 closes; nothing was refused
+in them here, with four embedders loading at once into an empty card. OWED on
+51ae16c: the next resume shows no cold start "for corpus embedding" before
+"preloading".
+
 ## 2026-11-25 — two large lanes; a batch puts at most a lane's worth of large units
 
 **SCENARIO.** As the row above (EUR-Lex5.next's large units, the pool
@@ -3612,3 +3635,55 @@ for a million rows on this node.
 
 **AFTER** — owed: those three lines and their times at the next release on
 the node (or at a slices change in a collection's file).
+
+## 2026-11-25 — the keeper counts a model at what its load left, and learns nothing from an over-committed card
+
+**SCENARIO.** The node in QUERY mode since 15:56:21Z (the operator's first
+switch), nothing parsed or embedded; the 35B loaded by the mode (99.2 s),
+thirteen models listed by LocalAI; the worker restarted at 16:23:49Z (deploy
+51ae16c) with all of them loaded.
+
+**BEFORE** (München, `louise node resident show`, /system and the card's
+counters). 16:14Z: budget 19,298 MiB (the 0.98 line 32,002 − growth 6,480 −
+shared context 5,304 − penalty 919); the 35B size 21,449, COUNTED 17,247.
+16:44Z: budget 19,171; the 35B COUNTED 13,275; in the budget: the 35B, MADLAD
+4,850, rerank-medcpt 242, medcpt-query 251, medcpt-article-ov 308 (taken
+18,928). The card: vram counter 31,544 (16:09Z) -> 32,285 (16:31Z) -> 32,417
+MiB (16:44Z); gtt_mm 13,332 MiB in host memory at 16:47Z; /system then: the
+35B 21,169 MiB, MADLAD 5,635, rerank-nemotron 2,844, qwen3-embedding-4b
+2,429, medcpt-article-ov 312, and tts-omnivoice 1.1, dar-legal-it 0.5,
+nemotron-embed 0.4, medcpt-query 0.4, bge-m3 0.4, rerank-medcpt 0.3 MiB.
+"card: unloaded" lines 0; LocalAI evictions 0; one cold start since the
+restart (medcpt-article-ov 6.4 s, a document encoder, in query mode) — and
+again after each question: unloaded "in 0.2 s" when a person's question
+holds the card, loaded back by the keeper 44 s later in 5.8 s (16:49:24Z).
+What paging costs a question there (16:48:54–16:49:49Z): the dense step of a
+search whose query encoder was wholly in host memory, 397 ms against 174 on
+the second search (Normattiva-DAR), 366 against 78 (NeuRIS); the 35B's
+decode 98.8 / 97.2 tok/s against 99.6 / 97.3 on an unloaded card.
+
+**THE CHANGE.** `model_load.rest_of_load` and `resident._rest_size`: a model
+that keeps its context is counted at the first steady reading of a load the
+worker saw begin; never at a later, smaller reading of the same process. No
+at-rest size and no margin sample is taken while the card is over-committed
+— a model reads short of its floor on the card, or what the models take at
+rest exceeds the card's total (not the sum of their largest sizes: that is
+over the card in normal work) — said once per change; a model never known
+is learnt only on a beat with the card at most 90 % full. The file's rests
+and margin peaks of the fewest-reading rule are dropped at the first read.
+With it: a chat model over the budget keeps its room (nothing below it is
+preloaded into it), and no document encoder is in the set where the node
+embeds nothing.
+
+**WHAT IT COSTS.** Nothing a round: one sum over the models LocalAI lists, on
+readings the beat already takes (the cost test: a beat's reads unchanged —
+`/system` 3, the probe 1, the settings 1). Until a model is known again it
+counts at its largest, so fewer models are in the budget for a while: on the
+node in query mode the 35B at 21,449 MiB is over the budget alone, and
+nothing below it is preloaded — which is what the card can hold. It unloads
+nothing.
+
+**AFTER.** Owed: `resident show` after the deploy (the 35B counted at its
+largest, the line "THE CARD IS OVER-COMMITTED" if it still is), and after
+the node's next load of the 35B under the worker's eyes (a mode switch) its
+at-rest size as the load left it.

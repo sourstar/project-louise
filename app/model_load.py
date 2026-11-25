@@ -166,6 +166,22 @@ _rest: dict[tuple[str, str], int] = {}
 #: Not this row's `cpu_percent`: behind VeGa it is the wrapper's process,
 #: 0.07–2.5 % whatever the engine does (scheduling.md, Perugia 2026-10-19)
 _anchor: dict[tuple[str, str], tuple[int | None, int, float, float]] = {}
+#: AS ITS LOAD LEFT IT (2026-11-25). (server, model) -> the backend pid of a
+#: load THIS PROCESS SAW BEGIN — the reading before showed the model absent, or
+#: under another pid — and (server, model) -> (pid, bytes): what that process
+#: held the first time it was STEADY (the same bytes for LOAD_REST_S) after it.
+#: The one reading of a model that keeps its context which is known to be the
+#: model whole and at rest: the fewest reading (`_rest`) is not — on the node
+#: in query mode the 35B, 21,449 MiB loaded, was read at 13,275 while the
+#: driver held a slice of it in host memory (gtt 13.3 GiB), over half its
+#: largest and so "at rest" by REST_FLOOR, and the keeper counted 8 GiB the
+#: card did not have. A process that did not see the load says nothing here.
+_load_seen: dict[tuple[str, str], int] = {}
+_load_rest: dict[tuple[str, str], tuple[int, int]] = {}
+#: how long a new load's bytes must stay the same to be "as its load left it":
+#: past the parts of a load (weights 0.2–0.8 s, the warm-up 1.5–3.5 s; the
+#: 35B's 99 s load changes at every reading), = app/resident.py AT_REST_S
+LOAD_REST_S = 10.0
 #: the clock the readings are timed on (a test's own)
 _rest_clock = time.monotonic
 #: = app/resident.py REST_FLOOR (that module's reasons; kept here, where the
@@ -210,6 +226,8 @@ def reset() -> None:
         _backends.clear()
         _rest.clear()
         _anchor.clear()
+        _load_seen.clear()
+        _load_rest.clear()
         _seen.clear()
         _on_demand.clear()
         _run_on_demand.clear()
@@ -266,6 +284,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
             sizes[(server, m["id"])] = size
         now[m["id"]] = size if ok else 0
     with _lock:
+        before = _pids.get(server)          # None: this process's first reading of the server
         _pids[server] = pids
         _held[server] = now
         _cpu[server] = cpu
@@ -289,6 +308,15 @@ def _fetch_system(server: str) -> frozenset[str] | None:
                 del _rest[k]
             if v >= floor:
                 _rest[k] = min(v, _rest.get(k, v))
+            # A LOAD THIS PROCESS SAW BEGIN, and what it left (`rest_of_load`)
+            if isinstance(pid, int):
+                if before is not None and before.get(k[1]) != pid and _load_seen.get(k) != pid:
+                    _load_seen[k] = pid
+                    _load_rest.pop(k, None)
+                a = _anchor[k]
+                if (_load_seen.get(k) == pid and _load_rest.get(k, (None, 0))[0] != pid
+                        and a[3] - a[2] >= LOAD_REST_S):
+                    _load_rest[k] = (pid, v)
     return frozenset(m["id"] for m in held)
 
 
@@ -386,6 +414,22 @@ def rest_vram(server: str, model: str) -> int | None:
     holding any."""
     with _lock:
         return _rest.get((server_of(server), model))
+
+
+def rest_of_load(server: str, model: str) -> int | None:
+    """The bytes `model` held on the card AS ITS LOAD LEFT IT: the first
+    steady reading of a load this process saw begin, while that same backend
+    process still holds the model. None when this process did not see the
+    load begin (it started with the model loaded), the load has not been
+    steady yet, or the model has been loaded again since. Never lowered by a
+    later reading: a smaller one from the same process is the model partly in
+    host memory, not the model at rest."""
+    with _lock:
+        key = (server_of(server), model)
+        got = _load_rest.get(key)
+        if got is None or _pids.get(key[0], {}).get(model) != got[0]:
+            return None
+        return got[1]
 
 
 def seen_loaded(server: str, model: str) -> bool:

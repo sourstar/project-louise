@@ -28,8 +28,8 @@ progress in the last 30 minutes", app/status.py) — one number for the page
 and the log.
 
 IT REPORTS; IT PAUSES NOTHING. The monitor paused the collection where a
-rule fired. Whether the worker should is the operator's decision and is not
-taken here.
+rule fired; the worker does not (operator, 2026-11-25, asked which: "keep
+report only").
 
 WHAT IT DOES NOT SEE: a stage with work pending whose steps are never
 started — held behind a wait. Each wait says its own line at every report

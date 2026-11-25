@@ -39,6 +39,8 @@ EXEMPT: dict[str, str] = {
     "app/llm.py": f"{MODEL_CALLS} — the chat model",
     "app/translate.py": f"{MODEL_CALLS} — the translation model",
     "app/model_load.py": f"{MODEL_CALLS} — the runner's /system and backend shutdown",
+    "app/localai_reclaimer.py": f"{MODEL_CALLS} — the runner's own settings, read and written back to turn its "
+                                f"memory reclaimer on or off with the node's rule: a few kB, at a change of mode",
     "app/model_pins.py": f"{MODEL_CALLS} — LocalAI's pin API",
     "app/translate_slots.py": f"{MODEL_CALLS} — LocalAI's model-config API, MADLAD's slots",
     "app/gate_twin.py": f"{MODEL_CALLS} — LocalAI's model-config API, the gate's twin load",

@@ -263,3 +263,80 @@ def test_localais_reclaimer_follows_the_nodes_file(tmp_path):
         settings.make_room_of(str(f))
     deploy = (ROOT / "deploy" / "16f" / "deploy-louise-madlad-t5.sh").read_text(encoding="utf-8")
     assert deploy.count('localai_settings.py" $PLATFORM_ARG') == 2, "applied AND checked with the node's file"
+
+
+# ---- QUERY MODE PAGES (operator, 2026-11-25: "A for paging") -----------------
+#
+# The node that day, in query mode: about 45 GiB of models on a 32 GiB card,
+# 13.3–14.9 GiB in the driver's gtt, the 35B at the speed of an unloaded card,
+# a query encoder wholly in host memory back in 0.2–0.3 s against 5–24 s for
+# a cold start. His choice: in query mode nothing is unloaded to make room
+# while system memory allows.
+
+@pytest.fixture
+def query(card, config_dir, monkeypatch):
+    """The node in query mode, its file saying nothing of `make_room` (the
+    node's own: "unload"); the host has 28 GiB available, as it had."""
+    from app import node_mode
+    node_mode.switch("query", by="test")
+    host = {"available": 28 * GIB}
+    monkeypatch.setattr(model_evict, "host_available", lambda: host["available"])
+    model_evict.reset()
+    card.host = host
+    yield card
+    model_evict.reset()
+
+
+def test_in_query_mode_the_rule_is_page_whatever_the_file_says_and_the_files_in_any_other(isolated_config, config_dir):
+    from app import node_mode
+    assert model_evict.rule() == ("unload", 12 * GIB, 3 * GIB), "custom mode: the file's"
+    node_mode.switch("query", by="test")
+    assert model_evict.rule() == ("page", 12 * GIB, None), "no bound over the card but the host's floor"
+    (config_dir / "platform.toml").write_text('[models]\nmake_room = "unload"\npage_floor_gib = 16\n', encoding="utf-8")
+    assert model_evict.rule() == ("page", 16 * GIB, None), "the file's floor, the mode's rule"
+    node_mode.switch("embed", by="test")
+    assert model_evict.rule() == ("unload", 16 * GIB, 3 * GIB), "embedding makes contexts all day: the measured 3 GiB"
+
+
+def test_in_query_mode_no_load_unloads_anything_while_the_host_has_memory(query):
+    r = _full(query)
+    # a question's load, and the keeper's own preload — which says no `page`: both page here
+    for for_what, page in (("louise-rerank-nemotron-1b", True), ("the preload of louise-chat", False)):
+        out = model_evict.make_room(S, need=6_000 * MIB, horizon=NOW, for_what=for_what, exclude=("m",), page=page)
+        assert out.fits and out.why == "paged" and out.paged > 0, for_what
+    assert r.unloaded == [] and r.calls["shutdown"] == 0
+    said = [s for s in query.said if "nothing unloaded for" in s]
+    assert len(said) == 2 and all("query mode: nothing is unloaded while the host has memory" in s for s in said)
+
+
+def test_in_query_mode_the_card_may_be_committed_far_over_its_size(query):
+    # the day's own state: the card's counter at its brim (a card never counts more than it has), the
+    # models reading what is LEFT of them on it, and 43 GiB of them when each is whole — committed 15 GiB
+    # over the card with this load, five times the 3 GiB measured for embedding
+    from tests.test_resident import _known
+    r = query({"louise-chat-35b": 21_169, "louise-translate-madlad": 3_590, "vega-dar-legal-it": 1,
+               "vega-qwen3-embedding-4b": 2_429}, extra_mib=5_200)
+    _known(louise_chat_35b=21_449, louise_translate_madlad=8_005, vega_dar_legal_it=8_237,
+           vega_qwen3_embedding_4b=5_685)
+    _used(louise_chat_35b=1, louise_translate_madlad=2, vega_dar_legal_it=9, vega_qwen3_embedding_4b=3)
+    assert model_evict.committed(S) == (21_449 + 8_005 + 8_237 + 5_685) * MIB
+    out = model_evict.make_room(S, need=4_404 * MIB, horizon=NOW, for_what="vega-nemotron-3-embed-1b",
+                                exclude=("vega-nemotron-3-embed-1b",))
+    assert out.fits and out.why == "paged" and r.unloaded == []
+
+
+def test_in_query_mode_a_host_under_its_floor_unloads_as_before(query):
+    r = _full(query)
+    query.host["available"] = 12 * GIB + resident.CONTEXT_RESERVE + 1_000 * MIB    # a load 3 GiB over would cross it
+    out = model_evict.make_room(S, need=6_000 * MIB, horizon=NOW, for_what="louise-translate-madlad",
+                                exclude=("louise-translate-madlad",))
+    assert out.fits and out.paged == 0 and r.unloaded == ["vega-qwen3-embedding-4b"], \
+        "while system memory allows — and not past it: the oldest real use goes"
+    assert [s for s in query.said if "is not paged" in s and "under its floor" in s]
+
+
+def test_resident_show_says_query_modes_rule(query):
+    query({})
+    shown = resident._make_room_shown([])
+    assert shown["rule"] == "page" and shown["over_the_card_at_most_mib"] is None
+    assert shown["says"].startswith("QUERY MODE (operator, 2026-11-25): no load unloads anything")
