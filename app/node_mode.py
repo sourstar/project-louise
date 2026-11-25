@@ -18,6 +18,13 @@ that differ:
   the run mode         embed: running ("run all")      chat: `[modes] chat_run`
   the network budget   `[modes] <mode>_down_max` / `<mode>_up_max`, each mode's own
 
+And a fourth, embed mode's own (the same day: "In embed mode you can also
+choose local/p2p embedding … Network and embedding mode remain personal
+choices"): `[modes] embed_embedding` — who embeds the backlog of the
+collections that embed one, each as its file says, every part here, or the
+parts the network gives this node (`collections.desired_embed_mode`, applied
+by the worker's round beside the mode, `worker._apply_embedding_choice`).
+
 THREE WORDS, kept apart (07 §7.3):
 - this MODE (embed | chat): what the node is for now;
 - the RUN MODE (`worker_state`: running, acquire-only, seed-only, paused,
@@ -25,7 +32,9 @@ THREE WORDS, kept apart (07 §7.3):
   stays the operator's to change after (a pause for a deploy), except that
   chat mode never runs everything (`refuses`) and `node resume` goes back to
   what the mode runs (`run_of`);
-- a collection's `embed` setting (off, on-demand, all, p2p): untouched.
+- a collection's `embed` setting (off, on-demand, all, p2p): its file's,
+  untouched — but that in embed mode the node's embedding choice may stand in
+  `all` / `p2p` for the collections whose file says one of the two.
 
 WHERE IT LIVES. Which mode the node is in is the node's state, in
 `state/node.sqlite` beside the run mode, and it survives a restart for the
@@ -293,8 +302,11 @@ def shown() -> dict:
         "run": node_state.peek_worker_state(),
         "chat_model": config.chat_model_for(mode),
         "network": pc.modes.network(mode),
+        # embed mode's embedding choice where it is in force, None elsewhere
+        "embedding": pc.modes.embedding(mode),
         "modes": {m: {"chat_model": config.chat_model_for(m), "run": run_of(m, pc.modes) or "yours",
                       "network": pc.modes.network(m),
+                      **({"embedding": pc.modes.embedding(m)} if m == EMBED else {}),
                       "budget": {k: v for k, v in budget(m, pc).items() if k in ("down", "up")}}
                   for m in MODES},
     }

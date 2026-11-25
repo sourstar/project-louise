@@ -181,6 +181,9 @@
   {% if c.embed_mode_note %}
   <div class="note"><span class="badge err">runs as all local</span> {{ c.embed_mode_note }}</div>
   {% endif %}
+  {% if c.embed_mode_choice %}
+  <div class="note" data-embed-choice><span class="badge">embed mode's choice</span> {{ c.embed_mode_choice }}</div>
+  {% endif %}
   {# THE CARD: STATUS IN SIGHT, PROSE AND BUTTONS BEHIND TWO CLOSED LINES
      (operator, 2026-11-02: "in each model card hide all the descriptive
      text in a Details expandable section and all the buttons in a Options
