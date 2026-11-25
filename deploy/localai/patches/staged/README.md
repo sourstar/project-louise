@@ -37,9 +37,9 @@ no model file does, and a test holds the staged ones to it. docs/notes/parking-s
 (it stays installed; the operator, to München: "Build 619655e5833b now,
 swap it after the drain, if it still applies", then "Deploy and engine swap"). München: the byte check VEGA/1 against VEGA/2 all
 identical (bge-m3, nemotron, qwen3-4b); the five llama.cpp gates passed, each "exact, 3 fresh load(s)", every fingerprint identical to
-before; twenty unloads of qwen3-embedding-4b through the wrapper at exit 0, none of a second or more. THE FILE AND ITS PATCHES ARE THE
-LIVE ENGINE'S NAME: nothing in them changes without a new build and every gate again; tests/test_localai_engine_canary_series.py holds
-it. What it is: `engine-stream.series` (`792f050e318e`, built 09:58:24Z, never gated, not swapped) line for line, then 0028 — so ONE
+before; twenty unloads of qwen3-embedding-4b through the wrapper at exit 0, none of a second or more. ITS FILE AND ITS PATCHES STAY AS THEY ARE
+while it is the engine a rollback puts back: tests/test_localai_engine_canary_series.py holds
+its name. What it is: `engine-stream.series` (`792f050e318e`, built 09:58:24Z, never gated, not swapped) line for line, then 0028 — so ONE
 swap carried the paging default (0021), the speech port's language tag (0022), a stream that fails after its first chunk failing (0025),
 the test switch for it (0026) and a canary refused for memory not being a canary that failed (0028). ITS OWN ROWS ON COPIES (München,
 the same pass): 0028 HOLDS (two graphs refused at a context's creation: "the context cannot be created now", nothing discarded, no
