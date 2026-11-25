@@ -130,7 +130,10 @@ def set_key(server: str, key: str, value: Any) -> bool:
         status = r.status_code
     except Exception as e:   # noqa: BLE001 — as above
         import httpx
-        if isinstance(e, httpx.TimeoutException) and not isinstance(e, httpx.ConnectTimeout):
+        # ReadTimeout alone: the request went out whole and no answer came. A
+        # pool or a write timeout sent nothing, a connect timeout reached
+        # nobody — those are asked again at the next beat, as any failure is
+        if isinstance(e, httpx.ReadTimeout):
             raise NotAnswered(f"the write was sent and not answered in {TIMEOUT_S:.0f} s "
                               f"({type(e).__name__})") from None
         raise NotTaken(f"its settings could not be written ({type(e).__name__})") from None

@@ -276,6 +276,9 @@ DEFAULT_THRESHOLD = 0.95
 SETTINGS_TIMEOUT_S = 2.0
 #: a model this keeper loaded, off the card again this soon: space is claimed
 REEVICTED_WITHIN_S = 600.0
+#: a warm that left its model unloaded (refused for room, or failed without
+#: raising) is tried again after this, with no back-off and no penalty
+RETRY_UNLOADED_S = 120.0
 #: the keeper's clock and the record's are read a moment apart
 OWN_UNLOAD_SLACK_S = 5.0
 #: the first back-off after a repeat eviction, doubled each time, and its cap
@@ -455,7 +458,6 @@ def reset() -> None:
         _park_floor_seen.clear()
         _park_floor_failed.clear()
         _settings_hold.clear()
-        _stale_said.clear()
         _pids_seen = (frozenset(), frozenset())
         _last, _last_why, _last_switches = {}, None, Switches()
         _track.clear()
@@ -465,6 +467,11 @@ def reset() -> None:
     global _first_beat, _last_beat_wall
     _first_beat = None
     _last_beat_wall = None
+    try:
+        from app import model_evict
+        model_evict._left_at.clear()         # what the eviction stopped for the host, with the keeper's own state
+    except Exception:   # noqa: BLE001
+        pass
 
 
 def switches() -> Switches:
@@ -723,12 +730,10 @@ def _hold_settings(server: str, what: str, e: Exception) -> None:
 _park_floor_seen: dict[str, int | None] = {}
 #: (server, floor) for which the write failed and was said: said once
 _park_floor_failed: set[tuple[str, int]] = set()
-#: (server, model) said on the card under a record that says parked: said once
-_stale_said: set[tuple[str, str]] = set()
 
 
 def _parked_follow(servers: Iterable[str]) -> dict[str, list]:
-    """PARKING, THE KEEPER'S THREE DUTIES (docs/notes/parking-step-2.md §4 B,
+    """PARKING, THE KEEPER'S TWO DUTIES (docs/notes/parking-step-2.md §4 B,
     §7; operator, 2026-11-25: "Do parking."). Each from readings the beat
     already took — LocalAI's settings (`_threshold`) and `/system`
     (`_remember`) — and nothing is asked while nothing is to change. Returns
@@ -742,15 +747,12 @@ def _parked_follow(servers: Iterable[str]) -> dict[str, list]:
        each park and stops the model instead where it would not hold. Never
        set by hand; nothing written where no model parks, so a server without
        the patch is never asked.
-    2. THE RECORD. A model listed parked whose process holds it on the card
-       (`model_load.parked_stale`: a request crossed its park) is given back
-       to LocalAI's record and watchdog by `POST /backend/load`.
-    3. THE HOST. LocalAI never stops a PARKED model by itself, and the floor
+    2. THE HOST. LocalAI never stops a PARKED model by itself, and the floor
        is checked only when a model is parked: the host's own claim on that
        memory is the eviction's to answer (`model_evict.host_claims` — space
        claimed, as every unload is; the budget still unloads nothing)."""
     from app import localai_reclaimer, model_evict, model_load, platform_config
-    out: dict[str, list] = {"floor": [], "record": [], "stopped": []}
+    out: dict[str, list] = {"floor": [], "stopped": []}
     try:
         platform_config.load()
         floor = int(model_evict.rule()[1])
@@ -792,23 +794,6 @@ def _parked_follow(servers: Iterable[str]) -> dict[str, list]:
                            f"available, and is stopped where it would not ([models] page_floor_gib)")
         except Exception as e:   # noqa: BLE001 — never the keeper's beat
             _say("warn", f"resident: LocalAI's park floor at {s} was not set ({type(e).__name__})")
-    for s in servers:
-        try:
-            for m in sorted(model_load.parked_stale(s)):
-                ok = model_load.record_loaded(s, m)
-                if ok:
-                    out["record"].append(m)
-                if (s, m) not in _stale_said:
-                    _stale_said.add((s, m))
-                    _say("info", f"resident: {m} is listed parked at {s} and its process holds it on the card "
-                                 f"(a request crossed its park, and the engine brought the weights back "
-                                 f"itself) — LocalAI's record "
-                                 + ("says loaded again (/backend/load)" if ok else
-                                    "could not be put right (/backend/load); asked again at each beat"))
-            _stale_said.intersection_update({(s2, m) for s2, m in _stale_said
-                                             if s2 != s or m in model_load.parked_stale(s)})
-        except Exception:   # noqa: BLE001
-            pass
     try:
         out["stopped"] = model_evict.host_claims(servers)
     except Exception:   # noqa: BLE001
@@ -1132,6 +1117,22 @@ def _weights(server: str, model: str, mem: Memory, largest: int | None) -> int |
         if _whole(v, largest, ON_DEMAND_REST_FLOOR):
             return v
     return None
+
+
+def rest_known(server: str, model: str, mem: "Memory") -> int | None:
+    """What `model` holds on the card AT REST, where this node knows it: an
+    on-demand model's weights (`_weights`), a context-keeping one's size as
+    its load left it or as the file remembers it — each only where it is a
+    reading of the model whole (`_whole`). None: not known. What the
+    eviction judges "in host memory" against (`model_evict.host_leftovers`);
+    never the largest, which holds every working context."""
+    from app import model_load
+    key = (server, model)
+    largest = max([v for v in (mem.sizes.get(key), model_load.size_vram(server, model)) if v] or [0]) or None
+    if _rest_floor(server, model) != REST_FLOOR:
+        return _weights(server, model, mem, largest)
+    return next((v for v in (model_load.rest_of_load(server, model), mem.rest.get(key)) if _whole(v, largest)),
+                None)
 
 
 def _rest_floor(server: str, model: str) -> float:
@@ -1826,7 +1827,11 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
         _say_budget(p)
         _reclaimer_follows(r.server for r in want)
         _parked_follow(r.server for r in want)
-        if not _question_now():
+        with _lock:
+            loading = _warm_thread is not None and _warm_thread.is_alive()
+        if not _question_now() and not loading and not _settling():
+            # NEVER BESIDE A LOAD OF THE KEEPER'S OWN, nor in the minutes after
+            # a resume: a model on its way to the card is not one left behind.
             # LEAVING A PAGING RULE GIVES THE HOST ITS MEMORY BACK (München,
             # 2026-11-25): the idle models the driver still holds in host
             # memory are stopped — the eviction's to do (`model_evict.
@@ -2077,8 +2082,27 @@ def _warm_all(items: list[Resident], stop: Callable[[], bool]) -> None:
                          f"{time.monotonic() - t0:.1f} s ({type(e).__name__}: {str(e)[:200]}); "
                          f"tried again at the next beat")
             continue
+        # A WARM THAT DID NOT PUT THE MODEL ON THE CARD IS NO LOAD: a parked
+        # model's return the card refused (503 `no_room_on_device`: it stays
+        # parked) and a load that failed without raising both end here with
+        # the model not loaded. Marked as loaded, the next beat found it "off
+        # the card again" seconds after its "load" and took a back-off and a
+        # penalty on the budget for an eviction nobody made (the review of
+        # 2026-11-25). It is asked again after RETRY_UNLOADED_S, no more.
+        # Read NOW: the warm just changed what the runner holds
+        try:
+            from app import model_load as _ml2
+            _ml2.loaded_models(r.server, 0.0)
+        except Exception:   # noqa: BLE001 — the last reading's word then
+            pass
+        loaded = _loaded(r)
         with _lock:
-            _track.setdefault(r.key, _Track()).warmed_at = _now()
+            t = _track.setdefault(r.key, _Track())
+            if loaded is False:
+                t.warmed_at = None
+                t.next_try = _now() + RETRY_UNLOADED_S
+            else:
+                t.warmed_at = _now()
 
 
 def _make_room_shown(want: list[Resident]) -> dict[str, Any]:

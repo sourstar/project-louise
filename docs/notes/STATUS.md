@@ -20,6 +20,45 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **AN INDEPENDENT READING OF THE NIGHT'S KEEPER AND EVICTION CODE, BEFORE IT REACHED THE NODE: EIGHT
+  FINDINGS, THREE REPRODUCED BY RUNNING — ALL FIXED; main 759322e7 WAS NEVER DEPLOYED (held with München the
+  minute the report came).** Asked for because I had caught one logic error of my own late (the mode-switch
+  fix's first cut). A fresh agent was given the files and the server's facts, not my conclusions. What it
+  found, and what each is now:
+  1. `host_leftovers` (#916) judged "in host memory" as "under its floor of the LARGEST it was seen
+     holding". A model that makes its context on demand rests far under its largest by design —
+     vega-dar-legal-it about 1.8 GiB at rest against 8,453 MiB, 0.21 with a floor of 0.3 — so in embed mode
+     the keeper would have STOPPED it, whole and on the card, at every idle minute, and where the budget
+     holds it loaded it back and stopped it again (42 s a reload). NOW: it reads nothing on the card, or
+     under half of what it holds AT REST where the node knows that (`resident.rest_known`); unknown with
+     something on the card, it is left alone; a model this stopped is not stopped by it again within the
+     hour; never beside a load of the keeper's own nor in the minutes after a resume.
+  2. `make_room` (#912) counted a model that parks at all it holds before the first victim; a park gives
+     back only the weights. Reproduced: one model parked, one stopped, "1,935 of 2,200 MiB made" — for
+     nothing. NOW: where the parks leave the room short, the models just parked are stopped for what their
+     processes still hold, until it fits: what the check counted is made.
+  3. The "listed parked but on the card" test (#912) misread a truly parked model after one partly paged
+     reading, and the keeper would have un-parked it at every beat. WITHDRAWN: a model listed parked is
+     parked for Louise, Louise never calls `/backend/load`, and the server's record heals at the model's
+     next request by its own design (parking-keeper.md §3; Tensor told).
+  4. A warm that left its model unloaded — a parked model's return the card refused, a load that failed
+     without raising — was marked as a load, and the next beat took a back-off and a penalty for an
+     eviction nobody made. NOW: the runner is read after the warm; not loaded is no load, asked again in
+     two minutes.
+  5. Any timeout but a connect timeout on the settings write was "sent and not answered" and held every
+     settings write to that server for an hour — the reclaimer's switch at a change of mode among them.
+     NOW: a read timeout alone (the request went out whole and no answer came).
+  6. A park that broke its backend (500 `model_stopped`) was not recorded as Louise's own stop. NOW it is.
+  7. `host_claims` took an unreadable pin record for "no pins", asked no pin of LocalAI, and could stop a
+     model parked by hand. NOW: unread stops nothing, the pin is read, and only what Louise knows is taken.
+  8. A `forget` of a text index waited for the opens it could see; one that began while it waited stored
+     its handle afterwards. NOW: a count of forgets per collection, read at the open's start and at its
+     end — a handle from before a forget is never kept.
+  Nothing found in the own-unloads record, the question's unloads, the warm-up, the rerank's parts, the
+  "no room now" answer, the stage script, the lock order, or the secrets. THE LESSON, mine: two of the
+  three reproduced defects were thresholds I reasoned about and never ran against the node's own numbers,
+  which were in this file (dar-legal-it's 8,453 against 1.8; bge-m3's 603 of 939). A rule that STOPS a
+  model is tested against the real sizes of the models it will meet, on-demand ones first.
 - **Rows that had arrived and were not yet written here (München, the afternoon's deploys).** 51ae16c
   (main 2b8c62e1: #900–#904) LIVE, the worker started 16:23:49Z; its staged lists on the node 3,265 passed /
   2 skipped, 11, 92, 478 / 9 skipped, and list 5 "25 passed" (the pinned tokenizer cases pass there); the

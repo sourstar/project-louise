@@ -33,12 +33,19 @@ A parked model is a candidate LAST — after every loaded one, in the same
 oldest-use order — and is then stopped for what its process still holds:
 nothing of it is left to park.
 
-## 2. The keeper's three duties (`resident._parked_follow`, each beat)
+**What the check before the first victim counted is made** (the review of
+2026-11-25). That check counts each victim at all it holds, and a park gives
+back only the weights. Where the parks leave the room short, the models just
+parked are stopped for what their processes still hold, oldest use first,
+until it fits — otherwise a model was parked and another stopped for a load
+that still had no room (reproduced: 360 MiB free, a 900 MiB model parked, a
+1,000 MiB one stopped, "1,935 of 2,200 MiB made").
+
+## 2. The keeper's two duties (`resident._parked_follow`, each beat)
 
 | duty | what it does | pros | cons |
 |---|---|---|---|
 | the floor | where a loaded model says it parks, LocalAI's `park_host_floor_bytes` is held to `[models] page_floor_gib` (12 GiB) — read whole, one key set, written whole, read again; the object's secrets never kept or said | one host-memory number for paging and parking; never set by hand; a server without the patch is never asked | one number for two uses: a node that wants parking with less host room than paging has to lower both |
-| the record | a model listed parked whose process holds it on the card (a request crossed its park) is given back to LocalAI's record by `POST /backend/load` | LocalAI's watchdog tracks it again; the evictor parks it rather than stopping it | told from the reading (nearer loaded than parked), and only where this process knows the model at rest; a tiny model whose residue is most of it stays "parked" until its next request, which makes the record exact anyway |
 | the host | when MemAvailable is under the floor, the parked model used longest ago is stopped, one a beat, never a pinned one (`model_evict.host_claims`) | the parse pool's room comes before a quick return (43 memory kills of the worker, 2026-11-19); LocalAI never stops a parked model itself | in embed mode at a busy hour (4.7 GB available at the worst, 2026-11-24) everything parked is stopped within a few beats: parking then pays only while the host has room — which is the hour it is safe |
 
 The status quo, for comparison: every give-way is a stop. Pros: nothing in
@@ -46,6 +53,20 @@ host memory, nothing new to go wrong. Cons: 6–34 s to come back, each time
 (model-profile.md), where a park's return was 15.5 ms for bge-m3.
 
 ## 3. Not built, and why
+
+- **The stale record is NOT reconciled by Louise — built, found unsound,
+  withdrawn the same night.** The server's record can say "parked" for a
+  model whose weights a crossing request brought back (parking-step-2.md
+  §7). A first cut told that case from the reading ("nearer what the model
+  holds loaded than what a park leaves") and called `/backend/load`; the
+  review reproduced the misread — after one partly paged reading a truly
+  parked bge-m3 (337 MiB held, 603 to return) was taken for on the card,
+  and the keeper would have un-parked it at every beat. Now a model listed
+  parked IS parked for Louise, and Louise never calls `/backend/load`: the
+  model's next request — or the keeper's own load, where the budget holds
+  it — makes the record exact by the server's own design ("already
+  loaded"). Until then Louise makes room for a return that costs nothing,
+  which errs on the side of room.
 
 - **The question's own models (the answer's chat, MADLAD) are never
   parked**: only a model on context on demand whose weights can leave the
