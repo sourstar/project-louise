@@ -219,9 +219,26 @@ def said(name: str) -> str | None:
 def watch(stop: threading.Event, say: Callable[[str], None] | None = None) -> None:
     """The worker's watcher thread: a look every CHECK_EVERY_S until `stop`.
     On a thread of its own (telemetry is published by someone other than the
-    thread doing the work); where no limit reads it ends at once."""
-    if anonymous() is None:
+    thread doing the work); where no limit reads it ends at once.
+
+    IT SAYS AT START WHETHER IT IS ARMED, with its figures (München,
+    2026-11-25: the operator's monitor is dropped only once the worker's own
+    rule has been SEEN live, and nothing said it was there): one line, armed
+    or not, so a worker that pauses nothing for memory is told apart from one
+    that watches and has had nothing to do."""
+    got = anonymous()
+    if got is None:
+        if say:
+            say("memory: the yield is NOT armed — the worker's cgroup names no memory limit "
+                f"({CGROUP_DIR}/memory.max reads \"max\" or does not read): nothing here pauses a "
+                "collection for memory")
         return
+    if say:
+        anon, limit = got
+        say(f"memory: the yield is armed — the worker's limit is {_mib(limit)} MiB; the collection with "
+            f"the most in the parse pool yields at {_mib(int(limit * HIGH_FRACTION))} MiB anonymous "
+            f"({HIGH_FRACTION:.1%}), all go on under {_mib(int(limit * LOW_FRACTION))} MiB "
+            f"({LOW_FRACTION:.0%}); read every {CHECK_EVERY_S:.0f} s, now {_mib(anon)} MiB")
     while not stop.wait(CHECK_EVERY_S):
         try:
             look(say=say)

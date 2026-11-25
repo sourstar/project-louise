@@ -20,6 +20,26 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **LIVE since 2026-11-25 09:40:28Z: main `1249b1d9`** (deploy `fa354241`; #877 the two modes, #878, #879,
+  #880 the voice ping, #881, #883–#887). München's readings from the first minutes, as logged:
+  - the mode, at start: "node in embed mode (read): chat model louise-chat-qwen3.5-9b-q4-p0; network budget
+    down unlimited ([budget]), up 12.5 MB/s ([budget])". `[models] chat_large` written through the System
+    page (the 35B); `chat_small` is the environment's, so no key was written. Nothing switched yet: the first
+    switch to chat mode is the operator's, and its rows (the worker's lines, the card and the RAM before and
+    after) are still owed.
+  - THE VOICE PING: five lines, once, twenty seconds after the start, under engine `d531d5d804f1` — Philippe
+    5.1 s, Synthetic it C 3.1 s, en 2.7 s, fr 2.3 s, de 1.9 s. The profiles the node is not set to (Louis, the
+    replaced Synthetic it) were not pinged. Expected: the record was empty. The row that proves the rule is
+    the NEXT start under the same engine (no line) and the first after the engine swap (five again).
+  - the scan's progress, once a minute: Normattiva "corpus scan: 290,816 units taken so far, 0 new, 0 changed
+    (60 s in)"; a source that does not say where it is: "still walking; 342,000 units taken so far, and the
+    source has not said where it is (DiscoverState.say)".
+  - the slice-scope wait: no line yet (the old worker's slice pass ran as it stopped: 1,025,283 held, 243,884
+    embedded here). The scan rate after `forget_many`: owed, when the walk ends and the apply starts.
+  - THE MEMORY YIELD SAID NOTHING AT START, so nobody could tell an armed watcher from an absent one, and
+    the operator's monitor is dropped only when the worker's rule has been seen live. Fixed the same day: the
+    watcher says once whether it is armed, with its limit, its two lines and the reading
+    (`memory_yield.watch`).
 - **The Ask button is Abort while a question is being answered (operator, 2026-11-25: "while a query is in
   processing I want the Ask button to switch to Abort"; `app/templates/ask.html`, 07 §7.4).** Pressed, the
   question's search and answer jobs are cancelled on the node (`DELETE /ask/relay/<id>`, the route the "stuck"
