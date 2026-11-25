@@ -316,8 +316,8 @@ poisons itself, refuses, or loses them — in no engine):
 
 | what | how | result |
 |---|---|---|
-| the backend's gRPC handlers, compiled against the patched engine | `tools/measure/park_told.py selftest` | 29 of 29: a model that cannot park answers as before; `Free`, `Status`, `LoadModel` as the table; the first vectors bit for bit over 12 cycles (6 returned by `LoadModel`, 6 by the request); a refused return `RESOURCE_EXHAUSTED`, still parked, the next served; 302 calls of `Free` beside live requests — 151 parked, 151 busy, every request's vectors intact |
-| llama.cpp's own server | `tools/measure/park_cpu_test.py` | 43 of 43 (17 of step 1, 26 told) |
+| the backend's gRPC handlers, compiled against the patched engine | `tools/measure/park_told.py selftest` | 33 of 33 (29 of 29 when the patch was cut; four added since for a park that FAILS — no host memory for the copy: `Free` answers `INTERNAL`, nothing is parked, the model answers, the next `Free` parks): a model that cannot park answers as before; `Free`, `Status`, `LoadModel` as the table; the first vectors bit for bit over 12 cycles (6 returned by `LoadModel`, 6 by the request); a refused return `RESOURCE_EXHAUSTED`, still parked, the next served; 302 calls of `Free` beside live requests — 151 parked, 151 busy, every request's vectors intact |
+| llama.cpp's own server | `tools/measure/park_cpu_test.py` | 48 of 48 (43 of 43 when the patch was cut — 17 of step 1, 26 told; five added for a park that fails: 500 `server_error`, the weights on the device, the model answering) |
 | a refused graph | `tools/measure/refuse_cpu_test.py … --told` | 17 of 17: every refusal 503 `no_room_on_device`, none counted as a canary that failed, the same process, the next request the control's vectors |
 | llama.cpp's server tests | `tools/server/tests/unit/test_park_weights.py`, `test_context_on_demand.py` | 25 passed |
 | the messages and codes | `park_reply_test.cpp`, standalone | all passed; the bytes of `Model already loaded` pinned |

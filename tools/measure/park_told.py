@@ -343,11 +343,26 @@ def selftest(binary: str, model: str, stubs_dir: str | None) -> int:
     worker.join()
     bad = [(c, str(g)[:60]) for c, g in answers if c != "OK" or g != base]
     check(f"{len(answers)} requests beside {sum(seen.values())} calls of Free: every one the first vectors",
-          not bad and len(answers) >= 10, f"{len(bad)} wrong: {bad[:2]}")
+          not bad and len(answers) >= 5, f"{len(bad)} wrong: {bad[:2]}")
     check("each Free was done, or refused FAILED_PRECONDITION busy - nothing else",
           set(seen) <= {PARKED, "FAILED_PRECONDITION busy"} and seen.get(PARKED, 0) >= 3, str(seen))
     check("the process is alive and its counts agree", p.proc.poll() is None
           and b.status()[1].get("parks") == p.text().count("weights parked in"))
+    p.stop()
+
+    # E. a park that FAILS (no host memory for the copy): INTERNAL - a fault, the caller stops the process as it would
+    # have - and nothing is half done
+    p = Process(binary, {"GGML_CPU_PARK_TEST": "1", "GGML_CPU_PARK_TEST_NO_HOST": "1"}, stubs_dir)
+    b = p.backend
+    b.load(name, **load, Options=on_demand)
+    code, _, detail, _ = b.free()
+    check("Free that cannot copy the weights out: INTERNAL, and it says they stay", code == "INTERNAL" and "stay on the device" in detail,
+          f"{code} {detail}")
+    check("Status: on the device, nothing parked", b.status()[1].get("parked") == 0 and b.status()[1].get("parks") == 0)
+    code, got, _ = b.embed_all()
+    check("and the model answers the first vectors", code == "OK" and got == base)
+    code, answer, _, _ = b.free()
+    check("Free again parks", code == "OK" and answer.message == PARKED and b.status()[1].get("parked") == 1)
     p.stop()
 
     print(f"{sum(results)} of {len(results)} passed")

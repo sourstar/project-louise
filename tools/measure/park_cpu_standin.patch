@@ -1,8 +1,8 @@
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index b49b957..ee90495 100644
+index b49b957..fc7b5d4 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
-@@ -2943,6 +2943,73 @@ static void ggml_backend_cpu_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
+@@ -2943,6 +2943,80 @@ static void ggml_backend_cpu_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
      memset(buffer->context, value, buffer->size);
  }
  
@@ -15,6 +15,8 @@ index b49b957..ee90495 100644
 +    int refuse = getenv("GGML_CPU_PARK_TEST_REFUSE") ? atoi(getenv("GGML_CPU_PARK_TEST_REFUSE")) : 0;
 +    // GGML_CPU_PARK_TEST_LOSE=N: the next N unparks say they succeeded and leave the poison (weights that came back wrong)
 +    int lose = getenv("GGML_CPU_PARK_TEST_LOSE") ? atoi(getenv("GGML_CPU_PARK_TEST_LOSE")) : 0;
++    // GGML_CPU_PARK_TEST_NO_HOST=N: the next N parks fail, as a host with no memory for the copy: the buffer stays as it is
++    int no_host = getenv("GGML_CPU_PARK_TEST_NO_HOST") ? atoi(getenv("GGML_CPU_PARK_TEST_NO_HOST")) : 0;
 +};
 +static ggml_cpu_park_test & ggml_cpu_park_test_state() {
 +    static ggml_cpu_park_test s;
@@ -24,6 +26,11 @@ index b49b957..ee90495 100644
 +    auto & s = ggml_cpu_park_test_state();
 +    if (s.saved.count(buffer)) {
 +        return true;
++    }
++    if (s.no_host > 0) {
++        s.no_host--;
++        GGML_LOG_WARN("%s: [test] GGML_CPU_PARK_TEST_NO_HOST: this park fails, the buffer stays\n", __func__);
++        return false;
 +    }
 +    uint8_t * base = (uint8_t *) buffer->context;
 +    s.saved[buffer].assign(base, base + buffer->size);
@@ -76,7 +83,7 @@ index b49b957..ee90495 100644
  static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
      /* .free_buffer     = */ ggml_backend_cpu_buffer_free_buffer,
      /* .get_base        = */ ggml_backend_cpu_buffer_get_base,
-@@ -2999,6 +3066,9 @@ static ggml_backend_buffer_t ggml_backend_cpu_buffer_type_alloc_buffer(ggml_back
+@@ -2999,6 +3073,9 @@ static ggml_backend_buffer_t ggml_backend_cpu_buffer_type_alloc_buffer(ggml_back
          return NULL;
      }
  
