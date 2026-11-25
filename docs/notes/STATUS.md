@@ -20,6 +20,22 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **LIVE since 2026-11-25 12:11:43Z: main `9811ca92`** (deploy `d478805`: #888–#894). München's rows:
+  the staged run 5 — the pinned-tokenizer legal spans, the proof that the batched encode cuts the same
+  pieces under the REAL tokenizer — "23 passed" (the other lists 3260 passed / 2 skipped; 11; 92; 478 / 9
+  skipped). "memory: the yield is armed — the worker's limit is 24,576 MiB; … yields at 21,504 MiB
+  anonymous (87.5%), all go on under 17,940 MiB (73%); read every 10 s, now 102 MiB" at the start. The
+  preload hold: every embedding collection waited 6–13 s and said so, no CANARY and no gate deferred for
+  room in the first ten minutes, gutenberg validated 44 s after the start (forty minutes that morning) —
+  on a WARM model server, so the hold against real loads is still to be seen at the engine swap
+  (scheduling-log.md). Owed: the large units' lines (EUR-Lex5.next's scan was still walking), which are the
+  AFTER of the tokenizer threads and the condition for the next deploy (#895, two lanes).
+- **Two log lines ran together** at that start ("embedding goes on: …" of NeuRIS and of wikidata, no
+  newline between): `print(text, flush=True)` writes the text and its newline as two writes, and two
+  threads logging in the same instant interleave them. Now the worker's stdout itself writes whole lines
+  (`app/log_lines.py`, installed at the worker's start): what a thread writes is kept until its line is
+  complete and goes out in one write — every print, whoever makes it — and `db.log_event` and the node
+  lines write theirs in one write besides (`db.say_line`), for the processes that do not install it.
 - **TWO LARGE LANES, and a batch puts at most a lane's worth of large units (`parallel.LARGE_LANES`,
   `compute`; scheduling.md pitfall 26).** The second half of the reading of EUR-Lex5.next's large units: the
   lane of one made fifteen 100 MB units take 1,513 s while ten children idled, and one fts batch gathered
