@@ -615,6 +615,46 @@ def test_a_model_whole_on_the_card_is_never_taken_for_one_in_host_memory(node, m
         "under half of what it rests at: in host memory; just over half: on the card"
 
 
+#: THE NODE'S OWN SET IN EMBED MODE (München, `resident show` and the card, 2026-11-25 22:32–22:41Z):
+#: model -> (MiB on the card, MiB at rest as the keeper counts it or None where it is not known, MiB at its largest)
+NODE_EMBED_MODE = {
+    "louise-chat-qwen3.5-9b-q4-p0": (5_882, 5_882, 8_104),
+    "louise-translate-madlad": (7_221, 7_221, 8_005),
+    "louise-tts-omnivoice": (1_672, 1_672, 2_867),
+    "louise-rerank-nemotron-1b": (3_163, 3_163, 3_348),
+    "louise-rerank-medcpt": (423, None, 423),
+    "vega-nemotron-embed": (2_519, 2_229, 4_404),
+    "vega-qwen3-embedding-4b": (2_736, 2_736, 5_685),
+    "vega-medcpt-query": (197, None, 481),
+    "vega-bge-m3": (615, 615, 1_335),
+    "vega-dar-legal-it": (1_816, None, 8_453),          # 0.21 of its largest, whole and on the card
+    "vega-medcpt-article-ov": (312, None, 312),
+}
+
+
+def test_on_the_nodes_own_numbers_nothing_healthy_is_stopped_and_the_four_of_that_night_are(node, monkeypatch):
+    """A rule that STOPS a model is run against the sizes of the models it
+    will meet (the lesson of the review, 2026-11-25): the node's set in embed
+    mode as München read it — nothing is stopped; and the same set as it
+    stood at the switch, the four idle Ask models reading 0 MiB — exactly
+    those four."""
+    r = node({m: v[0] for m, v in NODE_EMBED_MODE.items()})
+    for m, (_here, _rest, largest) in NODE_EMBED_MODE.items():
+        with model_load._lock:
+            model_load._sizes[(S, m)] = largest * MIB
+        node_state.touch_encoder(S, m, now=time.time() - 3_600)
+    monkeypatch.setattr(resident, "rest_known",
+                        lambda s, m, mem: (NODE_EMBED_MODE[m][1] or 0) * MIB or None)
+    monkeypatch.setattr(model_evict, "rule", lambda: ("unload", 12 * GIB, 3 * GIB))
+    in_set = {(S, m) for m in NODE_EMBED_MODE}
+    model_load.loaded_models(S, 0.0)
+    assert model_evict.host_leftovers([S], in_set) == [] and r.asked == []
+    four = ("louise-translate-madlad", "louise-tts-omnivoice", "louise-rerank-nemotron-1b", "louise-rerank-medcpt")
+    _paged_out(r, *four)
+    model_load.loaded_models(S, 0.0)
+    assert sorted(m for _s, m in model_evict.host_leftovers([S], in_set)) == sorted(four)
+
+
 def test_a_model_this_stopped_is_not_stopped_by_it_again_within_the_hour(node, monkeypatch):
     """Loaded back and paged out again, the card is too full for the set:
     the budget's to say — never a stop and a load at every beat."""
