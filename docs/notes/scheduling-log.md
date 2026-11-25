@@ -3654,7 +3654,13 @@ MiB (16:44Z); gtt_mm 13,332 MiB in host memory at 16:47Z; /system then: the
 2,429, medcpt-article-ov 312, and tts-omnivoice 1.1, dar-legal-it 0.5,
 nemotron-embed 0.4, medcpt-query 0.4, bge-m3 0.4, rerank-medcpt 0.3 MiB.
 "card: unloaded" lines 0; LocalAI evictions 0; one cold start since the
-restart (medcpt-article-ov 6.4 s, a document encoder, in query mode).
+restart (medcpt-article-ov 6.4 s, a document encoder, in query mode) — and
+again after each question: unloaded "in 0.2 s" when a person's question
+holds the card, loaded back by the keeper 44 s later in 5.8 s (16:49:24Z).
+What paging costs a question there (16:48:54–16:49:49Z): the dense step of a
+search whose query encoder was wholly in host memory, 397 ms against 174 on
+the second search (Normattiva-DAR), 366 against 78 (NeuRIS); the 35B's
+decode 98.8 / 97.2 tok/s against 99.6 / 97.3 on an unloaded card.
 
 **THE CHANGE.** `model_load.rest_of_load` and `resident._rest_size`: a model
 that keeps its context is counted at the first steady reading of a load the

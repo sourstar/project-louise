@@ -49,6 +49,16 @@ measured (published figures disagree).
   nothing (`resident.node_embeds`: medcpt-article-ov was preloaded in query mode at 16:30Z, "for resident
   encoder (pubmed)"). With all three, on the node in query mode: the 35B counted at 21,449 MiB, over the
   budget, nothing below it preloaded, nothing unloaded — the models already on the card stay, by use.
+  THE TWO PRICES (München, 16:48:54–16:49:49Z, the card over its line, gtt 13.3 GiB): the 35B answers at
+  the SAME speed as on an unloaded card (p0chat: decode 98.8 and 97.2 tok/s against phase 0's 99.6 and 97.3;
+  ttft 0.286 s and 2.505 s against 0.292 and 2.512); and a search whose query encoder was wholly in host
+  memory paid 0.2–0.3 s for it in its dense step (Normattiva-DAR 397 ms against 174 on the second search;
+  NeuRIS 366 against 78; pubmed none seen) — against the 5–24 s of a cold start. Each page-in put something
+  else out at once (MADLAD 5,635 -> 3,590 MiB, the other embedder to 0, and on the third search 2 GiB of the
+  35B). So paging by the driver is what makes this mode work today, and it is cheap; whether to rely on it on
+  purpose is the operator's (the node's rule says "unload"). ALSO MEASURED there: the document encoder is
+  unloaded at every question ("a person's question holds the card; corpus encoder(s) unloaded in 0.2 s") and
+  loaded again by the keeper 44 s later (5.8 s), in a mode that never embeds — the third change ends it.
 
 - **THE NODE, 2026-11-25 afternoon (München's rows): the engine 619655e5833b live, the cold preload row, the
   operator's first switch to QUERY MODE, and the French answer's BEFORE on the large chat model.**
