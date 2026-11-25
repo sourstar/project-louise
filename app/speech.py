@@ -318,6 +318,24 @@ def profiles(url: str) -> list[dict]:
     return got
 
 
+#: the bound on one voice ping: a clip's encoding and a second of synthesis
+PING_TIMEOUT_S = 60.0
+
+
+def ping(url: str, model: str, voice: str, timeout: float = PING_TIMEOUT_S) -> bool:
+    """One short synthesis IN THE VOICE (app/voice_ping.py): the engine
+    encodes the profile's clip where it holds no encoding of it it can read,
+    and writes it beside the clip; where it holds one, it reads it. True for
+    a 200: the next sentence in that voice pays no encoding. The answer's
+    audio is not kept. Never raises."""
+    try:
+        r = httpc.post(f"{url}/v1/audio/speech", json={"model": model, "input": "OK", "voice": voice},
+                       timeout=timeout)
+    except Exception:   # noqa: BLE001 — not pinged: asked again later
+        return False
+    return r.status_code == 200
+
+
 _timers: dict[str, threading.Timer] = {}
 
 

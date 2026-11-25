@@ -190,7 +190,32 @@ WHAT IT SAYS.
   A first question reads its language with the chat model first, as Quality does.
 
 STILL TO TAKE: a WARM row a mode on this build (a second, different question within the five minutes), so each
-leg's cold cost is cold less warm; and a cold Speed row with a question of its own.
+leg's cold cost is cold less warm. The cold Speed row with a question of its own is below.
+
+### The cold Speed row: web 9a4cec4f, engine d531d5d804f1 (München, 2026-11-25 06:28:42Z)
+
+The same worst case: the card emptied (25 MiB), the node paused, one question of its own through `/ask/relay`
+("Che cosa prevede la direttiva europea sul diritto di recesso nei contratti a distanza?"), Speed.
+
+| | first word from Ask | search | languages | catalog | fts (slowest) | dense | rerank | in the answer |
+|---|---|---|---|---|---|---|---|---|
+| Speed, cold, a question of its own | 58.7 s | 54.0 s | 15.7 s | 1.3 s | 12.2 s (wikidata) | 1.6 s | 23.3 s (6 of 8 lists) | 2.8 s |
+
+The loads (nine models, no MADLAD in Speed), from Ask: the 9B chat 10.7 s, qwen3-4b 5.5, nemotron 8.6, dar-legal-it
+13.0 (ended 9–16 s after Ask); medcpt-query 5.3, bge-m3 9.0, the nemotron reranker 8.1 (18–22 s); the medcpt
+reranker 8.8 (26 s); the voice 13.6 (33 s). The card after: 20,027 MiB.
+
+WHAT IT SAYS.
+- The load ahead holds in Speed as in Quality: DENSE 1.6 s with every encoder cold at Ask, the answer's first word
+  2.8 s after the search.
+- LANGUAGES 15.7 s holds the chat model's own load (10.7 s): the first stage's, which nothing can be loaded ahead
+  of, as in Quality.
+- RERANK 23.3 s is no load: the rerankers were on the card 22–26 s after Ask and the legs before the stage add to
+  30.9 s. Six lists in 23.3 s is 3.9 s a list, against 2.45 s (2,446 ms a list on this engine, the pass's step 5).
+  NOT READ, and nothing is built on it: whether the excess is the last load ahead (the voice, loading until 33 s)
+  competing with the reranker for the card, or these lists' own sizes. The per-list times were not kept. The row
+  that separates the two is München's: the same question cold, and again once every load ahead has ended.
+- NOT A PAIR with the Quality row above (48.1 s): another question, another engine build.
 
 ## Measurement after the build (München)
 

@@ -20,6 +20,23 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **A voice's encoding is made before a reader waits for it (`app/voice_ping.py`; operator, in the Tensor
+  session: "The only voice ping purpose is to do the re-encode for voices without it cached to avoid the extra
+  delay upon the first usage").** The port keeps a clip's encoding beside the clip, bound to the clip and the
+  engine's build; without one a voice's first sentence pays 0.8 s (an 11 s clip) to 3.2 s (the synthetic voices;
+  München's rows on d531d5d804f1). Beside the keeper's beat, once a minute, each voice the node is set to use
+  (`tts_voice`, the synthetic voices, the accounts' kept voices) that has no ping recorded under the engine the
+  speech model is loaded on (`/system`'s `backend`) AND the clip its profile lists (size, length, `updated_at`:
+  Philippe's clip was replaced in place twice under one id) gets one `{"input": "OK", "voice"}`; its 200 is
+  recorded in `state/node.sqlite` `voice_pings`. Never a warm, never because a voice was chosen, never a load of
+  the speech model, never under a question. NOT measured on the node: the first engine swap after its deploy is
+  the reading (five pings, once, then none).
+- **`node checkpoint run` recorded a step with an EMPTY command line about once in twenty starts** (read from
+  /proc a moment after the exec, before the kernel had set the arguments): such a step reads `reused` and a
+  restore would never stop it. Found as a test that failed now and then, reproduced on main; `run` now reads
+  again until the command line is there (≤ 2 s).
+- **The cold Speed row** (first word 58.7 s; rerank 23.3 s for six lists is not a load and is NOT explained yet):
+  ask-card-workflow.md.
 - **The node has two MODES OF USE, embed and chat (operator, 2026-11-25; `app/node_mode.py`, 07 §7.3 `node
   mode`, §7.8 `[modes]`).** One switch moves the three things that differ: the chat model (`[models]
   chat_small` in embed mode, `chat_large` in chat mode — the one `chat` setting became two and is still what
