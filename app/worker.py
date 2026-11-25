@@ -7642,6 +7642,10 @@ def main() -> int:
     collection at its unit and exits 130 on a signal" — invariant 2 says
     the same — and it exited 0. `_stop` is set by the signal handler, and
     by `node stop`'s request, which exits 0 (`_stop_requested`)."""
+    # every line of the worker's log written whole, whichever thread prints
+    # it and however (app/log_lines.py: two events on one line, 2026-11-25)
+    from . import log_lines
+    log_lines.install()
     _warn_if_pid1()
     # the public key the web process recognises must be this key's half
     # (app/identity.py): a node whose two processes disagree about who it is
