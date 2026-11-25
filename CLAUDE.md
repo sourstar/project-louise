@@ -224,12 +224,15 @@ are the ones that have drifted; prefer to add a test when you touch them.
     expiry would turn acquire-only back into running — starting the
     encoder — on every deploy. A paused COLLECTION (`node pause
     <collection>`) survives a restart for the same reason
-    (app/node_state.py). So does the node's MODE OF USE (embed | chat,
-    `node mode`, app/node_mode.py; operator, 2026-11-25: embed mode and
-    chat mode, "selectable through the api as well for cron jobs"): which
-    of the two the node is in is state beside the run mode, while what each
-    mode MEANS — its chat model, chat mode's run mode, its network budget —
-    is desired state in platform.toml (`[models] chat_large|chat_small`,
+    (app/node_state.py). So does the node's MODE OF USE (embed | query |
+    custom, `node mode`, app/node_mode.py; operator, 2026-11-25: embed mode
+    and chat mode, "selectable through the api as well for cron jobs"; the
+    same day: "Add a 3rd mode custom", and "query" for chat mode, whose
+    first word is still taken): which of them the node is in is state
+    beside the run mode, while what each mode MEANS — its chat model, and
+    embed and query mode's own network choice ("set for each embed/query
+    mode, a cron job then simply switches that") and network budget — is
+    desired state in platform.toml (`[models] chat_large|chat_small|chat`,
     `[modes]`). docs/07 §7.8 says the same. Do not "fix" it.
     *Enforced: test.*
 11. CORPUS FIDELITY. A plugin's corpus may be PRUNED but never altered in
