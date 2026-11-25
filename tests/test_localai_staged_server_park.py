@@ -280,3 +280,18 @@ def test_the_note_carries_both_readings_and_what_the_review_asked_to_have_writte
     for said in ("`/v1/messages` and `/v1/responses`", "outside the idle timeout", "`spawnGRPCModel`",
                  "346 of 350", "those two suites whole and green on the\nnode's server tree"):
         assert said in limits, said
+
+
+def test_the_condition_on_the_server_build_is_recorded_with_its_counts_and_its_one_failure_explained():
+    """The architecture session: LocalAI's two Postgres suites whole and green on the node's server tree before
+    the build is used. They ran there; one spec failed once; it was counted on both trees before being called
+    LocalAI's own flake."""
+    section = NOTE[NOTE.index("**STEP 1 ON THE NODE: THE SERVER IS BUILT, NOT SWAPPED"):]
+    for said in ("`v5.0.1-6-gffb10fdf3`", "Ran 278 of 278", "| the live tree's builder (the control), two runs | ok, ok | ok, ok |",
+                 "| the new tree's builder, three runs | 741 of 742, then ok, ok | ok, ok, ok |",
+                 "24 failures\nin 300 on the new tree and 20 in 300 on the live one", "The same rate.",
+                 "condition on\nthe server build is met"):
+        assert said in section, said
+    bugs = (ROOT / "docs" / "notes" / "localai-bugs.md").read_text(encoding="utf-8")
+    row = next(line for line in bugs.splitlines() if line.startswith("| B25 | defect |"))
+    assert "only THEN subscribes" in row and "ran the two one after the other while the load ran out: not a comparison" in row

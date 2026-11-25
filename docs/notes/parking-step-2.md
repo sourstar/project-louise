@@ -1004,3 +1004,25 @@ default (0021) — the two have never run together on a card — and the times.
    an encoder's env is a new run, gated, and which models park is the
    keeper's half and the operator's.
 
+**STEP 1 ON THE NODE: THE SERVER IS BUILT, NOT SWAPPED (München,
+2026-11-25 evening).** The four trees as above at every step; its HEAD
+`ffb10fdf3`, `--version` `v5.0.1-6-gffb10fdf3`, image
+`louise-localai:v5.0.1-gpu-intel-p1-p13-p19-poll-park`. In its builder:
+`pkg/model` "Ran 278 of 278 Specs … 278 Passed", and `pkg/xsysinfo`,
+`pkg/grpc`, `core/config`, `core/backend`, `core/schema` ok. **LocalAI's two
+suites that need Postgres RAN WHOLE there** (testcontainers started its
+own) — the first time anywhere for this patch:
+
+| | `core/http/endpoints/localai` | `core/services/monitoring` |
+|---|---|---|
+| the live tree's builder (the control), two runs | ok, ok | ok, ok |
+| the new tree's builder, three runs | 741 of 742, then ok, ok | ok, ok, ok |
+
+The one failure is LocalAI's own websocket spec (localai-bugs.md B25: the
+handler subscribes to new lines after it has sent the lines so far), in
+files no patch touches. Counted here before the condition was called met:
+the spec alone, alternately on both trees under the same load, 24 failures
+in 300 on the new tree and 20 in 300 on the live one; 1 in 200 on each on a
+quiet machine. The same rate. **The architecture session's condition on
+the server build is met.**
+
