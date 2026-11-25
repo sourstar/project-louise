@@ -551,27 +551,26 @@ expectation.
 
 **2. The parked state, `/backend/park`, `/system`, the floor, 503** —
 `review/0027-model-park.patch`, FOR REVIEW. On the server tree after 0024.
-**The architecture session read it (2026-11-25) and ACCEPTED it for
-staging with two changes, both built — "The review's two changes", below.**
-It stays under `review/`: the independent reading of the same patch, asked
-for beside theirs, came back (2026-11-25) with defects of its own — a model
-coming back is not counted by the limits until its `LoadModel` has
-answered, a park whose caller leaves can leave the record wrong,
-`/backend/load` answers a refusal 500, the host's memory is read without
-the container's limit, and others. Each is fixed before the patch is
-staged; the table of them comes with that cut.
+**THIRD CUT (2026-11-25).** The architecture session read the first and
+ACCEPTED it for staging with two changes ("The review's two changes",
+below). An INDEPENDENT READING of the same patch, asked for beside theirs,
+then found sixteen things; each is fixed, stated as a limit, or answered in
+"The independent reading, finding by finding", below. It stays under
+`review/` until the architecture session has seen what moved since its
+reading — three answers the keeper builds against are new.
 
 What it does (§3.2, §3.4), in the order a model meets it:
 
 | | |
 |---|---|
-| a model's file says `park: true` | it may be parked; and it is no longer sent `Free` on its way to being STOPPED (§3.4, 1) |
-| the keeper writes the host's floor (`park_host_floor_bytes`, through `/api/settings`; 0 by default) | parking is on. Before EACH park LocalAI asks the backend what it would move (`Status`, `park_size`), reads the host's available memory, and parks only if the weights fit above the floor at that moment; otherwise the model is stopped as before (§3.4, 5) |
-| LocalAI would stop a model for room (the reclaimer, the limit of loaded models, a concurrency group) | it parks one that can park instead. A busy one is never stopped for being busy at that moment: the eviction keeps it and takes another |
-| `POST /backend/park {"model"}` (the keeper's evictor) | parks, waits for nothing but the park itself, never stops: 200 with `parked{…}`; 409 `model_busy` (take another) — a request is running, OR a load, a return or a stop of the same model holds its lifecycle lock, which is tried and never waited for; 412 `cannot_park` / `parking_off` / `host_memory_floor` (stop it instead, if room is still wanted); 404 not loaded |
-| a request to a parked model, or `POST /backend/load` | the model comes back BEFORE the request goes: the limits are enforced as for a load, then one `LoadModel` with the options of its load. No room: the request is refused and the model stays parked. ANY OTHER failed return: the process is stopped and the request goes on to an ordinary load, from the file |
+| a model's file says `park: true` | it may be parked; and, in a process LocalAI is about to stop, it is no longer sent `Free` on its way to being STOPPED (§3.4, 1). One reached by address has no process to stop and is sent `Free` as before |
+| the keeper writes the host's floor (`park_host_floor_bytes`, through `/api/settings`; 0 by default) | parking is on. Before EACH park LocalAI asks the backend what it would move (`Status`, `park_size`), reads what the host can still give — its available memory and, under a container's memory limit, no more than the limit still allows — less what the parks in flight are about to copy, and parks only if the weights fit above the floor at that moment; otherwise the model is stopped as before (§3.4, 5) |
+| LocalAI would stop a model to get the DEVICE back (the limit of loaded models, a concurrency group, the reclaimer when it watches a GPU) | it parks one that can park instead. A model not busy when it was selected is never stopped for being busy at the moment of the park: the eviction fails, the model is kept and tracked again, the caller selects again |
+| an idle timeout; a reclaimer that watches the host's RAM; an eviction selected while busy (`force_eviction_when_busy`, the busy timeout) | the model is STOPPED, as before: the first wants it gone, the second would only fill the RAM it is asked to give back, the third is the operator's forced stop |
+| `POST /backend/park {"model"}` (the keeper's evictor) | parks, waits for nothing but the park itself, never stops a model that works: 200 with `parked{…}`; 409 `model_busy` (take another) — a request is running, OR a load, a return or a stop of the same model holds its lifecycle lock, which is tried and never waited for; 412 `cannot_park` / `parking_off` / `host_memory_floor` (stop it instead, if room is still wanted); 404 `model_not_loaded`, written by the route so that it differs from the 404 of a server WITHOUT the route; 500 `model_stopped` when the backend broke the park (answered `Free` without parking, or not within 60 s) and was stopped — the device is free, the model is not loaded |
+| a request to a parked model, or `POST /backend/load` | the model comes back BEFORE the request goes, under its lifecycle lock: the limits are enforced as for a load, the model is one of the loaded models again from the moment its `LoadModel` is sent, then one `LoadModel` with the options of its load. No room: the request is refused (503, on `/backend/load` too) and the model stays parked. ANY OTHER failed return: the process is stopped and the request goes on to an ordinary load, from the file |
 | `GET /system` | for a model that parks: `"parks": true`, `"state": "loaded"` or `"parked"`, and when parked `"parked": {"size_host", "size_vram_needed", "since"}`; `size_vram` keeps its meaning |
-| a backend's refusal of the moment | HTTP 503, `Retry-After: 2`, `{"error": {"code": 503, "type": "no_room_on_device", "message": "<model>: …"}}`, told by gRPC `ResourceExhausted` AND the head `no_room_on_device: ` of its message; in the middle of a chat stream, an error event of that type |
+| a backend's refusal of the moment | HTTP 503, `Retry-After: 2`, `{"error": {"code": 503, "type": "no_room_on_device", "message": "<model>: …"}}`, told by gRPC `ResourceExhausted` AND the head `no_room_on_device: ` of its message; in the middle of a chat stream, an error event of that type. A load refused for room does not arm the load-failure cooldown |
 
 **Where it differs from §3.2 and §3.4 — for the review to accept or refuse.
 ALL FIVE ACCEPTED (the architecture session, 2026-11-25), the fourth for
@@ -622,7 +621,46 @@ whose process holds its `size_vram_needed` on the card is loaded, and
 `POST /backend/load` on it makes the record say so; that reconciliation is
 the keeper's (the architecture session, 2026-11-25).
 
-**Stated limits — known, not built:** the mid-stream error event is typed
+**The independent reading, finding by finding** (a fresh agent given the
+commit and the surrounding tree, not this note; 2026-11-25). Fourteen were
+real, in whole or in part:
+
+| # | found | now |
+|---|---|---|
+| 1 | a model coming back was invisible to the limit of loaded models and to group exclusivity until its `LoadModel` had answered: a load starting during the copy counted neither it nor a pending load | registered with the watchdog BEFORE the `LoadModel` is sent; untracked again if the return is refused or fails |
+| 2 | a park whose caller left, or whose `Free` passed 60 s, kept the old record: a model listed loaded while its weights may be in host memory | a `Free` that has been sent is followed to its end whatever the caller does; one that has not answered in 60 s stops the process (`model_stopped`). The return had the same hole: closed by the review's change 1 |
+| 3 | a return that failed left the model parked for ever | the review's change 1 |
+| 4 | the limits were enforced BEFORE the lifecycle lock and the re-check of "parked": of two requests, the second could evict the model the first had just brought back; and after a failed return the request assumed "not loaded" although another request might have loaded it | enforced inside the return, under the lock, after the model is found still parked; after a failed or vanished return the store is looked at again (three looks at most) |
+| 5 | "no room" was 500 on `/backend/load` — the route that brings a parked model back — and on `/v1/messages`, `/v1/responses` | `/backend/load` answers 503 `no_room_on_device` with `Retry-After`; the other two write their own error bodies and are a stated limit |
+| 6 | an idle timeout PARKED a model that parks, and nothing ever stopped it; a reclaimer watching RAM "evicted" by filling RAM | only an eviction that wants the device back parks; the idle timeout and a RAM reclaimer stop |
+| 7 | the host read was the HOST's `MemAvailable` capped at the container's total, whatever the container already used; two parks could both pass it | `xsysinfo.AllocatableMemory`: the minimum of the host's figure and the cgroup's limit less its working set (v2 and v1); the bytes of the parks in flight are reserved |
+| 8 | a `park: true` model reached by address was no longer sent `Free` when stopped — the only thing that released it | `Free` is skipped only where there is a process to stop |
+| 9 | the watchdog waited for the lifecycle lock before it knew whether the model parks: up to 65 s more for a model that does NOT park | answered before the lock is looked at (the review's change 2, same cut) |
+| 10 | every `FAILED_PRECONDITION` from `Free` read as busy — the backend also says it of a model it does not hold, and a model "busy" for ever is never evicted | busy is the code AND the head `busy: ` of the message, which the engine writes on its three busy answers (staged 0023); anything else is "cannot park", so the model is stopped as before |
+| 12 | the failover prober sends inference straight to a loaded backend: a parked target would be un-parked behind the loader's back | a parked model is "not loaded" for a probe |
+| 13 | a load refused for room armed the load-failure cooldown: "ask again in 2 s", then locked out | not recorded as a failure |
+| 14 | `/backend/park`'s 404 was rewritten "Resource not found" by the error handler — the answer of a server without the route; and the route, said never to stop anything, stopped a model whose `Free` did not park | 404 `model_not_loaded` written by the route; 500 `model_stopped`, and the route's words say the one case |
+| 15 | the reclaimer untracked an address after a "successful eviction" — right for a stopped process, wrong for a parked one whose return may have registered it again | a parked target is not untracked a second time |
+| 16 | the specs: no loader spec attached a watchdog, none called the real `ParkModelAtAddress`, none held `park: true` → load options or the setting → loader, the 404 was asserted against echo's handler, the stream's event and the embeddings mapping were untested, "the stop" ran only the no-process branch | 8 specs with a real watchdog; the real gRPC client's `FreeResult` against a gRPC server; the file's switch to the load options; the setting to the loader; the error body, the stream's event, the embeddings mapping; the stop of a model in a real process. Two of them were mutated to fail (registration after the `LoadModel`; parking without `forRoom`): 6 specs failed, as they should |
+
+Kept, and said: **11** — with `force_eviction_when_busy` a busy model that
+parks is force-stopped, never parked. That is the operator's setting doing
+what it says; the commit's sentence is now "a model NOT busy when it was
+selected is never stopped for being busy at the moment of the park". And
+"takes another" was too strong: the caller selects AGAIN, and a model still
+busy then is skipped. What the reading checked and found right — no
+self-deadlock, no lock-order inversion, one `LoadModel` for two requests,
+an eviction in flight settled, `NoRoomOnDevice` through `%w` and
+`errors.Join`, a model that does not park unchanged — stands.
+
+**Stated limits — known, not built:** `/v1/messages` and `/v1/responses`
+write their own error bodies and answer a refusal 500 as before; a parked
+model is outside the idle timeout — LocalAI never stops it by itself (the
+fourth difference); `/backend/park` can answer 409 for an idle model whose
+health probe is in flight at that instant; that `park: true` reaches the
+MODEL a real load creates (`spawnGRPCModel`) is one line no spec here runs
+— it is München's first row on the park engine: a model loaded from a file
+with `park: true` is listed `"parks": true`. Also: the mid-stream error event is typed
 on the chat route only (completions and realtime keep `server_error`); a
 caller inside LocalAI that formats an error into a string before it
 returns loses the type and answers 500 as before (chat and embeddings pass
@@ -630,23 +668,22 @@ it on; the others are not audited); a model held by a remote worker
 (distributed mode) is not parked from the frontend; the settings page and
 the generated API description do not show the new setting and route.
 
-MEASURED: the loader against a scripted backend, 32 specs — what parks,
-what does not and why, the lifecycle lock tried and not waited for (held
-shared, held exclusive, by the watchdog's route too; a model that does not
-park is answered before the lock is looked at), the host read at each park
-(one byte under the floor refuses, the floor itself parks), the return with
-the options of the load, a refused return (deferral, still parked), FIVE
-ways a return fails and a sixth, the deadline (each stops the process), the
-request served by an ordinary load after it, a return whose caller leaves
-(followed to its end, the record exact), the stop that sends no `Free`; the
-watchdog — parks before it stops, never stops for busy, a forced eviction
-is not a park; the endpoint, `/system` and the 503 mapping; and every
-existing spec of `pkg/model` (256 of 256), `core/config`, `core/backend`,
-`core/schema`, `pkg/grpc`. Under the race detector the park specs are
-clean; the suite's three reports are one spec of LocalAI's own
-(`process_exit_test.go`, a log buffer read while it is written), which this
-patch does not touch. NOT measured: a real backend (it needs the park
-engine), a card; and 47 specs of `core/http/endpoints/localai` and those of
+MEASURED (Go, where it was written, 2026-11-25): the loader against a
+scripted backend, 40 specs; the loader and a REAL watchdog together, 8; the
+watchdog's routing, 6; the real gRPC client's `FreeResult` against a gRPC
+server, 3; the container-aware host read, 6; `park: true` to the load
+options and the embeddings mapping, 3; the setting to the loader and the
+failover probe, 2; the endpoint, `/system`, `/backend/load`'s 503, the
+error body, the stream's event. Whole suites green: `pkg/model` (274 of
+274), `pkg/xsysinfo`, `pkg/grpc`, `core/config`, `core/backend`,
+`core/schema`, `core/http/endpoints/openai`. Under the race detector the
+54 park specs are clean; the whole suite's three reports are one spec of
+LocalAI's own (`process_exit_test.go`, a log buffer read while it is
+written), which this patch does not touch. `core/application`: 346 of 350
+— the four that fail are LocalAI's OAuth login against a local TLS server,
+which this container's proxy breaks; they fail the same without the patch.
+NOT measured: a real backend (it needs the park engine), a card; and 47
+specs of `core/http/endpoints/localai` and those of
 `core/services/monitoring` that start a Postgres container could not run
 here — no Docker — each failing at that start. **The architecture session's
 condition on the server build: those two suites whole and green on the

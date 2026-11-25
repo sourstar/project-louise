@@ -12,37 +12,60 @@ llama.cpp backend does both, for a model on context on demand whose
 weights can leave the device). Coming back then costs a copy of the
 weights, where a model that was stopped costs a load.
 
-LocalAI stops models to make room - the memory reclaimer, the limit of
-loaded models, a concurrency group - and until now that was the only way
-to give a device back. A model whose file says `park: true` is PARKED
+LocalAI stops models to make room - the limit of loaded models, a
+concurrency group, the memory reclaimer - and until now that was the only
+way to give a device back. A model whose file says `park: true` is PARKED
 there instead, and brought back by the next request to it.
 
 What decides a park, each time:
-- the model's file says `park: true`. Such a model is also no longer sent
-  Free on its way to being STOPPED: for it Free is not a prelude to a
-  kill - it would copy the weights to host memory for a process about to
-  die - and stopping the process frees the device, as for every backend
-  that has no Free;
+- the model's file says `park: true`. Such a model, in a process LocalAI
+  is about to stop, is also no longer sent Free on its way to being
+  STOPPED: for it Free is not a prelude to a kill - it would copy the
+  weights to host memory for a process about to die - and stopping the
+  process frees the device, as for every backend that has no Free. (One
+  reached by address has no process to stop, and is sent Free as before.);
+- the eviction wants the DEVICE back: the limit of loaded models, a
+  concurrency group, the memory reclaimer when it watches a GPU. An idle
+  timeout wants the model gone, and a reclaimer that watches the host's RAM
+  would only fill it further: both stop the model, as before;
 - a host memory floor is set (the runtime setting park_host_floor_bytes,
   0 by default: nothing is parked). Parked weights are host memory, and
   the host is not what it was an hour ago: its available memory is read
-  before EACH park, and the model is parked only if the weights fit above
-  the floor at that moment. Otherwise it is stopped, as before;
+  before EACH park - the host's, and under a container's memory limit no
+  more than the limit still allows - less what the parks in flight are
+  about to copy, and the model is parked only if the weights fit above the
+  floor at that moment. Otherwise it is stopped, as before;
 - the backend says what parking would move (Status, "park_size") and
   answers Free with success and "parked".
 
-A busy model is never stopped for being busy at that moment: the eviction
-keeps it and takes another.
+A model that was not busy when an eviction selected it is never stopped
+for being busy at the moment of the park - a request that arrived, or a
+load, a return or a stop of it holding its lifecycle lock, which is tried
+and never waited for: the eviction fails, the model is kept, and the
+caller selects again. (An eviction selected WHILE busy exists only where
+the operator asked for it - force_eviction_when_busy, the busy timeout -
+and is the forced stop it was.) Busy is the code FailedPrecondition AND a
+message that begins "busy: ": the code alone is also a model the backend
+does not hold.
+
+A park that has been sent is followed to its end whatever its caller does.
+A backend that answers Free without parking, or has not answered in 60 s,
+cannot be trusted with requests: it is stopped, and the caller is told so.
+A backend that says the park failed moved nothing: the model stays loaded.
 
 A parked model:
 - stays in the list of loaded models - it has a live process - but is not
   one of them for the watchdog: not counted against the limit, not an
-  eviction candidate, not idle- or busy-checked, until it is back;
-- comes back at the next request to it, before the request goes: it is a
-  load for the limits (the models it may not share the device with are
-  evicted or parked first), then one LoadModel with the options of its
-  load. /backend/load does the same, for a caller that knows what comes
-  next;
+  eviction candidate, not idle- or busy-checked, until it comes back.
+  LocalAI never stops a parked model by itself; /backend/shutdown does;
+- comes back at the next request to it, before the request goes, under
+  the model's lifecycle lock: the limits are enforced as for a load (the
+  models it may not share the device with are evicted or parked first),
+  it is one of the loaded models again from the moment its LoadModel is
+  sent - so a load that starts during the copy counts it - and then one
+  LoadModel with the options of its load. Of several requests one brings
+  it back and the others find it back. /backend/load does the same, for a
+  caller that knows what comes next;
 - if the device has no room for it then, the request is refused and the
   model stays parked: a deferral, the next request asks again;
 - if the return FAILS for any other reason - the backend says so, holds
@@ -52,17 +75,19 @@ A parked model:
   request that met the failure goes on to an ordinary load, from the file;
 - a return that has been sent is followed to its end whatever its caller
   does: a request that leaves during the copy must not leave the weights
-  on the device under a record that says "parked".
+  on the device under a record that says "parked";
+- is not probed by the failover prober, whose inference would bring its
+  weights back behind the loader's back.
 
 For a caller that manages the device itself:
 - POST /backend/park {"model"} parks a loaded model. It waits for nothing
-  but the park itself and never stops anything; when the model is not
-  parked the answer says why and the caller decides: 409 model_busy (take
-  another) - a request is running, or a load, a return or a stop of the
-  same model holds its lifecycle lock, which is tried and never waited
-  for; 412 cannot_park / parking_off / host_memory_floor (stop it instead,
-  if room is still wanted); 404 not loaded. The watchdog's own evictions
-  do not queue behind that lock either, for a model that parks;
+  but the park itself and never stops a model that works; when the model
+  is not parked the answer says why and the caller decides: 409 model_busy
+  (take another); 412 cannot_park / parking_off / host_memory_floor (stop
+  it instead, if room is still wanted); 404 model_not_loaded - written by
+  the route, so that it differs from the 404 of a server that has no such
+  route; 500 model_stopped when the backend broke the park and was
+  stopped (the device is free, the model is not loaded);
 - GET /system says, for a model that parks, "parks": true and "state":
   "loaded" or "parked", and for a parked one "parked": {"size_host",
   "size_vram_needed", "since"}. size_vram keeps its meaning: what the
@@ -72,57 +97,87 @@ For a caller that manages the device itself:
 "The device has no room now" is a 503. A backend's refusal of the moment -
 gRPC ResourceExhausted whose message begins "no_room_on_device: " - was a
 500 like any fault. It is answered 503 with Retry-After and the type
-no_room_on_device, on every route, and as an error event of that type when
-it comes in the middle of a chat stream. The code alone is not enough:
-ResourceExhausted is also a stream that is busy and a message over the
-size limit, which stay what they were. The embeddings route no longer
-rewrites such a refusal as "conversation too long".
+no_room_on_device by the error handler, by /backend/load, and as an error
+event of that type when it comes in the middle of a chat stream. The code
+alone is not enough: ResourceExhausted is also a stream that is busy and a
+message over the size limit, which stay what they were. The embeddings
+route no longer rewrites such a refusal as "conversation too long", and a
+load refused for room does not arm the load-failure cooldown: the caller
+told to ask again must not find the model locked out. Routes that write
+their own error bodies (/v1/messages, /v1/responses) answer 500 as before.
 
-Tests: the loader against a scripted backend (32 specs: what parks, what
-does not and why, the lock that is tried and not waited for, the host read
-at each park, the return with the options of the load, a refused return,
-each way a return fails and the stop that follows, a return whose caller
-leaves, the stop that sends no Free);
-the watchdog (parks before it stops, never stops for busy); the endpoint,
-/system and the 503 mapping. A model that does not park: every existing
-spec of pkg/model, core/config, core/backend and core/schema passes.
+Tests: the loader against a scripted backend (40 specs: what parks, what
+does not and why, the lock tried and not waited for, the host read at each
+park and two parks not counting the same bytes, a park whose caller
+leaves, a Free that does not answer, the return with the options of the
+load, a refused return, each way a return fails and the stop that follows,
+a return whose caller leaves, a model swapped under a waiting request, the
+stop of a model in a real process that sends no Free); the loader and a
+real watchdog together (8 specs: a parked model leaves the registry and is
+back in it before its weights move, a return makes room as a load does,
+two requests and one return, the limit parks, a held lock keeps the model,
+the idle timeout stops, the reclaimer parks for a device and stops for
+RAM); the watchdog's routing; the real gRPC client's FreeResult; the
+container-aware host read; `park: true` from a model's file to its load
+options; the runtime setting reaching the loader; the endpoint, /system,
+/backend/load's 503, the error body, the stream's event. A model that
+does not park: every existing spec of pkg/model, pkg/grpc, pkg/xsysinfo,
+core/config, core/backend, core/schema and core/http/endpoints/openai
+passes.
 
 Assisted-by: Claude Code
 ---
  core/application/application.go               |   3 +
+ core/application/failover.go                  |   7 +
+ core/application/park_floor_internal_test.go  |  72 ++
  core/backend/embeddings.go                    |   4 +
  core/backend/options.go                       |   4 +
+ core/backend/park_internal_test.go            |  46 ++
  core/config/application_config.go             |   5 +
  core/config/model_config.go                   |  11 +
  core/config/runtime_settings.go               |   4 +
  core/config/runtime_settings_registry.go      |   6 +
- core/http/app.go                              |  32 +-
- .../http/endpoints/localai/backend_monitor.go |  63 +++
- .../endpoints/localai/backend_park_test.go    | 144 ++++++
+ core/http/app.go                              |  46 +-
+ core/http/endpoints/localai/backend_load.go   |  19 +
+ .../endpoints/localai/backend_load_test.go    |  34 +
+ .../http/endpoints/localai/backend_monitor.go |  74 +++
+ .../endpoints/localai/backend_park_test.go    | 170 +++++
  core/http/endpoints/localai/system.go         |  10 +
- .../endpoints/localai/system_info_test.go     |  54 +++
- core/http/endpoints/openai/chat.go            |  14 +-
- core/http/no_room_handler_test.go             |  56 +++
+ .../endpoints/localai/system_info_test.go     |  54 ++
+ core/http/endpoints/openai/chat.go            |  21 +-
+ .../openai/chat_stream_no_room_test.go        |  34 +
+ core/http/no_room_handler_test.go             |  69 ++
  core/http/routes/localai.go                   |   6 +
- core/schema/localai.go                        |  31 ++
+ core/schema/localai.go                        |  31 +
  core/services/monitoring/backend_monitor.go   |   8 +
  pkg/grpc/client.go                            |  16 +-
- pkg/model/initializers.go                     |  21 +-
- pkg/model/loader.go                           |  14 +-
- pkg/model/loader_options.go                   |   9 +
- pkg/model/model.go                            |  69 +++
- pkg/model/operation_locks.go                  |  29 ++
- pkg/model/park.go                             | 381 ++++++++++++++++
- pkg/model/park_internal_test.go               | 431 ++++++++++++++++++
- pkg/model/process.go                          |   6 +-
- pkg/model/watchdog.go                         |  15 +
- pkg/model/watchdog_park_internal_test.go      |  74 +++
- 28 files changed, 1506 insertions(+), 14 deletions(-)
+ pkg/grpc/free_result_test.go                  |  84 +++
+ pkg/model/initializers.go                     |  22 +-
+ pkg/model/loader.go                           |  23 +-
+ pkg/model/loader_options.go                   |  14 +
+ pkg/model/model.go                            |  69 ++
+ pkg/model/operation_locks.go                  |  29 +
+ pkg/model/park.go                             | 455 +++++++++++++
+ pkg/model/park_internal_test.go               | 619 ++++++++++++++++++
+ pkg/model/park_watchdog_internal_test.go      | 184 ++++++
+ pkg/model/process.go                          |   8 +-
+ pkg/model/watchdog.go                         |  66 +-
+ pkg/model/watchdog_park_internal_test.go      |  94 +++
+ pkg/xsysinfo/memory_headroom.go               |  87 +++
+ pkg/xsysinfo/memory_headroom_test.go          |  40 ++
+ 38 files changed, 2523 insertions(+), 25 deletions(-)
+ create mode 100644 core/application/park_floor_internal_test.go
+ create mode 100644 core/backend/park_internal_test.go
  create mode 100644 core/http/endpoints/localai/backend_park_test.go
+ create mode 100644 core/http/endpoints/openai/chat_stream_no_room_test.go
  create mode 100644 core/http/no_room_handler_test.go
+ create mode 100644 pkg/grpc/free_result_test.go
  create mode 100644 pkg/model/park.go
  create mode 100644 pkg/model/park_internal_test.go
+ create mode 100644 pkg/model/park_watchdog_internal_test.go
  create mode 100644 pkg/model/watchdog_park_internal_test.go
+ create mode 100644 pkg/xsysinfo/memory_headroom.go
+ create mode 100644 pkg/xsysinfo/memory_headroom_test.go
 
 diff --git a/core/application/application.go b/core/application/application.go
 index 29edd15..534667e 100644
@@ -138,6 +193,102 @@ index 29edd15..534667e 100644
  	// Close MCP sessions when a model is unloaded (watchdog eviction, manual shutdown, etc.)
  	ml.OnModelUnload(func(modelName string) {
  		mcpTools.CloseMCPSessions(modelName)
+diff --git a/core/application/failover.go b/core/application/failover.go
+index ffe5a8e..8952c86 100644
+--- a/core/application/failover.go
++++ b/core/application/failover.go
+@@ -52,6 +52,13 @@ func failoverLoadedBackend(ml *model.ModelLoader) failover.LoadedFunc {
+ 		if m == nil {
+ 			return nil
+ 		}
++		if m.ParkedState().Parked {
++			// A parked model is not loaded for a probe: an inference sent
++			// straight to its backend would bring its weights back to the
++			// device behind the loader's back. The next real request brings
++			// it back and judges it.
++			return nil
++		}
+ 		// Load always enables parallel requests; match it in case this is
+ 		// the first client built for the model.
+ 		return m.GRPC(true, ml.GetWatchDog())
+diff --git a/core/application/park_floor_internal_test.go b/core/application/park_floor_internal_test.go
+new file mode 100644
+index 0000000..c73d407
+--- /dev/null
++++ b/core/application/park_floor_internal_test.go
+@@ -0,0 +1,72 @@
++package application
++
++import (
++	"context"
++
++	"github.com/mudler/LocalAI/core/config"
++	grpcPkg "github.com/mudler/LocalAI/pkg/grpc"
++	pb "github.com/mudler/LocalAI/pkg/grpc/proto"
++	"github.com/mudler/LocalAI/pkg/model"
++	"github.com/mudler/LocalAI/pkg/system"
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++)
++
++// floorBackend is a backend that parks. Embedding leaves any other call as a
++// panic rather than a network call.
++type floorBackend struct {
++	grpcPkg.Backend
++}
++
++func (floorBackend) HealthCheck(context.Context) (bool, error) { return true, nil }
++func (floorBackend) IsBusy() bool                              { return false }
++func (floorBackend) Status(context.Context) (*pb.StatusResponse, error) {
++	return &pb.StatusResponse{Memory: &pb.MemoryUsageData{Breakdown: map[string]uint64{"park_size": 1 << 30}}}, nil
++}
++func (floorBackend) FreeResult(context.Context) (*pb.Result, error) {
++	return &pb.Result{Success: true, Message: "parked"}, nil
++}
++
++var _ = Describe("The host's floor for parking", func() {
++	It("is the runtime setting, read at each park: nothing parks while it is 0, and a change is followed at once", func() {
++		appConfig := config.NewApplicationConfig(config.WithSystemState(&system.SystemState{}))
++		app := newApplication(appConfig)
++		ml := app.ModelLoader()
++		ml.SetHostAvailableMemorySource(func() (uint64, error) { return 64 << 30, nil })
++		store := model.NewInMemoryModelStore()
++		held := model.NewModelWithClient("m", "addr", floorBackend{})
++		held.SetParks(true)
++		store.Set("m", held)
++		ml.SetModelStore(store)
++
++		Expect(appConfig.ParkHostFloorBytes).To(BeZero(), "the default")
++		_, err := ml.ParkModel(context.Background(), "m")
++		Expect(err).To(MatchError(model.ErrParkingOff))
++
++		floor := uint64(8 << 30)
++		Expect(appConfig.ApplyRuntimeSettings(&config.RuntimeSettings{ParkHostFloorBytes: &floor})).To(BeFalse(), "no restart of anything")
++		state, err := ml.ParkModel(context.Background(), "m")
++		Expect(err).NotTo(HaveOccurred())
++		Expect(state.Parked).To(BeTrue())
++	})
++})
++
++var _ = Describe("The failover prober and a parked model", func() {
++	It("takes a parked model for not loaded: a probe sent to it would bring its weights back behind the loader's back", func() {
++		ml := model.NewModelLoader(&system.SystemState{})
++		ml.SetParkHostFloorSource(func() uint64 { return 8 << 30 })
++		ml.SetHostAvailableMemorySource(func() (uint64, error) { return 64 << 30, nil })
++		store := model.NewInMemoryModelStore()
++		held := model.NewModelWithClient("m", "addr", floorBackend{})
++		held.SetParks(true)
++		store.Set("m", held)
++		ml.SetModelStore(store)
++		loaded := failoverLoadedBackend(ml)
++		cfg := config.ModelConfig{Name: "m"}
++
++		Expect(loaded(cfg)).NotTo(BeNil(), "loaded: it is probed")
++		_, err := ml.ParkModel(context.Background(), "m")
++		Expect(err).NotTo(HaveOccurred())
++		Expect(loaded(cfg)).To(BeNil(), "parked: not probed")
++	})
++})
 diff --git a/core/backend/embeddings.go b/core/backend/embeddings.go
 index 55abb76..ba921da 100644
 --- a/core/backend/embeddings.go
@@ -168,6 +319,58 @@ index 3b8a133..99cc8bc 100644
  	if c.GRPC.Attempts != 0 {
  		defOpts = append(defOpts, model.WithGRPCAttempts(c.GRPC.Attempts))
  	}
+diff --git a/core/backend/park_internal_test.go b/core/backend/park_internal_test.go
+new file mode 100644
+index 0000000..ad60e22
+--- /dev/null
++++ b/core/backend/park_internal_test.go
+@@ -0,0 +1,46 @@
++package backend
++
++import (
++	"github.com/mudler/LocalAI/core/config"
++	"github.com/mudler/LocalAI/pkg/model"
++	"github.com/mudler/LocalAI/pkg/system"
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/status"
++	"gopkg.in/yaml.v3"
++)
++
++var _ = Describe("Parking, from a model's file to its load", func() {
++	options := func(file string) *model.Options {
++		GinkgoHelper()
++		var cfg config.ModelConfig
++		Expect(yaml.Unmarshal([]byte(file), &cfg)).To(Succeed())
++		appConfig := config.NewApplicationConfig(config.WithSystemState(&system.SystemState{}))
++		return model.NewOptions(ModelOptions(cfg, appConfig)...)
++	}
++
++	It("carries `park: true` to the load, and nothing where the file does not say it", func() {
++		Expect(options("name: m\npark: true\n").Parks()).To(BeTrue())
++		Expect(options("name: m\npark: false\n").Parks()).To(BeFalse())
++		Expect(options("name: m\n").Parks()).To(BeFalse(), "nothing parks by default")
++	})
++})
++
++var _ = Describe("mapEmbeddingGRPCError", func() {
++	It("passes a refusal of the moment on as it is: the same code, another fact", func() {
++		refusal := status.Error(codes.ResourceExhausted, "no_room_on_device: the context cannot be created now")
++		mapped := mapEmbeddingGRPCError(refusal)
++		message, noRoom := model.NoRoomOnDevice(mapped)
++		Expect(noRoom).To(BeTrue())
++		Expect(message).To(Equal("the context cannot be created now"))
++		Expect(mapped.Error()).NotTo(ContainSubstring("conversation too long"))
++	})
++
++	It("still says a message over the size limit is a conversation too long", func() {
++		mapped := mapEmbeddingGRPCError(status.Error(codes.ResourceExhausted, "grpc: received message larger than max (60000000 vs. 52428800)"))
++		Expect(mapped.Error()).To(ContainSubstring("conversation too long"))
++		_, noRoom := model.NoRoomOnDevice(mapped)
++		Expect(noRoom).To(BeFalse())
++	})
++})
 diff --git a/core/config/application_config.go b/core/config/application_config.go
 index a465d86..9ebc9a7 100644
 --- a/core/config/application_config.go
@@ -246,16 +449,29 @@ index 7ff46a1..5d2f06e 100644
  	field("force_eviction_when_busy",
  		func(s *RuntimeSettings) **bool { return &s.ForceEvictionWhenBusy },
 diff --git a/core/http/app.go b/core/http/app.go
-index 37f63e8..1fce9a3 100644
+index 37f63e8..d6affc3 100644
 --- a/core/http/app.go
 +++ b/core/http/app.go
-@@ -116,6 +116,29 @@ func applyModelLoadCooldown(err error, code int, c echo.Context) int {
+@@ -116,6 +116,42 @@ func applyModelLoadCooldown(err error, code int, c echo.Context) int {
  	return http.StatusServiceUnavailable
  }
  
-+// noRoomRetryAfterSeconds is how long a client is told to wait before it
-+// sends again a request the device had no room for.
-+const noRoomRetryAfterSeconds = 2
++// errorTypeAndMessage is the type and the message an error is answered
++// with. noRoom is what applyNoRoomOnDevice returned for it: a refusal of
++// the moment says its own type and its own message, without the wrapping of
++// whatever met it on the way.
++func errorTypeAndMessage(err error, noRoom string) (errType, message string) {
++	var capErr *corebackend.BackendAdmissionError
++	if errors.As(err, &capErr) {
++		errType = "rate_limit_error"
++	}
++	message = err.Error()
++	if noRoom != "" {
++		errType = model.NoRoomOnDeviceType
++		message = noRoom
++	}
++	return errType, message
++}
 +
 +// applyNoRoomOnDevice maps a refusal of the moment - the device had no
 +// memory for a model's weights to come back, for a context, or for a
@@ -272,14 +488,14 @@ index 37f63e8..1fce9a3 100644
 +	if errors.As(err, &typed) {
 +		message = typed.Error()
 +	}
-+	c.Response().Header().Set("Retry-After", strconv.Itoa(noRoomRetryAfterSeconds))
++	c.Response().Header().Set("Retry-After", strconv.Itoa(model.NoRoomRetryAfterSeconds))
 +	return http.StatusServiceUnavailable, message
 +}
 +
  func applyBackendAdmission(err error, code int, c echo.Context) int {
  	var capacityErr *corebackend.BackendAdmissionError
  	if !errors.As(err, &capacityErr) {
-@@ -264,6 +287,7 @@ func API(application *application.Application) (*echo.Echo, error) {
+@@ -264,6 +300,7 @@ func API(application *application.Application) (*echo.Echo, error) {
  			code = applyModelLoadCooldown(err, code, c)
  			code = applyBackendAdmission(err, code, c)
  			code = applyNoAvailableNodes(err, code)
@@ -287,22 +503,23 @@ index 37f63e8..1fce9a3 100644
  
  			// Handle 404 errors: serve React SPA for HTML requests, JSON otherwise
  			if code == http.StatusNotFound {
-@@ -285,8 +309,13 @@ func API(application *application.Application) (*echo.Echo, error) {
- 			if errors.As(err, &capErr) {
- 				errType = "rate_limit_error"
+@@ -280,13 +317,9 @@ func API(application *application.Application) (*echo.Echo, error) {
  			}
-+			message := err.Error()
-+			if noRoom != "" {
-+				errType = model.NoRoomOnDeviceType
-+				message = noRoom
-+			}
+ 
+ 			// Send custom error page
+-			errType := ""
+-			var capErr *corebackend.BackendAdmissionError
+-			if errors.As(err, &capErr) {
+-				errType = "rate_limit_error"
+-			}
++			errType, message := errorTypeAndMessage(err, noRoom)
  			c.JSON(code, schema.ErrorResponse{
 -				Error: &schema.APIError{Message: err.Error(), Code: code, Type: errType},
 +				Error: &schema.APIError{Message: message, Code: code, Type: errType},
  			})
  		}
  	} else {
-@@ -302,6 +331,7 @@ func API(application *application.Application) (*echo.Echo, error) {
+@@ -302,6 +335,7 @@ func API(application *application.Application) (*echo.Echo, error) {
  			// model gets the status and Retry-After but no progress detail.
  			code = applyModelLoading(err, code, c)
  			code = applyNoAvailableNodes(err, code)
@@ -310,11 +527,119 @@ index 37f63e8..1fce9a3 100644
  			c.NoContent(code)
  		}
  	}
+diff --git a/core/http/endpoints/localai/backend_load.go b/core/http/endpoints/localai/backend_load.go
+index 84d6396..1e98054 100644
+--- a/core/http/endpoints/localai/backend_load.go
++++ b/core/http/endpoints/localai/backend_load.go
+@@ -1,7 +1,9 @@
+ package localai
+ 
+ import (
++	"errors"
+ 	"net/http"
++	"strconv"
+ 
+ 	"github.com/labstack/echo/v4"
+ 	"github.com/mudler/LocalAI/core/backend"
+@@ -26,6 +28,7 @@ import (
+ // @Success 200 {object} schema.ModelLoadResponse "Model loaded"
+ // @Failure 400 {object} schema.ModelLoadResponse "Missing model name"
+ // @Failure 500 {object} schema.ModelLoadResponse "Load failed (Loaded lists any sub-models that did load)"
++// @Failure 503 {object} schema.ErrorResponse "The device has no room now (type no_room_on_device, with Retry-After): ask again"
+ // @Router /backend/load [post]
+ func LoadModelEndpoint(cl *config.ModelConfigLoader, ml *model.ModelLoader, appConfig *config.ApplicationConfig) echo.HandlerFunc {
+ 	return func(c echo.Context) error {
+@@ -38,6 +41,22 @@ func LoadModelEndpoint(cl *config.ModelConfigLoader, ml *model.ModelLoader, appC
+ 		}
+ 
+ 		loaded, err := backend.PreloadModelByName(c.Request().Context(), cl, ml, appConfig, input.Model)
++		if message, noRoom := model.NoRoomOnDevice(err); noRoom {
++			// The device has no room for it NOW - for a parked model's
++			// weights to come back, or for a load. Not a load that failed:
++			// the same answer as on every route that meets it, so a caller
++			// that manages the device tells a deferral from a fault here,
++			// on the route it brings a model back with.
++			var typed *model.NoRoomOnDeviceError
++			if errors.As(err, &typed) {
++				message = typed.Error()
++			}
++			xlog.Info("no room on the device to pre-load model", "model", input.Model, "loaded", loaded, "reason", message)
++			c.Response().Header().Set("Retry-After", strconv.Itoa(model.NoRoomRetryAfterSeconds))
++			return c.JSON(http.StatusServiceUnavailable, schema.ErrorResponse{
++				Error: &schema.APIError{Message: message, Code: http.StatusServiceUnavailable, Type: model.NoRoomOnDeviceType},
++			})
++		}
+ 		if err != nil {
+ 			xlog.Error("failed to pre-load model", "model", input.Model, "loaded", loaded, "error", err)
+ 			return c.JSON(http.StatusInternalServerError, schema.ModelLoadResponse{
+diff --git a/core/http/endpoints/localai/backend_load_test.go b/core/http/endpoints/localai/backend_load_test.go
+index 8022af7..2fab231 100644
+--- a/core/http/endpoints/localai/backend_load_test.go
++++ b/core/http/endpoints/localai/backend_load_test.go
+@@ -2,6 +2,7 @@ package localai_test
+ 
+ import (
+ 	"bytes"
++	"context"
+ 	"encoding/json"
+ 	"net/http"
+ 	"net/http/httptest"
+@@ -12,10 +13,13 @@ import (
+ 	"github.com/mudler/LocalAI/core/config"
+ 	. "github.com/mudler/LocalAI/core/http/endpoints/localai"
+ 	"github.com/mudler/LocalAI/core/schema"
++	pb "github.com/mudler/LocalAI/pkg/grpc/proto"
+ 	"github.com/mudler/LocalAI/pkg/model"
+ 	"github.com/mudler/LocalAI/pkg/system"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/status"
+ )
+ 
+ var _ = Describe("LoadModelEndpoint (/backend/load)", func() {
+@@ -65,6 +69,36 @@ var _ = Describe("LoadModelEndpoint (/backend/load)", func() {
+ 		_ = os.RemoveAll(tempDir)
+ 	})
+ 
++	It("answers 503 no_room_on_device, with a Retry-After, for a parked model the device has no room for now", func() {
++		writeConfig("parked", "name: parked\npark: true\n")
++		backend := &parkingBackend{parkSize: 6 << 30, loadErr: status.Error(codes.ResourceExhausted, "no_room_on_device: the weights cannot come back to the device now")}
++		held := model.NewModelWithClient("parked", "addr", backend)
++		held.SetParks(true)
++		held.SetLoadOptions(&pb.ModelOptions{Model: "parked"})
++		store := model.NewInMemoryModelStore()
++		store.Set("parked", held)
++		modelLoader.SetModelStore(store)
++		modelLoader.SetParkHostFloorSource(func() uint64 { return 8 << 30 })
++		modelLoader.SetHostAvailableMemorySource(func() (uint64, error) { return 64 << 30, nil })
++		_, err := modelLoader.ParkModel(context.Background(), "parked")
++		Expect(err).NotTo(HaveOccurred())
++
++		rec := post(`{"model":"parked"}`)
++		Expect(rec.Code).To(Equal(http.StatusServiceUnavailable), rec.Body.String())
++		Expect(rec.Header().Get("Retry-After")).To(Equal("2"))
++		var answer schema.ErrorResponse
++		Expect(json.Unmarshal(rec.Body.Bytes(), &answer)).To(Succeed())
++		Expect(answer.Error.Type).To(Equal("no_room_on_device"))
++		Expect(answer.Error.Code).To(BeEquivalentTo(http.StatusServiceUnavailable))
++		Expect(answer.Error.Message).To(Equal("parked: the weights cannot come back to the device now"))
++		Expect(held.ParkedState().Parked).To(BeTrue(), "a deferral: it stays parked, and the next call asks again")
++
++		backend.loadErr = nil
++		rec = post(`{"model":"parked"}`)
++		Expect(rec.Code).To(Equal(http.StatusOK), rec.Body.String())
++		Expect(held.ParkedState().Parked).To(BeFalse())
++	})
++
+ 	It("rejects a request with no model name", func() {
+ 		rec := post(`{}`)
+ 		Expect(rec.Code).To(Equal(http.StatusBadRequest))
 diff --git a/core/http/endpoints/localai/backend_monitor.go b/core/http/endpoints/localai/backend_monitor.go
-index c60e92a..a4012c8 100644
+index c60e92a..45127fb 100644
 --- a/core/http/endpoints/localai/backend_monitor.go
 +++ b/core/http/endpoints/localai/backend_monitor.go
-@@ -76,3 +76,66 @@ func BackendShutdownEndpoint(bm *monitoring.BackendMonitorService) echo.HandlerF
+@@ -76,3 +76,77 @@ func BackendShutdownEndpoint(bm *monitoring.BackendMonitorService) echo.HandlerF
  		return c.JSON(http.StatusOK, map[string]string{"message": "model stopped"})
  	}
  }
@@ -322,10 +647,12 @@ index c60e92a..a4012c8 100644
 +// The types of the errors /backend/park answers with: each tells its caller
 +// what to do next.
 +const (
++	parkErrorNotLoaded  = "model_not_loaded"  // 404: nothing to park. A server without this route answers 404 too, with no such type
 +	parkErrorBusy       = "model_busy"        // 409: take another model; this one is not stopped for being busy
 +	parkErrorCannotPark = "cannot_park"       // 412: stop it instead, if room is still wanted
 +	parkErrorOff        = "parking_off"       // 412: no host memory floor is set
 +	parkErrorHostFloor  = "host_memory_floor" // 412: the host has no room for its weights now
++	parkErrorStopped    = "model_stopped"     // 500: its backend broke the park and was stopped; the device is free, the model is not loaded
 +)
 +
 +// BackendParkEndpoint parks a loaded model: its weights leave the device and
@@ -333,8 +660,10 @@ index c60e92a..a4012c8 100644
 +// request, brings it back. It waits for nothing but the park itself - not
 +// for a busy model, and not behind a load, a return or a stop of the same
 +// model that is running: each is 409 model_busy, at once. It never stops a
-+// model: when the model is not parked the answer says why, and the caller
-+// decides - another model, or /backend/shutdown.
++// model that works: when the model is not parked the answer says why, and
++// the caller decides - another model, or /backend/shutdown. The one model it
++// stops is one whose backend broke the park (Free answered without parking,
++// or did not answer in a minute): 500 model_stopped.
 +// @Summary Backend park
 +// @Tags monitoring
 +// @Param request body schema.BackendMonitorRequest true "Backend park request"
@@ -342,6 +671,7 @@ index c60e92a..a4012c8 100644
 +// @Failure 404 {object} schema.ErrorResponse "The model is not loaded"
 +// @Failure 409 {object} schema.ErrorResponse "The model is busy"
 +// @Failure 412 {object} schema.ErrorResponse "The model cannot be parked now"
++// @Failure 500 {object} schema.ErrorResponse "Its backend broke the park and was stopped (type model_stopped), or the park failed"
 +// @Router /backend/park [post]
 +func BackendParkEndpoint(bm *monitoring.BackendMonitorService) echo.HandlerFunc {
 +	return func(c echo.Context) error {
@@ -367,7 +697,10 @@ index c60e92a..a4012c8 100644
 +				Parked:  schema.SysInfoParked{SizeHost: state.Size, SizeVRAMNeeded: state.Size, Since: state.Since},
 +			})
 +		case errors.Is(err, model.ErrModelNotFound):
-+			return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("model %q is not loaded on this instance", input.Model))
++			// Written here, not through the error handler, which answers
++			// every 404 "Resource not found": the caller must tell a model
++			// that is not loaded from a server that has no such route.
++			return refuse(http.StatusNotFound, parkErrorNotLoaded, errors.New("not loaded on this instance"))
 +		case errors.Is(err, model.ErrModelBusy):
 +			return refuse(http.StatusConflict, parkErrorBusy, err)
 +		case errors.Is(err, model.ErrParkingOff):
@@ -376,6 +709,9 @@ index c60e92a..a4012c8 100644
 +			return refuse(http.StatusPreconditionFailed, parkErrorHostFloor, err)
 +		case errors.Is(err, model.ErrModelCannotPark):
 +			return refuse(http.StatusPreconditionFailed, parkErrorCannotPark, err)
++		case errors.Is(err, model.ErrParkStoppedModel):
++			xlog.Warn("A model's park stopped it", "model", input.Model, "error", err)
++			return refuse(http.StatusInternalServerError, parkErrorStopped, err)
 +		}
 +		xlog.Error("Failed to park model", "model", input.Model, "error", err)
 +		return err
@@ -383,10 +719,10 @@ index c60e92a..a4012c8 100644
 +}
 diff --git a/core/http/endpoints/localai/backend_park_test.go b/core/http/endpoints/localai/backend_park_test.go
 new file mode 100644
-index 0000000..6a08c7f
+index 0000000..69d9a02
 --- /dev/null
 +++ b/core/http/endpoints/localai/backend_park_test.go
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,170 @@
 +package localai_test
 +
 +import (
@@ -407,15 +743,18 @@ index 0000000..6a08c7f
 +	"github.com/mudler/LocalAI/pkg/system"
 +	. "github.com/onsi/ginkgo/v2"
 +	. "github.com/onsi/gomega"
++	ggrpc "google.golang.org/grpc"
 +)
 +
 +// parkingBackend is a backend that parks. Embedding leaves any other call as
 +// a panic rather than a network call.
 +type parkingBackend struct {
 +	grpcPkg.Backend
-+	busy     bool
-+	parkSize uint64
-+	parks    int
++	busy       bool
++	parkSize   uint64
++	parks      int
++	freeAnswer string // what Free answers with; "parked" when empty
++	loadErr    error  // what the return's LoadModel fails with
 +}
 +
 +func (b *parkingBackend) HealthCheck(context.Context) (bool, error) { return true, nil }
@@ -426,7 +765,17 @@ index 0000000..6a08c7f
 +}
 +func (b *parkingBackend) FreeResult(context.Context) (*pb.Result, error) {
 +	b.parks++
-+	return &pb.Result{Success: true, Message: "parked"}, nil
++	answer := b.freeAnswer
++	if answer == "" {
++		answer = "parked"
++	}
++	return &pb.Result{Success: true, Message: answer}, nil
++}
++func (b *parkingBackend) LoadModel(context.Context, *pb.ModelOptions, ...ggrpc.CallOption) (*pb.Result, error) {
++	if b.loadErr != nil {
++		return nil, b.loadErr
++	}
++	return &pb.Result{Success: true, Message: "Model already loaded"}, nil
 +}
 +
 +var _ = Describe("POST /backend/park", func() {
@@ -524,11 +873,24 @@ index 0000000..6a08c7f
 +		Expect(ml.CheckIsLoaded("madlad")).NotTo(BeNil(), "it is never stopped by a park that did not happen")
 +	})
 +
-+	It("answers 404 for a model that is not loaded, and 400 for no model", func() {
-+		code, _ := post(`{"model":"another"}`)
++	It("answers 404 with its own type for a model that is not loaded: a server without this route answers 404 too, with none", func() {
++		code, answer := post(`{"model":"another"}`)
 +		Expect(code).To(Equal(http.StatusNotFound))
++		errType, message := errorOf(answer)
++		Expect(errType).To(Equal("model_not_loaded"))
++		Expect(message).To(ContainSubstring("another"))
 +		code, _ = post(`{}`)
 +		Expect(code).To(Equal(http.StatusBadRequest))
++	})
++
++	It("answers 500 model_stopped when the backend broke the park: the one model it stops, and the answer says so", func() {
++		backend.freeAnswer = "freed" // it released the model instead of parking it
++		code, answer := post(`{"model":"madlad"}`)
++		Expect(code).To(Equal(http.StatusInternalServerError))
++		errType, message := errorOf(answer)
++		Expect(errType).To(Equal("model_stopped"))
++		Expect(message).To(ContainSubstring("madlad"))
++		Expect(ml.CheckIsLoaded("madlad")).To(BeNil(), "the device is free; the model is not loaded")
 +	})
 +})
 diff --git a/core/http/endpoints/localai/system.go b/core/http/endpoints/localai/system.go
@@ -622,10 +984,10 @@ index 238f296..58343c8 100644
 +	})
 +})
 diff --git a/core/http/endpoints/openai/chat.go b/core/http/endpoints/openai/chat.go
-index 13606f7..6ef5d63 100644
+index 13606f7..60a5bb7 100644
 --- a/core/http/endpoints/openai/chat.go
 +++ b/core/http/endpoints/openai/chat.go
-@@ -711,11 +711,19 @@ func ChatEndpoint(cl *config.ModelConfigLoader, ml *model.ModelLoader, evaluator
+@@ -711,11 +711,16 @@ func ChatEndpoint(cl *config.ModelConfigLoader, ml *model.ModelLoader, evaluator
  							return backendRequestError(res.err)
  						}
  
@@ -633,10 +995,7 @@ index 13606f7..6ef5d63 100644
 +						// that point of the answer - is said as what it is, so
 +						// a client can send the request again instead of
 +						// treating it as a fault.
-+						errType, errMessage := "server_error", res.err.Error()
-+						if noRoom, ok := model.NoRoomOnDevice(res.err); ok {
-+							errType, errMessage = model.NoRoomOnDeviceType, noRoom
-+						}
++						errType, errMessage := streamErrorTypeAndMessage(res.err)
  						errorResp := schema.ErrorResponse{
  							Error: &schema.APIError{
 -								Message: res.err.Error(),
@@ -648,12 +1007,66 @@ index 13606f7..6ef5d63 100644
  							},
  						}
  						respData, marshalErr := json.Marshal(errorResp)
+@@ -1338,3 +1343,13 @@ func forwardCloudProxyOpenAIViaBackend(c echo.Context, cfg *config.ModelConfig,
+ 	}
+ 	return cloudproxy.ForwardViaBackend(c, cfg, body, ml, appConfig)
+ }
++
++// streamErrorTypeAndMessage is the type and the message of the error event
++// a chat stream ends with. A refusal of the moment says what it is; every
++// other error is a server_error, as it was.
++func streamErrorTypeAndMessage(err error) (errType, message string) {
++	if noRoom, ok := model.NoRoomOnDevice(err); ok {
++		return model.NoRoomOnDeviceType, noRoom
++	}
++	return "server_error", err.Error()
++}
+diff --git a/core/http/endpoints/openai/chat_stream_no_room_test.go b/core/http/endpoints/openai/chat_stream_no_room_test.go
+new file mode 100644
+index 0000000..201a708
+--- /dev/null
++++ b/core/http/endpoints/openai/chat_stream_no_room_test.go
+@@ -0,0 +1,34 @@
++package openai
++
++import (
++	"errors"
++	"fmt"
++
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/status"
++)
++
++// The error event a chat stream ends with, once the answer has begun: no
++// status code can say anything any more, so the event's type does.
++var _ = Describe("the error event of a chat stream", func() {
++	It("says a refusal of the moment is one, so a client can send the request again", func() {
++		refusal := fmt.Errorf("stream: %w", status.Error(codes.ResourceExhausted, "no_room_on_device: the computation cannot be placed on the device now"))
++		errType, message := streamErrorTypeAndMessage(refusal)
++		Expect(errType).To(Equal("no_room_on_device"))
++		Expect(message).To(Equal("the computation cannot be placed on the device now"))
++	})
++
++	It("leaves every other error a server_error with its own words, as it was", func() {
++		for _, other := range []error{
++			errors.New("the backend went away"),
++			status.Error(codes.ResourceExhausted, "backend is busy"),
++			status.Error(codes.Internal, "Compute error."),
++		} {
++			errType, message := streamErrorTypeAndMessage(other)
++			Expect(errType).To(Equal("server_error"), other.Error())
++			Expect(message).To(Equal(other.Error()))
++		}
++	})
++})
 diff --git a/core/http/no_room_handler_test.go b/core/http/no_room_handler_test.go
 new file mode 100644
-index 0000000..e29bef6
+index 0000000..f95ddf1
 --- /dev/null
 +++ b/core/http/no_room_handler_test.go
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,69 @@
 +package http
 +
 +import (
@@ -694,6 +1107,19 @@ index 0000000..e29bef6
 +		Expect(code).To(Equal(http.StatusServiceUnavailable))
 +		Expect(message).To(Equal("the context cannot be created now, try again later"))
 +		Expect(retry).To(Equal("2"))
++	})
++
++	It("answers a refusal with its own type and its own message, and every other error with what it had", func() {
++		refusal := fmt.Errorf("embeddings: %w", status.Error(codes.ResourceExhausted, "no_room_on_device: the context cannot be created now"))
++		_, noRoom, _ := apply(refusal)
++		errType, message := errorTypeAndMessage(refusal, noRoom)
++		Expect(errType).To(Equal("no_room_on_device"))
++		Expect(message).To(Equal("the context cannot be created now"), "without the wrapping of whatever met it on the way")
++
++		fault := errors.New("some other error")
++		errType, message = errorTypeAndMessage(fault, "")
++		Expect(errType).To(BeEmpty())
++		Expect(message).To(Equal("some other error"))
 +	})
 +
 +	It("leaves the other meanings of ResourceExhausted, and every other error, as they were", func() {
@@ -841,8 +1267,98 @@ index fa4f63d..63bf901 100644
  }
  
  func (c *Client) ModelMetadata(ctx context.Context, in *pb.ModelOptions, opts ...grpc.CallOption) (*pb.ModelMetadataResponse, error) {
+diff --git a/pkg/grpc/free_result_test.go b/pkg/grpc/free_result_test.go
+new file mode 100644
+index 0000000..b059717
+--- /dev/null
++++ b/pkg/grpc/free_result_test.go
+@@ -0,0 +1,84 @@
++package grpc
++
++import (
++	"context"
++	"net"
++
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++
++	pb "github.com/mudler/LocalAI/pkg/grpc/proto"
++	gogrpc "google.golang.org/grpc"
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/status"
++)
++
++// parkingServer is a backend process whose Free answers what it is told to.
++type parkingServer struct {
++	pb.UnimplementedBackendServer
++	result *pb.Result
++	err    error
++	frees  int
++}
++
++func (s *parkingServer) Free(context.Context, *pb.HealthMessage) (*pb.Result, error) {
++	s.frees++
++	return s.result, s.err
++}
++
++// tracking is a watchdog that records the requests the client tells it of.
++type tracking struct{ began, ended int }
++
++func (t *tracking) Mark(string)   { t.began++ }
++func (t *tracking) UnMark(string) { t.ended++ }
++func (t *tracking) TrackRequest(string) func() {
++	t.began++
++	return func() { t.ended++ }
++}
++
++// The client against a real gRPC server: what the loader's specs, which
++// script a backend in memory, cannot see.
++var _ = Describe("Client.FreeResult", func() {
++	serve := func(s *parkingServer) string {
++		GinkgoHelper()
++		lis, err := net.Listen("tcp", "127.0.0.1:0")
++		Expect(err).NotTo(HaveOccurred())
++		srv := gogrpc.NewServer()
++		pb.RegisterBackendServer(srv, s)
++		go func() { _ = srv.Serve(lis) }()
++		DeferCleanup(srv.GracefulStop)
++		return lis.Addr().String()
++	}
++
++	It("gives the backend's answer to Free: the message a park is told by, and its metadata", func() {
++		backend := &parkingServer{result: &pb.Result{Success: true, Message: "parked"}}
++		wd := &tracking{}
++		client := &Client{address: serve(backend), parallel: true, wd: wd}
++		res, err := client.FreeResult(context.Background())
++		Expect(err).NotTo(HaveOccurred())
++		Expect(res.GetSuccess()).To(BeTrue())
++		Expect(res.GetMessage()).To(Equal("parked"))
++		Expect(backend.frees).To(Equal(1))
++		Expect(wd.began).To(Equal(1), "a park is a request for the watchdog while it runs")
++		Expect(wd.ended).To(Equal(1))
++		Expect(client.IsBusy()).To(BeFalse())
++	})
++
++	It("keeps the code and the words of a refusal: the loader reads both", func() {
++		backend := &parkingServer{err: status.Error(codes.FailedPrecondition, "busy: a request is running, the model stays on the device")}
++		client := &Client{address: serve(backend), parallel: true}
++		_, err := client.FreeResult(context.Background())
++		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
++		Expect(status.Convert(err).Message()).To(Equal("busy: a request is running, the model stays on the device"))
++	})
++
++	It("is what Free sends: one call, the answer dropped, a backend with no Free still Unimplemented", func() {
++		backend := &parkingServer{result: &pb.Result{Success: true, Message: "parked"}}
++		client := &Client{address: serve(backend), parallel: true}
++		Expect(client.Free(context.Background())).To(Succeed())
++		Expect(backend.frees).To(Equal(1))
++
++		none := &Client{address: serve(&parkingServer{err: status.Error(codes.Unimplemented, "method Free not implemented")}), parallel: true}
++		Expect(status.Code(none.Free(context.Background()))).To(Equal(codes.Unimplemented))
++	})
++})
 diff --git a/pkg/model/initializers.go b/pkg/model/initializers.go
-index 934e4b7..99cbffc 100644
+index 934e4b7..5cb2ede 100644
 --- a/pkg/model/initializers.go
 +++ b/pkg/model/initializers.go
 @@ -275,6 +275,9 @@ func (ml *ModelLoader) spawnGRPCModel(backend, uri string, o *Options, modelID,
@@ -855,36 +1371,37 @@ index 934e4b7..99cbffc 100644
  	if ml.wd != nil && o.modelSizeBytes > 0 {
  		ml.wd.RegisterModelSize(modelID, o.modelSizeBytes)
  	}
-@@ -546,7 +549,23 @@ func (ml *ModelLoader) Load(opts ...Option) (grpc.Backend, error) {
+@@ -546,7 +549,24 @@ func (ml *ModelLoader) Load(opts ...Option) (grpc.Backend, error) {
  
  	// Return earlier if we have a model already loaded
  	// (avoid looping through all the backends)
 -	if m := ml.CheckIsLoaded(o.modelID); m != nil {
 +	m := ml.CheckIsLoaded(o.modelID)
-+	if m != nil && m.ParkedState().Parked {
-+		// A parked model coming back is a load for the limits: the models it
-+		// may not share the device with are evicted first, as for a load.
-+		// Then its weights return. If the device has no room the request is
-+		// refused as a deferral and the model stays parked. If the return
-+		// FAILED its process was stopped: the model is not loaded any more,
-+		// and this request is served by an ordinary load, below.
-+		ml.enforceGroupExclusivity(o.modelID)
-+		ml.enforceLRULimit()
-+		if err := ml.unpark(o.context, m); errors.Is(err, ErrParkedReturnFailed) || errors.Is(err, errParkedModelGone) {
-+			m = nil
-+		} else if err != nil {
++	// A parked model comes back before the request goes (park.go: unpark).
++	// If the device has no room the request is refused as a deferral and the
++	// model stays parked. If the return FAILED, or the model was stopped
++	// while this request waited for it, what the store holds is looked at
++	// again: nothing, and this request is served by an ordinary load, below;
++	// or the model another request loaded meanwhile, which is used.
++	for attempt := 0; m != nil && m.ParkedState().Parked; attempt++ {
++		err := ml.unpark(o.context, m)
++		if err == nil {
++			break
++		}
++		if attempt == parkedReturnAttempts-1 || !(errors.Is(err, ErrParkedReturnFailed) || errors.Is(err, errParkedModelGone)) {
 +			return nil, err
 +		}
++		m = ml.CheckIsLoaded(o.modelID)
 +	}
 +	if m != nil {
  		xlog.Debug("Model already loaded", "model", o.modelID)
  		// Update last used time for LRU tracking
  		ml.updateModelLastUsed(m)
 diff --git a/pkg/model/loader.go b/pkg/model/loader.go
-index eab41ed..e7eeb13 100644
+index eab41ed..64d2ee9 100644
 --- a/pkg/model/loader.go
 +++ b/pkg/model/loader.go
-@@ -84,11 +84,15 @@ type BackendLoadEvent struct {
+@@ -84,11 +84,18 @@ type BackendLoadEvent struct {
  }
  
  type ModelLoader struct {
@@ -900,13 +1417,29 @@ index eab41ed..e7eeb13 100644
 +	operations *modelOperationLocks
 +	// parking (park.go): where the host's floor is read at each park, and
 +	// how the host's available memory is read
-+	parkHostFloor            func() uint64
-+	hostAvailable            func() (uint64, error)
++	parkHostFloor func() uint64
++	hostAvailable func() (uint64, error)
++	// parkReserved is what the parks in flight are about to copy into host
++	// memory: two parks must not both count the same free bytes. Under mu.
++	parkReserved             uint64
  	wd                       *WatchDog
  	externalBackends         map[string]string
  	lruEvictionMaxRetries    int           // Maximum number of retries when waiting for busy models
+@@ -625,7 +632,11 @@ func (ml *ModelLoader) loadModel(modelID, modelName, modelFileName string, loade
+ 
+ 	model, err := loader(modelID, modelName, modelFile)
+ 	if err != nil {
+-		ml.recordLoadFailure(modelID, err)
++		// "The device has no room now" is not a load that failed: the caller
++		// is told to ask again in a moment, and must not find a cooldown.
++		if _, noRoom := NoRoomOnDevice(err); !noRoom {
++			ml.recordLoadFailure(modelID, err)
++		}
+ 		// %w keeps the cause (a missing backend) visible to errors.Is.
+ 		return nil, fmt.Errorf("failed to load model with internal loader: %w", err)
+ 	}
 diff --git a/pkg/model/loader_options.go b/pkg/model/loader_options.go
-index baea857..0053fe2 100644
+index baea857..4bc2a18 100644
 --- a/pkg/model/loader_options.go
 +++ b/pkg/model/loader_options.go
 @@ -29,6 +29,7 @@ type Options struct {
@@ -932,6 +1465,18 @@ index baea857..0053fe2 100644
  func WithGRPCAttempts(attempts int) Option {
  	return func(o *Options) {
  		o.grpcAttempts = attempts
+@@ -154,6 +163,11 @@ func WithEnvVars(envVars map[string]string) Option {
+ 	}
+ }
+ 
++// Parks reports whether the options say the model's file allows parking it.
++func (o *Options) Parks() bool {
++	return o.park
++}
++
+ func NewOptions(opts ...Option) *Options {
+ 	o := &Options{
+ 		gRPCOptions:       &pb.ModelOptions{},
 diff --git a/pkg/model/model.go b/pkg/model/model.go
 index 991dba2..d45f4d9 100644
 --- a/pkg/model/model.go
@@ -1061,10 +1606,10 @@ index ce64312..608e1a9 100644
  	entry.refs--
 diff --git a/pkg/model/park.go b/pkg/model/park.go
 new file mode 100644
-index 0000000..e259587
+index 0000000..290ce6e
 --- /dev/null
 +++ b/pkg/model/park.go
-@@ -0,0 +1,381 @@
+@@ -0,0 +1,455 @@
 +package model
 +
 +import (
@@ -1115,6 +1660,11 @@ index 0000000..e259587
 +	// The model is not loaded any more: the next load of it is an ordinary
 +	// one, from its file.
 +	ErrParkedReturnFailed = errors.New("a parked model's return failed and its process was stopped")
++	// ErrParkStoppedModel: the park left a backend that cannot be trusted
++	// with requests - its Free succeeded without parking, or had not
++	// answered in parkTimeout - and its process was stopped. The device is
++	// free; the model is not loaded any more.
++	ErrParkStoppedModel = errors.New("the model could not be parked and its process was stopped")
 +	// errParkedModelGone: the parked model a request waited for was stopped
 +	// meanwhile. Nothing failed; the request is served by an ordinary load.
 +	errParkedModelGone = errors.New("the parked model was stopped meanwhile")
@@ -1128,19 +1678,33 @@ index 0000000..e259587
 +	// would move to the host - what the device must have room for when they
 +	// come back.
 +	parkSizeKey = "park_size"
++	// busyHead is how a backend's refusal to park begins when the reason is
++	// of the moment - a request is running, requests are waiting, the model
++	// is still loading. FailedPrecondition alone is not that: a backend also
++	// says it of a model it does not hold.
++	busyHead = "busy: "
++	// NoRoomRetryAfterSeconds is how long a client is told to wait before it
++	// sends again a request the device had no room for.
++	NoRoomRetryAfterSeconds = 2
++	// parkedReturnAttempts bounds how many times one request looks again at
++	// a model whose return failed or that was stopped under it.
++	parkedReturnAttempts = 3
 +	// NoRoomOnDeviceType is the type of a refusal of the moment: the device
 +	// had no memory - for parked weights to come back, for a context, for a
 +	// graph. Nothing is wrong with the request or the model.
 +	NoRoomOnDeviceType = "no_room_on_device"
 +
 +	parkStatusTimeout = 5 * time.Second
-+	parkTimeout       = 60 * time.Second
 +)
 +
-+// unparkTimeout is how long a return may take: the copy of the weights back
-+// to the device, measured in milliseconds to seconds. A return that has not
-+// answered by then is a backend that hangs, and is stopped.
-+var unparkTimeout = 60 * time.Second
++// parkTimeout and unparkTimeout are how long a park and a return may take:
++// one copy of the weights, measured in milliseconds to seconds. A backend
++// that has not answered by then hangs, and is stopped: what it did with the
++// weights is not known.
++var (
++	parkTimeout   = 60 * time.Second
++	unparkTimeout = 60 * time.Second
++)
 +
 +// NoRoomOnDeviceError is a request, or a model's return, that the device
 +// had no room for at that moment. The HTTP layer answers it 503 with a
@@ -1193,12 +1757,12 @@ index 0000000..e259587
 +	ml.hostAvailable = available
 +}
 +
++// hostAvailableMemory is what a backend of this process can still take: the
++// host's available memory and, in a container with a memory limit, no more
++// than the limit still allows. The weights are copied into the BACKEND's
++// memory, which is this process's cgroup.
 +func hostAvailableMemory() (uint64, error) {
-+	info, err := xsysinfo.GetSystemRAMInfo()
-+	if err != nil {
-+		return 0, err
-+	}
-+	return info.Available, nil
++	return xsysinfo.AllocatableMemory(), nil
 +}
 +
 +// ParkModel parks a loaded model: its weights leave the device, its process
@@ -1306,7 +1870,8 @@ index 0000000..e259587
 +	}
 +
 +	// The host, now. Not an hour ago, and not a budget: what is available at
-+	// this moment, less what would be copied into it, against the floor.
++	// this moment, less what the parks in flight are about to copy into it
++	// and what this one would, against the floor.
 +	if available == nil {
 +		available = hostAvailableMemory
 +	}
@@ -1314,35 +1879,65 @@ index 0000000..e259587
 +	if err != nil {
 +		return ParkedState{}, fmt.Errorf("%w: the host's memory could not be read (%v)", ErrParkHostFloor, err)
 +	}
-+	if free < size || free-size < floor {
-+		return ParkedState{}, fmt.Errorf("%w: %d MiB available, %d MiB to park, a floor of %d MiB",
-+			ErrParkHostFloor, free>>20, size>>20, floor>>20)
++	ml.mu.Lock()
++	reserved := ml.parkReserved
++	fits := free >= reserved && free-reserved >= size && free-reserved-size >= floor
++	if fits {
++		ml.parkReserved += size
++	}
++	ml.mu.Unlock()
++	if !fits {
++		return ParkedState{}, fmt.Errorf("%w: %d MiB available, %d MiB being parked by others, %d MiB to park, a floor of %d MiB",
++			ErrParkHostFloor, free>>20, reserved>>20, size>>20, floor>>20)
++	}
++	defer func() {
++		ml.mu.Lock()
++		ml.parkReserved -= size
++		ml.mu.Unlock()
++	}()
++
++	stopped := func(why string) error {
++		xlog.Warn("A park left a backend that cannot be trusted with requests; stopping it", "model", modelName, "reason", why)
++		stopCtx, cancel := context.WithTimeout(context.Background(), forcedShutdownTimeout)
++		defer cancel()
++		if stopErr := ml.deleteProcess(stopCtx, modelName, true); stopErr != nil && !errors.Is(stopErr, ErrModelNotFound) {
++			xlog.Error("stopping a model after its park", "model", modelName, "error", stopErr)
++		}
++		return fmt.Errorf("%w: %s", ErrParkStoppedModel, why)
 +	}
 +
-+	freeCtx, cancel := context.WithTimeout(ctx, parkTimeout)
++	// Once Free is sent it is followed to its end whatever the caller does:
++	// a caller that leaves in the middle of the copy must not leave a model
++	// recorded as loaded whose weights are in host memory.
++	freeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), parkTimeout)
 +	res, err := parker.FreeResult(freeCtx)
 +	cancel()
 +	if err != nil {
-+		switch status.Code(err) {
++		answer := status.Convert(err)
++		switch answer.Code() {
 +		case codes.Unimplemented:
 +			return ParkedState{}, fmt.Errorf("%w: its backend does not park", ErrModelCannotPark)
 +		case codes.FailedPrecondition:
-+			// a request reached it between the busy check and the park: not
-+			// now. It is never stopped for that.
-+			return ParkedState{}, fmt.Errorf("%w: %s", ErrModelBusy, status.Convert(err).Message())
++			if strings.HasPrefix(answer.Message(), busyHead) {
++				// a request reached it between the busy check and the park:
++				// not now. It is never stopped for that.
++				return ParkedState{}, fmt.Errorf("%w: %s", ErrModelBusy, answer.Message())
++			}
++			// a precondition that is not of the moment: it does not park
++			return ParkedState{}, fmt.Errorf("%w: its backend refused: %s", ErrModelCannotPark, answer.Message())
++		case codes.DeadlineExceeded:
++			// It may still park, or never answer anything again: neither
++			// record would be true.
++			return ParkedState{}, stopped(fmt.Sprintf("its backend had not answered Free in %s", parkTimeout))
 +		}
++		// The backend says the park failed: nothing moved, the model is
++		// where it was.
 +		return ParkedState{}, fmt.Errorf("parking model %q: %w", modelName, err)
 +	}
 +	if !res.GetSuccess() || res.GetMessage() != parkedMessage {
 +		// A Free that succeeded without parking freed something this loader
-+		// cannot bring back with a LoadModel: the process is no longer one
-+		// to send requests to. It is stopped, as the stop path would have
-+		// done after its own Free.
-+		xlog.Warn("Free did not park the model; stopping it", "model", modelName, "answer", res.GetMessage())
-+		if stopErr := ml.deleteProcess(ctx, modelName, true); stopErr != nil {
-+			xlog.Error("stopping a model whose Free did not park it", "model", modelName, "error", stopErr)
-+		}
-+		return ParkedState{}, fmt.Errorf("%w: its backend answered Free with %q and was stopped", ErrModelCannotPark, res.GetMessage())
++		// cannot bring back with a LoadModel.
++		return ParkedState{}, stopped(fmt.Sprintf("its backend answered Free with %q instead of parking", res.GetMessage()))
 +	}
 +
 +	m.markParked(size, time.Now())
@@ -1358,8 +1953,19 @@ index 0000000..e259587
 +
 +// unpark brings a parked model's weights back to the device, with a
 +// LoadModel that carries the options of its load. A model that is not
-+// parked is left alone. It ends one of three ways, and in none of them is
-+// the model left in a state that fails again:
++// parked is left alone. It runs under the model's exclusive lifecycle lock,
++// so of several requests for a parked model one brings it back and the
++// others find it back.
++//
++// A return is a load for the limits, and they are enforced HERE, under that
++// lock and after the model was found still parked: the models it may not
++// share the device with are evicted or parked first, and from the moment
++// its LoadModel is sent the model is one of the loaded models again - a
++// load that starts beside it counts it, and none evicts what another
++// request has just brought back.
++//
++// It ends one of three ways, and in none of them is the model left in a
++// state that fails again:
 +//   - the weights are back;
 +//   - the device has no room NOW: the model stays parked and the error is a
 +//     *NoRoomOnDeviceError - a deferral, the next request asks again;
@@ -1406,8 +2012,11 @@ index 0000000..e259587
 +		defer cancel()
 +		if stopErr := ml.deleteProcess(stopCtx, m.ID, true); stopErr != nil && !errors.Is(stopErr, ErrModelNotFound) {
 +			if held, ok := store.Get(m.ID); ok && held == m {
-+				// the process could not be stopped: the model is still what
-+				// it was, and the next request tries both again
++				// the process could not be stopped: the model is still
++				// parked, and the next request tries both again
++				if wd != nil {
++					wd.Untrack(m.address)
++				}
 +				return fmt.Errorf("bringing model %q back to the device: %w (and its process could not be stopped: %v)", m.ID, cause, stopErr)
 +			}
 +		}
@@ -1418,22 +2027,14 @@ index 0000000..e259587
 +	if opts == nil {
 +		return failed(errors.New("the options of its load are not held"))
 +	}
-+	loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unparkTimeout)
-+	res, err := m.GRPC(false, wd).LoadModel(loadCtx, opts)
-+	cancel()
-+	if err != nil {
-+		if message, noRoom := NoRoomOnDevice(err); noRoom {
-+			return &NoRoomOnDeviceError{Model: m.ID, Message: message}
-+		}
-+		return failed(err)
-+	}
-+	if !res.GetSuccess() {
-+		return failed(errors.New(res.GetMessage()))
-+	}
 +
-+	m.markUnparked()
++	// The limits, as for a load: this model is not yet one of the loaded
++	// models, so they make room for one more.
++	ml.enforceGroupExclusivity(m.ID)
++	ml.enforceLRULimit()
++
++	// One of the loaded models from here on, before its weights move.
 +	if wd != nil {
-+		// one of the loaded models again
 +		if p := m.Process(); p != nil {
 +			wd.Add(m.address, p)
 +		}
@@ -1443,21 +2044,42 @@ index 0000000..e259587
 +		}
 +		wd.UpdateLastUsed(m.address)
 +	}
++
++	loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unparkTimeout)
++	res, err := m.GRPC(false, wd).LoadModel(loadCtx, opts)
++	cancel()
++	if err != nil {
++		if message, noRoom := NoRoomOnDevice(err); noRoom {
++			if wd != nil {
++				wd.Untrack(m.address) // still parked: not one of the loaded models
++			}
++			return &NoRoomOnDeviceError{Model: m.ID, Message: message}
++		}
++		return failed(err)
++	}
++	if !res.GetSuccess() {
++		return failed(errors.New(res.GetMessage()))
++	}
++
++	m.markUnparked()
 +	xlog.Info("Model back on the device", "model", m.ID)
 +	return nil
 +}
 diff --git a/pkg/model/park_internal_test.go b/pkg/model/park_internal_test.go
 new file mode 100644
-index 0000000..7ab5be0
+index 0000000..49bfbfb
 --- /dev/null
 +++ b/pkg/model/park_internal_test.go
-@@ -0,0 +1,431 @@
+@@ -0,0 +1,619 @@
 +package model
 +
 +import (
 +	"context"
 +	"errors"
 +	"fmt"
++	"os"
++	"path/filepath"
++	"runtime"
 +	"time"
 +
 +	"github.com/mudler/LocalAI/pkg/grpc"
@@ -1488,6 +2110,11 @@ index 0000000..7ab5be0
 +	onLoad     func()
 +	loadHangs  bool
 +	loadCtxErr error
++	onHealth   func() // what runs when the loader probes it
++	// the same for the park's Free
++	onFree     func()
++	freeHangs  bool
++	freeCtxErr error
 +
 +	statuses, parks, plainFrees, loads int
 +	loadedWith                         *pb.ModelOptions
@@ -1501,8 +2128,13 @@ index 0000000..7ab5be0
 +	}
 +}
 +
-+func (b *parkBackend) HealthCheck(context.Context) (bool, error) { return true, nil }
-+func (b *parkBackend) IsBusy() bool                              { return b.busy }
++func (b *parkBackend) HealthCheck(context.Context) (bool, error) {
++	if b.onHealth != nil {
++		b.onHealth()
++	}
++	return true, nil
++}
++func (b *parkBackend) IsBusy() bool { return b.busy }
 +func (b *parkBackend) Status(context.Context) (*pb.StatusResponse, error) {
 +	b.statuses++
 +	if b.statusErr != nil {
@@ -1510,8 +2142,16 @@ index 0000000..7ab5be0
 +	}
 +	return &pb.StatusResponse{Memory: &pb.MemoryUsageData{Total: 1 << 40, Breakdown: map[string]uint64{"park_size": b.parkSize}}}, nil
 +}
-+func (b *parkBackend) FreeResult(context.Context) (*pb.Result, error) {
++func (b *parkBackend) FreeResult(ctx context.Context) (*pb.Result, error) {
 +	b.parks++
++	if b.onFree != nil {
++		b.onFree()
++	}
++	b.freeCtxErr = ctx.Err()
++	if b.freeHangs {
++		<-ctx.Done()
++		return nil, status.FromContextError(ctx.Err()).Err()
++	}
 +	return b.freeResult, b.freeErr
 +}
 +func (b *parkBackend) Free(context.Context) error {
@@ -1699,12 +2339,91 @@ index 0000000..7ab5be0
 +			Expect(m.ParkedState().Parked).To(BeFalse())
 +		})
 +
-+		It("stops a model whose Free succeeded without parking: nothing can bring back what it freed", func() {
++		It("stops a model whose Free succeeded without parking: nothing can bring back what it freed, and the answer says it was stopped", func() {
 +			backend.freeResult = &pb.Result{Success: true, Message: "freed"}
 +			_, err := ml.ParkModel(context.Background(), "m")
-+			Expect(err).To(MatchError(ErrModelCannotPark))
++			Expect(err).To(MatchError(ErrParkStoppedModel))
++			Expect(errors.Is(err, ErrModelCannotPark)).To(BeFalse(), "\"stop it instead\" would be told of a model that is already stopped")
 +			_, still := ml.store.Get("m")
 +			Expect(still).To(BeFalse())
++		})
++
++		It("stops a model whose Free has not answered in its time: it may still park, or never answer again, and neither record would be true", func() {
++			was := parkTimeout
++			parkTimeout = 50 * time.Millisecond
++			DeferCleanup(func() { parkTimeout = was })
++			backend.freeHangs = true
++			_, err := ml.ParkModel(context.Background(), "m")
++			Expect(err).To(MatchError(ErrParkStoppedModel))
++			_, still := ml.store.Get("m")
++			Expect(still).To(BeFalse())
++		})
++
++		It("follows a Free it has sent to its end, whatever the caller does: a caller that leaves must not leave a parked model recorded as loaded", func() {
++			ctx, leave := context.WithCancel(context.Background())
++			backend.onFree = leave // the caller goes away while the weights are being copied
++			state, err := ml.ParkModel(ctx, "m")
++			Expect(err).NotTo(HaveOccurred())
++			Expect(ctx.Err()).To(HaveOccurred())
++			Expect(backend.freeCtxErr).NotTo(HaveOccurred(), "the park's own call was not cancelled with its caller")
++			Expect(state.Parked).To(BeTrue())
++			Expect(m.ParkedState().Parked).To(BeTrue())
++		})
++
++		It("leaves a model whose backend says the park FAILED where it was: nothing moved", func() {
++			backend.freeResult, backend.freeErr = nil, status.Error(codes.Internal, "the weights could not be parked: the host has no memory for them")
++			_, err := ml.ParkModel(context.Background(), "m")
++			Expect(err).To(HaveOccurred())
++			for _, not := range []error{ErrModelBusy, ErrModelCannotPark, ErrParkStoppedModel} {
++				Expect(errors.Is(err, not)).To(BeFalse())
++			}
++			Expect(m.ParkedState().Parked).To(BeFalse())
++			_, still := ml.store.Get("m")
++			Expect(still).To(BeTrue())
++		})
++
++		It("takes FailedPrecondition for busy only when the backend says busy: the code alone is also a model it does not hold", func() {
++			backend.freeResult, backend.freeErr = nil, status.Error(codes.FailedPrecondition, "Model not loaded")
++			_, err := ml.ParkModel(context.Background(), "m")
++			Expect(err).To(MatchError(ErrModelCannotPark))
++			Expect(errors.Is(err, ErrModelBusy)).To(BeFalse(), "busy would keep it out of every eviction for ever")
++			for _, busy := range []string{"busy: a request is running, the model stays on the device", "busy: requests are waiting, the model stays on the device", "busy: the model is loading"} {
++				backend.freeErr = status.Error(codes.FailedPrecondition, busy)
++				_, err = ml.ParkModel(context.Background(), "m")
++				Expect(err).To(MatchError(ErrModelBusy), busy)
++			}
++		})
++
++		It("does not let two parks count the same free bytes of the host", func() {
++			other := newParkBackend()
++			second := NewModelWithClient("second", "addr2", other)
++			second.MarkHealthy()
++			second.SetParks(true)
++			second.SetLoadOptions(options)
++			ml.store.Set("second", second)
++			host = floor + 6*gib + 1 // room for ONE of the two, each 6 GiB
++
++			copying, finish := make(chan struct{}), make(chan struct{})
++			backend.onFree = func() { close(copying); <-finish }
++			first := make(chan error, 1)
++			go func() {
++				defer GinkgoRecover()
++				_, err := ml.ParkModel(context.Background(), "m")
++				first <- err
++			}()
++			Eventually(copying).Should(BeClosed())
++
++			// the host still reads as it did: the first copy has not landed
++			_, err := ml.ParkModel(context.Background(), "second")
++			Expect(err).To(MatchError(ErrParkHostFloor))
++			Expect(err.Error()).To(ContainSubstring("being parked by others"))
++			Expect(other.parks).To(BeZero())
++
++			close(finish)
++			Expect(<-first).NotTo(HaveOccurred())
++			host = floor + 6*gib + 1 // once it landed the reservation is given back
++			_, err = ml.ParkModel(context.Background(), "second")
++			Expect(err).NotTo(HaveOccurred())
 +		})
 +
 +		It("says a model that is not loaded is not loaded", func() {
@@ -1820,6 +2539,38 @@ index 0000000..7ab5be0
 +			Expect(backend.loads).To(BeZero())
 +		})
 +
++		It("uses the model another request loaded while this one waited for the parked one, and evicts nothing for it", func() {
++			replacement := newParkBackend()
++			// Between this request's look at the store and its turn at the
++			// model's lock, the parked process is stopped and the model
++			// loaded again: the probe below queues that swap on the lock
++			// ahead of the request.
++			m.lastHealthCheck = time.Time{}
++			backend.onHealth = func() {
++				backend.onHealth = nil
++				queued := make(chan struct{})
++				go func() {
++					defer GinkgoRecover()
++					close(queued)
++					release := ml.operations.acquire("m", true)
++					defer release()
++					fresh := NewModelWithClient("m", "addr-2", replacement)
++					fresh.MarkHealthy()
++					ml.store.Set("m", fresh)
++				}()
++				<-queued
++				time.Sleep(50 * time.Millisecond) // the swap is waiting on the lock this probe holds
++			}
++			client, err := ml.Load(WithContext(context.Background()), WithModelID("m"))
++			Expect(err).NotTo(HaveOccurred())
++			// a model reached by address is handed out wrapped; what it wraps is the replacement
++			wrapped, ok := client.(*ConnectionEvictingClient)
++			Expect(ok).To(BeTrue())
++			Expect(wrapped.Backend).To(BeIdenticalTo(replacement))
++			Expect(backend.loads).To(BeZero(), "nothing was sent to the process that is gone")
++			Expect(replacement.loads).To(BeZero(), "and the model that is loaded was not loaded again")
++		})
++
 +		It("stops a parked model whose load options are not held: there is nothing to bring it back with", func() {
 +			m.SetLoadOptions(nil)
 +			Expect(ml.unpark(context.Background(), m)).To(MatchError(ErrParkedReturnFailed))
@@ -1830,24 +2581,80 @@ index 0000000..7ab5be0
 +	})
 +
 +	Describe("the stop", func() {
-+		It("does not send Free to a model that parks: for it Free is not the prelude to a stop", func() {
-+			Expect(ml.ShutdownModel("m")).To(Succeed())
-+			Expect(backend.plainFrees + backend.parks).To(BeZero())
-+			_, still := ml.store.Get("m")
++		// A model in a process this loader started: the stop kills the process.
++		var owned *parkBackend
++		BeforeEach(func() {
++			if runtime.GOOS == "windows" {
++				Skip("the fixture backend is a shell script, which Windows cannot execute")
++			}
++			tmpDir := GinkgoT().TempDir()
++			GinkgoT().Setenv(backendTempDirEnv, filepath.Join(tmpDir, "backend-runtime"))
++			script := filepath.Join(tmpDir, "a-backend")
++			Expect(os.WriteFile(script, []byte("#!/bin/sh\nsleep 300\n"), 0o700)).To(Succeed())
++			proc, err := ml.startProcess(script, "owned", "127.0.0.1:65533", nil)
++			Expect(err).NotTo(HaveOccurred())
++			owned = newParkBackend()
++			held := &Model{ID: "owned", address: "127.0.0.1:65533", client: owned, process: proc}
++			held.MarkHealthy()
++			held.SetParks(true)
++			held.SetLoadOptions(options)
++			ml.store.Set("owned", held)
++			DeferCleanup(func() { _ = ml.ShutdownModelForce("owned") })
++		})
++
++		It("does not send Free to a model that parks, in a process it is about to stop: for it Free is not the prelude to a stop", func() {
++			Expect(ml.ShutdownModel("owned")).To(Succeed())
++			Expect(owned.plainFrees + owned.parks).To(BeZero())
++			_, still := ml.store.Get("owned")
 +			Expect(still).To(BeFalse())
 +		})
 +
 +		It("stops a parked model without bringing it back", func() {
-+			_, err := ml.ParkModel(context.Background(), "m")
++			_, err := ml.ParkModel(context.Background(), "owned")
 +			Expect(err).NotTo(HaveOccurred())
++			Expect(ml.ShutdownModel("owned")).To(Succeed())
++			Expect(owned.loads + owned.plainFrees).To(BeZero())
++			_, still := ml.store.Get("owned")
++			Expect(still).To(BeFalse())
++		})
++
++		It("still sends Free to a model that parks but is reached by address: nothing else releases its device", func() {
++			Expect(m.Process()).To(BeNil())
 +			Expect(ml.ShutdownModel("m")).To(Succeed())
-+			Expect(backend.loads + backend.plainFrees).To(BeZero())
++			Expect(backend.plainFrees).To(Equal(1))
 +		})
 +
 +		It("still sends Free to a model that does not park, as before", func() {
 +			m.SetParks(false)
 +			Expect(ml.ShutdownModel("m")).To(Succeed())
 +			Expect(backend.plainFrees).To(Equal(1))
++		})
++	})
++
++	Describe("a load the device has no room for", func() {
++		It("is not a load that failed: the caller told to ask again does not find a cooldown", func() {
++			ml.SetLoadFailureCooldown(time.Minute, time.Hour)
++			calls := 0
++			refused := func(string, string, string) (*Model, error) {
++				calls++
++				return nil, fmt.Errorf("could not load model: %w", status.Error(codes.ResourceExhausted, "no_room_on_device: the context cannot be created now"))
++			}
++			for range 2 {
++				_, err := ml.LoadModel("cold", "cold.gguf", refused)
++				_, noRoom := NoRoomOnDevice(err)
++				Expect(noRoom).To(BeTrue())
++			}
++			Expect(calls).To(Equal(2), "the second request reached the backend again")
++
++			failing := func(string, string, string) (*Model, error) {
++				calls++
++				return nil, errors.New("could not load model: the file is not a model")
++			}
++			_, err := ml.LoadModel("broken", "broken.gguf", failing)
++			Expect(err).To(HaveOccurred())
++			_, err = ml.LoadModel("broken", "broken.gguf", failing)
++			Expect(calls).To(Equal(3), "a load that FAILED still arms it")
++			Expect(err).To(HaveOccurred())
 +		})
 +	})
 +
@@ -1883,55 +2690,331 @@ index 0000000..7ab5be0
 +		})
 +	})
 +})
+diff --git a/pkg/model/park_watchdog_internal_test.go b/pkg/model/park_watchdog_internal_test.go
+new file mode 100644
+index 0000000..69a3b65
+--- /dev/null
++++ b/pkg/model/park_watchdog_internal_test.go
+@@ -0,0 +1,184 @@
++package model
++
++import (
++	"context"
++	"time"
++
++	pb "github.com/mudler/LocalAI/pkg/grpc/proto"
++	"github.com/mudler/LocalAI/pkg/system"
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/status"
++)
++
++// The loader and a REAL watchdog together: what a park and a return do to
++// the registry the limits are counted from. The loader's own specs run
++// without a watchdog, and the watchdog's against a manager that only records
++// its calls; neither sees these.
++var _ = Describe("Parking under a watchdog", func() {
++	const (
++		floor = uint64(8 << 30)
++		gib   = uint64(1 << 30)
++	)
++	var (
++		ml      *ModelLoader
++		wd      *WatchDog
++		backend *parkBackend
++		m       *Model
++		options = &pb.ModelOptions{Model: "m", ModelFile: "m.gguf", ContextSize: 512}
++	)
++
++	// a loaded model, registered as a load registers it
++	loaded := func(id, address string, parks bool) (*Model, *parkBackend) {
++		b := newParkBackend()
++		held := NewModelWithClient(id, address, b)
++		held.MarkHealthy()
++		held.SetParks(parks)
++		held.SetLoadOptions(options)
++		ml.store.Set(id, held)
++		ml.wd.AddAddressModelMap(address, id)
++		return held, b
++	}
++	attach := func(opts ...WatchDogOption) {
++		wd = NewWatchDog(append([]WatchDogOption{WithProcessManager(ml)}, opts...)...)
++		ml.SetWatchDog(wd)
++	}
++
++	BeforeEach(func() {
++		ml = NewModelLoader(&system.SystemState{})
++		ml.SetLRUEvictionRetrySettings(2, time.Millisecond)
++		ml.SetParkHostFloorSource(func() uint64 { return floor })
++		ml.SetHostAvailableMemorySource(func() (uint64, error) { return 64 * gib, nil })
++		attach(WithLRULimit(1))
++		m, backend = loaded("m", "addr", true)
++	})
++
++	It("takes a parked model out of the loaded models, and puts it back BEFORE its weights move", func() {
++		Expect(wd.GetLoadedModelCount()).To(Equal(1))
++		_, err := ml.ParkModel(context.Background(), "m")
++		Expect(err).NotTo(HaveOccurred())
++		Expect(wd.GetLoadedModelCount()).To(BeZero(), "not counted against the limit, not an eviction candidate")
++
++		during := -1
++		backend.onLoad = func() { during = wd.GetLoadedModelCount() }
++		_, err = ml.Load(WithContext(context.Background()), WithModelID("m"))
++		Expect(err).NotTo(HaveOccurred())
++		Expect(during).To(Equal(1), "a load that starts during the copy must count the model that is coming back")
++		Expect(wd.GetLoadedModelCount()).To(Equal(1))
++	})
++
++	It("does not leave a model whose return was refused, or failed, among the loaded models", func() {
++		_, err := ml.ParkModel(context.Background(), "m")
++		Expect(err).NotTo(HaveOccurred())
++
++		backend.loadResult, backend.loadErr = nil, status.Error(codes.ResourceExhausted, "no_room_on_device: the weights cannot come back to the device now")
++		_, err = ml.Load(WithContext(context.Background()), WithModelID("m"))
++		_, noRoom := NoRoomOnDevice(err)
++		Expect(noRoom).To(BeTrue())
++		Expect(m.ParkedState().Parked).To(BeTrue())
++		Expect(wd.GetLoadedModelCount()).To(BeZero(), "still parked: it holds nothing the limits count")
++
++		backend.loadErr = status.Error(codes.Internal, "the weights could not be brought back to the device: a failure, not a refusal")
++		Expect(ml.unpark(context.Background(), m)).To(MatchError(ErrParkedReturnFailed))
++		Expect(wd.GetLoadedModelCount()).To(BeZero())
++	})
++
++	It("makes room for a model that comes back as for a load: what took its place is stopped, or parked if it can", func() {
++		_, err := ml.ParkModel(context.Background(), "m")
++		Expect(err).NotTo(HaveOccurred())
++		_, plain := loaded("plain", "addr-plain", false) // loaded while m was parked: the limit is 1
++		Expect(wd.GetLoadedModelCount()).To(Equal(1))
++
++		_, err = ml.Load(WithContext(context.Background()), WithModelID("m"))
++		Expect(err).NotTo(HaveOccurred())
++		_, still := ml.store.Get("plain")
++		Expect(still).To(BeFalse(), "a model that does not park is stopped, as before")
++		Expect(plain.plainFrees).To(Equal(1))
++		Expect(wd.GetLoadedModelCount()).To(Equal(1))
++
++		_, err = ml.ParkModel(context.Background(), "m")
++		Expect(err).NotTo(HaveOccurred())
++		other, otherBackend := loaded("other", "addr-other", true)
++		_, err = ml.Load(WithContext(context.Background()), WithModelID("m"))
++		Expect(err).NotTo(HaveOccurred())
++		Expect(other.ParkedState().Parked).To(BeTrue(), "a model that parks is parked")
++		Expect(otherBackend.parks).To(Equal(1))
++		Expect(otherBackend.plainFrees).To(BeZero())
++		Expect(wd.GetLoadedModelCount()).To(Equal(1))
++	})
++
++	It("brings a parked model back once for two requests, and the second evicts nothing", func() {
++		_, err := ml.ParkModel(context.Background(), "m")
++		Expect(err).NotTo(HaveOccurred())
++
++		copying, finish := make(chan struct{}), make(chan struct{})
++		backend.onLoad = func() { close(copying); <-finish }
++		done := make(chan error, 2)
++		for range 2 {
++			go func() {
++				defer GinkgoRecover()
++				_, err := ml.Load(WithContext(context.Background()), WithModelID("m"))
++				done <- err
++			}()
++		}
++		Eventually(copying).Should(BeClosed())
++		close(finish)
++		Expect(<-done).NotTo(HaveOccurred())
++		Expect(<-done).NotTo(HaveOccurred())
++		Expect(backend.loads).To(Equal(1), "one LoadModel")
++		Expect(backend.parks).To(Equal(1), "and the model the first brought back was not parked again under the limit of one")
++		Expect(m.ParkedState().Parked).To(BeFalse())
++		Expect(wd.GetLoadedModelCount()).To(Equal(1))
++	})
++
++	It("parks, through the limit of loaded models, a model that can park", func() {
++		result := wd.EnforceLRULimit(0)
++		Expect(result.EvictedCount).To(Equal(1))
++		Expect(result.NeedMore).To(BeFalse())
++		Expect(m.ParkedState().Parked).To(BeTrue())
++		_, still := ml.store.Get("m")
++		Expect(still).To(BeTrue(), "its process stays")
++		Expect(wd.GetLoadedModelCount()).To(BeZero())
++	})
++
++	It("keeps, and tracks again, a model whose lifecycle lock is held when the limit selects it: it is not stopped for that", func() {
++		release := ml.operations.acquire("m", true) // its return, say
++		result := wd.EnforceLRULimit(0)
++		release()
++		Expect(result.EvictedCount).To(BeZero())
++		Expect(result.NeedMore).To(BeTrue(), "the room asked for does not exist yet")
++		Expect(m.ParkedState().Parked).To(BeFalse())
++		_, still := ml.store.Get("m")
++		Expect(still).To(BeTrue())
++		Expect(backend.parks + backend.plainFrees).To(BeZero())
++		Expect(wd.GetLoadedModelCount()).To(Equal(1), "tracked again: the next load still counts it")
++	})
++
++	It("stops at its idle timeout a model that parks: that eviction wants the model gone, not the device back", func() {
++		attach(WithIdleTimeout(time.Millisecond), WithIdleCheck(true))
++		wd.AddAddressModelMap("addr", "m")
++		wd.TrackRequest("addr")() // a request came and went: idle from now
++		time.Sleep(5 * time.Millisecond)
++		wd.checkIdle()
++		_, still := ml.store.Get("m")
++		Expect(still).To(BeFalse())
++		Expect(backend.parks).To(BeZero())
++	})
++
++	It("parks for a memory reclaimer that watches a device, and stops for one that watches the host's RAM", func() {
++		wd.evictLRU(true)
++		Expect(m.ParkedState().Parked).To(BeTrue())
++		Expect(wd.GetLoadedModelCount()).To(BeZero())
++		// its address is alive: a return registers it, and nothing erases that
++		_, err := ml.Load(WithContext(context.Background()), WithModelID("m"))
++		Expect(err).NotTo(HaveOccurred())
++		Expect(wd.GetLoadedModelCount()).To(Equal(1))
++
++		wd.evictLRU(false)
++		_, still := ml.store.Get("m")
++		Expect(still).To(BeFalse(), "parking would only fill the RAM it is asked to give back")
++		Expect(backend.parks).To(Equal(1), "the one park above")
++		Expect(wd.GetLoadedModelCount()).To(BeZero())
++	})
++})
 diff --git a/pkg/model/process.go b/pkg/model/process.go
-index 0d02b15..4655c05 100644
+index 0d02b15..01fcff4 100644
 --- a/pkg/model/process.go
 +++ b/pkg/model/process.go
-@@ -141,7 +141,11 @@ func (ml *ModelLoader) deleteProcess(ctx context.Context, s string, force bool)
+@@ -141,7 +141,13 @@ func (ml *ModelLoader) deleteProcess(ctx context.Context, s string, force bool)
  	// That is expected, not a failure — VRAM is reclaimed when the process
  	// is stopped below, or by the remote unloader for remote backends — so
  	// don't surface it as an error.
 -	if !force {
-+	// A model that PARKS is not sent Free here either: for it Free is not the
-+	// prelude to a stop - it copies the weights to host memory, which a
-+	// process about to be stopped has no use for. Stopping it frees the
-+	// device, as for every backend that has no Free.
-+	if !force && !model.Parks() {
++	// A model that PARKS, in a process this loader is about to stop, is not
++	// sent Free here either: for it Free is not the prelude to a stop - it
++	// copies the weights to host memory, which a process about to be stopped
++	// has no use for. Stopping it frees the device, as for every backend
++	// that has no Free. One reached by address has no process to stop: Free
++	// is all that releases its device, so it is sent as before.
++	if !force && !(model.Parks() && model.Process() != nil) {
  		xlog.Debug("Calling Free() to release GPU resources", "model", s)
  		freeCtx, cancel := context.WithTimeout(ctx, backendFreeTimeout)
  		err := model.GRPC(false, wd).Free(freeCtx)
 diff --git a/pkg/model/watchdog.go b/pkg/model/watchdog.go
-index 6cc14f5..2de7a66 100644
+index 6cc14f5..6e710e2 100644
 --- a/pkg/model/watchdog.go
 +++ b/pkg/model/watchdog.go
-@@ -720,6 +720,21 @@ func (wd *WatchDog) stillResident(t evictionTarget) bool {
+@@ -479,6 +479,13 @@ type evictionTarget struct {
+ 	model   string
+ 	wasBusy bool
+ 
++	// forRoom is an eviction that wants the DEVICE back - the limit of
++	// loaded models, a concurrency group, the memory reclaimer watching a
++	// GPU. A model that can park is parked for those, and only for those: an
++	// idle timeout wants the model gone, and a reclaimer watching the host's
++	// RAM would only fill it further by parking.
++	forRoom bool
++
+ 	// detached is what the eviction removed from the model registry for this
+ 	// address, kept so a shutdown that fails can register it again. nil only
+ 	// when the address was not tracked.
+@@ -661,7 +668,7 @@ func (wd *WatchDog) collectEvictionsLocked(candidates []modelUsageInfo, maxToEvi
+ 			continue
+ 		}
+ 		xlog.Info("[WatchDog] evicting model", "model", m.model, "busy", isBusy)
+-		evicted = append(evicted, evictionTarget{address: m.address, model: m.model, wasBusy: isBusy, detached: wd.detachForEvictionLocked(m.address)})
++		evicted = append(evicted, evictionTarget{address: m.address, model: m.model, wasBusy: isBusy, forRoom: true, detached: wd.detachForEvictionLocked(m.address)})
+ 	}
+ 	return evicted, skippedBusy
+ }
+@@ -720,6 +727,39 @@ func (wd *WatchDog) stillResident(t evictionTarget) bool {
  // loader checks it under its per-model lifecycle lock so a queued eviction
  // cannot stop a backend loaded after the original target exited.
  func (wd *WatchDog) shutdownTarget(t evictionTarget) error {
-+	// A model that can park is parked instead: it gives its device memory
-+	// back and keeps its process. A busy one is never stopped for being
-+	// busy at that moment - the caller keeps it and takes another. One that
-+	// cannot park, or that the host has no room for, is stopped as before.
++	_, err := wd.parkOrShutdownTarget(t)
++	return err
++}
++
++// parkOrShutdownTarget is shutdownTarget that also says whether the model
++// was PARKED: its process, and its address, are then still alive, and the
++// loader has already taken it out of the registry under the model's
++// lifecycle lock - a caller must not untrack the address again, since a
++// return may have registered it meanwhile.
++func (wd *WatchDog) parkOrShutdownTarget(t evictionTarget) (parked bool, err error) {
++	// For an eviction that wants the device back, a model that can park is
++	// parked instead: it gives its device memory back and keeps its process.
++	// A model that was not busy when it was selected is never stopped for
++	// being busy at the moment of the park - the eviction fails, the caller
++	// keeps the model and selects again. One that cannot park, or that the
++	// host has no room for, is stopped as before. An eviction selected WHILE
++	// busy exists only where the operator asked for it
++	// (force_eviction_when_busy, the busy timeout): that is a forced stop.
 +	if pm, ok := wd.pm.(interface {
 +		ParkModelAtAddress(string, string) (bool, error)
-+	}); ok && !t.wasBusy {
++	}); ok && t.forRoom && !t.wasBusy {
 +		parked, err := pm.ParkModelAtAddress(t.model, t.address)
 +		if parked {
-+			return nil
++			return true, nil
 +		}
 +		if errors.Is(err, ErrModelBusy) {
-+			return err
++			return false, err
 +		}
 +	}
++	return false, wd.stopTarget(t)
++}
++
++func (wd *WatchDog) stopTarget(t evictionTarget) error {
  	if pm, ok := wd.pm.(interface {
  		ShutdownModelAtAddress(string, string, bool) error
  	}); ok {
+@@ -939,13 +979,21 @@ func (wd *WatchDog) checkMemory() {
+ 	if aggregate.UsagePercent > thresholdPercent {
+ 		xlog.Warn("[WatchDog] Memory usage exceeds threshold, evicting LRU backend", "type", memoryType, "usage_percent", aggregate.UsagePercent, "threshold_percent", thresholdPercent)
+ 
+-		// Evict the least recently used model
+-		wd.evictLRUModel()
++		// Evict the least recently used model. Parking gives a GPU back; it
++		// would only move a host's own RAM around.
++		wd.evictLRU(aggregate.GPUCount > 0)
+ 	}
+ }
+ 
+ // evictLRUModel evicts the least recently used model
+ func (wd *WatchDog) evictLRUModel() {
++	wd.evictLRU(false)
++}
++
++// evictLRU is evictLRUModel for a caller that knows which memory it wants
++// back. forDevice says it is a device's: a model that can park is then
++// parked.
++func (wd *WatchDog) evictLRU(forDevice bool) {
+ 	wd.Lock()
+ 
+ 	if len(wd.addressModelMap) == 0 {
+@@ -1027,8 +1075,16 @@ func (wd *WatchDog) evictLRUModel() {
+ 
+ 	// Shutdown the model. This path never untracks before the stop, so a
+ 	// failed stop of a backend that still runs keeps it tracked on its own.
+-	target := evictionTarget{model: lruModel.model, address: lruModel.address, wasBusy: wasBusy}
+-	if err := wd.shutdownTarget(target); err != nil && !errors.Is(err, ErrModelNotFound) {
++	target := evictionTarget{model: lruModel.model, address: lruModel.address, wasBusy: wasBusy, forRoom: forDevice}
++	parked, err := wd.parkOrShutdownTarget(target)
++	if parked {
++		// Its address is still alive and the loader untracked it under the
++		// model's lifecycle lock: untracking it again here could erase a
++		// return that registered it meanwhile.
++		xlog.Info("[WatchDog] Memory reclaimer parked a model", "model", lruModel.model)
++		return
++	}
++	if err != nil && !errors.Is(err, ErrModelNotFound) {
+ 		xlog.Error("[WatchDog] error shutting down model during memory reclamation", "error", err, "model", lruModel.model)
+ 		if !wd.stillResident(target) {
+ 			// Same rule as shutdownEvictedStopped: the loader dropped the model
 diff --git a/pkg/model/watchdog_park_internal_test.go b/pkg/model/watchdog_park_internal_test.go
 new file mode 100644
-index 0000000..12511db
+index 0000000..4077761
 --- /dev/null
 +++ b/pkg/model/watchdog_park_internal_test.go
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,94 @@
 +package model
 +
 +import (
@@ -1973,7 +3056,7 @@ index 0000000..12511db
 +// Where the watchdog would stop a model to make room, it parks one that can
 +// park - and never stops one for being busy at that moment.
 +var _ = Describe("WatchDog eviction with a manager that parks", func() {
-+	target := evictionTarget{address: "addr", model: "m"}
++	target := evictionTarget{address: "addr", model: "m", forRoom: true}
 +
 +	It("parks instead of stopping", func() {
 +		pm := &parkingManager{parked: true}
@@ -2002,8 +3085,167 @@ index 0000000..12511db
 +	It("does not try to park what it was told to evict while busy: that is a forced stop", func() {
 +		pm := &parkingManager{parked: true}
 +		wd := NewWatchDog(WithProcessManager(pm))
-+		Expect(wd.shutdownTarget(evictionTarget{address: "addr", model: "m", wasBusy: true})).To(Succeed())
++		Expect(wd.shutdownTarget(evictionTarget{address: "addr", model: "m", wasBusy: true, forRoom: true})).To(Succeed())
 +		Expect(pm.calls).To(Equal([]string{"stop m@addr force=true"}))
++	})
++
++	It("does not park for an eviction that does not want the device back: an idle timeout wants the model gone", func() {
++		pm := &parkingManager{parked: true}
++		wd := NewWatchDog(WithProcessManager(pm))
++		Expect(wd.shutdownTarget(evictionTarget{address: "addr", model: "m"})).To(Succeed())
++		Expect(pm.calls).To(Equal([]string{"stop m@addr force=false"}))
++	})
++
++	It("says a model was parked, so that its address - still alive - is not untracked a second time", func() {
++		pm := &parkingManager{parked: true}
++		wd := NewWatchDog(WithProcessManager(pm))
++		parked, err := wd.parkOrShutdownTarget(target)
++		Expect(err).NotTo(HaveOccurred())
++		Expect(parked).To(BeTrue())
++		pm = &parkingManager{parkErr: ErrModelCannotPark}
++		wd = NewWatchDog(WithProcessManager(pm))
++		parked, err = wd.parkOrShutdownTarget(target)
++		Expect(err).NotTo(HaveOccurred())
++		Expect(parked).To(BeFalse())
++	})
++})
+diff --git a/pkg/xsysinfo/memory_headroom.go b/pkg/xsysinfo/memory_headroom.go
+new file mode 100644
+index 0000000..9147526
+--- /dev/null
++++ b/pkg/xsysinfo/memory_headroom.go
+@@ -0,0 +1,87 @@
++package xsysinfo
++
++import (
++	"strconv"
++	"strings"
++
++	"github.com/mudler/memory"
++)
++
++// The usage side of the memory cgroup this process runs in. Variables, as
++// the limit's paths in memory.go are.
++var (
++	cgroupV2CurrentPath = "/sys/fs/cgroup/memory.current"
++	cgroupV2StatPath    = "/sys/fs/cgroup/memory.stat"
++	cgroupV1UsagePath   = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
++	cgroupV1StatPath    = "/sys/fs/cgroup/memory/memory.stat"
++)
++
++// AllocatableMemory is how many bytes this process, or a child of it, can
++// still take: the host's available memory, and under a memory cgroup limit
++// no more than what the limit still allows.
++//
++// GetSystemRAMInfo's Available is the host's MemAvailable capped at the
++// cgroup's TOTAL: in a container with a memory limit it says what the HOST
++// could give, whatever the container already uses. A caller that is about
++// to copy gigabytes into memory - a model's weights being parked - and
++// trusts that figure can take the container over its limit, and it is the
++// process holding the weights that the kernel then kills.
++func AllocatableMemory() uint64 {
++	return chooseAllocatableMemory(
++		memory.AvailableMemory(),
++		readFileBestEffort(cgroupV2MaxPath), readFileBestEffort(cgroupV2CurrentPath), readFileBestEffort(cgroupV2StatPath),
++		readFileBestEffort(cgroupV1LimitPath), readFileBestEffort(cgroupV1UsagePath), readFileBestEffort(cgroupV1StatPath),
++	)
++}
++
++// chooseAllocatableMemory is the minimum of the host's available memory and
++// each cgroup's headroom, where a cgroup has a limit.
++func chooseAllocatableMemory(hostAvailable uint64, v2Max, v2Current, v2Stat, v1Limit, v1Usage, v1Stat string) uint64 {
++	best := hostAvailable
++	if room, limited := cgroupHeadroom(parseCgroupV2Max(v2Max), v2Current, v2Stat, "inactive_file"); limited && room < best {
++		best = room
++	}
++	if room, limited := cgroupHeadroom(parseCgroupV1Limit(v1Limit), v1Usage, v1Stat, "total_inactive_file"); limited && room < best {
++		best = room
++	}
++	return best
++}
++
++// cgroupHeadroom is what a memory cgroup with a limit still allows: the
++// limit less its working set - its usage without the file cache the kernel
++// drops before it refuses anything (the measure container runtimes report as
++// "working set"). limited is false where there is no limit or the usage
++// cannot be read: an unreadable cgroup must not be read as a full one.
++func cgroupHeadroom(limit uint64, usageRaw, statRaw, inactiveFileKey string) (room uint64, limited bool) {
++	if limit == 0 {
++		return 0, false
++	}
++	usage, ok := parseUintField(usageRaw)
++	if !ok {
++		return 0, false
++	}
++	if inactive := parseStatField(statRaw, inactiveFileKey); inactive < usage {
++		usage -= inactive
++	} else {
++		usage = 0
++	}
++	if usage >= limit {
++		return 0, true
++	}
++	return limit - usage, true
++}
++
++// parseStatField reads one "key value" line of a cgroup's memory.stat; 0
++// when the key is absent.
++func parseStatField(raw, key string) uint64 {
++	for line := range strings.SplitSeq(raw, "\n") {
++		fields := strings.Fields(line)
++		if len(fields) == 2 && fields[0] == key {
++			if v, err := strconv.ParseUint(fields[1], 10, 64); err == nil {
++				return v
++			}
++			return 0
++		}
++	}
++	return 0
++}
+diff --git a/pkg/xsysinfo/memory_headroom_test.go b/pkg/xsysinfo/memory_headroom_test.go
+new file mode 100644
+index 0000000..db0b6ed
+--- /dev/null
++++ b/pkg/xsysinfo/memory_headroom_test.go
+@@ -0,0 +1,40 @@
++package xsysinfo
++
++import (
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++)
++
++var _ = Describe("chooseAllocatableMemory", func() {
++	const gi = uint64(1) << 30
++
++	It("is the host's available memory where no cgroup limits it", func() {
++		Expect(chooseAllocatableMemory(40*gi, "max\n", "123\n", "inactive_file 0\n", "", "", "")).To(Equal(40 * gi))
++		Expect(chooseAllocatableMemory(40*gi, "", "", "", "9223372036854771712\n", "5\n", "")).To(Equal(40 * gi))
++		Expect(chooseAllocatableMemory(40*gi, "", "", "", "", "", "")).To(Equal(40 * gi))
++	})
++
++	It("is what a container's limit still allows, not what the host could give", func() {
++		// 24 GiB allowed, 20 GiB in use: 4 GiB, though the host has 40 available
++		Expect(chooseAllocatableMemory(40*gi, itoa(24*gi)+"\n", itoa(20*gi)+"\n", "anon 1\ninactive_file 0\n", "", "", "")).To(Equal(4 * gi))
++		// cgroup v1 says the same with its own names
++		Expect(chooseAllocatableMemory(40*gi, "", "", "", itoa(24*gi)+"\n", itoa(20*gi)+"\n", "total_inactive_file 0\n")).To(Equal(4 * gi))
++	})
++
++	It("does not count the file cache the kernel drops before it refuses anything", func() {
++		stat := "anon 5\ninactive_file " + itoa(6*gi) + "\nactive_file 7\n"
++		Expect(chooseAllocatableMemory(40*gi, itoa(24*gi)+"\n", itoa(20*gi)+"\n", stat, "", "", "")).To(Equal(10 * gi))
++	})
++
++	It("is the host's figure when that is the smaller one", func() {
++		Expect(chooseAllocatableMemory(2*gi, itoa(24*gi)+"\n", itoa(4*gi)+"\n", "", "", "", "")).To(Equal(2 * gi))
++	})
++
++	It("is nothing in a cgroup that is at its limit", func() {
++		Expect(chooseAllocatableMemory(40*gi, itoa(24*gi)+"\n", itoa(25*gi)+"\n", "", "", "", "")).To(BeZero())
++	})
++
++	It("does not read a limit whose usage cannot be read as a full cgroup", func() {
++		Expect(chooseAllocatableMemory(40*gi, itoa(24*gi)+"\n", "", "", "", "", "")).To(Equal(40 * gi))
 +	})
 +})
 -- 
