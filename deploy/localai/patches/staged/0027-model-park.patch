@@ -48,6 +48,16 @@ and is the forced stop it was.) Busy is the code FailedPrecondition AND a
 message that begins "busy: ": the code alone is also a model the backend
 does not hold.
 
+In use is more than a call in flight. One HTTP request is often several
+calls to the backend - an embeddings request makes one per input - and
+between two of them no call is in flight although the model is in the
+middle of its work: parked there, its weights are copied to the host and
+straight back, for nothing. So a model whose last request began or ended
+under a second ago is busy for a park, like one with a call in flight (the
+client says how long it has been without a request; health checks and
+Status are not requests). Seen on a real server with a real backend: 46
+parks landed inside one request of 2,048 inputs; with this, none of 13,812.
+
 A park that has been sent is followed to its end whatever its caller does.
 A backend that answers Free without parking, or has not answered in 60 s,
 cannot be trusted with requests: it is stopped, and the caller is told so.
@@ -83,7 +93,8 @@ For a caller that manages the device itself:
 - POST /backend/park {"model"} parks a loaded model. It waits for nothing
   but the park itself and never stops a model that works; when the model
   is not parked the answer says why and the caller decides: 409 model_busy
-  (take another); 412 cannot_park / parking_off / host_memory_floor (stop
+  (take another: a request is running or ended under a second ago, or a
+  load, a return or a stop of it holds its lock); 412 cannot_park / parking_off / host_memory_floor (stop
   it instead, if room is still wanted); 404 model_not_loaded - written by
   the route, so that it differs from the 404 of a server that has no such
   route; 500 model_stopped when the backend broke the park and was
@@ -106,7 +117,7 @@ load refused for room does not arm the load-failure cooldown: the caller
 told to ask again must not find the model locked out. Routes that write
 their own error bodies (/v1/messages, /v1/responses) answer 500 as before.
 
-Tests: the loader against a scripted backend (40 specs: what parks, what
+Tests: the loader against a scripted backend (41 specs: what parks, what
 does not and why, the lock tried and not waited for, the host read at each
 park and two parks not counting the same bytes, a park whose caller
 leaves, a Free that does not answer, the return with the options of the
@@ -117,7 +128,8 @@ real watchdog together (8 specs: a parked model leaves the registry and is
 back in it before its weights move, a return makes room as a load does,
 two requests and one return, the limit parks, a held lock keeps the model,
 the idle timeout stops, the reclaimer parks for a device and stops for
-RAM); the watchdog's routing; the real gRPC client's FreeResult; the
+RAM); the watchdog's routing; the real gRPC client's FreeResult and its
+idle time; the
 container-aware host read; `park: true` from a model's file to its load
 options; the runtime setting reaching the loader; the endpoint, /system,
 /backend/load's 503, the error body, the stream's event. A model that
@@ -140,7 +152,7 @@ Assisted-by: Claude Code
  core/http/app.go                              |  46 +-
  core/http/endpoints/localai/backend_load.go   |  19 +
  .../endpoints/localai/backend_load_test.go    |  34 +
- .../http/endpoints/localai/backend_monitor.go |  74 +++
+ .../http/endpoints/localai/backend_monitor.go |  74 ++
  .../endpoints/localai/backend_park_test.go    | 170 +++++
  core/http/endpoints/localai/system.go         |  10 +
  .../endpoints/localai/system_info_test.go     |  54 ++
@@ -150,22 +162,22 @@ Assisted-by: Claude Code
  core/http/routes/localai.go                   |   6 +
  core/schema/localai.go                        |  31 +
  core/services/monitoring/backend_monitor.go   |   8 +
- pkg/grpc/client.go                            |  16 +-
- pkg/grpc/free_result_test.go                  |  84 +++
+ pkg/grpc/client.go                            |  55 +-
+ pkg/grpc/free_result_test.go                  | 100 +++
  pkg/model/initializers.go                     |  22 +-
  pkg/model/loader.go                           |  23 +-
  pkg/model/loader_options.go                   |  14 +
  pkg/model/model.go                            |  69 ++
  pkg/model/operation_locks.go                  |  29 +
- pkg/model/park.go                             | 455 +++++++++++++
- pkg/model/park_internal_test.go               | 619 ++++++++++++++++++
- pkg/model/park_watchdog_internal_test.go      | 184 ++++++
+ pkg/model/park.go                             | 470 +++++++++++++
+ pkg/model/park_internal_test.go               | 649 ++++++++++++++++++
+ pkg/model/park_watchdog_internal_test.go      | 184 +++++
  pkg/model/process.go                          |   8 +-
  pkg/model/watchdog.go                         |  66 +-
  pkg/model/watchdog_park_internal_test.go      |  94 +++
  pkg/xsysinfo/memory_headroom.go               |  87 +++
  pkg/xsysinfo/memory_headroom_test.go          |  40 ++
- 38 files changed, 2523 insertions(+), 25 deletions(-)
+ 38 files changed, 2619 insertions(+), 29 deletions(-)
  create mode 100644 core/application/park_floor_internal_test.go
  create mode 100644 core/backend/park_internal_test.go
  create mode 100644 core/http/endpoints/localai/backend_park_test.go
@@ -636,7 +648,7 @@ index 8022af7..2fab231 100644
  		rec := post(`{}`)
  		Expect(rec.Code).To(Equal(http.StatusBadRequest))
 diff --git a/core/http/endpoints/localai/backend_monitor.go b/core/http/endpoints/localai/backend_monitor.go
-index c60e92a..45127fb 100644
+index c60e92a..3206e83 100644
 --- a/core/http/endpoints/localai/backend_monitor.go
 +++ b/core/http/endpoints/localai/backend_monitor.go
 @@ -76,3 +76,77 @@ func BackendShutdownEndpoint(bm *monitoring.BackendMonitorService) echo.HandlerF
@@ -648,7 +660,7 @@ index c60e92a..45127fb 100644
 +// what to do next.
 +const (
 +	parkErrorNotLoaded  = "model_not_loaded"  // 404: nothing to park. A server without this route answers 404 too, with no such type
-+	parkErrorBusy       = "model_busy"        // 409: take another model; this one is not stopped for being busy
++	parkErrorBusy       = "model_busy"        // 409: take another model; this one is in use (a request running, or one that ended under a second ago) and is not stopped for it
 +	parkErrorCannotPark = "cannot_park"       // 412: stop it instead, if room is still wanted
 +	parkErrorOff        = "parking_off"       // 412: no host memory floor is set
 +	parkErrorHostFloor  = "host_memory_floor" // 412: the host has no room for its weights now
@@ -1230,10 +1242,72 @@ index b66c221..8f1bdd0 100644
 +	return bms.modelLoader.ParkModel(ctx, modelName)
 +}
 diff --git a/pkg/grpc/client.go b/pkg/grpc/client.go
-index fa4f63d..63bf901 100644
+index fa4f63d..22f96e7 100644
 --- a/pkg/grpc/client.go
 +++ b/pkg/grpc/client.go
-@@ -1423,6 +1423,17 @@ func (c *Client) StopQuantization(ctx context.Context, in *pb.QuantizationStopRe
+@@ -5,6 +5,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"io"
++	"math"
+ 	"sync"
+ 	"time"
+ 
+@@ -30,8 +31,11 @@ func (b bearerToken) RequireTransportSecurity() bool { return false }
+ type Client struct {
+ 	address  string
+ 	inFlight int
+-	parallel bool
+-	token    string
++	// lastRequest is when the last request to the backend began or ended -
++	// a request, not a health check or a Status. See IdleFor.
++	lastRequest time.Time
++	parallel    bool
++	token       string
+ 	sync.Mutex
+ 	opMutex sync.Mutex
+ 	wd      WatchDog
+@@ -61,10 +65,37 @@ func (c *Client) setBusy(v bool) {
+ }
+ 
+ func (c *Client) wdMark() func() {
++	c.touch()
++	done := func() {}
+ 	if c.wd != nil {
+-		return c.wd.TrackRequest(c.address)
++		done = c.wd.TrackRequest(c.address)
+ 	}
+-	return func() {}
++	return func() {
++		done()
++		c.touch()
++	}
++}
++
++func (c *Client) touch() {
++	c.Lock()
++	c.lastRequest = time.Now()
++	c.Unlock()
++}
++
++// IdleFor is how long the backend has been without a request: since the
++// last one began or ended. One HTTP request is often several calls to the
++// backend - an embeddings request makes one per input - and between two of
++// them IsBusy is false although the model is in the middle of its work. A
++// caller that must not act on a model in use asks this as well. Health
++// checks and Status are not requests. A client that has sent none yet has
++// been idle for ever.
++func (c *Client) IdleFor() time.Duration {
++	c.Lock()
++	defer c.Unlock()
++	if c.lastRequest.IsZero() {
++		return time.Duration(math.MaxInt64)
++	}
++	return time.Since(c.lastRequest)
+ }
+ 
+ // dial creates a gRPC client connection with common options.
+@@ -1423,6 +1454,17 @@ func (c *Client) StopQuantization(ctx context.Context, in *pb.QuantizationStopRe
  }
  
  func (c *Client) Free(ctx context.Context) error {
@@ -1251,7 +1325,7 @@ index fa4f63d..63bf901 100644
  	if !c.parallel {
  		c.opMutex.Lock()
  		defer c.opMutex.Unlock()
-@@ -1433,13 +1444,12 @@ func (c *Client) Free(ctx context.Context) error {
+@@ -1433,13 +1475,12 @@ func (c *Client) Free(ctx context.Context) error {
  
  	conn, err := c.dial()
  	if err != nil {
@@ -1269,15 +1343,16 @@ index fa4f63d..63bf901 100644
  func (c *Client) ModelMetadata(ctx context.Context, in *pb.ModelOptions, opts ...grpc.CallOption) (*pb.ModelMetadataResponse, error) {
 diff --git a/pkg/grpc/free_result_test.go b/pkg/grpc/free_result_test.go
 new file mode 100644
-index 0000000..b059717
+index 0000000..0f876d5
 --- /dev/null
 +++ b/pkg/grpc/free_result_test.go
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,100 @@
 +package grpc
 +
 +import (
 +	"context"
 +	"net"
++	"time"
 +
 +	. "github.com/onsi/ginkgo/v2"
 +	. "github.com/onsi/gomega"
@@ -1337,6 +1412,21 @@ index 0000000..b059717
 +		Expect(wd.began).To(Equal(1), "a park is a request for the watchdog while it runs")
 +		Expect(wd.ended).To(Equal(1))
 +		Expect(client.IsBusy()).To(BeFalse())
++	})
++
++	It("says how long the backend has been without a REQUEST: a health check and a Status are not one", func() {
++		backend := &parkingServer{result: &pb.Result{Success: true, Message: "parked"}}
++		client := &Client{address: serve(backend), parallel: true}
++		Expect(client.IdleFor()).To(BeNumerically(">", 24*time.Hour), "none sent yet: idle for ever")
++
++		_, err := client.FreeResult(context.Background()) // any request stamps it, at its start and at its end
++		Expect(err).NotTo(HaveOccurred())
++		Expect(client.IdleFor()).To(BeNumerically("<", time.Second))
++
++		time.Sleep(60 * time.Millisecond)
++		_, _ = client.HealthCheck(context.Background())
++		_, _ = client.Status(context.Background())
++		Expect(client.IdleFor()).To(BeNumerically(">=", 60*time.Millisecond), "a probe does not make a model look in use")
 +	})
 +
 +	It("keeps the code and the words of a refusal: the loader reads both", func() {
@@ -1606,10 +1696,10 @@ index ce64312..608e1a9 100644
  	entry.refs--
 diff --git a/pkg/model/park.go b/pkg/model/park.go
 new file mode 100644
-index 0000000..290ce6e
+index 0000000..3608c70
 --- /dev/null
 +++ b/pkg/model/park.go
-@@ -0,0 +1,455 @@
+@@ -0,0 +1,470 @@
 +package model
 +
 +import (
@@ -1697,6 +1787,14 @@ index 0000000..290ce6e
 +	parkStatusTimeout = 5 * time.Second
 +)
 +
++// parkIdleMin is how long a model must have been without a request before
++// it is parked. A model between two calls of one HTTP request - an
++// embeddings request makes a call per input - is not busy by the client's
++// count of calls in flight, and is in use: parked there, its weights are
++// copied to the host and straight back, for nothing. Until it has been
++// idle this long it is busy, like a model with a call in flight.
++var parkIdleMin = time.Second
++
 +// parkTimeout and unparkTimeout are how long a park and a return may take:
 +// one copy of the weights, measured in milliseconds to seconds. A backend
 +// that has not answered by then hangs, and is stopped: what it did with the
@@ -1768,7 +1866,8 @@ index 0000000..290ce6e
 +// ParkModel parks a loaded model: its weights leave the device, its process
 +// stays. It waits for nothing but the park itself - not for a busy model,
 +// and not for the model's lifecycle lock: a load, a return or a stop of it
-+// that is running is ErrModelBusy at once, like a request. It never stops a
++// that is running is ErrModelBusy at once, like a request - one that is
++// running, or one that ended less than parkIdleMin ago. It never stops a
 +// model: every reason it does not park is an error the caller acts on -
 +// ErrModelBusy (take another), ErrModelCannotPark, ErrParkingOff,
 +// ErrParkHostFloor (stop it instead, if room is still wanted). A model that
@@ -1851,6 +1950,12 @@ index 0000000..290ce6e
 +	}
 +	if client.IsBusy() {
 +		return ParkedState{}, ErrModelBusy
++	}
++	if idler, ok := client.(interface{ IdleFor() time.Duration }); ok {
++		if idle := idler.IdleFor(); idle < parkIdleMin {
++			return ParkedState{}, fmt.Errorf("%w: its last request was %d ms ago, and a model is parked once it has been without one for %s",
++				ErrModelBusy, idle.Milliseconds(), parkIdleMin)
++		}
 +	}
 +
 +	// What parking would move to the host: the backend says. One that has no
@@ -2067,10 +2172,10 @@ index 0000000..290ce6e
 +}
 diff --git a/pkg/model/park_internal_test.go b/pkg/model/park_internal_test.go
 new file mode 100644
-index 0000000..49bfbfb
+index 0000000..0668b50
 --- /dev/null
 +++ b/pkg/model/park_internal_test.go
-@@ -0,0 +1,619 @@
+@@ -0,0 +1,649 @@
 +package model
 +
 +import (
@@ -2172,6 +2277,15 @@ index 0000000..49bfbfb
 +	return b.loadResult, b.loadErr
 +}
 +
++// idleBackend is a parkBackend that says how long it has been without a
++// request, as the real client does.
++type idleBackend struct {
++	*parkBackend
++	idle time.Duration
++}
++
++func (b *idleBackend) IdleFor() time.Duration { return b.idle }
++
 +var _ = Describe("Parking", func() {
 +	const (
 +		floor = uint64(8 << 30)
@@ -2253,6 +2367,27 @@ index 0000000..49bfbfb
 +			Expect(m.ParkedState().Parked).To(BeFalse())
 +			_, still := ml.store.Get("m")
 +			Expect(still).To(BeTrue())
++		})
++
++		It("takes a model that answered a request under a second ago for busy: one HTTP request is several calls, and between two of them it is in use", func() {
++			recent := &idleBackend{parkBackend: backend, idle: 200 * time.Millisecond}
++			m = NewModelWithClient("m", "addr", recent)
++			m.MarkHealthy()
++			m.SetParks(true)
++			m.SetLoadOptions(options)
++			ml.store.Set("m", m)
++
++			_, err := ml.ParkModel(context.Background(), "m")
++			Expect(err).To(MatchError(ErrModelBusy))
++			Expect(err.Error()).To(ContainSubstring("its last request was 200 ms ago"))
++			Expect(backend.parks+backend.statuses).To(BeZero(), "nothing was asked of the backend")
++			_, still := ml.store.Get("m")
++			Expect(still).To(BeTrue(), "and it is not stopped for it")
++
++			recent.idle = parkIdleMin
++			state, err := ml.ParkModel(context.Background(), "m")
++			Expect(err).NotTo(HaveOccurred())
++			Expect(state.Parked).To(BeTrue())
 +		})
 +
 +		It("does not wait for the model's lifecycle lock either: a load, a return or a stop of it that is running is busy, at once", func() {

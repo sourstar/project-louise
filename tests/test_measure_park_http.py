@@ -43,6 +43,8 @@ class StandIn:
         self.park_answer = None         # (status, type): what the park answers instead of parking
         self.park_while_busy = False    # the defect: a busy model is parked
         self.slow = 0.0                 # seconds a request of more than sixteen sentences takes
+        self.settle = 0.0               # a park within this long of a request is 409 model_busy, as the real server's
+        self.last_request = 0.0
         self.running = 0
         self.returns = 0
         self.calls: list[str] = []
@@ -91,7 +93,7 @@ def localai():
             stand_in.calls.append(f"GET {self.path}")
             stand_in.headers.append(dict(self.headers))
             if self.path == "/system":
-                self._answer(200, {"backends": [], "models": [stand_in.row(), {"id": "another", "size_vram": 5}]})
+                self._answer(200, {"backends": [], "loaded_models": [stand_in.row(), {"id": "another", "size_vram": 5}]})
             elif self.path == "/api/settings":
                 self._answer(200, stand_in.settings)
             else:
@@ -109,6 +111,8 @@ def localai():
                     return self._error(stand_in.park_answer[0], stand_in.park_answer[1], "not parked")
                 if stand_in.running and not stand_in.park_while_busy:
                     return self._error(409, "model_busy", "model is busy")
+                if time.monotonic() - stand_in.last_request < stand_in.settle:
+                    return self._error(409, "model_busy", "its last request was a moment ago")
                 if stand_in.floor == 0:
                     return self._error(412, "parking_off", "parking is off: no host memory floor is set")
                 stand_in.state = "parked"
@@ -135,6 +139,7 @@ def localai():
                 finally:
                     with stand_in.lock:
                         stand_in.running -= 1
+                        stand_in.last_request = time.monotonic()
             self._answer(404, {"error": {"code": 404, "message": "Resource not found"}})
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -157,6 +162,21 @@ def test_cycles_that_park_and_return_the_same_bytes_pass_and_say_what_each_took(
     cycle = lines[1]
     assert "575 MiB to the host" in cycle and "the process holds 321 MiB of the device, 575 MiB given back" in cycle
     assert "back by the request in" in cycle and cycle.endswith("vectors identical")
+
+
+def test_a_park_asked_right_after_a_request_waits_the_second_out_and_says_so(localai):
+    """The real server takes a model that answered a request under a second ago for busy. Found on it: a first
+    cut of `cycles` asked once, and would have failed every cycle."""
+    stand_in, server = localai
+    stand_in.settle = 0.3
+    passed, lines = tool.cycles(server, "copy", 2, "request")
+    assert passed, "\n".join(lines)
+    told = next(line for line in lines if line.startswith("each park was asked right after a request"))
+    assert int(told.split("answered 409 model_busy ")[1].split()[0]) >= 2
+    # and a model that stays busy past the tool's patience is a failure said as one, not a hang
+    stand_in.settle = 60.0
+    status, answer, _, busy_first = tool.park_when_idle(server, "copy", patience=0.3)
+    assert status == 409 and tool.error_of(answer)[0] == "model_busy" and busy_first >= 1
 
 
 def test_a_return_by_backend_load_is_asked_for_each_cycle(localai):
@@ -272,6 +292,19 @@ def test_a_key_is_read_from_its_file_sent_as_a_bearer_and_never_printed(localai,
     assert passed
     assert any(h.get("Authorization") == "Bearer sentinel-key-4f1c" for h in stand_in.headers)
     assert "sentinel-key-4f1c" not in "\n".join(lines) and "sentinel-key-4f1c" not in repr(keyed.base)
+
+
+def test_the_shapes_are_the_real_server_s_as_they_were_read_off_it():
+    """docs/notes/parking-step-2.md §8: the answers captured from LocalAI's own server with staged 0027, a real
+    backend behind it. The stand-in above is only as good as these."""
+    assert tool.MODELS_KEY == "loaded_models"
+    note = (ROOT / "docs" / "notes" / "parking-step-2.md").read_text(encoding="utf-8")
+    section = note[note.index("## 8. "):]
+    for shape in ('{"backends":["llama-cpp-park"],"loaded_models":[]}',
+                  '{"message":"model parked","parked":{"size_host":66547200,"size_vram_needed":66547200,"since":"',
+                  '"type":"parking_off"', '"type":"model_not_loaded"', '"type":"cannot_park"',
+                  '"type":"host_memory_floor"', '"type":"model_busy"', '`park_host_floor_bytes`'):
+        assert shape in section, shape
 
 
 def test_what_it_reads_of_an_answer():

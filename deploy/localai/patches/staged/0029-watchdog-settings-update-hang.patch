@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 21:28:10 +0000
+Subject: [PATCH] fix(watchdog): a settings update no longer hangs on a
+ watchdog whose loop never ran
+
+POST /api/settings restarts the watchdog: RestartWatchdog stops the old one
+and waits for its Run() loop to end (WaitDone), holding the application's
+watchdog lock. But Run() is only started where a periodic check is on - the
+busy check, the idle check or the memory reclaimer. A watchdog that exists
+only for the limit of loaded models (max_active_backends > 0 or
+single_backend, and none of the three checks) never runs it, nothing ever
+signals "done", and the update never answers. Every later update then hangs
+behind the lock. The settings themselves had been applied; only the answer,
+and the lock, were lost.
+
+Seen on a real instance: LOCALAI_MAX_ACTIVE_BACKENDS=1, no checks, one POST
+of the settings as GET returned them - no answer in 300 s.
+
+WaitDone returns at once for a watchdog whose Run() was never entered. One
+whose loop runs is waited for as before, and one whose loop ended by itself
+("No checks enabled, stopping watchdog") still finds its signal.
+
+Tests: the three cases; without the change the first does not return.
+
+Assisted-by: Claude Code
+---
+ pkg/model/watchdog.go                        | 14 ++++++
+ pkg/model/watchdog_waitdone_internal_test.go | 45 ++++++++++++++++++++
+ 2 files changed, 59 insertions(+)
+ create mode 100644 pkg/model/watchdog_waitdone_internal_test.go
+
+diff --git a/pkg/model/watchdog.go b/pkg/model/watchdog.go
+index 6e710e2..aa78518 100644
+--- a/pkg/model/watchdog.go
++++ b/pkg/model/watchdog.go
+@@ -4,6 +4,7 @@ import (
+ 	"errors"
+ 	"slices"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ 
+ 	"github.com/mudler/LocalAI/pkg/xsysinfo"
+@@ -26,6 +27,10 @@ import (
+ // and the GRPC client talks to it via a channel to send status updates
+ type WatchDog struct {
+ 	sync.Mutex
++	// started says Run was entered. A watchdog made only for the limit of
++	// loaded models never runs its loop: it has nothing to stop and nothing
++	// to wait for.
++	started        atomic.Bool
+ 	busyTime       map[string]time.Time
+ 	inFlight       map[string]int
+ 	requestStarts  map[string]map[uint64]time.Time
+@@ -241,7 +246,15 @@ func (wd *WatchDog) Shutdown() {
+ 
+ // WaitDone blocks until the watchdog's Run() goroutine has completely shut down.
+ // This should be called after Shutdown() to ensure the watchdog is fully stopped.
++// A watchdog whose Run() was never started returns at once: its loop is only
++// started where a periodic check is on (busy, idle, the memory reclaimer),
++// and one made for the limit of loaded models alone would be waited for for
++// ever - by a settings update, which restarts the watchdog while holding its
++// lock, so that every later update hung behind the first.
+ func (wd *WatchDog) WaitDone() {
++	if !wd.started.Load() {
++		return
++	}
+ 	<-wd.done
+ }
+ 
+@@ -851,6 +864,7 @@ func groupsOverlap(a, b []string) bool {
+ }
+ 
+ func (wd *WatchDog) Run() {
++	wd.started.Store(true)
+ 	xlog.Info("[WatchDog] starting watchdog")
+ 
+ 	for {
+diff --git a/pkg/model/watchdog_waitdone_internal_test.go b/pkg/model/watchdog_waitdone_internal_test.go
+new file mode 100644
+index 0000000..6b400bb
+--- /dev/null
++++ b/pkg/model/watchdog_waitdone_internal_test.go
+@@ -0,0 +1,45 @@
++package model
++
++import (
++	"time"
++
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++)
++
++// A settings update restarts the watchdog: it stops the old one and waits
++// for its loop to end. The loop is only started where a periodic check is
++// on, so a watchdog made for the limit of loaded models alone was waited
++// for for ever, with the application's watchdog lock held.
++var _ = Describe("WatchDog.WaitDone", func() {
++	waited := func(wd *WatchDog) chan struct{} {
++		done := make(chan struct{})
++		go func() {
++			defer GinkgoRecover()
++			wd.Shutdown()
++			wd.WaitDone()
++			close(done)
++		}()
++		return done
++	}
++
++	It("does not wait for a loop that was never started", func() {
++		wd := NewWatchDog(WithLRULimit(1)) // no busy check, no idle check, no memory reclaimer: Run() is not started
++		Eventually(waited(wd), "2s").Should(BeClosed())
++	})
++
++	It("still waits for a loop that runs, until it has stopped", func() {
++		wd := NewWatchDog(WithBusyCheck(true), WithBusyTimeout(time.Hour), WithWatchdogInterval(time.Hour))
++		go wd.Run()
++		Eventually(wd.started.Load).Should(BeTrue())
++		Eventually(waited(wd), "2s").Should(BeClosed())
++	})
++
++	It("returns for a loop that ended by itself because no check was on", func() {
++		wd := NewWatchDog(WithLRULimit(1), WithWatchdogInterval(10*time.Millisecond))
++		go wd.Run() // it finds no check enabled at its first tick and stops
++		Eventually(wd.started.Load).Should(BeTrue())
++		time.Sleep(50 * time.Millisecond)
++		Eventually(waited(wd), "2s").Should(BeClosed())
++	})
++})
+-- 
+2.43.0
+

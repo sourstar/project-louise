@@ -588,6 +588,23 @@ measured (published figures disagree).
   and every gate wait for the operator's own yes to München, after EUR-Lex5.next is drained (repaired, indexing since 10:05Z).
 - **THE NEXT ENGINE TO BUILD IS `792f050e318e` (`engine-stream.series`, 2026-11-25):** the paging default (0021), the language tag (0022) and A STREAM THAT FAILS AFTER ITS FIRST CHUNK FAILS (0025; localai-bugs.md B21 — a chat answer cut short was delivered as complete, on every engine so far; measured on a CPU build: OK after 4 of 50 chunks before, INTERNAL after 3 of 50 after), with the test switch that lets a card show it (0026). The operator has not yet said which candidate is built; this one stands in the two before it. parking-step-2.md §6a.
 - **PARKING, STEP 2 — THE ENGINE PART IS STAGED (2026-11-25):** `engine-park.series` → `ed93e3c1b2e2`, staged 0023, its second cut accepted by the architecture session after an independent reading of the first found real defects (a failed return answered as "no room", a refused request re-parking, "already loaded" by name only — §6, finding by finding). MEASURED on CPU builds with a stand-in device only: 49/49 over gRPC, 56/56 and 19/19 over llama.cpp's server. NOT measured: anything on a card; no device has been SEEN to refuse a commit. The readiness poll (staged 0024, server) is accepted and goes on the node with the server part.
+- **"DO PARKING." (the operator, 2026-11-25 evening) — THE TWO HALVES MET ON A REAL SERVER, AND THE PASS IS WRITTEN:** LocalAI's
+  real server (staged 0024 + 0027 + 0029) drove a real llama.cpp backend built from the park engine's source on a CPU stand-in
+  device, through HTTP alone (`tools/measure/park_http.py`, new: München has no gRPC reach to a backend). 20 of 20 park-and-return
+  cycles the same bytes by a request, 20 of 20 by `/backend/load`; a refused return 503 `no_room_on_device` with `Retry-After`,
+  still parked, then served; a failed return paid as a fresh load, not an error; a parked model shut down and loaded afresh;
+  LocalAI's own limit of loaded models parking instead of stopping. IT FOUND WHAT NO SPEC HAD: a park landing BETWEEN two backend
+  calls of one HTTP request (46 times in one request of 2,048 sentences) — fixed in 0027: a model used under a second ago is busy
+  (13,812 of 13,812 refused 409 on the re-run); and LocalAI'S OWN defect B24 — a settings write that never answers under a
+  watchdog made for the limit of loaded models alone — fixed as staged 0029; the node is NOT in that combination (busy check on,
+  no limit). `ed93e3c1b2e2` was built on the node at 21:28:13Z. The pass, its order and its exact lines:
+  [parking-step-2.md](parking-step-2.md) §8. NOT measured: anything of parking on a card; parkable buffers under the paging
+  default have never run together.
+- **THE EXPERTS' RECORD IS ON BY DEFAULT (the operator, 21:27Z: "Which experts of the 35B stay on the card: switch it on by
+  default")** — one env line in every MoE model's file, here and on the node; no engine change, no gate. THE LINE ALONE CHANGES
+  NOTHING for the 35B as it runs, whole on the card at 98.8 tok/s: the mechanism that chooses experts exists only with the experts
+  in host memory and a cache on the card, which measured 57–70 tok/s. That move is put to him with its pros and cons and a row
+  that would decide it (E, München's, running); it is not made ([moe-expert-record.md](moe-expert-record.md)).
 - **PARKING, STEP 2 — THE SERVER PART IS STAGED (2026-11-25, its third cut ACCEPTED):** `staged/0027-model-park.patch`. The architecture
   session accepted the first cut with two changes (a return that FAILS stops the process, the request goes on to an ordinary load;
   `/backend/park` tries the lifecycle lock, 409 at once). An independent reading then found sixteen things, fourteen real: a returning

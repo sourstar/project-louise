@@ -18,9 +18,16 @@ every return). Nothing parks while LocalAI's `park_host_floor_bytes` is 0.
     python3 -I tools/measure/park_http.py cycles  SERVER MODEL -n 20 --return load
     python3 -I tools/measure/park_http.py refused SERVER MODEL        # the copy's env: GGML_SYCL_PARK_REFUSE=2
     python3 -I tools/measure/park_http.py busy    SERVER MODEL
+    python3 -I tools/measure/park_http.py stop    SERVER MODEL        # a PARKED model shut down, then loaded afresh
+    python3 -I tools/measure/park_http.py failed  SERVER MODEL        # only where the backend can be made to FAIL a return
 
 SERVER is LocalAI's address (http://host:port). A LocalAI that asks for a key:
 `--token-file PATH` (the key is never printed).
+
+A model that answered a request under a second ago is busy for a park (409
+`model_busy`): one HTTP request is several calls to its backend, and between
+two of them the model is in use. `cycles` and `refused` ask again until that
+second has passed, and say how often they were told busy.
 
 `cycles` embeds sixteen sentences, then N times: parks (`/backend/park`), reads
 `/system` (the model must be listed "parked", and its process hold less of the
@@ -58,6 +65,9 @@ from pathlib import Path
 
 TEXTS = [f"sentence number {i}: the quick brown fox jumps over the lazy dog, {i} times" for i in range(16)]
 NO_ROOM = "no_room_on_device"
+#: where GET /system lists the loaded models (LocalAI's SystemInformationResponse; read off the real server,
+#: after a first cut of this tool said "models" and was right only against its own stand-in)
+MODELS_KEY = "loaded_models"
 FLOOR_KEY = "park_host_floor_bytes"
 
 
@@ -100,13 +110,13 @@ class Server:
         status, body, _ = self.call("GET", "/system")
         if status != 200 or not isinstance(body, dict):
             raise SystemExit(f"GET /system answered {status}: {str(body)[:200]}")
-        return next((m for m in body.get("models") or [] if m.get("id") == model), None)
+        return next((m for m in body.get(MODELS_KEY) or [] if m.get("id") == model), None)
 
     def rows(self) -> list[dict]:
         status, body, _ = self.call("GET", "/system")
         if status != 200 or not isinstance(body, dict):
             raise SystemExit(f"GET /system answered {status}: {str(body)[:200]}")
-        return list(body.get("models") or [])
+        return list(body.get(MODELS_KEY) or [])
 
     def set_floor(self, floor: int) -> tuple[object, object]:
         status, settings, _ = self.call("GET", "/api/settings")
@@ -152,6 +162,21 @@ def describe(row: dict | None) -> str:
     return f"parks, state {row.get('state')!r}, size_vram {mib(row.get('size_vram'))}{extra}"
 
 
+def park_when_idle(server: Server, model: str, patience: float = 5.0) -> tuple[int, object, float, int]:
+    """One park, asked again while the answer is 409 model_busy: LocalAI takes a model that answered a request
+    under a second ago for busy (one HTTP request is several calls to its backend), so a park asked right after
+    a request waits that second out. Returns (status, answer, what the park itself took, how many times busy)."""
+    deadline, busy_answers = time.monotonic() + patience, 0
+    while True:
+        t = time.monotonic()
+        status, answer, _ = server.park(model)
+        took = time.monotonic() - t
+        if status != 409 or error_of(answer)[0] != "model_busy" or time.monotonic() > deadline:
+            return status, answer, took, busy_answers
+        busy_answers += 1
+        time.sleep(0.1)
+
+
 def cycles(server: Server, model: str, n: int, back: str) -> tuple[bool, list[str]]:
     """N parks and returns; (passed, the lines to print)"""
     lines: list[str] = []
@@ -164,11 +189,10 @@ def cycles(server: Server, model: str, n: int, back: str) -> tuple[bool, list[st
         return False, lines + ["NOT RUN: /system does not list it as a model that parks, loaded - "
                                "its file needs `park: true`, and the server staged 0027"]
     held = row.get("size_vram")
-    parks, returns, passed = [], [], True
+    parks, returns, passed, settled = [], [], True, 0
     for i in range(1, n + 1):
-        t = time.monotonic()
-        status, answer, _ = server.park(model)
-        took_park = time.monotonic() - t
+        status, answer, took_park, busy_first = park_when_idle(server, model)
+        settled += busy_first
         if status != 200:
             kind, message = error_of(answer)
             return False, lines + [f"FAIL: cycle {i}: the park answered HTTP {status} {kind}: {message}"]
@@ -203,6 +227,8 @@ def cycles(server: Server, model: str, n: int, back: str) -> tuple[bool, list[st
         if not same or not state_ok:
             return False, lines + [f"FAIL: cycle {i}: " + ("the vectors are not the first ones" if not same
                                                              else "the model is not listed loaded after its return")]
+    lines.append(f"each park was asked right after a request: answered 409 model_busy {settled} times in all before "
+                 f"the model had been idle for its second")
     lines.append(f"{n} of {n} cycles: the same bytes; a park {statistics.median(parks) * 1000:.1f} ms (median, "
                  f"{min(parks) * 1000:.1f}-{max(parks) * 1000:.1f}), a return with its sixteen sentences "
                  f"{statistics.median(returns) * 1000:.1f} ms ({min(returns) * 1000:.1f}-{max(returns) * 1000:.1f})")
@@ -214,7 +240,7 @@ def refused(server: Server, model: str, tries: int = 6) -> tuple[bool, list[str]
     status, base, _ = server.embed(model)
     if status != 200:
         return False, [f"NOT RUN: the model does not answer: HTTP {status} {error_of(base)}"]
-    status, answer, _ = server.park(model)
+    status, answer, _, _ = park_when_idle(server, model)
     if status != 200:
         return False, [f"NOT RUN: the park answered HTTP {status} {error_of(answer)}"]
     lines, n, passed = [f"parked; the sixteen vectors {digest(base)}"], 0, True
@@ -239,6 +265,64 @@ def refused(server: Server, model: str, tries: int = 6) -> tuple[bool, list[str]
         if not deferral and (row is None or row.get("state") != "parked"):
             return False, lines + ["FAIL: after a refused return the model is not listed parked"]
     return False, lines + [f"FAIL: not served after {tries} requests"]
+
+
+def pid_of(row: dict | None) -> object:
+    return ((row or {}).get("process") or {}).get("pid")
+
+
+def stop_parked(server: Server, model: str) -> tuple[bool, list[str]]:
+    """a PARKED model is shut down (what a keeper does when the host runs short): it is gone without being
+    brought back first, and the next request is an ordinary load that gives the same bytes"""
+    status, base, _ = server.embed(model)
+    if status != 200:
+        return False, [f"NOT RUN: the model does not answer: HTTP {status} {error_of(base)}"]
+    before = server.row(model)
+    status, answer, _, _ = park_when_idle(server, model)
+    if status != 200:
+        return False, [f"NOT RUN: the park answered HTTP {status} {error_of(answer)}"]
+    lines = [f"parked: {describe(server.row(model))}; its process {pid_of(before)}"]
+    t = time.monotonic()
+    status, answer, _ = server.call("POST", "/backend/shutdown", {"model": model})
+    lines.append(f"/backend/shutdown of the parked model: HTTP {status} in {(time.monotonic() - t) * 1000:.0f} ms: {json.dumps(answer)[:120]}")
+    gone = server.row(model)
+    lines.append(f"/system afterwards: {describe(gone)}")
+    t = time.monotonic()
+    status2, got, _ = server.embed(model)
+    after = server.row(model)
+    lines.append(f"the next request: HTTP {status2} in {time.monotonic() - t:.2f} s, vectors "
+                 f"{'identical' if got == base else 'DIFFERENT'}; {describe(after)}; its process {pid_of(after)}")
+    ok = status == 200 and gone is None and status2 == 200 and got == base and after is not None and after.get("state") == "loaded"
+    if ok and pid_of(before) is not None and pid_of(before) == pid_of(after):
+        return False, lines + ["FAIL: the same process answers after the shutdown"]
+    return ok, lines + [("ok: a parked model is stopped as it is, and loads afresh" if ok
+                         else "FAIL: the parked model was not stopped cleanly, or did not come back by an ordinary load")]
+
+
+def failed_return(server: Server, model: str) -> tuple[bool, list[str]]:
+    """where the backend FAILS a return (not a refusal for room): the process is stopped and the request that met
+    it is served by an ordinary load - never the same fault again from the same process"""
+    status, base, _ = server.embed(model)
+    if status != 200:
+        return False, [f"NOT RUN: the model does not answer: HTTP {status} {error_of(base)}"]
+    before = server.row(model)
+    status, answer, _, _ = park_when_idle(server, model)
+    if status != 200:
+        return False, [f"NOT RUN: the park answered HTTP {status} {error_of(answer)}"]
+    t = time.monotonic()
+    status, got, _ = server.embed(model)
+    took = time.monotonic() - t
+    after = server.row(model)
+    lines = [f"parked; its process {pid_of(before)}",
+             f"the request to it: HTTP {status} in {took:.2f} s, vectors "
+             f"{'identical' if got == base else ('DIFFERENT' if status == 200 else error_of(got))}; {describe(after)}; "
+             f"its process {pid_of(after)}"]
+    if pid_of(before) is not None and pid_of(before) == pid_of(after):
+        return False, lines + ["NOT RUN: the same process answered - the return did not fail (the backend's test switch "
+                               "for a failing return is not in its env)"]
+    ok = status == 200 and got == base and after is not None and after.get("state") == "loaded"
+    return ok, lines + [("ok: the failed return cost a load, not an error" if ok
+                         else "FAIL: the request that met a failed return was not served by an ordinary load")]
 
 
 def busy(server: Server, model: str, sentences: int = 2048, lead: float = 0.2) -> tuple[bool, list[str]]:
@@ -283,7 +367,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--token-file", help="the file that holds LocalAI's API key")
     sub = ap.add_subparsers(dest="verb", required=True)
-    for verb in ("state", "floor", "park", "cycles", "refused", "busy"):
+    for verb in ("state", "floor", "park", "cycles", "refused", "busy", "stop", "failed"):
         p = sub.add_parser(verb)
         p.add_argument("server")
         if verb == "floor":
@@ -318,6 +402,10 @@ def main() -> int:
         passed, lines = cycles(server, a.model, a.n, a.back)
     elif a.verb == "refused":
         passed, lines = refused(server, a.model)
+    elif a.verb == "stop":
+        passed, lines = stop_parked(server, a.model)
+    elif a.verb == "failed":
+        passed, lines = failed_return(server, a.model)
     else:
         passed, lines = busy(server, a.model, a.sentences)
     print("\n".join(lines))

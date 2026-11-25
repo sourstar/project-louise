@@ -701,6 +701,8 @@ expectation.
 
 **2. The parked state, `/backend/park`, `/system`, the floor, 503** —
 `staged/0027-model-park.patch`, STAGED (2026-11-25). On the server tree after 0024.
+**AMENDED THE SAME DAY after its first run on a real server (§8):** a model
+whose last request began or ended under a second ago is busy for a park.
 **THIRD CUT (2026-11-25).** The architecture session read the first and
 ACCEPTED it for staging with two changes ("The review's two changes",
 below). An INDEPENDENT READING of the same patch, asked for beside theirs,
@@ -837,7 +839,8 @@ error body, the stream's event. Whole suites green: `pkg/model` (274 of
 `core/schema`, `core/http/endpoints/openai`. Under the race detector the
 54 park specs are clean; the whole suite's three reports are one spec of
 LocalAI's own (`process_exit_test.go`, a log buffer read while it is
-written), which this patch does not touch. `core/application`: 346 of 350
+written), which this patch does not touch. (With the amendment of §8: 41
+loader specs, `pkg/model` 275 of 275, 278 with staged 0029's three.) `core/application`: 346 of 350
 — the four that fail are LocalAI's OAuth login against a local TLS server,
 which this container's proxy breaks; they fail the same without the patch.
 NOT measured: a real backend (it needs the park engine), a card; and 47
@@ -849,3 +852,145 @@ node's server tree before the build is used there — München's to run.**
 
 It does NOTHING until two things are true on the park engine: the keeper
 has written the floor, and a model's file says `park: true`.
+
+## 8. The two halves together: LocalAI's real server and a real backend (2026-11-25)
+
+The operator, relayed by München: **"Do parking."** München cannot reach a
+backend's own address (it listens inside the model server's container), so
+the rows of §6 that go through gRPC cannot be taken on the node as written.
+With the server part they do not have to be: `tools/measure/park_http.py`
+drives parking through LocalAI's HTTP alone — the five routes a caller that
+manages the device uses, which is what Louise's keeper does.
+
+**It was run here first, on the real thing but for the card:** LocalAI's
+server built from the node's server tree with staged 0024, 0027 and 0029
+(`go build ./cmd/local-ai`), starting LocalAI's own llama.cpp backend built
+for CPU from the park engine's source with the stand-in device
+(`GGML_CPU_PARK_TEST`, dev only), two model files that say `park: true` and
+one that does not, bge-small-en-v1.5 F16. No scripted backend, no stand-in
+server: the first time the two halves met.
+
+**It found two things no spec had, and one of LocalAI's own:**
+
+| found | what it was | now |
+|---|---|---|
+| a park landed INSIDE a request | one HTTP embeddings request is one backend call PER INPUT; between two of them no call is in flight, so the model was not "busy" — 46 parks were accepted during a single request of 2,048 sentences. The answers stayed right (each next input brought the weights back); the weights were copied to the host and straight back 46 times | a model whose last request began or ended under a second ago is busy for a park (`parkIdleMin`; the client says how long it has been without a REQUEST — health checks and `Status` are not one). Re-run: 13,812 parks asked during the same request, 13,812 × 409 `model_busy` |
+| the tool read `/system` wrong | LocalAI lists the models under `"loaded_models"`; the tool said `"models"` and was right only against its own stand-in | the tool reads the real key, and a test holds the shapes below against it |
+| **LocalAI's own: a settings write that never answers** (localai-bugs.md B24) | `POST /api/settings` restarts the watchdog and waits for its loop to end; the loop is only started where a periodic check is on. With a limit of loaded models and no busy check, idle check or reclaimer, the write hung (300 s here, then the tool's timeout) holding the watchdog's lock, and every later write behind it. The setting itself had been applied | staged 0029: a watchdog whose loop never ran is not waited for. The same write: 0.09 s. THE NODE IS NOT IN THAT COMBINATION (München, 21:24Z: busy check on, no limit) — and must not be put in it before 0029 is in its server |
+
+**The rows, on the final build** (each line is the tool's own output):
+
+    cycles SERVER copy -n 20 --return request
+    each park was asked right after a request: answered 409 model_busy 200 times in all before the model had been idle for its second
+    20 of 20 cycles: the same bytes; a park 51.3 ms (median, 48.0-57.5), a return with its sixteen sentences 1193.6 ms (1126.7-1407.4)
+
+    cycles SERVER copy -n 20 --return load
+    each park was asked right after a request: answered 409 model_busy 200 times in all before the model had been idle for its second
+    20 of 20 cycles: the same bytes; a park 49.7 ms (median, 46.5-57.9), a return with its sixteen sentences 1230.9 ms (1165.6-1289.2)
+
+    busy SERVER copy
+    2048 sentences in one request; while it ran, 8772 parks answered: {(409, 'model_busy'): 8772}
+    the request itself: HTTP 200, vectors identical
+    afterwards: parks, state 'loaded', size_vram ?
+    ok: a busy model is refused 409 model_busy, and is still there
+
+    refused SERVER copy          (the stand-in refuses the next two returns)
+    parked; the sixteen vectors ea8f98c32f34
+    request 1: HTTP 503 'no_room_on_device' Retry-After '2': copy: the weights cannot come back to the device now; parks, state 'parked', size_vram ?, 63 MiB on the host since 2026-11-25T21:35:08.364116731Z
+    request 2: HTTP 503 'no_room_on_device' Retry-After '2': copy: the weights cannot come back to the device now; parks, state 'parked', size_vram ?, 63 MiB on the host since 2026-11-25T21:35:08.364116731Z
+    request 3: served, vectors identical; parks, state 'loaded', size_vram ?
+    ok: 2 return(s) refused as a deferral, then served
+
+    stop SERVER copy             (a PARKED model shut down: the keeper's move when the host runs short)
+    parked: parks, state 'parked', size_vram ?, 63 MiB on the host since 2026-11-25T21:35:01.247706173Z; its process 9950
+    /backend/shutdown of the parked model: HTTP 200 in 103 ms: {"message": "model stopped"}
+    /system afterwards: not listed
+    the next request: HTTP 200 in 1.37 s, vectors identical; parks, state 'loaded', size_vram ?; its process 10938
+    ok: a parked model is stopped as it is, and loads afresh
+
+    failed SERVER copy           (the stand-in fails the next return)
+    parked; its process 11212
+    the request to it: HTTP 200 in 1.64 s, vectors identical; parks, state 'loaded', size_vram ?; its process 11246
+    ok: the failed return cost a load, not an error
+
+The backend's own lines agree: one "weights parked" and one "weights
+unparked" per cycle. A return on this CPU is the copy plus sixteen sentences
+embedded; the times are not the card's. And LocalAI's own limit of loaded
+models, set to 1, with two models that park and one that does not: asking
+for the second PARKED the first (the same process answered it later — a
+return, not a load), asking for the third parked again, and the one that
+does not park was stopped as it always was.
+
+**That a model's file reaches the model a real load creates** — the one line
+no spec ran (§7's stated limit) — is shown: after a real load `/system`
+lists `"parks": true, "state": "loaded"`.
+
+**THE SHAPES, read off the real server** (the keeper's half was built
+against 0027's text; these are its bytes):
+
+    GET /system, nothing loaded      {"backends":["llama-cpp-park"],"loaded_models":[]}
+    a model that parks, loaded       "parks": true, "state": "loaded"        (a model that does not park: neither key)
+    POST /backend/park {"model":"copy"}
+      200  {"message":"model parked","parked":{"size_host":66547200,"size_vram_needed":66547200,"since":"2026-11-25T21:01:40.683232191Z"}}
+           asked again while parked: the same answer, nothing done twice
+      404  {"error":{"code":404,"message":"model \"nobody\": not loaded on this instance","type":"model_not_loaded"}}
+      409  {"error":{"code":409,"message":"model \"copy\": model is still busy: its last request was 7 ms ago, and a model is parked once it has been without one for 1s","type":"model_busy"}}
+      412  {"error":{"code":412,"message":"model \"copy\": parking is off: no host memory floor is set","type":"parking_off"}}
+      412  {"error":{"code":412,"message":"model \"plain\": model cannot be parked: its file does not say `park: true`","type":"cannot_park"}}
+      412  {"error":{"code":412,"message":"model \"copy\": parking would leave the host under its memory floor: 14953 MiB available, 0 MiB being parked by others, 63 MiB to park, a floor of 1048576 MiB","type":"host_memory_floor"}}
+      500  {"error":{"code":500,"message":"parking model \"copy\": rpc error: code = Internal desc = the weights could not be parked, they stay on the device (is there host memory for them?)","type":""}}      (the engine said the park failed: the model stays loaded)
+      400  {"error":{"code":400,"message":"code=400, message=model is required","type":""}}
+    a refused return, on /v1/embeddings and on /backend/load alike
+      503, Retry-After: 2   {"error":{"code":503,"message":"copy: the weights cannot come back to the device now","type":"no_room_on_device"}}
+    POST /backend/load {"model":"copy"}      200  {"loaded":["copy"],"message":"model loaded"}
+    POST /backend/shutdown of a parked model  200  {"message": "model stopped"}
+    the floor: `park_host_floor_bytes`, BYTES, among the 97 keys of GET /api/settings (0 from the start);
+      written by POST /api/settings with the whole object; read back as written
+
+**NOT shown here, and only the card can:** the device's memory given back by
+a park and taken by a return (`size_vram` is not read on a CPU), a card that
+refuses a return for its own reasons, parkable buffers under the paging
+default (0021) — the two have never run together on a card — and the times.
+
+**THE PASS ON THE NODE** (München; the order and its reasons):
+
+1. THE SERVER FIRST — the node's live tree, then `git am` of staged 0024,
+   0027, 0029 in that order. `git rev-parse HEAD^{tree}` must read
+   `54dae233a83d5921371bb77e1bdca489e4af6731` before anything,
+   `8b7a1216b2cbec186dad14a31a127151dfe6cfc8` after 0024,
+   `8faa0e471dfde057709dc6c36568a49b4ade415f` after 0027 and
+   `e37b86e089b38d2667de8368965eddd1e6bf0782` after 0029; `--version` reads
+   `v5.0.1-6-g…`. It is inert: nothing parks until the floor is above 0 AND a
+   model's file says `park: true`. No gate. Before it is used: LocalAI's
+   `core/http/endpoints/localai` and `core/services/monitoring` suites on
+   its builder and on the live tree's (the control) — they start their own
+   Postgres through the Docker socket — and `pkg/model` reading "Ran 278 of
+   278".
+2. THE ENGINE `ed93e3c1b2e2` (built 21:28:13Z): every llama.cpp vega run
+   gated again, with the wrapper's part for a return through it
+   (architecture's branch `wrapper-same-load`) in the vega package; the
+   rollback is `619655e5833b`.
+3. The two rows whose answers MOVE with this engine and server: the canary
+   refused on a copy is now HTTP 503 `no_room_on_device` with
+   `Retry-After: 2` (it was 500); the stream's error object is typed
+   `no_room_on_device` (it was `server_error`).
+4. PARKING ON A COPY — bge-m3 on the engine directly, context on demand,
+   `park: true`, env `GGML_SYCL_PARKABLE=1` and `GGML_SYCL_PARK_VERIFY=1`,
+   the floor at 12 GiB for the rows and back to 0 after:
+
+        python3 -I tools/measure/park_http.py floor   SERVER 12884901888
+        python3 -I tools/measure/park_http.py state   SERVER COPY
+        python3 -I tools/measure/park_http.py cycles  SERVER COPY -n 20 --return request
+        python3 -I tools/measure/park_http.py cycles  SERVER COPY -n 20 --return load
+        python3 -I tools/measure/park_http.py busy    SERVER COPY
+        python3 -I tools/measure/park_http.py stop    SERVER COPY
+        python3 -I tools/measure/park_http.py refused SERVER COPY      # a second copy whose env adds GGML_SYCL_PARK_REFUSE=2
+        python3 -I tools/measure/park_http.py floor   SERVER 0
+
+   and, with the fingerprint texts, the gate's clause of §3.3: the sixteen
+   fingerprints after the cycles. `failed` has no switch on a card and is
+   not run there.
+5. Parking near a REAL model is not in this pass: `GGML_SYCL_PARKABLE=1` in
+   an encoder's env is a new run, gated, and which models park is the
+   keeper's half and the operator's.
+
