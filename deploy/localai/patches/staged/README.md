@@ -20,7 +20,11 @@ while still staged here — the backend qualification's finding F4 — and are n
 0006's llama.cpp patch has 4 rejected hunks: each is rebased onto the series
 and passes its CPU tests again before its card gates.
 
-**A candidate, the two fixes the live engine's card rows led to: `engine-refusal.series`, engine `d531d5d804f1`** (2026-11-25):
+**LIVE since 2026-11-25 05:52:18Z, engine `d531d5d804f1`: `engine-refusal.series`** (München: the byte check identical, the five
+llama.cpp gates exact with every fingerprint identical to `b190673dbdbf`'s, twenty unloads at exit 0, none slow; LocalAI's server
+swapped first, with 0019, the seven run ids unchanged by it). THE FILE AND ITS PATCHES ARE THE LIVE ENGINE'S NAME: nothing in them
+changes without a new build and every gate again; tests/test_localai_engine_refusal_series.py holds it. Its own rows — the
+refusal's, the port's — are being taken in the same pause. What it is, as it was cut (2026-11-25):
 `engine-next.series` line for line, then 0018 — the pool's refusal that 0013 promised and did not deliver — and 0020 — the speech port
 keeps nothing of a saved voice in memory between requests. Another engine, so another gating of every run; a patch that says "fails
 the request" and ends the process, and a deleted voice held in memory, are not left in place (CLAUDE.md, "fix it after is never an
@@ -30,7 +34,13 @@ LocalAI's server in the same pass and is in no engine series.
     SERIES_FILE=deploy/localai/patches/staged/engine-refusal.series \
       sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
 
-**LIVE since 2026-11-25 00:55:18Z, engine `b190673dbdbf`: `engine-next.series`** (München: the byte check identical, the five
+**MIRRORS, not sources** (operator, 2026-11-25, to München: "make a fork of localai and llama.cpp so that we keep all our patches
+there"): github.com/sourstar/LocalAI — `louise/engine-<name>` = the base + the series' patches applied as build.sh applies them,
+and `louise/server-…` = the node's server tree; github.com/sourstar/llama.cpp — `louise/engine-<name>` = the backend's llama.cpp
+version + the files of `backend/cpp/llama-cpp/patches`, one commit each. München pushes a branch pair for every engine that goes
+live. The patch files here and `build.sh` stay the source of every build and of an engine's name.
+
+**Live 2026-11-25 00:55:18Z to 05:52:18Z, engine `b190673dbdbf`, and the engine a rollback puts back: `engine-next.series`** (München: the byte check identical, the five
 llama.cpp gates exact with every fingerprint identical to `9ea95e93a83c`'s, twenty unloads through the wrapper at exit 0, none
 slow — so with every switch unset it computes the bytes the engine before it did. THE FILE AND ITS PATCHES ARE THE LIVE ENGINE'S
 NAME: not a comment of it changes without a new build and every gate again; tests/test_localai_engine_next_series.py holds it.

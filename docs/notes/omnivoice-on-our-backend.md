@@ -837,9 +837,16 @@ Recommended: the original clip at 32 steps, on the port. The ear clips of
 all four are with the operator (München); his ear decides, and Philippe
 stays on the 11 s clip if he says nothing.
 
+**DECIDED (the operator, 2026-11-25, relayed by München): Philippe's voice
+is the ORIGINAL 27.75 s clip.** The steps are a node setting (`[speech]
+tts_steps`, passed as `params.flow_steps`; main 4a3201ee) — his number
+after he hears 20, 24, 28 and 32.
+
 **The port is not the live voice on b190673dbdbf, and will not be**
 (the architecture session, 2026-11-25): it becomes the voice on the engine
-that carries the fixes these rows led to — below.
+that carries the fixes these rows led to — below. That engine, d531d5d804f1, is live
+since 2026-11-25 05:52:18Z; the port's rows on it are München's, in the
+same pause.
 
 **What the engine keeps of a saved voice between requests: nothing (staged
 0020, 2026-11-25).** The architecture session asked when a living process
