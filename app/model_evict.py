@@ -528,6 +528,101 @@ def give_back(server: str, v: Loaded) -> tuple[str, int]:
     return (UNLOADED, v.size) if model_load.unload(server, v.model) else (KEPT, 0)
 
 
+#: a model used this recently is IN USE: its own requests bring it back to
+#: the card, and stopping it would cut a batch short (`host_leftovers`)
+HOST_IDLE_S = 60.0
+
+
+def host_leftovers(servers: Iterable[str], in_set: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+    """WHAT THE DRIVER PAGED TO HOST MEMORY UNDER A PAGING RULE DOES NOT STAY
+    THERE UNDER ANOTHER (München, 2026-11-25 22:30Z, the first switch from
+    query to embed mode). In query mode nothing is unloaded while the host has
+    memory, and the driver keeps the idle models there — 15.9 GiB that night:
+    MADLAD, both rerankers and the speech model, each reading 0 MiB on the
+    card. They are still of embed mode's set ("Chat, speech, rerankers, madlad
+    are preloaded too"), so the keeper took them as loaded and loaded nothing;
+    nobody asks them while no question comes, so nothing brought them back to
+    the card; and LocalAI counts the CARD — 15.6 of 32 GiB — so it never
+    claimed them. The parse pool started beside them: MemAvailable 21.9 ->
+    7.8 -> 5.3 -> 4.4 -> 3.6 GiB in two minutes, the file cache squeezed from
+    16.4 to 4.3 GiB, until München stopped the four by hand (gtt 15,488 ->
+    1,720 MiB, MemAvailable 15.8 -> 30.3 GiB at once).
+
+    So, WHERE THE RULE IN FORCE IS NOT "page" (`rule`), a model that
+      - Louise knows — of the keeper's set (`in_set`) or with a use row:
+        never a model somebody loaded by hand,
+      - is IN HOST MEMORY: it reads under its own floor of the most it was
+        seen holding on the card, 0 MiB included — and is neither parked (its
+        own rule, `host_claims`), nor on another card, nor one that holds no
+        VRAM,
+      - is IDLE: no real use in the last HOST_IDLE_S (one in use is brought
+        back by its own requests), and its backend is not busy,
+      - is not pinned by a gate or a pass,
+    is stopped — all of them at one call, the keeper's first beat after the
+    switch. THE KEEPER THEN LOADS BACK, ONTO THE CARD, THOSE ITS BUDGET HOLDS
+    (its ordinary loads, behind the beat); the others load at their first
+    request. A model that is on the card stays, whatever its set: the card's
+    room is LocalAI's to claim ("nothing is evicted only because it's idle,
+    only if space is claimed", operator, 2026-11-08 — here the space is the
+    host's, claimed by the rule that gives the host to the parse pool).
+
+    THE STANDARD ALTERNATIVE, written down: bring each back with one request
+    (the driver moves a model to the card as it is used: 0.2-0.3 s measured
+    for a small one) instead of a stop and a load (2-38 s, model-profile.md).
+    It needs a request per role sent WITHOUT the "is it loaded" check every
+    caller's warm goes through (`model_load.ensure_loaded`), and it frees the
+    host only as fast as the card takes each model; a stop frees it at once,
+    which is what the two minutes above asked for. It would pay if switches
+    of mode became frequent.
+
+    Returns the (server, model) stopped. Never raises."""
+    from app import gate_twin, model_load, model_pins, model_use, resident
+    try:
+        if rule()[0] == "page":
+            return []
+        in_set = {tuple(k) for k in in_set}
+        pins = model_pins.recorded()
+        if pins is None:
+            return []                            # the pin record cannot be read: nothing is stopped on a guess
+        use = model_use.last_used()
+        mem = resident._memory_now()
+        now = time.time()
+        gone: list[tuple[tuple[str, str], int]] = []
+        for s in sorted({model_load.server_of(x) for x in servers}):
+            held = model_load.held_sizes(s)       # the beat's own reading
+            if held is None:
+                continue
+            cpu, away = model_load.held_cpu(s), model_load.parked(s)
+            for m, (_pid, size) in sorted(held.items()):
+                key = (s, m)
+                if (key in pins or (key not in use and key not in in_set) or key in mem.elsewhere or m in away
+                        or gate_twin.is_twin(m) or cpu.get(m, 0.0) > BUSY_CPU_PERCENT
+                        or now - use.get(key, float("-inf")) < HOST_IDLE_S):
+                    continue
+                largest = max(mem.sizes.get(key) or 0, model_load.size_vram(s, m) or 0)
+                if not largest or int(size or 0) >= resident._rest_floor(s, m) * largest:
+                    continue                     # holds no VRAM, never seen, or on the card
+                try:
+                    if model_pins.read_pinned(s, m):
+                        continue                 # a pin Louise's record does not hold: the operator's
+                    if model_load.unload(s, m):
+                        gone.append((key, largest - int(size or 0)))
+                except Exception:   # noqa: BLE001 — left where it is; the next beat asks again
+                    continue
+        if gone:
+            back = [k[1] for k, _ in gone if k in in_set]
+            _say("info", f"card: unloaded {', '.join(f'{k[1]} (about {out // MIB:,} MiB in host memory)' for k, out in gone)} "
+                         f"— idle, and held by the driver in host memory since the rule was \"page\" (query "
+                         f"mode): under the rule in force the host's memory is the parse pool's, and the "
+                         f"card's count would never have claimed them. "
+                         + (f"The keeper loads back onto the card those its budget holds ({', '.join(back)}); "
+                            if back else "")
+                         + "the others load at their first request")
+        return [k for k, _ in gone]
+    except Exception:   # noqa: BLE001 — nothing stopped: the next beat asks again
+        return []
+
+
 def host_claims(servers: Iterable[str]) -> list[str]:
     """THE HOST CLAIMS ITS MEMORY BACK FROM A PARKED MODEL. LocalAI checks
     the host's floor only at the moment it parks, and never stops a parked

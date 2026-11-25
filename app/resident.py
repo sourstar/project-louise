@@ -66,6 +66,11 @@ against the reclaimer.
   within REEVICTED_WITHIN_S is not loaded again for 10 min, then 20, 40 …,
   capped at BACKOFF_CAP_S, and said each time with the model's tier; one
   that stayed longer than that starts the count again.
+  NOT FOR AN UNLOAD LOUISE MADE ITSELF (2026-11-25, app/own_unloads.py): a
+  question that took the card, a load's room, a change of mode, a gate's
+  twin. Those are in the node's own record, read here; the back-off and the
+  penalty below are feedback on what the RECLAIMER evicts, and a question
+  ten minutes after a load cost the budget 8,880 MiB for two hours.
 
 THE BUDGET — WHAT IS PRELOADED AT ALL (`plan`; the defect it fixes, measured
 by the node, 2026-11-08 03:25). The room check judges one load against the
@@ -271,6 +276,8 @@ DEFAULT_THRESHOLD = 0.95
 SETTINGS_TIMEOUT_S = 2.0
 #: a model this keeper loaded, off the card again this soon: space is claimed
 REEVICTED_WITHIN_S = 600.0
+#: the keeper's clock and the record's are read a moment apart
+OWN_UNLOAD_SLACK_S = 5.0
 #: the first back-off after a repeat eviction, doubled each time, and its cap
 BACKOFF_FIRST_S, BACKOFF_CAP_S = 600.0, 7200.0
 MIB = 1 << 20
@@ -1687,10 +1694,25 @@ def _due(r: Resident, now: float) -> bool:
     said = evicted = None
     with _lock:
         t = _track.setdefault(r.key, _Track())
+        stayed = None if t.warmed_at is None else now - t.warmed_at
+    # AN UNLOAD LOUISE MADE ITSELF IS NO EVICTION (München, 2026-11-25: a
+    # question took the card ten minutes after the switch to embed mode, and
+    # the keeper took the encoders it unloaded for the reclaimer's work — a
+    # ten-minute back-off and 8,880 MiB off the budget for two hours). The
+    # back-off and the penalty are feedback on what the RECLAIMER evicts;
+    # what a question, a load's room, a change of mode or a gate unloaded is
+    # in the node's record (app/own_unloads.py), read outside the lock
+    own = None
+    if stayed is not None and stayed < REEVICTED_WITHIN_S:
+        from app import own_unloads
+        own = own_unloads.since(r.key, stayed + OWN_UNLOAD_SLACK_S)
+    with _lock:
         if t.warmed_at is not None:
             stayed = now - t.warmed_at
             t.warmed_at = None
-            if stayed < REEVICTED_WITHIN_S:
+            if own is not None:
+                pass                               # Louise's own doing: no strike, and due as it was
+            elif stayed < REEVICTED_WITHIN_S:
                 t.strikes += 1
                 wait = min(BACKOFF_FIRST_S * 2 ** (t.strikes - 1), BACKOFF_CAP_S)
                 t.next_try = now + wait
@@ -1804,6 +1826,17 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
         _say_budget(p)
         _reclaimer_follows(r.server for r in want)
         _parked_follow(r.server for r in want)
+        if not _question_now():
+            # LEAVING A PAGING RULE GIVES THE HOST ITS MEMORY BACK (München,
+            # 2026-11-25): the idle models the driver still holds in host
+            # memory are stopped — the eviction's to do (`model_evict.
+            # host_leftovers`; the budget still unloads nothing) — and those
+            # of this set are loaded back onto the card by the ordinary loads
+            # of the next beats. Not an eviction the reclaimer made: no
+            # back-off and no penalty on the budget follow from it (`_due`,
+            # app/own_unloads.py)
+            from app import model_evict
+            model_evict.host_leftovers((r.server for r in want), by_key)
     else:
         with _lock:
             _out_said = frozenset()

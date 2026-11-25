@@ -20,6 +20,78 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **A SECOND DEFECT FROM THE SAME ROWS, OLDER THAN TONIGHT, FIXED IN THE SAME BRANCH: THE KEEPER TOOK
+  LOUISE'S OWN UNLOADS FOR THE RECLAIMER'S EVICTIONS (München, 22:40:18–37Z, embed mode).** A question — the
+  pinned runs of the 9B's AFTER — took the card as a question does ("a person's question holds the card;
+  corpus encoder(s) unloaded in 0.2 s: vega-medcpt-article-ov"; LocalAI stopped vega-dar-legal-it at
+  22:40:19 and vega-qwen3-embedding-4b at 22:40:28), and a beat later the keeper said "vega-dar-legal-it …
+  off the card again 10 min after its load: space is claimed, so it is not loaded again for 10 min" and "the
+  budget shrank by 8,453 MiB … the penalty on the margin is 8,568 MiB", then the same for medcpt-article-ov
+  (8,880 MiB in all, halved every 2 h). The back-off and the penalty are feedback on what the RECLAIMER
+  evicts — it saw the card past its line where a beat's sample did not; an unload Louise chose says nothing
+  of the card's growth. The keeper could not tell them apart: the question runs in the web's process, the
+  keeper in the worker's. It never showed before because the encoders had always been loaded hours earlier
+  (a model that stayed over ten minutes starts the count again); tonight they were ten minutes old, loaded
+  at the switch. FIXED: `model_load.unload` and `park` — the two calls every unload of Louise's goes through
+  — note the model in `state/model-unloads.json` (app/own_unloads.py: the pin record's way, a locked file
+  replaced whole, pruned after an hour), and `_due` asks it before it counts an eviction: Louise's own
+  doing is no strike and no penalty, and the model is due at once. The mode-switch fix below relies on the
+  same record (its first cut cleared the keeper's track by hand; one mechanism now). NOT known yet: who
+  stopped dar-legal-it and qwen3-embedding-4b — the question's own room-making in the web's log, or
+  LocalAI's reclaimer; with the record the keeper's lines say which from now on. Tonight's 8,880 MiB penalty
+  stands in the node's file and halves by itself. ALSO SEEN, not touched: dar-legal-it is counted at 8,453
+  MiB — its largest — because its weights at rest (about 1.8 GiB) were not learnt again since the at-rest
+  sizes were dropped that afternoon (`REST_BASIS` 2), and a model that embeds all day is never seen at
+  rest; that is why it is out of the budget and why the penalty was so large. To look at with a day of
+  embed mode behind it.
+- **The answer's language, AFTER on the model that showed the defect (München, 22:40Z, embed mode,
+  bcdf0dc).** The 9B, temperature 0.3, the same four hits in the same order as the BEFORE of 14:22Z (fr /
+  it / en / en), which answered in FRENCH (3,653 chars). With the language named after the question: three
+  answers byte for byte the same (sha cc8387a26178, 2,417 chars), ITALIAN — "Dante Alighieri nacque a
+  Firenze nel 1265 …". Same model, same hits: French before, Italian after. #901's row is complete.
+- **`resident show` in embed mode (München, 22:41Z): the four Ask models ARE of the set, three in the
+  budget** — budget 17,972 MiB (margin 25, context 5,124, penalty 8,880), 17,939 taken: the 9B, MADLAD
+  (7,221), the TTS (1,672), rerank-nemotron-1b (3,163) in; rerank-medcpt, every embedder and dar-legal-it
+  out. After München's shutdowns by hand the keeper loaded them back itself ("loading
+  louise-translate-madlad — translation (not on the card; needs 7,221 MiB, 16,395 MiB free under the 0.98
+  line)", 16.3 s; TTS 9.2; rerank-nemotron-1b 8.4; rerank-medcpt 10.9): the stop-then-load-back the fix
+  below builds, done once by hand — gtt 15.9 → 1.7 GiB, and at 22:41Z vram0 24,990, gtt 2,936, MemAvailable
+  19,786 MiB.
+- **DEFECT, FOUND AT THE FIRST QUERY → EMBED SWITCH AND FIXED BEFORE ANYTHING ELSE: LEAVING A PAGING RULE
+  LEFT WHAT THE DRIVER HAD PAGED OUT SITTING IN HOST MEMORY (München, 22:29:57Z, on the operator's word for
+  the switch; bcdf0dc).** The switch itself did what it says: "node in embed mode (query -> embed): chat
+  model louise-chat-qwen3.5-9b-q4-p0; network budget down unlimited, up 12.5 MB/s", the 35B stopped, the 9B
+  loaded in 15.2 s, the corpus encoders in 6.2–42.3 s (dar-legal-it 42.3), and the KEEPER ALONE turned the
+  reclaimer ON 32 s later ("the rule in force unloads for room again"; LocalAI: "memoryReclaimer=true
+  memoryThreshold=0.98") — no eviction by LocalAI, no CANARY. BUT: gtt stayed at 15.9 GiB — MADLAD, both
+  rerankers and the speech model, each reading 0 MiB on the card. They are still of embed mode's set (the
+  11-08 rule preloads them in every mode), so the keeper took them as loaded and loaded nothing; no
+  question came, so nothing brought them back to the card; and LocalAI, counting the CARD at 15.6 of 32
+  GiB, would never claim them — while the parse pool started (worker cgroup 14.6 GiB in two minutes):
+  MemAvailable 21.9 → 7.8 → 5.3 → 4.4 → 3.6 GiB, the ARC squeezed 16.4 → 4.3 GiB. München stopped the four
+  by hand at 22:32:20Z: gtt 15,488 → 1,720 MiB, MemAvailable 15.8 → 30.3 GiB at once. I made query mode
+  page (#908) and never said what leaving it does with what was paged. FIXED (`model_evict.host_leftovers`,
+  called by the keeper's beat; docs/07 §7.8): where the rule in force is not "page", a model Louise knows
+  (of the set, or with a use row), IDLE for a minute, not pinned, not busy, not parked, not on another
+  card, that reads under its own floor of the most it was seen holding — 0 MiB included, which the
+  over-commitment line skips — is stopped at the keeper's first beat after the switch, all of them in that
+  beat, never while a question holds the card, said in one line; AND THE KEEPER LOADS BACK ONTO THE CARD
+  THOSE ITS BUDGET HOLDS, by its ordinary loads, with no back-off and no penalty (the stop is the mode's
+  doing, not the reclaimer's). A first cut left alone every model of the set — which would have left
+  exactly these four: read off `wanted()` before the merge. One ON the card stays, as the rule of 11-08
+  says; one in use is brought back by its own requests. Written down, not built: bringing each back with
+  one request instead of a stop and a load (it frees the host only as fast as the card takes each model).
+  Until its sha is live München's four shutdowns by hand stay the remedy at each such switch.
+- **The wrapper's package, decided for the parking pass: ONLY vega-louise-llama-cpp is rebuilt (Tensor's
+  (i), mine too).** "Each package is what its gate saw" (invariant 12), not "one wrapper on the node": the
+  change acts only on a LoadModel repeated for a model already held, which only the park engine's return
+  sends, and no OpenVINO, PyTorch or CPU model parks — rebuilding the other three would re-gate their runs
+  for nothing (RULE 1). Cost, written down: two wrapper builds on the node until those three are next
+  rebuilt and gated for their own reasons. Recorded at #882's merge with München's table (each package's
+  wrapper sha256, REVISION and backend); München found no deploy stage or build check that compares an
+  installed package's wrapper with main's file. The server is NOT swapped yet: one spec of LocalAI's own
+  (a log websocket's race, in files no patch touches) fails 14 in 200 on the new tree against 1 in 200 on
+  the live one with every core busy — Tensor runs an interleaved comparison first.
 - **The author's check gains `licence` and `space-pin` (`louise hold check <collection> --build`; the
   compliance check, compliance-check.md §4).** Both are the node's OWN resolutions said to the author
   before the worker meets them, never a second implementation: `licence` is `licensing.state_for` (a
