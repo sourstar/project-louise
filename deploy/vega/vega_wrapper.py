@@ -77,6 +77,11 @@ from app.vega.procfs import WSL_GPU, ProcFS
 from app.vega import tag as vtag
 
 LOAD = "/backend.Backend/LoadModel"
+#: what the llama.cpp backend answers a LoadModel for the model it already
+#: holds — "a repeated request is a no-op, not a reload" (LocalAI v5.0.1's
+#: backend, as docs/notes/parking-step-2.md §2 reads it): the one answer that
+#: makes a repeated load THE SAME RUN (`Gate.load_model`)
+ALREADY_LOADED = "Model already loaded"
 EMBED = "/backend.Backend/Embedding"
 TOKENIZE = "/backend.Backend/TokenizeString"
 DETOKENIZE = "/backend.Backend/Detokenize"
@@ -1682,6 +1687,8 @@ class Gate:
             nvidia.runner(cfg.nvidia_smi) if cfg.nvidia_smi else None)
         self.loaded: Loaded | None = None
         self._load_lock = threading.Lock()
+        #: the canonical options of the load in force (`load_model`), None before one
+        self._load_canon: "loadopts.Canon | None" = None
         # the input lengths against the ubatch (`PASSES_EVERY_S`)
         self.passes: PassCount | None = None
         self._passes_wake = threading.Event()
@@ -1701,11 +1708,40 @@ class Gate:
     def load_model(self, raw: bytes, forward: Callable[[bytes], bytes],
                    call: Callable[[str, bytes], bytes] | None = None) -> bytes:
         with self._load_lock:
-            self.loaded = None                       # a new load has no run until it is stated
             try:
                 canon = load_options(self.pb, raw)
             except loadopts.Unstatable as e:
+                self.loaded = None
                 return self._refuse_load(e)
+            # THE LOAD IN FORCE, ASKED AGAIN (parking step 2, docs/notes/
+            # parking-step-2.md §3.3; 2026-11-25): LocalAI brings a parked
+            # model's weights back with a repeated LoadModel, which the
+            # backend answers "already loaded" — the same process, the same
+            # weights, engine and options: THE SAME RUN (invariant 12: no gate
+            # per return). Stated again it would drop the run while it hashed
+            # the weights and the tree, refuse every vector meanwhile ("no run
+            # is stated"), restart the pass and keep counts and probe the
+            # tokenizer again. So the same options to the same live child are
+            # forwarded and nothing here moves. Any other options take the
+            # whole path below: another load, another statement.
+            #
+            # THE BACKEND SAYS WHICH IT WAS: only an answer of ALREADY_LOADED
+            # is a return. A backend that loads again at a repeated LoadModel
+            # (it answers anything else) has read its files again — an upgrade
+            # on disk is then another run, as at any load — and is stated.
+            held = self.loaded
+            early: bytes | None = None
+            if (held is not None and self._load_canon == canon
+                    and self.child.pid == held.pid and self.child.alive()):
+                early = forward(raw)
+                said = self.pb.Result.FromString(early)
+                if said.success and ALREADY_LOADED in said.message:
+                    log(f"{self.backend.name}: the load in force asked again (the same options, the "
+                        f"same process {held.pid}; the backend: {said.message!r}): run "
+                        f"{held.run_id[:23]}… stands")
+                    return early
+            self.loaded = None                       # a new load has no run until it is stated
+            self._load_canon = None
             hashed: dict[str, Any] = {}
 
             def hashing(key: str, compute: Callable[[], str]) -> threading.Thread:
@@ -1753,7 +1789,8 @@ class Gate:
                     nv_before = nvidia.used_vram_mib(self.nvidia_smi)
                 except nvidia.NvidiaUnreadable as e:
                     log(f"{self.backend.name}: NVIDIA memory before the load not read: {e}")
-            answer = forward(raw)
+            # (a repeated load the backend did NOT call a return was forwarded above)
+            answer = early if early is not None else forward(raw)
             if not self.pb.Result.FromString(answer).success:
                 return answer                        # the backend's own refusal, as it said it
             deadline = time.monotonic() + WEIGHTS_TIMEOUT_S
@@ -1868,6 +1905,7 @@ class Gate:
                                    if self.cfg.cuts == TOKENIZER and embedder else (None, False))
             self.loaded = Loaded(run_id, run, declares_pairs(canon.options.get("Options")),
                                  self.child.pid, context_size, specials, token_ids)
+            self._load_canon = canon                 # what a repeated LoadModel is compared with
             ubatch = load_ubatch(canon, nbatch) if embedder else 0
             self.passes = PassCount(run_id, run, ubatch) if ubatch else None
             if self.passes is not None:

@@ -93,6 +93,9 @@ class Servicer(backend_pb2_grpc.BackendServicer):
         note(context, method="LoadModel", model=request.Model, options=list(request.Options))
         if not os.path.isfile(request.ModelFile):
             return backend_pb2.Result(success=False, message=f"no weights at {request.ModelFile}")
+        if os.environ.get("FAKE_REPEAT_NOOP") and self.loaded is not None and request == self.loaded:
+            # llama.cpp's own answer for the model it holds: a no-op, not a reload
+            return backend_pb2.Result(success=True, message="Model already loaded")
         self.loaded = request
         return backend_pb2.Result(success=True, message="loaded")
 
