@@ -48,9 +48,12 @@ measured (published figures disagree).
   now names it — "The question is written in Italian (ISO code 'it'): write your whole answer in that
   language" — and says it again after the sources and the question ("Write the answer in Italian, not in the
   language of the sources."), the citation reminder still last. A language chosen on the page wins; where
-  nobody knows the question's language the line says "the language of the question above". NOT REPRODUCED
-  on the node (München's two re-runs, with other hits, were Italian), so the fix is by construction and its
-  proof is the operator's own question after the deploy. From the same report: the answer's log lines went
+  nobody knows the question's language the line says "the language of the question above". REPRODUCED
+  on the node once (München, 14:20Z, the code then live, his question with four of his five hits pinned in
+  his order and no older-language rule in the prompt: 3,653 characters in French, "Dante Alighieri est né à
+  Florence en 1265…"; two earlier re-runs with other hits were Italian) — so the cause is the first source's
+  language with nothing naming the answer's. BEFORE/AFTER owed: ten pinned runs on each side of the deploy
+  (`/root/measure/ask-french/pinned.py`), counted by language. From the same report: the answer's log lines went
   out under the default collection's name ("[EUR-Lex5.next info:chat]" for a gutenberg answer) — `chat` is
   a node stage now; and a search replaced by a second press took 9 s to stop (its next checkpoint, inside
   the rerank) — what the Abort button will also wait for.
