@@ -33,7 +33,12 @@ measured (published figures disagree).
   Ask; the reading started at 2.5 s (by itself); FIRST SOUND at 6.0 s, 3.6 s after the first word; sentence
   1 (62 chars): cut 0.7 s after the first word, asked for 0.0 s later, here 2.9 s after that (the node made
   it in 2.5 s, 4.1 s of sound), played 0.1 s after it arrived; the longest silence between two sentences
-  1.2 s; 7 sentence(s)" — and the numbers behind it. Known before any reading comes in: a first sentence is
+  1.2 s; 7 sentence(s)" — and the numbers behind it. THE NODE'S SIDE IS IN IT (the Bug session, the same
+  evening: "the delay … is much more than 3 s … when the request arrived versus when synthesis started"):
+  the speech route's `Server-Timing` now carries `node`, everything between a sentence's arrival and its
+  answer, beside `turn` (the wait behind the sentence before) and `synth` (the model's call); the line says
+  "after N s waiting its turn", "N s elsewhere on the node (a thread, a lookup)" and "N s between the page
+  and the node" wherever one of them is 0.3 s or more. Known before any reading comes in: a first sentence is
   cut only when the next begins, and then costs its synthesis (about 2.5 s at 32 steps, about half at 16).
   THE FIX WAITS FOR HIS NEXT READING'S LINE: nothing is changed on a guess.
 - **After 881caff (the keeper's fix) on the node, 17:46Z, query mode (München):** "resident: THE CARD IS

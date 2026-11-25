@@ -401,6 +401,7 @@ def test_every_field_the_page_reports_is_one_the_node_keeps():
 READING = {"first_word": 2400, "last_word": 9100, "started": [2450], "taps": [], "by_itself": True, "blocked": False,
            "count": 7, "lang": "it", "ua": "Mozilla/5.0 (Linux; Android 15) Chrome/142 Mobile",
            "sentences": [{"chars": 62, "cut": 3100, "sent": 3110, "got": 6000, "synth": 2510, "audio": 4100,
+                          "turn": 0, "node": 2700, "cache": None,
                           "play": 6050, "end": 10150, "text": "Dante nacque a Firenze."},
                          {"chars": 80, "cut": 3900, "sent": 6010, "got": 8700, "synth": 2600, "audio": 5200,
                           "play": 11400, "end": 16600}]}
@@ -422,7 +423,8 @@ def test_a_readings_times_are_one_line_saying_where_the_wait_went(isolated_confi
     assert "Dante" not in text and "Firenze" not in text, "times only: never a word of the answer"
     numbers = json.loads(text.split(" — ")[2])
     assert numbers["first_word"] == 2400 and numbers["sentences"][0] == {
-        "chars": 62, "cut": 3100, "sent": 3110, "got": 6000, "synth": 2510, "audio": 4100, "play": 6050, "end": 10150}
+        "chars": 62, "cut": 3100, "sent": 3110, "got": 6000, "synth": 2510, "audio": 4100, "turn": 0, "node": 2700,
+        "cache": None, "play": 6050, "end": 10150}
     assert text.endswith("Chrome/142 Mobile")
 
 
@@ -454,3 +456,29 @@ def test_the_page_sends_a_readings_times_once_when_it_ends():
     assert sent <= {"first_word", "last_word", "started", "taps", "sentences", "count", "by_itself", "blocked",
                     "lang", "ua"}, sent
     assert "text" not in sent and "answer" not in sent
+
+
+def test_the_line_says_where_the_node_spent_a_sentences_wait(isolated_config, monkeypatch):
+    # the Bug session, 2026-11-25: "the delay before the first sound is much more than 3 s … make sure the
+    # line also gives the node's side: when the request arrived versus when synthesis started"
+    from app import web
+    def first(**t):
+        row = {"chars": 62, "cut": 3100, "sent": 3110, "got": 14_110, "synth": 2500, "audio": 4100, "turn": 0,
+               "node": 2540, "play": 14_150, "end": 18_250, **t}
+        return web.reading_said({**READING, "sentences": [row]})[0]
+    assert "the node made it in 2.5 s; 8.5 s between the page and the node" in first(), \
+        "eleven seconds from asked-for to here and the node had it for 2.5: the rest was on the way"
+    assert "the node made it in 2.5 s after 6.0 s waiting its turn" in first(turn=6000, node=8540)
+    assert "the node made it in 2.5 s and 8.4 s elsewhere on the node (a thread, a lookup)" in first(node=10_900)
+    assert "answered from the node's kept clips" in first(cache=1, synth=None, node=12, got=3200, play=3250)
+    assert "elsewhere" not in first() and "waiting its turn" not in first()
+
+
+def test_the_speech_route_says_how_long_the_node_had_the_request(isolated_config, monkeypatch):
+    from app import speech
+    monkeypatch.setattr(speech, "synthesize_timed",
+                        lambda body, **kw: (200, b"RIFF", "audio/wav", [("turn", 0.0), ("synth", 12.0)]))
+    r = TestClient(api.app).post("/v1/audio/speech", json={"input": "Dante."})
+    assert r.status_code == 200
+    parts = dict(p.strip().split(";dur=") for p in r.headers["server-timing"].split(","))
+    assert set(parts) == {"turn", "synth", "node"} and float(parts["node"]) >= 0.0

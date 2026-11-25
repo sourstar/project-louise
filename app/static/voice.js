@@ -762,8 +762,12 @@
                // each start of a reading: a tap, a question read by itself,
                // or a reading moved to a changed text (follow)
                started: times.started.map(rel), taps: times.taps.map(rel),
+               // `turn`, `synth`, `node`, `cache`: the node's own account of a
+               // sentence (its `Server-Timing`) — the wait behind the sentence
+               // before, the model's call, everything it spent, a kept clip
                sentences: times.items.map(t => ({ chars: t.chars, cut: rel(t.cut), sent: rel(t.sent),
                  got: rel(t.got), synth: t.synth ?? null, audio: t.audio ?? null,
+                 turn: t.turn ?? null, node: t.node ?? null, cache: t.cache ?? null,
                  play: rel(t.play), end: rel(t.end) })) };
     },
     sentences, cut, firstPieces, downsample, wavBytes,

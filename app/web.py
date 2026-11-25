@@ -548,7 +548,8 @@ def reading_said(body: dict) -> tuple[str, dict]:
     rows = []
     for t in (body.get("sentences") or [])[:VOICE_TIMELINE_SENTENCES]:
         if isinstance(t, dict):
-            rows.append({k: _ms(t.get(k)) for k in ("chars", "cut", "sent", "got", "synth", "audio", "play", "end")})
+            rows.append({k: _ms(t.get(k)) for k in ("chars", "cut", "sent", "got", "synth", "audio", "turn", "node",
+                                                    "cache", "play", "end")})
     count = _ms(body.get("count"))
     numbers = {"first_word": first_word, "last_word": _ms(body.get("last_word")),
                "started": [v for v in started if v is not None], "sentences": rows,
@@ -566,11 +567,26 @@ def reading_said(body: dict) -> tuple[str, dict]:
         cut, sent, got = one.get("cut"), one.get("sent"), one.get("got")
         if None not in (cut, sent, got):
             waited = None if first_word is None else cut - first_word
+            # THE NODE'S SIDE of the wait between asked-for and here: its turn
+            # behind the sentence before, the model's call, and whatever else
+            # the node spent on it; the rest was the way there and back
+            node, turn, synth = one.get("node"), one.get("turn") or 0, one.get("synth")
+            made = ("answered from the node's kept clips" if one.get("cache") else
+                    f"the node made it in {_s(synth)}"
+                    + (f" after {_s(turn)} waiting its turn" if turn >= 100 else ""))
+            if node is not None and synth is not None and not one.get("cache"):
+                other = node - turn - synth
+                if other >= 300:
+                    made += f" and {_s(other)} elsewhere on the node (a thread, a lookup)"
+            if node is not None:
+                away = (got - sent) - node
+                if away >= 300:
+                    made += f"; {_s(away)} between the page and the node"
             parts.append(
                 f"sentence 1 ({one.get('chars')} chars): "
                 + ("" if waited is None else f"cut {_s(waited)} after the first word, ")
                 + f"asked for {_s(sent - cut)} later, here {_s(got - sent)} after that "
-                + f"(the node made it in {_s(one.get('synth'))}, {_s(one.get('audio'))} of sound), "
+                + f"({made}, {_s(one.get('audio'))} of sound), "
                 + f"played {_s(play - got)} after it arrived")
     gaps = [b["play"] - a["end"] for a, b in zip(rows, rows[1:]) if a.get("end") is not None and b.get("play") is not None]
     if gaps:
