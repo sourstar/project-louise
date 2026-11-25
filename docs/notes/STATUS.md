@@ -20,6 +20,22 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **A memory kill names the process killed and its part; a row in flight beside it says it is a bystander
+  (the lessons of EUR-Lex5.next, row A5; `oom_hold.victim`).** The kill's words — "not computed again until the
+  cause is known" — were written on every row of the batch in flight, and the two units that carried them were
+  bystanders of 256 MiB each. The hold already recorded the parts in flight and two samples of the cgroup's
+  processes; now it reads the killed one off them, at the kill, before anything leaves the pool: FOR CERTAIN
+  where a large part's own process ended by SIGKILL (`parallel.in_flight` reads the exit code of a part that
+  has a process of its own), LIKELY otherwise — the largest process gone since the watcher's last sample, with
+  its part where that pid is a large part's. In the hold (`killed`), the guard's line, `node show`, the
+  exception, and FIRST on each row's deferral: "THIS document is in the part whose process was killed" or
+  "this document is a bystander". WHAT IT DOES NOT DO: a child of the shared pool is named by pid and memory
+  only — the pool does not know which part a child holds (a slot per child that the child writes at each
+  part would say it; not built: the kills of 11-19 and 11-25 were all large parts, and it is a write on the
+  pool's hot path that would need measuring first). Not measured on the node: there has been no kill since
+  the lanes' own processes (#869); the first one is the reading. Still open from the row group: a stage that
+  makes no progress saying so by itself.
+
 - **EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you can also choose local/p2p
   embedding"; "Network and embedding mode remain personal choices") — `[modes] embed_embedding`.** The last
   part of the modes' second cut, built as put to him (B1: a node choice in embed mode; he answered the network
