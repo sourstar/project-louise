@@ -20,6 +20,24 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **Rows that had arrived and were not yet written here (München, the afternoon's deploys).** 51ae16c
+  (main 2b8c62e1: #900–#904) LIVE, the worker started 16:23:49Z; its staged lists on the node 3,265 passed /
+  2 skipped, 11, 92, 478 / 9 skipped, and list 5 "25 passed" (the pinned tokenizer cases pass there); the
+  start: "node in query mode (read): chat model louise-chat-qwen3.6-35b-a3b; network budget down 6.2 MB/s,
+  up 1.2 MB/s", "preloading 13 model(s) for Ask", no embedding wait, no CANARY, no GateDeferred, no
+  progress line; `louise node mode` shows `embedding` null and `modes.embed.embedding` "collection" (#902
+  as shipped: the file's choice until he sets one). THE ANSWER'S LANGUAGE ON THE 35B, after #901: three
+  pinned runs byte-identical (sha 8b693cff8f28, 1,412 chars), Italian, the prompt's two language lines
+  present — the 35B answered Italian before too; the model that showed the defect is the 9B, whose row is
+  above. The card's counter at 16:31Z: 32,285 MiB, over the 0.98 line (32,002): the reading #907 then
+  explained (models partly in host memory). Housekeeping on the operator's word that day: engines
+  d658549772ca, 792f050e318e and b190673dbdbf removed, voice profile c638f287 deleted; the September
+  snapshot, kept that afternoon under its hold, released and destroyed by him at 20:46Z (869 G). The
+  35B's cold start with #906's bound, seen at the boot: "loaded in 37.4 s (… load bound 300 s)".
+  STILL OWED from those deploys: the preload hold at a resume (no cold start for corpus embedding before
+  "preloading"), the slice pass alone at a release, two lane parts at once with pid, peak and seconds, the
+  first "[node info:progress]" line if one comes, the embedding-choice line when he first sets it, and the
+  seconds from a second press of Ask to "cancelled".
 - **The web's warm follows the node's mode: a paused node warms nothing (München, during the parking pass,
   22:49Z, and at the p19 swap that morning).** After the model server's restart the web loaded MADLAD (6.1
   s), the nemotron reranker (5.7 s) and the 9B (11.0 s) by itself, on a PAUSED node, onto a card the pass
