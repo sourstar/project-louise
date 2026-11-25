@@ -47,7 +47,7 @@ after it as a thin wrapper around A.
 | `rescan` | B1, C1, C4, C5: a second scan of an unchanged corpus inserts, changes and retires nothing, and costs listing and stat | the corpus and a COPY of the manifest (a scan writes) | to build |
 | `parse-bound` | A1, A2: every document's parse is bounded in time and a document that hits the bound is isolated | the worker's journal and the rows that did not come back; and, for the platform itself, a test plugin with a deliberately catastrophic pattern | to build |
 | `origin-hash` | invariant 11: every record carries the hash of its origin unit | the records | refused at build today; the check reports it |
-| `licence`, `space-pin` | invariants 9 and 1 | the same resolutions the node uses | exist in the plan and at start; the check reports them together |
+| `licence`, `space-pin` | invariants 9 and 1 | the same resolutions the node uses (`licensing.state_for`; `spaces.verdict`, the start's own check asked read-only: nothing is pinned by asking) | BUILT (2026-11-25): a yellow- or red-class source with no acknowledgement fails and names `hold collection ack`; a space the start would refuse fails with the start's reason; no space pinned yet is inconclusive |
 | `words` | E2: every word of the origin's files is in a section, a note or a kept tree | the plugin's real fixtures | built for eurlex as a test; the generic harness is to build |
 | `bulk-ledger` | F1: a bulk-fed plugin records what the bulk gave, what it cannot give and why | the plugin's ledger | built for eurlex; the generic check is to build |
 

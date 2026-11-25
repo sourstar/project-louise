@@ -327,8 +327,11 @@ louise hold
   check       <collection> [--checks …] [--sample F] [--seed HEX]      run the validation plan; print the report
               <collection> --build [--checks …]                        the BUILD's checks instead (added 2026-11-25, operator: "a consistency check shall be available
                                                                        also for whom is willing to create a compliant collection"): how the collection was MADE on this
-                                                                       node, read from its manifest, read-only — `units` (no unit held by two live rows) and `chunkless`
-                                                                       (a document indexed with no chunk states why, as an issue); in no Codex, never attested; each
+                                                                       node, read from its manifest, read-only — `units` (no unit held by two live rows), `chunkless`
+                                                                       (a document indexed with no chunk states why, as an issue), `licence` (a yellow- or red-class
+                                                                       source's terms are acknowledged: the node's own resolution) and `space-pin` (the space held is
+                                                                       the Codex's: the start's own refusal, asked without pinning; the last two added the same day);
+                                                                       in no Codex, never attested; each
                                                                        verdict in plain words with what would supply what is missing; exit 1 when one failed
                                                                        (app/build_check.py; docs/notes/compliance-check.md lists the checks still to come)
               [--live DIR]                                             `origin-seal` in live mode: the sealed files under DIR re-validated now (03 §3.7)
