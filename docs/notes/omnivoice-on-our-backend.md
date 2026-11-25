@@ -944,6 +944,19 @@ The operator, 2026-11-25: "it-C, Philippe 27s clip, steps to be determined
 but not 16, likely something between 20 and 32". The port at rest holds
 2,266 MiB of the card after these rows.
 
+**DECIDED (the operator, 2026-11-25, his ear on the takes above): "Philippe
+voice 32 steps / Original clip (the longer one)".** The 27.75 s clip at 32
+steps: 2.53 s a sentence on the card (the row above), the model's own step
+count, so `[speech] tts_steps` unset says the same as
+`louise node speech set --steps 32`. Two things it means:
+- the steps are the NODE's, one number for every voice (07 §7.8): the
+  synthetic voices are read at 32 as well. A step count per voice does not
+  exist; it would be Louise-side code (the architecture session's) and is
+  built only if he asks for it;
+- on the node it is München's, on his word: the setting, and the profile
+  under Philippe's id holding the original clip (replaced in place twice
+  already, the encoding re-made by the voice ping, §13).
+
 **The speech model on the engine** (for München's test copy; the one engine,
 no package of its own):
 

@@ -213,6 +213,12 @@ def test_the_longer_clip_is_answered_with_its_cost_not_promised_away():
     measured = card[card.index("| Philippe's clip | pros | cons |"):]
     assert measured.count("\n| ") >= 4 and "Philippe\nstays on the 11 s clip if he says nothing" in card
     assert "the first sentence\nof a NEW PROCESS still takes 8.74 s, and the clip is not why" in card
+    # the operator's ear, 2026-11-25: the original clip at the model's own steps - and the steps
+    # are the node's, so the note says what that means for the synthetic voices
+    decided = card[card.index('**DECIDED (the operator, 2026-11-25, his ear on the takes above)'):]
+    assert '"Philippe\nvoice 32 steps / Original clip (the longer one)"' in decided
+    assert "| 32 | 2.12–2.13 s | 2.53 s |" in card and "2.53 s a sentence on the card" in decided
+    assert "one number for every voice" in decided and "A step count per voice does not\n  exist" in decided
 
 
 def test_the_reference_s_hooks_are_the_ones_the_gate_tool_names():
