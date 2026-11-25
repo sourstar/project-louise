@@ -20,6 +20,26 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **THE OPERATOR ON PAGING, 2026-11-25 evening, the rest of it: "and C when it is ready"; asked why not in
+  every mode, "A. And cache the model to reload it from disk warm".** So: parking (C) is wanted as the
+  controlled form of query mode's paging, when its engine is ready — not instead of it. Paging stays QUERY
+  MODE'S ONLY (A): in embed mode the host's memory is the parse pool's (4.7 GB available at the worst hour on
+  11-24, under the 12 GiB floor) and the embedders make a 2–3 GiB context a request on a card where only 3.5
+  GiB over was ever measured to hold. What he asked for instead: A MODEL UNLOADED FOR ROOM COMES BACK FROM
+  THE FILE CACHE, NOT FROM THE DRIVE — `deploy/vega/warm_model_files.py`, host-side (the app never touches a
+  model's files, invariant 7). The gain is on record (model-profile.md): qwen3-embedding-4b 33.7 s from the
+  drive against about 6, medcpt-article-ov 21.1 against 3.5, MADLAD 38.0 against 16.7. It reads the
+  embedders' weight files again, whole, each time it runs — the list from LocalAI's own model files
+  (`embeddings: true`; `--all` for every model), each path taken from the container's to the host's through
+  the container's mounts — writes nothing, and SAYS per model the bytes, the seconds and the rate: several
+  GiB a second is memory, a few hundred MiB a second is the drive ("FROM THE DRIVE: it had been dropped"),
+  which is the measurement nothing on the node recorded. No RAM of its own: the cache is the host's (the ZFS
+  ARC, capped at 16 GB — the embedders' ~8 GB then stand in for as many corpus blocks). NOT INSTALLED AND NOT
+  MEASURED: a timer on the host is a node action (his word, by München); the first pass by hand says which
+  files were cold, and a reload timed after it against one without it is the AFTER. The standard tool is
+  vmtouch; locking the files in RAM (`vmtouch -dl`) is written down and not taken — that RAM is the parse
+  pool's.
+
 - **ON THE CAR'S HANDS-FREE "ONLY THE LAST PART OF THE SPOKEN SENTENCE IS WRITTEN DOWN" (operator, Android
   Chrome over Bluetooth, by the Bug session, 2026-11-25) — the microphone is shown recording when it GIVES
   SOUND, not when it is opened; the wait is measured.** The page turned the microphone red the instant the
