@@ -33,7 +33,7 @@
    a network budged shall be settable"): the two buttons switch (as `louise
    node mode` and POST /api/mode do), the form writes platform.toml's [modes]
    (app/node_mode.py) #}
-<div class="panel"><details class="sect" id="sys-mode" open>
+<div class="panel"><details class="sect" id="sys-mode"{% if mode_error or mode_saved %} open{% endif %}>
   <summary><h2>Mode</h2> <span class="note">the node is in <b>{{ node_mode_labels[node_modes.mode] }}</b></span></summary>
   {% if mode_error %}<div class="note"><span class="badge err">not saved</span> {{ mode_error }}</div>{% endif %}
   {% if mode_saved %}<div class="note"><span class="badge">saved</span> the worker takes it at its next round</div>{% endif %}
