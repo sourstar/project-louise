@@ -40,7 +40,7 @@ import httpx
 from . import (backend, catalog, chunking, collections as collections_mod, config, cpu_limit, db,
                discovery, embed_select, layers as layers_mod, parallel, embeddings,
                encoder_timeouts, entities,
-               fts, issues as issues_mod, lookahead, model_load, model_pins, origin_missing,
+               fts, issues as issues_mod, lookahead, memory_yield, model_load, model_pins, origin_missing,
                resident,
                node_state,
                plugin_io, refs, sched, sizing, slice_scope, spaces, stats, text_index)
@@ -5583,6 +5583,15 @@ def _pipeline_worker(collection, gone: threading.Event) -> None:
             if _paused.is_set():
                 time.sleep(2)
                 continue
+            # THE COLLECTION YIELDS TO THE WORKER'S MEMORY (app/memory_yield.py;
+            # the rule an operator's monitor held until 2026-11-25): nothing
+            # new of it starts while the worker is over its line — its parts
+            # in flight finish — and its own log says why, with the numbers
+            yielding = memory_yield.said(collection.name)
+            if yielding is not None:
+                _say_once(con, collection.name, "memory-yield", yielding, every_s=WAIT_SAID_EVERY_S)
+                time.sleep(config.WORKER_IDLE_SLEEP)
+                continue
             # Tier-2 is DESIRED STATE (invariant 10) and this thread outlives
             # every edit to it, so the object is re-read each round rather
             # than held from thread start — see `_live_collection`.
@@ -7644,6 +7653,9 @@ def _start_oom_watch() -> None:
     from . import oom_hold
     oom_hold.on_kill(_on_oom_kill)          # a pool that sees a child die asks at once
     threading.Thread(target=oom_hold.watch, args=(_stop, _on_oom_kill), name="oom-watch", daemon=True).start()
+    # ...and the watcher that makes a collection yield BEFORE the kernel acts
+    threading.Thread(target=memory_yield.watch, args=(_stop, _node_line("memory")),
+                     name="memory-yield", daemon=True).start()
 
 
 

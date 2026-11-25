@@ -20,6 +20,15 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **A collection yields to the worker's memory by itself (`app/memory_yield.py`; the lessons, row A4).** The
+  rule München's monitor held — pause the heavy collection over 21,500 MiB of the worker cgroup's anonymous
+  memory, resume under 18,000 — is the worker's own: over 87.5 % of its limit the collection holding the most of
+  the parse pool yields (its thread stands down after its unit), the next after two minutes still over, all go on
+  under 73 %; a yield that does not bring the memory down ends after ten minutes and says the memory is not the
+  pool's. NOT MEASURED AS A CURE: the monitor's rule never fired (highest reading 17,412 MiB); the first yield
+  is the first measurement (scheduling-log.md). Still open from the same row group: a stage that makes no
+  progress saying so by itself (the monitor's hang and "done not rising" rules), and a memory kill naming its
+  part and not the bystanders (A5).
 - **THE LESSONS OF EUR-LEX5.NEXT BECOME THE PLATFORM'S (operator: "All the workaround made on the spot must be
   reflected in RAGE so that the same collection made from scratch can run smoothly"; "Every problem encountered
   with a collection must become a lesson learned reflected in RAGE"; "a consistency check shall be available

@@ -3390,3 +3390,36 @@ five minutes.
 **AFTER.** Owed: München's reading the first time a collection is paused under
 a scan on this build.
 
+## 2026-11-25 — a collection yields to the worker's memory by itself
+
+**SCENARIO.** The node as on 11-24/25: EUR-Lex5.next's rdf and fts with heavy
+units beside Normattiva, legi_F and NeuRIS at work, one worker cgroup of
+24 GiB. Until now München's monitor held the rule (pause over 21,500 MiB of
+`anon`, resume under 18,000).
+
+**BEFORE** (München's samples, usage / anon in MiB): the highest under the
+rule were 18,959 / 17,303, 17,734 / 17,412 and 17,469 / 16,356, all in the
+night's run of 11-24 (21:41–23:29Z, the stages working); the morning's scan
+and its apply 11,283–13,711 / 9,824–13,340. THE RULE NEVER FIRED: 0 memory
+pauses since it was set (04:35Z). The one real kill of these days (11-23) was
+a records build run by `docker exec` inside the worker's cgroup: memory that
+was not the pool's.
+
+**CHANGE.** Scheduling pitfall 24, `app/memory_yield.py`: a watcher of the
+worker's own cgroup every 10 s; at 87.5 % of the limit (21,504 MiB) the
+collection holding the most of the parse pool in flight yields, the next
+heaviest after 120 s still over; all go on under 73 % (17,940 MiB); a yield
+with nothing of its collection in flight and the memory still over ends after
+600 s, saying the memory is not the pool's.
+
+**EXPECTED.** Nothing, on these readings: the lines are above everything the
+samples show. If it fires: "[node info:memory] memory: <collection> yields —
+the worker holds N MiB anonymous, over 21,504 of 24,576; it has the most in
+the parse pool — …", the collection's own "yielding to the worker's memory …"
+every five minutes, and "… goes on — … under 17,940 …; it yielded for S s".
+
+**AFTER.** Owed, and only an event gives it: the first yield's lines, the
+`anon` curve across it (does it fall, how fast), and how long the collection
+stood. Until then München's monitor stays as a second pair of eyes, its pause
+at the same line.
+

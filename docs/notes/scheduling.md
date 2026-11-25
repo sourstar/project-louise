@@ -589,6 +589,23 @@ EVERY WAIT HAS ITS REQUEST AND ITS NUMBER. A thread that waits for something
 another thread produces checks that the producer is running or asked for,
 asks if not, and says how far it is — or it waits for a restart.
 
+**24. A rule of the node that lived in an operator's script.** 2026-11-25.
+EUR-Lex5.next ran its heavy units (package units of 14 MB in the large lane)
+beside three other collections under one 24 GiB cap, and what kept the kernel
+away was München's monitor: the worker cgroup's `anon` read every ten seconds,
+the collection paused over 21,500 MiB and resumed under 18,000. An agent
+standing guard — and a rule nobody could test, find or inherit: a collection
+built from scratch on another node would not have it.
+→ `app/memory_yield.py`: the same rule in the worker (87.5 % and 73 % of
+the cgroup's limit), the yielding collection chosen by what it holds of the
+parse pool in flight, its pipeline thread standing down after its unit
+(`_pipeline_worker`), bounded at ten minutes where the memory is not the
+pool's, and each step said with its numbers. NOT a measured cure: the
+monitor's rule never fired (its highest reading was 17,412 MiB), so the first
+yield on a node is the first measurement of whether a yield helps. The rule:
+what protects a collection is the platform's and is tested; what an operator
+runs beside it is, at most, a second pair of eyes.
+
 ## 6. Before you change the scheduler — the checklist
 
 1. **Read the worker log as a time series first.** It is the first
