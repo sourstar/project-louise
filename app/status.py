@@ -687,6 +687,10 @@ def holds(name: str, stage: str, *, collection=None, mode: str | None = None, pa
         out.append(Hold(UNKNOWN, "store", _store_says(name)))
     elif not node_state.mode_runs(mode, activity):
         out.append(Hold(HELD, "mode", mode_says(mode, stage)))
+    elif not node_state.network_runs(activity):
+        # the mode of use's own network choice (embed and query mode each
+        # have one, app/node_mode.py): held, and said as what it is
+        out.append(Hold(HELD, "network", node_state.network_says(activity)))
     if pause is not None:
         out.append(Hold(HELD, "pause", node_state._pause_says(name, pause)))
     said = profile_says(stage)

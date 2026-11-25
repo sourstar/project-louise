@@ -214,7 +214,7 @@ def healthz():
 # ---------------- status & stats ----------------
 
 def _node_mode_now() -> str:
-    """embed or chat (app/node_mode.py), for the status answer."""
+    """embed, query or custom (app/node_mode.py), for the status answer."""
     from . import node_mode
     return node_mode.current()
 
@@ -848,20 +848,24 @@ def mode_set(body: ModeBody, request: Request):
     "The mode shall be selectable through the api as well for cron jobs").
     Synchronous, as `/api/control` is: the mode and its run mode are written
     before the answer; the worker applies the budget and changes the chat
-    model at its next round. Calling it again with the same mode sets that
-    mode's run mode again."""
+    model at its next round. `embed`, `query` or `custom` (`chat`, the
+    morning's word for query, is still taken). Calling it again with the
+    mode the node is in changes nothing: a pause set by hand stays."""
     from . import node_mode
-    if body.mode not in node_mode.MODES:
+    mode = node_mode.named(body.mode)
+    if mode is None:
         raise HTTPException(400, f"mode must be {'|'.join(node_mode.MODES)}")
     client = request.client.host if request.client else "?"
     agent = (request.headers.get("user-agent") or "")[:80]
-    got = node_mode.switch(body.mode, by=f"POST /api/mode from {client} ({agent})")
-    line = f"node switched to {body.mode} mode (was {got['before']}); run mode {got['run']}"
+    got = node_mode.switch(mode, by=f"POST /api/mode from {client} ({agent})")
+    line = (f"node switched to {mode} mode (was {got['before']}); run mode {got['run']}" if got["changed"]
+            else f"node asked for {mode} mode, which it is in: nothing changed (run mode {got['run']})")
     try:
         db.log_event(_con(), "info", "control", line)
     except Exception:   # noqa: BLE001 — the mode is set; the event is a courtesy
         print(f"[info:control] {line}", flush=True)
-    return {**node_mode.shown(), "before": got["before"], "run_before": got["run_before"]}
+    return {**node_mode.shown(), "before": got["before"], "run_before": got["run_before"],
+            "changed": got["changed"]}
 
 
 class ScopeBody(BaseModel):
