@@ -648,21 +648,28 @@ def _sentences_v4(text: str) -> list[str]:
 def _windows(tok: Any, text: str, budget: int) -> list[str]:
     """Consecutive windows of `budget` tokens, cut at token boundaries, the
     whole text kept: the last resort for one sentence past the window.
-    The tokens' ends are read a span at a time (`_token_ends`): a window is
-    cut after its `budget`-th token where another token follows, the last
-    one runs to the text's end — as when every offset was listed first."""
+    The text is encoded a span at a time: a window is cut after its
+    `budget`-th token where another token follows, the last one runs to the
+    text's end — as when every offset was listed first."""
     out: list[str] = []
     begin = 0
     n = 0
-    pending: int | None = None          # the end of a window's last token, cut once another follows
-    for end in _token_ends(tok, text):
-        if pending is not None:
-            out.append(text[begin:pending])
-            begin = pending
-            pending = None
-        n += 1
-        if n % budget == 0:
-            pending = end
+    # ONLY THE CUTS ARE READ (2026-11-25, architecture's reading of München's
+    # profile of 32018R0688 fr: 13,717,825 Python steps over every token's
+    # end, 16.9 s of 72): the tokens whose end a window is cut at are the
+    # budget-th, 2·budget-th, … counted across the spans, so each span's
+    # offsets are indexed at those positions, n/budget reads, not n
+    cuts: list[int] = []
+    spans = _spans(tok, text)
+    for (a, _b), enc in zip(spans, _encode_many(tok, (text[a:b] for a, b in spans))):
+        offsets = enc.offsets
+        cuts.extend(a + offsets[i][1] for i in range((budget - 1 - n) % budget, len(offsets), budget))
+        n += len(offsets)
+    if cuts and n % budget == 0:
+        cuts.pop()                      # the last token itself: no token follows it, no cut
+    for c in cuts:
+        out.append(text[begin:c])
+        begin = c
     if n:
         out.append(text[begin:])
         begin = len(text)
