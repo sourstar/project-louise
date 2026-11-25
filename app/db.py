@@ -584,8 +584,11 @@ def set_scope(con, scope: dict):
     return merged
 
 
-def apply_desired_embed_mode(con, collection) -> str | None:
-    """Make the collection's Tier-2 `embed_mode` (its TOML, else the default)
+def apply_desired_embed_mode(con, collection, desired: str | None = None) -> str | None:
+    """Make the collection's Tier-2 `embed_mode` (its TOML, else the default
+    — or embed mode's embedding choice where it is in force, which is
+    desired state too, platform.toml's: `collections.desired_embed_mode`,
+    THE resolution; `desired` is its answer where the caller already has it)
     the effective one. Returns the Tier-3 value it replaced, or None when
     nothing changed.
 
@@ -596,7 +599,8 @@ def apply_desired_embed_mode(con, collection) -> str | None:
     state and Tier 2 decorative. The worker calls this at boot and whenever
     the TOML value changes; the override remains useful between those.
     """
-    desired = collection.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
+    if desired is None:
+        desired = collections_mod.desired_embed_mode(collection)[0]
     scope = get_scope(con)
     current = scope.get("embed_mode")
     if current == desired:

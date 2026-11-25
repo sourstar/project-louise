@@ -20,6 +20,24 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you can also choose local/p2p
+  embedding"; "Network and embedding mode remain personal choices") — `[modes] embed_embedding`.** The last
+  part of the modes' second cut, built as put to him (B1: a node choice in embed mode; he answered the network
+  half in his own words and left this one). `"local"` or `"p2p"` — absent, each collection's own, so a node
+  that sets nothing changes nothing: while the node is in embed mode, every collection that embeds its
+  backlog (its file says all or p2p) embeds it the node's way. The choice says WHO embeds a backlog, never
+  WHETHER: off and on-demand keep their own word; p2p on a collection that is not shared stays all local and
+  the card says why. ONE resolution, `collections.desired_embed_mode`, behind the worker's apply
+  (`db.apply_desired_embed_mode`), `hold config show` and the Library card (invariant 10); the worker's round
+  follows a switch or an edit of the key (`worker._apply_embedding_choice`: one comparison a round, the
+  collections' stores written only when the choice in force changed, and only those it governs — a Library
+  override of an on-demand collection survives a switch). Set on the System page's mode table (a third
+  select on embed mode's row) or in platform.toml; `louise node mode` and `GET /api/mode` show it. Not a
+  scheduling change: under p2p the backfill already leaves a part another live peer leads and embeds
+  everything where none does (`_backfill_rows`, 04 §4.5) — the choice only says which of the two existing
+  modes a collection is at. OWED from the node: one switch with the key set, the line "embed mode's
+  embedding choice (all p2p): N collection(s) … follow it" and each card's note.
+
 - **AN ITALIAN QUESTION WAS ANSWERED IN FRENCH (operator, 2026-11-25: "I made a search with a query in
   italian and the answer was in french") — the answer's language is now NAMED and said after the sources
   (`retrieval.build_answer_messages`).** "Parlami della vita di Dante Alighieri" over gutenberg at 14:07Z: five

@@ -2760,6 +2760,9 @@ def _collection_shelf(collection: collections_mod.Collection,
         # one the node will not run as written (07 §7.8, 2026-10-19)
         "embed_mode_file": collection.embed_mode_default,
         "embed_mode_note": getattr(collection, "embed_mode_note", None),
+        # what embed mode's embedding choice does to this collection, in
+        # words; None where it is not in force for it (`desired_embed_mode`)
+        "embed_mode_choice": collections_mod.desired_embed_mode(collection)[1],
         "share": bool(getattr(collection, "share", False)),
         # the SHARE box on every collection that can be served (a public
         # Codex, 04 §4.3) — never only where the p2p line happens to be
@@ -4535,7 +4538,10 @@ def _node_modes() -> dict:
     for r in rows:
         r["network"] = pc.modes.network(r["mode"])      # None: custom, its run mode decides
         r["network_key"] = {node_mode.QUERY: "query_network", node_mode.EMBED: "embed_network"}.get(r["mode"])
+        # embed mode's embedding choice (who embeds a backlog): embed mode's only
+        r["embedding"] = pc.modes.embedding(r["mode"])
     return {"mode": node_mode.current(), "rows": rows, "networks": platform_config.NETWORK_LABELS,
+            "embeddings": platform_config.EMBEDDING_LABELS,
             # one model named for both: a switch changes no model, said on the page (RULE 2)
             "one_model": (rows[0]["chat_model"] if len({r["chat_model"] for r in rows}) == 1 else None),
             "budget": {"down": _rate(pc.bandwidth.down_max_bps), "up": _rate(pc.bandwidth.up_max_bps)}}
@@ -4564,11 +4570,12 @@ async def system_mode_set(request: Request):
 @admin_router.post("/system/modes")
 async def system_modes_set(request: Request):
     """The Mode panel's settings: each mode's network choice and network
-    budget, each one that changed written into platform.toml's `[modes]`
-    (read back before it replaces the file; an empty budget: the key
-    removed, `[budget]`'s in force). Every gate reads the network choice
-    from the file, so it is in force at once; the worker applies a budget at
-    its next round. No restart."""
+    budget and embed mode's embedding choice, each one that changed written
+    into platform.toml's `[modes]` (read back before it replaces the file;
+    an empty budget: the key removed, `[budget]`'s in force). Every gate
+    reads the network choice from the file, so it is in force at once; the
+    worker applies a budget, and the embedding choice to the collections it
+    governs, at its next round. No restart."""
     from urllib.parse import quote
     from . import model_pins, voice
     form = await request.form()
@@ -4587,6 +4594,11 @@ async def system_modes_set(request: Request):
                 if key == "query_network" and now.written("chat_run"):
                     values["chat_run"] = None          # its first name leaves the file with it
             continue
+        if key == "embed_embedding":
+            if got != now.embed_embedding:
+                # "each collection's own" is the key's absence: nothing in force
+                values[key] = None if got == platform_config.EMBEDDINGS[0] else got
+            continue
         if got != now.written(key):
             values[key] = got or None
     client = request.client.host if request.client else "?"
@@ -4597,7 +4609,8 @@ async def system_modes_set(request: Request):
         return RedirectResponse(f"/admin/system?mode_error={quote(str(e)[:300])}#sys-mode", status_code=303)
     if values:
         model_pins.node_event("info", "modes set from the System page: " + "; ".join(
-            f"{k} → {v or '[budget] (unset)'}" for k, v in values.items()))
+            f"{k} → {v or ('each collection\'s own (unset)' if k == 'embed_embedding' else '[budget] (unset)')}"
+            for k, v in values.items()))
     return RedirectResponse("/admin/system?mode_saved=1#sys-mode" if values else "/admin/system#sys-mode",
                             status_code=303)
 

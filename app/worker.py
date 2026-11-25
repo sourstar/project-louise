@@ -6053,21 +6053,78 @@ def _sweep_unheld_embedders(collections, con=None) -> list[str]:
     return gone
 
 
-def _apply_tier2_embed_mode(con, collection, reason: str) -> None:
+def _apply_tier2_embed_mode(con, collection, reason: str, *, mode: str | None = None) -> None:
     """On restart, on add, and on a TOML edit the file wins (invariant 10):
     the Library's runtime override is replaced by the TOML's `embed_mode`
     (or the default when the TOML is silent), and the event log says so —
     an operator who flipped a mode from the UI sees why it changed back and
-    where to make it permanent."""
-    replaced = db.apply_desired_embed_mode(con, collection)
+    where to make it permanent. The files are two: where EMBED MODE'S
+    EMBEDDING CHOICE is in force for this collection (platform.toml's
+    `[modes] embed_embedding`, `collections.desired_embed_mode`) the line
+    says that instead. `mode` is the node's mode of use where the caller has
+    just read it (`_apply_embedding_choice`)."""
+    desired, choice = collections_mod.desired_embed_mode(collection, mode=mode)
+    replaced = db.apply_desired_embed_mode(con, collection, desired)
     if replaced is not None:
-        desired = collection.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
+        own = collection.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
+        if desired != own:
+            db.log_event(con, "info", "control",
+                         f"embed mode {replaced!r} -> {desired!r} on {reason}: {choice}")
+            return
         source = (f"collections/{collection.name}.toml" if collection.embed_mode_default
                   else "the default — the TOML sets none")
         db.log_event(con, "info", "control",
                      f"embed mode {replaced!r} -> {desired!r} on {reason}: the "
                      f"file wins ({source}); the Library's override lasts until "
                      f"the next restart or TOML edit")
+
+
+#: embed mode's embedding choice as the worker last applied it to the
+#: collections ("local", "p2p", or None: each collection's own — any other
+#: mode, or no choice made); `_UNREAD` before the first round
+_UNREAD = object()
+_embedding_choice_seen: list = [_UNREAD]
+
+
+def _apply_embedding_choice(mode: str, collections, cons) -> list[str]:
+    """EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you
+    can also choose local/p2p embedding"), acted on once a round beside the
+    mode: where the choice IN FORCE changed — a switch into or out of embed
+    mode, or `[modes] embed_embedding` edited (the page's edit needs no
+    restart) — every collection that embeds a backlog has its desired embed
+    mode applied again, and one line says who follows. The first read of a
+    process writes nothing: the start has just applied every collection
+    (`_apply_tier2_embed_mode`, "restart"), through the same resolution.
+    Costs one comparison a round. Returns the collections it applied."""
+    from . import platform_config
+    try:
+        choice = platform_config.seen().modes.embedding(mode)
+    except Exception:   # noqa: BLE001 — a file that does not load: each collection's own
+        choice = None
+    if choice not in ("local", "p2p"):
+        choice = None
+    before = _embedding_choice_seen[0]
+    if before == choice:
+        return []
+    _embedding_choice_seen[0] = choice
+    if before is _UNREAD:
+        return []
+    said = dict(platform_config.EMBEDDING_LABELS).get(choice or "collection")
+    reason = (f"embed mode's embedding choice ({said})" if choice
+              else "embed mode's embedding choice no longer in force")
+    applied = []
+    for c in collections:
+        own = c.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
+        if own not in collections_mod.BACKFILL_MODES or c.name not in cons:
+            continue
+        _apply_tier2_embed_mode(cons[c.name], c, reason, mode=mode)
+        applied.append(c.name)
+    _node_line("control")(
+        f"{reason}: {len(applied)} collection(s) that embed a backlog "
+        f"{'follow it' if choice else 'are back at their own file'}"
+        f"{': ' + ', '.join(applied) if applied else ''} "
+        f"(off and on-demand collections keep their own word; p2p needs the collection shared)")
+    return applied
 
 
 def _sync_collections(all_collections, cons, last_discover, pipeline: bool = False):
@@ -7522,7 +7579,7 @@ def run_forever():
             get_manager().set_override(node_state.bandwidth_override(node_con))
             # ...and the budget of the node's mode of use (embed or chat),
             # with its models at a switch (app/node_mode.py)
-            _apply_node_mode(node_con)
+            _apply_embedding_choice(_apply_node_mode(node_con), all_collections, cons)
             # ...and the same channel carries the measurement back the other
             # way: acquisition and seeding move their bytes HERE, so without
             # this the Network page's graph is a flat zero beside a saturated

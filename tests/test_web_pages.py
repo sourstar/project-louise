@@ -1577,6 +1577,11 @@ def _mode_row(html: str, mode: str) -> str:
     return re.search(rf'<tr data-node-mode="{mode}">.*?</tr>', html, re.S).group(0)
 
 
+def _select(html: str, name: str) -> str:
+    """One <select> of a piece of the page, its options included."""
+    return re.search(rf'<select name="{name}".*?</select>', html, re.S).group(0)
+
+
 def test_the_system_page_shows_the_mode_and_what_each_of_the_three_sets(models_page):
     # operator, 2026-11-25: embed mode and query mode, then "Add a 3rd mode custom"; "In both embed
     # and query modes you can choose to download and seed, seed only, no network"; "For both modes a
@@ -1595,7 +1600,7 @@ def test_the_system_page_shows_the_mode_and_what_each_of_the_three_sets(models_p
     options = r'<option value="([a-z-]+)"( selected)?>([^<]+)</option>'
     assert 'name="query_network"' in query and re.findall(options, query) == [
         ("download-seed", " selected", "download and seed"), ("seed", "", "seed only"), ("none", "", "no network")]
-    assert 'name="embed_network"' in embed and re.findall(options, embed) == [
+    assert 'name="embed_network"' in embed and re.findall(options, _select(embed, "embed_network")) == [
         ("download-seed", "", "download and seed"), ("seed", " selected", "seed only"), ("none", "", "no network")], \
         "each mode its own"
     assert 'name="chat_down_max" value="2MB"' in query and 'name="chat_up_max" value=""' in query
@@ -1694,6 +1699,52 @@ def test_a_budget_that_does_not_read_changes_nothing(models_page):
     assert r.status_code == 303 and "mode_error=" in r.headers["location"]
     assert path.read_text(encoding="utf-8") == before and node_state.worker_state() == "running"
     assert "not saved" in client.get(r.headers["location"], headers={"X-Admin-Token": "sekrit"}).text
+
+
+def test_the_system_page_offers_embed_modes_embedding_choice_on_its_row_only(models_page):
+    # operator, 2026-11-25: "In embed mode you can also choose local/p2p embedding"
+    client, path = models_page
+    html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
+    embed, query, custom = _mode_row(html, "embed"), _mode_row(html, "query"), _mode_row(html, "custom")
+    options = r'<option value="([a-z0-9-]+)"( selected)?>([^<]+)</option>'
+    assert re.findall(options, _select(embed, "embed_embedding")) == [
+        ("collection", " selected", "each collection&#39;s own"), ("local", "", "all local"), ("p2p", "", "all p2p")], \
+        "a file that says nothing: each collection's own"
+    assert 'name="embed_embedding"' not in query and "nothing is embedded" in query
+    assert 'name="embed_embedding"' not in custom and "each collection's own" in custom
+    path.write_text(path.read_text(encoding="utf-8") + '\n[modes]\nembed_embedding = "p2p"\n', encoding="utf-8")
+    html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
+    assert '<option value="p2p" selected>all p2p</option>' in _select(_mode_row(html, "embed"), "embed_embedding")
+
+
+def test_the_page_writes_the_embedding_choice_and_removes_the_key_for_each_collections_own(models_page):
+    import tomllib
+    client, path = models_page
+    post = lambda value: client.post("/admin/system/modes", data={"embed_embedding": value},   # noqa: E731
+                                     headers={"X-Admin-Token": "sekrit"}, follow_redirects=False)
+    r = post("p2p")
+    assert r.status_code == 303 and "mode_saved=1" in r.headers["location"]
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["modes"] == {"embed_embedding": "p2p"}
+    assert "mode_saved" not in post("p2p").headers["location"], "the same choice again writes nothing"
+    assert "mode_saved=1" in post("collection").headers["location"]
+    assert "embed_embedding" not in tomllib.loads(path.read_text(encoding="utf-8")).get("modes", {}), \
+        "each collection's own is the key's absence"
+    before = path.read_text(encoding="utf-8")
+    r = post("everything")
+    assert "mode_error=" in r.headers["location"] and path.read_text(encoding="utf-8") == before, \
+        "a word that is not one of the three is said, not written"
+
+
+def test_a_card_says_what_embed_modes_choice_did_to_its_collection(client, monkeypatch):
+    from app import node_mode
+    note = ("embed mode's embedding choice is all p2p ([modes] embed_embedding = \"p2p\"): while the node "
+            "is in embed mode this collection embeds its backlog that way")
+    monkeypatch.setattr(collections_mod, "desired_embed_mode", lambda c, **kw: ("p2p", note))
+    html = client.get("/admin/library", headers={"X-Admin-Token": "sekrit"}).text
+    assert "data-embed-choice" in html and "embed mode&#39;s embedding choice is all p2p" in html
+    monkeypatch.setattr(collections_mod, "desired_embed_mode", lambda c, **kw: ("all", None))
+    assert "data-embed-choice" not in client.get("/admin/library", headers={"X-Admin-Token": "sekrit"}).text
+    assert node_mode.current() == "custom"
 
 
 def test_the_library_does_not_offer_run_everything_in_query_mode(client):
