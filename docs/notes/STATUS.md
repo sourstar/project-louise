@@ -20,6 +20,23 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **The Ask button is Abort while a question is being answered (operator, 2026-11-25: "while a query is in
+  processing I want the Ask button to switch to Abort"; `app/templates/ask.html`, 07 §7.4).** Pressed, the
+  question's search and answer jobs are cancelled on the node (`DELETE /ask/relay/<id>`, the route the "stuck"
+  notice's Cancel already used), their streams closed, and the page says so: the hits and the words already
+  shown stay, the question stays in its box. A job whose start the node had not answered yet is cancelled when
+  named. The same guard closes a race that was there: a question replaced while its start was on its way could
+  take the newer one's stream, and released its hold on the model. `tests/browser/ask_abort.js`.
+- **A TRANSLATION THE MODEL SERVER CUT WAS SHOWN AND KEPT AS WHOLE — fixed the same day (`llm.translate_stream`,
+  `/ask/translate/stream`).** Found from the engine session's reading of LocalAI's chat route: a failure after
+  chunks have gone out is an error event and THEN the ordinary `[DONE]`. The answer's path read it (the page
+  says "answer cut"); the translation's dropped the stream's end, joined what had arrived — after an error
+  event, a token cap, a stream closed early or an exception under way — and both sent it as the passage's
+  finished text and kept it in the translation cache for every later reader. Now a stream that does not end
+  whole raises `llm.StreamCut`; the passage is a miss (its original shown, counted), is not kept, and the
+  route's log line says how many were cut and the first reason. `tests/test_translation_cut.py`. NOT known:
+  how many cut translations the node's cache holds from before — it is in the web process's memory only, so a
+  restart of the web (every deploy) empties it.
 - **The check a collection's author runs: `louise hold check <collection> --build` (`app/build_check.py`;
   operator: "a consistency check shall be available also for whom is willing to create a compliant
   collection").** The BUILD's checks, beside the plan's of 03 §3.2 and apart from them: about how the collection
