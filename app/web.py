@@ -4608,9 +4608,9 @@ async def system_modes_set(request: Request):
     except (ValueError, *voice.LOAD_ERRORS) as e:
         return RedirectResponse(f"/admin/system?mode_error={quote(str(e)[:300])}#sys-mode", status_code=303)
     if values:
+        unset = {"embed_embedding": "each collection's own (unset)"}
         model_pins.node_event("info", "modes set from the System page: " + "; ".join(
-            f"{k} → {v or ('each collection\'s own (unset)' if k == 'embed_embedding' else '[budget] (unset)')}"
-            for k, v in values.items()))
+            f"{k} → {v or unset.get(k, '[budget] (unset)')}" for k, v in values.items()))
     return RedirectResponse("/admin/system?mode_saved=1#sys-mode" if values else "/admin/system#sys-mode",
                             status_code=303)
 
