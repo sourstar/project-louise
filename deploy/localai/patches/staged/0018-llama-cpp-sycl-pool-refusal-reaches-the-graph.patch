@@ -1,0 +1,152 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 01:53:45 +0000
+Subject: [PATCH] fix(llama-cpp): the SYCL pool's refusal reaches the graph
+ instead of ending the backend
+
+Carried as a llama.cpp patch beside the others
+(patches/0018-sycl-pool-refusal-is-not-a-std-exception.patch), after
+0014-sycl-pool-refusal-fails-the-graph.patch, which it completes.
+
+0014 meant a device-memory refusal during a request to fail that request
+and leave the backend running. It threw the refusal as a std::runtime_error
+and caught it around the graph - but the SYCL backend calls its ops under
+its own macros, SYCL_CHECK(CHECK_TRY_ERROR(op(...))), and CHECK_TRY_ERROR
+catches any std::exception and aborts. The op that had asked for the
+memory took the refusal, and the backend process ended exactly as before
+0014, with one more line of log in front. LocalAI answered 500 "error
+reading from server: EOF" and loaded the model again.
+
+Seen with the test switch of 0016 on an Intel Arc Pro B70 (a reranker,
+GGML_SYCL_POOL_REFUSE=2): three backend processes, each gone at its first
+refusal, "SYCL error: CHECK_TRY_ERROR(op(...))" in ggml_sycl_op_mul_mat,
+never "the graph is abandoned".
+
+The refusal is now a plain struct, neither a sycl::exception nor a
+std::exception, with a static_assert for each: only the graph's own catch
+can take it. The request is then answered "Compute error." by the same
+process, and the next one is served.
+
+Checked without a device: the backend's real macros under icpx 2025.3.3
+abort on the old type and pass the new one; a CPU stand-in that fails two
+graphs with GGML_STATUS_ALLOC_FAILED gets an error for the request, the
+same process, and the same vectors bit for bit at the next request. Its
+test on a device is 0016's: the first two requests that grow the pool
+answered with an error by the same process, the third served with the
+scores of a run without the switch.
+
+Assisted-by: Claude Code
+---
+ ...-pool-refusal-is-not-a-std-exception.patch | 100 ++++++++++++++++++
+ 1 file changed, 100 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0018-sycl-pool-refusal-is-not-a-std-exception.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0018-sycl-pool-refusal-is-not-a-std-exception.patch b/backend/cpp/llama-cpp/patches/0018-sycl-pool-refusal-is-not-a-std-exception.patch
+new file mode 100644
+index 0000000..cc1c816
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0018-sycl-pool-refusal-is-not-a-std-exception.patch
+@@ -0,0 +1,100 @@
++sycl: the pool's refusal is not a std::exception, so that it reaches the graph
++
++"sycl: a pool commit the device refuses fails the graph, not the process"
++threw the refusal as a type derived from std::runtime_error and caught it
++around the graph. It never arrived there. The ops are called under the
++backend's own macros,
++
++  SYCL_CHECK(CHECK_TRY_ERROR(op(ctx, src0, src1, dst, ...)));
++
++and CHECK_TRY_ERROR (common.hpp) catches ANY std::exception, prints it and
++returns an error, which SYCL_CHECK turns into an abort. So the op that had
++asked the pool for memory took the refusal and the process ended as it
++always had, with one more line in front:
++
++  E alloc: the device refused 6 MiB for the pool (2 MiB committed): ...
++  the SYCL pool could not commit device memory
++  Exception caught at file:.../ggml-sycl.cpp, line:4221, func:operator()
++  SYCL error: CHECK_TRY_ERROR(op(ctx, src0, src1, dst, src0_dd_i, ...)): Exception caught in this line of code.
++    in function ggml_sycl_op_mul_mat at .../ggml-sycl.cpp:4221
++
++(an Intel Arc Pro B70, a reranker, GGML_SYCL_POOL_REFUSE=2: three
++processes, each gone at its first refusal; no "the graph is abandoned").
++
++The refusal is now a plain struct: neither a sycl::exception, which the
++ops' function-try-blocks end the process on, nor a std::exception, which
++CHECK_TRY_ERROR takes. Two static_asserts hold both. No handler between an
++op and ggml_sycl_graph_compute_or_fail() catches (...): the four in the
++backend are in the host allocator, the multi-device exchange and its
++teardown.
++
++What an abandoned op leaves: its temporaries are the pool's, released in
++reverse order as the stack unwinds; the one thing ops change for good, the
++layout of quantized weights, takes its scratch memory from the device
++allocator, not from the pool, and has its own fallback.
++
++Checked without a device: with the backend's real macros under icpx
++2025.3.3, the old type aborts with the lines above and the new one reaches
++a catch outside the op; and with a CPU stand-in that fails two graphs with
++GGML_STATUS_ALLOC_FAILED, llama-server answers "Compute error." (or, with
++a context made for the request, its canary's refusal), keeps its process,
++and serves the next request with the same vectors, bit for bit. On a
++device: GGML_SYCL_POOL_REFUSE=2, the first two requests that grow the pool
++answered with an error by the same process, the third served.
++---
++diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
++index a9599ca..1aa0170 100644
++--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
++@@ -28,6 +28,7 @@
++ #include <cmath>
++ #include <cstring>
++ #include <stdexcept>
+++#include <type_traits>
++ #include <iostream>
++ #include <fstream>
++ #include <stdio.h>
++@@ -2264,11 +2265,21 @@ ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type() {
++ // The device refused memory for an op's temporaries. Thrown by the pool and caught by
++ // ggml_backend_sycl_graph_compute(), which fails the GRAPH with GGML_STATUS_ALLOC_FAILED: on a card shared with
++ // other models a refusal is contention, not a fault, and the process - with every other model's work and this
++-// model's weights - must outlive it. Not a sycl::exception on purpose: the function-try-blocks that end the
++-// process on one must not see it.
++-struct ggml_sycl_out_of_device_memory : public std::runtime_error {
++-    using std::runtime_error::runtime_error;
+++// model's weights - must outlive it.
+++//
+++// NOT a sycl::exception and NOT a std::exception, on purpose. Between the pool and the graph's caller stand the ops,
+++// and they end the process on either: their function-try-blocks on a sycl::exception, and CHECK_TRY_ERROR
+++// (common.hpp) on ANY std::exception - it catches one, prints it, and SYCL_CHECK aborts. As a std::runtime_error,
+++// which this was at first, the refusal never reached the graph: the op that had asked for the memory took it
+++// (SYCL_CHECK(CHECK_TRY_ERROR(op(...))) in ggml_sycl_op_mul_mat) and the process ended as it always had. No handler
+++// between an op and ggml_sycl_graph_compute_or_fail() catches (...).
+++struct ggml_sycl_out_of_device_memory {
+++    const char * what;
++ };
+++static_assert(!std::is_base_of<std::exception, ggml_sycl_out_of_device_memory>::value,
+++              "CHECK_TRY_ERROR catches std::exception: the pool's refusal must not be one, or it ends the process");
+++static_assert(!std::is_base_of<sycl::exception, ggml_sycl_out_of_device_memory>::value,
+++              "the ops' function-try-blocks end the process on a sycl::exception: the pool's refusal must not be one");
++ 
++ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
++     static const int MAX_SYCL_BUFFERS = 256;
++@@ -2484,7 +2495,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
++                 // nothing of the pool has changed yet: this graph fails, and a later one may ask again
++                 GGML_LOG_ERROR("%s: the device refused %zu MiB for the pool (%zu MiB committed): %s\n", __func__,
++                                reserve_size / (1024 * 1024), pool_size / (1024 * 1024), e.what());
++-                throw ggml_sycl_out_of_device_memory("the SYCL pool could not commit device memory");
+++                throw ggml_sycl_out_of_device_memory{ "the SYCL pool could not commit device memory" };
++             }
++ 
++             // reserve virtual address space (if not already reserved)
++@@ -7393,7 +7404,7 @@ static ggml_status ggml_sycl_graph_compute_or_fail(ggml_backend_sycl_context * s
++     try {
++         ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
++     } catch (const ggml_sycl_out_of_device_memory & e) {
++-        GGML_LOG_ERROR("%s: %s: the graph is abandoned\n", __func__, e.what());
+++        GGML_LOG_ERROR("%s: %s: the graph is abandoned\n", __func__, e.what);
++         try {
++             sycl_ctx->stream()->wait();   // what was submitted before the refusal finishes on memory still held
++         } catch (const sycl::exception &) {
+-- 
+2.43.0
+

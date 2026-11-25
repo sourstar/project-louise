@@ -12,6 +12,7 @@
   "mmap": true,
   "name": "vega-nemotron-3-embed-1b",
   "options": [
+    "fit:off",
     "parallel:1",
     "pooling:mean",
     "ubatch:8192"

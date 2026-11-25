@@ -421,7 +421,9 @@ louise node
                                                                        weights; operator, 2026-11-24 — the eviction penalty, and what is left for weights; a model
                                                                        loaded with context_on_demand counts at its weights), each model in priority order with its rank, tier, roles, collections, loaded
                                                                        state, at-rest and largest size, in the budget or not and why, last use, and pin holders
-                                                                       (an embed batch's, the operator's; never the preload's); read-only (added 2026-11-08,
+                                                                       (an embed batch's, the operator's; never the preload's); and how a load that does not fit
+                                                                       gets its room (`[models] make_room`, §7.8: in "page" the host's available memory against
+                                                                       its floor, and LocalAI's reclaimer if it is still on); read-only (added 2026-11-08,
                                                                        operator; the budget the same day)
 
 louise dev                                                             operator instruments; read-only unless the line says otherwise
@@ -2219,6 +2221,22 @@ variable, a file, a log line or a message.
              # 2026-11-08: "Chat, speech, rerankers, madlad are preloaded too"); false: loaded at their first use.
              # Paused or seed-only preloads neither. Either way nothing is unloaded for being idle — "only if
              # space is claimed", by LocalAI's reclaimer, which evicts the least recently used (added 2026-11-08)
+             make_room = "unload"   page_floor_gib = 12   page_over_gib = 3
+             # HOW A LOAD THAT DOES NOT FIT THE CARD GETS ITS ROOM (added
+             # 2026-11-24, operator: "Extend page instead of unload to the dense models"). "unload" (the default,
+             # the rule of 2026-11-16): the model with the oldest real use is unloaded. "page": for a load WORK
+             # is waiting on, nothing is unloaded while the host can hold what the card cannot — MemAvailable
+             # less the shortfall stays at or above `page_floor_gib` — and the driver moves idle models' memory
+             # to host memory and back at their next use (measured on the B70: 0.2–0.4 s more on a small model's
+             # next request, 7.5–8.7 s after an unload); under the floor, the host unread, or a model whose
+             # paged load failed: unloaded as before. NEVER FURTHER OVER THE CARD THAN WAS MEASURED: the loaded
+             # models at their largest plus the load may exceed the card by `page_over_gib` at most (3; 3.5 held
+             # on the B70 with a context made on demand in it), and the host keeps a context's worth
+             # (3,262 MiB, the keeper's reserve) above its floor — a context a full card refuses kills its
+             # backend. Past either, unloaded as before. The keeper's own preloads keep "unload" either way. It
+             # needs the engine's two switches in every llama.cpp model's file and LocalAI's memory reclaimer
+             # off (deploy/vega/stage/localai_settings.py reads this key); `node resident show` says the rule,
+             # the host's memory against the floor, and a reclaimer left on (app/model_evict.py)
              chat_large = "louise-chat-qwen3.6-35b-a3b"   chat_small = "louise-chat-qwen3.5-9b-q4-p0"
              translate = "louise-translate-madlad"
              # the chat and translation models OVER the environment's CHAT_MODEL and TRANSLATE_MODEL, which stay

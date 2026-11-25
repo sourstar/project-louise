@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
-Date: Mon, 2 Nov 2026 21:06:12 +0000
+Date: Sat, 21 Nov 2026 02:55:05 +0000
 Subject: [PATCH] fix(llama-cpp): encode encoder-decoder slots together, in
  waves (T5, MADLAD)
 
@@ -23,6 +23,9 @@ The same CPU checks pass at ddf48f8: a lone request equal to the library's;
 4 arrival orders, the same 7 outputs; in-wave equal to alone on 7 of 7; over
 n_ubatch and n > 1 refused with 400; 60 requests leave every slot idle.
 
+Rebased 2026-11-21 onto LocalAI v5.0.1 (llama.cpp 78e0529): the
+llama.cpp patch's context lines refreshed, its code unchanged.
+
 Assisted-by: Claude Code
 ---
  .../0004-server-encoder-decoder-waves.patch   | 327 ++++++++++++++++++
@@ -31,7 +34,7 @@ Assisted-by: Claude Code
 
 diff --git a/backend/cpp/llama-cpp/patches/0004-server-encoder-decoder-waves.patch b/backend/cpp/llama-cpp/patches/0004-server-encoder-decoder-waves.patch
 new file mode 100644
-index 0000000..5bf20b0
+index 0000000..4c3bf16
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0004-server-encoder-decoder-waves.patch
 @@ -0,0 +1,327 @@
@@ -71,10 +74,10 @@ index 0000000..5bf20b0
 +enc_dec; slot_order is the slot order for them).
 +
 +diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-+index 1abec47..f11c533 100644
++index 32c7e70..803a87c 100644
 +--- a/tools/server/server-context.cpp
 ++++ b/tools/server/server-context.cpp
-+@@ -33,6 +33,9 @@
++@@ -34,6 +34,9 @@
 + #include <random>
 + #include <utility>
 + #include <fstream>
@@ -84,7 +87,7 @@ index 0000000..5bf20b0
 + 
 + // fix problem with std::min and std::max
 + #if defined(_WIN32)
-+@@ -417,6 +420,13 @@ struct server_slot {
++@@ -428,6 +431,13 @@ struct server_slot {
 +     // (llama_process ENCODE) when the slot starts; the task's own prompt is then
 +     // the decoder's start token
 +     llama_tokens enc_tokens;
@@ -98,7 +101,7 @@ index 0000000..5bf20b0
 + 
 +     // sampling
 +     json json_schema;
-+@@ -701,9 +711,15 @@ struct server_slot {
++@@ -712,9 +722,15 @@ struct server_slot {
 + 
 +             // do not keep context of the child slots - the parent's context is enough
 +             // nor of the stateless slots - no task ever reuses it
@@ -115,7 +118,7 @@ index 0000000..5bf20b0
 + 
 +             // mtmd_helper always re-eval the whole prompt
 +             if (task->type == SERVER_TASK_TYPE_TTS) {
-+@@ -1368,11 +1384,11 @@ private:
++@@ -1385,11 +1401,11 @@ private:
 +                 && std::string(arch) == "t5";
 +         }
 + 
@@ -131,8 +134,8 @@ index 0000000..5bf20b0
 +         }
 + 
 +         try {
-+@@ -2017,6 +2033,122 @@ private:
-+         return output;
++@@ -1965,6 +1981,122 @@ private:
++         return task.params.lora.empty() ? params_base.lora_adapters : construct_lora_list(task.params.lora);
 +     }
 + 
 ++    // the gathering window of an encoder-decoder wave: a client's concurrent requests
@@ -252,9 +255,9 @@ index 0000000..5bf20b0
 ++    }
 ++
 +     bool launch_slot_with_task(server_slot & slot, server_task && task) {
-+         // process per-request lora adapters
-+         if (!task.params.lora.empty()) {
-+@@ -2175,7 +2307,14 @@ private:
++         auto task_loras = get_task_lora(task);
++ 
++@@ -2127,7 +2259,14 @@ private:
 +                 send_error(task, "an encoder-decoder model takes text only", ERROR_TYPE_INVALID_REQUEST);
 +                 return false;
 +             }
@@ -269,7 +272,7 @@ index 0000000..5bf20b0
 +             llama_token dec_start = llama_model_decoder_start_token(model_tgt);
 +             if (dec_start == LLAMA_TOKEN_NULL) {
 +                 dec_start = llama_vocab_bos(vocab);
-+@@ -4155,8 +4294,29 @@ private:
++@@ -4120,8 +4259,29 @@ private:
 +         std::vector<server_slot *> generating;
 +         std::vector<server_slot *> drafting;
 + 
@@ -300,7 +303,7 @@ index 0000000..5bf20b0
 +             if (slot.state != SLOT_STATE_GENERATING || slot.task->type == SERVER_TASK_TYPE_TTS || slot.task->type == SERVER_TASK_TYPE_REALTIME) {
 +                 return;
 +             }
-+@@ -4298,7 +4458,7 @@ private:
++@@ -4263,7 +4423,7 @@ private:
 +         if (params_base.cont_batching || batch.size() == 0) {
 +             bool add_ok = true; // false means the batch is full, skip remaining slots
 + 
@@ -309,7 +312,7 @@ index 0000000..5bf20b0
 +                 if (!add_ok || batch.size() >= n_batch) {
 +                     return; // batch is full, skip remaining slots
 +                 }
-+@@ -4307,6 +4467,12 @@ private:
++@@ -4272,6 +4432,12 @@ private:
 +                     return;
 +                 }
 + 
@@ -322,7 +325,7 @@ index 0000000..5bf20b0
 +                 // check if we can batch this slot with the previous one
 +                 if (slot_batched && !slot_batched->can_batch_with(slot)) {
 +                     return;
-+@@ -4374,39 +4540,6 @@ private:
++@@ -4340,39 +4506,6 @@ private:
 +                             return;
 +                         }
 + 
@@ -362,6 +365,3 @@ index 0000000..5bf20b0
 +                         if (!slot.can_split()) {
 +                             if (slot.task->n_tokens() > n_ubatch) {
 +                                 send_error(slot,
--- 
-2.43.0
-

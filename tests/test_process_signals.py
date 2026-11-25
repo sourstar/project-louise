@@ -35,13 +35,21 @@ def _env(tmp_path: Path, corpus_dir: Path) -> dict:
     (tmp_path / "data").mkdir(exist_ok=True)
     codex_collection("gutenberg", louise_root=tmp_path / "data", config_dir=tmp_path / "config",
                      corpus_dir=corpus_dir, toml_extra='\n[encoder]\nurl = "http://127.0.0.1:9"\nembed_model = "m"\nquery_model = "m"\n')
-    return {
+    env = {
         "PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), "PYTHONPATH": str(ROOT),
         "DATA_DIR": str(tmp_path / "data"), "CONFIG_DIR": str(tmp_path / "config"),
         "LOUISE_ROOT": str(tmp_path / "data"),
         "CORPUS_DIR": str(corpus_dir), "PARSE_PROCESSES": "1",
         "WORKER_IDLE_SLEEP": "0.2",
     }
+    # A HOME OF ITS OWN, THE PARENT'S PACKAGES. Where a dependency is installed for the user
+    # (`pip install --user`: jinja2 under ~/.local in the cloud sessions' image), the child's own
+    # HOME hid it and the web died at import ("jinja2 must be installed", 2026-11-24). The user
+    # base is named outright, so the child imports what this process imports and shares no state.
+    import site
+    if site.ENABLE_USER_SITE:
+        env["PYTHONUSERBASE"] = site.getuserbase()
+    return env
 
 
 class _Output:

@@ -11,8 +11,21 @@ Read first: `CLAUDE.md` (the rules), `docs/notes/STATUS.md` (where things stand)
 
 ## 1. The machine
 
-- **TrueNAS SCALE** host, 12 cpus, 61 GB RAM, ZFS ARC capped at 16 GB.
-- **GPU**: Intel Arc Pro B70, 32 GB VRAM, xe driver, at PCI `0000:03:00.0`. The
+- **TrueNAS SCALE** host, 12 cpus, 61 GB RAM: 2 × 32 GB DDR5 on channels A and B
+  (dual channel), an EXPO-6400 kit with a 5600 JEDEC base, **running at 5200 MT/s**
+  by the firmware's own report (`dmidecode -t memory`, `Configured Memory Speed`,
+  read 2026-11-19) although the BIOS menu shows the EXPO profile selected — the
+  profile is not in effect (AM5 falls back to JEDEC after a failed training); open
+  until a bandwidth measurement or a BIOS session settles it. ZFS ARC capped at 16 GB.
+- **GPU**: Intel Arc Pro B70 (`8086:e223`; `lspci` labels it "Battlemage G21" from its
+  id table, the AOT target is `bmg-g31` — build.sh), 32 GB VRAM, 608 GB/s, xe
+  driver, at PCI `0000:03:00.0`, on a **PCIe 5.0 x16 link** — read 2026-11-19 from
+  sysfs: the card's upstream bridge `01:00.0` to the root port `00:01.1` is
+  `max 32.0 GT/s x16, now 32.0 GT/s x16`. The endpoint `03:00.0` and the on-card
+  downstream bridge `02:01.0` report an INTERNAL link of 2.5 GT/s x1: read the
+  bridge, never the endpoint, for the slot link (`/sys/bus/pci/devices/…/..`,
+  `max_link_speed`, `current_link_width`). What a VRAM overcommit costs over that
+  link: idle-context-brief.md §6 "What the spill costs". The
   iGPU is `0000:13:00.0`. `/dev/dri/cardN` numbers can swap across reboots (§12):
   always check by PCI address.
 - **Pools**:
@@ -265,6 +278,34 @@ in `deploy/watchdog/README.md`).
 - **Priority**: query steps outrank corpus embedding (`app/rage/dispatch.py` levels).
   Corpus work stands aside on the whole card while a person's query step holds the
   claim.
+- **LocalAI's SERVER is our build, and this is its recipe** (as München ran it
+  2026-11-21/22 for P1 and 2026-11-24 with P13; until then it was in nobody's
+  repository — `deploy/localai/llama-cpp/build.sh` builds the llama.cpp BACKEND only):
+  1. the tree: `git clone https://github.com/mudler/LocalAI`, checked out at the
+     series' base (`v5.0.1`, `dd5780a`), then the patches that touch the server by
+     `git am`, in order — `deploy/localai/patches/0001-system-list-load-options.patch`
+     (P1), then `staged/0011-config-voice-cloning-opt-in-unknown-backend.patch` (P13).
+     On the node: `/mnt/ssd3/louise-build/core-p1-v5/src-clone`;
+  2. the build: `docker build --target builder -t louise-localai-p13-builder:v5.0.1 .`
+     — LocalAI's own Dockerfile, its `builder` stage; only `/build/local-ai` is taken;
+  3. the patch's own tests, inside the builder: `docker run --rm -w /build --entrypoint
+     sh louise-localai-p13-builder:v5.0.1 -c "go test -tags nosqlite,purego_utp
+     ./core/config/"` (`./pkg/model/` for P1);
+  4. the image, three lines: `FROM quay.io/go-skynet/local-ai:v5.0.1-gpu-intel` /
+     `COPY --from=louise-localai-p13-builder:v5.0.1 /build/local-ai /local-ai` /
+     a `LABEL` naming the patches and the base; tagged
+     `louise-localai:v5.0.1-gpu-intel-p1-p13`;
+  5. the check: `docker run --rm --entrypoint /local-ai <image> --version` reads
+     `v5.0.1-<commits past the tag>-g<the build tree's HEAD>` — `v5.0.1-1-g105104c32`
+     with P1, `v5.0.1-2-gac69f2840` with P1 and P13 (the hash is the build tree's own:
+     check the count and `git log`);
+  6. the swap (`localai-v5-swap.sh`, on the node): the TrueNAS app pins the tag
+     `quay.io/go-skynet/local-ai:v5.0.0-gpu-intel`, so the built image is tagged with
+     that name locally, the previous one kept under its `louise-localai:…` tag as the
+     way back, and the app redeployed — LocalAI restarts and every model unloads —
+     then `--version`, `GET /system` still listing `load_options`, and the settings
+     check (`deploy/vega/stage/localai_settings.py --check`).
+  State on 2026-11-24: the P1+P13 image is BUILT, not swapped.
 
 ## 9. The GPU governor
 

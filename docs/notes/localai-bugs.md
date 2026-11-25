@@ -1,7 +1,7 @@
 # LocalAI: every action item for the LocalAI team
 
 *One place for everything this project owes or asks `mudler/LocalAI`: the
-defects found (B1–B14), the patches we carry (P1–P2), and the requests (R1–R5).
+defects found (B1–B20), the patches we carry (P1–P8, more staged), and the requests (R1–R6).
 The operator files them upstream. Started 2026-10-02 while mapping LocalAI
 against the model pool (`model-pool-prior-art.md`@c572c3b); the patches and
 requests come from `model-pool-over-localai.md`@c572c3b, accepted
@@ -119,22 +119,37 @@ the source):*
 | B14 | defect | llama.cpp backend, `Embedding`: ignores `EmbeddingTokens`, which `/v1/embeddings` fills when given token ids; it embeds the empty text beside them and refuses it ("Input content cannot be empty"), so no client can embed tokens | **blocking** for a space that cuts by tokens: without token ids an input cannot always be cut to exactly its first N tokens (3 of 512 at 1,024 on the AMD peer); P2 | not filed; found 2026-10-18, source in §B14 |
 | B15 | defect | `v4.12.1`: backend downloads are staged at `${basepath}/downloading` = `//downloading`, unwritable by LocalAI's user, so every backend install and auto-upgrade fails | backend updates (the operator wants them); set `LOCALAI_DOWNLOAD_STAGING_PATH` | **fixed in v5.0.0** (#13186: staging falls back to the OS temp folder); live on the node since 2026-11-21 (v5.0.1) |
 | B16 | defect | llama.cpp backend (llama-server's code): never runs the encoder of an encoder-decoder model; a T5-family GGUF is decoded as if decoder-only and answers garbage (`<2cs><2cs>…`) | MADLAD cannot run on llama.cpp, so it runs on torch (17–38 s cold); P3 | upstream llama.cpp #5763 / #26565, no fix; §P3 |
+| B17 | defect | `v5.0.1`, `/v1/audio/speech`: whether a model may be given a voice profile is decided from its `backend:` NAME against LocalAI's own table, before `tts.voice_cloning` is read — a backend installed under any other name (ours: the engine's digest in it) is refused "selected model does not support reference-audio voice cloning", and no key of the model file can say otherwise | OmniVoice on our engine cannot be asked for a recorded voice the way Louise asks (`localai://voice-profiles/<id>`): blocks the cut-over of speech, not the measurement | not filed; found on the card 2026-11-24 |
+| B18 | defect | llama.cpp (ggml-sycl): a device-memory refusal while a graph runs aborts the process — the pool's commit is under `SYCL_CHECK` (`ggml_sycl_pool_vmm::alloc`, `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY`) | on a card several models share, another model's load can kill a model with its request; it is what stands between the node and paging idle models instead of unloading them | not filed; seen on the card 2026-11-24; fixed by P14 (staged) |
+| B19 | defect | llama.cpp backend (LocalAI's `grpc-server.cpp`, the handler of llama.cpp's own server): a SECOND SIGTERM/SIGINT, arriving while the backend cleans up after the first, calls `exit(1)` INSIDE the signal handler — the exit handlers and static destructors then run against the clean-up in progress and can block, the process alive and its card memory held | 3 of 14 unloads of a model behind our wrapper took LocalAI's whole 15 s and ended in its SIGKILL (München, 2026-11-24): LocalAI signals the backend's process GROUP, and anything in that group that forwards the signal delivers it twice | not filed; avoided on our side since 2026-11-24 (the wrapper leaves a backend already told 2 s to go, #856); fixed by P15 (staged) |
+| B20 | defect | `v5.0.1`, voice profiles (`core/services/voiceprofile`): a request's lease on a profile's clip is a hard link under `voice-profiles/.leases/<store>/`, removed when the request ends — and by nothing else. A process that is killed leaves its lease directory and any lease in it for ever: no start, no delete looks at another process's directory | a deleted profile's RECORDING stays on disk behind a link that no listing of profiles shows — a person's voice outliving its delete. Seen on the node 2026-11-25 (München): nine lease directories dated 10-10 to 11-25, eight empty, one holding a 1,331,940-byte link made in October to a clip of a profile that still exists (same inode); had that profile been deleted, the bytes would have stayed | **to file upstream** (mudler/LocalAI); P19 (staged) |
 | **P1** | **patch we carry** | `GET /system` lists the options each loaded model was given, with their hash | none since VeGa: the wrapper receives `LoadModel` itself (vega.md §1). It was blocking for the model pool; kept for upstream. IN the node's LocalAI again since 2026-11-21 (v5.0.1 + P1, cherry-picked as 105104c32; operator: "Re-patch, then update"): its `/system` rows carry `load_options` (5 of 5 loaded models, as the runs state them). Before it, v4.12.1 upstream core carried none, and Louise read a model's options from the answering run's statement (`model_load.note_run_options`), as it still can | not filed; [`deploy/localai/patches/0001-system-list-load-options.patch`](../../deploy/localai/patches/0001-system-list-load-options.patch) |
 | **P2** | **patch we carry** | llama.cpp backend: `Embedding` embeds `EmbeddingTokens`, with the special tokens a text gets (B14) | **blocking** for the token cut: VeGa's wrapper sends a cut as its first tokens to a backend that embeds them (`Gate._probe`) | not filed; [`deploy/localai/patches/0002-llama-cpp-embed-token-ids.patch`](../../deploy/localai/patches/0002-llama-cpp-embed-token-ids.patch) |
 | **P3** | **patch we carry** | llama.cpp backend: the encoder of an encoder-decoder model runs (B16), as a llama.cpp patch in the backend's own `patches/` | MADLAD on llama.cpp (operator, 2026-10-27: "we need anyway a patched llama.cpp") | not filed; [`deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch`](../../deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch) |
 | **P4** | **patch we carry** | llama.cpp backend: encoder-decoder slots are encoded together, in WAVES, and decode in one batch (on P3, which ran one slot) | MADLAD on llama.cpp at torch's speed: a question's 7 languages in one wave instead of 7 × 3 s | not filed; [`deploy/localai/patches/0004-llama-cpp-encoder-decoder-waves.patch`](../../deploy/localai/patches/0004-llama-cpp-encoder-decoder-waves.patch) |
 | **P5** | **patch we carry** | llama.cpp backend (ggml-sycl): the batched F16 matmul converts a non-contiguous src1 for the GEMM that RUNS — the oneDNN flat copy only when oneDNN's GEMM runs, the gather for oneMKL (`GGML_SYCL_ENABLE_DNN=0`); before, the KQ product of two or more decoder tokens over an F16 K cache read the wrong queries (the P4 card fault, upstream-bugs.md S1) | the root cause of the wrong text in waves, found by code reading 2026-10-28 and matched by the 32-case pattern of upstream's own suite; the F16 KV cache back for MADLAD (−44 % per token against the f32 workaround) once the rebuilt tar passes its gates | **to file at ggml-org/llama.cpp as a PR** ([upstream-reports/ggml-llama-cpp-sycl.md](upstream-reports/ggml-llama-cpp-sycl.md), second section); [`deploy/localai/patches/0005-llama-cpp-sycl-batched-mul-mat-src1.patch`](../../deploy/localai/patches/0005-llama-cpp-sycl-batched-mul-mat-src1.patch) |
-| **P8 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder output is kept PER SEQUENCE (`llama_memory_enc_dec`, stage 1 of llama-cpp-encoder-decoder.md), so a slot is encoded while others decode; on P3 and P4 | a late request joins the next decode step instead of waiting for the wave; the upstream shape (no public API) | not filed; [`deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch`](../../deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch); moves into the series after its card gates |
-| **P9 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder outputs live ON THE DEVICE (stage 2: a persistent store written by the encoder graph, read by the decoder's `ggml_get_rows`; no host copies), on P5 | the shape upstream asked for (a persistent buffer, no host copies); the per-step upload gone | not filed; [`deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch`](../../deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch); moves into the series with P5 after the card gates |
-| **P10 (staged; LIVE on its own backend)** | **patch staged, built into a separate backend, LIVE 2026-11-11** | llama.cpp: nvidia/llama-nemotron-rerank-1b-v2 ranks (`LlamaBidirectionalForSequenceClassification`: bidirectional Llama 3.2 1B, mean-pooled, a `score` head). Ported from ggml-org/llama.cpp#24083 (open) onto ddf48f8: converter class, the optional `cls.output` in llama-embed, BOS for a rerank template's prompt; this base pools before the head when the GGUF says classifier pooling mean, so no graph change | the reranker benchmark's arm A3 (operator, 2026-11-10: "Patch llama.cpp to support nemo reranker, tomorrow I want to see its benchmarks too") | upstream #24083 open; [`deploy/localai/patches/staged/0008-llama-cpp-nemotron-rerank.patch`](../../deploy/localai/patches/staged/0008-llama-cpp-nemotron-rerank.patch), built only from [`staged/nemotron-rerank.series`](../../deploy/localai/patches/staged/nemotron-rerank.series) into its own backend; joins the series only if A3 earns it. A3 earned it (operator, 11-11: B): the `[reranker]` of five collections on `louise-sycl-f16-llama-cpp-9d17b8a39845` (STATUS 11-11); joining the main series waits for the next engine change |
-| **P11 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: CONTEXT ON DEMAND — a model loaded with the option `context_on_demand` keeps its weights, and a request that carries `metadata.keep_context_ms` has its context (KV cache and compute buffers) freed that long after its answer; the next request creates it again. A request that carries none leaves the context loaded, as ever (the option `keep_context_ms:N` gives such requests a keep). No RPC reads the `llama_context` any more (it is null while the model is idle) | the card holds ~34 GB of models on 32.6 GB, ~10 GB of it context that works seconds a day (operator, 2026-11-11: "when llama.cpp gets a request it allocates the context memory; when the processing is done it frees it"; "Implement it") — [idle-context-brief.md](idle-context-brief.md) | not filed — PREPARED for the operator to file himself (2026-11-11: "prepare everything for upstream, I will upload it eventually"; [`deploy/localai/upstream/llama-cpp-context-on-demand/`](../../deploy/localai/upstream/llama-cpp-context-on-demand/READING-GUIDE.md), [`localai-context-on-demand/`](../../deploy/localai/upstream/localai-context-on-demand/READING-GUIDE.md)); [`deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`](../../deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch), built only from [`staged/context-on-demand.series`](../../deploy/localai/patches/staged/context-on-demand.series); CPU checks passed 2026-11-11, card gates not run |
+| **P9 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder output is kept PER SEQUENCE (`llama_memory_enc_dec`, stage 1 of llama-cpp-encoder-decoder.md), so a slot is encoded while others decode; on P3 and P4 | a late request joins the next decode step instead of waiting for the wave; the upstream shape (no public API) | not filed; [`deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch`](../../deploy/localai/patches/staged/0006-llama-cpp-encoder-decoder-memory.patch); moves into the series after its card gates |
+| **P10 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the encoder outputs live ON THE DEVICE (stage 2: a persistent store written by the encoder graph, read by the decoder's `ggml_get_rows`; no host copies), on P5 | the shape upstream asked for (a persistent buffer, no host copies); the per-step upload gone | not filed; [`deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch`](../../deploy/localai/patches/staged/0007-llama-cpp-encoder-decoder-store.patch); moves into the series with P5 after the card gates |
+| **P11 (staged)** | **patch staged, not in the series yet** | llama.cpp: OmniVoice (k2-fsa/OmniVoice) speaks on llama.cpp's own audio generation — the architecture `omnivoice` in libllama, the projector type in libmtmd, the pipeline in mtmd-helper, omnivoice.cpp's host rules vendored (MIT); a text model and an mmproj repacked from omnivoice.cpp's two files | one backend for speech too: the omnivoice-cpp backend (another ggml, another build, unpinned) is no longer needed; the model as its authors mask it | not filed (upstream llama.cpp has no OmniVoice; an upstream pull request needs a converter from the Hugging Face checkpoint and the operator's own review); [`deploy/localai/patches/staged/0009-llama-cpp-omnivoice.patch`](../../deploy/localai/patches/staged/0009-llama-cpp-omnivoice.patch); speech from text, from a clip and from a described voice gated on the CPU 2026-11-24; the card before the series |
+| **P12 (staged)** | **patch staged, not in the series yet** | llama.cpp backend: the TTS call takes a voice profile's transcript (`params["ref_text"]`), a described voice (`instructions`, or a `voice` that names no file) or no voice at all, for a model that clones AND has a "tts" chat template; `LOCALAI_HAS_TTS_TEMPLATE` probes for the template, which is older than per-session voices | LocalAI resolves a voice profile to a clip and its transcript, and its own llama.cpp backend dropped the transcript and refused a request without a voice; needed for P11's model to be served as Louise asks. Also passes `params["seed"]`, `["flow_steps"]`, `["cfg_scale"]`: without a seed no speech request on this backend is reproducible | not filed; [`deploy/localai/patches/staged/0010-llama-cpp-tts-voice-modes.patch`](../../deploy/localai/patches/staged/0010-llama-cpp-tts-voice-modes.patch); its `grpc-server.cpp` half first compiles with the test engine on the node |
+| **P13 (staged)** | **patch staged, not in the series yet** | LocalAI's server (`core/config`): `VoiceCloningForModel` honours a model's explicit `tts.voice_cloning: true` for a backend the capability table does not know, with the reference contract the cloning backends share | the fix of B17: a model on an engine installed under its own name can be asked for a saved voice profile, as Louise asks | **to file upstream** (the operator, 2026-11-24: "add the improvement to the list of the fixes I have at some point send"); [`deploy/localai/patches/staged/0011-config-voice-cloning-opt-in-unknown-backend.patch`](../../deploy/localai/patches/staged/0011-config-voice-cloning-opt-in-unknown-backend.patch); LocalAI's `core/config` tests pass with it; the node's server not rebuilt yet |
+| **P18 (staged)** | **LIVE in engine d531d5d804f1 since 2026-11-25; ON THE CARD: IT HOLDS** (two refusals answered 500 "Compute error." by one process, the third served with the control's scores) | llama.cpp (ggml-sycl): the pool's refusal is a plain struct, not a `std::exception` — `CHECK_TRY_ERROR` around every op catches those and `SYCL_CHECK` aborts — so that it reaches the graph's catch (two `static_assert`s hold the shape) | what P14 was meant to be: **P14 DID NOT HOLD ON THE CARD** (2026-11-25: each process gone at its first refusal, `ggml_sycl_op_mul_mat` line 4221) | to file upstream WITH P14, as one change; [`deploy/localai/patches/staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch`](../../deploy/localai/patches/staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch); the real macros under Intel's compiler and a CPU stand-in above the backend pass here; its card row is 0016's switch |
+| **P14 (staged)** | **live since 2026-11-24, and it does not do what it says: see P18** | llama.cpp (ggml-sycl): the pool's refused commit throws, `ggml_backend_sycl_graph_compute` answers `GGML_STATUS_ALLOC_FAILED`, the server's existing "Compute error." answers the request and the process lives | the fix of B18 | **to file upstream** (ggml-org/llama.cpp); [`deploy/localai/patches/staged/0013-llama-cpp-sycl-pool-refusal.patch`](../../deploy/localai/patches/staged/0013-llama-cpp-sycl-pool-refusal.patch); compiled here 2026-11-24, never run; its test is on the card |
+| **P19 (staged)** | **LIVE in the node's SERVER since 2026-11-25 (v5.0.1-3-g3ee38c799 = v5.0.1 + P1 + P13 + P19)**; patch staged, for the SERVER (v5.0.1 + P1, the node's server tree; not a patch of the engine and in no engine series) | LocalAI's server (`core/services/voiceprofile`): a Store keeps an owner file locked in its lease directory for as long as it lives; lease directories whose owner is gone are removed, with their leases, when a Store starts and at every profile delete; a living Store's leases are left alone; a directory with no owner file goes once it is a day old | the fix of B20 | **to file upstream** (mudler/LocalAI); [`deploy/localai/patches/staged/0019-voiceprofile-abandoned-leases.patch`](../../deploy/localai/patches/staged/0019-voiceprofile-abandoned-leases.patch); LocalAI's own tests pass with it on v5.0.1 + P1 and on the whole candidate tree (25 specs, 6 new; the first new one fails without the change), and `core/http/endpoints/openai`'s |
+| **P15 (staged)** | **patch staged, not in the series yet** | llama.cpp backend (`grpc-server.cpp`): a second termination signal leaves through `second_signal.h` — `write(2)` and `std::_Exit(1)`, async-signal-safe calls only — with a standalone test LocalAI's own unit-test runner picks up | the fix of B19 | **to file upstream** (mudler/LocalAI; the same handler is in ggml-org/llama.cpp's `tools/server/server.cpp`); [`deploy/localai/patches/staged/0014-llama-cpp-second-signal-exit.patch`](../../deploy/localai/patches/staged/0014-llama-cpp-second-signal-exit.patch); its test compiled and run here, the backend itself not built |
+| **P16 (staged, a prototype)** | **patch staged, in the next live engine's candidate, off unless a model's env sets it** | llama.cpp (ggml, ggml-sycl, the server): PARKING — a model's weights leave the device and come back at the same addresses (physical memory behind a reserved virtual range), switched on by a model's env only; the engine half of `models-beyond-the-card.md` | more models than the card holds without a process start per swap (operator, 2026-11-24) | not for upstream yet: a prototype for one measurement ([`parking-prototype.md`](parking-prototype.md)); [`deploy/localai/patches/staged/0015-llama-cpp-park-weights.patch`](../../deploy/localai/patches/staged/0015-llama-cpp-park-weights.patch); compiled and tested on a CPU stand-in here, never run on a card |
+| **P17 (staged)** | **patch staged, in the next live engine's candidate, off unless a model's env sets it** | llama.cpp (the MoE cache): the experts used are recorded beyond a context — in memory with the model and in a file — and a cache is filled from the record when it is created, its eviction order seeded from it | the first answer after every load of a MoE model with its experts in host memory is the slow one: the cache starts empty and uploads miss by miss (operator, 2026-11-24) | **to file upstream** (ggml-org/llama.cpp, whose cache it extends) once the card has measured it; [`deploy/localai/patches/staged/0017-llama-cpp-moe-record.patch`](../../deploy/localai/patches/staged/0017-llama-cpp-moe-record.patch); [`moe-expert-record.md`](moe-expert-record.md); the record tested here, the fill not run |
+| **P20 (staged)** | **patch staged, in the candidate `engine-lang.series` (`aa88ab5c356a`), not built** | llama.cpp (the speech port, ours): a language TAG — `it-IT`, `en_GB`, `IT` — is the language of its first subtag; it was read as no language, in silence, and the text spoken in the reference clip's accent. LocalAI sends tags: a voice profile's language is its fallback when a request names none | the operator's "thick italian accent"; Louise's half is #881 | `staged/0022-llama-cpp-omnivoice-language-tag.patch`; omnivoice-on-our-backend.md §14 |
+| **P7** | **in the series since 2026-11-22** (was P10: staged, built into a separate backend, LIVE 2026-11-11; the qualification's F4) | llama.cpp: nvidia/llama-nemotron-rerank-1b-v2 ranks (`LlamaBidirectionalForSequenceClassification`: bidirectional Llama 3.2 1B, mean-pooled, a `score` head). Ported from ggml-org/llama.cpp#24083 (open) onto ddf48f8: converter class, the optional `cls.output` in llama-embed, BOS for a rerank template's prompt; this base pools before the head when the GGUF says classifier pooling mean, so no graph change | the reranker benchmark's arm A3 (operator, 2026-11-10: "Patch llama.cpp to support nemo reranker, tomorrow I want to see its benchmarks too") | upstream #24083 open; [`deploy/localai/patches/0007-llama-cpp-nemotron-rerank.patch`](../../deploy/localai/patches/0007-llama-cpp-nemotron-rerank.patch), built only from [`staged/nemotron-rerank.series`](../../deploy/localai/patches/staged/nemotron-rerank.series) into its own backend; joins the series only if A3 earns it. A3 earned it (operator, 11-11: B): the `[reranker]` of five collections on `louise-sycl-f16-llama-cpp-9d17b8a39845` (STATUS 11-11); joining the main series waits for the next engine change |
+| **P8** | **in the series since 2026-11-22** (was P11: staged, yet LIVE on the node's engine since the 2026-11-12 trial; F4) | llama.cpp backend: CONTEXT ON DEMAND — a model loaded with the option `context_on_demand` keeps its weights, and a request that carries `metadata.keep_context_ms` has its context (KV cache and compute buffers) freed that long after its answer; the next request creates it again. A request that carries none leaves the context loaded, as ever (the option `keep_context_ms:N` gives such requests a keep). No RPC reads the `llama_context` any more (it is null while the model is idle) | the card holds ~34 GB of models on 32.6 GB, ~10 GB of it context that works seconds a day (operator, 2026-11-11: "when llama.cpp gets a request it allocates the context memory; when the processing is done it frees it"; "Implement it") — [idle-context-brief.md](idle-context-brief.md) | not filed — PREPARED for the operator to file himself (2026-11-11: "prepare everything for upstream, I will upload it eventually"; [`deploy/localai/upstream/llama-cpp-context-on-demand/`](../../deploy/localai/upstream/llama-cpp-context-on-demand/READING-GUIDE.md), [`localai-context-on-demand/`](../../deploy/localai/upstream/localai-context-on-demand/READING-GUIDE.md)); [`deploy/localai/patches/0008-llama-cpp-context-on-demand.patch`](../../deploy/localai/patches/0008-llama-cpp-context-on-demand.patch), built only from [`staged/context-on-demand.series`](../../deploy/localai/patches/staged/context-on-demand.series); CPU checks passed 2026-11-11, card gates not run |
 | **P6** | **patch we carry** | llama.cpp (common/chat): Command R7B / Command A ("Command 3") tool calls are parsed by llama.cpp's own Cohere2 MoE parser; before, the autoparser preserved `<\|START_THINKING\|><\|END_THINKING\|><\|START_ACTION\|>` as ONE token string, the server dropped the three markers, and every R7B tool call was an HTTP 500 | Command R7B as a chat candidate (operator, 2026-11-03: "B, check vllm parser before reinventing") | **to file at ggml-org/llama.cpp as a PR** once proven on the node (#20786, closed unreproduced, was this); [`deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch`](../../deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch); in the series since 2026-11-06: engine ea2417d91dcc, every live model byte-identical, every gate passed |
-| **P7** | **upstream, carried ahead of the pin** | llama.cpp (ggml-sycl, dmmv.cpp): upstream's "sycl: dmmv code cleanup" (ggml-org/llama.cpp#31325, commit 5e18eb02, merged 2026-11-02, after our pin ddf48f8): the q8_0 reorder dmmv folded into the generic template, the non-K launchers templated, +41/−411, "a no-op for performance" | the operator, 2026-11-07: "Add the patch 1 as well", in the same engine as the B70 AOT build and the pinned Intel stack, so every space is gated once | **upstream**; drops out of the series when LocalAI's pin passes 5e18eb02; [`deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch`](../../deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch); gated with the a+b engine (quantized dmmv bytes can move: the chat models' decode) |
+| **P7** (retired 2026-11-21) | **upstream, in the base** | llama.cpp (ggml-sycl, dmmv.cpp): upstream's "sycl: dmmv code cleanup" (ggml-org/llama.cpp#31325, commit 5e18eb02, merged 2026-11-02, after our pin ddf48f8): the q8_0 reorder dmmv folded into the generic template, the non-K launchers templated, +41/−411, "a no-op for performance" | the operator, 2026-11-07: "Add the patch 1 as well", in the same engine as the B70 AOT build and the pinned Intel stack, so every space is gated once | **upstream**; dropped from the series 2026-11-21: LocalAI v5.0.1's llama.cpp `78e0529` carries 5e18eb02; was [`deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch`](../../deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch); gated with the a+b engine (quantized dmmv bytes can move: the chat models' decode) |
 | R1 | request | a response header naming the backend instance (pid and start time) that answered | optional: the model pool checks before and after instead | not filed |
 | R2 | request | a batched `Embedding` call: one backend call for N texts, where `/v1/embeddings` now makes N in sequence | only if the node measures a loss (model-pool-over-localai.md@c572c3b §8.2) | not filed |
 | R3 | request | read API keys from a file, not only from `LOCALAI_API_KEY` | only if LocalAI's own UI is published (invariant 8) | not filed |
 | R4 | request | admission by declared memory, priority eviction, refusal instead of overcommit (opt-in), eviction aware of other processes' memory, restore after quiet | availability; what the model pool gives up at the cut-over | not filed; #5352 is the nearest open issue |
 | R5 | request | a strict mode: LocalAI fills in no load option the model's YAML leaves unset — no GGUF guess, no hardware tuning, no app-wide setting — or says, per option, where each value came from | settings changed in LocalAI's UI would otherwise give runs nobody asked for; we pin instead (model-pool-over-localai.md@c572c3b §10) | not filed |
+| R6 | request, a patch to come | the readiness poll after a backend is spawned: LocalAI checks `Health` at once, before the process has bound its port, then sleeps `grpc.attempts_sleep_time` (default 2, whole seconds) before it looks again — about 2 s of every cold load of every spawned backend, with no work in them | 2.01–2.07 s between the backend's "Server listening" and LocalAI's load call, the same for qwen3-embedding-4b and MADLAD (München, 2026-11-24); every load after an eviction pays it | not filed; the patch is built with the parking work (operator, 2026-11-24, relayed by München: "Patch localAI when clockwork is implemented") |
 
 A global compile-cache directory was considered and is **not to be filed**
 (operator, 2026-10-02): the per-model caches already exist (§ at the end).
@@ -515,6 +530,37 @@ with the envs.
 ---
 
 
+### B17. `v5.0.1`: a voice profile is refused by the backend's name, whatever the model says
+
+*Seen on the node 2026-11-24, the OmniVoice port's first rows on the B70
+(München): every request with `voice: localai://voice-profiles/<id>` to the
+test model answered 400 in 1–5 ms, before the backend; with
+`tts.voice_cloning: true` in the model file the same.*
+
+`core/http/endpoints/localai/tts.go` asks `config.VoiceCloningForModel(cfg)`
+before it leases a profile's clip. That function
+(`core/config/backend_capabilities.go`) first resolves `cfg.Backend` in
+`BackendCapabilities` — the exact name, else with a gallery hardware prefix
+(`intel-sycl-f16-`, `vulkan-`, …) and a release-channel suffix
+(`-development`, `-quantization`) stripped — and returns nil when nothing
+is found. Only then does it read the model's own `tts.voice_cloning`, whose
+comment says "operators with custom filenames can opt in or out
+explicitly". A backend an operator builds and installs under a name of its
+own (`louise-sycl-f16-llama-cpp-<series>-stack-<stack>`: the digest IS the
+name, invariant 12) resolves to nothing, so the explicit opt-in is never
+reached. The live speech model passes only because
+`intel-sycl-f16-omnivoice-cpp` strips to `omnivoice-cpp`.
+
+**Around it, for a measurement:** `voice` as the clip's path with
+`params.ref_text` — a `voice` that is no `localai://` reference goes to the
+backend untouched (refused to a non-admin viewer only), and the llama.cpp
+backend with P12 takes an existing file as the reference.
+
+**The fix:** P13 (staged) below — an explicit `tts.voice_cloning: true`
+honoured for a backend the table does not know, the name lookup kept for
+everything else. The node's server is built from our series (P1 is live
+there: `/local-ai --version` reads `v5.0.1-1-g…`), so it can carry it.
+
 ## Patches we carry
 
 Our llama.cpp backend images build LocalAI's backend from the base commit in
@@ -537,6 +583,30 @@ re-placed by hand around upstream's new audio-stream and realtime conditions),
 their code unchanged, and pass the P3/P4 CPU checks again at `ddf48f8` (each
 entry below). The series as committed applies with no fuzz and no rejected
 hunk at every level. P6 and P9 (staged) are NOT rebased yet.
+
+**Base since 2026-11-21: LocalAI v5.0.1
+[`dd5780a`](https://github.com/mudler/LocalAI/tree/dd5780aa904d132c784867d37fc713df8d984c8a)**
+(`LLAMA_VERSION` `78e0529`, llama.cpp of 2026-11-18). Operator, 2026-11-21,
+choice A: the series moves to the latest backend
+(docs/notes/llama-cpp-update-2026-11-21.md says what it gains). P1 and P2
+apply unchanged. P3, P4, P5 and P6 were regenerated on llama.cpp `78e0529`
+with LocalAI's own `0001-add-server-task-type-score.patch` applied first, as
+its `prepare.sh` does (`ls patches`, `patch -p1`): their added and removed
+lines are identical, only context lines and hunk offsets moved (P4: two
+hunks had taken fuzz around upstream's per-task LoRA handling; P6: two in
+`tests/test-chat.cpp`). Applied that way on a fresh `78e0529` every hunk is
+exact, and `git am` of the six on a fresh v5.0.1 succeeds. The former P7 is
+in the base and retired (below). **2026-11-22: P10 and P11 enter the series as P7 and
+P8** — the backend qualification found both LIVE on the node (281e1ee481b6 carried the
+context on demand, 10aa8b1851d7 the nemotron reranker) while this file called them staged,
+so the first v5.0.1 engine lacked them and the gate refused it (finding F4,
+backend-qualification-2026-11-21.md). The series' own checks — P2's
+`embedding_tokens_test`, P3's 379/379 MADLAD decode and P4's in-wave
+equality, P5's `test-backend-ops` case, P6's chat tests — are run on the
+node before the engine serves anything (every space re-gated, invariant
+12). Every encoder, reranker and MADLAD YAML now carries `fit:off`: LocalAI's
+backend defaults `fit_params` to true at both bases, and a model's placement
+must not depend on what else was on the card when it loaded.
 
 **The series digest — what an engine is named by** (`build.sh`: the series
 file's bytes, then each patch's, in order; first twelve hex of the sha256).
@@ -758,7 +828,7 @@ refused, as before.
 
 ### P3. llama.cpp backend: the encoder of encoder-decoder models runs
 
-*Base: master `16acc89` (llama.cpp `ddf48f8`) since 2026-11-02, re-anchored,
+*Base since 2026-11-21: LocalAI v5.0.1 (`dd5780a`, llama.cpp `78e0529`), context refreshed, code unchanged (above). Before:* *master `16acc89` (llama.cpp `ddf48f8`) since 2026-11-02, re-anchored,
 the code unchanged; `v4.12.1` (`ec92740`) before. After P1 and P2. File:
 `0003-llama-cpp-encoder-decoder.patch`. It adds
 `backend/cpp/llama-cpp/patches/0003-server-encoder-decoder.patch`, a
@@ -838,7 +908,7 @@ as one JSON prompt (translator-choice.md, "Code changes").
 
 ### P4. llama.cpp backend: encoder-decoder slots are encoded in waves
 
-*Base: master `16acc89` (llama.cpp `ddf48f8`) since 2026-11-02: two hunks
+*Base since 2026-11-21: LocalAI v5.0.1 (`dd5780a`, llama.cpp `78e0529`), context refreshed, code unchanged (above). Before:* *master `16acc89` (llama.cpp `ddf48f8`) since 2026-11-02: two hunks
 re-placed by hand in `release()` and in the loop that picks the generating
 slots, around upstream's new audio-stream and realtime conditions, the code
 unchanged; `v4.12.1` (`ec92740`) before. After P1–P3. File:
@@ -1010,7 +1080,7 @@ oneMKL path. The f32 cache stays until the P5 tar passes its gates.
 
 ### P5. llama.cpp backend (ggml-sycl): the batched F16 matmul converts src1 for the GEMM that runs
 
-*Base: master `16acc89` since 2026-11-02 (unchanged bytes; at `ddf48f8` its
+*Base since 2026-11-21: LocalAI v5.0.1 (`dd5780a`, llama.cpp `78e0529`), context refreshed, code unchanged (above). Before:* *master `16acc89` since 2026-11-02 (unchanged bytes; at `ddf48f8` its
 hunks apply with offsets, no fuzz); `v4.12.1` (`ec92740`) before. After P1–P4 (independent of them: a ggml-sycl
 file). File: [`deploy/localai/patches/0005-llama-cpp-sycl-batched-mul-mat-src1.patch`](../../deploy/localai/patches/0005-llama-cpp-sycl-batched-mul-mat-src1.patch),
 which adds `backend/cpp/llama-cpp/patches/0005-sycl-batched-mul-mat-src1-strides.patch`
@@ -1090,7 +1160,7 @@ rebuilt for this alone — every space on it would be re-gated — the next
 rebuild carries P5 (approved-encoders.md "Known limits").
 
 
-### P8 (staged). llama.cpp backend: the encoder output is kept per sequence
+### P9 (staged). llama.cpp backend: the encoder output is kept per sequence
 
 *Base: `v4.12.1` (`ec92740`), after P1–P4. NOT yet rebased onto `16acc89`:
 at `ddf48f8` its llama.cpp patch has 4 rejected hunks; it is rebased before
@@ -1159,7 +1229,7 @@ f32-cache MADLAD backend rebuilt with it AND P6 — T3, in-wave vs alone (bar
 90 %), a lone request against P4's bytes, seconds per question — then
 the retrieval comparison. Stage 2 (the device store) is P6 below.
 
-### P9 (staged). llama.cpp backend: the encoder outputs live on the device
+### P10 (staged). llama.cpp backend: the encoder outputs live on the device
 
 *Base: `v4.12.1` (`ec92740`), after P1–P5. NOT yet rebased onto `16acc89`
 (with P6). File:
@@ -1207,9 +1277,301 @@ orders, bursts, a late request answered in 0.06 s).
 **Card gates** with P5 (one rebuild): plus `test-backend-ops -o
 SET_ROWS,GET_ROWS` on the node for F32, which the device store relies on.
 
+### P11 (staged). llama.cpp: OmniVoice speaks on llama.cpp's own audio generation
+
+*Base: LocalAI v5.0.1 (`dd5780a`, llama.cpp `78e0529`), after P1–P8. File:
+`deploy/localai/patches/staged/0009-llama-cpp-omnivoice.patch` (staged: built
+and gated on the CPU 2026-11-24, voice cloning and described voices
+included, NOT in `series` until the card gates pass — staged/README.md). The operator, 2026-11-24:
+"Evaluate to patch our backend to support omnivoice, I would like to have
+only one backend", then "Go with option D" (docs/notes/omnivoice-on-our-backend.md).*
+
+**What LocalAI does today.** OmniVoice is served by a backend of its own,
+`omnivoice-cpp`: a Go wrapper around omnivoice.cpp, which links its own ggml
+fork. On a node that builds its llama.cpp backend from a pinned series with
+its own SYCL fixes, speech runs on an engine nobody there builds, pins or
+qualifies.
+
+**What the patch does.** One llama.cpp patch (`0012-mtmd-omnivoice.patch`),
+nothing in LocalAI's own sources: the llama.cpp backend already answers the
+TTS call through libmtmd's audio generation, so an OmniVoice model is a
+`model:` (the backbone, a new libllama architecture: Qwen3 layers read in
+both directions, no KV cache, no vocabulary head on embedding rows) and an
+`mmproj:` (the audio heads, the residual codebooks, the DAC decoder, and an
+audio encoder that turns a voice clip into codec frames). A request's
+`voice` is a clip to clone or a description of a voice, through llama.cpp's
+own speaker-reference and "tts" template paths. The
+32-step decoding is host code in mtmd-helper on a context of its own;
+omnivoice.cpp's host-side rules (language names, duration estimate, chunking,
+post-processing, Philox noise) are vendored unchanged under its MIT notice.
+
+**One deliberate difference from omnivoice.cpp.** It adds its attention mask
+to the scores (+1 / 0), which is what transformers' "eager" attention does
+with the reference's boolean mask and what omnivoice.cpp was validated
+against; the reference's default path (SDPA), its training and its authors'
+fast path block with it. The port blocks. On one sentence the two give 1,298
+different codes of 1,344.
+
+**Tested (CPU).** Against omnivoice.cpp a650381 on the same ggml, with the
+mask blocked, step by step — the codes themselves cannot be compared, the
+decoding being chaotic under rounding: prompt ids identical; logits on the
+same codes within omnivoice.cpp's own rounding noise at steps 0, 1, 8, 16
+and 31; omnivoice.cpp's scoring on the port's logits gives the port's codes
+at all 32 steps; the two decoders agree to 1.25e-6 but for the last 83 ms of
+a chunk (two transposed convolutions omnivoice.cpp pads with a zero); two
+runs byte-identical; a clip's codes equal on 158 of 159 frames, the other on
+a near-tie (`tools/measure/omnivoice_port_gate.py`,
+`tests/test_measure_omnivoice_port_gate.py`, `tests/test_omnivoice_repack.py`).
+**Speed (CPU, equal threads, one job on the machine):** 1.2–1.5 times
+omnivoice.cpp's on a sentence, 2.1 times with a voice clip; a slot keeps the
+last clip's frames, so an answer read sentence by sentence encodes its
+clip once; one log line per request says where its time went
+(omnivoice-on-our-backend.md §11; `tests/test_localai_staged_omnivoice.py`).
+
+**For LocalAI's team, when it is filed:** nothing to change in LocalAI; the
+gallery would list the two repacked files under the llama.cpp backend. For
+llama.cpp's: the patch needs a converter from the Hugging Face checkpoint
+(`conversion/omnivoice.py`) in place of our repack of omnivoice.cpp's files,
+and the vendored headers restyled or rewritten.
+
+### P12 (staged). llama.cpp backend: TTS takes a transcript, a described voice, or no voice
+
+*Base: LocalAI v5.0.1 (`dd5780a`), after P1–P8 and P11. File:
+`deploy/localai/patches/staged/0010-llama-cpp-tts-voice-modes.patch` (staged
+2026-11-24 with P11; docs/notes/omnivoice-on-our-backend.md §10).*
+
+**What happens.** `core/http/endpoints/localai/tts.go` resolves a saved voice
+profile into `voice` = the clip's path and `params["ref_text"]` = its
+transcript. The llama.cpp backend's `prepareTTSTask` knows two kinds of
+model — a required speaker reference (`voice` is a path) or, where llama.cpp
+has per-session voices, a named voice for the "tts" template — and never
+reads `ref_text` or the request's `instructions`. A model that clones and
+describes (OmniVoice) is then refused without a voice, has a description
+opened as a file, and clones without the transcript the profile holds. At a
+llama.cpp pin without `set_voice` (v5.0.1's own, 78e0529) the template branch
+is compiled out altogether, though `common_chat_get_tts_prompt` is there.
+
+**The patch.** `tts_request_options.h` gets a third mode, a reference OR a
+name: `voice` is the reference when the caller found a file of that name, a
+name or description otherwise, and may be empty; `instructions` is the
+template's voice when the request names none; `ref_text` is kept beside a
+reference, in the required-reference mode too. `grpc-server.cpp` picks the
+mode from the model (its speaker-reference capability and whether it has a
+"tts" template), hands the transcript to the helper's `speaker_ref_text` and
+renders the template whenever the mode describes. `prepare.sh` gains the
+probe `LOCALAI_HAS_TTS_TEMPLATE`; `set_voice` stays behind
+`LOCALAI_HAS_TTS_VOICE`. Qwen3-TTS Base and LFM3-Audio behave as before,
+but for the transcript now reaching the first.
+**And the decoding's seed, steps and guidance (added 2026-11-24, found when
+the card timing was prepared):** `params["seed"]`, `["flow_steps"]` and
+`["cfg_scale"]` — the three fields llama.cpp's own `/v1/audio/speech` reads
+from its body and LocalAI's call could not set. Without a seed the helper
+draws one for every request: the same text never gave the same audio twice,
+for any model on this backend.
+
+**Tested.** `tts_request_options_test.cpp`: the thirteen cases there before
+and four new ones (a clip with its transcript, a description, neither,
+`instructions`, both together; the required reference keeping its rule; the
+three decoding fields parsed, and refused when malformed).
+NOT compiled here: the `grpc-server.cpp` half builds with the backend.
+
+**For LocalAI's team:** the patch is independent of OmniVoice and could be
+filed on its own — the transcript of a voice profile is lost on the llama.cpp
+backend today for Qwen3-TTS Base as well.
+
+### P13 (staged). LocalAI's server: `tts.voice_cloning` is honoured for a backend the table does not know
+
+*Base: LocalAI v5.0.1 (`dd5780a`), on the series or on v5.0.1 + P1 alone
+(the tree the node's server is built from); independent of P11 and P12.
+File: `deploy/localai/patches/staged/0011-config-voice-cloning-opt-in-unknown-backend.patch`
+(staged 2026-11-24). The operator, the same day, to München: "Patch LocalAI
+and add the improvement to the list of the fixes I have at some point
+send".*
+
+**What happens.** B17: `VoiceCloningForModel`
+(`core/config/backend_capabilities.go`) answers "no cloning" as soon as the
+model's backend name resolves to no entry of `BackendCapabilities`, before
+it reads the model's `tts.voice_cloning` — the field its own comment gives
+operators to opt in with. LocalAI's test file tells the same story for
+`audio-cpp`, which was fixed by registering it; a backend an operator
+builds and names cannot be registered.
+
+**The patch.** 17 lines in that function: for a backend the table does not
+know, `tts.voice_cloning: true` returns `referenceVoiceCloning()`, the
+contract the cloning backends share (a WAV, a transcript required).
+Nothing else moves — no field: no; `false`: no; a known backend that cannot
+clone (piper) is not opened by the field; a model that names no backend is
+not either.
+
+**Tested.** LocalAI's `core/config` package, `go test -tags
+nosqlite,purego_utp`, on v5.0.1 with the generated protocol code: all specs
+pass with the six new ones; without the change two of the six fail (the
+opt-in, and the contract being each caller's own copy).
+
+**For LocalAI's team:** file as it is. It is independent of OmniVoice and of
+our engine: any external backend installed under a name of its own meets
+B17 with the first saved voice profile.
+
+### B18 and P14 (staged). ggml-sycl: a refused pool commit ends the process
+
+*Seen on the node 2026-11-24 (München): nemotron-embed's backend, loading
+beside the 35B, died with `level_zero backend failed with error: 39
+(UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)` … `SYCL error:
+CHECK_TRY_ERROR(phys.emplace(dev, ctx, reserve_size))` … `in function alloc
+at ggml-sycl.cpp:2147`. File:
+`deploy/localai/patches/staged/0013-llama-cpp-sycl-pool-refusal.patch`.*
+
+**What happens.** ggml-sycl's virtual-memory pool commits device memory for
+the temporaries of the ops while a graph runs; the commit is wrapped in
+`SYCL_CHECK`, which aborts. The model's buffers themselves fail softly (a
+device allocation that returns null fails the load or the context), so the
+abort is the one path where contention on a shared card costs a process:
+the weights, every slot, the request, and for LocalAI a cooldown of 500s
+and 503s.
+
+**The patch.** The pool throws `ggml_sycl_out_of_device_memory` before it
+has changed anything; `ggml_backend_sycl_graph_compute` catches it, drains
+the queue and returns `GGML_STATUS_ALLOC_FAILED`. llama.cpp already turns
+that into `-2` from decode/encode and its server into "Compute error." for
+the request, without stopping. 36 lines. Left as it was: a refusal inside a
+SYCL graph RECORDING (`GGML_SYCL_ENABLE_GRAPH=1`, off by default), and the
+two older pools.
+
+**Tested.** Compiled here 2026-11-24 with Intel's compiler (oneAPI 2025.3.3: the
+engine's SYCL backend builds and links with it), never run. On the card (docs/notes/room-on-the-card.md
+§4): the device filled, a model asked — the request refused, the process
+alive, the same model answering afterwards. **Run 2026-11-24 (München):
+not provoked** — at 31,701 of 32,002 MiB every request was served, the
+driver paging a neighbour out instead of refusing. The path is exercised
+with a test switch instead, `GGML_SYCL_POOL_REFUSE=N` (staged
+`0016-llama-cpp-sycl-pool-refuse-switch.patch`, in the parking
+prototype's engine; parking-prototype.md §4).
+
+**PROVOKED, AND 0013 DID NOT HOLD (München, 2026-11-25, engine b190673dbdbf).** A reranker copy with `GGML_SYCL_POOL_REFUSE=2` against a control: the control served the short pair and the twelve long documents three times (1.54–1.59 s, the same scores, its process alive). With the switch, the first request that grew the pool ended the PROCESS — HTTP 500 "error reading from server: EOF" after 3.0 s — and so did LocalAI's two reloads, each at its first refusal. In each process, in one millisecond: "the device refused 6 MiB for the pool (2 MiB committed)", then "the SYCL pool could not commit device memory / Exception caught at … ggml-sycl.cpp, line:4221, func:operator()", then "SYCL error: CHECK_TRY_ERROR(op(ctx, src0, src1, dst, …)): Exception caught in this line of code … in function ggml_sycl_op_mul_mat". Never "the graph is abandoned", never "Compute error.". **Why:** 0013 threw the refusal as a `std::runtime_error`; the backend calls its ops under its own macros, `SYCL_CHECK(CHECK_TRY_ERROR(op(…)))`, and `CHECK_TRY_ERROR` catches ANY `std::exception` and aborts (72 call sites). The op that asked for the memory took the refusal; the graph's catch was never reached. The live engines since 2026-11-24 therefore die on a refused pool commit exactly as every engine before them: no worse, and not fixed. It was not seen before the card because nothing here runs the SYCL path, and filling the card did not provoke it.
+
+**The fix, staged 0018** (`0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch`, candidate `engine-refusal.series`: the live engine and this one patch): the refusal is a plain struct, neither a `sycl::exception` nor a `std::exception`, with a `static_assert` for each, so only the graph's own catch can take it. Checked without a card, in the three layers a card run crosses: (1) the backend's REAL macros under Intel's compiler (`tools/measure/sycl_refusal_macro_check.cpp`): the old type aborts with the card's own lines, exit 134; the new one reaches a catch outside the op, exit 0; (2) what an abandoned op leaves, read: its temporaries are the pool's and are released in reverse order as the stack unwinds; the one thing ops change for good, the layout of quantized weights, takes its scratch memory from the device allocator, not the pool; no handler between an op and the graph catches `(...)`; (3) everything ABOVE the backend, run: a CPU stand-in that fails two graphs with `GGML_STATUS_ALLOC_FAILED` (`tools/measure/refuse_cpu_standin.patch`, `tools/measure/refuse_cpu_test.py`, 13 of 13) — the request is answered 500 "Compute error." (503 from the canary when the context is made for the request), the process is the same one, and the next request returns the control's vectors bit for bit. What is left for the card is the one thing none of these is: a real device between (1) and (3) — the same row again. (room-on-the-card.md §4 has the same, with the steps.)
+
+### B20 and P19 (staged). A voice lease outlives the process that took it
+
+*Seen on the node 2026-11-25 (München, after deleting a TEST profile in the
+port's rows): `voice-profiles/.leases` held nine directories, eight empty,
+one with a single file — 1,331,940 bytes, link count 2, the same inode as
+the original 27.75 s clip in a living profile, made in October by a process
+long gone. Nothing of the deleted test profile remained. Base: LocalAI
+v5.0.1 (`dd5780a`) + P1, the node's server tree.*
+
+**What happens.** `Store.LeaseAudios` hard-links a profile's clip into the
+Store's own lease directory (`.leases/<uuid>`, one per process) so that a
+delete does not break a synthesis in flight; the handler of `/tts` and
+`/v1/audio/speech` gives it back with `defer release()` when the request
+ends (the realtime endpoint, when its session ends). `Store.Close` removes
+the directory. A process that is killed does neither, and no later process
+looks: `Delete` removes the profile's directory and leaves every lease
+directory alone. So a recording can stay on disk after its profile is
+deleted, for as long as the data directory lives.
+
+**The fix, P19** (`0019-voiceprofile-abandoned-leases.patch`, a patch of
+the SERVER): the Store keeps `.leases/<uuid>/.owner` locked while it lives
+— `flock` on Unix, `LockFileEx` on Windows, as LocalAI's add-on stores do;
+the kernel drops the lock when the process ends, however it ends. A lease
+directory whose owner file can be locked belongs to nobody: it is removed,
+with every lease in it, when a Store starts and whenever a profile is
+deleted. A living Store's leases are never touched. A directory without an
+owner file (every one made before the patch) is removed once the last lease
+made or released in it is a day old — by the directory's own time, since a
+lease is a link and carries its clip's. Only real directories are
+considered: a link under `.leases` is not followed, a stray file not
+removed.
+
+**Tested.** LocalAI's own suite for the package, 25 specs with 6 new: a
+killed process's lease is gone with the profile's delete and no WAV is left
+below the store (this one FAILS without the change); a living store's lease
+survives the delete and is readable until released; a new Store removes what
+the ones before it left; a directory without an owner file goes only once
+it is old; a symlink and a stray file are left alone; the owner file is
+0600 and gone at Close. `core/http/endpoints/openai`'s suite passes with it.
+Compiles for Windows (`GOOS=windows go vet`).
+
+**On the node.** It takes effect when the SERVER is rebuilt with it — the
+engine's tar does not carry it. At its first start it removes the nine
+lockless directories, the October link among them (all older than a day):
+that is a deletion on the node and is the operator's word, put to him with
+the pass by München. Until it is live, the rule the architecture session
+set stands: no recorded profile is deleted without `find … -samefile` on
+its clip under `.leases`, before and after, said in the report.
+
+**On the node, 2026-11-25 (München).** The server with P19 started at
+~04:51Z: seven lines "Removed the voice profile leases of a process that is
+gone", the October link gone, Philippe's original clip back to link count
+1, one lease directory with its `.owner` file; the seven run ids of the
+engine unchanged by the server's swap. Then the three layers after a TEST
+profile's delete (HTTP 204): its directory gone with its encoding; no file
+of its clip's inode anywhere under `voice-profiles`; and the port, in the
+very process that had spoken the deleted voice last, answering Philippe's
+voice from his own kept encoding. A request naming the deleted profile by
+its reference: HTTP 404 from LocalAI, the backend not called.
+
+**The same condition, one layer down, in our own port:** the engine kept
+the last clip's samples and rows in memory between requests (staged 0020,
+live in d531d5d804f1).
+
+### B19 and P15 (staged). The backend calls `exit()` inside its signal handler
+
+*Seen on the node 2026-11-24 (München, the load timings retaken on an
+unloaded node): 3 of 14 `POST /backend/shutdown` of a model behind our vega
+wrapper took 15.06 s instead of 0.11–0.21 s; 0 of 22 for the same engine
+started directly. File:
+`deploy/localai/patches/staged/0014-llama-cpp-second-signal-exit.patch`.*
+
+**What happens.** LocalAI's unload ends in `process.Stop()`
+(`pkg/model/process.go` L190) of mudler/go-processmanager v0.2.0:
+- SIGTERM to the backend's PROCESS GROUP (`process_unix.go` L39–L46,
+  `syscall.Kill(-pid, …)`; `KillProcessGroup` is true by default and the
+  child is started with `Setpgid`);
+- a poll every 100 ms for the pid it started, for `GracefulTimeout` — 15 s
+  by the library's default (`config.go` L40); LocalAI passes no
+  `WithGracefulTimeout` (`process.go` L332–L341) and has no setting for it;
+- then SIGKILL to the group. The HTTP answer is written after that, and
+  `exitCode=-1` in "Backend process stopped" is Go's code for a child ended
+  by a signal.
+
+Behind the wrapper the engine was in that group, so it took LocalAI's
+SIGTERM and, a millisecond later, the one the wrapper sent its child. The
+backend's handler (`grpc-server.cpp` L218–L227 at v5.0.1; llama.cpp's
+`tools/server/server.cpp` L32–L41 at our pin) serves the first by ending
+the server loop — main() then prints "stopping", "cleaning up before
+exit...", shuts the gRPC server down and frees the backend — and answers
+the second with `fprintf` and `exit(1)`. `exit()` is not safe inside a
+handler: it runs the exit handlers and the static destructors against the
+clean-up it interrupted. The log is the same in the fast and the slow case
+("Received second interrupt, terminating immediately." within 1 ms); in the
+slow one the process stays, the card's counter returns to empty only at
+LocalAI's kill. Where exactly it blocks was not read: the threads' stacks
+during a slow case would say.
+
+**Our side.** The wrapper no longer tells a backend twice (architecture,
+#856: a backend already told is left `OWN_EXIT_S` = 2 s to go by itself,
+and the wrapper's whole stop is over in 12 s, under LocalAI's 15). One case
+stays open there: an engine slower than 2 s to leave — a forced stop with a
+call in progress, a busy node — gets the second signal after all.
+
+**The fix (P15, staged).** The second signal leaves through a small header,
+`second_signal.h`: `write(2)` of the same message and `std::_Exit(1)`,
+nothing else. `second_signal_test.cpp` forks a child whose exit handler
+never returns: it is gone at once with status 1, and the same child leaving
+through `exit(1)` is still there a second later. The test is standalone,
+so `backend/cpp/run-unit-tests.sh` picks it up by its name; compiled and run
+here with that script's flags. The backend itself was not built here: the
+change in `grpc-server.cpp` is one include and one call. **On the card,
+2026-11-24 (München, engine 9ea95e93a83c): PASS** — ten double SIGTERMs on
+a direct bge-m3 copy, the process gone after 52–155 ms each, the
+second-interrupt line once each. It applies on the
+series alone and beside each of 0009–0013. An engine build with it is the
+operator's word to München; it can ride the next one.
+
 ### P6. llama.cpp (common/chat): Command R7B / Command A tool calls parse
 
-*Base: master `16acc89` (llama.cpp `ddf48f8`), after P1–P5 (independent of
+*Base since 2026-11-21: LocalAI v5.0.1 (`dd5780a`, llama.cpp `78e0529`), context refreshed, code unchanged (above). Before:* *master `16acc89` (llama.cpp `ddf48f8`), after P1–P5 (independent of
 them: common/chat). File:
 `deploy/localai/patches/0006-llama-cpp-chat-cohere-command3.patch`,
 which adds `backend/cpp/llama-cpp/patches/0008-chat-cohere-command3-parser.patch`
@@ -1262,39 +1624,37 @@ difference = the full re-gate). (2) Command R7B walked (no `tools_failed`)
 and piloted (15 answers), read before any whole run.
 
 
-### P7. llama.cpp (ggml-sycl, dmmv.cpp): upstream's dmmv cleanup, carried ahead of the pin
+### P7. llama.cpp: nvidia/llama-nemotron-rerank-1b-v2 ranks (P10, staged, until 2026-11-22)
 
-*Base: master `16acc89` (llama.cpp `ddf48f8`), after P1–P6 (independent of
-them: dmmv.cpp only; P5 is in ggml-sycl.cpp). File:
-`deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch`, which adds
-`backend/cpp/llama-cpp/patches/0009-sycl-dmmv-cleanup.patch`: upstream's
-commit `5e18eb021b021a133cfa4d9ac84dab644bc24318` (ggml-org/llama.cpp#31325,
-merged 2026-11-02, after our pin) byte for byte in its changed lines.*
+*In the series since 2026-11-22 as `deploy/localai/patches/0007-llama-cpp-nemotron-rerank.patch`,
+which adds `backend/cpp/llama-cpp/patches/0010-llama-nemotron-rerank.patch`: the
+`LlamaBidirectionalForSequenceClassification` architecture (bidirectional Llama 3.2 1B,
+mean-pooled, a classification head), its conversion and its server task — the port of
+ggml-org/llama.cpp #24083, not merged upstream. Applied as it was: on llama.cpp `78e0529`
+every hunk lands with offsets only. Built into its own backend `10aa8b1851d7` and LIVE for
+`louise-rerank-nemotron-1b` since 2026-11-11 (the reranker survey's arm A3) while this file
+still called it staged — the qualification's finding F4: without it the reranker's GGUF does not
+load ("done_getting_tensors: wrong number of tensors"). Parity with NVIDIA's own scoring:
+`tools/measure/nemotron_rerank_parity.py`; the index row above has its measurements.*
 
-**What.** "sycl: dmmv code cleanup": the q8_0 reorder dmmv folded into the
-generic template and the non-K launchers templated, +41/−411, "a no-op for
-performance" upstream.
+### P8. llama.cpp backend: context on demand (P11, staged, until 2026-11-22)
 
-**Why it is carried.** The operator, 2026-11-07: "Add the patch 1 as well",
-built into the same engine as the B70 AOT build and the pinned Intel stack,
-so that every space is gated once rather than twice.
-
-**Risk.** Quantized dmmv bytes can move: the chat models' decode. A gate
-that is not exact on that engine has three candidate causes (AOT, the stack,
-P7), and attributing it costs a bisect build.
-
-**Upstream.** Already upstream. It drops out of the series when LocalAI's
-llama.cpp pin passes `5e18eb02`.
----
-
-### P11 (staged). llama.cpp backend: context on demand
+*In the series since 2026-11-22 as `deploy/localai/patches/0008-llama-cpp-context-on-demand.patch`
+on LocalAI v5.0.1 (llama.cpp `78e0529`): the LocalAI half rebased (one `grpc-server.cpp` hunk,
+the pooling-type member, re-placed by hand), the llama.cpp half taken in its upstream form
+(`deploy/localai/upstream/llama-cpp-context-on-demand/`, three diffs applied in order; they
+differ from the staged form in comments only), applied by LocalAI's `prepare.sh` after `0010`.
+Verified by the qualification's phase 2 on the engine it replaces: the gate requires it
+(idle-context-brief.md §10: an engine that does not say what it did with its context is not
+admitted), and the live engine 281e1ee481b6 carried it from the 11-12 trial while this entry
+still said "staged" — finding F4. The entry as it stood follows.*
 
 *2026-11-11. The design and its reasons: [idle-context-brief.md](idle-context-brief.md).
 Staged — built and tested on the CPU, NOT in `series`, never on a live model
 until its card gates pass and the operator says so (staged/README.md).*
 
-`deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`, built
-only from `staged/context-on-demand.series`. Two halves, one design:
+`deploy/localai/patches/0008-llama-cpp-context-on-demand.patch`, built, until 2026-11-22,
+only from `staged/context-on-demand.series` (gone with the move). Two halves, one design:
 
 **llama.cpp** (`backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch`;
 the same bytes in `staged/llama.cpp/`, written in upstream's form:
@@ -1456,6 +1816,40 @@ MADLAD's test copy).
 **Card gates before it moves into the series** (staged/README.md; the brief
 §2 and §7).
 
+## Patches retired into the base
+
+*A patch leaves the series when upstream merges it (above). Its entry stays
+here, with its verification, for the record.*
+
+### P7. llama.cpp (ggml-sycl, dmmv.cpp): upstream's dmmv cleanup, carried ahead of the pin — RETIRED 2026-11-21
+
+*Retired with the move to LocalAI v5.0.1 (llama.cpp `78e0529`, which carries
+upstream's 5e18eb02); `0007-llama-cpp-sycl-dmmv-cleanup.patch` deleted from
+the series. What follows is the entry as it stood.*
+
+*Base: master `16acc89` (llama.cpp `ddf48f8`), after P1–P6 (independent of
+them: dmmv.cpp only; P5 is in ggml-sycl.cpp). File:
+`deploy/localai/patches/0007-llama-cpp-sycl-dmmv-cleanup.patch`, which adds
+`backend/cpp/llama-cpp/patches/0009-sycl-dmmv-cleanup.patch`: upstream's
+commit `5e18eb021b021a133cfa4d9ac84dab644bc24318` (ggml-org/llama.cpp#31325,
+merged 2026-11-02, after our pin) byte for byte in its changed lines.*
+
+**What.** "sycl: dmmv code cleanup": the q8_0 reorder dmmv folded into the
+generic template and the non-K launchers templated, +41/−411, "a no-op for
+performance" upstream.
+
+**Why it is carried.** The operator, 2026-11-07: "Add the patch 1 as well",
+built into the same engine as the B70 AOT build and the pinned Intel stack,
+so that every space is gated once rather than twice.
+
+**Risk.** Quantized dmmv bytes can move: the chat models' decode. A gate
+that is not exact on that engine has three candidate causes (AOT, the stack,
+P7), and attributing it costs a bisect build.
+
+**Upstream.** Already upstream. It drops out of the series when LocalAI's
+llama.cpp pin passes `5e18eb02`.
+---
+
 ## Nice to have for the next round of backend patches
 
 Not planned, and no work until a round of backend patches is opened. Each
@@ -1550,6 +1944,42 @@ the app-wide settings. Ask for either:
 
 Until then the model pool's models pin every such field
 (`model-pool-over-localai.md`@c572c3b §10).
+
+### R6. The readiness poll costs every cold load two seconds
+
+Found 2026-11-24 from a load timed line by line on the node
+(`models-beyond-the-card.md` §5.2): the llama.cpp backend prints "Server
+listening" and LocalAI's `LoadModel` reaches it 2.01–2.07 s later, the same
+for a 2.5 GiB encoder and a 6 GiB translator. Read at `v5.0.1`, and the same
+on master that day:
+- `spawnGRPCModel` (`pkg/model/initializers.go` L190–L203) starts the
+  process and loops: `HealthCheck`, and if it is not alive,
+  `time.Sleep(grpcAttemptsDelay × 1 s)`, at most `grpcAttempts` times;
+- the defaults are 20 attempts and a delay of 2 (`pkg/model/loader_options.go`
+  L161–L162); a model's YAML may set them, `grpc: attempts` and
+  `attempts_sleep_time` (`core/config/model_config.go` L1783–L1784), in whole
+  seconds, and 0 reads as unset, so 1 s is the least a file can ask;
+- the first check runs the instant the process is spawned. The client is
+  `grpc.NewClient` (`pkg/grpc/client.go` L83) and the call does not wait for
+  the connection, so a refused loopback connection fails at once: the first
+  check never succeeds, and the second comes a full delay later.
+
+So a backend that listens after 50 ms is found after 2 s. LocalAI's own
+documentation presents the two keys as the window for slow backends
+(attempts × sleep ≈ 40 s); the delay is also the resolution with which a
+fast one is noticed. That the whole 2.0 s is this sleep is inferred from the
+source; a copy with `attempts_sleep_time: 1` would make it a reading (the
+gap falls to about 1 s, or it is not the poll).
+
+The patch to come, in `spawnGRPCModel` alone: the wait between two checks
+starts at a few tens of milliseconds and doubles up to the configured delay,
+inside the same window (attempts × delay) — exponential backoff, no new
+setting, no YAML key. gRPC's own wait-for-ready was looked at and does not do
+it alone: its reconnect backoff starts at 1 s. Not searched upstream yet.
+Decided (operator, 2026-11-24, relayed by München): "Patch localAI when
+clockwork is implemented" — built and swapped with the parking work's
+LocalAI changes (`models-beyond-the-card.md` §6, step 2), one server
+rebuild, and no YAML key meanwhile.
 
 ---
 

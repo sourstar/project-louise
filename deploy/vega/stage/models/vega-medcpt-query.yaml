@@ -12,6 +12,7 @@
   "mmap": true,
   "name": "vega-medcpt-query",
   "options": [
+    "fit:off",
     "parallel:1",
     "pooling:cls",
     "ubatch:512"

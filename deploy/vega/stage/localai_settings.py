@@ -65,6 +65,16 @@ LocalAI does not take it.
 
 reads the live settings and exits 1 naming each managed key that differs,
 changing nothing.
+
+PAGE INSTEAD OF UNLOAD (operator, 2026-11-24; platform.toml `[models]
+make_room = "page"`, app/model_evict.py): memory_reclaimer_enabled → false,
+the threshold kept. A card that holds more than its size — the driver
+paging idle models to host memory — reads full at every tick, and the
+reclaimer would unload the least recently used model each time; the
+threshold stays because Louise's keeper reads it for its budget's line.
+`--platform FILE` names the node's platform.toml: THE FILE DECIDES, so that
+a deploy applies and checks the mode the node is in instead of putting the
+other back (the architecture session's review). Without it: "unload".
 """
 from __future__ import annotations
 
@@ -99,11 +109,33 @@ def owner_holds(current: dict[str, Any]) -> bool:
     return current.get("addon_host_settings_authority") == "owner_required"
 
 
-def desired_for(current: dict[str, Any]) -> dict[str, Any]:
-    """DESIRED, less what the add-on owner holds while it runs."""
+#: `[models] make_room` of the node's platform.toml, set from `--platform`
+MAKE_ROOM = "unload"
+
+
+def make_room_of(platform: str | None) -> str:
+    """`[models] make_room` in the file named, "unload" where it says
+    nothing; a file that cannot be read or says another word stops the
+    deploy — the reclaimer is never set by a guess."""
+    if not platform:
+        return "unload"
+    import tomllib
+    with open(platform, "rb") as f:
+        mode = (tomllib.load(f).get("models") or {}).get("make_room", "unload")
+    if mode not in ("unload", "page"):
+        raise SystemExit(f"{platform}: [models] make_room is \"unload\" or \"page\", got {mode!r}")
+    return mode
+
+
+def desired_for(current: dict[str, Any], make_room: str | None = None) -> dict[str, Any]:
+    """DESIRED for the node's `make_room` (the reclaimer off where idle
+    models are paged), less what the add-on owner holds while it runs."""
+    want = dict(DESIRED)
+    if (make_room or MAKE_ROOM) == "page":
+        want["memory_reclaimer_enabled"] = False
     if not owner_holds(current):
-        return dict(DESIRED)
-    return {k: v for k, v in DESIRED.items() if k not in OWNER_KEYS}
+        return want
+    return {k: v for k, v in want.items() if k not in OWNER_KEYS}
 
 
 def merged(current: dict[str, Any], desired: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -156,7 +188,12 @@ def check(base: str) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if a != "--check"]
+    argv = sys.argv[1:]
+    if "--platform" in argv:
+        at = argv.index("--platform")
+        MAKE_ROOM = make_room_of(argv[at + 1] if at + 1 < len(argv) else None)
+        del argv[at:at + 2]
+    args = [a for a in argv if a != "--check"]
     base = args[0] if args else "http://127.0.0.1:30286"
     if "--check" in sys.argv[1:]:
         got = check(base)
