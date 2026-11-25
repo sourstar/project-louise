@@ -1348,3 +1348,90 @@ def test_the_beat_sends_back_the_run_of_a_failure_nobody_here_was_refused(node, 
     assert len(list((hold_runs.directory(root, "gutenberg") / "set-aside").glob("document-*"))) == 1
     assert embeddings.upsert_book(8, "en", chunks(3, book=8), collection) == 3
     rage_keep.reset()
+
+
+# ---- one discard, one failure (gutenberg on the node, 2026-11-25) -----------
+#
+# The engine counted ONE discarded context; the run's history was written
+# twice in fifteen seconds ("A REPEAT: time 2 for this run (before:
+# 2026-11-25T09:40:55Z)"), because the refused request counted it and the
+# beat's reading of the engine's count counted it again; and the CANARY error
+# was written at every asking of a gate deferred for room — fifty lines.
+
+def test_one_discard_is_one_failure_whoever_saw_it():
+    run_check.reset_cache()
+    who = ("http://e", "m")
+    run_check.canary_failed(*who)                      # the request that was refused
+    assert run_check._canary[who] == 1, "counted at once: the run stops being relied on that second"
+    run_check.canary_failed(*who, by_engine=1)         # the engine's count, read by the beat: the same one
+    assert run_check._canary[who] == 1
+    run_check.canary_failed(*who, by_engine=1)         # one no request of this process saw (a reader's query)
+    assert run_check._canary[who] == 2
+    run_check.canary_failed(*who)
+    run_check.canary_failed(*who, by_engine=2)         # the request's, and one more
+    assert run_check._canary[who] == 4
+    run_check.reset_cache()
+
+
+def test_a_failure_the_engines_count_never_shows_stops_waiting_and_takes_nothing_later(monkeypatch):
+    """Never fewer than happened: a request's failure that the engine's count
+    did not show in time must not swallow a LATER discard."""
+    run_check.reset_cache()
+    who = ("http://e", "m")
+    t = [1000.0]
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: t[0])
+    run_check.canary_failed(*who)
+    t[0] += run_check.CANARY_CONFIRM_S + 1
+    run_check.canary_failed(*who, by_engine=1)         # a later discard, somebody else's
+    assert run_check._canary[who] == 2
+    run_check.reset_cache()
+
+
+def test_the_requests_refusal_and_the_beats_reading_write_the_runs_history_once(node, endpoint, monkeypatch):
+    from app import worker
+    from app.rage import keep as rage_keep
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    rage_keep.reset()
+    who = run_check._who(collections_mod.recipe_for(collection), False)
+    count = {"run_id": R1, "on_demand": True, "calls": 40, "told": 40, "created": 9,
+             "created_ms": 500, "failed": 0, "canary_failed": 0}
+    monkeypatch.setattr(run_check, "engine_counts", lambda: {who: dict(count)})
+
+    def beat():
+        monkeypatch.setattr(worker, "_last_keeps_read", 0.0)
+        worker._read_engine_counts(con)
+    beat()
+    endpoint.canary_fail = 1
+    with pytest.raises(embeddings.EndpointCanaryFailed):
+        embeddings.upsert_book(8, "en", chunks(3, book=8), collection)       # the request counts it
+    assert backend_gate.embed_allowed(con, collection) is True               # gated from scratch, passes
+    count.update(calls=41, told=41, failed=1, canary_failed=1)
+    beat()                                                                   # the engine's count shows the same one
+    assert run_check._suspect(collection) is False, "the same discard made the run suspect again after its gate"
+    assert backend_gate.embed_allowed(con, collection) is True
+    assert len(hold_runs.canary_history(root, "gutenberg", "document", R1)) == 1
+    errors = [m for m in _events(con, "error") if "did not reproduce its canary" in m and "A REPEAT" in m]
+    assert errors == [], errors
+    rage_keep.reset()
+
+
+def test_a_gate_asked_again_says_the_canary_once(node):
+    root, collection, codex = node
+    run_check.reset_cache()
+    run_check.canary_failed(*run_check._who(collections_mod.recipe_for(collection), False))
+    said: list[str] = []
+    for _ in range(5):                                  # the gate deferred for room, asked every few seconds
+        run_check._send_back(collection, R1, "document", said.append)
+    assert len(said) == 1 and said[0].startswith("CANARY") and "A REPEAT" not in said[0], said
+    assert len(hold_runs.canary_history(root, "gutenberg", "document", R1)) == 1
+    run_check.reset_cache()
+
+
+def test_the_keeps_canary_line_says_how_many_were_discarded():
+    from app.rage import keep as rage_keep
+    line = ("CANARY — the engine of vega-qwen3-embedding-4b at http://l:8080 discarded 2 context(s) that did "
+            "not reproduce its canary (2 since this worker started, 53 created and used): each request")
+    assert rage_keep.discarded_in(line) == 2
+    assert rage_keep.discarded_in("the keep of m was raised to 90 s") == 0

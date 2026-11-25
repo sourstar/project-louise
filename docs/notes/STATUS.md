@@ -29,6 +29,25 @@ measured (published figures disagree).
   loading after a start or a resume — bounded (two minutes for a keeper that never beats, ten for the
   window), said when it begins and when it ends; a later single reload holds nothing. AFTER owed at the next
   worker start (scheduling-log.md).
+- **ONE DISCARDED CONTEXT WAS COUNTED AS TWO CANARY FAILURES, and said fifty times (`run_check.canary_failed`,
+  `_send_back`; gutenberg on the node, 09:40:55Z).** 27 s after the worker's start, while the keeper's preload
+  of 13 models was loading (1,493 MiB free on the card a second later), the engine discarded ONE context of
+  vega-qwen3-embedding-4b for not reproducing its canary. Louise set the run's statements aside, paused
+  embedding and gated the run again (validated 10:20:41Z: forty minutes, nothing wrong written) — as designed.
+  NOT as designed: the refused request counted the discard and, thirty seconds later, the worker's beat read
+  the engine's own count and counted it AGAIN (the counter's comment said "compared and never summed"; the
+  code summed). So the run's history holds two times a role for one discard ("A REPEAT: time 2 for this run
+  (before: 2026-11-25T09:40:55Z)", fifteen seconds after the first), and a second count arriving after a gate
+  that had passed would have gated the run again for the same discard. And the CANARY error was written at
+  every asking of the gate, which was deferred for room every six seconds: fifty lines in three minutes, two
+  more an hour later. FIXED: one discard is one failure whoever saw it — the request counts at once, the
+  engine's count confirms what requests saw before it counts anything of its own, never fewer than happened
+  (a failure only the engine saw is counted; one the engine's count does not show within 90 s stops waiting,
+  so it cannot swallow a later discard); the error is said once an episode, as its history is written once.
+  gutenberg's `gate-canary.json` keeps its four entries: a record of what the code did. STILL OPEN from the
+  same minute: embedding must not start while the keeper's preload is still loading; a gate deferred for room
+  says that, with the room it needs; and whether the discard was a canary REFUSED FOR MEMORY answered as a
+  failure is the engine session's (its 0023, point 5; neither `d531d5d804f1` nor `792f050e318e` has it).
 - **THE LEGAL CHUNKER ENCODES A TEXT'S SPANS TOGETHER, AND EVERY POOL CHILD IS TOLD ITS TOKENIZER THREADS
   (Legal's `chunking_legal._encode_many`; `parallel.tokenizer_threads`, `lane_threads`).** From the reading of
   EUR-Lex5.next's large units (below): the counts tokenized span after span on one thread. Legal: the spans of
