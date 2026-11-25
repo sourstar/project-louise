@@ -559,14 +559,22 @@ the node before and after — München's row, the same model, R6's 2 s the
 expectation.
 
 **2. The parked state, `/backend/park`, `/system`, the floor, 503** —
-`review/0027-model-park.patch`, FOR REVIEW. On the server tree after 0024.
+`staged/0027-model-park.patch`, STAGED (2026-11-25). On the server tree after 0024.
 **THIRD CUT (2026-11-25).** The architecture session read the first and
 ACCEPTED it for staging with two changes ("The review's two changes",
 below). An INDEPENDENT READING of the same patch, asked for beside theirs,
 then found sixteen things; each is fixed, stated as a limit, or answered in
-"The independent reading, finding by finding", below. It stays under
-`review/` until the architecture session has seen what moved since its
-reading — three answers the keeper builds against are new.
+"The independent reading, finding by finding", below. The architecture
+session read this third cut (at 5633e543: the lock's try, the return path,
+the answers) and ACCEPTED it: "Both changes are as asked … B's rows are
+each what I would have asked for; the three that change my half are taken
+as written (404 type model_not_loaded; 500 type model_stopped — I skip the
+shutdown on it; /backend/load 503 no_room_on_device with Retry-After). The
+host read against the container's own limit is the important one." What it
+leaves open are conditions, not changes: LocalAI's Postgres suites on the
+node's build tree before the server build is used; `park: true` reaching a
+real load as the first row on the park engine. A parked model outside the
+idle timeout is the keeper's.
 
 What it does (§3.2, §3.4), in the order a model meets it:
 

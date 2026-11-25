@@ -1,5 +1,5 @@
-"""Parking, step 2, the SERVER part — SENT FOR REVIEW, not staged
-(docs/notes/parking-step-2.md §7, 2; deploy/localai/patches/review/).
+"""Parking, step 2, the SERVER part — STAGED after three cuts
+(docs/notes/parking-step-2.md §7, 2; deploy/localai/patches/staged/).
 
 LocalAI parks a model that can park where it would stop it for room, brings
 it back at the next request, and answers a refusal of the moment 503. Its Go
@@ -9,13 +9,14 @@ SAME words — the message of a park, the key of its bytes, the head of a
 refusal — which no Go spec can check across the two; the rules a reviewer
 agreed to (a busy model is never stopped, the stop sends no Free to a model
 that parks, the host is read at each park, nothing is parked by default); what
-it deliberately does not add; and that it is under review, in no series."""
+it deliberately does not add; what the two readings changed; and that it is a
+patch of the SERVER, in no engine series."""
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PATCHES = ROOT / "deploy" / "localai" / "patches"
-PATCH = PATCHES / "review" / "0027-model-park.patch"
+PATCH = PATCHES / "staged" / "0027-model-park.patch"
 ENGINE = PATCHES / "staged" / "0023-llama-cpp-park-when-told.patch"
 NOTE = (ROOT / "docs" / "notes" / "parking-step-2.md").read_text(encoding="utf-8")
 
@@ -55,12 +56,18 @@ def test_it_is_a_mail_under_localai_s_policy_for_the_server_alone():
     assert "backend/backend.proto" not in files, "LocalAI's own two calls: no new RPC"
 
 
-def test_it_is_under_review_and_in_no_series():
-    assert not (PATCHES / "staged" / PATCH.name).exists()
+def test_it_is_staged_for_the_server_and_in_no_engine_series():
+    assert not (PATCHES / "review" / PATCH.name).exists(), "it moved; it is not in two places"
     for series in (PATCHES / "series", *(PATCHES / "staged").glob("*.series")):
         assert "model-park" not in series.read_text(encoding="utf-8"), series.name
-    readme = (PATCHES / "review" / "README.md").read_text(encoding="utf-8")
-    assert PATCH.name in readme and "NO engine series" in readme
+    readme = (PATCHES / "staged" / "README.md").read_text(encoding="utf-8")
+    row = next(line for line in readme.splitlines() if line.startswith(f"| `{PATCH.name}` |"))
+    assert "SERVER" in row and "NO engine series" in row and "ACCEPTED by the architecture session at its third cut" in row
+    # the condition on the build that carries it, and what turns it on
+    assert "whole and green on the node's server tree" in row and "Postgres" in row
+    assert "It does nothing until the keeper writes the floor AND a model's file says `park: true`" in row
+    moved = (PATCHES / "review" / "README.md").read_text(encoding="utf-8")
+    assert "Nothing waits here now." in moved and "to `staged/0027-model-park.patch`, 2026-11-25" in moved
 
 
 def test_the_server_and_the_engine_say_the_same_words():
@@ -245,7 +252,7 @@ def test_a_refusal_is_503_with_a_retry_after_and_its_own_type():
 
 def test_the_note_puts_every_difference_to_the_review_with_its_cost():
     section = NOTE[NOTE.index("**2. The parked state, `/backend/park`, `/system`, the floor, 503**"):]
-    for said in ("FOR REVIEW", "Where it differs from §3.2 and §3.4", "`POST /backend/load`, which exists, IS it",
+    for said in ("STAGED (2026-11-25)", "Where it differs from §3.2 and §3.4", "`POST /backend/load`, which exists, IS it",
                  "LocalAI never stops a PARKED model by itself", "park_host_floor_bytes", "NOT measured",
                  "no Docker", "It does NOTHING until two things are true"):
         assert said in section, said
@@ -254,6 +261,8 @@ def test_the_note_puts_every_difference_to_the_review_with_its_cost():
 def test_the_note_carries_both_readings_and_what_the_review_asked_to_have_written():
     section = NOTE[NOTE.index("**2. The parked state, `/backend/park`, `/system`, the floor, 503**"):]
     assert "**THIRD CUT (2026-11-25).**" in section
+    assert "ACCEPTED it:" in section and "I skip the\nshutdown on it" in section, "the architecture session's words on the third cut"
+    assert "conditions, not changes" in section
     # the architecture session's two changes, each with its pros and cons, and the deadline it left to this part
     changes = section[section.index("**The review's two changes (the architecture session, 2026-11-25), built:**"):]
     assert "| | it was | it is | pros | cons |" in changes and "**A deadline on the return**" in changes
