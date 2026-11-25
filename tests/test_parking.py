@@ -448,6 +448,42 @@ def test_a_floor_the_server_does_not_take_is_said_once_and_asked_again(node):
     assert len(r.posted) == 3, "asked again at each beat"
 
 
+def test_a_settings_write_that_is_not_answered_is_not_sent_again_at_each_beat(node, monkeypatch):
+    """Tensor, 2026-11-25, on the real server: a whole-object POST
+    /api/settings never answers where LocalAI's watchdog exists only for a
+    limit of loaded models and no periodic check is on. Each repeat would
+    leave one more request hanging: the server is left alone for an hour,
+    said once — for the floor and for the reclaimer's switch alike."""
+    r = node({"vega-bge-m3": 2_000}, parks=["vega-bge-m3"])
+    sent = []
+
+    def post(url, json=None, **kw):
+        if url.endswith("/api/settings"):
+            sent.append(json)
+            raise httpx.ReadTimeout("no answer")
+        return r.post(url, json=json, **kw)
+    monkeypatch.setattr(httpc, "post", post)
+    clock = {"t": 1_000.0}
+    monkeypatch.setattr(resident, "_now", lambda: clock["t"])
+    model_load.loaded_models(S, 0.0)
+    for _ in range(4):
+        resident._threshold(S)
+        assert resident._parked_follow([S])["floor"] == []
+        resident._reclaimer_follows([S])              # the reclaimer's writer honours the same hold
+        clock["t"] += 60.0
+    assert len(sent) == 1, "one write, never answered: not repeated at each beat"
+    said = [t for t in node.said if "not sent again at each beat" in t]
+    assert len(said) == 1 and "park floor" in said[0] and "60 min" in said[0] and SECRET not in said[0]
+    clock["t"] += localai_reclaimer.SETTINGS_HOLD_S
+    resident._threshold(S)
+    resident._parked_follow([S])
+    assert len(sent) == 2, "after the hold it is asked once more"
+    with pytest.raises(localai_reclaimer.NotTaken) as e:
+        monkeypatch.setattr(httpc, "post", lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectTimeout("down")))
+        localai_reclaimer.set_park_floor(S, 5)
+    assert not isinstance(e.value, localai_reclaimer.NotAnswered), "a server that is down was sent nothing"
+
+
 def test_the_host_under_its_floor_takes_its_memory_back_from_the_parked_model_used_longest_ago(node, monkeypatch):
     """LocalAI never stops a parked model by itself, and checks the floor
     only when it parks: the parse pool's room comes before a quick return.

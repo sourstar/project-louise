@@ -1,30 +1,45 @@
 #!/usr/bin/env python3
-"""KEEP THE EMBEDDERS' WEIGHT FILES IN THE FILE CACHE, so a model that was
-unloaded comes back from memory and not from the drive (operator, 2026-11-25:
-"cache the model to reload it from disk warm").
+"""READ THE MODELS' WEIGHT FILES WHOLE AND SAY HOW FAST THEY CAME — the
+measurement behind "cache the model to reload it from disk warm" (operator,
+2026-11-25), and what it found.
 
-Outside query mode a load that does not fit unloads the model used least
-recently (`[models] make_room`, app/model_evict.py), and that model is loaded
-again when it is next asked for. What the reload costs depends on where its
-file is (docs/notes/model-profile.md, measured on the node):
+THE IDEA. Outside query mode a load that does not fit stops the model used
+least recently, and that model is loaded again when it is next asked for.
+If its weight file were always in the host's file cache, the reload would
+read memory and not the drive; a timer re-reading the embedders' files would
+keep them there.
 
-    from the drive        from the file cache
-    qwen3-embedding-4b   33.7 s      about 6 s
-    medcpt-article-ov    21.1 s      3.5 s
-    madlad               38.0 s      16.7 s
-    rerank-medcpt         5.6 s      2.4 s
+WHAT THE NODE MEASURED (München, 2026-11-25 21:08Z, right after a boot, Louise
+stopped and nothing loaded; `--all --json`, twice in a row):
 
-A file read stays cached only until something else needs the room, and in
-embed mode the corpus is read through the same cache all day. This reads the
-embedders' weight files again, whole and in order, each time it is run: a
-file still cached costs a copy in memory and stays among the ones used most;
-a file that was dropped is read back from the drive NOW, on nobody's
-request, instead of at a reload someone waits for.
+    first pass   105 models, 469.8 GiB in 107.2 s = 4,490 MiB/s   ARC 2,235 -> 16,332 MiB (its cap)
+    second pass  the same,   469.8 GiB in 108.4 s = 4,440 MiB/s
 
-    python3 deploy/vega/warm_model_files.py                 # one pass (a timer runs it)
-    python3 deploy/vega/warm_model_files.py --loop 300      # a pass every 5 minutes, until told to stop
+    from the DRIVE (both passes: 470 GiB do not fit a 16 GiB cache)    4.3-4.8 GiB/s
+        the 35B chat model   20.61 GiB   4.69 s
+        madlad                5.48 GiB   1.20 s
+        qwen3-embedding-4b    2.33 GiB   0.81 s
+        nemotron-embed        2.13 GiB   0.46 s
+        bge-m3                1.08 GiB   0.25 s
+    from MEMORY (a file read a moment before, shared by a second model) 7.3-7.5 GiB/s
+
+THE FINDING: THE DRIVE IS NOT WHAT A RELOAD COSTS HERE. ssd5 gives 4.5 GiB a
+second cold; an embedder's whole file is a quarter to three quarters of a
+second of it, and the cache would save about a tenth of a second of that.
+The 35B's file is 4.7 s of a load that took 37.4 s on an empty card that
+night and 99.2 s that afternoon with twelve models on the card: the time is
+the card and the server, not the file. So NO TIMER IS INSTALLED, and the
+file cache's cap is not raised for it. What does shorten a model's return is
+keeping its weights in host memory in the model server itself — parking
+(docs/notes/parking-keeper.md): 15.5 ms measured for bge-m3.
+
+It stays as the tool that measures this, on this node after a change of
+drive or on another node:
+
+    python3 deploy/vega/warm_model_files.py                 # the embedders, one pass
     python3 deploy/vega/warm_model_files.py --all           # every model LocalAI holds a file for
     python3 deploy/vega/warm_model_files.py --json          # the pass as one JSON object
+    python3 deploy/vega/warm_model_files.py --loop 300      # a pass every 5 minutes, until told to stop
 
 WHICH FILES — the system's to say, never a typed list (CLAUDE.md RULE 2):
 LocalAI's own model files in its models path. A model is an embedder when
@@ -35,27 +50,24 @@ container's own mounts (`docker inspect`, the longest destination that holds
 it), because the weights are mounted into the models path from elsewhere.
 
 IT READS, AND NOTHING ELSE: no file is opened for writing, none is created,
-LocalAI is asked nothing. It needs no RAM of its own beyond one block; the
-cache it fills is the host's (on the node the ZFS ARC, capped at 16 GB, where
-the embedders' ~8 GB then stand in for as many corpus blocks). SIGTERM or
-SIGINT ends it after the file in hand (exit 0 from `--loop`, 130 from a pass
-cut short).
+LocalAI is asked nothing. SIGTERM or SIGINT ends it after the file in hand
+(exit 0 from `--loop`, 130 from a pass cut short). It needs no RAM of its
+own beyond one block — but what it reads fills the host's cache (the ARC
+went to its 16 GiB cap in the first pass), in place of what was there.
 
-EACH PASS SAYS WHAT IT FOUND — per model the bytes, the seconds and the rate.
-The rate is the measurement: several GiB a second is memory, a few hundred
-MiB a second is the drive. The first pass after a quiet hour tells whether
-the files were still cached, which nothing else on the node records.
+EACH PASS SAYS THE BYTES, THE SECONDS AND THE RATE of every model, AND NO
+VERDICT. A first cut called anything over 4,000 MiB/s "from memory": on this
+node that was the DRIVE (4.3-4.8 GiB/s), and its summary would have said "all
+from memory" of a pass that read 470 GiB from it. Where a rate comes from is
+told by comparing two passes, or two files of one pass — as above — never by
+a constant: it is the drive's, and no interface says whether a file is in a
+ZFS ARC (`mincore(2)`, what vmtouch reads, sees the page cache, which the
+ARC is not).
 
-THE STANDARD TOOL for this is vmtouch (`vmtouch -t FILES` touches them into
-the cache, `vmtouch -dl` locks them there): not on TrueNAS SCALE's base
-image, and what it lacks is the list of files, which is what this derives.
-ALTERNATIVES, written down: `vmtouch -dl` or mlock — the files can then never
-be dropped, at the price of that much RAM taken from the parse pool for good
-(4.7 GB were available at the node's worst hour, 2026-11-24); a copy on a
-tmpfs — another path for the same weights, which the engines' identity is
-keyed on, so no; parking (docs/notes/parking-step-2.md) — the weights kept in
-host memory by the model server itself and back on the card in milliseconds,
-the form this should take once that engine is live.
+THE STANDARD TOOL for touching files into a page cache is vmtouch (`vmtouch
+-t FILES`; `vmtouch -dl` locks them there): not on TrueNAS SCALE's base
+image, blind to the ARC, and what it lacks is the list of files, which is
+what this derives.
 """
 from __future__ import annotations
 
@@ -75,10 +87,6 @@ NODE_MODELS = Path("/mnt/ssd5/apps/localai/models")
 LOCALAI = "ix-localai-localai-1"
 BLOCK = 16 << 20
 MIB = 1 << 20
-#: a file read faster than this came from memory: an NVMe drive read whole
-#: gives 1–3 GiB/s at best through ZFS, memory several times that; under it,
-#: the pass says "the drive" — a statement of the rate, not of the device
-FROM_MEMORY_MIB_S = 4000.0
 #: a file smaller than this says nothing by its rate (it is over before the clock moves)
 RATE_MIN_BYTES = 64 << 20
 
@@ -114,10 +122,8 @@ class Read:
         if self.missing and not self.files:
             return f"{self.name}: its weights are not on this host ({self.missing[0]})"
         rate = self.rate
-        where = ("" if rate is None else
-                 " — from memory" if rate >= FROM_MEMORY_MIB_S else " — FROM THE DRIVE: it had been dropped")
-        return (f"{self.name}: {self.bytes / MIB:,.0f} MiB in {self.files} file(s), {self.seconds:.1f} s"
-                + ("" if rate is None else f" ({rate:,.0f} MiB/s)") + where
+        return (f"{self.name}: {self.bytes / MIB:,.0f} MiB in {self.files} file(s), {self.seconds:.2f} s"
+                + ("" if rate is None else f" ({rate:,.0f} MiB/s)")
                 + (f"; {len(self.missing)} path(s) not found" if self.missing else ""))
 
 
@@ -240,13 +246,15 @@ def warm(models: list[Model], mounts: list[tuple[str, str]], *, clock=time.perf_
 
 def summary(reads: list[Read]) -> str:
     total, secs = sum(r.bytes for r in reads), sum(r.seconds for r in reads)
-    cold = [r.name for r in reads if r.rate is not None and r.rate < FROM_MEMORY_MIB_S]
-    return (f"warm: {len(reads)} model(s), {total / MIB:,.0f} MiB read in {secs:.1f} s"
-            + (f" — FROM THE DRIVE: {', '.join(cold)}" if cold else " — all from memory" if reads else ""))
+    rates = sorted(r.rate for r in reads if r.rate is not None)
+    return (f"read: {len(reads)} model(s), {total / MIB:,.0f} MiB in {secs:.1f} s"
+            + (f" = {total / MIB / secs:,.0f} MiB/s" if secs > 0 and total >= RATE_MIN_BYTES else "")
+            + (f"; per model {rates[0]:,.0f} to {rates[-1]:,.0f} MiB/s — where a rate comes from is told by "
+               f"a second pass, not by its size" if rates else ""))
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Keep the embedders' weight files in the file cache (reads only).")
+    ap = argparse.ArgumentParser(description="Read the models' weight files whole and say the rate (reads only).")
     ap.add_argument("--models", type=Path, default=NODE_MODELS, help="LocalAI's models path on this host")
     ap.add_argument("--container", default=LOCALAI, help="LocalAI's container, asked for its mounts")
     ap.add_argument("--container-models", default=None,

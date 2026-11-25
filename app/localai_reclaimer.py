@@ -56,6 +56,23 @@ class NotTaken(RuntimeError):
     settings object."""
 
 
+class NotAnswered(NotTaken):
+    """The settings WRITE was sent and LocalAI did not answer it in
+    TIMEOUT_S. Not a write to send again at the next beat: a whole-object
+    `POST /api/settings` NEVER answers when LocalAI's watchdog exists only
+    for a limit of loaded models and no periodic check is on (Tensor,
+    2026-11-25, on the real server: the handler waits on a watchdog that is
+    not running) — each repeat is one more request left hanging in it. The
+    caller holds its writes to that server for SETTINGS_HOLD_S and says so
+    once (app/resident.py `_settings_held`). The node is not in that
+    combination (München, 21:24Z: `watchdog_busy_enabled` true, no limit),
+    and a server patch for it rides the park server build."""
+
+
+#: how long a server whose settings write did not answer is left alone
+SETTINGS_HOLD_S = 3600.0
+
+
 def wanted(rule: str) -> bool:
     """Whether the reclaimer is ON under this make-room rule."""
     return rule != "page"
@@ -112,6 +129,10 @@ def set_key(server: str, key: str, value: Any) -> bool:
         r = httpc.post(url, json=_body(current, value, key), timeout=TIMEOUT_S)
         status = r.status_code
     except Exception as e:   # noqa: BLE001 — as above
+        import httpx
+        if isinstance(e, httpx.TimeoutException) and not isinstance(e, httpx.ConnectTimeout):
+            raise NotAnswered(f"the write was sent and not answered in {TIMEOUT_S:.0f} s "
+                              f"({type(e).__name__})") from None
         raise NotTaken(f"its settings could not be written ({type(e).__name__})") from None
     if status >= 400:
         raise NotTaken(f"its settings were refused (HTTP {status})")

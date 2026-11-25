@@ -447,6 +447,7 @@ def reset() -> None:
         _reclaimer_failed.clear()
         _park_floor_seen.clear()
         _park_floor_failed.clear()
+        _settings_hold.clear()
         _stale_said.clear()
         _pids_seen = (frozenset(), frozenset())
         _last, _last_why, _last_switches = {}, None, Switches()
@@ -682,6 +683,34 @@ def _threshold(server: str) -> float:
     return DEFAULT_THRESHOLD
 
 
+#: server -> until when (monotonic) no settings write is sent to it: one was
+#: sent and never answered (app/localai_reclaimer.py `NotAnswered`)
+_settings_hold: dict[str, float] = {}
+
+
+def _settings_held(server: str) -> bool:
+    """Whether writes to `server`'s settings are held (`_settings_hold`)."""
+    with _lock:
+        until = _settings_hold.get(server)
+        if until is not None and _now() >= until:
+            del _settings_hold[server]
+            until = None
+    return until is not None
+
+
+def _hold_settings(server: str, what: str, e: Exception) -> None:
+    """A settings write that was not answered: no other is sent to `server`
+    for SETTINGS_HOLD_S, said once (the reason: `NotAnswered`)."""
+    from app import localai_reclaimer
+    with _lock:
+        _settings_hold[server] = _now() + localai_reclaimer.SETTINGS_HOLD_S
+    _say("warn", f"resident: {what} at {server} was not set — {e}. A settings write LocalAI does not answer "
+                 f"is not sent again at each beat: it is a known fault of the server (its watchdog exists "
+                 f"only for a limit of loaded models and runs no periodic check), and each repeat would "
+                 f"leave one more request hanging in it. Nothing is written to its settings for "
+                 f"{localai_reclaimer.SETTINGS_HOLD_S / 60:.0f} min; a restart of the worker asks again")
+
+
 #: server -> LocalAI's `park_host_floor_bytes` as its last settings answer
 #: gave it (None: unread, absent)
 _park_floor_seen: dict[str, int | None] = {}
@@ -730,8 +759,13 @@ def _parked_follow(servers: Iterable[str]) -> dict[str, list]:
             if seen == floor:
                 _park_floor_failed.discard((s, floor))
                 continue
+            if _settings_held(s):
+                continue
             try:
                 localai_reclaimer.set_park_floor(s, floor)
+            except localai_reclaimer.NotAnswered as e:
+                _hold_settings(s, "LocalAI's park floor", e)
+                continue
             except localai_reclaimer.NotTaken as e:
                 if (s, floor) not in _park_floor_failed:
                     _park_floor_failed.add((s, floor))
@@ -807,8 +841,13 @@ def _reclaimer_follows(servers: Iterable[str]) -> list[str]:
         if seen is None or seen is want:
             _reclaimer_failed.discard((s, want))
             continue
+        if _settings_held(s):
+            continue
         try:
             localai_reclaimer.set_enabled(s, want)
+        except localai_reclaimer.NotAnswered as e:
+            _hold_settings(s, "LocalAI's memory reclaimer", e)
+            continue
         except localai_reclaimer.NotTaken as e:
             if (s, want) not in _reclaimer_failed:
                 _reclaimer_failed.add((s, want))

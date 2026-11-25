@@ -20,6 +20,44 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **"CACHE THE MODEL TO RELOAD IT FROM DISK WARM" — MEASURED, AND IT DOES NOT PAY: THE DRIVE IS NOT WHAT A
+  RELOAD COSTS (München, 21:08Z, after the boot for the ssd3 port swap; Louise stopped, nothing loaded).**
+  `warm_model_files.py --all --json` twice in a row: 105 models, 469.8 GiB in 107.2 s and 108.4 s — 4,490 and
+  4,440 MiB/s; the ARC from 2,235 MiB to its 16,384 cap in the first pass (MemAvailable 55.9 → 41.6 GiB).
+  From the DRIVE, both passes (470 GiB do not fit 16): 4.3–4.8 GiB/s — the 35B's 20.61 GiB in 4.69 s, MADLAD
+  5.48 in 1.20, qwen3-embedding-4b 2.33 in 0.81, nemotron-embed 2.13 in 0.46, bge-m3 1.08 in 0.25; from
+  MEMORY (a file shared with a model read a moment before): 7.3–7.5 GiB/s. So a timer on the embedders'
+  files would save about a tenth of a second each, and a larger cache under 5 s of the 35B's load — which
+  was 37.4 s on the empty card that night and 99.2 s at 15:58Z with twelve models on it: the time is the
+  card and the server. **NO TIMER, NO CHANGE OF THE CACHE'S CAP; what the entry below called "the gain on
+  record" (33.7 s against 6) was never the file's read.** THE TOOL'S VERDICT WAS WRONG AND IS REMOVED: it
+  called anything over 4,000 MiB/s "from memory", which on this node is the drive; it now says bytes,
+  seconds and rate, and its docstring and model-profile.md carry the rows. A quick return is parking's.
+  The node after the boot: ssd3 on ata4 at 6.0 Gbps, 0 ata events, pools healthy, bcdf0dc, engine
+  619655e5833b, query mode; the 35B's cold start 37.4 s "load bound 300 s" (#906's row), omnivoice 7.7,
+  parakeet-igpu 3.7, silero 2.1, medcpt-query 4.7, bge-m3 7.5; the OVER-COMMITTED line at info (MADLAD read
+  short, 32,664 MiB at rest).
+- **Parking, what moved on Tensor's side the same hour, and one guard taken from it.** (a) and (b) of what
+  my half relies on, MEASURED by Tensor on the real server: `GET /api/settings` carries
+  `park_host_floor_bytes` (0 from the start, the written value after a whole-object POST), and one
+  embedding to a parked model brings it back (20 of 20) — `/backend/load` only for the stale record, as
+  built. THE STAGED 0027 IS REPLACED: on a real backend a park landed between two inputs of ONE embeddings
+  request (46 times in 2,048 sentences; answers right, the weights copied out and back each time), so a
+  model whose last request began or ended under a second ago is now busy for a park — 409 `model_busy`,
+  which my evictor already takes as "the next candidate". A HAZARD OF THE SERVER, guarded here: a
+  whole-object `POST /api/settings` NEVER answers where LocalAI's watchdog exists only for a limit of loaded
+  models and no periodic check is on (not the node's settings — München, 21:24Z — and a server patch
+  rides the park build). A write that was sent and not answered is therefore not repeated at each beat:
+  the keeper leaves that server's settings alone for an hour, said once, for the park floor and the
+  reclaimer's switch alike (`localai_reclaimer.NotAnswered`, `resident._settings_held`).
+- **The operator, 21:27Z, to München: "Which experts of the 35B stay on the card: switch it on by default",
+  "Run unattended"; and earlier "Can parking be combined with paging? The idea was also to decide which
+  expert of the 35B is paged or preloaded".** Three levels then, by his design: parking for whole models,
+  paging for what stays, the experts switch to steer what paging takes of the 35B. They combine as §4 C of
+  parking-step-2.md already says (over the card within the host's floor → the driver pages; otherwise room
+  is made → park where the model can, stop where it cannot). Whether the experts switch is a line of the
+  chat model's file or the engine's default is Tensor's to say; mine when it lands: the staged model file
+  and the keeper's remembered size of the 35B kept true.
 - **PARKING, LOUISE'S HALF — BUILT, INERT UNTIL THE PARK SERVER AND A `park: true` FILE (operator: "Do
   parking."; docs/notes/parking-keeper.md).** Built against the exact answers of Tensor's staged
   0027-model-park.patch (read from their branch: `/backend/park`'s 200 / 409 `model_busy` / 412 ×3 / 404
