@@ -6235,7 +6235,8 @@ def _check_origin(a, codex, *, local=None, run: str | None = None):
                 print(f"note: {e}", file=sys.stderr)
                 raise Stopped("SIGTERM") from None
         if why is not None:
-            print(f"note: records-vs-origin cannot ask the origin by its blocks: {why}"
+            how = "by its blocks" if isinstance(mo, block_origin.BlockOrigin) else "by Range"
+            print(f"note: records-vs-origin cannot ask the origin {how}: {why}"
                   + ("; the copy this node keeps is re-parsed meanwhile" if fallback else ""), file=sys.stderr)
             if fallback:
                 return fallback
@@ -6452,14 +6453,17 @@ def _member_origin(codex):
     (app/acquire/member_origin.py) or its documents' files
     (app/acquire/file_origin.py): `_reparse_from`, `_origin_unit_from` and
     `_weigh_from` share its listings and its temporary base."""
-    from app.acquire import block_origin, file_origin, member_origin, unit_origin
+    from app.acquire import block_origin, file_origin, member_origin, range_origin, unit_origin
     key = getattr(codex, "collection_id", id(codex))
     if key not in _member_origins:
         # by what the spec declares: zip members, a mirror tree, a unit its
-        # UnitFetcher fetches again (app/acquire/unit_origin.py), or the
-        # blocks of a dated one-stream bzip2 dump (app/acquire/block_origin.py)
+        # UnitFetcher fetches again (app/acquire/unit_origin.py), the
+        # blocks of a dated one-stream bzip2 dump (app/acquire/block_origin.py),
+        # or the byte ranges a plugin says a record reads of a dated run's
+        # container files (app/acquire/range_origin.py)
         _member_origins[key] = (member_origin.for_codex(codex) or file_origin.for_codex(codex)
-                                or unit_origin.for_codex(codex) or block_origin.for_codex(codex))
+                                or unit_origin.for_codex(codex) or block_origin.for_codex(codex)
+                                or range_origin.for_codex(codex))
     return _member_origins[key]
 
 

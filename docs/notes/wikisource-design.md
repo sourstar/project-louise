@@ -51,19 +51,30 @@ snapshot's run under an origin base (`local_of`), fetches and parses it
 again and compares the whole line. The base is a download of the run
 (`hold check --origin DIR`), as Wikipedia's is.
 
-*Not built, and not reuse as this note first said*: no reader of a
-multistream dump by Range exists. The block origin (#752,
-app/acquire/block_origin.py) is wikidata's alone: it wants a single-file
-layout and the plugin's `origin_lines`, and Wikipedia's and Wikisource's
-specs are `container-files`. Wikipedia itself is checked against a local
-base only (app/plugins/wikipedia/weigh.py says so). So, of the two ways
-below, both are new work:
-- while the run is served: read the covering bz2 streams by Range (their
-  offsets are in the run's index) and the three tables whole (about 45 MB
-  for it), then re-parse. It needs an origin class for container-files
-  multistream, and a weigher that counts a unit by its streams with the
-  index and the tables shared; until then a unit weighs the run's files
-  whole and a sample is compared in part;
+*Built 2026-11-24, the first of the two ways below*: the origin by Range,
+AGAINST THE COPY (app/acquire/range_origin.py, generic; the plugin's
+`origin_ranges`). The block origin's method (#752, wikidata's) taken over
+for a run of container files: the copy places a record's unit — the
+streams of the pages its work is made of, found by reading them through
+the copy's index of the run — those byte ranges are fetched from the
+origin and compared with the copy's, the three tables are fetched whole
+and compared (about 45 MB for it, once a check, shared by every record of
+the wiki), and a record whose bytes are the origin's is re-parsed from the
+copy in the parse pool. A stream of a multistream dump is a bzip2 stream
+of its own, so equal bytes decode alike with nothing assumed of the bytes
+before. A unit is weighed by its streams when the check's bound reaches
+it, the tables its shared pieces. Wikipedia's dump layer has the same
+shape and needs only the hook.
+
+| | pros | cons |
+|---|---|---|
+| against the copy (built) | exact; small; the proven method; no assumption about the wiki | needs the corpus: a peer holding only the SHARD checks against a download of the run, as for Wikipedia |
+| copy-free (not built) | a peer checks with the SHARD alone | the run's page index rebuilt from the origin's multistream index, which carries no redirect and no content model: both read from fetched streams, and a content model taken to be a namespace's; a mistake shows as a false failure, never a false pass |
+
+The operator was asked which (2026-11-24); the first is the default taken.
+Not yet run through `hold check` on a collection: step 2 makes the first.
+
+- while the run is served: the above;
 - after the run is gone from dumps.wikimedia.org: it fetches the same
   revision ids from the wiki's API, one batched `prop=revisions` request per
   record, through the transfer budget (invariant 5). Each revision's content
@@ -232,9 +243,16 @@ Wikidata carries a genre (P136) on fewer than 5 % of sitelinked items. So:
      verifier's own download of the run gives the same record and the same
      `origin_hash`; the same origin read in a later run moves it
      (tests/test_wikisource_origin.py).
+   - *The origin by Range, against the copy* (2026-11-24;
+     app/acquire/range_origin.py, `origin_ranges`): a record's streams and
+     the run's tables compared with the origin's bytes, a unit weighed by
+     its streams (§1). Against a mock origin on loopback: the same bytes,
+     a stream, a table and a length that differ, an origin gone, without
+     Range or silent, a page the run does not hold, the pool's hand-over.
    - Not yet: records-vs-origin through `hold check` on a collection (step
-     2 makes the first one); the reader by Range and the one by revision id
-     (§1: both new work); the weigher.
+     2 makes the first one); the reader by revision id for a run no longer
+     served (§1); the copy-free reader, if peers are to check without the
+     corpus.
 2. **The collection**, it first:
    - `hold collection create` from a recipe (the dated run pinned);
    - the acknowledgement;
