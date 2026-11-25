@@ -234,6 +234,37 @@ def test_a_memory_kill_is_held_and_never_written_on_the_document(tmp_path, monke
     assert worker.transient_failure(parallel.MemoryKilled(3, 4, "x"))
 
 
+def test_a_rows_deferral_after_a_kill_says_first_what_the_row_was_to_it(tmp_path, monkeypatch, isolated_config):
+    """The lessons of EUR-Lex5.next, row A5: the kill's words fell on every
+    row in flight, and the two units that carried them were bystanders of
+    256 MiB each. Each row's line says what THAT row was: the one whose
+    process was killed, or a bystander."""
+    from app import oom_hold
+    c, con, row = _setup(tmp_path, "fts")
+
+    def line():
+        return con.execute("SELECT message FROM events WHERE level='warn' AND doc_uid=? ORDER BY id DESC "
+                           "LIMIT 1", (row["uid"],)).fetchone()[0]
+
+    def killed(collection, rows, *, names):
+        raise parallel.MemoryKilled(3, 4, "fts of alpha")
+    monkeypatch.setattr(parallel, "fts_for_rows", killed)
+    part = {"collection": "alpha", "kind": "fts", "rows": 1, "bytes": 300 * 2 ** 20, "estimated_peak": 0,
+            "uids": [["another-document", 300 * 2 ** 20]], "large": True}
+    monkeypatch.setattr(oom_hold, "_victim", {"certain": True, "pid": 4242, "part": part, "others_killed": 0})
+    assert worker._execute_step(con, c, "fts", row) is False
+    assert line().startswith("fts deferred — this document is a bystander"), line()
+    assert "pid 4242" in line() and "another-document" in line() and "will be retried" in line()
+
+    part["uids"] = [[row["uid"], 300 * 2 ** 20]]
+    assert worker._execute_step(con, c, "fts", row) is False
+    assert line().startswith("fts deferred — THIS document is in the part whose process was killed"), line()
+
+    monkeypatch.setattr(oom_hold, "_victim", None)
+    assert worker._execute_step(con, c, "fts", row) is False
+    assert line().startswith("fts deferred — which document the killed process held is not known"), line()
+
+
 @pytest.mark.parametrize("why", ["stop", "mode"])
 def test_the_rounds_parse_stops_with_the_worker_and_a_direct_call_does_not(why, tmp_path, monkeypatch,
                                                                         isolated_config):

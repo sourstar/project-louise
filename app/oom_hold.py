@@ -133,11 +133,111 @@ def describe(rec: dict[str, Any]) -> str:
     what = {"worker": "the worker's main process", "cgroup": "a process in the worker's memory cgroup "
             "(a parse-pool child, a check, a derivation)"}.get(rec.get("kind"), str(rec.get("kind")))
     peak = rec.get("memory_peak")
+    who = said(rec.get("killed"))
     return (f"HELD since {rec.get('at')}: the kernel killed {what} for memory"
             + (f" (the cgroup's peak {peak / 2 ** 30:.1f} GB)" if isinstance(peak, int) else "")
+            + (f" — {who}" if who else "")
             + "; not relaunched until the cause is known (operator, 2026-11-19). Release with "
               "`louise node release-oom --cause \"…\"` or `--diagnostic \"…\"`; what it was doing is in "
             + str(path()))
+
+
+# WHICH PROCESS, AND WHAT IT HELD (the lessons of EUR-Lex5.next, row A5): a
+# kill's words — "not computed again until the cause is known" — fell on
+# EVERY row of the batch in flight, and the two units that carried them were
+# bystanders of 256 MiB each (measured). The hold already records the parts
+# in flight and two samples of the cgroup's processes; `victim` reads the
+# killed one off them, and `said` puts it in words for the hold, the guard's
+# line and each row's deferral.
+
+#: a process the kernel killed ends by SIGKILL
+SIGKILLED = -9
+
+
+def victim(details: dict[str, Any]) -> dict[str, Any] | None:
+    """The process the kernel killed and the part it held, from what a hold
+    records (`in_flight`, `processes_before`, `processes_now`); None where
+    nothing says. In order of certainty:
+
+      1. CERTAIN — a part in flight whose OWN process ended by SIGKILL: a
+         large part has a process of its own, and `parallel.in_flight` reads
+         its exit code. Every other part in flight is then a bystander.
+      2. LIKELY — the process of the watcher's last sample that is gone now,
+         the largest of them: the kernel kills the process with the highest
+         badness, which among the pool's children is the one holding the most
+         memory. With its part where that pid is a large part's; a child of
+         the shared pool otherwise, whose part is one of those in flight and
+         is not known (a broken pool ends its other children too, so "gone"
+         alone names nobody)."""
+    parts = [p for p in details.get("in_flight") or [] if isinstance(p, dict)]
+    own = sorted((p for p in parts if p.get("exitcode") == SIGKILLED), key=lambda p: -(p.get("bytes") or 0))
+    if own:
+        part = own[0]
+        return {"certain": True, "pid": part.get("pid"), "part": _part_of(part), "others_killed": len(own) - 1}
+    before = details.get("processes_before") or {}
+    now = {p.get("pid") for p in details.get("processes_now") or [] if isinstance(p, dict)}
+    me = os.getpid()
+    gone = sorted((p for p in before.get("processes") or []
+                   if isinstance(p, dict) and p.get("pid") not in now and p.get("pid") != me),
+                  key=lambda p: -(p.get("rss_anon") or 0))
+    if not gone:
+        return None
+    dead = gone[0]
+    part = next((p for p in parts if p.get("pid") is not None and p.get("pid") == dead.get("pid")), None)
+    return {"certain": False, "pid": dead.get("pid"), "rss_anon": dead.get("rss_anon"),
+            "sampled_at": before.get("at"), "part": _part_of(part) if part else None,
+            "in_flight": len(parts)}
+
+
+def _part_of(part: dict[str, Any]) -> dict[str, Any]:
+    return {k: part.get(k) for k in ("collection", "kind", "rows", "bytes", "estimated_peak", "uids", "large")}
+
+
+def _mib(n: Any) -> str:
+    return f"{n / 2 ** 20:,.0f} MiB" if isinstance(n, int) else "size not read"
+
+
+def said(v: dict[str, Any] | None) -> str:
+    """`victim`'s answer in words; "" for None."""
+    if not v:
+        return ""
+    part = v.get("part")
+    held = ""
+    if part:
+        uids = [u[0] for u in part.get("uids") or [] if u and u[0]]
+        held = (f"{part.get('kind') or 'a part'} of {part.get('collection')}: "
+                f"{', '.join(map(str, uids[:3])) or 'its rows'}"
+                f"{' and others' if (part.get('rows') or 0) > 3 else ''}, {_mib(part.get('bytes'))} of text, "
+                f"estimated peak {_mib(part.get('estimated_peak'))}")
+    if v.get("certain"):
+        more = v.get("others_killed") or 0
+        return (f"the process killed is pid {v.get('pid')}, the large part's own ({held}); every other "
+                f"part in flight is a bystander" + (f" ({more} more large part(s) were killed too)" if more else ""))
+    was = f"pid {v.get('pid')}, {_mib(v.get('rss_anon'))} anonymous at the last sample ({v.get('sampled_at')})"
+    if part:
+        return f"the process killed is most likely {was}, the large part's own ({held})"
+    return (f"the process killed is most likely {was}, a child of the shared pool: which of the "
+            f"{v.get('in_flight')} part(s) in flight it held is not known")
+
+
+#: the victim as read at the first kill this process saw (`killed`)
+_victim: dict[str, Any] | None = None
+
+
+def victim_seen() -> dict[str, Any] | None:
+    """The killed process as this process read it when it first saw the
+    kill, while the parts were still in flight; None before, or unread."""
+    return _victim
+
+
+def _note_victim() -> None:
+    global _victim
+    try:
+        from . import parallel
+        _victim = victim({"in_flight": parallel.in_flight(), "processes_before": last_sample(),
+                          "processes_now": processes()})
+    except Exception:   # noqa: BLE001 — the hold and the stop never wait on this reading
+        _victim = None
 
 
 # THE PROCESS'S BASELINE: the counter as this process first read it — at its
@@ -184,6 +284,7 @@ def killed(cgroup: str | None = None) -> tuple[int, int] | None:
             return _fired
         _fired = (base, now)
         handler = _handler
+    _note_victim()              # FIRST, while its parts are still in flight
     if handler is not None:
         handler(base, now)
     return _fired
@@ -191,11 +292,12 @@ def killed(cgroup: str | None = None) -> tuple[int, int] | None:
 
 def _reset() -> None:
     """Tests: forget the baseline, the handler, the kill seen and the sample."""
-    global _handler, _fired
+    global _handler, _fired, _victim
     with _lock:
         _base.clear()
         _handler = None
         _fired = None
+        _victim = None
         _sample.clear()
 
 

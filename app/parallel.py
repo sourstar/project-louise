@@ -1247,15 +1247,23 @@ def _partition(collection, rows: list[dict], want: int) -> list[list[dict]]:
 #: worker's watcher only when the kernel has killed.
 _in_flight: dict[int, dict] = {}
 _in_flight_lock = threading.Lock()
+#: per part that has a process of its own (a large part, `_LaneTask`): how
+#: to read that process's exit code. Beside `_in_flight`, never in it — a
+#: hold is written as JSON. Read only when the kernel has killed
+#: (`in_flight`): -9 on a part is THE process the kernel killed, and every
+#: other part in flight is a bystander (the lessons of EUR-Lex5, row A5)
+_exit_of: dict[int, Callable[[], int | None]] = {}
 #: the rows named per part in a hold (the rest are counted)
 IN_FLIGHT_ROWS = 20
 
 
 def _enter(key: int, kind: str, collection, part: list[dict], *, peak: int = 0,
-           large: bool = False, until: float | None = None, pid: int | None = None) -> None:
+           large: bool = False, until: float | None = None, pid: int | None = None,
+           exit_of: Callable[[], int | None] | None = None) -> None:
     """`large`: the part has the large lane, a process of its own; `until`:
     the monotonic time its answer is waited for (a large part's own bound);
-    `pid`: that process's, where it has one of its own. `since` is when it
+    `pid`: that process's, where it has one of its own, and `exit_of` reads
+    that process's exit code (None while it runs). `since` is when it
     was submitted — what `app/pool_progress.py` reads to say what a batch
     has been waiting on, in which process, at what peak."""
     with _in_flight_lock:
@@ -1264,6 +1272,8 @@ def _enter(key: int, kind: str, collection, part: list[dict], *, peak: int = 0,
                            "parse_bytes": sum(parse_size_of(r) for r in part), "estimated_peak": peak,
                            "uids": [[r.get("uid"), r.get("size")] for r in part[:IN_FLIGHT_ROWS]],
                            "since": time.monotonic(), "large": large, "until": until, "pid": pid}
+        if exit_of is not None:
+            _exit_of[key] = exit_of
 
 
 def _pid_of(f) -> int | None:
@@ -1280,12 +1290,25 @@ def _pid_of(f) -> int | None:
 def _leave(key: int) -> None:
     with _in_flight_lock:
         _in_flight.pop(key, None)
+        _exit_of.pop(key, None)
 
 
 def in_flight() -> list[dict]:
-    """The parts the pool holds now, largest first."""
+    """The parts the pool holds now, largest first — each part that has a
+    process of its own with that process's `exitcode` as it reads now (None:
+    still running): the hold of a memory kill is written from this, and -9
+    on a part names the process the kernel killed."""
     with _in_flight_lock:
-        return sorted((dict(v) for v in _in_flight.values()), key=lambda v: -v["bytes"])
+        parts = [(dict(v), _exit_of.get(k)) for k, v in _in_flight.items()]
+    out = []
+    for part, exit_of in parts:
+        if exit_of is not None:
+            try:
+                part["exitcode"] = exit_of()
+            except Exception:   # noqa: BLE001 — a process object that cannot be asked: not known
+                part["exitcode"] = None
+        out.append(part)
+    return sorted(out, key=lambda v: -v["bytes"])
 
 
 #: a row whose estimated parse peak reaches this takes the large lane
@@ -1348,9 +1371,29 @@ class MemoryKilled(MemoryWait):
     (app/louise.py `main`), which its supervisor holds."""
 
     def __init__(self, before: int, after: int, what: str) -> None:
+        from . import oom_hold
+        #: the process killed and the part it held, as read at the kill
+        #: (`oom_hold.victim`); None where nothing said
+        self.victim = oom_hold.victim_seen()
+        who = oom_hold.said(self.victim)
         super().__init__(f"the kernel killed a parse-pool child for memory ({what}; the cgroup's oom_kill "
-                         f"{before} -> {after}): not computed again until the cause is known")
+                         f"{before} -> {after}{'; ' + who if who else ''}): not computed again until the "
+                         f"cause is known")
         self.before, self.after = before, after
+
+    def role_of(self, uid: str | None) -> str:
+        """What THIS document was to the kill, in words: the one whose
+        process was killed, a bystander, or not known (the lessons of
+        EUR-Lex5, row A5: the kill's words fell on every row in flight, and
+        the rows that carried them were bystanders)."""
+        v = self.victim
+        part = (v or {}).get("part")
+        if not v or not part:
+            return "which document the killed process held is not known"
+        if uid is not None and any(u and u[0] == uid for u in part.get("uids") or []):
+            return ("THIS document is in the part whose process was killed" if v.get("certain")
+                    else "THIS document is in the part whose process was most likely the one killed")
+        return "this document is a bystander: it was in flight beside the part killed, and is not its cause"
 
 
 def _raise_if_killed(what: str, cause: BaseException | None = None) -> None:
@@ -2403,7 +2446,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                 if idle:
                     progress = time.monotonic()   # the watchdog counts from a part in flight
                 _enter(id(f), kind, collection, part, peak=need, large=bool(peak), until=ext.get(id(f)),
-                       pid=_pid_of(f))
+                       pid=_pid_of(f), exit_of=getattr(f, "_exitcode", None))
                 futures.append((part, f))
                 nxt += 1
                 w = lane_threads() if peak else 1
