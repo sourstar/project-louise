@@ -128,6 +128,8 @@ measured (published figures disagree).
   cut out as staged 0028, `engine-canary.series` = `792f050e318e` + it. Recommended: build it beside and swap IT when
   EUR-Lex5.next is drained, in `792f050e318e`'s place ([parking-step-2.md](parking-step-2.md) §6b, with the words that tell a
   refusal from a real mismatch in a backend's log). Not measured on a card.
+  **DECIDED (the operator, to München): "Build 619655e5833b now, swap it after the drain, if it still applies"** — built
+  beside, nothing live moves; `792f050e318e` will not be swapped.
 - **`792f050e318e` IS BUILT, NOT LIVE (München, 2026-11-25 09:58:24Z):** installed beside `d531d5d804f1`, which stays live. Its swap
   and every gate wait for the operator's own yes to München, after EUR-Lex5.next is drained (repaired, indexing since 10:05Z).
 - **THE NEXT ENGINE TO BUILD IS `792f050e318e` (`engine-stream.series`, 2026-11-25):** the paging default (0021), the language tag (0022) and A STREAM THAT FAILS AFTER ITS FIRST CHUNK FAILS (0025; localai-bugs.md B21 — a chat answer cut short was delivered as complete, on every engine so far; measured on a CPU build: OK after 4 of 50 chunks before, INTERNAL after 3 of 50 after), with the test switch that lets a card show it (0026). The operator has not yet said which candidate is built; this one stands in the two before it. parking-step-2.md §6a.

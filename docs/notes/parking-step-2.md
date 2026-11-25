@@ -607,6 +607,14 @@ If the operator says nothing: nothing is swapped — the node stays on
 München as before. Building `619655e5833b` beside changes nothing that
 runs.
 
+**DECIDED (the operator, 2026-11-25, to München, verbatim): "Build
+619655e5833b now, swap it after the drain, if it still applies".** The tree
+e94b653 is on the node and the name checks there. The build is armed behind
+the verdict of the app deploy of 11:08Z and is installed beside: nothing
+live moves. The swap and every gate follow when EUR-Lex5.next has drained;
+`792f050e318e` will not be swapped. München's pass carries this section's
+card row.
+
 `ed93e3c1b2e2` (`engine-park.series`) is NOT renamed and does not list
 0028: staged 0023 carries the same fix in its own form, on the same lines,
 with the answer's type its own (`no_room_on_device`). A test holds the two

@@ -187,3 +187,6 @@ def test_the_bug_log_and_the_note_say_what_was_seen_what_was_measured_and_what_w
                  "values differ", "| | pros | cons |", NAME, "792f050e318e", "NOT measured: a card",
                  "the warmup", "If the operator says nothing"):
         assert said in section, said
+    # his word, as it was relayed, and what it leaves untouched until the drain
+    assert '"Build\n619655e5833b now, swap it after the drain, if it still applies"' in section
+    assert "nothing\nlive moves" in section and "`792f050e318e` will not be swapped" in section
