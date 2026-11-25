@@ -70,7 +70,17 @@ it writes a vector.
 
 ## 3. Page instead of unload — what is built
 
-`[models] make_room = "page"` (07 §7.8; app/model_evict.py; off by default).
+`[models] make_room = "page"` (07 §7.8; app/model_evict.py). **THE DEFAULT
+since 2026-11-25** (operator, relayed by the architecture session: "Set the
+new paging mode as the default in the engine") — in three places, held
+together: the keeper's default, here; the engine's (staged 0021: every
+llama.cpp model pages without a line in its file); and LocalAI's reclaimer,
+off where the deploy sees a card that pages. ON A CARD WHOSE DRIVER WAS NOT
+MEASURED TO PAGE the default unloads as before: paging is what the xe
+driver was seen to do, and under a driver that does not, a load over the
+card is a failed load or a killed backend (`PAGING_DRIVERS`). The default
+replaces none of the conditions below: the refusal reaching the graph (§4),
+the host's floor measured in the busy hours, the 30-minute soak.
 A load WORK is waiting on that does not fit under the line unloads nothing
 while the host can hold the difference — MemAvailable less the shortfall
 at or above `page_floor_gib` — and the xe driver moves idle models' memory
@@ -118,15 +128,25 @@ operator's word there; nothing here does it):
    **MET 2026-11-25**: staged 0018 is in the live engine d531d5d804f1 and
    its row on the card passed (§4);
 1. this code deployed — inert while the file says nothing;
-2. in every llama.cpp model's file `GGML_SYCL_BMG_VRAM_CHECK=0` and
+2. EVERY llama.cpp MODEL ABLE TO PAGE: `GGML_SYCL_BMG_VRAM_CHECK=0` and
    `GGML_SYCL_HOST_PINNED_MEM_2G=1` (S5's two switches; the second so that
    a model leaves the card in pieces, not whole — MADLAD without it lost
-   5.4 GiB at once). **Every encoder is a new run under a new file: gated
+   5.4 GiB at once). Since staged 0021 these are THE ENGINE'S DEFAULTS, so
+   no model's file carries them and a model added later pages too; a file
+   that sets either the other way still wins for that model. A tensor
+   larger than 2 GiB is not refused by the cap: the allocator gives it a
+   buffer of its own, of its own size, and that one piece moves whole. **Every encoder is a new run under a new file: gated
    before it writes a vector** (invariant 12). The 35B's five answers were
    text for text the same with the second switch (M, S5 part 1);
 3. the floor measured in the busy hours, and written in the file;
-4. `make_room = "page"`, the settings stage run, `node resident show` read
-   (it names a reclaimer left on and a host under its floor);
+4. the keeper's default merged ONLY ONCE the engine with 0021 is the live
+   one (the architecture session: a keeper that pages on an engine whose
+   models cannot would unload-for each of them and say so) — IT IS:
+   `619655e5833b` (`engine-canary.series`, which carries 0021), live since
+   2026-11-25 15:18:30Z, its five gates exact with every fingerprint
+   identical to before (München). Then the settings
+   stage run, `node resident show` read (it names the rule the node
+   follows, a reclaimer left on and a host under its floor);
 5. a soak the POC never had: the Ask's models and a corpus pass together
    for 30 minutes, the card over its size, no abort and no kernel line.
 

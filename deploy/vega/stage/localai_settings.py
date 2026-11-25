@@ -74,7 +74,15 @@ reclaimer would unload the least recently used model each time; the
 threshold stays because Louise's keeper reads it for its budget's line.
 `--platform FILE` names the node's platform.toml: THE FILE DECIDES, so that
 a deploy applies and checks the mode the node is in instead of putting the
-other back (the architecture session's review). Without it: "unload".
+other back (the architecture session's review). Where it says nothing, or
+no file is named: "page", THE DEFAULT since 2026-11-25 (operator: "Set the
+new paging mode as the default in the engine") — the same default as
+app/platform_config.py's, held equal by a test. AND ONLY ON A CARD THAT
+PAGES: the reclaimer is turned off where a card under a driver measured to
+page is there (`paging_card`: xe, as app/model_evict.py PAGING_DRIVERS); on
+any other card the keeper unloads as before and the reclaimer stays on. A
+host whose cards cannot be read keeps the reclaimer as it is set here — it
+is never set by a guess.
 """
 from __future__ import annotations
 
@@ -109,19 +117,50 @@ def owner_holds(current: dict[str, Any]) -> bool:
     return current.get("addon_host_settings_authority") == "owner_required"
 
 
+#: the rule where the node's file says nothing: app/platform_config.py's own
+#: default (tests/test_model_evict_page.py holds the two equal)
+DEFAULT_MAKE_ROOM = "page"
 #: `[models] make_room` of the node's platform.toml, set from `--platform`
-MAKE_ROOM = "unload"
+MAKE_ROOM = DEFAULT_MAKE_ROOM
+#: the drivers measured to page idle models' memory — app/model_evict.py
+#: PAGING_DRIVERS, held equal by the same test
+PAGING_DRIVERS = ("xe",)
+#: does this host have a card that pages? False until the script, run on the
+#: host, has read it from sysfs (`paging_card`): the reclaimer is turned off
+#: by a card that was seen, never by a default
+PAGES = False
+
+
+def paging_card(sys_drm: str = "/sys/class/drm") -> bool | None:
+    """Is a card under a driver measured to page on this host? None where no
+    card's driver can be read (not a host, or a sysfs that does not say)."""
+    import os
+    import re
+    try:
+        cards = [d for d in os.listdir(sys_drm) if re.fullmatch(r"card\d+", d)]
+    except OSError:
+        return None
+    drivers = set()
+    for card in cards:
+        try:
+            drivers.add(os.path.basename(os.path.realpath(os.path.join(sys_drm, card, "device", "driver"))))
+        except OSError:
+            continue
+    drivers.discard("driver")                      # a link that did not resolve
+    if not drivers:
+        return None
+    return any(d in PAGING_DRIVERS for d in drivers)
 
 
 def make_room_of(platform: str | None) -> str:
-    """`[models] make_room` in the file named, "unload" where it says
-    nothing; a file that cannot be read or says another word stops the
-    deploy — the reclaimer is never set by a guess."""
+    """`[models] make_room` in the file named, the default where it says
+    nothing or no file is named; a file that cannot be read or says another
+    word stops the deploy — the reclaimer is never set by a guess."""
     if not platform:
-        return "unload"
+        return DEFAULT_MAKE_ROOM
     import tomllib
     with open(platform, "rb") as f:
-        mode = (tomllib.load(f).get("models") or {}).get("make_room", "unload")
+        mode = (tomllib.load(f).get("models") or {}).get("make_room", DEFAULT_MAKE_ROOM)
     if mode not in ("unload", "page"):
         raise SystemExit(f"{platform}: [models] make_room is \"unload\" or \"page\", got {mode!r}")
     return mode
@@ -131,7 +170,7 @@ def desired_for(current: dict[str, Any], make_room: str | None = None) -> dict[s
     """DESIRED for the node's `make_room` (the reclaimer off where idle
     models are paged), less what the add-on owner holds while it runs."""
     want = dict(DESIRED)
-    if (make_room or MAKE_ROOM) == "page":
+    if (make_room or MAKE_ROOM) == "page" and PAGES:
         want["memory_reclaimer_enabled"] = False
     if not owner_holds(current):
         return want
@@ -193,6 +232,14 @@ if __name__ == "__main__":
         at = argv.index("--platform")
         MAKE_ROOM = make_room_of(argv[at + 1] if at + 1 < len(argv) else None)
         del argv[at:at + 2]
+    if MAKE_ROOM == "page":
+        pages = paging_card()
+        PAGES = bool(pages)
+        if not pages:
+            print("[models] make_room is \"page\" and " +
+                  ("no card's driver can be read here" if pages is None else
+                   "no card here is under a driver measured to page (" + ", ".join(PAGING_DRIVERS) + ")") +
+                  ": LocalAI's memory reclaimer stays on, the keeper unloads as before")
     args = [a for a in argv if a != "--check"]
     base = args[0] if args else "http://127.0.0.1:30286"
     if "--check" in sys.argv[1:]:
