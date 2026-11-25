@@ -6,6 +6,11 @@
    "cold_max_s": 9.4,
    "load_timeout_s": 30
   },
+  "louise-chat-qwen3.6-35b-a3b": {
+   "cold_max_s": 99.2,
+   "load_timeout_s": 300,
+   "source": "the node, 2026-11-25 15:58Z: its load at the first switch to query mode (one reading; not in the profile this file was made from \u2014 keep it when the file is regenerated)"
+  },
   "louise-rerank-bge": {
    "cold_max_s": 8.1,
    "load_timeout_s": 30

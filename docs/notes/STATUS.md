@@ -20,6 +20,51 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **THE NODE, 2026-11-25 afternoon (München's rows): the engine 619655e5833b live, the cold preload row, the
+  operator's first switch to QUERY MODE, and the French answer's BEFORE on the large chat model.**
+  - *The engine.* 619655e5833b (engine-stream's series + 0028) live since 15:18:30Z; the pass ended 15:52:00Z,
+    the node paused 5,573 s. Five gates exact with identical fingerprints (wikipedia 109 s, gutenberg 2,046 s,
+    pubmed's query side 92 s, NeuRIS 530 s, wikidata 534 s); 20 unloads clean; MADLAD 379/379 identical to the
+    11-22 rebuilt-engine run; the reranker 20/20 lists equal to phase 0, max |delta| 0.0; the 9B within 1 % of
+    phase 0. 0028: a canary refused for MEMORY answers "the context cannot be created now, the memory it needs
+    may be in use: try again later" — HTTP 500 through LocalAI, no "context canary failed", nothing counted as a
+    mismatch, the next requests served with the same vector. In the app that answer is an `EndpointBusy`
+    (`embeddings._endpoint_error`: every 5xx that is not the canary's or VeGa's words) — a deferral, no document
+    touched, no run set aside: read in the code, not yet seen through the worker. 0025: a stream cut mid-way
+    ends with an SSE error object then [DONE] (7 of 155 chunks), the next stream whole. 0022: "en-GB" read as
+    language en; the wav bytes are not stable run to run, so no sha comparison (with Tensor).
+  - *The cold preload row* (the resume after the pass, 3e6b6cc): scheduling-log.md, "a collection's embedding
+    waits for the keeper's preload". Held 34–55 s on an emptied card, CANARY 0, GateDeferred 0; the twenty
+    seconds before the keeper's beat at a resume are real (four embedders cold-started for corpus embedding in
+    them) and are what #900 closes — in deploy 51ae16c.
+  - *His first switch to query mode*, from the System page, 15:56:21Z, on 3e6b6cc: "node in query mode (custom
+    -> query): chat model louise-chat-qwen3.6-35b-a3b", "node mode running -> acquire-only: runs fetch, seed",
+    the 9B unloaded and the 35B loaded by 15:58:01Z — "loaded in 99.2 s (for chat; load bound 120 s)". THE
+    BOUND WAS THE NODE'S DEFAULT: the 35B is in no profile, so a load one fifth slower would have timed out at
+    the switch and again at his first question. `app/model_loads.json` now carries it by the file's own rule
+    (3 x the slowest cold start: 300 s), from this one reading. He then set query mode's budget (down 6.2
+    MB/s, up 1.2 MB/s): "node in query mode (budget changed)", no restart. THE CARD IN QUERY MODE: 31,544 MiB
+    used of 32 GiB with twelve models loaded — the 35B and every model of Ask — over the reclaimer's 0.95 line,
+    and three "resident: not preloaded" lines in six minutes. THE KEEPER'S BUDGET THERE (its own lines): the
+    0.98 line 32,002 MiB − 6,480 of growth measured over the last 6 h (embedding hours) − 5,304 for the two
+    embedders' working contexts (qwen3-embedding-4b 3,195 + nemotron 2,109) − 919 of eviction penalty =
+    19,298 MiB for weights. The 35B counts 17,247 of it (size 21,449; at 15:58:24Z, "never used here", it
+    did not fit at 21,416 and was itself "not preloaded"), the TTS fits behind it (1,672), and EVERYTHING
+    ELSE OF ASK is out — MADLAD 4,850, rerank-nemotron 2,465, qwen3-embedding-4b 2,736, nemotron 2,295,
+    bge-m3 900, the two medcpt — "loaded at its first request, then left to the reclaimer's LRU". So in
+    query mode the keeper guarantees two models; the rest stay while nothing needs their room and come back
+    at a reload's price (5–24 s each on the cold row). The budget unloads nothing, so nothing left the card.
+    OPEN, asked of München: whether the 35B itself was ever made to give way — room is made from the model
+    used least recently, a never-used one first, and nothing exempts the mode's own chat model
+    (`model_evict.make_room`). This is the case parking is for (parking-step-2.md): not solved today. No
+    reading of the card from before the switch.
+  - *The French answer, BEFORE on the 35B*: his question with four of his hits pinned, query_lang 'it', the
+    code live (old prompt), in query mode — three answers byte for byte the same (sha 10ed4c650136, 2,676
+    chars), ITALIAN. So the old prompt fails on the 9B (the single French run of 14:22Z) and not on the 35B;
+    the AFTER on the 9B needs the node out of query mode, which is his.
+  - EUR-Lex5.next stands still in query mode (531,751 rdf and 1,089 fts pending): his mode, not a stall. The
+    stalled-stage report (#904) says nothing of it — no step is started in query mode, so nothing is tried.
+
 - **A search nobody waits for stops BETWEEN two lists of one reranker, not after the last
   (`retrieval._rerank_lists`).** München's finding beside the operator's French answer: a search replaced by a
   second press went on for 9 s inside the rerank of its lists (17.9 s for them all) while the second search

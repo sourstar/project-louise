@@ -3554,6 +3554,29 @@ still held the models — the preload's one cold start was vega-medcpt-article-o
 The row that proves the hold is a start on a COLD card: the first worker start
 after the model server itself restarts (the engine swap). Still owed.
 
+**THE COLD ROW** (München; the resume after the engine pass, 15:52:02Z, the
+card emptied by the swap to 619655e5833b; the code live was 3e6b6cc, where the
+hold did not yet cover a resume's first seconds — #900). Local times.
+"16:52:02 node mode paused -> running". IN THE GAP, before the keeper's beat:
+four cold starts "for corpus embedding" — vega-qwen3-embedding-4b 6.0 s
+(16:52:10), nemotron 10.0 s (:13), bge-m3 10.2 s (:14), medcpt-article-ov
+12.2 s (:16) — and "embedding enabled" for wikipedia and NeuRIS at 16:52:15,
+all before "16:52:22 … preloading 13 model(s) for Ask". The first "embedding
+waits: the keeper is still loading the models of Ask after the node's resume"
+at 16:52:23 (legi_F), then :24, :26, :27, :43, :45. The keeper's nine loads —
+medcpt-query 7.0 s, dar-legal-it 23.8, the 9B 7.9, madlad 12.1, tts 9.6,
+rerank-nemotron 7.8, rerank-medcpt 5.3, parakeet 5.7, silero 2.4 — the last at
+16:53:14. "embedding goes on" 16:53:15–19: HELD 34–55 s. A second round of
+waits at 16:53:23–26 around one more load (medcpt-article-ov 5.1 s, pubmed's
+resident encoder), on again 16:53:28–31. CANARY lines 0; GateDeferred 0;
+wikidata had embedded 5,693 chunks by 16:54:27.
+READING: on a cold card the hold costs the backlog under a minute and no run
+is set aside (BEFORE: forty minutes of gutenberg). The twenty seconds between
+the resume and the keeper's beat are the gap #900 closes; nothing was refused
+in them here, with four embedders loading at once into an empty card. OWED on
+51ae16c: the next resume shows no cold start "for corpus embedding" before
+"preloading".
+
 ## 2026-11-25 — two large lanes; a batch puts at most a lane's worth of large units
 
 **SCENARIO.** As the row above (EUR-Lex5.next's large units, the pool
