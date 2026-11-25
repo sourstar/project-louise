@@ -94,6 +94,10 @@ class Servicer(backend_pb2_grpc.BackendServicer):
         if not os.path.isfile(request.ModelFile):
             return backend_pb2.Result(success=False, message=f"no weights at {request.ModelFile}")
         if os.environ.get("FAKE_REPEAT_NOOP") and self.loaded is not None and request == self.loaded:
+            if os.path.exists(os.environ.get("FAKE_REPEAT_REFUSE", "") or os.devnull + ".none"):
+                # a parked model whose weights cannot come back to the card now (parking step 2)
+                context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED,
+                              "the weights cannot come back to the device now")
             # llama.cpp's own answer for the model it holds: a no-op, not a reload
             return backend_pb2.Result(success=True, message="Model already loaded")
         self.loaded = request

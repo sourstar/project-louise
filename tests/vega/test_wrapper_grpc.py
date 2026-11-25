@@ -89,7 +89,8 @@ def make_node(tmp_path, stubs, vega):
 
     def make(*, pairs=False, receipt_timeout_s=2.0, socket=None, tokenizer=False,
              cuts=None, token_ids=False, extra: dict[str, Any] | None = None,
-             canary_fail: str = "", repeat_noop: bool = False) -> Node:
+             canary_fail: str = "", repeat_noop: bool = False,
+             repeat_refuse: Path | None = None) -> Node:
         backends = tmp_path / "backends"
         real = backends / "fake-llama-cpp"
         real.mkdir(parents=True)
@@ -114,6 +115,8 @@ def make_node(tmp_path, stubs, vega):
                    **({"FAKE_CANARY_FAIL": canary_fail} if canary_fail else {}),
                    # the backend answers a repeated LoadModel as llama.cpp does: "already loaded"
                    **({"FAKE_REPEAT_NOOP": "1"} if repeat_noop else {}),
+                   # ...and refuses it while this file exists: no room on the card for the weights
+                   **({"FAKE_REPEAT_REFUSE": str(repeat_refuse)} if repeat_refuse else {}),
                    PYTHONPATH=os.pathsep.join([str(stubs.dir), os.environ.get("PYTHONPATH", "")]))
         cfg = vw.load_config(pkg / "vega.json", backends)
         running = vw.serve(cfg, "127.0.0.1:0", pb=stubs.pb, environ=env,
@@ -412,6 +415,31 @@ def test_the_load_in_force_asked_again_is_the_same_run_and_nothing_is_stated_twi
     batch, r = node.embed(["after"])
     _vectors, (second,) = node.verify(batch, r)
     assert second == first, "the same run on the next vector's receipt"
+
+
+def test_a_repeated_load_the_card_refuses_goes_through_as_it_is_and_the_run_stays_stated(make_node, tmp_path):
+    """The Tensor session, 2026-11-25: a parked model whose weights cannot come
+    back answers gRPC RESOURCE_EXHAUSTED. It is still the same run — the same
+    process, the same weights, still parked — so the status goes to LocalAI as
+    it is and the wrapper keeps the run: the next load or vector brings it back."""
+    full = tmp_path / "card-full"
+    node = make_node(repeat_noop=True, repeat_refuse=full)
+    pb = node.stubs.pb
+    batch, r = node.embed(["before"])
+    _vectors, (first,) = node.verify(batch, r)
+    gate = node.running.gate
+    state = gate.loaded
+    raw = pb.ModelOptions(**node.models["vega-fake"].options).SerializeToString()
+    full.touch()
+    with pytest.raises(grpc.RpcError) as e:
+        node.channel().unary_unary(vw.LOAD)(raw, timeout=10)
+    assert e.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED and "cannot come back" in e.value.details()
+    assert gate.loaded is state, "refused: nothing changed, the run stands"
+    full.unlink()                                          # room again: the same load is the return
+    assert pb.Result.FromString(node.channel().unary_unary(vw.LOAD)(raw, timeout=10)).success
+    batch, r = node.embed(["after"])
+    _vectors, (second,) = node.verify(batch, r)
+    assert gate.loaded is state and second == first
 
 
 def test_a_backend_that_loads_again_at_a_repeated_load_is_stated_again(make_node):

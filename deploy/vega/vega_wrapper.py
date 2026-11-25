@@ -1727,15 +1727,23 @@ class Gate:
             #
             # THE BACKEND SAYS WHICH IT WAS: only an answer of ALREADY_LOADED
             # is a return. A backend that loads again at a repeated LoadModel
-            # (it answers anything else) has read its files again — an upgrade
-            # on disk is then another run, as at any load — and is stated.
+            # (it succeeds with any other answer) has read its files again —
+            # an upgrade on disk is then another run, as at any load — and is
+            # stated.
+            # A REPEAT THAT IS REFUSED CHANGES NOTHING (the Tensor session,
+            # 2026-11-25): the weights that cannot come back now are gRPC's
+            # RESOURCE_EXHAUSTED — `forward` raises it, it goes to LocalAI as
+            # it is — and the model is still the same run: the same process,
+            # the same weights, still parked; the next LoadModel or the next
+            # Embedding brings them back. So the run stays stated, as it does
+            # for a refusal the backend words in its answer.
             held = self.loaded
             early: bytes | None = None
             if (held is not None and self._load_canon == canon
                     and self.child.pid == held.pid and self.child.alive()):
-                early = forward(raw)
+                early = forward(raw)                 # a status that is not OK is the caller's, the run kept
                 said = self.pb.Result.FromString(early)
-                if said.success and ALREADY_LOADED in said.message:
+                if not said.success or ALREADY_LOADED in said.message:
                     log(f"{self.backend.name}: the load in force asked again (the same options, the "
                         f"same process {held.pid}; the backend: {said.message!r}): run "
                         f"{held.run_id[:23]}… stands")
