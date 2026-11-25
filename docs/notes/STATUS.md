@@ -20,6 +20,22 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **AN ITALIAN QUESTION WAS ANSWERED IN FRENCH (operator, 2026-11-25: "I made a search with a query in
+  italian and the answer was in french") — the answer's language is now NAMED and said after the sources
+  (`retrieval.build_answer_messages`).** "Parlami della vita di Dante Alighieri" over gutenberg at 14:07Z: five
+  hits, the first a French history of Italian literature, the small chat model (the 9B), Quality, no answer
+  language chosen on the page. With none chosen, the prompt's one instruction was the system prompt's
+  "answer in the user's language", above the sources; the model was left to work out which language that is
+  and followed its first source. The search already knows the question's language (`query_lang`): the prompt
+  now names it — "The question is written in Italian (ISO code 'it'): write your whole answer in that
+  language" — and says it again after the sources and the question ("Write the answer in Italian, not in the
+  language of the sources."), the citation reminder still last. A language chosen on the page wins; where
+  nobody knows the question's language the line says "the language of the question above". NOT REPRODUCED
+  on the node (München's two re-runs, with other hits, were Italian), so the fix is by construction and its
+  proof is the operator's own question after the deploy. From the same report: the answer's log lines went
+  out under the default collection's name ("[EUR-Lex5.next info:chat]" for a gutenberg answer) — `chat` is
+  a node stage now; and a search replaced by a second press took 9 s to stop (its next checkpoint, inside
+  the rerank) — what the Abort button will also wait for.
 - **THE TOKENIZER THREADS, MEASURED LIKE FOR LIKE: 1.31x ON A LARGE TEXT UNIT (the Legal session's profile,
   the same afternoon; it corrects the entry below).** fts of fr 32018R0688 (92,328,556 bytes) on the live
   tree, one unit, 4 CPUs: 94 s with one tokenizer thread, 72 s with four (the lane ran it in 70 s);

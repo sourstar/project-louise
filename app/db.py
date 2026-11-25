@@ -862,7 +862,11 @@ NODE_CONTROL_KEYS = (WORKER_STATE_KEY, BANDWIDTH_OVERRIDE_KEY)
 
 #: stages whose lines are about the NODE, not about the collection whose
 #: manifest stores them — see `log_event`'s `node` below
-NODE_STAGES = frozenset({"sched", "share", "models"})   # share: the seeder and gossip lines cover every collection and name theirs in the message; models: a cold start (app/model_load.py) is the node's
+#: `chat` (2026-11-25): an answer is written over whichever collections the
+#: question searched, and its lines went out under the DEFAULT manifest's name
+#: — "[EUR-Lex5.next info:chat] answer: 2022 chars …" for a question answered
+#: from gutenberg (München). An answer is the node's, not that collection's.
+NODE_STAGES = frozenset({"sched", "share", "models", "chat"})   # share: the seeder and gossip lines cover every collection and name theirs in the message; models: a cold start (app/model_load.py) is the node's
 
 
 def say_line(line: str) -> None:
