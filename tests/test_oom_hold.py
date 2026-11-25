@@ -243,3 +243,124 @@ def test_a_batch_held_for_memory_is_never_said_to_be_computed_in_process(capsys)
     err = capsys.readouterr().err
     assert "NOT computed again" in err and "computing this batch in-process" not in err
     parallel.reset_failures()
+
+
+# ---- WHICH process was killed, and what it held (the lessons of EUR-Lex5, row A5) ----
+#
+# A kill's words fell on every row of the batch in flight, and the two units
+# that carried them were bystanders of 256 MiB each (measured). The hold
+# names the process killed and its part; each row says what it was to it.
+
+def _part(uid, size, *, pid=None, exitcode=None, large=False, collection="eurlex5", peak=0):
+    part = {"collection": collection, "kind": "fts", "rows": 1, "bytes": size, "estimated_peak": peak,
+            "uids": [[uid, size]], "large": large, "pid": pid}
+    if large:
+        part["exitcode"] = exitcode
+    return part
+
+
+def test_a_large_part_whose_own_process_was_killed_is_named_for_certain():
+    v = oom_hold.victim({"in_flight": [_part("small-a", 256 * 2 ** 20),
+                                       _part("32024R0351-el", 300 * 2 ** 20, pid=4242, exitcode=-9, large=True,
+                                             peak=7 * 2 ** 30),
+                                       _part("32018R0688-de", 120 * 2 ** 20, pid=4243, exitcode=None, large=True)]})
+    assert v["certain"] and v["pid"] == 4242 and v["others_killed"] == 0
+    assert v["part"]["uids"] == [["32024R0351-el", 300 * 2 ** 20]] and v["part"]["collection"] == "eurlex5"
+    words = oom_hold.said(v)
+    assert "pid 4242" in words and "32024R0351-el" in words and "300 MiB of text" in words
+    assert "estimated peak 7,168 MiB" in words and "every other part in flight is a bystander" in words
+    assert "most likely" not in words
+
+
+def test_a_large_part_that_ended_another_way_is_not_the_one_killed():
+    # -15: its batch cancelled it; 0: it finished. Neither is the kernel's kill
+    for code in (-15, 0, None):
+        assert oom_hold.victim({"in_flight": [_part("u", 1, pid=7, exitcode=code, large=True)]}) is None
+
+
+def test_with_no_exit_code_the_largest_process_gone_since_the_last_sample_is_the_likely_one():
+    before = {"at": "2026-11-25T15:00:00Z", "processes": [
+        {"pid": 100, "rss_anon": 9 * 2 ** 30}, {"pid": 4242, "rss_anon": 6 * 2 ** 30},
+        {"pid": 4250, "rss_anon": 300 * 2 ** 20}]}
+    # the lane part's process is gone and nobody read its exit code
+    v = oom_hold.victim({"in_flight": [_part("32024R0351-el", 300 * 2 ** 20, pid=4242, large=True),
+                                       _part("small-a", 256 * 2 ** 20)],
+                         "processes_before": before, "processes_now": [{"pid": 100}, {"pid": 4250}]})
+    assert not v["certain"] and v["pid"] == 4242 and v["rss_anon"] == 6 * 2 ** 30
+    assert v["part"]["uids"][0][0] == "32024R0351-el"
+    words = oom_hold.said(v)
+    assert "most likely pid 4242" in words and "6,144 MiB anonymous at the last sample" in words
+    assert "32024R0351-el" in words
+    # a child of the shared pool: the pool does not know which part a child holds
+    v = oom_hold.victim({"in_flight": [_part("small-a", 256 * 2 ** 20), _part("small-b", 256 * 2 ** 20)],
+                         "processes_before": before, "processes_now": [{"pid": 100}, {"pid": 4250}]})
+    assert v["part"] is None and v["pid"] == 4242 and v["in_flight"] == 2
+    assert "a child of the shared pool: which of the 2 part(s) in flight it held is not known" in oom_hold.said(v)
+
+
+def test_nothing_sampled_and_no_exit_code_names_nobody():
+    assert oom_hold.victim({"in_flight": [_part("small-a", 1)]}) is None
+    assert oom_hold.victim({}) is None and oom_hold.said(None) == ""
+    same = [{"pid": 100, "rss_anon": 1}]
+    assert oom_hold.victim({"processes_before": {"processes": same}, "processes_now": same}) is None, \
+        "every sampled process is still there"
+
+
+def test_the_pool_reads_a_large_parts_exit_code_only_for_a_part_with_its_own_process():
+    from app import parallel
+
+    class C:
+        name = "eurlex5"
+    codes = iter([None, -9])
+    parallel._enter(11, "fts", C(), [{"uid": "big", "size": 9}], large=True, pid=4242, exit_of=lambda: next(codes))
+    parallel._enter(12, "fts", C(), [{"uid": "small", "size": 5}])
+    try:
+        big, small = parallel.in_flight()
+        assert big["uids"][0][0] == "big" and big["exitcode"] is None, "still running"
+        assert "exitcode" not in small, "a part of the shared pool has no process of its own"
+        assert parallel.in_flight()[0]["exitcode"] == -9
+        json.dumps(parallel.in_flight())        # a hold is written as JSON: no reader inside the record
+    finally:
+        parallel._leave(11)
+        parallel._leave(12)
+    assert parallel._exit_of == {} and parallel.in_flight() == []
+
+
+def test_the_victim_is_read_before_the_handler_runs_and_the_hold_says_it(tmp_path, monkeypatch):
+    from app import parallel, worker
+    cg = _cgroup(tmp_path, kills=4)
+    monkeypatch.setattr(oom_hold, "CGROUP_DIR", str(cg))
+    monkeypatch.setattr(worker, "_oom_held", threading.Event())
+    monkeypatch.setattr(worker, "_stop", threading.Event())
+    monkeypatch.setattr(worker, "_handle_sigterm", lambda signum, frame: None)
+    oom_hold.on_kill(worker._on_oom_kill)
+    assert oom_hold.killed() is None and oom_hold.victim_seen() is None
+
+    class C:
+        name = "eurlex5"
+    parallel._enter(21, "fts", C(), [{"uid": "32024R0351-el", "size": 300 * 2 ** 20}], large=True, pid=4242,
+                    peak=7 * 2 ** 30, exit_of=lambda: -9)
+    parallel._enter(22, "fts", C(), [{"uid": "small-a", "size": 256 * 2 ** 20}])
+    try:
+        (cg / "memory.events").write_text("oom 4\noom_kill 5\n")
+        assert oom_hold.killed() == (4, 5)
+    finally:
+        parallel._leave(21)
+        parallel._leave(22)
+    rec = oom_hold.held()
+    assert rec["killed"]["certain"] and rec["killed"]["pid"] == 4242
+    assert rec["killed"]["part"]["uids"] == [["32024R0351-el", 300 * 2 ** 20]]
+    said = oom_hold.describe(rec)
+    assert "the process killed is pid 4242" in said and "32024R0351-el" in said and "release-oom" in said
+
+    e = parallel.MemoryKilled(4, 5, "fts of eurlex5")
+    assert "pid 4242" in str(e) and "not computed again until the cause is known" in str(e)
+    assert e.role_of("32024R0351-el") == "THIS document is in the part whose process was killed"
+    assert e.role_of("small-a").startswith("this document is a bystander")
+
+
+def test_a_kill_nobody_could_read_says_so_on_every_row():
+    from app import parallel
+    e = parallel.MemoryKilled(4, 5, "fts of eurlex5")
+    assert e.victim is None and "the process killed" not in str(e)
+    assert e.role_of("any") == "which document the killed process held is not known"

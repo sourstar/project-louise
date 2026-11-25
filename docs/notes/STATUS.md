@@ -20,8 +20,93 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
-- **THE TOKENIZER THREADS ON THE NODE: ABOUT 5 %, NOT 1.7x — so far (München, three large units at
-  `9811ca92`).** 241 s for 250,927,844 bytes, 0.960 µs a byte, against 1.012 before on the like-for-like
+- **A stage that makes no progress says so by itself (`app/stage_progress.py`; the lessons, row G3 — the
+  monitor's "hang" and "done not rising").** The worker's step executor notes each step (when it started, on
+  which document, whether it ended with a commit: two dictionary writes a step), and a watcher thread says,
+  after thirty minutes — the Library's own bound for "no progress" — either "fts has been in ONE step for 47
+  min — it started on <uid> and has not come back" or "rdf has made NO PROGRESS for 31 min: 31 step(s) ended
+  without a commit, the last on <uid>"; again every thirty minutes, and one line when the stage commits
+  again. "Did work" is not "made progress": a deferral is a try. A stage nobody tries any more (paused, held
+  by a mode) is not a stall. IT REPORTS AND PAUSES NOTHING — the monitor paused the collection where a rule
+  fired; whether the worker should is the operator's decision, not taken. It does not see a stage with work
+  pending whose steps never start: that is a wait, and each wait says its own line (#885). Not measured on
+  the node: the first stall is the reading (the pool's watcher already says a part in flight after a minute).
+
+- **A memory kill names the process killed and its part; a row in flight beside it says it is a bystander
+  (the lessons of EUR-Lex5.next, row A5; `oom_hold.victim`).** The kill's words — "not computed again until the
+  cause is known" — were written on every row of the batch in flight, and the two units that carried them were
+  bystanders of 256 MiB each. The hold already recorded the parts in flight and two samples of the cgroup's
+  processes; now it reads the killed one off them, at the kill, before anything leaves the pool: FOR CERTAIN
+  where a large part's own process ended by SIGKILL (`parallel.in_flight` reads the exit code of a part that
+  has a process of its own), LIKELY otherwise — the largest process gone since the watcher's last sample, with
+  its part where that pid is a large part's. In the hold (`killed`), the guard's line, `node show`, the
+  exception, and FIRST on each row's deferral: "THIS document is in the part whose process was killed" or
+  "this document is a bystander". WHAT IT DOES NOT DO: a child of the shared pool is named by pid and memory
+  only — the pool does not know which part a child holds (a slot per child that the child writes at each
+  part would say it; not built: the kills of 11-19 and 11-25 were all large parts, and it is a write on the
+  pool's hot path that would need measuring first). Not measured on the node: there has been no kill since
+  the lanes' own processes (#869); the first one is the reading.
+
+- **EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you can also choose local/p2p
+  embedding"; "Network and embedding mode remain personal choices") — `[modes] embed_embedding`.** The last
+  part of the modes' second cut, built as put to him (B1: a node choice in embed mode; he answered the network
+  half in his own words and left this one). `"local"` or `"p2p"` — absent, each collection's own, so a node
+  that sets nothing changes nothing: while the node is in embed mode, every collection that embeds its
+  backlog (its file says all or p2p) embeds it the node's way. The choice says WHO embeds a backlog, never
+  WHETHER: off and on-demand keep their own word; p2p on a collection that is not shared stays all local and
+  the card says why. ONE resolution, `collections.desired_embed_mode`, behind the worker's apply
+  (`db.apply_desired_embed_mode`), `hold config show` and the Library card (invariant 10); the worker's round
+  follows a switch or an edit of the key (`worker._apply_embedding_choice`: one comparison a round, the
+  collections' stores written only when the choice in force changed, and only those it governs — a Library
+  override of an on-demand collection survives a switch). Set on the System page's mode table (a third
+  select on embed mode's row) or in platform.toml; `louise node mode` and `GET /api/mode` show it. Not a
+  scheduling change: under p2p the backfill already leaves a part another live peer leads and embeds
+  everything where none does (`_backfill_rows`, 04 §4.5) — the choice only says which of the two existing
+  modes a collection is at. OWED from the node: one switch with the key set, the line "embed mode's
+  embedding choice (all p2p): N collection(s) … follow it" and each card's note.
+
+- **AN ITALIAN QUESTION WAS ANSWERED IN FRENCH (operator, 2026-11-25: "I made a search with a query in
+  italian and the answer was in french") — the answer's language is now NAMED and said after the sources
+  (`retrieval.build_answer_messages`).** "Parlami della vita di Dante Alighieri" over gutenberg at 14:07Z: five
+  hits, the first a French history of Italian literature, the small chat model (the 9B), Quality, no answer
+  language chosen on the page. With none chosen, the prompt's one instruction was the system prompt's
+  "answer in the user's language", above the sources; the model was left to work out which language that is
+  and followed its first source. The search already knows the question's language (`query_lang`): the prompt
+  now names it — "The question is written in Italian (ISO code 'it'): write your whole answer in that
+  language" — and says it again after the sources and the question ("Write the answer in Italian, not in the
+  language of the sources."), the citation reminder still last. A language chosen on the page wins; where
+  nobody knows the question's language the line says "the language of the question above". REPRODUCED
+  on the node once (München, 14:20Z, the code then live, his question with four of his five hits pinned in
+  his order and no older-language rule in the prompt: 3,653 characters in French, "Dante Alighieri est né à
+  Florence en 1265…"; two earlier re-runs with other hits were Italian) — so the cause is the first source's
+  language with nothing naming the answer's. BEFORE/AFTER owed: ten pinned runs on each side of the deploy
+  (`/root/measure/ask-french/pinned.py`), counted by language. From the same report: the answer's log lines went
+  out under the default collection's name ("[EUR-Lex5.next info:chat]" for a gutenberg answer) — `chat` is
+  a node stage now; and a search replaced by a second press took 9 s to stop (its next checkpoint, inside
+  the rerank) — what the Abort button will also wait for.
+
+- **The slice-scope pass runs ALONE where the stages wait for it (`worker.PASS_ONLY`; scheduling.md pitfall
+  27; the Legal session's finding).** EUR-Lex5.next's release reset the pass to row 0 of 1,025,283 and the
+  stages' wait asked — as the morning's fix had built it — for a scan: 627,868 released rows stood eighteen
+  minutes behind a corpus walk with nothing to find, for a pass of fourteen seconds. The wait now asks for
+  the pass by itself (it reads the manifest, not the corpus); a real scan takes a queued pass's place and is
+  never lost to one. AFTER owed at the next release.
+- **Also from the afternoon:** the legal chunker's `_windows` reads only its cuts' offsets (the Legal
+  session; 8.96 s -> 7.87 s on a 19.6 M-character sentence off the node, the same windows — the rest of
+  that time is the encode, so the "17 s of Python steps" read from the profile was mostly encode inside the
+  walk); the preload hold covers the seconds between a RESUME and the keeper's next beat (an engine swap's
+  resume is the cold start that matters); a rescan is offered in query mode ("The rescan all collections
+  remains usable from any profile"), its dialog saying that what it finds is parsed in embed mode.
+- **THE TOKENIZER THREADS, MEASURED LIKE FOR LIKE: 1.31x ON A LARGE TEXT UNIT (the Legal session's profile,
+  the same afternoon; it corrects the entry below).** fts of fr 32018R0688 (92,328,556 bytes) on the live
+  tree, one unit, 4 CPUs: 94 s with one tokenizer thread, 72 s with four (the lane ran it in 70 s);
+  `encode_batch` 62.7 s -> 40.5 s, 1.55x; peak the same (2.68 GiB). So the threads are at work and #892 buys
+  about a quarter of a large text unit's time — not the 1.7x of the bench (the chunker alone) and not the
+  "5 %" below, which set three DIFFERENT units against the morning's fifteen. The tokenizer is still more
+  than half of the unit; of the rest, `_windows` walks every token in Python (13.7 M steps, ~17 s) to find
+  the few it cuts at. Both are leads for the Legal session; the table is in scheduling-log.md.
+- **(superseded by the entry above) The tokenizer threads on the node: about 5 %, not 1.7x — so far
+  (München, three large units at `9811ca92`).** 241 s for 250,927,844 bytes, 0.960 µs a byte, against 1.012 before on the like-for-like
   figure (fifteen units one after the other; the 1.715 quoted from the nine-unit commit line held six more
   units parsed ahead). The same pieces: run 5, 23 passed under the real tokenizer. Peak of a child +11 %
   (3,159,196 kB). Three units cannot tell 5 % from nothing; what they do say is that the chunker's

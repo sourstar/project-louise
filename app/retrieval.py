@@ -1833,12 +1833,34 @@ def build_answer_messages(query: str, result: dict, answer_lang: str | None = No
     if any(h.get("reading") for h in shown_hits):
         from . import historical
         system += historical.SYSTEM_RULE
-    if answer_lang:
-        system += (f" Write your whole answer in the language with ISO code "
-                   f"'{answer_lang}', whatever language the question or the "
-                   f"sources are in.")
+    # THE ANSWER'S LANGUAGE IS NAMED, AND SAID LAST (operator, 2026-11-25: "I
+    # made a search with a query in italian and the answer was in french" —
+    # "Parlami della vita di Dante Alighieri" over gutenberg, the first source
+    # a French history of Italian literature, the small chat model, no answer
+    # language chosen on the page). Until then a question with no language
+    # chosen had ONE instruction, "answer in the user's language", in the
+    # system prompt, thousands of words of sources above the question; the
+    # model was left to work out which language that is, and followed its
+    # first source. The search already knows the question's language
+    # (`query_lang`, 05 §5.2): it is named — in the system prompt and again
+    # after the sources and the question — and where nobody knows it, that
+    # line still says whose language the answer takes.
+    asked = (answer_lang or "").strip().lower() or None
+    lang = asked or (str(result.get("query_lang") or "").strip().lower() or None)
+    if lang:
+        from . import llm            # it imports this module's neighbours: late
+        name = llm.language_phrase(lang)
+        system += (f" Write your whole answer in {name}, whatever language the question or the sources "
+                   f"are in." if asked else
+                   f" The question is written in {name}: write your whole answer in that language, "
+                   f"whatever language the sources are in.")
+        after = f"Write the answer in {name}, not in the language of the sources."
+    else:
+        after = "Write the answer in the language of the question above, not in the language of the sources."
     system += THINK_OFF
+    # after the sources and the question; the citation reminder stays the very
+    # last thing the model reads (2026-10-13: without it last, it stopped citing)
     return [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"Sources:\n\n{context}\n\nQuestion: {query}\n\n{CITE_REMINDER}"},
+        {"role": "user", "content": f"Sources:\n\n{context}\n\nQuestion: {query}\n\n{after} {CITE_REMINDER}"},
     ]

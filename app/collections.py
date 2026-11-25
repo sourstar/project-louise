@@ -905,6 +905,55 @@ def effective_embed_mode(mode: str | None, share: bool, where: str) -> tuple[str
     return mode, None
 
 
+def desired_embed_mode(collection, *, mode: str | None = None,
+                       choice: str | None = None) -> tuple[str, str | None]:
+    """`(the embed mode the node runs this collection at, what embed mode's
+    choice did to it)` — THE resolution of the desired embed mode, the one the worker
+    applies (`db.apply_desired_embed_mode`) and every page and command shows
+    (invariant 10).
+
+    The file's word, else the default — but for EMBED MODE'S EMBEDDING CHOICE
+    (operator, 2026-11-25: "In embed mode you can also choose local/p2p
+    embedding"; `[modes] embed_embedding`, platform_config.EMBEDDINGS): while
+    the node is in embed mode and the choice is local or p2p, a collection
+    that embeds its backlog (its file says all or p2p) embeds it the node's
+    way. A collection whose file says off or on-demand is left its own word —
+    the choice says WHO embeds a backlog, never WHETHER one is embedded — and
+    p2p on a collection that is not shared stays all local, as it does in its
+    own file (`effective_embed_mode`): p2p publishes what it embeds.
+
+    The second is words wherever the choice is in force and changes the mode
+    or cannot (a collection that is not shared). `mode` and `choice` are the
+    node's mode of use and its choice where the caller has them; read where
+    not (`node_mode.current`, platform.toml)."""
+    own = collection.embed_mode_default or DEFAULT_EMBED_MODE
+    if own not in BACKFILL_MODES:
+        return own, None
+    from . import node_mode, platform_config
+    if mode is None:
+        mode = node_mode.current()
+    if mode != node_mode.EMBED:
+        return own, None
+    if choice is None:
+        try:
+            choice = platform_config.seen().modes.embed_embedding
+        except Exception:   # noqa: BLE001 — a file that does not load: each collection's own
+            return own, None
+    if choice not in ("local", "p2p"):
+        return own, None
+    said = f"embed mode's embedding choice is {dict(platform_config.EMBEDDING_LABELS)[choice]} " \
+           f'([modes] embed_embedding = "{choice}")'
+    if choice == "p2p" and not getattr(collection, "share", False):
+        return "all", (f"{said}, but this collection is not shared and p2p publishes what it embeds: "
+                       f"it embeds all local until sharing is turned on")
+    wanted = "all" if choice == "local" else "p2p"
+    if wanted == own:
+        return own, None
+    return wanted, (f"{said}: while the node is in embed mode this collection embeds its backlog that "
+                    f"way; its file says {EMBED_MODE_LABELS.get(own, own)}, in force again in any "
+                    f"other mode")
+
+
 #: 02 §2.6: "The kinds are closed, and `--kinds` (07 §7.3) takes their names."
 MEMBER_KINDS = ("records", "vectors", "buckets", "index", "relations", "figures",
                 "bundle", "centres", "calibration", "terms", "seals", "origin")

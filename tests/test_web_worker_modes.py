@@ -84,6 +84,33 @@ def test_rescan_is_grey_wherever_the_mode_parses_nothing(client):
     assert "disabled" not in btn
 
 
+def test_a_rescan_is_offered_in_query_mode_and_says_what_the_scan_does_there(client):
+    """Operator, 2026-11-25: "The rescan all collections remains usable from
+    any profile". Query mode's run mode parses nothing, and by the rule of
+    2026-09-19 that greys a rescan; in query mode the scan the operator asks
+    for runs all the same, and the dialog says what becomes of what it finds.
+    Custom mode is "what we have now": by its run mode (the test above)."""
+    from app import node_mode
+    node_mode.switch("query", by="test")
+    assert node_state.worker_state() == "acquire-only"
+    html = client.get("/admin/library").text
+    btn = _button(html, "rescan all collections…")
+    assert "disabled" not in btn and "this mode parses nothing" not in btn
+    dialog = html[html.index('data-confirm="rescan-all"'):]
+    dialog = dialog[:dialog.index("</template>")]
+    assert "query mode</span> the scan runs now and records what is new or changed" in dialog
+    assert "until the node is in embed mode" in dialog
+    # ...and whatever query mode's run mode is at that moment, a pause set by hand included
+    node_state.set_worker_state("paused")
+    assert "disabled" not in _button(client.get("/admin/library").text, "rescan all collections…"), \
+        "query mode offers it whatever its run mode: the scan is the web's, asked for by the operator"
+    # embed mode: the mode parses, nothing to say
+    node_mode.switch("embed", by="test")
+    html = client.get("/admin/library").text
+    assert "disabled" not in _button(html, "rescan all collections…")
+    assert "the scan runs now and records what is new or changed" not in html
+
+
 def test_the_page_says_what_the_current_mode_runs(client):
     """The words come from the table the worker reads, so a button cannot
     promise what the node does not do."""

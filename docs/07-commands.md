@@ -384,7 +384,11 @@ louise node
                                                                        the run mode stays the operator's (any of the four) and the chat model is `[models] chat`. Embed and
                                                                        query mode each have their own NETWORK CHOICE (download and seed, seed only, none) and network
                                                                        budget (§7.8 `[modes]`), which a switch brings with it. A switch to the mode the node is in changes
-                                                                       nothing. `chat`, the first word for query mode, is still taken. It survives a restart (§7.8). The
+                                                                       nothing. `chat`, the first word for query mode, is still taken. A RESCAN asked for on the Library
+                                                                       is offered in every mode (operator: "The rescan all collections remains usable from any
+                                                                       profile"): in query mode, whose run mode parses nothing, the scan runs all the same and records
+                                                                       what is new or changed, parsed and indexed once the node is in embed mode; in custom mode it
+                                                                       follows the run mode, as before. It survives a restart (§7.8). The
                                                                        System page's Mode panel and `POST /api/mode {"mode": …}` (§7.4, for a cron job) do the same
   freeze <collection>                                                  a runtime override: the collection keeps the version it holds — nothing fetched from its origin, its origin not scanned, nothing
                                                                        taken in from peers; parsed, indexed, embedded here, searched and checked as it is; shared, only its parts
@@ -2156,8 +2160,9 @@ custom, `node mode` — survives a restart for the same reason again
 node that came back from a restart in embed mode would start every encoder
 under the large chat model. A node never switched is in custom mode: the
 node as it was before there were modes. What each mode MEANS — its chat
-model, embed and query mode's network choice and network budget — is
-desired state, in `platform.toml` (`[models]`, `[modes]`). What `hold config show` prints comes
+model, embed and query mode's network choice and network budget, embed
+mode's embedding choice — is desired state, in `platform.toml` (`[models]`,
+`[modes]`). What `hold config show` prints comes
 from the same resolution the node uses, each value labelled with its
 tier; a value shown anywhere else comes from that resolution too.
 
@@ -2220,6 +2225,16 @@ variable, a file, a log line or a message.
              # with "none" everything is still parsed, indexed and embedded — and every gate reads it from this
              # file, so an edit is in force at once. `chat_run`, the first name of query mode's choice
              # ("acquire-only" | "seed-only" | "paused"), is still read as it; naming both is refused
+             embed_embedding = "p2p"   # EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you
+             # can also choose local/p2p embedding"; "Network and embedding mode remain personal choices"): who
+             # embeds the backlog of the collections that embed one — "collection" (the default, and the key's
+             # absence: each as its own file says), "local" (every part here, as `embed = "all"`) or "p2p" (the
+             # parts rendezvous gives this node, published as it goes, as `embed = "p2p"`). In force while the
+             # node is in embed mode, over the collections whose own file says all or p2p; one whose file says off
+             # or on-demand keeps its word (the choice says WHO embeds a backlog, never WHETHER), and p2p on a
+             # collection that is not shared stays all local and says so. The worker applies it at its next
+             # round — an edit or a switch needs no restart — and each collection's file is in force again in
+             # any other mode. One resolution for the worker and every page (`collections.desired_embed_mode`)
              embed_down_max = "400Mbit"   embed_up_max = "40Mbit"   chat_down_max = "50Mbit"   chat_up_max = "10Mbit"
              # each mode's own network budget, in [budget]'s grammar: while the node is in the mode it stands in
              # `[budget] down_max` / `up_max`'s place (the schedule, the reserve and an override apply on top;
@@ -2491,6 +2506,13 @@ Library asks before writing either pair — setting `all p2p` with sharing
 off enables sharing; disabling sharing under `all p2p` switches the mode
 to `all local`; proceed or abort — and a file edited by hand to say
 `p2p` with `share = false` runs as `all`, shown as such on its card.
+*Amended 2026-11-25* (operator: "In embed mode you can also choose
+local/p2p embedding"): while the node is in EMBED MODE, its embedding
+choice (`platform.toml` `[modes] embed_embedding`, the System page) may
+stand in the `all` / `p2p` word of every collection whose file says one of
+the two — all local or all p2p for the node at once; `off` and
+`on-demand` keep their own word, `p2p` still needs the collection shared,
+and the card says what the choice did to it.
 Beside the drop-down the card reads the two axes: the bounty list (the
 open parts of the current snapshot — any peer may embed any of them, 04
 §4.5; the parts this node is first for, and those it leaves to the fetch)

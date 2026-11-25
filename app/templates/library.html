@@ -4,6 +4,14 @@
 {# what the node's mode runs, from the one table the worker reads
    (app/node_state.py); `worker_state` may be absent in a partial render #}
 {% set mode_scans = mode_runs(worker_state|default('running'), 'parse') %}
+{# A RESCAN IS USABLE IN EVERY MODE OF USE (operator, 2026-11-25: "The rescan
+   all collections remains usable from any profile"). Query mode's run mode
+   parses nothing, and the rule of 2026-09-19 greys a rescan there; in query
+   mode the scan the operator asks for runs all the same — it records what is
+   new or changed, and that is parsed, indexed and embedded when the node is
+   in embed mode. Custom mode is "what we have now": by its run mode. #}
+{% set query_mode = node_mode_now() == 'query' %}
+{% set mode_scans = mode_scans or query_mode %}
 {% set mode_fetches = mode_runs(worker_state|default('running'), 'fetch') %}
 <h1>Library</h1>
 <div class="panel">
@@ -40,6 +48,7 @@
     <h2>Rescan all {{ shelves|length }} collection{{ '' if shelves|length == 1 else 's' }}?</h2>
     <div class="note"><b>Every collection's corpus folder is examined again, none skipped,</b> one collection after the other: the record of what earlier scans saw is cleared. A new file is added; a file whose content changed has its document parsed, indexed and embedded again. Unchanged documents keep their work.</div>
     <div class="note">On a large corpus this takes from minutes to hours, and the page waits until every scan is done.</div>
+    {% if query_mode %}<div class="note"><span class="badge">query mode</span> the scan runs now and records what is new or changed; nothing of it is parsed, indexed or embedded until the node is in embed mode.</div>{% endif %}
   </template>
   <div class="note">{{ mode_says.get(worker_state, '') }}</div>
 </div>
@@ -172,6 +181,9 @@
   {% if c.embed_mode_note %}
   <div class="note"><span class="badge err">runs as all local</span> {{ c.embed_mode_note }}</div>
   {% endif %}
+  {% if c.embed_mode_choice %}
+  <div class="note" data-embed-choice><span class="badge">embed mode's choice</span> {{ c.embed_mode_choice }}</div>
+  {% endif %}
   {# THE CARD: STATUS IN SIGHT, PROSE AND BUTTONS BEHIND TWO CLOSED LINES
      (operator, 2026-11-02: "in each model card hide all the descriptive
      text in a Details expandable section and all the buttons in a Options
@@ -299,6 +311,7 @@
       <h2>Rescan {{ c.name }}?</h2>
       <div class="note"><b>Every file of its corpus folder is examined again, none skipped:</b> the record of what earlier scans saw is cleared ({{ c.total|num }} document{{ '' if c.total == 1 else 's' }} known now). A new file is added; a file whose content changed has its document parsed, indexed and embedded again. Unchanged documents keep their work.</div>
       <div class="note">On a large corpus this takes from minutes to hours, and the page waits until the scan is done.</div>
+      {% if query_mode %}<div class="note"><span class="badge">query mode</span> the scan runs now and records what is new or changed; nothing of it is parsed, indexed or embedded until the node is in embed mode.</div>{% endif %}
     </template>
     {# `unfreeze` (node_state.set_frozen, as `louise node unfreeze`): the
        version held stops being kept — the worker fetches and scans what

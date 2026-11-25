@@ -122,7 +122,7 @@ def _behind(con, cursor: int) -> None:
         {"signature": json.dumps({"slices": None, "embed": None}), "cursor": cursor, "done": True}))
 
 
-def test_the_wait_says_where_the_pass_is_and_asks_for_the_scan_it_needs(collection, monkeypatch):
+def test_the_wait_says_where_the_pass_is_and_asks_for_the_pass_alone(collection, monkeypatch):
     con = db.connect(collection)
     worker._scan_only(con, collection, "startup")                 # three documents
     _behind(con, 1)
@@ -130,9 +130,10 @@ def test_the_wait_says_where_the_pass_is_and_asks_for_the_scan_it_needs(collecti
     assert slice_scope.waits(con, collection) == "the pass is at row 1 of 3"
 
     assert worker._wait_for_slice_scope(con, collection) is True, "every wait has its request"
-    assert worker._take_discovery_request("alpha") == ("slice scope", False)
+    assert worker._take_discovery_request("alpha") == (worker.PASS_ONLY, False), \
+        "the pass ALONE: it reads the manifest, no corpus scan is needed for it"
     line = [m for m in _said(con) if m.startswith("waiting for the slice scope")][-1]
-    assert "the pass is at row 1 of 3" in line and "one is asked for now" in line
+    assert "the pass is at row 1 of 3" in line and "its pass ALONE is asked for now, over the manifest" in line
     assert "nothing is parsed, indexed or embedded until then" in line
 
     # ONCE A PERIOD, the line and the request together: every idle pass comes here, and a scan
@@ -240,3 +241,55 @@ def test_do_not_fetch_is_set_by_the_command_and_listed(isolated_config, capsys):
     before = path.read_text(encoding="utf-8")
     assert louise.main(["hold", "config", "apply", "gutenberg", "--set", "acquire_enabled=maybe"]) == 2
     assert path.read_text(encoding="utf-8") == before, "a value that does not read writes nothing"
+
+
+# ---- the slice-scope pass alone (EUR-Lex5.next's release, 2026-11-25) -------
+#
+# A release reset the pass to row 0 of 1,025,283, and 627,868 released rows
+# waited eighteen minutes for a corpus scan with nothing to find: the pass's
+# only producer was a scan's end. The pass took fourteen seconds.
+
+def test_the_pass_alone_walks_no_corpus_and_brings_the_scope_up_to_date(collection, monkeypatch):
+    from app import discovery, embed_select
+    con = db.connect(collection)
+    worker._scan_only(con, collection, "startup")                 # three documents
+    _behind(con, 0)
+    assert not slice_scope.ready(con, collection)
+    walked: list = []
+    monkeypatch.setattr(discovery, "sync_collection", lambda *a, **k: walked.append(1) or {})
+    selected: list = []
+    real = embed_select.apply
+    monkeypatch.setattr(embed_select, "apply", lambda *a, **k: (selected.append(1), real(*a, **k))[1])
+    worker._scan_only(con, collection, worker.PASS_ONLY)
+    assert walked == [], "no corpus scan: the origin's folder has nothing to say about the slices held"
+    assert slice_scope.ready(con, collection), "the pass ran over the manifest"
+    assert selected == [1], "and the embed selection after it, as after a scan"
+    assert any("slice scope: the pass alone, over the manifest" in m for m in _said(con))
+
+
+def test_a_real_scan_takes_the_place_of_a_queued_pass_and_is_never_lost_to_one():
+    worker._take_discovery_request("alpha")
+    worker._request_discovery("alpha", worker.PASS_ONLY, acquire=False)
+    worker._request_discovery("alpha", "interval", acquire=True)
+    assert worker._take_discovery_request("alpha") == ("interval", True), \
+        "the scan runs the pass at its end: it must not be dropped for it"
+    worker._request_discovery("alpha", "startup", acquire=True)
+    worker._request_discovery("alpha", worker.PASS_ONLY, acquire=False)
+    assert worker._take_discovery_request("alpha") == ("startup", True), "nor replaced by it"
+    worker._request_discovery("alpha", "startup", acquire=True)
+    worker._request_discovery("alpha", "interval", acquire=True)
+    assert worker._take_discovery_request("alpha") == ("startup", True), "first reason wins, as before"
+
+
+def test_the_pass_alone_owes_no_scan_where_the_mode_parses_nothing(collection, monkeypatch):
+    con = db.connect(collection)
+    owed: list = []
+    monkeypatch.setattr(worker, "_owe_scan", lambda name, why=None: owed.append(name))
+    worker._acquire_only.set()                    # download/seeding only: the mode parses nothing
+    try:
+        worker._scan_only(con, collection, worker.PASS_ONLY)
+        assert owed == [], "it lands nothing: the stages that wait for it ask again when they run"
+        worker._scan_only(con, collection, "interval")
+        assert owed == ["alpha"], "a real scan is owed, as before"
+    finally:
+        worker._acquire_only.clear()
