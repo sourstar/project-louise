@@ -20,8 +20,16 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
-- **THE TOKENIZER THREADS ON THE NODE: ABOUT 5 %, NOT 1.7x — so far (München, three large units at
-  `9811ca92`).** 241 s for 250,927,844 bytes, 0.960 µs a byte, against 1.012 before on the like-for-like
+- **THE TOKENIZER THREADS, MEASURED LIKE FOR LIKE: 1.31x ON A LARGE TEXT UNIT (the Legal session's profile,
+  the same afternoon; it corrects the entry below).** fts of fr 32018R0688 (92,328,556 bytes) on the live
+  tree, one unit, 4 CPUs: 94 s with one tokenizer thread, 72 s with four (the lane ran it in 70 s);
+  `encode_batch` 62.7 s -> 40.5 s, 1.55x; peak the same (2.68 GiB). So the threads are at work and #892 buys
+  about a quarter of a large text unit's time — not the 1.7x of the bench (the chunker alone) and not the
+  "5 %" below, which set three DIFFERENT units against the morning's fifteen. The tokenizer is still more
+  than half of the unit; of the rest, `_windows` walks every token in Python (13.7 M steps, ~17 s) to find
+  the few it cuts at. Both are leads for the Legal session; the table is in scheduling-log.md.
+- **(superseded by the entry above) The tokenizer threads on the node: about 5 %, not 1.7x — so far
+  (München, three large units at `9811ca92`).** 241 s for 250,927,844 bytes, 0.960 µs a byte, against 1.012 before on the like-for-like
   figure (fifteen units one after the other; the 1.715 quoted from the nine-unit commit line held six more
   units parsed ahead). The same pieces: run 5, 23 passed under the real tokenizer. Peak of a child +11 %
   (3,159,196 kB). Three units cannot tell 5 % from nothing; what they do say is that the chunker's
