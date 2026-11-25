@@ -20,6 +20,24 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **THE LEGAL CHUNKER ENCODES A TEXT'S SPANS TOGETHER, AND EVERY POOL CHILD IS TOLD ITS TOKENIZER THREADS
+  (Legal's `chunking_legal._encode_many`; `parallel.tokenizer_threads`, `lane_threads`).** From the reading of
+  EUR-Lex5.next's large units (below): the counts tokenized span after span on one thread. Legal: the spans of
+  a text and the units of a piece go to the tokenizers library's own `encode_batch` — the same encodings, so
+  the same pieces and no chunker version (held by tests/test_chunking_legal_spans.py and, under the REAL
+  tokenizer, by the staged run 5 of the deploy); a 28.5 M-character act on 4 cores 63.9 s → 37.7 s, the same
+  30,988 pieces. Architecture: that library starts one thread a CORE in every process by default, so each
+  spawned child is told its number before it encodes (`RAYON_NUM_THREADS`): ONE for a child of the shared pool
+  and of an operator's pass; four, held to the node profile's cores, for the large lane's child — which then
+  counts as that many parts against the profile's cap while it runs. The spans are cut as they are encoded,
+  not listed (a list is a second copy of a 136 MB act in the child whose peak the lane's room is reckoned on).
+  BEFORE, counted on the node (München): fifteen units of 32018R0688 (1,494,357,545 bytes) parsed in 1,513 s
+  on the one lane — nine in a batch's commit (876,560,544 bytes, 1,503.0 s of parse wall), six parsed ahead —
+  with the pool otherwise idle. AFTER: the same act's remaining languages (it, de, fr, en) and the
+  "has left the parse pool after N" lines, owed. STILL OPEN, the next change: a second lane (a unit peaks at
+  ~2.8 GiB of RSS, the cgroup at 16.8 of 24.6 GiB with one in flight) and a batch that does not hold the
+  collection's other stages behind several large units — 10:08–10:25Z averaged ~100 documents and ~118 rdf a
+  minute, in bursts of thousands between waits of many minutes.
 - **A BATCH IN FLIGHT SAYS ON WHAT (`app/pool_progress.py`; München, 2026-11-25 09:57Z).** EUR-Lex5.next's
   pipeline sat in its fts stage for nine minutes and more on ONE 136 MB act (bg 32018R0688; hr, et, fi, sl of
   the same act queued at ~100 MB each): one pool child at 98 % of a core in `chunk_legal_article`, ten idle,

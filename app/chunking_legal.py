@@ -547,27 +547,32 @@ def _encode_many(tok: Any, texts):
 
 
 def _count(tok: Any, text: str) -> int:
-    return sum(len(e.ids) for e in _encode_many(tok, [text[a:b] for a, b in _spans(tok, text)]))
+    # the spans are CUT AS THEY ARE ENCODED (a generator): a list of them is
+    # a second copy of the text, alive for the whole count — 136 MB of an
+    # act in a child whose peak the large lane's room is reckoned on
+    return sum(len(e.ids) for e in _encode_many(tok, (text[a:b] for a, b in _spans(tok, text))))
 
 
 def _count_many(tok: Any, texts: Sequence[str]) -> list[int]:
-    """`_count` of each text, their spans encoded together."""
-    owner: list[int] = []
-    parts: list[str] = []
-    for i, t in enumerate(texts):
-        for a, b in _spans(tok, t):
-            owner.append(i)
-            parts.append(t[a:b])
+    """`_count` of each text, their spans encoded together — cut as they
+    are encoded, a batch of them alive at a time."""
+    owner: list[int] = []                # the text each span sent so far belongs to
+
+    def parts():
+        for i, t in enumerate(texts):
+            for a, b in _spans(tok, t):
+                owner.append(i)
+                yield t[a:b]
     out = [0] * len(texts)
-    for i, e in zip(owner, _encode_many(tok, parts)):
-        out[i] += len(e.ids)
+    for k, e in enumerate(_encode_many(tok, parts())):
+        out[owner[k]] += len(e.ids)
     return out
 
 
 def _token_ends(tok: Any, text: str):
     """Each token's end offset in `text`, in order, a span at a time."""
     spans = _spans(tok, text)
-    for (a, _b), enc in zip(spans, _encode_many(tok, [text[a:b] for a, b in spans])):
+    for (a, _b), enc in zip(spans, _encode_many(tok, (text[a:b] for a, b in spans))):
         for _s, e in enc.offsets:
             yield a + e
 
