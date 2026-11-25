@@ -137,6 +137,9 @@ def fresh_worker_state():
     # nor what the pool's progress watcher has said (app/pool_progress.py)
     from app import pool_progress
     pool_progress.reset()
+    # nor what a stage noted of its steps (app/stage_progress.py)
+    from app import stage_progress
+    stage_progress.reset()
     # nor the worker's start: a test's embedding never waits for the keeper's
     # preload (app/resident.py `holds_embedding`) unless the test says when
     # the worker started

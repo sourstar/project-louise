@@ -20,6 +20,18 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **A stage that makes no progress says so by itself (`app/stage_progress.py`; the lessons, row G3 — the
+  monitor's "hang" and "done not rising").** The worker's step executor notes each step (when it started, on
+  which document, whether it ended with a commit: two dictionary writes a step), and a watcher thread says,
+  after thirty minutes — the Library's own bound for "no progress" — either "fts has been in ONE step for 47
+  min — it started on <uid> and has not come back" or "rdf has made NO PROGRESS for 31 min: 31 step(s) ended
+  without a commit, the last on <uid>"; again every thirty minutes, and one line when the stage commits
+  again. "Did work" is not "made progress": a deferral is a try. A stage nobody tries any more (paused, held
+  by a mode) is not a stall. IT REPORTS AND PAUSES NOTHING — the monitor paused the collection where a rule
+  fired; whether the worker should is the operator's decision, not taken. It does not see a stage with work
+  pending whose steps never start: that is a wait, and each wait says its own line (#885). Not measured on
+  the node: the first stall is the reading (the pool's watcher already says a part in flight after a minute).
+
 - **EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you can also choose local/p2p
   embedding"; "Network and embedding mode remain personal choices") — `[modes] embed_embedding`.** The last
   part of the modes' second cut, built as put to him (B1: a node choice in embed mode; he answered the network

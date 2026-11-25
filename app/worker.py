@@ -43,7 +43,7 @@ from . import (backend, catalog, chunking, collections as collections_mod, confi
                fts, issues as issues_mod, lookahead, memory_yield, model_load, model_pins, origin_missing,
                resident,
                node_state,
-               plugin_io, refs, sched, sizing, slice_scope, spaces, stats, text_index)
+               plugin_io, refs, sched, sizing, slice_scope, spaces, stage_progress, stats, text_index)
 from .rage import card_record, dispatch
 from .rage import keep as rage_keep
 from .rage.dispatch import Level
@@ -4906,6 +4906,17 @@ def run_not_validated(exc: BaseException) -> bool:
 
 
 def _execute_step(con, collection, stage, row) -> bool:
+    """`_run_step`, NOTED: when the step started, on which document, and
+    whether it ended with something committed — what `app/stage_progress.py`
+    reads to say, by itself, that a stage has made no progress (the lessons
+    of EUR-Lex5.next, G3). Two dictionary writes a step; nothing of what
+    runs when changes."""
+    with stage_progress.step(getattr(collection, "name", str(collection)), stage, row["uid"]) as noted:
+        noted.did = _run_step(con, collection, stage, row)
+        return noted.did
+
+
+def _run_step(con, collection, stage, row) -> bool:
     """One document's stage, transactional, errors recorded on the row —
     shared verbatim by the main loop and the per-collection pipeline
     threads (each caller passes a con its own thread owns).
@@ -7797,6 +7808,10 @@ def _start_oom_watch() -> None:
     from . import pool_progress
     threading.Thread(target=pool_progress.watch, args=(_stop, _node_line("pool")),
                      name="pool-progress", daemon=True).start()
+    # ...AND A STAGE THAT MAKES NO PROGRESS SAYS SO (app/stage_progress.py): one
+    # step that has not ended, or steps tried and none committing, for 30 min
+    threading.Thread(target=stage_progress.watch, args=(_stop, _node_line("progress")),
+                     name="stage-progress", daemon=True).start()
 
 
 
