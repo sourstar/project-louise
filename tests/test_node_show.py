@@ -11,7 +11,7 @@ from app import collections as collections_mod
 def test_a_show_on_a_node_that_never_booted_creates_nothing(isolated_config):
     out = node_show.show()
     assert not node_state.path().exists(), "peeked, never opened for writing"
-    assert out["mode"] == "paused" and out["overrides"] == {"mode": "paused", "mode_of_use": "embed",
+    assert out["mode"] == "paused" and out["overrides"] == {"mode": "paused", "mode_of_use": "custom",
                                                             "paused_collections": [],
                                                             "bandwidth_bps": None,
                                                             "mode_writes": [], "paused_by": {}}

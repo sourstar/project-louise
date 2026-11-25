@@ -290,6 +290,8 @@ ISSUES = {
                                 "validity: it stays open-ended, labelled (under-closed)",
     "form-disagrees-with-celex": "the Formex body is a consolidation (CONS.ACT) and the CELEX an "
                                  "original, or the reverse; the CELEX decides the version",
+    "item-not-its-form": "an item the origin lists under a manifestation is not of that form (a TIFF "
+                         "page image declared application/pdf): held in the unit, not read as that form",
     "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
                      "unit, its text is what the other pages give",
     "start-from-document-date": "no publication and no entry into force is stated: the act's own date "
@@ -411,6 +413,31 @@ def eli_work_of(path: str | None) -> str | None:
     if len(parts) == 4 and parts[1].isdigit():
         return "/".join(parts[:3] + ["oj"])
     return None
+
+
+#: where a PDF's header may sit: ISO 32000-1 asks for it at byte 0, and its
+#: readers (Acrobat's implementation note, PDFium) take it anywhere in the
+#: first 1024 bytes — files with a BOM or a few stray bytes before `%PDF-`
+#: exist, and one read by its first five bytes alone would be held unread
+PDF_HEADER_WINDOW = 1024
+
+
+def _is_pdf(data: bytes) -> bool:
+    """Is this file a PDF by its CONTENT — the header a PDF reader looks for?"""
+    return b"%PDF-" in data[:PDF_HEADER_WINDOW]
+
+
+def _content_kind(data: bytes) -> str:
+    """What a file's first bytes say it is, in words, for an issue."""
+    if data[:4] in (b"II*\x00", b"MM\x00*"):
+        return "a TIFF image"
+    if data[:3] == b"\xff\xd8\xff":
+        return "a JPEG image"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "a PNG image"
+    if data[:4] == b"PK\x03\x04":
+        return "a zip"
+    return f"not a PDF (its first bytes {data[:8]!r})"
 
 
 def _form_held(note, files: dict[str, bytes], skip: tuple[str, ...] = ()) -> str | None:
@@ -994,7 +1021,17 @@ class EurlexSource:
                 names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
                 act = rendition.parse_html(files, names, lang=stated_lang, root=root_tag, note=note)
             elif form is not None:
-                names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
+                listed_names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
+                # A PDF MANIFESTATION'S ITEMS BY THEIR CONTENT (2026-11-25,
+                # 32007M4820 en: its pdf manifestation lists the decision's PDF
+                # and three TIFF page images, all four declared application/pdf
+                # by the origin; PDFium was given a TIFF and the unit refused).
+                # An item that is not a PDF is held in the unit, not read as one
+                names = [n for n in listed_names if _is_pdf(files[n])]
+                others = [n for n in listed_names if n not in names]
+                if others:
+                    found.append(Issue("item-not-its-form", "; ".join(
+                        f"{n} is {_content_kind(files[n])}, listed as {form}" for n in others)))
                 act, blank = rendition.parse_pdf(files, names, lang=stated_lang, root=root_tag, note=note)
                 if blank:
                     found.append(Issue("no-text-layer", f"{blank} page(s) of {', '.join(names)} hold no text "

@@ -20,6 +20,165 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **THE TOKENIZER THREADS ON THE NODE: ABOUT 5 %, NOT 1.7x — so far (München, three large units at
+  `9811ca92`).** 241 s for 250,927,844 bytes, 0.960 µs a byte, against 1.012 before on the like-for-like
+  figure (fifteen units one after the other; the 1.715 quoted from the nine-unit commit line held six more
+  units parsed ahead). The same pieces: run 5, 23 passed under the real tokenizer. Peak of a child +11 %
+  (3,159,196 kB). Three units cannot tell 5 % from nothing; what they do say is that the chunker's
+  tokenizing is not most of a large unit's 70–86 s on the node, or that the lane child's threads are not at
+  work — and nothing let München tell which child was the lane's. The pool's line now names a large part's
+  PID and its PEAK (the kernel's high-water mark, read every 10 s), in flight and when it leaves.
+  Also in this change, from the Legal session: a PDF manifestation's items are read by their CONTENT
+  (32007M4820: three TIFF page images declared application/pdf; PDFium was given a TIFF) — a non-PDF is
+  held and said (`item-not-its-form`); a PDF is known by the header a reader looks for, anywhere in its
+  first 1024 bytes.
+- **LIVE since 2026-11-25 12:11:43Z: main `9811ca92`** (deploy `d478805`: #888–#894). München's rows:
+  the staged run 5 — the pinned-tokenizer legal spans, the proof that the batched encode cuts the same
+  pieces under the REAL tokenizer — "23 passed" (the other lists 3260 passed / 2 skipped; 11; 92; 478 / 9
+  skipped). "memory: the yield is armed — the worker's limit is 24,576 MiB; … yields at 21,504 MiB
+  anonymous (87.5%), all go on under 17,940 MiB (73%); read every 10 s, now 102 MiB" at the start. The
+  preload hold: every embedding collection waited 6–13 s and said so, no CANARY and no gate deferred for
+  room in the first ten minutes, gutenberg validated 44 s after the start (forty minutes that morning) —
+  on a WARM model server, so the hold against real loads is still to be seen at the engine swap
+  (scheduling-log.md). Owed: the large units' lines (EUR-Lex5.next's scan was still walking), which are the
+  AFTER of the tokenizer threads and the condition for the next deploy (#895, two lanes).
+- **Two log lines ran together** at that start ("embedding goes on: …" of NeuRIS and of wikidata, no
+  newline between): `print(text, flush=True)` writes the text and its newline as two writes, and two
+  threads logging in the same instant interleave them. Now the worker's stdout itself writes whole lines
+  (`app/log_lines.py`, installed at the worker's start): what a thread writes is kept until its line is
+  complete and goes out in one write — every print, whoever makes it — and `db.log_event` and the node
+  lines write theirs in one write besides (`db.say_line`), for the processes that do not install it.
+- **TWO LARGE LANES, and a batch puts at most a lane's worth of large units (`parallel.LARGE_LANES`,
+  `compute`; scheduling.md pitfall 26).** The second half of the reading of EUR-Lex5.next's large units: the
+  lane of one made fifteen 100 MB units take 1,513 s while ten children idled, and one fts batch gathered
+  nine of them and committed only after all nine, the collection's rdf behind it. The lane is now two — the
+  memory is held by the existing guards (`_room`, `_reserve`), which on the node's numbers admit a second
+  and refuse a third — and a batch takes two and defers the rest to the next round, so it commits after two.
+  NOT YET DEPLOYED: it goes out after the tokenizer-threads change has its AFTER, one change a deploy. KNOWN
+  AND NOT TOUCHED: a unit whose estimate passes the worker's whole limit is `TooLarge`, an error a person
+  sees — 26 bytes a byte of text puts that line near 630 MB of text, and EUR-Lex5.next has one unit of
+  911,527,513 bytes pending. Whether its TEXT is that large, and what to do if it is, is the Legal session's
+  question (asked).
+- **THE NEXT ENGINE CANDIDATE IS `619655e5833b`, not `792f050e318e`** (operator, 2026-11-25: "Build
+  619655e5833b now, swap it after the drain, if it still applies"; Tensor's `staged/engine-canary.series`).
+  It is `engine-stream.series` line for line — the paging default (0021), the language tag (0022), a stream
+  that fails after its first chunk FAILS (0025), the test switch (0026) — plus 0028: a context canary
+  REFUSED FOR MEMORY at a request is HTTP 503 "the context cannot be created now …: try again later" (no
+  "context canary failed" words, so Louise reads a busy endpoint, a deferral, and counts no canary failure),
+  and at the load it fails the load instead of serving unchecked. Measured on a CPU build, 12 of 12; the
+  card row is München's at the swap. `792f050e318e` is built and will not be swapped.
+- **A collection's embedding waits for the keeper's preload after a start (`resident.holds_embedding`,
+  `worker._preload_holds`; scheduling.md pitfall 25).** The cause of the morning's forty minutes (the entry on
+  the canary count, below): the worker's embed producer started three seconds after the worker and the keeper
+  began loading thirteen models five seconds later; a context created beside those loads, on a card with
+  1.5 GiB free, failed its canary, and the gate could not load its own copy until the card had room. Now a
+  collection's embedding, its gate and the at-once gate of an untested copy wait while the keeper is still
+  loading after a start or a resume — bounded (two minutes for a keeper that never beats, ten for the
+  window), said when it begins and when it ends; a later single reload holds nothing. AFTER owed at the next
+  worker start (scheduling-log.md).
+- **ONE DISCARDED CONTEXT WAS COUNTED AS TWO CANARY FAILURES, and said fifty times (`run_check.canary_failed`,
+  `_send_back`; gutenberg on the node, 09:40:55Z).** 27 s after the worker's start, while the keeper's preload
+  of 13 models was loading (1,493 MiB free on the card a second later), the engine discarded ONE context of
+  vega-qwen3-embedding-4b for not reproducing its canary. Louise set the run's statements aside, paused
+  embedding and gated the run again (validated 10:20:41Z: forty minutes, nothing wrong written) — as designed.
+  NOT as designed: the refused request counted the discard and, thirty seconds later, the worker's beat read
+  the engine's own count and counted it AGAIN (the counter's comment said "compared and never summed"; the
+  code summed). So the run's history holds two times a role for one discard ("A REPEAT: time 2 for this run
+  (before: 2026-11-25T09:40:55Z)", fifteen seconds after the first), and a second count arriving after a gate
+  that had passed would have gated the run again for the same discard. And the CANARY error was written at
+  every asking of the gate, which was deferred for room every six seconds: fifty lines in three minutes, two
+  more an hour later. FIXED: one discard is one failure whoever saw it — the request counts at once, the
+  engine's count confirms what requests saw before it counts anything of its own, never fewer than happened
+  (a failure only the engine saw is counted; one the engine's count does not show within 90 s stops waiting,
+  so it cannot swallow a later discard); the error is said once an episode, as its history is written once.
+  gutenberg's `gate-canary.json` keeps its four entries: a record of what the code did. STILL OPEN from the
+  same minute: embedding must not start while the keeper's preload is still loading; a gate deferred for room
+  says that, with the room it needs; and whether the discard was a canary REFUSED FOR MEMORY answered as a
+  failure is the engine session's (its 0023, point 5; neither `d531d5d804f1` nor `792f050e318e` has it).
+- **THE LEGAL CHUNKER ENCODES A TEXT'S SPANS TOGETHER, AND EVERY POOL CHILD IS TOLD ITS TOKENIZER THREADS
+  (Legal's `chunking_legal._encode_many`; `parallel.tokenizer_threads`, `lane_threads`).** From the reading of
+  EUR-Lex5.next's large units (below): the counts tokenized span after span on one thread. Legal: the spans of
+  a text and the units of a piece go to the tokenizers library's own `encode_batch` — the same encodings, so
+  the same pieces and no chunker version (held by tests/test_chunking_legal_spans.py and, under the REAL
+  tokenizer, by the staged run 5 of the deploy); a 28.5 M-character act on 4 cores 63.9 s → 37.7 s, the same
+  30,988 pieces. Architecture: that library starts one thread a CORE in every process by default, so each
+  spawned child is told its number before it encodes (`RAYON_NUM_THREADS`): ONE for a child of the shared pool
+  and of an operator's pass; four, held to the node profile's cores, for the large lane's child — which then
+  counts as that many parts against the profile's cap while it runs. The spans are cut as they are encoded,
+  not listed (a list is a second copy of a 136 MB act in the child whose peak the lane's room is reckoned on).
+  BEFORE, counted on the node (München): fifteen units of 32018R0688 (1,494,357,545 bytes) parsed in 1,513 s
+  on the one lane — nine in a batch's commit (876,560,544 bytes, 1,503.0 s of parse wall), six parsed ahead —
+  with the pool otherwise idle. AFTER: the same act's remaining languages (it, de, fr, en) and the
+  "has left the parse pool after N" lines, owed. STILL OPEN, the next change: a second lane (a unit peaks at
+  ~2.8 GiB of RSS, the cgroup at 16.8 of 24.6 GiB with one in flight) and a batch that does not hold the
+  collection's other stages behind several large units — 10:08–10:25Z averaged ~100 documents and ~118 rdf a
+  minute, in bursts of thousands between waits of many minutes.
+- **A BATCH IN FLIGHT SAYS ON WHAT (`app/pool_progress.py`; München, 2026-11-25 09:57Z).** EUR-Lex5.next's
+  pipeline sat in its fts stage for nine minutes and more on ONE 136 MB act (bg 32018R0688; hr, et, fi, sl of
+  the same act queued at ~100 MB each): one pool child at 98 % of a core in `chunk_legal_article`, ten idle,
+  rdf (134,618 pending) behind it, the scheduler's line "0% in 9 turns" — and no line saying a batch was in
+  flight or on what. BUILT: the pool records when each part entered and whether it has the large lane; a
+  watcher says, a minute in and every minute after, the collection, the stage, the unit, its size, how long,
+  that a large part is ALONE in the lane and how long its answer is still waited for; then how long it took.
+  Telemetry only: what runs when is unchanged. WHAT THE READING OF THE POOL FOUND, not yet fixed, each waiting
+  for a number from the node: (1) large units (estimated peak ≥ 2 GiB) run ONE AT A TIME in the whole worker
+  (`_large_lane`, the memory rule of 11-19), the others of the batch deferred a round each — so five such
+  units are five rounds on one core; a second lane where the measured room holds two peaks needs the busy
+  child's peak. (2) The time a large part may take, 120 s + 1.24 µs a byte (288 s for this one), was
+  measured on the PARSE of 32021R2017 and is applied to fts, whose cost on a legal act is six to eight
+  tokenizer passes: if these units end as "did not answer" errors, that is a bound calibrated on another
+  stage — the platform's defect, first in line. (3) The collection's one pipeline thread waits for the large
+  part, so its rdf waits too; a batch that commits its light rows and leaves the large part to a later round
+  is the scheduling change, after `schedule-report`. (4) The chunker's speed on such a unit is the Legal
+  session's: its counts tokenize span by span on one thread, and the spans are independent
+  (`encode_batch`: the same ids, on the idle cores).
+- **LIVE since 2026-11-25 09:40:28Z: main `1249b1d9`** (deploy `fa354241`; #877 the two modes, #878, #879,
+  #880 the voice ping, #881, #883–#887). München's readings from the first minutes, as logged:
+  - the mode, at start: "node in embed mode (read): chat model louise-chat-qwen3.5-9b-q4-p0; network budget
+    down unlimited ([budget]), up 12.5 MB/s ([budget])". `[models] chat_large` written through the System
+    page (the 35B); `chat_small` is the environment's, so no key was written. Nothing switched yet: the first
+    switch to chat mode is the operator's, and its rows (the worker's lines, the card and the RAM before and
+    after) are still owed.
+  - THE VOICE PING: five lines, once, twenty seconds after the start, under engine `d531d5d804f1` — Philippe
+    5.1 s, Synthetic it C 3.1 s, en 2.7 s, fr 2.3 s, de 1.9 s. The profiles the node is not set to (Louis, the
+    replaced Synthetic it) were not pinged. Expected: the record was empty. The row that proves the rule is
+    the NEXT start under the same engine (no line) and the first after the engine swap (five again).
+  - the scan's progress, once a minute: Normattiva "corpus scan: 290,816 units taken so far, 0 new, 0 changed
+    (60 s in)"; a source that does not say where it is: "still walking; 342,000 units taken so far, and the
+    source has not said where it is (DiscoverState.say)".
+  - the slice-scope wait: no line yet (the old worker's slice pass ran as it stopped: 1,025,283 held, 243,884
+    embedded here). The scan rate after `forget_many`: owed, when the walk ends and the apply starts.
+  - THE MEMORY YIELD SAID NOTHING AT START, so nobody could tell an armed watcher from an absent one, and
+    the operator's monitor is dropped only when the worker's rule has been seen live. Fixed the same day: the
+    watcher says once whether it is armed, with its limit, its two lines and the reading
+    (`memory_yield.watch`).
+- **The Ask button is Abort while a question is being answered (operator, 2026-11-25: "while a query is in
+  processing I want the Ask button to switch to Abort"; `app/templates/ask.html`, 07 §7.4).** Pressed, the
+  question's search and answer jobs are cancelled on the node (`DELETE /ask/relay/<id>`, the route the "stuck"
+  notice's Cancel already used), their streams closed, and the page says so: the hits and the words already
+  shown stay, the question stays in its box. A job whose start the node had not answered yet is cancelled when
+  named. The same guard closes a race that was there: a question replaced while its start was on its way could
+  take the newer one's stream, and released its hold on the model. `tests/browser/ask_abort.js`.
+- **A TRANSLATION THE MODEL SERVER CUT WAS SHOWN AND KEPT AS WHOLE — fixed the same day (`llm.translate_stream`,
+  `/ask/translate/stream`).** Found from the engine session's reading of LocalAI's chat route: a failure after
+  chunks have gone out is an error event and THEN the ordinary `[DONE]`. The answer's path read it (the page
+  says "answer cut"); the translation's dropped the stream's end, joined what had arrived — after an error
+  event, a token cap, a stream closed early or an exception under way — and both sent it as the passage's
+  finished text and kept it in the translation cache for every later reader. Now a stream that does not end
+  whole raises `llm.StreamCut`; the passage is a miss (its original shown, counted), is not kept, and the
+  route's log line says how many were cut and the first reason. `tests/test_translation_cut.py`. NOT known:
+  how many cut translations the node's cache holds from before — it is in the web process's memory only, so a
+  restart of the web (every deploy) empties it.
+- **The check a collection's author runs: `louise hold check <collection> --build` (`app/build_check.py`;
+  operator: "a consistency check shall be available also for whom is willing to create a compliant
+  collection").** The BUILD's checks, beside the plan's of 03 §3.2 and apart from them: about how the collection
+  was made on this node, read from its manifest, read-only, in no Codex and never attested. Built: `units` (no
+  unit held by two live rows; EUR-Lex5 held 37,695 and then 405) and `chunkless` (a document indexed with no
+  chunk states why, as an issue; 57 were told apart by hand). Each verdict in plain words with what would
+  supply what is missing. To build: `rescan`, `parse-bound`, and the generic forms of eurlex's word-coverage
+  test and bulk ledger. Design, the choice put to the operator and the list: `compliance-check.md`. NOT RUN on
+  the node's collections yet: the first run there is the reading (Wikipedia's redirects are indexed with no
+  chunk today).
 - **A collection yields to the worker's memory by itself (`app/memory_yield.py`; the lessons, row A4).** The
   rule München's monitor held — pause the heavy collection over 21,500 MiB of the worker cgroup's anonymous
   memory, resume under 18,000 — is the worker's own: over 87.5 % of its limit the collection holding the most of

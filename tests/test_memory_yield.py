@@ -152,6 +152,26 @@ def test_the_watcher_ends_at_once_where_no_limit_reads(monkeypatch):
     assert not t.is_alive()
 
 
+def test_the_watcher_says_at_start_that_it_is_armed_with_its_figures(monkeypatch):
+    """München, 2026-11-25: the operator's monitor is dropped only when the
+    worker's own rule has been SEEN live — and nothing said it was there."""
+    monkeypatch.setattr(my, "anonymous", lambda cgroup=None: (9 * GIB, LIMIT))
+    stop = threading.Event()
+    stop.set()                                   # one line, then the loop ends
+    said: list[str] = []
+    my.watch(stop, said.append)
+    assert said == ["memory: the yield is armed — the worker's limit is 24,576 MiB; the collection with the "
+                    "most in the parse pool yields at 21,504 MiB anonymous (87.5%), all go on under 17,940 MiB "
+                    "(73%); read every 10 s, now 9,216 MiB"], said
+
+
+def test_the_watcher_says_when_it_is_not_armed(monkeypatch):
+    monkeypatch.setattr(my, "anonymous", lambda cgroup=None: None)
+    said: list[str] = []
+    my.watch(threading.Event(), said.append)
+    assert len(said) == 1 and "NOT armed" in said[0] and "memory.max" in said[0], said
+
+
 def test_the_pipeline_thread_stands_down_while_its_collection_yields(isolated_config, monkeypatch):
     """The worker's side: a yielding collection's thread starts nothing, says why
     in the collection's own log, and comes back when the yield ends."""

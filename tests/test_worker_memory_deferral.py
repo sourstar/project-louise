@@ -183,8 +183,7 @@ def test_a_deferred_large_head_never_makes_the_round_wait_on_the_lane(stage, tmp
     con.commit()
     before = _state(con, head["uid"])
     col = 2 if stage == "rdf" else 3
-    assert parallel._large_lane.acquire(blocking=False), "another collection's large parse holds the lane"
-    try:
+    with parallel.all_lanes_held():                  # other collections' large parses hold every lane
         for n in (1, 2):
             selected, row = worker._next_book(con, scope, embed_allowed=False, collection=c)
             assert (selected, row["uid"]) == (stage, head["uid"]), "still pending, untouched: selected again"
@@ -195,8 +194,6 @@ def test_a_deferred_large_head_never_makes_the_round_wait_on_the_lane(stage, tmp
             done = [u for (u,) in con.execute("SELECT uid FROM documents WHERE uid<>?", (head["uid"],))
                     if _state(con, u)[col] == 1]
             assert len(done) == n, f"round {n}: the peer behind it written"
-    finally:
-        parallel._large_lane.release()
     assert asked[0][0] is True and asked[0][1] >= 0.5, "a fresh large row waits once, bounded, as before"
     assert asked[1][0] is False and asked[1][1] < 0.1, f"deferred: asked, never waited for ({asked})"
     assert took < 0.5, f"the second round did not wait LARGE_WAIT_S ({took:.2f} s)"

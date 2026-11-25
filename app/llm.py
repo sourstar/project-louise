@@ -697,8 +697,23 @@ def is_translation(value: str, original: str, lang: str) -> bool:
             and flatten_whitespace(value) != flatten_whitespace(original))
 
 
+class StreamCut(RuntimeError):
+    """A streamed answer that did not end whole (`StreamEnd.whole`): the
+    endpoint reported an error in mid-stream, capped it, or closed it before
+    its end marker. Its message is `StreamEnd.why()`."""
+
+
 def translate_stream(text: str, lang: str):
     """ONE passage into ISO language `lang`, yielded as the model writes it.
+
+    RAISES `StreamCut` WHERE THE TRANSLATION DID NOT END WHOLE (2026-11-25).
+    The stream's end was read and dropped here, so a passage the model server
+    cut — an error event in mid-stream, which LocalAI follows with its
+    ordinary `[DONE]` (Tensor's reading of core/http/endpoints/openai/chat.go,
+    that day), a token cap, a stream closed early — came back as a finished
+    translation: painted as one and KEPT as the passage's translation for
+    every later reader. The entries are translated in full or shown in
+    their original; a cut one is a miss, and its caller says so.
 
     The Ask page translates its entries IN FULL (operator, 2026-09-18),
     and a whole chunk measured 58.6 s on the node (3,819 characters, 1,266
@@ -714,5 +729,7 @@ def translate_stream(text: str, lang: str):
         f"names, citations like [3] and paragraph breaks as they are; translate all "
         f"of it, do not summarise, do not add commentary. Reply with ONLY the "
         f"translation.\n\n{flatten_whitespace(text)}")
-    yield from chat_stream([{"role": "user", "content": prompt}], temperature=0.0,
-                           max_tokens=max(600, len(text) + 200), level=Level.TRANSLATE)
+    end = yield from chat_stream([{"role": "user", "content": prompt}], temperature=0.0,
+                                 max_tokens=max(600, len(text) + 200), level=Level.TRANSLATE)
+    if not end.whole:
+        raise StreamCut(end.why())

@@ -145,13 +145,50 @@ def profile_runs(activity: str) -> bool:
     return lim.mode is None or mode_runs(lim.mode, activity)
 
 
+#: what a mode's NETWORK CHOICE lets through (app/node_mode.py `network`;
+#: operator, 2026-11-25: "download and seed, seed only, no network")
+NETWORK_RUNS: dict[str, frozenset[str]] = {
+    "download-seed": frozenset({FETCH, SEED}),
+    "seed": frozenset({SEED}),
+    "none": frozenset(),
+}
+
+
+def network_runs(activity: str) -> bool:
+    """Does the NETWORK CHOICE of the mode of use the node is in let this
+    run? Only fetching and seeding are its to hold; a mode with no choice of
+    its own (custom) holds nothing, and a choice that does not read holds
+    nothing either — the run mode and the profile still decide."""
+    if activity not in (FETCH, SEED):
+        return True
+    try:
+        from . import node_mode
+        choice = node_mode.network()
+    except Exception:   # noqa: BLE001 — never the reason nothing moves
+        return True
+    return choice is None or activity in NETWORK_RUNS.get(choice, NETWORK_RUNS["download-seed"])
+
+
+def network_says(activity: str) -> str:
+    """Why the network choice holds `activity`, in words, for whoever shows
+    a stage that does not run (app/status.py)."""
+    from . import node_mode, platform_config
+    mode = node_mode.current()
+    choice = node_mode.network(mode)
+    label = dict(platform_config.NETWORK_LABELS).get(choice or "", choice)
+    return (f"the node is in {mode} mode with its network set to \"{label}\": nothing is "
+            f"{'fetched' if activity == FETCH else 'seeded'} — the System page's Mode panel, or "
+            f"platform.toml [modes] {mode}_network")
+
+
 def runs(state: str, activity: str) -> bool:
-    """Does the node, in this mode and in the profile in force now, do this?
-    The STRICTER of the two wins (node-profiles-design.md decision 6): the
-    activity runs only where both the node's mode and the profile's mode run
-    it. Every gate asks here, so the worker, the seeder, `node health`, the
-    jobs and the Library cannot disagree about what runs."""
-    return mode_runs(state, activity) and profile_runs(activity)
+    """Does the node, in this mode, under its mode of use's network choice
+    and in the profile in force now, do this? The STRICTEST wins
+    (node-profiles-design.md decision 6): the activity runs only where the
+    node's run mode, the network choice and the profile's mode all run it.
+    Every gate asks here, so the worker, the seeder, `node health`, the jobs
+    and the Library cannot disagree about what runs."""
+    return mode_runs(state, activity) and network_runs(activity) and profile_runs(activity)
 
 
 def path() -> Path:

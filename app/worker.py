@@ -4284,9 +4284,43 @@ def _embedding_allowed(con, collection) -> bool:
         return False        # a wrong endpoint (404, 401, …): asked again on a bound
     if _endpoint_busy_holds(collection):
         return False        # it timed out answering nobody: asked again on a bound
+    if _preload_holds(con, collection):
+        return False        # the keeper is still loading after a start: bounded, and said
     if not backend_gate.embed_allowed(con, collection, stop=_stop.is_set):
         return False
     return _quarantine_allows(con, collection, "embedding")
+
+
+#: when (monotonic) this worker process started: what "after a start" is
+#: measured from (`resident.holds_embedding`)
+_BORN = time.monotonic()
+#: collection -> when its wait for the preload was last said
+_preload_said: dict[str, float] = {}
+PRELOAD_SAY_EVERY_S = 300.0
+
+
+def _preload_holds(con, collection) -> bool:
+    """A COLLECTION'S OWN EMBEDDING WAITS FOR THE KEEPER'S PRELOAD AFTER A
+    START (app/resident.py `holds_embedding`: gutenberg, 2026-11-25 — its
+    first embedding beside thirteen loads met a card with 1.5 GiB free, a
+    context failed its canary, and the run was gated again forty minutes
+    later). A deferral, never an error; bounded there; said once and then
+    every PRELOAD_SAY_EVERY_S, and once more when it ends."""
+    why = resident.holds_embedding(_BORN)
+    name = collection.name
+    now = time.monotonic()
+    if why is None:
+        if _preload_said.pop(name, None) is not None:
+            db.log_event(con, "info", "embed", "embedding goes on: the keeper's preload after the start "
+                                               "has ended (or its bound has passed)")
+        return False
+    if now - _preload_said.get(name, -1e9) >= PRELOAD_SAY_EVERY_S:
+        _preload_said[name] = now
+        db.log_event(con, "info", "embed",
+                     f"embedding waits: {why}. A collection's embedding and its gate do not start beside "
+                     f"those loads (a context created on a full card fails its canary); at most "
+                     f"{resident.START_HOLD_S / 60:.0f} min after a start (app/resident.py)")
+    return True
 
 
 #: collection path -> the violations last said, so the halt is logged on change
@@ -4332,6 +4366,8 @@ def _settle_the_run(con, collection) -> None:
     except Exception:   # noqa: BLE001
         return
     if gate is not None and gate.status == copy_state.OPEN:
+        if _preload_holds(con, collection):
+            return              # not beside the keeper's loads after a start: the next round
         backend_gate.embed_allowed(con, collection, stop=_stop.is_set)
 
 
@@ -6304,9 +6340,12 @@ def _read_engine_counts(con) -> None:
             # — and its run goes back to the gate, whoever's request it was
             # (run_check.canary_failed: a person's query from the web process
             # is in the engine's count and in nobody's exception here)
-            discarded = line.startswith("CANARY")
+            # ...counted as the ENGINE's: it confirms a failure a refused
+            # request of this process already counted, and counts only what
+            # nobody here saw (run_check.canary_failed: one discard, one failure)
+            discarded = rage_keep.discarded_in(line)
             if discarded:
-                run_check.canary_failed(url, model)
+                run_check.canary_failed(url, model, by_engine=discarded)
             db.log_event(con, "error" if discarded else "info", "sched", line)
 
 
@@ -6615,7 +6654,7 @@ def _node_line(stage: str):
     """A logger for a node-level thread with no manifest of its own: the
     line on stdout, naming the collection in its message."""
     def log(m: str) -> None:
-        print(f"{time.strftime('%H:%M:%S')} [node info:{stage}] {m[:500]}", flush=True)
+        db.say_line(f"{time.strftime('%H:%M:%S')} [node info:{stage}] {m[:500]}")     # one write: never run together
     return log
 
 
@@ -7603,6 +7642,10 @@ def main() -> int:
     collection at its unit and exits 130 on a signal" — invariant 2 says
     the same — and it exited 0. `_stop` is set by the signal handler, and
     by `node stop`'s request, which exits 0 (`_stop_requested`)."""
+    # every line of the worker's log written whole, whichever thread prints
+    # it and however (app/log_lines.py: two events on one line, 2026-11-25)
+    from . import log_lines
+    log_lines.install()
     _warn_if_pid1()
     # the public key the web process recognises must be this key's half
     # (app/identity.py): a node whose two processes disagree about who it is
@@ -7656,6 +7699,11 @@ def _start_oom_watch() -> None:
     # ...and the watcher that makes a collection yield BEFORE the kernel acts
     threading.Thread(target=memory_yield.watch, args=(_stop, _node_line("memory")),
                      name="memory-yield", daemon=True).start()
+    # A BATCH IN FLIGHT SAYS ON WHAT (app/pool_progress.py): which unit a stage
+    # has been waiting on, how big, how long — once a minute, from here
+    from . import pool_progress
+    threading.Thread(target=pool_progress.watch, args=(_stop, _node_line("pool")),
+                     name="pool-progress", daemon=True).start()
 
 
 

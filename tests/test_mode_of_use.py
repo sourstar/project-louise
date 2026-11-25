@@ -48,25 +48,39 @@ def platform(monkeypatch):
 
 # ---------------- platform.toml: [modes] and the two chat settings ----------------
 
-def test_a_file_that_says_nothing_has_chat_mode_on_download_and_seeding_and_no_budget(platform):
+def test_a_file_that_says_nothing_has_both_modes_on_download_and_seed_and_no_budget(platform):
     pc = platform_config.load()
-    assert pc.modes.chat_run == "acquire-only", "the first of the three the operator named"
-    assert pc.modes.budget("embed") == (None, None) and pc.modes.budget("chat") == (None, None)
+    assert pc.modes.network("embed") == pc.modes.network("query") == "download-seed", \
+        "the first of the three the operator named"
+    assert pc.modes.network("custom") is None, "custom: its run mode says what the network does"
+    assert pc.modes.budget("embed") == (None, None) and pc.modes.budget("query") == (None, None)
+    assert pc.modes.budget("custom") == (None, None)
     assert pc.models.chat_large is None and pc.models.chat_small is None
 
 
-def test_modes_reads_chat_modes_run_mode_and_each_modes_budget(platform):
-    platform('[modes]\nchat_run = "seed-only"\nembed_down_max = "400Mbit"\nembed_up_max = "40Mbit"\n'
-             'chat_down_max = "20MB"\n')
+def test_modes_reads_each_modes_network_choice_and_budget(platform):
+    # operator: "set for each embed/query mode, a cron job then simply switches that"
+    platform('[modes]\nembed_network = "seed"\nquery_network = "none"\nembed_down_max = "400Mbit"\n'
+             'embed_up_max = "40Mbit"\nchat_down_max = "20MB"\n')
     m = platform_config.load().modes
-    assert m.chat_run == "seed-only"
+    assert (m.network("embed"), m.network("query"), m.network("chat")) == ("seed", "none", "none")
     assert m.budget("embed") == (50 * MB, 5 * MB), "[budget]'s grammar: bits and bytes"
-    assert m.budget("chat") == (20 * MB, None), "a direction the mode does not set is [budget]'s"
+    assert m.budget("query") == m.budget("chat") == (20 * MB, None), \
+        "a direction the mode does not set is [budget]'s; query mode's keys keep the first name"
     assert m.written("chat_down_max") == "20MB" and m.written("chat_up_max") == ""
+
+
+@pytest.mark.parametrize("run, network", [("acquire-only", "download-seed"), ("seed-only", "seed"),
+                                          ("paused", "none")])
+def test_the_mornings_chat_run_is_read_as_query_modes_network_choice(platform, run, network):
+    platform(f'[modes]\nchat_run = "{run}"\n')
+    assert platform_config.load().modes.network("query") == network
 
 
 @pytest.mark.parametrize("text, says", [
     ('[modes]\nchat_run = "running"\n', "chat_run"),            # running everything is embed mode's
+    ('[modes]\nchat_run = "paused"\nquery_network = "none"\n', "both chat_run and query_network"),
+    ('[modes]\nembed_network = "fast"\n', "embed_network"),
     ('[modes]\nchat_run = "sleep"\n', "chat_run"),
     ('[modes]\nchat_budget = "20MB"\n', "no key chat_budget"),  # a misspelt key is not "no budget"
     ('[modes]\nchat_down_max = "fast"\n', "chat_down_max"),
@@ -79,14 +93,18 @@ def test_a_modes_table_that_does_not_read_is_refused_at_load(platform, text, say
         platform_config.load()
 
 
-def test_the_chat_model_is_the_small_one_in_embed_mode_and_the_large_one_in_chat_mode(platform):
-    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
-    assert config.chat_model_for("chat") == "chat-35b" and config.chat_model_for("embed") == "chat-9b"
-    assert config.CHAT_MODEL == "chat-9b", "a node never switched is in embed mode"
-    node_mode.switch("chat", by="test")
+def test_each_mode_has_its_chat_model_small_large_and_the_operators_own(platform):
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\nchat = "chat-mine"\n')
+    assert (config.chat_model_for("query"), config.chat_model_for("embed"), config.chat_model_for("custom")) \
+        == ("chat-35b", "chat-9b", "chat-mine")
+    assert config.chat_model_for("chat") == "chat-35b", "the first word for query mode"
+    assert config.CHAT_MODEL == "chat-mine", "a node never switched is in custom mode: its one chat setting"
+    node_mode.switch("query", by="test")
     assert config.CHAT_MODEL == "chat-35b", "every reader of config.CHAT_MODEL follows the switch"
     node_mode.switch("embed", by="test")
     assert config.CHAT_MODEL == "chat-9b"
+    node_mode.switch("custom", by="test")
+    assert config.CHAT_MODEL == "chat-mine"
 
 
 def test_the_one_chat_setting_there_was_still_answers_in_both_modes(platform):
@@ -102,80 +120,136 @@ def test_the_one_chat_setting_there_was_still_answers_in_both_modes(platform):
 
 # ---------------- the switch ----------------
 
-def test_a_node_never_switched_is_in_embed_mode_and_its_run_mode_is_untouched(platform):
+def test_a_node_never_switched_is_in_custom_mode_the_node_before_modes(platform):
     assert not node_state.path().exists()
-    assert node_mode.current() == "embed"
+    assert node_mode.current() == "custom"
     assert not node_state.path().exists(), "reading the mode creates nothing"
     node_state.set_worker_state("seed-only")
-    assert node_mode.current() == "embed" and node_state.worker_state() == "seed-only", \
-        "nothing sets the run mode until someone switches"
+    assert node_mode.current() == "custom" and node_state.worker_state() == "seed-only"
+    assert node_mode.network() is None and node_mode.run_of("custom") is None
+    assert [node_mode.refuses(s) for s in node_state.MODE_RUNS] == [None] * 4, "every run mode is its own"
+
+
+def test_a_switch_to_custom_mode_leaves_the_run_mode_alone(platform):
+    # operator: "what is currently available in the run mode, basically what we have now"
+    node_mode.switch("embed", by="test")
+    node_state.set_worker_state("seed-only")
+    got = node_mode.switch("custom", by="test")
+    assert (got["mode"], got["before"], got["run"], got["run_before"], got["changed"]) == \
+        ("custom", "embed", "seed-only", "seed-only", True)
+    assert node_state.worker_state() == "seed-only"
 
 
 def test_a_switch_to_embed_mode_runs_everything(platform):
     # operator: "3. In embed mode switch to run all"
     node_state.set_worker_state("paused")
     got = node_mode.switch("embed", by="test")
-    assert got == {"mode": "embed", "before": "embed", "run": "running", "run_before": "paused"}
+    assert got == {"mode": "embed", "before": "custom", "run": "running", "run_before": "paused", "changed": True}
     assert node_state.worker_state() == "running"
 
 
-@pytest.mark.parametrize("run", platform_config.CHAT_RUNS)
-def test_a_switch_to_chat_mode_sets_the_run_mode_the_file_names(platform, run):
-    # operator: "a run mode among download/seeding, seeding or pause"
-    platform(f'[modes]\nchat_run = "{run}"\n')
+@pytest.mark.parametrize("network", platform_config.NETWORKS)
+def test_a_switch_to_query_mode_stops_the_processing_whatever_its_network_choice(platform, network):
+    platform(f'[modes]\nquery_network = "{network}"\n')
     node_state.set_worker_state("running")
-    got = node_mode.switch("chat", by="test")
-    assert (got["mode"], got["before"], got["run"], got["run_before"]) == ("chat", "embed", run, "running")
-    assert node_mode.current() == "chat" and node_state.worker_state() == run
+    got = node_mode.switch("query", by="test")
+    assert (got["mode"], got["before"], got["run"], got["run_before"]) == \
+        ("query", "custom", "acquire-only", "running")
+    assert node_mode.current() == "query" and node_state.worker_state() == "acquire-only"
     assert not node_state.mode_runs(node_state.worker_state(), node_state.EMBED), \
-        "chat mode never embeds: the memory is the large chat model's"
+        "query mode never embeds: the system is kept unloaded for a question's models"
+    from app import resident
+    assert node_state.worker_state() in resident.PRELOADING_MODES, \
+        "and it is ALWAYS a mode in which the keeper preloads them, whatever the network choice"
+
+
+def test_chat_the_first_word_for_query_mode_is_still_taken(platform):
+    got = node_mode.switch("chat", by="a cron job written this morning")
+    assert got["mode"] == "query" and node_mode.current() == "query"
+    with node_state.connect() as c:                       # a store written before the rename
+        db.set_control(c, node_mode.KEY, "chat")
+    node_mode.forget()
+    assert node_mode.current() == "query"
 
 
 def test_the_mode_survives_a_restart_and_who_switched_is_recorded(platform):
-    node_mode.switch("chat", by="POST /api/mode from 10.0.0.9 (curl)")
+    node_mode.switch("query", by="POST /api/mode from 10.0.0.9 (curl)")
     node_mode.forget()                      # a new process remembers nothing
-    assert node_mode.current() == "chat"
+    assert node_mode.current() == "query"
     with node_state.connect() as c:         # the store itself, as the worker reads it
-        assert node_mode.current(c) == "chat"
+        assert node_mode.current(c) == "query"
     assert [(h["mode"], h["run"], h["by"]) for h in node_mode.history()] == \
-        [("chat", "acquire-only", "POST /api/mode from 10.0.0.9 (curl)")]
+        [("query", "acquire-only", "POST /api/mode from 10.0.0.9 (curl)")]
     last = node_state.mode_history()[-1]
-    assert last["state"] == "acquire-only" and "chat mode" in last["by"], \
+    assert last["state"] == "acquire-only" and "query mode" in last["by"], \
         "the run mode's own history says the mode set it"
 
 
-def test_a_cron_jobs_call_means_the_same_thing_every_time(platform):
+def test_a_cron_jobs_repeated_call_never_undoes_a_pause_set_by_hand(platform):
+    """Operator, 2026-11-25: the run and network choices are personal. A
+    switch to the mode the node is ALREADY in writes nothing — `node resume`
+    is what goes back to the mode's own run mode."""
     node_mode.switch("embed", by="cron")
     node_state.set_worker_state("paused", by="a deploy")     # the operator's, afterwards
-    assert node_mode.current() == "embed" and node_state.worker_state() == "paused", \
-        "the switch sets the run mode once; it does not hold it"
+    got = node_mode.switch("embed", by="cron")
+    assert got["changed"] is False and got["run"] == "paused"
+    assert node_state.worker_state() == "paused"
+    assert len(node_mode.history()) == 1, "nothing written, nothing recorded"
+    node_mode.switch("query", by="cron")
+    assert node_state.worker_state() == "acquire-only", "a real switch sets the mode's run mode"
+
+
+# ---------------- the network choice, each mode's own ----------------
+
+def test_each_modes_network_choice_holds_fetch_and_seed_and_nothing_else(platform):
+    """Operator: "In both embed and query modes you can choose to download
+    and seed, seed only, no network". The run gate's third reader."""
+    platform('[modes]\nembed_network = "seed"\nquery_network = "none"\n')
+    F, S, P, I, E = (node_state.FETCH, node_state.SEED, node_state.PARSE, node_state.INDEX, node_state.EMBED)
+    node_mode.switch("embed", by="test")
+    st = node_state.worker_state()
+    assert [node_state.runs(st, a) for a in (F, S, P, I, E)] == [False, True, True, True, True], \
+        "embed mode, seed only: everything is processed, nothing is downloaded"
+    node_mode.switch("query", by="cron")                 # "a cron job then simply switches that"
+    st = node_state.worker_state()
+    assert [node_state.runs(st, a) for a in (F, S, P, I, E)] == [False, False, False, False, False], \
+        "query mode, no network: the mode's own choice came with the switch"
     node_mode.switch("embed", by="cron")
-    assert node_state.worker_state() == "running", "switching to the mode it is in sets its run mode again"
+    assert node_state.runs(node_state.worker_state(), S) and not node_state.runs(node_state.worker_state(), F)
 
 
-def test_chat_mode_refuses_to_run_everything_and_says_where_to_switch(platform):
-    assert node_mode.refuses("running") is None, "embed mode takes every run mode"
-    node_mode.switch("chat", by="test")
+def test_a_network_choice_changed_in_the_file_is_in_force_at_once(platform):
+    node_mode.switch("embed", by="test")
+    assert node_state.runs("running", node_state.FETCH)
+    platform('[modes]\nembed_network = "none"\n')
+    node_mode.forget()
+    assert not node_state.runs("running", node_state.FETCH) and not node_state.runs("running", node_state.SEED)
+    assert node_state.runs("running", node_state.EMBED), "the embedders keep the card"
+    assert "embed mode with its network set to \"no network\"" in node_state.network_says(node_state.FETCH)
+
+
+def test_custom_mode_has_no_network_choice_the_run_mode_decides_as_before(platform):
+    platform('[modes]\nembed_network = "none"\nquery_network = "none"\n')
+    assert node_mode.current() == "custom"
+    assert node_state.runs("running", node_state.FETCH) and node_state.runs("acquire-only", node_state.SEED)
+    assert not node_state.runs("seed-only", node_state.FETCH)
+
+
+def test_query_mode_refuses_to_run_everything_and_says_where_to_switch(platform):
+    # operator: "The API constrain is only for query mode"
+    assert node_mode.refuses("running") is None, "custom mode takes every run mode"
+    node_mode.switch("embed", by="test")
+    assert node_mode.refuses("running") is None, "and so does embed mode"
+    node_mode.switch("query", by="test")
     said = node_mode.refuses("running")
-    assert said and "embed mode" in said and "louise node mode embed" in said and "/api/mode" in said
+    assert said and "embed mode" in said and "louise node mode embed|custom" in said and "/api/mode" in said
     assert [node_mode.refuses(s) for s in platform_config.CHAT_RUNS] == [None, None, None]
 
 
-def test_chat_modes_run_mode_changed_in_the_file_is_taken_at_once_in_chat_mode_only(platform):
-    assert node_mode.set_chat_run("paused", by="test") is False, "embed mode: the file only"
-    node_state.set_worker_state("running")
-    node_mode.switch("chat", by="test")
-    assert node_mode.set_chat_run("paused", by="the System page") is True
-    assert node_state.worker_state() == "paused"
-    assert node_mode.set_chat_run("paused", by="the System page") is False, "already there"
-    with pytest.raises(ValueError, match="one of"):
-        node_mode.set_chat_run("running")
-
-
-def test_a_mode_that_is_not_one_of_the_two_is_refused(platform):
-    with pytest.raises(ValueError, match="embed or chat"):
+def test_a_mode_that_is_not_one_of_the_three_is_refused(platform):
+    with pytest.raises(ValueError, match="embed, query or custom"):
         node_mode.switch("turbo")
-    assert node_mode.current() == "embed" and node_mode.history() == []
+    assert node_mode.current() == "custom" and node_mode.history() == []
 
 
 # ---------------- the network budget ----------------
@@ -236,6 +310,7 @@ def _lines(capsys):
 
 
 def test_the_round_applies_the_modes_budget_and_follows_the_file_without_a_restart(platform, capsys):
+    node_mode.switch("embed", by="the test: a node in embed mode")
     platform('[budget]\ndown_max = "10MB"\nup_max = "1MB"\n[models]\nchat_large = "chat-35b"\n'
              'chat_small = "chat-9b"\n[modes]\nembed_down_max = "8MB"\nchat_down_max = "2MB"\nchat_up_max = "500KB"\n')
     m = TransferManager(platform=platform_config.load(), clock=FakeClock())
@@ -251,22 +326,23 @@ def test_the_round_applies_the_modes_budget_and_follows_the_file_without_a_resta
         worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a))
         assert _lines(capsys) == [], "ONE line: a round that changes nothing says nothing"
 
-        node_mode.switch("chat", by="test")
-        assert worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a)) == "chat"
+        node_mode.switch("query", by="test")
+        assert worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a)) == "query"
         assert _rates(m) == pytest.approx((2 * MB, 0.5 * MB))
-        assert "node in chat mode (embed -> chat): chat model chat-35b" in _lines(capsys)[0]
-        assert started == [("embed", "chat")], "a switch changes the chat model, behind"
+        assert "node in query mode (embed -> query): chat model chat-35b" in _lines(capsys)[0]
+        assert started == [("embed", "query")], "a switch changes the chat model, behind"
 
         # the page's edit of a budget: the next round has it, no restart
         platform('[budget]\ndown_max = "10MB"\nup_max = "1MB"\n[models]\nchat_large = "chat-35b"\n'
                  'chat_small = "chat-9b"\n[modes]\nchat_down_max = "3MB"\n')
         worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a))
         assert _rates(m) == pytest.approx((3 * MB, 1 * MB))
-        assert "node in chat mode (budget changed)" in _lines(capsys)[0]
-        assert started == [("embed", "chat")], "a budget change is not a switch"
+        assert "node in query mode (budget changed)" in _lines(capsys)[0]
+        assert started == [("embed", "query")], "a budget change is not a switch"
 
 
 def test_a_switch_made_while_the_worker_was_down_still_changes_the_model_when_it_is_back(platform, capsys):
+    node_mode.switch("embed", by="the test: a node in embed mode")
     # a cron job's call during a deploy: the worker that comes back reads chat mode for the first
     # time in its life, and the store says the last chat model made the node's was embed mode's
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
@@ -275,26 +351,27 @@ def test_a_switch_made_while_the_worker_was_down_still_changes_the_model_when_it
     with node_state.connect() as c:
         worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a))     # embed, acted on
         assert node_mode.applied(c) == "embed" and started == []
-        node_mode.switch("chat", by="cron")
+        node_mode.switch("query", by="cron")
         worker._node_mode_seen[:] = [None, None]                                       # a new worker process
         capsys.readouterr()
         worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a))
-        assert started == [("embed", "chat")] and node_mode.applied(c) == "chat"
-        assert "embed -> chat, switched while the worker was down" in _lines(capsys)[0]
+        assert started == [("embed", "query")] and node_mode.applied(c) == "query"
+        assert "embed -> query, switched while the worker was down" in _lines(capsys)[0]
         worker._node_mode_seen[:] = [None, None]                                       # and one more restart
         worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a))
-        assert started == [("embed", "chat")], "a restart in the mode already acted on changes no model"
+        assert started == [("embed", "query")], "a restart in the mode already acted on changes no model"
         assert "(read)" in _lines(capsys)[0]
 
 
 def test_every_process_that_moves_bytes_follows_the_modes_budget(platform, monkeypatch):
+    node_mode.switch("embed", by="the test: a node in embed mode")
     # the web and an operator pass have a manager of their own: get_manager() reads the mode's budget
     from app.transfer import manager as tm
     platform('[budget]\ndown_max = "10MB"\n[modes]\nembed_down_max = "8MB"\nchat_down_max = "2MB"\n')
     tm.set_manager(None)
     try:
         assert tm.get_manager().bucket(Direction.DOWN).core.rate == pytest.approx(8 * MB)
-        node_mode.switch("chat", by="test")
+        node_mode.switch("query", by="test")
         assert tm.get_manager().bucket(Direction.DOWN).core.rate == pytest.approx(8 * MB), \
             "re-read at most every MODE_FOLLOW_S: not a store read per transfer"
         monkeypatch.setattr(tm, "_mode_followed", -1e9)                # MODE_FOLLOW_S later
@@ -328,19 +405,19 @@ class _Runner:
 def test_a_switch_unloads_the_chat_model_left_and_loads_the_one_entered(platform, monkeypatch, capsys):
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     runner = _Runner(monkeypatch)
-    node_mode.switch("chat", by="test")
-    got = worker._mode_models("embed", "chat", question=lambda: False)
+    node_mode.switch("query", by="test")
+    got = worker._mode_models("embed", "query", question=lambda: False)
     assert got == {"old": "chat-9b", "new": "chat-35b", "unloaded": True, "loaded": True}
     assert runner.calls == [("unload", "chat-9b"), ("warm", "chat-35b")], \
         "the memory of the model left is given back BEFORE the one entered is loaded"
-    assert "chat mode: chat-9b unloaded; chat-35b loaded" in capsys.readouterr().out
+    assert "query mode: chat-9b unloaded; chat-35b loaded" in capsys.readouterr().out
 
 
 def test_a_switch_between_modes_that_name_one_model_unloads_nothing(platform, monkeypatch, capsys):
     platform('[models]\nchat = "chat-one"\n')
     runner = _Runner(monkeypatch, loaded=("chat-one",))
-    node_mode.switch("chat", by="test")
-    worker._mode_models("embed", "chat", question=lambda: False)
+    node_mode.switch("query", by="test")
+    worker._mode_models("embed", "query", question=lambda: False)
     assert runner.calls == [] and runner.loaded == {"chat-one"}
     assert "both modes name chat-one" in capsys.readouterr().out
 
@@ -348,18 +425,18 @@ def test_a_switch_between_modes_that_name_one_model_unloads_nothing(platform, mo
 def test_a_switch_waits_for_the_answer_in_flight_but_not_for_ever(platform, monkeypatch):
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     runner = _Runner(monkeypatch)
-    node_mode.switch("chat", by="test")
+    node_mode.switch("query", by="test")
     asked: list = []
 
     def question():                         # an answer streams for two looks, then ends
         asked.append(len(runner.calls))
         return len(asked) < 3
-    worker._mode_models("embed", "chat", question=question, sleep=lambda s: None)
+    worker._mode_models("embed", "query", question=question, sleep=lambda s: None)
     assert asked == [0, 0, 0], "nothing was unloaded under the answer"
     assert runner.calls[0] == ("unload", "chat-9b")
 
     runner.calls.clear()
-    worker._mode_models("chat", "embed", wait_s=0.0, question=lambda: True, sleep=lambda s: None)
+    worker._mode_models("query", "embed", wait_s=0.0, question=lambda: True, sleep=lambda s: None)
     assert ("unload", "chat-35b") in runner.calls, "an answer that never ends does not hold the switch"
 
 
@@ -368,7 +445,7 @@ def test_a_model_that_does_not_load_at_the_switch_is_said_and_does_not_raise(pla
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     _Runner(monkeypatch)
     monkeypatch.setattr(llm, "warm", lambda *a, **k: (_ for _ in ()).throw(TimeoutError("120 s")))
-    got = worker._mode_models("embed", "chat", question=lambda: False)
+    got = worker._mode_models("embed", "query", question=lambda: False)
     assert got["loaded"] is False
     assert "did not load now" in capsys.readouterr().out
 
@@ -376,32 +453,40 @@ def test_a_model_that_does_not_load_at_the_switch_is_said_and_does_not_raise(pla
 # ---------------- the command ----------------
 
 def test_node_mode_reads_and_switches(platform, capsys):
-    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n[modes]\nchat_run = "seed-only"\n'
-             'chat_down_max = "2MB"\n')
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\nchat = "chat-mine"\n'
+             '[modes]\nquery_network = "seed"\nchat_down_max = "2MB"\n')
     assert louise.main(["node", "mode"]) == 0
     shown = json.loads(capsys.readouterr().out)
-    assert shown["mode"] == "embed" and shown["chat_model"] == "chat-9b"
-    assert shown["modes"]["chat"] == {"chat_model": "chat-35b", "run": "seed-only",
+    assert shown["mode"] == "custom" and shown["chat_model"] == "chat-mine" and shown["network"] is None
+    assert shown["modes"]["query"] == {"chat_model": "chat-35b", "run": "acquire-only", "network": "seed",
                                       "budget": {"down": 2 * MB, "up": None}}
-    assert shown["modes"]["embed"]["run"] == "running"
+    assert shown["modes"]["embed"]["run"] == "running" and shown["modes"]["embed"]["network"] == "download-seed"
+    assert shown["modes"]["custom"]["run"] == "yours" and shown["modes"]["custom"]["network"] is None
 
-    assert louise.main(["node", "mode", "chat"]) == 0
+    assert louise.main(["node", "mode", "query"]) == 0
     got = json.loads(capsys.readouterr().out)
-    assert (got["mode"], got["before"], got["run"], got["chat_model"]) == ("chat", "embed", "seed-only", "chat-35b")
-    assert node_mode.current() == "chat" and "louise node mode chat" in node_mode.history()[-1]["by"]
+    assert (got["mode"], got["before"], got["run"], got["chat_model"], got["network"], got["changed"]) == \
+        ("query", "custom", "acquire-only", "chat-35b", "seed", True)
+    assert node_mode.current() == "query" and "louise node mode query" in node_mode.history()[-1]["by"]
+    assert louise.main(["node", "mode", "chat"]) == 0, "the first word for query mode"
+    assert json.loads(capsys.readouterr().out)["changed"] is False
+    assert louise.main(["node", "mode", "custom"]) == 0
+    assert json.loads(capsys.readouterr().out)["mode"] == "custom"
 
 
 def test_node_resume_goes_back_to_what_the_mode_runs(platform, capsys):
-    platform('[modes]\nchat_run = "seed-only"\n')
     assert louise.main(["node", "pause"]) == 0 and louise.main(["node", "resume"]) == 0
-    assert node_state.worker_state() == "running", "embed mode, and a node never switched: everything, as before"
-    node_mode.switch("chat", by="test")
+    assert node_state.worker_state() == "running", "custom mode, a node never switched: everything, as before"
+    node_mode.switch("query", by="test")
     assert louise.main(["node", "pause"]) == 0 and node_state.worker_state() == "paused"
     capsys.readouterr()
     assert louise.main(["node", "resume"]) == 0
-    assert node_state.worker_state() == "seed-only", \
-        "chat mode: resume never starts the embedders under the large chat model"
-    assert json.loads(capsys.readouterr().out)["mode"] == "chat"
+    assert node_state.worker_state() == "acquire-only", \
+        "query mode: resume never starts the embedders under the large chat model"
+    assert json.loads(capsys.readouterr().out)["mode"] == "query"
+    node_mode.switch("embed", by="test")
+    assert louise.main(["node", "pause"]) == 0 and louise.main(["node", "resume"]) == 0
+    assert node_state.worker_state() == "running"
 
 
 # ---------------- the API ----------------
@@ -420,16 +505,19 @@ ADMIN = {"X-Admin-Token": "sekrit"}
 
 def test_the_mode_is_switched_through_the_api_for_a_cron_job(client):
     # operator: "7. The mode shall be selectable through the api as well for cron jobs"
-    assert client.post("/api/mode", json={"mode": "chat"}).status_code in (401, 403), "the admin's only"
-    assert client.get("/api/mode", headers=ADMIN).json()["mode"] == "embed"
+    assert client.post("/api/mode", json={"mode": "query"}).status_code in (401, 403), "the admin's only"
+    assert client.get("/api/mode", headers=ADMIN).json()["mode"] == "custom"
 
-    r = client.post("/api/mode", json={"mode": "chat"}, headers={**ADMIN, "User-Agent": "cron-curl"})
+    r = client.post("/api/mode", json={"mode": "query"}, headers={**ADMIN, "User-Agent": "cron-curl"})
     assert r.status_code == 200
     got = r.json()
-    assert (got["mode"], got["before"], got["run"], got["chat_model"]) == ("chat", "embed", "acquire-only", "chat-35b")
-    assert node_mode.current() == "chat" and node_state.worker_state() == "acquire-only"
+    assert (got["mode"], got["before"], got["run"], got["chat_model"], got["changed"]) == \
+        ("query", "custom", "acquire-only", "chat-35b", True)
+    again = client.post("/api/mode", json={"mode": "chat"}, headers=ADMIN).json()     # the first word; the same mode
+    assert again["mode"] == "query" and again["changed"] is False
+    assert node_mode.current() == "query" and node_state.worker_state() == "acquire-only"
     assert "POST /api/mode" in node_mode.history()[-1]["by"] and "cron-curl" in node_mode.history()[-1]["by"]
-    assert client.get("/api/status").json()["mode"] == "chat"
+    assert client.get("/api/status").json()["mode"] == "query"
 
     r = client.post("/api/mode", json={"mode": "embed"}, headers=ADMIN)
     assert r.json()["mode"] == "embed" and node_state.worker_state() == "running"
@@ -438,7 +526,7 @@ def test_the_mode_is_switched_through_the_api_for_a_cron_job(client):
 
 
 def test_the_control_route_refuses_to_run_everything_in_chat_mode(client):
-    node_mode.switch("chat", by="test")
+    node_mode.switch("query", by="test")
     r = client.post("/api/control", json={"state": "running"}, headers=ADMIN)
     assert r.status_code == 409 and "embed mode" in r.json()["detail"]
     assert node_state.worker_state() == "acquire-only", "said, not done"

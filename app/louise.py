@@ -4065,11 +4065,12 @@ def cmd_node_resume(a) -> int:
         _print({"paused": sorted(names)})
         return 0
     # back to what the node's MODE runs (app/node_mode.py): everything in
-    # embed mode, chat mode's own run mode in chat mode — where running
-    # everything would start the embedders under the large chat model
+    # embed mode, query mode's own run mode in query mode — where running
+    # everything would start the embedders under the large chat model — and
+    # everything in custom mode, where resume means what it always meant
     from app import node_mode
     mode = node_mode.current()
-    state = node_mode.run_of(mode)
+    state = node_mode.run_of(mode) or "running"
     node_state.set_worker_state(state, by=f"louise node resume ({mode} mode)")
     # the store written, said: the worker obeys the one it reads (its log
     # names it: "node mode … (read from …)"), and a command run with another
@@ -4080,14 +4081,16 @@ def cmd_node_resume(a) -> int:
 
 
 def cmd_node_mode(a) -> int:
-    """`node mode [embed|chat]` (07 §7.3): the node's mode of use, read or
-    switched. A switch sets the chat model, the run mode and the network
-    budget of the mode together (app/node_mode.py) and survives a restart."""
+    """`node mode [embed|query|custom]` (07 §7.3): the node's mode of use,
+    read or switched. A switch sets the chat model, the run mode (not in
+    custom mode, where it is the operator's own) and the network budget of
+    the mode together (app/node_mode.py) and survives a restart. `chat`, the
+    first word for query mode, is still taken."""
     from app import node_mode, node_state
     if a.mode:
         got = node_mode.switch(a.mode, by=f"louise node mode {a.mode} ({node_state.invoker()})")
         _print({**node_mode.shown(), "before": got["before"], "run_before": got["run_before"],
-                "store": str(node_state.path())})
+                "changed": got["changed"], "store": str(node_state.path())})
         return 0
     _print({**node_mode.shown(), "store": str(node_state.path())})
     return 0
@@ -6181,6 +6184,27 @@ def run_check(a):
     return name, codex, snapshot, seed, report
 
 
+def _check_build(a) -> int:
+    """`hold check <collection> --build` (07 §7.3; operator, 2026-11-25: "a
+    consistency check shall be available also for whom is willing to create a
+    compliant collection"): the BUILD's checks (app/build_check.py) — how the
+    collection was made on this node, from its manifest, read-only; in no
+    Codex, never attested. `--checks` names some of them. Exit 1 when one
+    failed; an inconclusive one says why and is neither."""
+    from app import build_check, collections as collections_mod
+    name, _ = col.resolve(a.root, a.collection)
+    c = collections_mod.by_name(name)
+    if c is None:
+        raise CodexError(f"{name}: no such collection on this node")
+    try:
+        verdicts = build_check.run(c, [x for x in (a.checks or "").split(",") if x] or None)
+    except ValueError as e:
+        raise CodexError(str(e)) from None
+    _print({"collection": name, "build": [v.shown() for v in verdicts],
+            "failed": [v.check for v in verdicts if v.result == build_check.FAIL]})
+    return 1 if any(v.result == build_check.FAIL for v in verdicts) else 0
+
+
 def cmd_check(a) -> int:
     """`hold check` — run the plan (03 §3.2) and attest what completed.
 
@@ -6189,6 +6213,8 @@ def cmd_check(a) -> int:
     attestation, is reported with its reason, and is retried.
     """
     from app.hold import check as chk
+    if getattr(a, "build", False):
+        return _check_build(a)
     _whole_quota()
     name, codex, snapshot, seed, report = run_check(a)
     written = report.attestations
@@ -7753,7 +7779,7 @@ def build_parser() -> argparse.ArgumentParser:
                                       "the small chat model, everything runs) or chat (the large chat "
                                       "model; download/seeding, seeding or pause); each with its own "
                                       "network budget; across restarts")
-    p.add_argument("mode", nargs="?", default=None, choices=("embed", "chat"))
+    p.add_argument("mode", nargs="?", default=None, choices=("embed", "query", "custom", "chat"))
     p.set_defaults(fn=cmd_node_mode)
     p = nverbs.add_parser("freeze", help="ONE collection keeps the version it holds: nothing fetched, "
                                         "scanned or taken in from peers; parsed, indexed, embedded here "
@@ -8703,6 +8729,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "against the current trusted list and fresh revocation responses")
     p.add_argument("--json", action="store_true",
                    help="09 §9.8's report object")
+    p.add_argument("--build", action="store_true",
+                   help="the BUILD's checks instead of the plan's: how the collection was made on this "
+                        "node (one unit one live row; a document with no chunk states why), from its "
+                        "manifest, read-only, never attested; --checks names some of them")
     p.set_defaults(fn=cmd_check)
 
     user = surfaces.add_parser("user", help="who may search: tokens, roles, expiry (07 §7.4; app/users.py)")
