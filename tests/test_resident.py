@@ -1502,7 +1502,10 @@ def test_a_reading_taken_with_a_slice_in_host_memory_never_lowers_what_a_model_r
     p = resident._plan_now([_r("louise-chat", "chat")])
     assert p.placed[0].counted == 21_449 * MIB, "the budget counts the card's bytes, not the ones in host memory"
     over = [t for level, t in said if level == "warn" and "OVER-COMMITTED" in t]
-    assert len(over) == 1 and "41,349 MiB whole against the card's 32,656 MiB" in over[0], said
+    assert len(over) == 1, "said when the three loads made it so — the beat before a model read short"
+    assert "take 41,349 MiB at rest against the card's 32,656 MiB" in over[0], said
+    got = resident._overcommitted([SERVER], resident.read_memory(), (32_656 * MIB, 32_417 * MIB))
+    assert got == (41_349 * MIB, 32_656 * MIB, ("vega-c",)), "both signs: the sum, and the model read short"
     assert resident.read_memory().peaks == peaks or max(resident.read_memory().peaks.values()) == max(peaks.values()), \
         "no margin is sampled from a card that holds part of its models elsewhere"
     _beat([])
@@ -1529,7 +1532,7 @@ def test_nothing_is_learnt_of_a_model_first_met_on_an_over_committed_card(tmp_pa
     _beat([])
     mem = resident.read_memory()
     assert (SERVER, "louise-chat") not in mem.rest and (SERVER, "louise-translate") not in mem.rest, \
-        "34,454 MiB of models on 32,656: a reading taken now is what is LEFT of a model, not the model"
+        "the card at 99 % and no model reading short: a slice of one may be out, so nothing is learnt now"
     p = resident._plan_now([_r("louise-chat", "chat"), _r("louise-translate", "translation")])
     assert [x.counted // MIB for x in p.placed] == [21_449, 8_005], "each at its largest until it is known"
 
@@ -1612,3 +1615,27 @@ def test_no_document_encoder_is_in_the_set_where_the_node_embeds_nothing(tmp_pat
     assert none["vega-qwen3-embedding-4b"] == ("query encoder",), "the same model answers the questions: it stays"
     node_state.set_worker_state("acquire-only", by="query mode")
     assert resident.node_embeds() is False and resident.node_embeds("running") is True
+
+
+def test_thirteen_models_at_rest_on_a_card_that_holds_them_are_not_over_committed(tmp_path, node, monkeypatch):
+    """The sum of their LARGEST sizes is over the card — each includes its
+    working context — and that is not over-commitment: at rest they fit
+    (the node in embed mode, 28.4 of 32.7 GiB). The margin is sampled."""
+    said: list[tuple[str, str]] = []
+    resident.set_log(lambda level, text: said.append((level, text)))
+    _a_minute_a_reading(monkeypatch)
+    rest = {"louise-chat": 5_790, "louise-translate": 7_900} | {f"vega-{i}": 1_400 for i in range(11)}
+    largest = {m: int(v * 1.6) for m, v in rest.items()}
+    resident._write_memory(resident.Memory(
+        sizes={(SERVER, m): v * MIB for m, v in largest.items()},
+        rest={(SERVER, m): v * MIB for m, v in rest.items()}, total=32_656 * MIB))
+    resident.reset()
+    assert sum(largest.values()) > 32_656 > sum(rest.values())
+    held = {m: (100 + i, v) for i, (m, v) in enumerate(sorted(rest.items()))}
+    node.held |= set(held)
+    _rows(monkeypatch, held)
+    _card(monkeypatch, 32_656, sum(rest.values()) + 700)
+    _beat([])
+    assert not [t for _l, t in said if "OVER-COMMITTED" in t], said
+    assert resident.read_memory().margin(resident._wall()) == (700 * MIB, True), "the growth is sampled as before"
+    resident.set_log(lambda level, text: None)

@@ -1178,52 +1178,82 @@ def _held_now(servers: Iterable[str], mem: Memory,
 
 
 #: what `_overcommitted` last said, so it is said once per change
-_over_said: tuple[int, int] | None = None
+_over_said: tuple[int, int, tuple[str, ...]] | None = None
+#: A MODEL NEVER KNOWN AT REST is learnt from a reading only while the card
+#: has clear room — its count at most this share of its total: a slice of a
+#: large idle model can be in host memory with no model reading short (the
+#: 35B at 0.62 of itself), and the card is then full to the brim (99 % on the
+#: node). At rest the node's card stands at 87 %, so the reading comes on a
+#: calm beat; until then the model counts at its largest
+LEARN_ROOM = 0.9
 
 
 def _overcommitted(servers: Iterable[str], mem: Memory, card: tuple[int, int],
-                   there: frozenset[int] = frozenset()) -> tuple[int, int] | None:
-    """(the bytes of the models LocalAI holds on this card, each WHOLE — at
-    the most it was ever seen holding — and the card's total bytes) when the
-    first is over the second; None when they fit, or it cannot be told. The
-    card's total, not the reclaimer's line: past the total the driver MUST
-    put something elsewhere, which is the fact this is about (and it costs no
-    read of LocalAI's settings). THEN THE DRIVER KEEPS THE DIFFERENCE IN HOST MEMORY (xe
-    pages the buffers used least recently; the node in query mode,
-    2026-11-25: 45 GiB of models on a 32 GiB card, 13.3 GiB in gtt, six
-    models at under 2 MiB on the card), and NO READING SAYS WHAT A MODEL
-    HOLDS AT REST any more: a model's `size_vram` is what is left of it, and
-    the card's count stops at its total. So nothing is learnt from such a
-    reading — no at-rest size, no margin sample (`_remember`)."""
+                   there: frozenset[int] = frozenset()) -> tuple[int, int, tuple[str, ...]] | None:
+    """Whether the driver holds part of this card's models in HOST memory
+    now: (the bytes the models LocalAI holds here take at rest, the card's
+    total bytes, the models read short) — or None: they are on the card
+    whole, or it cannot be told. Two signs, either one enough:
+
+      - a model READS SHORT: under its own floor of the most it was seen
+        holding (`_rest_floor`: the node in query mode, 2026-11-25 —
+        tts-omnivoice 1.1 MiB, dar-legal-it 0.5, nemotron 0.4, bge-m3 0.4 on
+        the card, 13.3 GiB of the models in the driver's gtt);
+      - what the models take AT REST — each at what is known of it, one not
+        known at this reading — is more than the card's total: they cannot
+        all be on it.
+
+    NOT the sum of their largest sizes: those include every working context,
+    and thirteen models at their largest are over the card on a node where
+    all thirteen rest on it with room to spare (28.4 of 32.7 GiB). Past its
+    total the driver MUST put something elsewhere — xe moves the buffers used
+    least recently — and then NO READING SAYS WHAT A MODEL HOLDS AT REST: its
+    `size_vram` is what is left of it, and the card's count stops at its
+    total. So nothing is learnt from such a reading: no at-rest size, no
+    margin sample (`_remember`)."""
     from app import model_load
     try:
-        whole = 0
+        whole, short = 0, []
         for s in sorted(set(servers)):
             got = model_load.held_sizes(s)
             if got is None:
                 return None
-            for m, (pid, size) in got.items():
+            for m, (pid, size) in sorted(got.items()):
                 if not size or (s, m) in mem.elsewhere or pid in there:
                     continue
-                whole += max([int(size)] + [v for v in (mem.sizes.get((s, m)), model_load.size_vram(s, m)) if v])
+                largest = max([int(size)] + [v for v in (mem.sizes.get((s, m)), model_load.size_vram(s, m)) if v])
+                floor = _rest_floor(s, m)
+                known = (_weights(s, m, mem, largest) if floor != REST_FLOOR else
+                         next((v for v in (model_load.rest_of_load(s, m), mem.rest.get((s, m)))
+                               if _whole(v, largest)), None))
+                if size < floor * largest:
+                    short.append(m)
+                    whole += known or largest       # certainly more than what is left of it
+                else:
+                    whole += known or int(size)
     except Exception:   # noqa: BLE001 — cannot be told: taken as fitting, as before
         return None
-    return (whole, int(card[0])) if card[0] and whole > card[0] else None
+    if short or (card[0] and whole > card[0]):
+        return whole, int(card[0]), tuple(short)
+    return None
 
 
-def _say_overcommitted(over: tuple[int, int] | None) -> None:
+def _say_overcommitted(over: tuple[int, int, tuple[str, ...]] | None) -> None:
     global _over_said
     with _lock:
         before, _over_said = _over_said, over
     if over is not None and before is None:
-        _say("warn", f"resident: THE CARD IS OVER-COMMITTED — the models LocalAI holds are "
-                     f"{over[0] // MIB:,} MiB whole against the card's {over[1] // MIB:,} MiB: the driver "
-                     f"keeps the difference in host memory and brings a model back when it is used. No "
-                     f"at-rest size and no margin is learnt from readings taken now; the budget stands on "
-                     f"what was learnt before")
+        short = over[2]
+        _say("warn", f"resident: THE CARD IS OVER-COMMITTED — "
+                     + (f"{len(short)} model(s) read short on the card ({', '.join(short[:6])}"
+                        f"{' …' if len(short) > 6 else ''}), and " if short else "")
+                     + f"the models LocalAI holds take {over[0] // MIB:,} MiB at rest against the card's "
+                       f"{over[1] // MIB:,} MiB: the driver keeps the difference in host memory and brings a "
+                       f"model back when it is used. No at-rest size and no margin is learnt from readings "
+                       f"taken now; the budget stands on what was learnt before")
     elif over is None and before is not None:
-        _say("info", f"resident: the card holds its models whole again (they were {before[0] // MIB:,} MiB "
-                     f"against the card's {before[1] // MIB:,} MiB)")
+        _say("info", f"resident: the card holds its models whole again (they took {before[0] // MIB:,} MiB "
+                     f"at rest against the card's {before[1] // MIB:,} MiB)")
 
 
 def _settling(now: float | None = None) -> bool:
@@ -1300,7 +1330,8 @@ def _remember(want: list[Resident]) -> Memory:
         _say_overcommitted(over)
         if over is not None:
             sample = None
-        fits_whole = card is not None and over is None and not loading and not settling
+        fits_whole = (card is not None and over is None and not loading and not settling
+                      and bool(card[0]) and card[1] <= LEARN_ROOM * card[0])
         if card is not None:
             moved = _where(servers, here, there)
     now = _wall()

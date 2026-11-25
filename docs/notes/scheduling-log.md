@@ -3659,9 +3659,15 @@ restart (medcpt-article-ov 6.4 s, a document encoder, in query mode).
 **THE CHANGE.** `model_load.rest_of_load` and `resident._rest_size`: a model
 that keeps its context is counted at the first steady reading of a load the
 worker saw begin; never at a later, smaller reading of the same process. No
-at-rest size and no margin sample is taken while the models LocalAI holds,
-each whole, exceed the card's total; said once per change. The file's rests
+at-rest size and no margin sample is taken while the card is over-committed
+— a model reads short of its floor on the card, or what the models take at
+rest exceeds the card's total (not the sum of their largest sizes: that is
+over the card in normal work) — said once per change; a model never known
+is learnt only on a beat with the card at most 90 % full. The file's rests
 and margin peaks of the fewest-reading rule are dropped at the first read.
+With it: a chat model over the budget keeps its room (nothing below it is
+preloaded into it), and no document encoder is in the set where the node
+embeds nothing.
 
 **WHAT IT COSTS.** Nothing a round: one sum over the models LocalAI lists, on
 readings the beat already takes (the cost test: a beat's reads unchanged —

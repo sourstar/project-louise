@@ -33,10 +33,12 @@ measured (published figures disagree).
   THE RULE NOW: a model that keeps its context rests at what its LOAD left — the first steady reading of a
   load the worker saw begin (`model_load.rest_of_load`), replacing the file's; a smaller reading of the same
   process later is the model partly off the card, never its rest. A worker that started with the model loaded
-  keeps the file's figure, or learns one once from a reading taken while the card holds everything whole.
-  WHILE THE CARD IS OVER-COMMITTED (the models LocalAI holds, each whole, exceed the card's total) nothing is
-  learnt from a reading — no at-rest size, no margin sample — and one line says so ("resident: THE CARD IS
-  OVER-COMMITTED — … MiB whole against the card's … MiB"). The file's at-rest sizes and margin peaks of the
+  keeps the file's figure, or learns one once from a reading taken on a calm beat (the card at most 90 % full
+  and nothing over-committed). WHILE THE CARD IS OVER-COMMITTED — a model reads short of its own floor on the
+  card, or what the models take AT REST is more than the card's total; never the sum of their largest sizes,
+  which is over the card on a node where everything rests on it — nothing is learnt from a reading, no
+  at-rest size and no margin sample, and one line says so ("resident: THE CARD IS OVER-COMMITTED — … model(s)
+  read short on the card (…), and the models LocalAI holds take … MiB at rest against the card's … MiB"). The file's at-rest sizes and margin peaks of the
   old rule are dropped at the first read (`REST_BASIS`, `MARGIN_BASIS`): each model counts at its largest
   until it is known again. IT CHANGES WHAT THE KEEPER BELIEVES AND SAYS, NOT WHAT IS ON THE CARD (the budget
   unloads nothing). Open, the operator's: whether query mode should let the driver page on purpose or keep
