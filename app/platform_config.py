@@ -192,13 +192,16 @@ class ModelsConfig:
     #: HOW A LOAD THAT DOES NOT FIT THE CARD GETS ITS ROOM (added 2026-11-24,
     #: operator: "Extend page instead of unload to the dense models").
     #: "unload", the rule since 2026-11-16: the model with the oldest real use
-    #: is unloaded. "page": for a load WORK is waiting on, nothing is unloaded
+    #: is unloaded. "page", THE DEFAULT (operator, 2026-11-25: "Set the new
+    #: paging mode as the default in the engine"; where the card's driver was
+    #: measured to page — app/model_evict.py PAGING_DRIVERS — and unload under
+    #: any other): for a load WORK is waiting on, nothing is unloaded
     #: while the host can hold what the card cannot — the driver moves idle
     #: models' memory to host memory and back at their next use (measured on
     #: the B70: 0.2–0.4 s more on a small model's next request, against
     #: 7.5–8.7 s after an unload) — and the unload stays the fallback
     #: (app/model_evict.py). The keeper's own preloads keep "unload" either way.
-    make_room: str = "unload"
+    make_room: str = "page"
     #: in "page", the host memory that must stay AVAILABLE once the overflow is
     #: paged, in GiB: under it a load unloads as before. A default to be
     #: replaced by the node's own measurement of its busy hours — the host's

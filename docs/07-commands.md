@@ -2170,10 +2170,13 @@ variable, a file, a log line or a message.
              # 2026-11-08: "Chat, speech, rerankers, madlad are preloaded too"); false: loaded at their first use.
              # Paused or seed-only preloads neither. Either way nothing is unloaded for being idle — "only if
              # space is claimed", by LocalAI's reclaimer, which evicts the least recently used (added 2026-11-08)
-             make_room = "unload"   page_floor_gib = 12   page_over_gib = 3
+             make_room = "page"   page_floor_gib = 12   page_over_gib = 3
              # HOW A LOAD THAT DOES NOT FIT THE CARD GETS ITS ROOM (added
-             # 2026-11-24, operator: "Extend page instead of unload to the dense models"). "unload" (the default,
-             # the rule of 2026-11-16): the model with the oldest real use is unloaded. "page": for a load WORK
+             # 2026-11-24, operator: "Extend page instead of unload to the dense models"). "unload" (the rule
+             # of 2026-11-16): the model with the oldest real use is unloaded. "page", THE DEFAULT (amended
+             # 2026-11-25, operator: "Set the new paging mode as the default in the engine") WHERE THE CARD'S
+             # DRIVER WAS MEASURED TO PAGE — xe; under any other driver the default unloads as before, and
+             # `node resident show` says so: for a load WORK
              # is waiting on, nothing is unloaded while the host can hold what the card cannot — MemAvailable
              # less the shortfall stays at or above `page_floor_gib` — and the driver moves idle models' memory
              # to host memory and back at their next use (measured on the B70: 0.2–0.4 s more on a small model's
@@ -2183,9 +2186,12 @@ variable, a file, a log line or a message.
              # on the B70 with a context made on demand in it), and the host keeps a context's worth
              # (3,262 MiB, the keeper's reserve) above its floor — a context a full card refuses kills its
              # backend. Past either, unloaded as before. The keeper's own preloads keep "unload" either way. It
-             # needs the engine's two switches in every llama.cpp model's file and LocalAI's memory reclaimer
-             # off (deploy/vega/stage/localai_settings.py reads this key); `node resident show` says the rule,
-             # the host's memory against the floor, and a reclaimer left on (app/model_evict.py)
+             # needs an engine whose models page by default (staged 0021: the VRAM check off, buffers of 2 GiB
+             # at most — a tensor larger than that gets a buffer of its own and moves whole; a model's own
+             # file may set either switch the other way) and LocalAI's memory reclaimer off
+             # (deploy/vega/stage/localai_settings.py reads this key, and turns it off only on a host with a
+             # card that pages); `node resident show` says the rule the node FOLLOWS, the host's memory
+             # against the floor, and a reclaimer left on (app/model_evict.py)
              chat = "louise-chat-…"   translate = "louise-translate-madlad"
              # the chat and translation models OVER the environment's CHAT_MODEL and TRANSLATE_MODEL, which stay
              # the defaults; unset, the environment's. Read on every request, no restart (app/config.py). The

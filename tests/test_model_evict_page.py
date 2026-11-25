@@ -7,8 +7,12 @@ model loaded, the driver paging the idle ones — 0.2–0.4 s more on a small
 model's next request against 7.5–8.7 s after an unload. The rule here: a
 load WORK waits on unloads nothing while the host can hold what the card
 cannot; the keeper's own preloads, a host under its floor and a model whose
-paged load failed keep the unload of 2026-11-16; off by default, and
-LocalAI's reclaimer off with it."""
+paged load failed keep the unload of 2026-11-16.
+
+THE DEFAULT since 2026-11-25 (operator: "Set the new paging mode as the
+default in the engine") — where the card's driver was measured to page; on
+any other card the default unloads as before, and LocalAI's reclaimer is
+turned off only for a card that pages."""
 from __future__ import annotations
 
 import re
@@ -48,11 +52,13 @@ def _full(card) -> Runner:
 
 # ---- the setting -------------------------------------------------------------
 
-def test_the_rule_is_the_files_and_unload_unless_it_says_page(isolated_config, config_dir):
-    assert platform_config.load().models.make_room == "unload" and model_evict.rule() == ("unload", 12 * GIB, 3 * GIB)
+def test_the_rule_is_the_files_and_page_where_it_says_nothing(isolated_config, config_dir):
+    assert platform_config.load().models.make_room == "page" and model_evict.rule() == ("page", 12 * GIB, 3 * GIB)
     (config_dir / "platform.toml").write_text('[models]\nmake_room = "page"\npage_floor_gib = 20\npage_over_gib = 5\n',
                                            encoding="utf-8")
     assert model_evict.rule() == ("page", 20 * GIB, 5 * GIB)
+    (config_dir / "platform.toml").write_text('[models]\nmake_room = "unload"\n', encoding="utf-8")
+    assert model_evict.rule() == ("unload", 12 * GIB, 3 * GIB), "a node that wants the rule of 2026-11-16 says so"
     for bad, says in (('make_room = "swap"', 'models.make_room is "unload" or "page"'),
                       ("make_room = true", 'models.make_room is "unload" or "page"'),
                       ('make_room = "page"\npage_floor_gib = 0', "page_floor_gib: must be >= 1"),
@@ -65,11 +71,42 @@ def test_the_rule_is_the_files_and_unload_unless_it_says_page(isolated_config, c
 
 # ---- the rule ----------------------------------------------------------------
 
-def test_off_by_default_a_load_that_does_not_fit_unloads_as_before(card):
+def test_a_file_that_says_unload_unloads_as_before_however_much_the_host_holds(card, config_dir, monkeypatch):
+    (config_dir / "platform.toml").write_text('[models]\nmake_room = "unload"\n', encoding="utf-8")
+    monkeypatch.setattr(model_evict, "host_available", lambda: 400 * GIB)
     r = _full(card)
     out = model_evict.make_room(S, need=6_000 * MIB, horizon=NOW, for_what="louise-translate-madlad",
                                 exclude=("louise-translate-madlad",), page=True)
     assert out.fits and out.paged == 0 and r.unloaded == ["vega-qwen3-embedding-4b"], "the oldest real use"
+
+
+def test_with_no_file_work_is_paged_on_a_card_that_pages(card, monkeypatch):
+    """The default (operator, 2026-11-25): no line in the node's file, and a load work waits on unloads nothing."""
+    monkeypatch.setattr(model_evict, "host_available", lambda: 40 * GIB)
+    model_evict.reset()
+    r = _full(card)
+    out = model_evict.make_room(S, need=6_000 * MIB, horizon=NOW, for_what="louise-translate-madlad",
+                                exclude=("louise-translate-madlad",), page=True)
+    assert out.fits and out.why == "paged" and out.paged > 0 and r.unloaded == []
+
+
+@pytest.mark.parametrize("driver", ["amdgpu", "nvidia", "i915", ""])
+def test_a_card_whose_driver_was_not_measured_to_page_unloads_as_before_and_says_so_once(paging, monkeypatch, driver):
+    """Paging is what the xe driver was MEASURED to do. Under a driver that does not page, a load over the card is
+    a failed load or a killed backend: there the default is the unload of before, on every node that is not ours."""
+    from app import gpu
+    r = _full(paging)
+    real = r.gpu
+    monkeypatch.setattr(gpu, "_get_json", lambda url: {"devices": [dict(d, driver=driver) for d in real(url)["devices"]]})
+    kw = dict(need=6_000 * MIB, horizon=NOW, for_what="louise-translate-madlad", exclude=("louise-translate-madlad",),
+              page=True)
+    out = model_evict.make_room(S, **kw)
+    assert out.fits and out.paged == 0 and r.unloaded == ["vega-qwen3-embedding-4b"]
+    said = [s for s in paging.said if "was not measured to move idle models' memory" in s]
+    assert len(said) == 1 and (driver or "not read") in said[0] and "measured: xe" in said[0]
+    model_evict.make_room(S, **kw)
+    assert len([s for s in paging.said if "was not measured to move" in s]) == 1, "once, not at every load"
+    assert model_evict.PAGING_DRIVERS == ("xe",), "a driver joins the list by a measurement on its card"
 
 
 def test_work_that_does_not_fit_unloads_nothing_while_the_host_can_hold_the_difference(paging):
@@ -233,10 +270,21 @@ def test_show_says_the_rule_and_what_it_stands_on(paging, monkeypatch):
     assert r.unloaded == []
 
 
-def test_show_in_unload_says_how_to_page(card):
+def test_show_in_unload_says_how_to_page(card, config_dir):
+    (config_dir / "platform.toml").write_text('[models]\nmake_room = "unload"\n', encoding="utf-8")
     card({})
     shown = resident._make_room_shown([])
     assert shown["rule"] == "unload" and 'make_room = "page"' in shown["says"]
+
+
+def test_show_says_unload_on_a_card_that_does_not_page_and_why(paging, monkeypatch):
+    from app import gpu
+    r = paging({})
+    real = r.gpu
+    monkeypatch.setattr(gpu, "_get_json", lambda url: {"devices": [dict(d, driver="amdgpu") for d in real(url)["devices"]]})
+    shown = resident._make_room_shown([])
+    assert shown["rule"] == "unload", "what the node DOES, not what its file says"
+    assert "amdgpu" in shown["says"] and "measured: xe" in shown["says"] and "host_floor_mib" not in shown
 
 
 def test_localais_reclaimer_follows_the_nodes_file(tmp_path):
@@ -246,13 +294,32 @@ def test_localais_reclaimer_follows_the_nodes_file(tmp_path):
     finally:
         sys.path.pop(0)
     live = dict(settings.DESIRED)
-    assert settings.make_room_of(None) == "unload" and not settings.drift(live)
+    # the default is the app's own, and the drivers that page are the keeper's own list
+    assert settings.DEFAULT_MAKE_ROOM == platform_config.ModelsConfig().make_room == "page"
+    assert settings.PAGING_DRIVERS == model_evict.PAGING_DRIVERS
+    assert settings.make_room_of(None) == "page" and not settings.drift(live), \
+        "no card was seen (PAGES is False until the script reads sysfs): the reclaimer is not turned off by a default"
     f = tmp_path / "platform.toml"
     f.write_text('[node]\nname = "nas"\n', encoding="utf-8")
+    assert settings.make_room_of(str(f)) == "page"
+    f.write_text('[models]\nmake_room = "unload"\n', encoding="utf-8")
     assert settings.make_room_of(str(f)) == "unload"
     f.write_text('[models]\nmake_room = "page"\n', encoding="utf-8")
     assert settings.make_room_of(str(f)) == "page"
+    assert settings.desired_for(live, "page")["memory_reclaimer_enabled"] is True, "page, and no card that pages: left on"
+    # the card, read as the script reads it on the host
+    drm = tmp_path / "drm"
+    assert settings.paging_card(str(drm)) is None, "no sysfs: not known"
+    for card_name, driver in (("card0", "amdgpu"), ("card1", "xe")):
+        (drm / card_name / "device").mkdir(parents=True)
+        target = tmp_path / "drivers" / driver
+        target.mkdir(parents=True, exist_ok=True)
+        (drm / card_name / "device" / "driver").symlink_to(target)
+        (drm / f"{card_name}-HDMI-A-1").mkdir()                       # a connector, not a card
+        assert settings.paging_card(str(drm)) is (driver == "xe"), "an AMD card alone does not page; an xe card does"
+    settings.PAGES = True
     want = settings.desired_for(live, "page")
+    settings.PAGES = False
     assert want["memory_reclaimer_enabled"] is False, "a card paging idle models reads full at every tick"
     assert want["memory_reclaimer_threshold"] == settings.DESIRED["memory_reclaimer_threshold"], \
         "the keeper reads the line with the reclaimer off"
