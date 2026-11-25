@@ -38,6 +38,12 @@ from __future__ import annotations
 from typing import Any
 
 KEY = "memory_reclaimer_enabled"
+#: THE HOST MEMORY THAT MUST STAY AVAILABLE ONCE A MODEL'S WEIGHTS ARE PARKED
+#: THERE, in bytes (the server's 0027; docs/notes/parking-step-2.md §3.4, 5):
+#: LocalAI reads it before EACH park; 0, its default, means nothing is parked.
+#: Never set by hand — the keeper writes the node's one host floor
+#: (`[models] page_floor_gib`, app/resident.py `_parked_follow`), the same way
+PARK_FLOOR_KEY = "park_host_floor_bytes"
 #: as deploy/vega/stage/localai_settings.py: a marker LocalAI's GET adds while
 #: its add-on owner is on, and the keys that owner holds (POST refuses them)
 NOT_SETTINGS = ("addon_host_settings_authority",)
@@ -55,11 +61,15 @@ def wanted(rule: str) -> bool:
     return rule != "page"
 
 
-def _body(current: dict[str, Any], enabled: bool) -> dict[str, Any]:
+def _body(current: dict[str, Any], value: Any, key: str = KEY) -> dict[str, Any]:
     held = OWNER_KEYS if current.get("addon_host_settings_authority") == "owner_required" else ()
     out = {k: v for k, v in current.items() if k not in NOT_SETTINGS and k not in held}
-    out[KEY] = enabled
+    out[key] = value
     return out
+
+
+def _same(a: Any, b: Any) -> bool:
+    return type(a) is type(b) and a == b       # True is not 1: a switch and a count are told apart
 
 
 def set_enabled(server: str, enabled: bool) -> bool:
@@ -67,6 +77,21 @@ def set_enabled(server: str, enabled: bool) -> bool:
     changed, False when it already was so. Raises `NotTaken` — naming the
     status or the kind of failure, never a byte of the object — when the
     settings cannot be read, written or verified."""
+    return set_key(server, KEY, bool(enabled))
+
+
+def set_park_floor(server: str, floor_bytes: int) -> bool:
+    """LocalAI's park floor (`PARK_FLOOR_KEY`) set to `floor_bytes` at
+    `server`; True when it was changed. Raises `NotTaken` as `set_enabled`
+    does — on a server without the park patch the key does not read back,
+    and that is what it says."""
+    return set_key(server, PARK_FLOOR_KEY, int(floor_bytes))
+
+
+def set_key(server: str, key: str, value: Any) -> bool:
+    """ONE key of LocalAI's settings set to `value`, the rest written back as
+    it was read (the module's docstring); True when it was changed, False
+    when it already was so. Raises `NotTaken`."""
     from app import httpc
     url = f"{server.rstrip('/')}/api/settings"
 
@@ -81,15 +106,15 @@ def set_enabled(server: str, enabled: bool) -> bool:
             raise NotTaken(f"its settings could not be read (HTTP {status})")
         return got
     current = read()
-    if current.get(KEY) is enabled:
+    if _same(current.get(key), value):
         return False
     try:
-        r = httpc.post(url, json=_body(current, enabled), timeout=TIMEOUT_S)
+        r = httpc.post(url, json=_body(current, value, key), timeout=TIMEOUT_S)
         status = r.status_code
     except Exception as e:   # noqa: BLE001 — as above
         raise NotTaken(f"its settings could not be written ({type(e).__name__})") from None
     if status >= 400:
         raise NotTaken(f"its settings were refused (HTTP {status})")
-    if read().get(KEY) is not enabled:
-        raise NotTaken(f"it answered HTTP {status} and {KEY} is unchanged")
+    if not _same(read().get(key), value):
+        raise NotTaken(f"it answered HTTP {status} and {key} is unchanged")
     return True

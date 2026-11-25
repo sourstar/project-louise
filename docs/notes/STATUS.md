@@ -20,6 +20,31 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **PARKING, LOUISE'S HALF — BUILT, INERT UNTIL THE PARK SERVER AND A `park: true` FILE (operator: "Do
+  parking."; docs/notes/parking-keeper.md).** Built against the exact answers of Tensor's staged
+  0027-model-park.patch (read from their branch: `/backend/park`'s 200 / 409 `model_busy` / 412 ×3 / 404
+  `model_not_loaded` / 500 `model_stopped`, `/system`'s `parks` / `state` / `parked{}`, the setting
+  `park_host_floor_bytes`, 503 `no_room_on_device` with `Retry-After: 2`). (i) THE EVICTOR PARKS:
+  `model_evict.make_room` — and a question's `free_card` — give a model's room back through
+  `/backend/park` where LocalAI lists it `"parks": true`, stop it otherwise; busy is never stopped, the
+  next candidate is asked; freed is what the answer says moved, never the model's whole size (its residue
+  stays: 321 MiB for bge-m3); a parked model gives way LAST and is then stopped. (ii) A PARKED MODEL IS
+  LISTED AND IS NOT ON THE CARD: nothing is learnt from what is left of it (its largest, its rest and its
+  steady reading are untouched), the budget's margin and the over-commitment count it as read, the keeper
+  takes it as not loaded and brings it back as it loads a model, and `ensure_loaded` makes room for a return
+  as for a load ("parked: X came back from host memory in N s"). (iii) THE KEEPER'S THREE DUTIES each beat
+  (`resident._parked_follow`): the floor — `park_host_floor_bytes` = `[models] page_floor_gib`, written
+  only where a loaded model parks, through the one settings writer (the object's secrets never said); the
+  record — a model listed parked that is on the card is given back to LocalAI by `/backend/load`; the host
+  — under its floor, the parked model used longest ago is stopped, one a beat, never a pinned one
+  (`model_evict.host_claims`: space claimed, the budget still unloads nothing). (iv) "NO ROOM NOW" IS A
+  DEFERRAL: the document path already defers on it (`EndpointBusy`; the three messages checked not to read
+  as an input's refusal), a question's calls keep their fallback and can tell it from a fault
+  (`httpc.no_room`, `ModelRefused.retry_after_s`). 39 tests (tests/test_parking.py), the first of each
+  part: WITHOUT THE PATCH NOTHING CHANGES. NOT measured — nothing parks yet; six rows owed from the node
+  are in the note, §4. Spec: docs/07 §7.8 `[models]`, amended 2026-11-25 ("PARKED, WHERE A MODEL CAN").
+  The node is DOWN for the ssd3 port swap (operator, 20:54Z "Shut down now"; München stopped Louise
+  cleanly and sent a last snapshot).
 - **"DO PARKING." (operator, to München, 2026-11-25 20:46Z) — the order of it, and what is mine.** Tensor's
   pass: the server first (v5.0.1 + 0001 + 0011 + 0019 + 0024 + 0027 — inert until a floor is set AND a
   model's file says `park: true`), then the engine ed93e3c1b2e2 with every llama.cpp gate again, then rows on

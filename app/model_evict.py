@@ -102,6 +102,25 @@ unload, 1.3–1.8 s on the 35B. So, in "page":
 What it does NOT do: choose the victim, page the keeper's preloads outside
 query mode, or answer for memory the driver cannot move.
 
+PARKED, WHERE THE MODEL CAN, INSTEAD OF STOPPED (docs/notes/parking-step-2.md
+§4 A; operator, 2026-11-25: "Do parking."). A model LocalAI lists
+`"parks": true` (its file says `park: true`, and the server carries the
+park patch) gives its room back through `POST /backend/park`: its weights go
+to host memory, its process stays, and its next request brings them back in
+the time of a copy — 15.5 ms measured for bge-m3 against 6–34 s for the load
+a stop costs. LocalAI decides at each park whether the host can hold them
+(the floor the keeper writes, app/resident.py `_parked_follow`); `give_back`
+is the one place that chooses the verb:
+  parked            its weights are off the card, counted at what the answer says;
+  409 model_busy    it works: NOT stopped, the next candidate is asked;
+  412, or no route  nothing moved: stopped instead (`/backend/shutdown`), as before;
+  not loaded / its backend broke the park and was stopped — off the card.
+A PARKED MODEL IS LISTED AND IS NOT ON THE CARD: it is no candidate while a
+loaded one can give the room, and only then is it stopped for what its
+process still holds there (321 MiB for bge-m3) — a stop, since nothing of it
+is left to park. On a server without the patch no model says `parks`, and
+every line above is today's.
+
 Nothing here unloads for being idle: only a load that needs the room asks
 (operator, 2026-11-08: "nothing is evicted only because it's idle, only if
 space is claimed"). The node's mode wins: paused or seed-only, nothing is
@@ -162,6 +181,8 @@ class Loaded:
     size: int                    # bytes on the card now: what unloading it gives back
     last_used: float | None      # epoch s of its last real use; None never used
     busy: bool = False
+    parks: bool = False          # LocalAI says it can be parked (`/system` `"parks": true`)
+    parked: bool = False         # its weights are in host memory: `size` is what its process still holds
 
 
 @dataclass(frozen=True)
@@ -173,6 +194,8 @@ class Outcome:
     free: int | None = None
     unloaded: tuple[str, ...] = ()
     why: str = ""
+    #: the models whose weights went to host memory for it (`give_back`)
+    parked: tuple[str, ...] = ()
     #: bytes over the line left to the driver to page (`make_room = "page"`)
     paged: int = 0
 
@@ -182,12 +205,14 @@ def eligible(loaded: Iterable[Loaded], horizon: float | None) -> list[Loaded]:
     first of all), the larger first between equals. Only a model whose last
     real use is older than `horizon` (None: no model at all — the model to
     load was never used, so nothing used gives way to it, and a never-used
-    one is no older than it); never a busy one. Pure."""
+    one is no older than it); never a busy one. The PARKED ones come after
+    every loaded one, in the same order among themselves: what they hold on
+    the card is small, and giving it back costs their return a load. Pure."""
     if horizon is None:
         return []
     out = [v for v in loaded if not v.busy and v.size > 0
            and (v.last_used is None or v.last_used < horizon)]
-    return sorted(out, key=lambda v: (v.last_used if v.last_used is not None else float("-inf"),
+    return sorted(out, key=lambda v: (v.parked, v.last_used if v.last_used is not None else float("-inf"),
                                       -v.size, v.model))
 
 
@@ -295,7 +320,11 @@ def committed(server: str) -> int | None:
     if held is None:
         return None
     mem = resident._memory_now()
-    return sum(max(int(size or 0), mem.sizes.get((server, m)) or 0, model_load.size_vram(server, m) or 0)
+    away = model_load.parked(server)
+    # a parked model at what its process holds now: its weights do not come
+    # back by themselves — a return is a load, and room is made for it
+    return sum(int(size or 0) if m in away else
+               max(int(size or 0), mem.sizes.get((server, m)) or 0, model_load.size_vram(server, m) or 0)
                for m, (_pid, size) in held.items() if (server, m) not in mem.elsewhere)
 
 
@@ -415,7 +444,9 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
         known = {r.key for r in resident.current()} | set(use)
         mem = resident._memory_now()
         keep = {tuple(k) for k in protect} | {(server, m) for m in exclude}
-        loaded = [Loaded(m, int(size or 0), use.get((server, m)), cpu.get(m, 0.0) > BUSY_CPU_PERCENT)
+        parks, away = model_load.parks(server), model_load.parked(server)     # the same answer: no request
+        loaded = [Loaded(m, int(size or 0), use.get((server, m)), cpu.get(m, 0.0) > BUSY_CPU_PERCENT,
+                         parks=m in parks, parked=m in away)
                   for m, (_pid, size) in held.items()
                   if (server, m) in known and (server, m) not in keep and (server, m) not in pins
                   and (server, m) not in mem.elsewhere and not gate_twin.is_twin(m)]
@@ -432,6 +463,7 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
             + (f" — {', '.join(v.model for v in newer)} were used more recently, are busy, or hold none"
                if newer else "")))
     gone: list[Loaded] = []
+    away_now: list[tuple[Loaded, int]] = []
     freed = 0
     for v in order:
         if free + freed >= need:
@@ -439,18 +471,26 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
         try:
             if model_pins.read_pinned(server, v.model):
                 continue                         # a pin Louise's record does not hold: the operator's
-            if model_load.unload(server, v.model):
-                gone.append(v)
-                freed += v.size
+            how, moved = give_back(server, v)
         except Exception:   # noqa: BLE001 — left on the card; the next one is asked
             continue
+        if how == PARKED:
+            away_now.append((v, moved))
+        elif how == UNLOADED:
+            gone.append(v)
+        freed += moved
+    said = f"{need // MIB:,} MiB needed, {max(0, free) // MIB:,} MiB were free under the {t:.2f} line"
+    if away_now:
+        _say("info", f"card: parked {', '.join(f'{v.model} ({_ago(now, v.last_used)}, {moved // MIB:,} MiB to host memory)' for v, moved in away_now)} "
+                     f"for {for_what} — {said}; its process stays and its next request brings the weights "
+                     f"back in the time of a copy (operator, 2026-11-25: \"Do parking.\")")
     if gone:
-        _say("info", f"card: unloaded {', '.join(f'{v.model} ({_ago(now, v.last_used)}, {v.size // MIB:,} MiB)' for v in gone)} "
-                     f"for {for_what} — {need // MIB:,} MiB needed, {max(0, free) // MIB:,} MiB were free "
-                     f"under the {t:.2f} line; the oldest real use goes first (operator, 2026-11-16)")
+        _say("info", f"card: unloaded {', '.join(f'{v.model} ({_ago(now, v.last_used)}, {v.size // MIB:,} MiB' + (', it was parked: what its process still held' if v.parked else '') + ')' for v in gone)} "
+                     f"for {for_what} — {said}; the oldest real use goes first (operator, 2026-11-16)")
     if free + freed < need:
         return Outcome(False, need, free, tuple(v.model for v in gone),
-                       f"{for_what}: {(free + freed) // MIB:,} of {need // MIB:,} MiB made")
+                       f"{for_what}: {(free + freed) // MIB:,} of {need // MIB:,} MiB made",
+                       parked=tuple(v.model for v, _ in away_now))
     # NEVER LOADED BEFORE THE DRIVER SHOWS IT (xe overcommits silently)
     deadline = clock() + ROOM_WAIT_S
     while True:
@@ -461,7 +501,68 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
         if card is None or int(t * card[0]) - card[1] >= need or clock() >= deadline:
             break
         sleep(ROOM_POLL_S)
-    return Outcome(True, need, free, tuple(v.model for v in gone))
+    return Outcome(True, need, free, tuple(v.model for v in gone), parked=tuple(v.model for v, _ in away_now))
+
+
+#: what `give_back` did
+PARKED, UNLOADED, KEPT = "parked", "unloaded", "kept"
+
+
+def give_back(server: str, v: Loaded) -> tuple[str, int]:
+    """ONE MODEL GIVES ITS ROOM BACK: parked where LocalAI says it parks and
+    it is not parked already, stopped otherwise (the module's docstring).
+    (PARKED | UNLOADED | KEPT, the bytes that left the card): a parked one at
+    what the answer says went to the host, never more than it held; a stopped
+    one at what it held; a busy one, or one the runner would not stop, KEPT
+    and 0. A model the park found gone is UNLOADED — it is off the card and
+    nothing was sent after it."""
+    from app import model_load
+    if v.parks and not v.parked:
+        how, moved = model_load.park(server, v.model)
+        if how == model_load.PARKED:
+            return PARKED, min(moved, v.size) if moved else v.size
+        if how == model_load.PARK_BUSY:
+            return KEPT, 0
+        if how == model_load.PARK_GONE:
+            return UNLOADED, v.size
+    return (UNLOADED, v.size) if model_load.unload(server, v.model) else (KEPT, 0)
+
+
+def host_claims(servers: Iterable[str]) -> list[str]:
+    """THE HOST CLAIMS ITS MEMORY BACK FROM A PARKED MODEL. LocalAI checks
+    the host's floor only at the moment it parks, and never stops a parked
+    model by itself (docs/notes/parking-step-2.md §7, the fourth difference:
+    "that decision is the keeper's"). When the host's available memory is
+    UNDER the floor (`rule`: `[models] page_floor_gib`), the parked model
+    with the oldest real use is stopped — ONE a call (the keeper's beat),
+    never one a gate or a pass has pinned — and its weights leave host
+    memory; its next request pays a load, as before parking. The parse
+    pool's room comes before a model's quick return (43 memory kills of the
+    worker, 2026-11-19). Space is claimed here as for every unload: by the
+    host, where `make_room` answers the card. Returns the models stopped.
+    Never raises."""
+    from app import model_load, model_pins, model_use
+    try:
+        floor = rule()[1]
+        avail = host_available()
+        if avail is None or floor <= 0 or avail >= floor:
+            return []
+        pins = model_pins.recorded() or set()
+        use = model_use.last_used()
+        away = [(s, m, host) for s in sorted({model_load.server_of(x) for x in servers})
+                for m, (host, _needed) in model_load.parked(s).items() if (s, m) not in pins]
+        if not away:
+            return []
+        s, m, host = min(away, key=lambda a: (use.get((a[0], a[1]), float("-inf")), -a[2], a[1]))
+        if not model_load.unload(s, m):
+            return []
+        _say("info", f"card: {m} was parked — {host // MIB:,} MiB of weights in host memory — and is stopped: "
+                     f"the host has {avail // MIB:,} MiB available, under its floor of {floor // MIB:,} MiB "
+                     f"([models] page_floor_gib). Its next request pays a load; the parked model used "
+                     f"longest ago goes first, one a beat")
+        return [m]
+    except Exception:   # noqa: BLE001 — nothing stopped: the next beat asks again
+        return []
 
 
 def make_room_for(server: str, model: str, *, horizon: float | None,

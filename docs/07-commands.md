@@ -2309,6 +2309,19 @@ variable, a file, a log line or a message.
              # LocalAI's memory reclaimer follows the rule IN FORCE, held by the keeper's beat: off where idle
              # models are paged (query mode, or "page" here), on otherwise — a switch of mode moves it, and a
              # deploy that set it from this key alone is corrected at the next beat (app/localai_reclaimer.py)
+             # PARKED, WHERE A MODEL CAN, INSTEAD OF STOPPED (added 2026-11-25, operator: "Do parking."; it needs
+             # LocalAI's park patch and `park: true` in the model's file, and changes nothing without them):
+             # wherever the lines above say "unloaded", a model LocalAI lists as one that parks gives its room
+             # back by moving its weights to host memory — its process stays, and its next request brings them
+             # back in the time of a copy (15.5 ms measured for bge-m3, against 6–34 s for a load) — and is
+             # stopped only where it cannot be parked. `page_floor_gib` is ALSO the host memory that must stay
+             # available once weights are parked there: the keeper writes it to LocalAI
+             # (`park_host_floor_bytes`), which checks it before each park, and when the host falls under it
+             # the parked model used longest ago is stopped, one a beat. A parked model is listed as loaded and
+             # is not on the card: its return is a load its room is made for, and a return the card refuses is
+             # "no room now" (HTTP 503, type no_room_on_device) — a deferral for every caller, never an error
+             # on a document. `node resident show` says which models park and which are parked
+             # (app/model_evict.py, app/model_load.py, docs/notes/parking-keeper.md)
              chat_large = "louise-chat-qwen3.6-35b-a3b"   chat_small = "louise-chat-qwen3.5-9b-q4-p0"
              translate = "louise-translate-madlad"
              # the chat and translation models OVER the environment's CHAT_MODEL and TRANSLATE_MODEL, which stay

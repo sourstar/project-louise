@@ -89,10 +89,51 @@ def reset() -> None:
 ERROR_BODY_CHARS = 300
 
 
+#: THE DEVICE HAS NO ROOM NOW (LocalAI with the park patch, the server's 0027;
+#: docs/notes/parking-step-2.md §3.4, 4): HTTP 503, `Retry-After`, and this
+#: error type — a parked model whose weights cannot come back, a context that
+#: cannot be created, a computation that cannot be placed. Nothing is wrong
+#: with the request or the model, and the same request may be served a moment
+#: later: A DEFERRAL FOR EVERY CLIENT, never an error written to a document.
+#: The document path defers on any 5xx that is not an input's own refusal
+#: (app/embeddings.py `EndpointBusy`); a question's calls keep their own
+#: fallback and can tell this answer from a fault (`no_room`)
+NO_ROOM = "no_room_on_device"
+NO_ROOM_RETRY_S = 2.0
+
+
+def no_room(r: Any) -> float | None:
+    """Whether an answer is LocalAI's "the device has no room now": the
+    seconds after which it says to ask again (its `Retry-After`; where that
+    is missing or unreadable, NO_ROOM_RETRY_S), else None. The status AND the
+    type: a 503 is also a model that loads and a load in cooldown. Never
+    raises."""
+    try:
+        if getattr(r, "status_code", None) != 503:
+            return None
+        body = r.json()
+        kind = (body.get("error") or {}).get("type") if isinstance(body, dict) else None
+        if kind != NO_ROOM:
+            return None
+    except Exception:                    # noqa: BLE001 — a body that is not JSON says no such thing
+        return None
+    try:
+        after = float(r.headers.get("Retry-After"))
+        return after if 0 <= after <= 3600 else NO_ROOM_RETRY_S
+    except Exception:                    # noqa: BLE001
+        return NO_ROOM_RETRY_S
+
+
 class ModelRefused(httpx.HTTPStatusError):
     """A model server's error answer: the status AND the first
     ERROR_BODY_CHARS of its body. An `httpx.HTTPStatusError`, `.response`
     and `.request` kept, so every handler of one handles it."""
+
+    @property
+    def retry_after_s(self) -> float | None:
+        """Not None when the answer was "the device has no room now"
+        (`no_room`): a deferral, and the seconds after which to ask again."""
+        return no_room(self.response)
 
 
 def refusal(r: httpx.Response) -> tuple[str, str]:
