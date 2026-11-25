@@ -190,13 +190,55 @@ def child_start(init=None, *args) -> None:
         init(*args)
 
 
-def _child_init(knobs: dict, base: int | None = None) -> None:
+#: THE TOKENIZER'S OWN THREADS, per child (2026-11-25). The legal chunker
+#: encodes a text's spans together (`chunking_legal._encode_many`, the
+#: tokenizers library's `encode_batch`), which runs on the library's thread
+#: pool (Rust, rayon) — by default one thread a CORE, in EVERY process that
+#: chunks: eleven busy children would start eleven times the node's cores.
+#: So each child is told its number before it encodes anything
+#: (`RAYON_NUM_THREADS`, rayon's own setting, read once when its pool starts):
+#: ONE for a child of the shared pool and of an operator's pass, whose
+#: parallelism is the pool itself; LANE_TOKENIZER_THREADS for the large
+#: lane's child, which is alone by design while the others idle — where the
+#: threads pay (Legal's measure on 4 cores: a 28.5 M-character act, 63.9 s →
+#: 37.7 s, the same 30,988 pieces) — never more than the node profile's
+#: cores, and counted as that many parts against the profile's cap while it
+#: runs (`compute`).
+#: `TOKENIZERS_PARALLELISM=true` is said outright: children are SPAWNED, so
+#: nothing of a parent's thread pool is inherited (the library's own warning
+#: is about forks), and an environment that set it false would silently give
+#: the lane one thread.
+LANE_TOKENIZER_THREADS = 4
+
+
+def tokenizer_threads(n: int) -> None:
+    """This process's tokenizer threads, set before its first encode."""
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    os.environ["RAYON_NUM_THREADS"] = str(max(1, int(n)))
+
+
+def lane_threads() -> int:
+    """The tokenizer threads of a large part's own process, and what that
+    part counts for against the profile's cores."""
+    cores = cpu_limit.current().cores
+    return max(1, min(LANE_TOKENIZER_THREADS, cores if cores is not None else processes()))
+
+
+def _pass_child_init() -> None:
+    """A child of an operator's pass (`each_part`, `compute_parts`): it
+    stops when its parent is gone, and its tokenizer has one thread."""
+    watch_parent()
+    tokenizer_threads(1)
+
+
+def _child_init(knobs: dict, base: int | None = None, threads: int = 1) -> None:
     """A child sits at the WORKER's base nice + 10, whichever thread started
     the pool. A child inherits its starter's nice, and since the pipeline
     threads lower themselves (docs/notes/scheduling.md §12) a relative
     `nice(10)` landed at 15 (live, 2026-09-20) — below the index
     maintainer, whose rule is that it yields to parsing, not the reverse."""
     watch_parent()
+    tokenizer_threads(threads)
     try:
         if base is None:
             os.nice(10)
@@ -278,7 +320,7 @@ def each_part(fn, tasks: list[tuple], *, limit: int | None = None):
     from . import oom_hold
     oom_hold.baseline()                     # read BEFORE a child can be killed
     ex = ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
-                             initializer=watch_parent)
+                             initializer=_pass_child_init)
     window: deque = deque()
     try:
         while taken < len(tasks):
@@ -303,7 +345,7 @@ def each_part(fn, tasks: list[tuple], *, limit: int | None = None):
                       + (f"on {n} process(es)" if n > 1 else "in this process"),
                       file=sys.stderr, flush=True)
                 ex = (ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
-                                          initializer=watch_parent)
+                                          initializer=_pass_child_init)
                       if n > 1 else None)
                 continue
             window.popleft()
@@ -337,7 +379,7 @@ def each_part_unordered(fn, tasks: list[tuple], *, limit: int | None = None):
     from . import oom_hold
     oom_hold.baseline()                     # read BEFORE a child can be killed
     ex = ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
-                             initializer=watch_parent)
+                             initializer=_pass_child_init)
     todo: deque = deque(range(len(tasks)))
     inflight: dict = {}
     try:
@@ -370,7 +412,7 @@ def each_part_unordered(fn, tasks: list[tuple], *, limit: int | None = None):
                 print(f"{_hms()} [parse pool] a child was killed: {len(todo)} part(s) go again "
                       + (f"on {n} process(es)" if n > 1 else "in this process"), file=sys.stderr, flush=True)
                 ex = (ProcessPoolExecutor(max_workers=n, mp_context=multiprocessing.get_context("spawn"),
-                                          initializer=watch_parent)
+                                          initializer=_pass_child_init)
                       if n > 1 else None)
     finally:
         if ex is not None:
@@ -536,7 +578,7 @@ def _lane_executor() -> ProcessPoolExecutor:
     minutes, one a large part, in a slice of packages of figures. `_Executor`
     leaves an executor that is shut down alone, as 3.13 does."""
     return _Executor(max_workers=1, mp_context=multiprocessing.get_context("spawn"),
-                     initializer=_child_init, initargs=(_knobs(), _base_nice()),
+                     initializer=_child_init, initargs=(_knobs(), _base_nice(), lane_threads()),
                      max_tasks_per_child=1)
 
 
@@ -1209,12 +1251,18 @@ _in_flight_lock = threading.Lock()
 IN_FLIGHT_ROWS = 20
 
 
-def _enter(key: int, kind: str, collection, part: list[dict], *, peak: int = 0) -> None:
+def _enter(key: int, kind: str, collection, part: list[dict], *, peak: int = 0,
+           large: bool = False, until: float | None = None) -> None:
+    """`large`: the part has the large lane, a process of its own; `until`:
+    the monotonic time its answer is waited for (a large part's own bound).
+    `since` is when it was submitted — what `app/pool_progress.py` reads to
+    say what a batch has been waiting on."""
     with _in_flight_lock:
         _in_flight[key] = {"collection": getattr(collection, "name", None), "kind": kind, "rows": len(part),
                            "bytes": sum(int(r.get("size") or 0) for r in part),
                            "parse_bytes": sum(parse_size_of(r) for r in part), "estimated_peak": peak,
-                           "uids": [[r.get("uid"), r.get("size")] for r in part[:IN_FLIGHT_ROWS]]}
+                           "uids": [[r.get("uid"), r.get("size")] for r in part[:IN_FLIGHT_ROWS]],
+                           "since": time.monotonic(), "large": large, "until": until}
 
 
 def _leave(key: int) -> None:
@@ -2069,6 +2117,19 @@ def _in_flight_count(futures) -> int:
     return n
 
 
+def _load(futures, weight_of: dict[int, int]) -> int:
+    """`_in_flight_count`, a large part counted as the cores its tokenizer
+    may use (`lane_threads`): what a batch holds of the profile's cap."""
+    n = 0
+    for _part, f in futures:
+        if isinstance(f, list):
+            continue
+        w = _waitable(f)
+        if w is None or not w.done():
+            n += weight_of.get(id(f), 1)
+    return n
+
+
 def _watchdog(progress: float, futures, ext: dict[int, float]) -> float:
     """When a batch that hears nothing gives up: PARSE_TIMEOUT_S after its
     last answer — or after its first part went in — and never before a large
@@ -2190,6 +2251,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
     lanes: list = []                      # this batch's large-lane releases (one-shot)
     gives_of: dict[int, list] = {}        # id(future) -> its own releases
     ext: dict[int, float] = {}            # id(future) of a large part -> the time its bytes take
+    weight_of: dict[int, int] = {}        # id(future) of a large part in flight -> the cores it counts for
     short_of_room = False                 # a part deferred for the cgroup's room (`recycle_for_room`)
     stopped = False
     mine = 0
@@ -2203,7 +2265,9 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                 stopped = True
                 break
             cap = cpu_limit.cap(slots(name, budget), lim, floor=1)
-            while nxt < len(parts) and _in_flight_count(futures) < cap:
+            # a large part in flight counts as the cores its tokenizer may
+            # use (`lane_threads`), every other part as one
+            while nxt < len(parts) and _load(futures, weight_of) < cap:
                 part = parts[nxt]
                 peak = _large(k, part)
                 seen = remembered(collection, part[0]) if peak else 0
@@ -2274,11 +2338,14 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                                   + LARGE_SECONDS_PER_BYTE * parse_size_of(part[0]))
                 if idle:
                     progress = time.monotonic()   # the watchdog counts from a part in flight
-                _enter(id(f), kind, collection, part, peak=need)
+                _enter(id(f), kind, collection, part, peak=need, large=bool(peak), until=ext.get(id(f)))
                 futures.append((part, f))
                 nxt += 1
-                mine += 1
-                _occupy(name, 1)
+                w = lane_threads() if peak else 1
+                if w > 1:
+                    weight_of[id(f)] = w
+                mine += w
+                _occupy(name, w)
             if not futures:
                 continue                          # a stop seen while admitting: said at the top
             part, oldest = futures[0]
@@ -2308,8 +2375,9 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
             _leave(id(oldest))
             ext.pop(id(oldest), None)
             gives_of.pop(id(oldest), None)
-            mine -= 1
-            _occupy(name, -1)
+            w = weight_of.pop(id(oldest), 1)
+            mine -= w
+            _occupy(name, -w)
             progress = time.monotonic()
             _beat()
         if stopped:

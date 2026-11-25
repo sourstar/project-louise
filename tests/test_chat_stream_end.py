@@ -126,3 +126,70 @@ def test_the_citations_are_asked_last_and_by_example():
     assert "like [2] or [2][5]" in retrieval.CITE_REMINDER and "[n]" not in retrieval.CITE_REMINDER
     system = retrieval.build_answer_messages("q", result)[0]["content"]
     assert system.endswith(retrieval.THINK_OFF)
+
+
+# ---- a failure the server reports in mid-stream, then its ordinary end ------
+#
+# LocalAI (core/http/endpoints/openai/chat.go, read by the engine session,
+# 2026-11-25): once chunks have gone out, a failure is `data: {"error":
+# {"message", "type": "server_error", "code": "server_error"}}` and THEN
+# `data: [DONE]`. A client that waits only for [DONE] sees a finished answer.
+
+LOCALAI_ERROR = {"error": {"message": "no_room_on_device: m: the card has no room",
+                           "type": "server_error", "code": "server_error"}}
+
+
+def test_an_error_followed_by_the_end_marker_is_not_a_whole_answer(monkeypatch):
+    _openai(monkeypatch)
+    _stream_client(monkeypatch, _sse(
+        {"choices": [{"delta": {"content": "Il diritto "}, "finish_reason": None}]},
+        LOCALAI_ERROR, done=True))
+    pieces, end = _run()
+    assert pieces == ["Il diritto "]
+    assert end.error and "no_room_on_device" in end.error and not end.whole
+    assert "the endpoint reported an error" in end.why()
+
+
+def _translated(text: str = "x" * 500) -> tuple[list[str], BaseException | None]:
+    pieces: list[str] = []
+    try:
+        for piece in llm.translate_stream(text, "it"):
+            pieces.append(piece)
+    except llm.StreamCut as e:
+        return pieces, e
+    return pieces, None
+
+
+def test_a_translation_the_server_cut_raises_after_its_words(monkeypatch):
+    """`translate_stream` read the stream's end and dropped it: a cut passage
+    came back as a finished translation."""
+    _openai(monkeypatch)
+    _stream_client(monkeypatch, _sse(
+        {"choices": [{"delta": {"content": "La balena "}, "finish_reason": None}]},
+        LOCALAI_ERROR, done=True))
+    pieces, cut = _translated()
+    assert pieces == ["La balena "], "the words written are still relayed as they come"
+    assert isinstance(cut, llm.StreamCut) and "no_room_on_device" in str(cut)
+
+
+def test_a_capped_translation_raises(monkeypatch):
+    _openai(monkeypatch)
+    _stream_client(monkeypatch, _sse(
+        {"choices": [{"delta": {"content": "La "}, "finish_reason": None}]},
+        {"choices": [{"delta": {}, "finish_reason": "length"}]}))
+    assert "token limit" in str(_translated()[1])
+
+
+def test_a_translation_whose_stream_closed_early_raises(monkeypatch):
+    _openai(monkeypatch)
+    _stream_client(monkeypatch, _sse(
+        {"choices": [{"delta": {"content": "La "}, "finish_reason": None}]}, done=False))
+    assert "closed before" in str(_translated()[1])
+
+
+def test_a_whole_translation_does_not_raise(monkeypatch):
+    _openai(monkeypatch)
+    _stream_client(monkeypatch, _sse(
+        {"choices": [{"delta": {"content": "La balena."}, "finish_reason": None}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]}))
+    assert _translated() == (["La balena."], None)

@@ -7656,6 +7656,11 @@ def _start_oom_watch() -> None:
     # ...and the watcher that makes a collection yield BEFORE the kernel acts
     threading.Thread(target=memory_yield.watch, args=(_stop, _node_line("memory")),
                      name="memory-yield", daemon=True).start()
+    # A BATCH IN FLIGHT SAYS ON WHAT (app/pool_progress.py): which unit a stage
+    # has been waiting on, how big, how long — once a minute, from here
+    from . import pool_progress
+    threading.Thread(target=pool_progress.watch, args=(_stop, _node_line("pool")),
+                     name="pool-progress", daemon=True).start()
 
 
 

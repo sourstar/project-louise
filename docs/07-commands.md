@@ -325,6 +325,12 @@ louise hold
                                                                        [--type T] [--partitions N]: the vector index type and its IVF partitions (default: VECTOR_INDEX_TYPE, from the row count)
               show <collection>
   check       <collection> [--checks …] [--sample F] [--seed HEX]      run the validation plan; print the report
+              <collection> --build [--checks …]                        the BUILD's checks instead (added 2026-11-25, operator: "a consistency check shall be available
+                                                                       also for whom is willing to create a compliant collection"): how the collection was MADE on this
+                                                                       node, read from its manifest, read-only — `units` (no unit held by two live rows) and `chunkless`
+                                                                       (a document indexed with no chunk states why, as an issue); in no Codex, never attested; each
+                                                                       verdict in plain words with what would supply what is missing; exit 1 when one failed
+                                                                       (app/build_check.py; docs/notes/compliance-check.md lists the checks still to come)
               [--live DIR]                                             `origin-seal` in live mode: the sealed files under DIR re-validated now (03 §3.7)
               [--shards S,…] [--origin DIR] [--against FILE]           --shards: these parts alone, how a received claim is reproduced (03 §3.6);
                                                                        --against: image-equivalence's reference lines (03 §3.4) (both 2026-10-07)
@@ -1690,6 +1696,23 @@ format, app/ask/SKILL.md), with the node's address in it and no token.
 It says how a model searches with the three tools and how it cites.
 The MCP server's `initialize` gives the same text as its
 `instructions`.
+
+**The Ask page's question** (*2026-10-28; amended 2026-11-25*;
+`app/relay.py`): the page starts its search and its answer as jobs
+(`POST /ask/relay`), listens to each (`GET /ask/relay/<id>/events`,
+Server-Sent Events) and may cancel one (`DELETE /ask/relay/<id>`). Its
+one button is **Ask**, and **Abort** from the press until the question
+ends (operator, 2026-11-25: "while a query is in processing I want the
+Ask button to switch to Abort to be able to abort the query in case I
+change my mind or I want to change the query"). Pressed, the question's
+jobs are cancelled on the node — a search at its next checkpoint, an
+answer between two words of the model; a call to a model already made
+finishes first — and nothing more of them reaches the page, which says
+so, keeps the hits and the words it had already shown (the answer marked
+as cut short) and leaves the question in its box with the cursor in it.
+A job whose start the node had not answered yet is cancelled when the
+node names it. A new question asked over one still running (Ctrl/Cmd+
+Enter) replaces it, as before.
 
 **Speech** (*added 2026-11-06, -07*; `app/speech.py`, `app/transcribe.py`,
 `app/voice.py`). OpenAI's two audio endpoints, relayed to the node's model

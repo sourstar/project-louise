@@ -248,6 +248,8 @@ pre.cli{background:var(--ink);border:1px solid var(--line);border-radius:3px;pad
     padding:6px 8px;overflow-wrap:normal;word-break:normal}
 }
 button.ask{padding:6px 22px}
+/* the same button while a question is being answered: it aborts it */
+button.ask.abort{border-color:var(--err);color:var(--err)}
 details.settings{margin-top:10px}
 details.settings>summary{cursor:pointer;color:var(--muted);font-size:12px}
 details.settings[open]>summary{margin-bottom:8px}
