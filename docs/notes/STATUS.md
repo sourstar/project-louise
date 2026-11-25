@@ -20,6 +20,23 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **ON THE CAR'S HANDS-FREE "ONLY THE LAST PART OF THE SPOKEN SENTENCE IS WRITTEN DOWN" (operator, Android
+  Chrome over Bluetooth, by the Bug session, 2026-11-25) — the microphone is shown recording when it GIVES
+  SOUND, not when it is opened; the wait is measured.** The page turned the microphone red the instant the
+  browser handed it over. On Bluetooth the phone switches the car from its media profile to its call profile
+  only then, and for a second or three the track gives nothing or samples that are all zero: he spoke into
+  the switch (the Bug session's reading of the code; NOT measured — no clip of his car has reached the node's
+  log). NOW: opened, the page says "the microphone is waking up — speak when it turns red" (dashed, not red,
+  still tappable to stop); it turns red at the first window holding a sample that is not zero, or after 3 s
+  of zeros (`WAKE_MAX_MS` — never waited for without a bound; the silence rules speak then). Every
+  recording's report carries what it cost: `first_ms` (the first window), `wake_ms` (the first sound),
+  `zero_ms` (the zeros before it), `woke` (sound | timeout) — the line "voice: microphone … " under `models`.
+  WHAT IT DOES NOT DO: recover what is said before the route is up (nothing can), nor keep the microphone
+  open between questions (the Bug session's third option: the car would stay in call mode and the answer
+  read aloud would play at call quality) — to be judged on the car's numbers. A quiet built-in microphone is
+  never exactly zero, so a phone turns red at once as before; if a device's does read zero in silence, it
+  turns red at his first word, and his words are recorded from the start either way.
+
 - **"THE VOICE STARTS VERY LATE AFTER THE ANSWER BEGINS" (operator, on a phone, by the Bug session,
   2026-11-25) — NOT YET FOUND; the page now sends each reading's times to the node's log.** The Bug session's
   three suspicions: the answer is not streamed, the speech model is not loaded ahead, or speech waits for the

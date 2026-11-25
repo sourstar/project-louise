@@ -491,7 +491,11 @@ def ask_voices(request: Request):
 #: what a recording's report may say (app/static/voice.js `micInfo`), and its size
 VOICE_REPORT_KEYS = ("label", "ready", "muted", "mutes", "rate", "channels", "ec", "ns", "agc", "ctx_rate",
                      "ctx_state", "frames", "ms", "peak", "heard", "inputs", "stop", "vad", "chars", "ua",
-                     "mode", "ctx_was", "parts", "decode_fails", "mime")
+                     "mode", "ctx_was", "parts", "decode_fails", "mime",
+                     # how long the microphone took to give sound once opened (a car's Bluetooth
+                     # switching profile): the first window, the first sample that is not zero,
+                     # the zeros before it, and whether sound or WAKE_MAX_MS showed it recording
+                     "first_ms", "wake_ms", "zero_ms", "woke")
 VOICE_REPORT_MAX = 4096
 
 

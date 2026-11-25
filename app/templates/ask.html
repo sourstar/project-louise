@@ -221,6 +221,8 @@
   .voice-btn[hidden]{display:none}
   #mic{flex:0 0 auto;min-width:44px;padding:0 10px}
   #mic.rec{border-color:var(--err);color:var(--err);animation:mic-pulse 1.2s ease-in-out infinite}
+  /* opened and not yet giving sound (a car's Bluetooth switching to its call profile): not red, dashed */
+  #mic.waking{border-style:dashed;opacity:.75}
   /* a phone keeps :hover on the button last tapped: the accent border stayed
      on the microphone after speaking — red in the warm themes (operator,
      2026-11-12: "the button remains red"). Without a hover, no hover look. */

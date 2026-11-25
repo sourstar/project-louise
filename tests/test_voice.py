@@ -488,3 +488,37 @@ def test_the_speech_route_says_how_long_the_node_had_the_request(isolated_config
     assert r.status_code == 200
     parts = dict(p.strip().split(";dur=") for p in r.headers["server-timing"].split(","))
     assert set(parts) == {"turn", "synth", "node"} and float(parts["node"]) >= 0.0
+
+
+# ---- the microphone is shown recording when it gives sound (operator, on the car's hands-free, 2026-11-25:
+# "most of the time only the last part of the spoken sentence is written down")
+
+def test_the_microphone_turns_red_at_its_first_sound_not_when_it_is_opened():
+    from pathlib import Path
+    from app import web
+    js = (Path(web.__file__).parent / "static" / "voice.js").read_text(encoding="utf-8")
+    start = js[js.index("async function start()"):js.index("function wake(r, how)")]
+    assert "micState('rec'" not in start, "opening the microphone no longer shows it recording"
+    assert "micState('wake', 'the microphone is waking up — speak when it turns red')" in start
+    assert "setTimeout(() => wake(r, 'timeout'), WAKE_MAX_MS)" in start, "never waited for without a bound"
+    hear = js[js.index("function hear(r, buf, rate)"):js.index("// THE SECOND WAY TO RECORD")]
+    assert "if (top > 0) { r.live = true; wake(r, 'sound'); } else r.zero_ms += ms;" in hear, \
+        "a microphone that is on is never exactly zero; the zeros before it are counted"
+    wake = js[js.index("function wake(r, how)"):js.index("function release(r)")]
+    assert "if (r.shown) return;" in wake and "micState('rec'" in wake and "r.wake_ms" in wake
+    assert "clearTimeout(r.waking)" in js[js.index("function release(r)"):js.index("async function stop()")]
+    html = (Path(web.__file__).parent / "templates" / "ask.html").read_text(encoding="utf-8")
+    assert "#mic.waking{" in html
+
+
+def test_the_recordings_report_carries_how_long_the_microphone_took_to_give_sound(isolated_config, monkeypatch):
+    from app import model_pins, web
+    lines = []
+    monkeypatch.setattr(model_pins, "node_event", lambda level, text: lines.append((level, text)))
+    c = TestClient(api.app)
+    c.post("/ask/voice/report", json={"outcome": "heard", "label": "Car hands-free", "first_ms": 180, "wake_ms": 2350,
+                                      "zero_ms": 2170, "woke": "sound", "chars": 9})
+    said = json.loads(lines[-1][1].split(" — ", 1)[1])
+    assert said == {"label": "Car hands-free", "chars": 9, "first_ms": 180, "wake_ms": 2350, "zero_ms": 2170,
+                    "woke": "sound"}, "the car's number: 2.2 s of zeros before the first sound"
+    assert {"first_ms", "wake_ms", "zero_ms", "woke"} <= set(web.VOICE_REPORT_KEYS)
