@@ -1576,13 +1576,14 @@ def test_the_system_page_shows_the_mode_and_what_each_of_the_two_sets(models_pag
     # mode a run mode among download/seeding, seeding or pause"; "For both modes a network budged
     # shall be settable"
     client, path = models_page
-    path.write_text(path.read_text(encoding="utf-8") + '\n[models]\nchat_large = "chat-35b"\nchat_small = "chat-4b"\n'
+    path.write_text(path.read_text(encoding="utf-8") + '\n[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n'
                     '\n[budget]\ndown_max = "10MB"\n\n[modes]\nchat_down_max = "2MB"\n', encoding="utf-8")
     html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
     assert 'id="sys-mode"' in html and "the node is in <b>embed mode</b>" in html
     assert html.index('id="sys-mode"') < html.index('id="sys-models"'), "above the models it chooses between"
+    assert "both modes answer with" not in html
     embed, chat = _mode_row(html, "embed"), _mode_row(html, "chat")
-    assert "chat-4b" in embed and "run everything" in embed, "embed mode switches to run all"
+    assert "chat-9b" in embed and "run everything" in embed, "embed mode switches to run all"
     assert "chat-35b" in chat
     assert re.findall(r'<option value="([a-z-]+)"( selected)?>([^<]+)</option>', chat) == [
         ("acquire-only", " selected", "download/seeding only"), ("seed-only", "", "seeding only"),
@@ -1597,7 +1598,10 @@ def test_the_system_page_shows_the_mode_and_what_each_of_the_two_sets(models_pag
 def test_the_mode_is_switched_from_the_system_page(models_page):
     from app import config, node_mode, node_state
     client, path = models_page
-    path.write_text(path.read_text(encoding="utf-8") + '\n[models]\nchat_large = "chat-35b"\nchat_small = "chat-4b"\n',
+    # nothing named yet: the page says a switch would change no model, and what supplies it
+    html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
+    assert "both modes answer with <b>chat-env</b>" in html and "under Models" in html
+    path.write_text(path.read_text(encoding="utf-8") + '\n[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n',
                     encoding="utf-8")
     r = client.post("/admin/system/mode", data={"mode": "chat"}, headers={"X-Admin-Token": "sekrit"},
                     follow_redirects=False)

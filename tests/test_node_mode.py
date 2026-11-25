@@ -80,13 +80,13 @@ def test_a_modes_table_that_does_not_read_is_refused_at_load(platform, text, say
 
 
 def test_the_chat_model_is_the_small_one_in_embed_mode_and_the_large_one_in_chat_mode(platform):
-    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-4b"\n')
-    assert config.chat_model_for("chat") == "chat-35b" and config.chat_model_for("embed") == "chat-4b"
-    assert config.CHAT_MODEL == "chat-4b", "a node never switched is in embed mode"
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    assert config.chat_model_for("chat") == "chat-35b" and config.chat_model_for("embed") == "chat-9b"
+    assert config.CHAT_MODEL == "chat-9b", "a node never switched is in embed mode"
     node_mode.switch("chat", by="test")
     assert config.CHAT_MODEL == "chat-35b", "every reader of config.CHAT_MODEL follows the switch"
     node_mode.switch("embed", by="test")
-    assert config.CHAT_MODEL == "chat-4b"
+    assert config.CHAT_MODEL == "chat-9b"
 
 
 def test_the_one_chat_setting_there_was_still_answers_in_both_modes(platform):
@@ -237,14 +237,14 @@ def _lines(capsys):
 
 def test_the_round_applies_the_modes_budget_and_follows_the_file_without_a_restart(platform, capsys):
     platform('[budget]\ndown_max = "10MB"\nup_max = "1MB"\n[models]\nchat_large = "chat-35b"\n'
-             'chat_small = "chat-4b"\n[modes]\nembed_down_max = "8MB"\nchat_down_max = "2MB"\nchat_up_max = "500KB"\n')
+             'chat_small = "chat-9b"\n[modes]\nembed_down_max = "8MB"\nchat_down_max = "2MB"\nchat_up_max = "500KB"\n')
     m = TransferManager(platform=platform_config.load(), clock=FakeClock())
     started: list = []
     with node_state.connect() as c:
         assert worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a)) == "embed"
         assert _rates(m) == pytest.approx((8 * MB, 1 * MB))
         said = _lines(capsys)
-        assert len(said) == 1 and "node in embed mode (read): chat model chat-4b" in said[0]
+        assert len(said) == 1 and "node in embed mode (read): chat model chat-9b" in said[0]
         assert "down 8.0 MB/s, up 1.0 MB/s ([budget])" in said[0]
         assert started == [], "the first read is not a switch: no model is unloaded at boot"
 
@@ -259,7 +259,7 @@ def test_the_round_applies_the_modes_budget_and_follows_the_file_without_a_resta
 
         # the page's edit of a budget: the next round has it, no restart
         platform('[budget]\ndown_max = "10MB"\nup_max = "1MB"\n[models]\nchat_large = "chat-35b"\n'
-                 'chat_small = "chat-4b"\n[modes]\nchat_down_max = "3MB"\n')
+                 'chat_small = "chat-9b"\n[modes]\nchat_down_max = "3MB"\n')
         worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a))
         assert _rates(m) == pytest.approx((3 * MB, 1 * MB))
         assert "node in chat mode (budget changed)" in _lines(capsys)[0]
@@ -269,7 +269,7 @@ def test_the_round_applies_the_modes_budget_and_follows_the_file_without_a_resta
 class _Runner:
     """What a switch asks of the model server: the unload and the load."""
 
-    def __init__(self, monkeypatch, loaded=("chat-4b",)):
+    def __init__(self, monkeypatch, loaded=("chat-9b",)):
         from app import llm, model_load
         self.calls: list = []
         self.loaded = set(loaded)
@@ -289,14 +289,14 @@ class _Runner:
 
 
 def test_a_switch_unloads_the_chat_model_left_and_loads_the_one_entered(platform, monkeypatch, capsys):
-    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-4b"\n')
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     runner = _Runner(monkeypatch)
     node_mode.switch("chat", by="test")
     got = worker._mode_models("embed", "chat", question=lambda: False)
-    assert got == {"old": "chat-4b", "new": "chat-35b", "unloaded": True, "loaded": True}
-    assert runner.calls == [("unload", "chat-4b"), ("warm", "chat-35b")], \
+    assert got == {"old": "chat-9b", "new": "chat-35b", "unloaded": True, "loaded": True}
+    assert runner.calls == [("unload", "chat-9b"), ("warm", "chat-35b")], \
         "the memory of the model left is given back BEFORE the one entered is loaded"
-    assert "chat mode: chat-4b unloaded; chat-35b loaded" in capsys.readouterr().out
+    assert "chat mode: chat-9b unloaded; chat-35b loaded" in capsys.readouterr().out
 
 
 def test_a_switch_between_modes_that_name_one_model_unloads_nothing(platform, monkeypatch, capsys):
@@ -309,7 +309,7 @@ def test_a_switch_between_modes_that_name_one_model_unloads_nothing(platform, mo
 
 
 def test_a_switch_waits_for_the_answer_in_flight_but_not_for_ever(platform, monkeypatch):
-    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-4b"\n')
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     runner = _Runner(monkeypatch)
     node_mode.switch("chat", by="test")
     asked: list = []
@@ -319,7 +319,7 @@ def test_a_switch_waits_for_the_answer_in_flight_but_not_for_ever(platform, monk
         return len(asked) < 3
     worker._mode_models("embed", "chat", question=question, sleep=lambda s: None)
     assert asked == [0, 0, 0], "nothing was unloaded under the answer"
-    assert runner.calls[0] == ("unload", "chat-4b")
+    assert runner.calls[0] == ("unload", "chat-9b")
 
     runner.calls.clear()
     worker._mode_models("chat", "embed", wait_s=0.0, question=lambda: True, sleep=lambda s: None)
@@ -328,7 +328,7 @@ def test_a_switch_waits_for_the_answer_in_flight_but_not_for_ever(platform, monk
 
 def test_a_model_that_does_not_load_at_the_switch_is_said_and_does_not_raise(platform, monkeypatch, capsys):
     from app import llm
-    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-4b"\n')
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     _Runner(monkeypatch)
     monkeypatch.setattr(llm, "warm", lambda *a, **k: (_ for _ in ()).throw(TimeoutError("120 s")))
     got = worker._mode_models("embed", "chat", question=lambda: False)
@@ -339,11 +339,11 @@ def test_a_model_that_does_not_load_at_the_switch_is_said_and_does_not_raise(pla
 # ---------------- the command ----------------
 
 def test_node_mode_reads_and_switches(platform, capsys):
-    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-4b"\n[modes]\nchat_run = "seed-only"\n'
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n[modes]\nchat_run = "seed-only"\n'
              'chat_down_max = "2MB"\n')
     assert louise.main(["node", "mode"]) == 0
     shown = json.loads(capsys.readouterr().out)
-    assert shown["mode"] == "embed" and shown["chat_model"] == "chat-4b"
+    assert shown["mode"] == "embed" and shown["chat_model"] == "chat-9b"
     assert shown["modes"]["chat"] == {"chat_model": "chat-35b", "run": "seed-only",
                                       "budget": {"down": 2 * MB, "up": None}}
     assert shown["modes"]["embed"]["run"] == "running"
@@ -373,7 +373,7 @@ def test_node_resume_goes_back_to_what_the_mode_runs(platform, capsys):
 def client(isolated_config, platform, monkeypatch):
     from app.api import app
     monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
-    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-4b"\n')
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     with TestClient(app) as c:
         yield c
 

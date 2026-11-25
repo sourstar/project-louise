@@ -4514,6 +4514,8 @@ def _node_modes() -> dict:
             "down_in_force": _rate(b["down"]), "up_in_force": _rate(b["up"]),
         })
     return {"mode": node_mode.current(), "rows": rows, "chat_run": pc.modes.chat_run,
+            # one model named for both: a switch changes no model, said on the page (RULE 2)
+            "one_model": rows[0]["chat_model"] if rows[0]["chat_model"] == rows[1]["chat_model"] else None,
             "chat_runs": [(s, dict(node_state.MODE_LABELS)[s]) for s in platform_config.CHAT_RUNS],
             "budget": {"down": _rate(pc.bandwidth.down_max_bps), "up": _rate(pc.bandwidth.up_max_bps)}}
 

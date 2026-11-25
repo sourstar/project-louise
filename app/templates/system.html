@@ -37,6 +37,7 @@
   <summary><h2>Mode</h2> <span class="note">the node is in <b>{{ node_mode_labels[node_modes.mode] }}</b></span></summary>
   {% if mode_error %}<div class="note"><span class="badge err">not saved</span> {{ mode_error }}</div>{% endif %}
   {% if mode_saved %}<div class="note"><span class="badge">saved</span> the worker takes it at its next round</div>{% endif %}
+  {% if node_modes.one_model %}<div class="note"><span class="badge">one chat model</span> both modes answer with <b>{{ node_modes.one_model }}</b>, so a switch changes no model: name the large one and the small one under Models, below.</div>{% endif %}
   <form method="post" action="/admin/system/mode" class="actions">
     {% for r in node_modes.rows %}
     <button class="mode{{ ' selected' if node_modes.mode==r.mode }}" name="mode" value="{{ r.mode }}"

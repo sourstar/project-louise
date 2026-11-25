@@ -2194,7 +2194,8 @@ variable, a file, a log line or a message.
              # 2026-11-08: "Chat, speech, rerankers, madlad are preloaded too"); false: loaded at their first use.
              # Paused or seed-only preloads neither. Either way nothing is unloaded for being idle — "only if
              # space is claimed", by LocalAI's reclaimer, which evicts the least recently used (added 2026-11-08)
-             chat_large = "louise-chat-35b"   chat_small = "louise-chat-…"   translate = "louise-translate-madlad"
+             chat_large = "louise-chat-qwen3.6-35b-a3b"   chat_small = "louise-chat-qwen3.5-9b-q4-p0"
+             translate = "louise-translate-madlad"
              # the chat and translation models OVER the environment's CHAT_MODEL and TRANSLATE_MODEL, which stay
              # the defaults; unset, the environment's. Read on every request, no restart (app/config.py). The
              # System page's Models panel writes them, with [translate] reading and [speech] (amended 2026-11-15,
