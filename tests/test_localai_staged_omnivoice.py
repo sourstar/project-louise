@@ -219,6 +219,9 @@ def test_the_longer_clip_is_answered_with_its_cost_not_promised_away():
     assert '"Philippe\nvoice 32 steps / Original clip (the longer one)"' in decided
     assert "| 32 | 2.12–2.13 s | 2.53 s |" in card and "2.53 s a sentence on the card" in decided
     assert "one number for every voice" in decided and "A step count per voice does not\n  exist" in decided
+    # and what the node holds, as München counted it: the number set, not left to a default
+    assert '**On the node (München, 2026-11-25): DONE' in decided and 'is "32", set explicitly' in decided
+    assert "27,748 ms, 24 kHz mono,\n1,331,940 bytes" in decided and "the node was never lower" in decided
 
 
 def test_the_reference_s_hooks_are_the_ones_the_gate_tool_names():

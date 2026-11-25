@@ -957,6 +957,17 @@ count, so `[speech] tts_steps` unset says the same as
   under Philippe's id holding the original clip (replaced in place twice
   already, the encoding re-made by the voice ping, §13).
 
+**On the node (München, 2026-11-25): DONE, on his own word to München
+between 07:10 and 07:20Z.** `tts_steps` was unset (the key exists since
+deploy 3fe58f9, 07:00Z) and is "32", set explicitly
+(`louise node speech set --steps 32`) so that the node's number does not
+move if a model's default ever does; the node was never lower, so no voice
+got slower. The profile under Philippe's id lists 27,748 ms, 24 kHz mono,
+1,331,940 bytes, updated 06:33:12Z: the original clip. Under d531d5d804f1
+its first sentence said "rows encoded" (06:33Z, 2.81 s) and every one since
+"read from its kept encoding"; the port's line through the web, as admin,
+says "32 steps". The keeper's own ping record comes with #880's deploy.
+
 **The speech model on the engine** (for München's test copy; the one engine,
 no package of its own):
 

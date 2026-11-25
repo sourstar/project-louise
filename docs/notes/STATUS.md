@@ -112,7 +112,9 @@ measured (published figures disagree).
 - **PHILIPPE'S VOICE, DECIDED (the operator, 2026-11-25: "Philippe voice 32 steps / Original clip (the longer
   one)"):** the 27.75 s clip at 32 steps, 2.53 s a sentence on the card. 32 is the model's own, and the steps are
   the node's — one number for every voice, so the synthetic voices are at 32 too; no step count per voice exists
-  ([omnivoice-on-our-backend.md](omnivoice-on-our-backend.md) §13). On the node: München's, on his word.
+  ([omnivoice-on-our-backend.md](omnivoice-on-our-backend.md) §13). ON THE NODE since 07:10–07:20Z (München, on
+  his word there): `tts_steps = "32"`, set explicitly (unset before, never lower); the profile holds the
+  27,748 ms clip, its encoding read from its file under d531d5d804f1.
 - **The port on the card:** 2.24 s a sentence with the 11 s clip, 2.70 s with Philippe's original 27.75 s
   clip; today's backend 3.60 and 8.65 s. The longer clip is nearly free on the port.
 
