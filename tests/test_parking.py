@@ -524,36 +524,38 @@ def _paged_out(r: Runner, *models: str) -> None:
     r.on_card = lambda m: 0 if m in models else was(m)
 
 
-def test_out_of_the_set_and_in_host_memory_is_unloaded_where_the_rule_does_not_page(node, monkeypatch):
+def test_idle_and_in_host_memory_is_unloaded_where_the_rule_does_not_page(node, monkeypatch):
     """München, 2026-11-25 22:30Z, the first query -> embed switch: MADLAD,
     both rerankers and the speech model read 0 MiB on the card, 15.9 GiB of
-    them in host memory, nobody's to claim (LocalAI counts the card), while
-    the parse pool took MemAvailable from 21.9 to 3.6 GiB in two minutes."""
+    them in host memory — still of embed mode's set, so the keeper loaded
+    nothing; idle, so nothing brought them back; and LocalAI counts the card.
+    The parse pool took MemAvailable from 21.9 to 3.6 GiB in two minutes."""
     r = node({"louise-translate-madlad": 6_000, "louise-rerank-medcpt": 800, "louise-tts-omnivoice": 1_700,
-              "vega-qwen3-4b": 2_700, "louise-chat-9b": 5_900, "by-hand": 4_000, "vega-bge-m3": 600})
-    _used(louise_translate_madlad=1, louise_rerank_medcpt=1, louise_tts_omnivoice=2, vega_qwen3_4b=0.1,
+              "vega-qwen3-4b": 2_700, "louise-chat-9b": 5_900, "by-hand": 4_000, "vega-bge-m3": 600,
+              "never-asked": 900})
+    _used(louise_translate_madlad=1, louise_rerank_medcpt=1, louise_tts_omnivoice=2, vega_qwen3_4b=0.001,
           louise_chat_9b=0.1, vega_bge_m3=3)
     _known(louise_translate_madlad=6_000, louise_rerank_medcpt=800, louise_tts_omnivoice=1_700,
-           vega_qwen3_4b=2_700, louise_chat_9b=5_900, by_hand=4_000, vega_bge_m3=600)
+           vega_qwen3_4b=2_700, louise_chat_9b=5_900, by_hand=4_000, vega_bge_m3=600, never_asked=900)
     _paged_out(r, "louise-translate-madlad", "louise-rerank-medcpt", "louise-tts-omnivoice", "by-hand",
-               "vega-qwen3-4b")
-    keep = {(S, "vega-qwen3-4b"), (S, "louise-chat-9b")}          # embed mode's set
+               "vega-qwen3-4b", "never-asked")
+    in_set = {(S, "vega-qwen3-4b"), (S, "louise-chat-9b"), (S, "louise-translate-madlad"), (S, "never-asked")}
     monkeypatch.setattr(model_evict, "rule", lambda: ("page", 12 * GIB, None))
     model_load.loaded_models(S, 0.0)
-    assert model_evict.host_leftovers([S], keep) == [] and r.asked == [], "query mode: that is where they live"
+    assert model_evict.host_leftovers([S], in_set) == [] and r.asked == [], "query mode: that is where they live"
 
     monkeypatch.setattr(model_evict, "rule", lambda: ("unload", 12 * GIB, 3 * GIB))
-    gone = model_evict.host_leftovers([S], keep)
-    assert gone == ["louise-rerank-medcpt", "louise-translate-madlad", "louise-tts-omnivoice"]
+    gone = [m for _s, m in model_evict.host_leftovers([S], in_set)]
+    assert gone == ["louise-rerank-medcpt", "louise-translate-madlad", "louise-tts-omnivoice", "never-asked"]
     assert _verbs(r, "shutdown") == gone and not _verbs(r, "park")
-    assert "vega-qwen3-4b" in r.models, "in the set: its next batch pages it back"
+    assert "vega-qwen3-4b" in r.models, "used four seconds ago: its own batches bring it back"
     assert "by-hand" in r.models, "a model Louise does not know is never touched"
-    assert "vega-bge-m3" in r.models, "out of the set and ON the card: LocalAI's to claim, as always"
+    assert "vega-bge-m3" in r.models, "idle and ON the card: LocalAI's to claim, as always"
     said = [t for t in node.said if t.startswith("card: unloaded")]
     assert len(said) == 1 and "louise-translate-madlad (about 6,000 MiB in host memory)" in said[0]
-    assert "out of this mode's set" in said[0] and "loads again at its first request" in said[0]
+    assert "loads back onto the card those its budget holds (louise-translate-madlad, never-asked)" in said[0]
     model_load.loaded_models(S, 0.0)
-    assert model_evict.host_leftovers([S], keep) == [], "said and done once"
+    assert model_evict.host_leftovers([S], in_set) == [], "said and done once"
 
 
 def test_a_pinned_a_busy_a_parked_and_a_model_that_holds_no_vram_are_left(node, monkeypatch):
@@ -574,21 +576,34 @@ def test_a_pinned_a_busy_a_parked_and_a_model_that_holds_no_vram_are_left(node, 
     assert model_evict.host_leftovers([S], set()) == [], "the pin record unread: nothing is stopped on a guess"
 
 
-def test_the_keepers_beat_gives_the_host_back_but_never_while_a_question_holds_the_card(node, monkeypatch):
+def test_the_keepers_beat_gives_the_host_back_and_takes_it_for_no_eviction(node, monkeypatch):
+    """Never while a question holds the card; and the stop is the mode's own
+    doing, not the reclaimer's: no back-off, no penalty on the budget — the
+    keeper loads the model back onto the card as it loads any missing one."""
     r = node({"louise-translate-madlad": 6_000, "vega-qwen3-4b": 2_700})
-    _used(louise_translate_madlad=1, vega_qwen3_4b=0.1)
+    _used(louise_translate_madlad=1, vega_qwen3_4b=0.001)
     _known(louise_translate_madlad=6_000, vega_qwen3_4b=2_700)
     _paged_out(r, "louise-translate-madlad")
     monkeypatch.setattr(model_evict, "rule", lambda: ("unload", 12 * GIB, 3 * GIB))
-    want = [resident.Resident(S, "vega-qwen3-4b", ("encoder",))]
+    want = [resident.Resident(S, "vega-qwen3-4b", ("encoder",)), resident.Resident(S, "louise-translate-madlad",
+                                                                                   ("translation",))]
     monkeypatch.setattr(resident, "wanted", lambda *a, **k: want)
     monkeypatch.setattr(resident, "preloads", lambda state=None: (True, ""))
     monkeypatch.setattr(resident, "_question_now", lambda: True)
     resident.beat([], embed_mode=lambda c: "all", state="running")
     assert _verbs(r, "shutdown") == [], "a question's models may be on their way back to the card"
+    with resident._lock:
+        resident._track[(S, "louise-translate-madlad")] = resident._Track()
+        resident._track[(S, "louise-translate-madlad")].warmed_at = resident._now() - 30.0   # warmed half a minute ago
     monkeypatch.setattr(resident, "_question_now", lambda: False)
+    penalized = []
+    monkeypatch.setattr(resident, "_penalize", lambda r_, stayed: penalized.append(r_.model))
     resident.beat([], embed_mode=lambda c: "all", state="running")
     assert _verbs(r, "shutdown") == ["louise-translate-madlad"] and "vega-qwen3-4b" in r.models
+    madlad = want[1]
+    assert resident._due(madlad, resident._now()) is True and penalized == [], \
+        "found off the card 30 s after its load, and not taken for an eviction"
+    assert not [t for t in node.said if "off the card again" in t]
 
 
 # ---- "the device has no room now" is a deferral ------------------------------------
