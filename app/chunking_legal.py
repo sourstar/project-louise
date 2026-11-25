@@ -509,14 +509,66 @@ def _spans(tok: Any, text: str) -> list[tuple[int, int]]:
     return out
 
 
+#: characters given to one `encode_batch` (2026-11-25, architecture's
+#: reading of EUR-Lex5.next's fts: 32018R0688 in 23 languages, 90-136 MB
+#: each, 75-90 s apiece on ONE child while ten idled, the chunker encoding
+#: span after span on one thread). The spans of a text, and the units a
+#: piece packs, are independent texts: the tokenizers library's own
+#: `encode_batch` encodes them on its own threads (Rust, rayon) and gives
+#: each the encoding `encode` gives it, so the counts, offsets and pieces
+#: are the same (no chunker version moves; tests/test_chunking_legal_spans.py).
+#: Bounded, so a batch holds a few MB of encodings, never a whole act's.
+BATCH_CHARS = 4_000_000
+
+
+def _batched(tok: Any) -> bool:
+    """May `tok` encode many texts in one call with each one's own
+    encoding? A tokenizer that pads (`padding`) pads a batch to its longest."""
+    return callable(getattr(tok, "encode_batch", None)) and getattr(tok, "padding", None) is None
+
+
+def _encode_many(tok: Any, texts):
+    """`tok.encode(t, add_special_tokens=False)` for each text, in order:
+    in batches of up to BATCH_CHARS where the tokenizer batches."""
+    if not _batched(tok):
+        for t in texts:
+            yield tok.encode(t, add_special_tokens=False)
+        return
+    group: list[str] = []
+    size = 0
+    for t in texts:
+        group.append(t)
+        size += len(t)
+        if size >= BATCH_CHARS:
+            yield from tok.encode_batch(group, add_special_tokens=False)
+            group, size = [], 0
+    if group:
+        yield from tok.encode_batch(group, add_special_tokens=False)
+
+
 def _count(tok: Any, text: str) -> int:
-    return sum(len(tok.encode(text[a:b], add_special_tokens=False).ids) for a, b in _spans(tok, text))
+    return sum(len(e.ids) for e in _encode_many(tok, [text[a:b] for a, b in _spans(tok, text)]))
+
+
+def _count_many(tok: Any, texts: Sequence[str]) -> list[int]:
+    """`_count` of each text, their spans encoded together."""
+    owner: list[int] = []
+    parts: list[str] = []
+    for i, t in enumerate(texts):
+        for a, b in _spans(tok, t):
+            owner.append(i)
+            parts.append(t[a:b])
+    out = [0] * len(texts)
+    for i, e in zip(owner, _encode_many(tok, parts)):
+        out[i] += len(e.ids)
+    return out
 
 
 def _token_ends(tok: Any, text: str):
     """Each token's end offset in `text`, in order, a span at a time."""
-    for a, b in _spans(tok, text):
-        for _s, e in tok.encode(text[a:b], add_special_tokens=False).offsets:
+    spans = _spans(tok, text)
+    for (a, _b), enc in zip(spans, _encode_many(tok, [text[a:b] for a, b in spans])):
+        for _s, e in enc.offsets:
             yield a + e
 
 
@@ -640,7 +692,7 @@ def _pack_linear(tok: Any, units: Sequence[str], budget: int, sep: str) -> list[
     units then held to the bound by its own exact count, a unit given back
     while it is over. One count per unit and about one per piece: linear in
     the text. A single unit past the budget is the caller's."""
-    counts = [_count(tok, u) for u in units]
+    counts = _count_many(tok, units)
     sep_n = _count(tok, sep) if sep else 0
     out: list[tuple[str, int]] = []
     i, n = 0, len(units)
