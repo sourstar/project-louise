@@ -3423,3 +3423,45 @@ every five minutes, and "… goes on — … under 17,940 …; it yielded for S 
 stood. Until then München's monitor stays as a second pair of eyes, its pause
 at the same line.
 
+
+## 2026-11-25 — a large unit's tokenizer runs on four threads; every other pool child on one
+
+**SCENARIO.** The node at 1249b1d9, embed mode, everything running. EUR-Lex5.next
+(carried: embedded before its text is indexed) with rdf 134,618 and fts 1,491
+pending, among them the 23 languages of 32018R0688 at 89.8–136.2 MB each; a
+corpus scan of the same collection walking on one thread beside it (22 min
+23 s, nothing to apply); the other collections with nothing in the pool
+("parse pool — 1.9 of 11 slots in flight (17%) over 602s").
+
+**BEFORE** (München, counted from the manifest and the worker's own lines).
+Fifteen units of 32018R0688, 1,494,357,545 bytes, parsed in 1,513 s on the one
+large lane: nine committed by one batch — "indexed 9 documents / 22637 chunks
+in one commit (1513.5s: parse 1503.0, index 8.2, the rest 2.2); 91 more
+parsed, carried to the next batch" (876,560,544 bytes) — and six parsed ahead
+in the same minutes, committed seven seconds later (617,797,001 bytes). A
+lane child lived 75–95 s and peaked at ~2.8 GiB of RSS (VmHWM 2,834,164 kB);
+the worker cgroup: anon 12,875 MiB, peak 16,818 of 24,576. No unit met its
+time bound; no error. Around it, 10:08–10:25Z: done 38,496 → 40,188,
+rdf_pending 133,618 → 131,618 — about 100 documents and 118 rdf a minute on
+average, in bursts ("23 batches, 554 documents, 26079 chunks in 30.0s of stage
+time") between waits of many minutes behind large parts.
+
+**THE CHANGE.** Two commits, one cause. The Legal session's: the legal
+chunker encodes a text's spans, and a piece's units, together
+(`encode_batch`; the same pieces). Architecture's: each spawned child is told
+its tokenizer threads — one for a child of the shared pool and of a pass,
+four (held to the profile's cores) for the large lane's child, which counts
+as that many parts against the profile's cap while it runs. Legal's measure
+off the node: a 28.5 M-character act on 4 cores, 63.9 s → 37.7 s, the same
+30,988 pieces.
+
+**WHAT IT DOES NOT CHANGE.** One large unit at a time; a batch still commits
+at its end, so the collection's rdf still waits behind a run of large units.
+Those are the next row.
+
+**AFTER** — owed. The same act's remaining languages (it, de, fr, en) and any
+unit of that size: each unit's seconds from the "has left the parse pool
+after N" line (#891), against ~100 s for ~100 MB; the lane child's peak RSS
+against 2.8 GiB (a batch of encodings is alive at a time); and the staged run
+5's count under the real tokenizer, which is the proof that the pieces are
+the same.
