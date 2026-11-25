@@ -77,6 +77,11 @@ from app.vega.procfs import WSL_GPU, ProcFS
 from app.vega import tag as vtag
 
 LOAD = "/backend.Backend/LoadModel"
+#: what the llama.cpp backend answers a LoadModel for the model it already
+#: holds — "a repeated request is a no-op, not a reload" (LocalAI v5.0.1's
+#: backend, as docs/notes/parking-step-2.md §2 reads it): the one answer that
+#: makes a repeated load THE SAME RUN (`Gate.load_model`)
+ALREADY_LOADED = "Model already loaded"
 EMBED = "/backend.Backend/Embedding"
 TOKENIZE = "/backend.Backend/TokenizeString"
 DETOKENIZE = "/backend.Backend/Detokenize"
@@ -1682,6 +1687,8 @@ class Gate:
             nvidia.runner(cfg.nvidia_smi) if cfg.nvidia_smi else None)
         self.loaded: Loaded | None = None
         self._load_lock = threading.Lock()
+        #: the canonical options of the load in force (`load_model`), None before one
+        self._load_canon: "loadopts.Canon | None" = None
         # the input lengths against the ubatch (`PASSES_EVERY_S`)
         self.passes: PassCount | None = None
         self._passes_wake = threading.Event()
@@ -1701,11 +1708,48 @@ class Gate:
     def load_model(self, raw: bytes, forward: Callable[[bytes], bytes],
                    call: Callable[[str, bytes], bytes] | None = None) -> bytes:
         with self._load_lock:
-            self.loaded = None                       # a new load has no run until it is stated
             try:
                 canon = load_options(self.pb, raw)
             except loadopts.Unstatable as e:
+                self.loaded = None
                 return self._refuse_load(e)
+            # THE LOAD IN FORCE, ASKED AGAIN (parking step 2, docs/notes/
+            # parking-step-2.md §3.3; 2026-11-25): LocalAI brings a parked
+            # model's weights back with a repeated LoadModel, which the
+            # backend answers "already loaded" — the same process, the same
+            # weights, engine and options: THE SAME RUN (invariant 12: no gate
+            # per return). Stated again it would drop the run while it hashed
+            # the weights and the tree, refuse every vector meanwhile ("no run
+            # is stated"), restart the pass and keep counts and probe the
+            # tokenizer again. So the same options to the same live child are
+            # forwarded and nothing here moves. Any other options take the
+            # whole path below: another load, another statement.
+            #
+            # THE BACKEND SAYS WHICH IT WAS: only an answer of ALREADY_LOADED
+            # is a return. A backend that loads again at a repeated LoadModel
+            # (it succeeds with any other answer) has read its files again —
+            # an upgrade on disk is then another run, as at any load — and is
+            # stated.
+            # A REPEAT THAT IS REFUSED CHANGES NOTHING (the Tensor session,
+            # 2026-11-25): the weights that cannot come back now are gRPC's
+            # RESOURCE_EXHAUSTED — `forward` raises it, it goes to LocalAI as
+            # it is — and the model is still the same run: the same process,
+            # the same weights, still parked; the next LoadModel or the next
+            # Embedding brings them back. So the run stays stated, as it does
+            # for a refusal the backend words in its answer.
+            held, held_canon = self.loaded, self._load_canon
+            early: bytes | None = None
+            if (held is not None and self._load_canon == canon
+                    and self.child.pid == held.pid and self.child.alive()):
+                early = forward(raw)                 # a status that is not OK is the caller's, the run kept
+                said = self.pb.Result.FromString(early)
+                if not said.success or ALREADY_LOADED in said.message:
+                    log(f"{self.backend.name}: the load in force asked again (the same options, the "
+                        f"same process {held.pid}; the backend: {said.message!r}): run "
+                        f"{held.run_id[:23]}… stands")
+                    return early
+            self.loaded = None                       # a new load has no run until it is stated
+            self._load_canon = None
             hashed: dict[str, Any] = {}
 
             def hashing(key: str, compute: Callable[[], str]) -> threading.Thread:
@@ -1753,9 +1797,25 @@ class Gate:
                     nv_before = nvidia.used_vram_mib(self.nvidia_smi)
                 except nvidia.NvidiaUnreadable as e:
                     log(f"{self.backend.name}: NVIDIA memory before the load not read: {e}")
-            answer = forward(raw)
-            if not self.pb.Result.FromString(answer).success:
+            # (a repeated load the backend did NOT call a return was forwarded above)
+            answer = early if early is not None else forward(raw)
+            result = self.pb.Result.FromString(answer)
+            if not result.success:
                 return answer                        # the backend's own refusal, as it said it
+            if early is None and ALREADY_LOADED in result.message:
+                # OTHER OPTIONS, AND THE BACKEND DID NOT LOAD (the independent
+                # reading of the park engine, 2026-11-25: its "already loaded"
+                # compares the model's NAME only): what computes is the load
+                # in force, under ITS options. A run stated here would name
+                # options that are not the ones computing — the artefact
+                # invariant 12 exists against. So nothing is stated for them:
+                # the run in force stands for the process that still serves
+                # it, and LocalAI is told the load failed, so that it stops
+                # this backend and loads afresh.
+                self.loaded, self._load_canon = held, held_canon
+                return self._refuse_load(loadopts.Unstatable(
+                    "the backend holds this model under other options and did not load again "
+                    f"(it answered {result.message!r}): stop it to load these"))
             deadline = time.monotonic() + WEIGHTS_TIMEOUT_S
             for t in hashers.values():
                 t.join(max(0.0, deadline - time.monotonic()))
@@ -1868,6 +1928,7 @@ class Gate:
                                    if self.cfg.cuts == TOKENIZER and embedder else (None, False))
             self.loaded = Loaded(run_id, run, declares_pairs(canon.options.get("Options")),
                                  self.child.pid, context_size, specials, token_ids)
+            self._load_canon = canon                 # what a repeated LoadModel is compared with
             ubatch = load_ubatch(canon, nbatch) if embedder else 0
             self.passes = PassCount(run_id, run, ubatch) if ubatch else None
             if self.passes is not None:
