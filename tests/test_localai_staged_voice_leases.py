@@ -83,7 +83,7 @@ def test_the_purge_runs_at_start_and_at_every_delete_and_close_lets_go_last():
 
 
 def test_the_note_says_what_was_seen_what_it_does_on_the_node_and_what_stands_until_then():
-    assert "| B20 | defect |" in BUGS and "| **P19 (staged)** | **patch staged, for the SERVER**" in BUGS
+    assert "| B20 | defect |" in BUGS and "| **P19 (staged)** | **LIVE in the node's SERVER since 2026-11-25" in BUGS
     section = BUGS[BUGS.index("### B20 and P19 (staged)."):BUGS.index("### B19 and P15 (staged).")]
     assert "1,331,940 bytes, link count 2" in section and "Nothing of the deleted test profile remained" in section
     assert "It takes effect when the SERVER is rebuilt with it" in section
@@ -91,3 +91,6 @@ def test_the_note_says_what_was_seen_what_it_does_on_the_node_and_what_stands_un
     assert "find … -samefile" in section, "the rule that stands until it is live"
     readme = (STAGED / "README.md").read_text(encoding="utf-8")
     assert f"`{PATCH.name}`" in readme and "a patch of NO engine series" in readme
+    # and what it did on the node the first time it started, and the three layers after a delete
+    assert "seven lines \"Removed the voice profile leases of a process that is\ngone\"" in section
+    assert "no file\nof its clip's inode anywhere under `voice-profiles`" in section

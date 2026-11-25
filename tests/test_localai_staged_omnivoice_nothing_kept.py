@@ -93,3 +93,10 @@ def test_the_candidate_carries_it_and_the_note_says_what_holds_now():
         assert said in section, said
     readme = (STAGED / "README.md").read_text(encoding="utf-8")
     assert f"`{PATCH.name}`" in readme and "engine `d531d5d804f1`" in readme
+    # the card's rows on the live engine, and the statement of mine they corrected
+    card = NOTE[NOTE.index("### On the card, the live engine d531d5d804f1"):]
+    for said in ('**0 "rows\nkept"**', "One digest, a3782775560685fb, four\nways",
+                 "no file of its clip's inode anywhere under `voice-profiles`",
+                 "**A kept encoding is its engine BUILD's**", "they are not, by this\nnote's own design",
+                 "**The load ahead's warm is enough as it is**"):
+        assert said in card, said

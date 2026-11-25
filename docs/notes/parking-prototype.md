@@ -169,7 +169,8 @@ per-client split was not read (the pid lookup returned nothing).
   that never had weights.
 
 The pool's refusal, provoked in the same pause, did NOT hold: staged 0013
-is wrong and staged 0018 completes it (room-on-the-card.md §4). The un-park
+is wrong and staged 0018 completes it (room-on-the-card.md §4) — and 0018's
+own row passed on d531d5d804f1 that morning. The un-park
 refusal on a full card was not run: a card cannot be made to refuse by
 filling it, and the prototype has no switch for that path — it stands on the
 CPU stand-in's 16 of 16 and gets its own switch before step 2 relies on it.

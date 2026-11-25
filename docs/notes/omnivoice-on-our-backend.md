@@ -881,6 +881,66 @@ between does not disturb the third. The file is the same 651,336 bytes,
 "read from its kept encoding", none "kept"; then steps 3 to 5 of the order
 below, on the candidate engine.
 
+### On the card, the live engine d531d5d804f1 (München, 2026-11-25 06:25Z, the node paused)
+
+LocalAI's server v5.0.1-3-g3ee38c799 (with P13 and P19), a test copy of the
+port, one Italian sentence; five encodings on disk at the start.
+
+**Nothing is kept between requests.** Counted over every log of the rows:
+29 lines ending "read from its kept encoding", 2 "rows encoded", **0 "rows
+kept"**. Sentences 2 to 5 of one process in Philippe's voice: 2.236, 2.246,
+2.244, 2.244 s, each read from the file.
+
+**The same audio however the rows are got.** Seed 7 on a TEST profile of the
+27.75 s clip: first use 4.842 s ("encoded"); the same process again 2.622 s
+(read from the file); a new process 9.138 s (read); the file deleted and a
+new process 10.416 s (encoded again). One digest, a3782775560685fb, four
+ways.
+
+**The three layers after that profile's delete** (HTTP 204): (1) its
+directory gone, `profile.json`, `reference.wav` and `reference.wav.encoded`
+with it; (2) no file of its clip's inode anywhere under `voice-profiles`,
+and `.leases` holding one directory with its `.owner` file; (3) the SAME
+process that had spoken the deleted voice last answers Philippe's voice in
+2.258 s, read from Philippe's own file. A request naming the deleted
+profile by its reference: HTTP 404 from LocalAI, the port not called.
+
+**A kept encoding is its engine BUILD's** — and I had told München the files
+written under b190673dbdbf would still be read; they are not, by this
+note's own design (the file is bound to a stamp compiled into the engine).
+After an engine swap each voice's first sentence encodes its clip once
+(0.80 s for the 11 s clip, about 2.2 s for the original) and writes the file
+again; every later process reads it.
+
+**The load ahead's warm is enough as it is** (the architecture session's
+question). The keeper's exact body, `{"model", "input": "OK"}` with no
+voice and no language, in a new process: HTTP 200, 7.15 s, 48,044 bytes.
+
+| a new process's | wall | backbone | decoder |
+|---|---|---|---|
+| warm "OK", no voice | 7.154 s | 0.87 s | 0.64 s |
+| then the first CLONED sentence | 3.069 s, of which 0.80 s the one re-encoding after the engine swap | 1.81 s | 0.29 s |
+| a cloned sentence FIRST, no warm before it | 8.724 s | 2.79 s | 0.80 s |
+| any later sentence | 2.24 s | 1.80 s | 0.28 s |
+
+After a no-voice warm the first cloned sentence already runs at the steady
+1.81 / 0.29 s: the first use is the pipeline's, not the voice's.
+
+**The steps, for the ear** (three takes each, every line read from the
+file):
+
+| steps | Philippe's 11 s clip | his ORIGINAL 27.75 s clip |
+|---|---|---|
+| 16 | 1.22–1.25 s | 1.48–1.49 s |
+| 20 | 1.44–1.45 s | 1.74 s |
+| 24 | 1.67–1.68 s | 2.00 s |
+| 28 | 1.90 s | 2.26–2.27 s |
+| 32 | 2.12–2.13 s | 2.53 s |
+
+The operator, 2026-11-25: "it-C, Philippe 27s clip, steps to be determined
+but not 16, likely something between 20 and 32". The port at rest holds
+2,266 MiB of the card after these rows.
+
 **The speech model on the engine** (for München's test copy; the one engine,
 no package of its own):
 

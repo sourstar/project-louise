@@ -142,11 +142,16 @@ def test_the_notes_say_what_the_card_showed_and_what_waits_for_the_fix():
     assert "PROVOKED, AND 0013 DID NOT HOLD" in section and PATCH.name in section
     assert "line:4221" in section and "ggml_sycl_op_mul_mat" in section
     bugs = (ROOT / "docs" / "notes" / "localai-bugs.md").read_text(encoding="utf-8")
-    assert "| **P18 (staged)** |" in bugs and "DID NOT HOLD ON THE CARD" in bugs
+    assert "| **P18 (staged)** | **LIVE in engine d531d5d804f1 since 2026-11-25; ON THE CARD: IT HOLDS**" in bugs
+    assert "DID NOT HOLD ON THE CARD" in bugs, "what P14 did is still said"
     readme = (STAGED / "README.md").read_text(encoding="utf-8")
     assert f"`{PATCH.name}`" in readme and "`engine-refusal.series`" in readme
     assert "IT DID NOT HOLD" in readme, "0013's row says so itself"
-    # page mode was to be switched on once the refusal held: it does not hold yet
-    assert "Page mode waits for 0018's row on the card" in readme
+    # page mode was to be weighed once the refusal held. It holds: 0018's row on the card, 2026-11-25
+    assert "whose row on the card PASSED: page mode's step 0 is met" in readme
+    assert "ON THE CARD, 2026-11-25 (München, d531d5d804f1): IT HOLDS" in readme
+    assert "IT HOLDS.** The control (one process)" in section and "One process started in all" in section
+    assert "CHECK_TRY_ERROR 0" in section, "the op no longer takes the refusal"
+    assert "**MET 2026-11-25**" in room[room.index("## 3. "):room.index("## 4. ")]
     for tool in ("sycl_refusal_macro_check.cpp", "refuse_cpu_test.py", "refuse_cpu_standin.patch"):
         assert (ROOT / "tools" / "measure" / tool).is_file() and tool in room, tool

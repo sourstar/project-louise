@@ -114,7 +114,9 @@ What the rule is careful about, each from a measurement or a review:
 **On the node, before the setting is turned on** (München's, on the
 operator's word there; nothing here does it):
 0. the engine's refusal fix (§4) in the live engine — the architecture
-   session's condition: until then a full card can kill a live request;
+   session's condition: until then a full card can kill a live request.
+   **MET 2026-11-25**: staged 0018 is in the live engine d531d5d804f1 and
+   its row on the card passed (§4);
 1. this code deployed — inert while the file says nothing;
 2. in every llama.cpp model's file `GGML_SYCL_BMG_VRAM_CHECK=0` and
    `GGML_SYCL_HOST_PINNED_MEM_2G=1` (S5's two switches; the second so that
@@ -184,6 +186,8 @@ it. Its path is exercised deterministically instead: staged 0016,
 
 **The fix, staged 0018** (`0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch`, candidate `engine-refusal.series`: the live engine and this one patch): the refusal is a plain struct, neither a `sycl::exception` nor a `std::exception`, with a `static_assert` for each, so only the graph's own catch can take it. Checked without a card, in the three layers a card run crosses: (1) the backend's REAL macros under Intel's compiler (`tools/measure/sycl_refusal_macro_check.cpp`): the old type aborts with the card's own lines, exit 134; the new one reaches a catch outside the op, exit 0; (2) what an abandoned op leaves, read: its temporaries are the pool's and are released in reverse order as the stack unwinds; the one thing ops change for good, the layout of quantized weights, takes its scratch memory from the device allocator, not the pool; no handler between an op and the graph catches `(...)`; (3) everything ABOVE the backend, run: a CPU stand-in that fails two graphs with `GGML_STATUS_ALLOC_FAILED` (`tools/measure/refuse_cpu_standin.patch`, `tools/measure/refuse_cpu_test.py`, 13 of 13) — the request is answered 500 "Compute error." (503 from the canary when the context is made for the request), the process is the same one, and the next request returns the control's vectors bit for bit. What is left for the card is the one thing none of these is: a real device between (1) and (3) — the same row again.
 
+**ON THE CARD, 2026-11-25 06:24Z (München, engine d531d5d804f1, the card emptied, the node paused): IT HOLDS.** The control (one process): the short pair and the twelve long documents four times, 200 in 1.53–1.58 s, scores 2903cd77b39a, nothing refused. With `GGML_SYCL_POOL_REFUSE=2` (pid 3022088): the short pair 200; the first long request HTTP 500 in 0.044 s, `rpc error: code = Internal desc = Compute error.`, the pid alive; the second the same in 0.040 s, the same pid; the third 200 in 1.625 s and the fourth in 1.534 s, both with the control's scores 2903cd77b39a, the same pid. One process started in all. Its log, counted: "the device refused" 2, "ggml_sycl_graph_compute_or_fail: the SYCL pool could not commit device memory: the graph is abandoned" 2, CHECK_TRY_ERROR 0, "Exception caught" 0, "Server listening" 1. A refused pool commit now fails its request and nothing else.
+
 **Compiled here, never run; its test is on the card** (compiled 2026-11-24
 with Intel's compiler, oneAPI 2025.3.3, installed in the cloud session: the
 engine's SYCL backend builds and links with it. The test is München's, on
@@ -210,7 +214,8 @@ Order (the architecture session): the build and the card test on the
 operator's word, then the gates, and only then may page mode be weighed.
 
 Until it is in the live engine, `make_room = "page"` stays off (step 0 of
-§3's list).
+§3's list). It is, since 2026-11-25 05:52Z, and its row passed: step 0 is
+met, and steps 1 to 5 are what stands between the node and page mode.
 
 **Not built:** paging for the keeper's preloads (a preload beyond the card
 would only be loaded to be paged out), a rule for which model the driver
