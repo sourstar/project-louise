@@ -1,0 +1,474 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 02:14:33 +0000
+Subject: [PATCH] fix(voiceprofile): the leases of a process that is gone do
+ not outlive a deleted profile
+
+A synthesis takes a request-scoped lease on a profile's reference clip: a
+hard link under voice-profiles/.leases/<store>/, removed when the request
+ends, so that an administrator's delete does not break a synthesis in
+flight. A process that is killed removes nothing. Its lease directory
+stays, and a lease in it keeps the recording's bytes on disk after the
+profile is deleted - behind a link no listing of profiles shows. Seen: a
+lease four weeks old, linked to a clip of a living profile, beside eight
+empty directories of processes that had ended without Close.
+
+A Store now keeps an owner file locked in its lease directory for as long
+as it lives (flock on Unix, LockFileEx on Windows, as the add-on stores
+do); the kernel drops the lock when the process ends, however it ends.
+Lease directories whose owner file can be locked belong to nobody and are
+removed, with every lease in them, when a Store starts and whenever a
+profile is deleted. A living Store's leases are left alone: a synthesis in
+flight keeps its audio until it completes, as before. A directory without
+an owner file (left by a LocalAI that wrote none) is removed once the last
+lease made or released in it is a day old - counted by the directory's own
+time, since a lease is a link and carries its clip's.
+
+Only real directories are considered: a link under .leases is not followed
+and a stray file is not removed.
+
+Tests: a killed process's lease is gone with the profile's delete, and no
+WAV is left below the store; a living store's lease survives the delete
+and is readable until released; a new Store removes what the ones before
+it left; a directory without an owner file goes only once it is old; a
+symlink and a stray file are left alone; the owner file is 0600 and gone
+at Close.
+
+Assisted-by: Claude Code
+---
+ core/services/voiceprofile/export_test.go     |  16 ++
+ core/services/voiceprofile/lease_owner.go     | 103 +++++++++++
+ .../services/voiceprofile/lease_owner_test.go | 162 ++++++++++++++++++
+ .../services/voiceprofile/lease_owner_unix.go |  19 ++
+ .../voiceprofile/lease_owner_windows.go       |  21 +++
+ core/services/voiceprofile/store.go           |  22 ++-
+ 6 files changed, 341 insertions(+), 2 deletions(-)
+ create mode 100644 core/services/voiceprofile/export_test.go
+ create mode 100644 core/services/voiceprofile/lease_owner.go
+ create mode 100644 core/services/voiceprofile/lease_owner_test.go
+ create mode 100644 core/services/voiceprofile/lease_owner_unix.go
+ create mode 100644 core/services/voiceprofile/lease_owner_windows.go
+
+diff --git a/core/services/voiceprofile/export_test.go b/core/services/voiceprofile/export_test.go
+new file mode 100644
+index 0000000..279e08f
+--- /dev/null
++++ b/core/services/voiceprofile/export_test.go
+@@ -0,0 +1,16 @@
++package voiceprofile
++
++// AbandonForTest ends a Store the way a killed process ends: the kernel drops
++// its lock on the owner file and nothing is removed.
++func (s *Store) AbandonForTest() {
++	if s.leaseOwner != nil {
++		_ = s.leaseOwner.Close()
++		s.leaseOwner = nil
++	}
++}
++
++const (
++	LeasesDirNameForTest      = leasesDirName
++	LeaseOwnerFileNameForTest = leaseOwnerFileName
++	AbandonedLeaseAgeForTest  = abandonedLeaseAge
++)
+diff --git a/core/services/voiceprofile/lease_owner.go b/core/services/voiceprofile/lease_owner.go
+new file mode 100644
+index 0000000..ed5706e
+--- /dev/null
++++ b/core/services/voiceprofile/lease_owner.go
+@@ -0,0 +1,103 @@
++package voiceprofile
++
++import (
++	"errors"
++	"io/fs"
++	"os"
++	"path/filepath"
++	"time"
++
++	"github.com/mudler/xlog"
++)
++
++const (
++	// leasesDirName holds one directory of request leases per Store.
++	leasesDirName = ".leases"
++
++	// leaseOwnerFileName is the file a Store keeps locked in its lease
++	// directory for as long as it lives. A lease directory whose owner file
++	// can be locked by someone else belongs to a process that is gone.
++	leaseOwnerFileName = ".owner"
++
++	// abandonedLeaseAge is how long a lease directory WITHOUT an owner file
++	// (made by a LocalAI that did not write one) is left alone, counted from
++	// the last lease made or released in it. No synthesis holds a lease that
++	// long.
++	abandonedLeaseAge = 24 * time.Hour
++)
++
++// claimLeaseDirectory writes and locks this Store's owner file. The lock is
++// held until Close, or until the process ends, whichever comes first - which
++// is the point: the kernel drops it when the process dies, however it dies.
++func (s *Store) claimLeaseDirectory(root *os.Root) error {
++	owner, err := root.OpenFile(filepath.Join(s.leaseDir, leaseOwnerFileName), os.O_CREATE|os.O_RDWR, 0o600)
++	if err != nil {
++		return err
++	}
++	if locked, err := tryLockLeaseOwner(owner); err != nil || !locked {
++		_ = owner.Close()
++		if err == nil {
++			err = errors.New("lease owner file is locked by another process")
++		}
++		return err
++	}
++	s.leaseOwner = owner
++	return nil
++}
++
++// purgeAbandonedLeases removes the lease directories of Stores that are gone,
++// with every lease in them.
++//
++// A lease is a hard link to a profile's reference clip, made for one request
++// and removed when the request ends. A process that is killed removes
++// nothing: its directory stays, and a lease in it keeps the recording's bytes
++// on disk after the profile is deleted - the one thing a delete of a person's
++// voice must not leave behind. A living Store's leases are never touched: a
++// synthesis in flight keeps its audio until it completes.
++func (s *Store) purgeAbandonedLeases(root *os.Root) {
++	leases, err := root.Open(leasesDirName)
++	if err != nil {
++		return
++	}
++	entries, err := leases.ReadDir(-1)
++	_ = leases.Close()
++	if err != nil {
++		xlog.Warn("Failed to list voice profile lease directories", "error", err)
++		return
++	}
++	own := filepath.Base(s.leaseDir)
++	for _, entry := range entries {
++		// only real directories: a link is not followed, a stray file is not ours
++		if !entry.Type().IsDir() || entry.Name() == own {
++			continue
++		}
++		dir := filepath.Join(leasesDirName, entry.Name())
++		if !s.leaseDirectoryAbandoned(root, dir) {
++			continue
++		}
++		if err := root.RemoveAll(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
++			xlog.Warn("Failed to remove an abandoned voice profile lease directory", "error", err)
++			continue
++		}
++		xlog.Info("Removed the voice profile leases of a process that is gone", "directory", entry.Name())
++	}
++}
++
++// leaseDirectoryAbandoned reports whether the Store that made dir is gone.
++func (s *Store) leaseDirectoryAbandoned(root *os.Root, dir string) bool {
++	owner, err := root.OpenFile(filepath.Join(dir, leaseOwnerFileName), os.O_RDWR, 0)
++	if errors.Is(err, fs.ErrNotExist) {
++		// no owner file: a directory of a LocalAI that wrote none. Its age is
++		// the directory's own time - a lease is a link, so a lease's time is
++		// its clip's, not the request's.
++		info, statErr := root.Stat(dir)
++		return statErr == nil && s.now().Sub(info.ModTime()) > abandonedLeaseAge
++	}
++	if err != nil {
++		return false
++	}
++	defer func() { _ = owner.Close() }()
++	locked, err := tryLockLeaseOwner(owner)
++	// the lock is ours until owner is closed: the directory is removed under it
++	return err == nil && locked
++}
+diff --git a/core/services/voiceprofile/lease_owner_test.go b/core/services/voiceprofile/lease_owner_test.go
+new file mode 100644
+index 0000000..5e9b91a
+--- /dev/null
++++ b/core/services/voiceprofile/lease_owner_test.go
+@@ -0,0 +1,162 @@
++package voiceprofile_test
++
++import (
++	"bytes"
++	"io/fs"
++	"os"
++	"path/filepath"
++	"strings"
++	"time"
++
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++
++	"github.com/mudler/LocalAI/core/services/voiceprofile"
++)
++
++// recordings lists every WAV file below the store, leases included.
++func recordings(dataPath string) []string {
++	var found []string
++	root := filepath.Join(dataPath, voiceprofile.DirectoryName)
++	Expect(filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
++		if err != nil {
++			return err
++		}
++		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".wav") {
++			rel, _ := filepath.Rel(root, path)
++			found = append(found, rel)
++		}
++		return nil
++	})).To(Succeed())
++	return found
++}
++
++var _ = Describe("Request leases of a store that is gone", func() {
++	var dataPath string
++
++	newStore := func() *voiceprofile.Store {
++		store := voiceprofile.NewStore(dataPath)
++		DeferCleanup(func() { Expect(store.Close()).To(Succeed()) })
++		return store
++	}
++	create := func(ctx SpecContext, store *voiceprofile.Store, name string) voiceprofile.Profile {
++		created, err := store.Create(ctx, voiceprofile.CreateInput{
++			Name: name, Transcript: "A reference sentence.", ConsentConfirmed: true,
++		}, bytes.NewReader(pcmWAV(2*time.Second)))
++		Expect(err).NotTo(HaveOccurred())
++		return created
++	}
++
++	BeforeEach(func() {
++		dataPath = GinkgoT().TempDir()
++	})
++
++	It("leaves nothing of a deleted recording behind when the process that leased it was killed", func(ctx SpecContext) {
++		killed := newStore()
++		profile := create(ctx, killed, "A person's voice")
++		_, lease, _, err := killed.LeaseAudio(ctx, profile.ID)
++		Expect(err).NotTo(HaveOccurred())
++		Expect(lease).To(BeAnExistingFile())
++
++		survivor := newStore()
++		_, err = survivor.List(ctx)
++		Expect(err).NotTo(HaveOccurred())
++		// the request was never released: the process died with it
++		killed.AbandonForTest()
++
++		Expect(survivor.Delete(ctx, profile.ID)).To(Succeed())
++		Expect(lease).NotTo(BeAnExistingFile())
++		Expect(recordings(dataPath)).To(BeEmpty(), "a hard link under .leases keeps the recording's bytes after the delete")
++		Expect(filepath.Dir(lease)).NotTo(BeADirectory())
++	})
++
++	It("keeps the lease of a living store through a delete, as a synthesis in flight needs", func(ctx SpecContext) {
++		busy := newStore()
++		profile := create(ctx, busy, "In flight")
++		_, lease, release, err := busy.LeaseAudio(ctx, profile.ID)
++		Expect(err).NotTo(HaveOccurred())
++
++		other := newStore()
++		Expect(other.Delete(ctx, profile.ID)).To(Succeed())
++		Expect(lease).To(BeAnExistingFile(), "the owner is alive: its request still reads the clip")
++		audio, err := os.ReadFile(lease)
++		Expect(err).NotTo(HaveOccurred())
++		Expect(audio).To(Equal(pcmWAV(2 * time.Second)))
++
++		release()
++		Expect(lease).NotTo(BeAnExistingFile())
++		Expect(recordings(dataPath)).To(BeEmpty())
++	})
++
++	It("removes at start what the processes before it left behind", func(ctx SpecContext) {
++		killed := newStore()
++		profile := create(ctx, killed, "Left behind")
++		_, lease, _, err := killed.LeaseAudio(ctx, profile.ID)
++		Expect(err).NotTo(HaveOccurred())
++		killed.AbandonForTest()
++
++		next := newStore()
++		_, err = next.List(ctx)
++		Expect(err).NotTo(HaveOccurred())
++		Expect(lease).NotTo(BeAnExistingFile())
++		Expect(filepath.Dir(lease)).NotTo(BeADirectory())
++		// the profile itself is not a lease: it stays
++		Expect(recordings(dataPath)).To(ConsistOf(filepath.Join(profile.ID, "reference.wav")))
++	})
++
++	It("removes a lease directory without an owner file only once it is old", func(ctx SpecContext) {
++		// two directories as a LocalAI that wrote no owner file left them
++		leases := filepath.Join(dataPath, voiceprofile.DirectoryName, voiceprofile.LeasesDirNameForTest)
++		old := filepath.Join(leases, "11111111-1111-4111-8111-111111111111")
++		recent := filepath.Join(leases, "22222222-2222-4222-8222-222222222222")
++		for _, dir := range []string{old, recent} {
++			Expect(os.MkdirAll(dir, 0o700)).To(Succeed())
++			Expect(os.WriteFile(filepath.Join(dir, "lease.wav"), pcmWAV(time.Second), 0o600)).To(Succeed())
++		}
++		past := time.Now().Add(-2 * voiceprofile.AbandonedLeaseAgeForTest)
++		Expect(os.Chtimes(old, past, past)).To(Succeed())
++
++		store := newStore()
++		_, err := store.List(ctx)
++		Expect(err).NotTo(HaveOccurred())
++		Expect(old).NotTo(BeADirectory())
++		Expect(filepath.Join(recent, "lease.wav")).To(BeAnExistingFile(), "it may belong to a process that still runs")
++	})
++
++	It("follows no link and removes no stray file under the lease directory", func(ctx SpecContext) {
++		outside := GinkgoT().TempDir()
++		kept := filepath.Join(outside, "not-a-lease.wav")
++		Expect(os.WriteFile(kept, pcmWAV(time.Second), 0o600)).To(Succeed())
++		past := time.Now().Add(-2 * voiceprofile.AbandonedLeaseAgeForTest)
++		Expect(os.Chtimes(outside, past, past)).To(Succeed())
++
++		leases := filepath.Join(dataPath, voiceprofile.DirectoryName, voiceprofile.LeasesDirNameForTest)
++		Expect(os.MkdirAll(leases, 0o700)).To(Succeed())
++		Expect(os.Symlink(outside, filepath.Join(leases, "33333333-3333-4333-8333-333333333333"))).To(Succeed())
++		stray := filepath.Join(leases, "stray-file")
++		Expect(os.WriteFile(stray, []byte("x"), 0o600)).To(Succeed())
++		Expect(os.Chtimes(stray, past, past)).To(Succeed())
++
++		store := newStore()
++		_, err := store.List(ctx)
++		Expect(err).NotTo(HaveOccurred())
++		Expect(kept).To(BeAnExistingFile())
++		Expect(stray).To(BeAnExistingFile())
++	})
++
++	It("locks an owner file while it lives and leaves none when it closes", func(ctx SpecContext) {
++		store := voiceprofile.NewStore(dataPath)
++		profile := create(ctx, store, "Owner")
++		_, lease, release, err := store.LeaseAudio(ctx, profile.ID)
++		Expect(err).NotTo(HaveOccurred())
++		owner := filepath.Join(filepath.Dir(lease), voiceprofile.LeaseOwnerFileNameForTest)
++		Expect(owner).To(BeAnExistingFile())
++		info, err := os.Stat(owner)
++		Expect(err).NotTo(HaveOccurred())
++		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0o600)))
++		release()
++
++		Expect(store.Close()).To(Succeed())
++		Expect(filepath.Dir(lease)).NotTo(BeADirectory())
++	})
++})
+diff --git a/core/services/voiceprofile/lease_owner_unix.go b/core/services/voiceprofile/lease_owner_unix.go
+new file mode 100644
+index 0000000..6e1929c
+--- /dev/null
++++ b/core/services/voiceprofile/lease_owner_unix.go
+@@ -0,0 +1,19 @@
++//go:build !windows
++
++package voiceprofile
++
++import (
++	"errors"
++	"os"
++	"syscall"
++)
++
++// tryLockLeaseOwner takes an exclusive, non-blocking flock on f. It reports
++// false, without an error, when another open file holds the lock.
++func tryLockLeaseOwner(f *os.File) (bool, error) {
++	err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
++	if errors.Is(err, syscall.EWOULDBLOCK) {
++		return false, nil
++	}
++	return err == nil, err
++}
+diff --git a/core/services/voiceprofile/lease_owner_windows.go b/core/services/voiceprofile/lease_owner_windows.go
+new file mode 100644
+index 0000000..fe04893
+--- /dev/null
++++ b/core/services/voiceprofile/lease_owner_windows.go
+@@ -0,0 +1,21 @@
++//go:build windows
++
++package voiceprofile
++
++import (
++	"errors"
++	"os"
++
++	"golang.org/x/sys/windows"
++)
++
++// tryLockLeaseOwner takes an exclusive, non-blocking lock on f using Windows
++// LockFileEx. It reports false, without an error, when another handle holds
++// the lock.
++func tryLockLeaseOwner(f *os.File) (bool, error) {
++	err := windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, new(windows.Overlapped))
++	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
++		return false, nil
++	}
++	return err == nil, err
++}
+diff --git a/core/services/voiceprofile/store.go b/core/services/voiceprofile/store.go
+index 8857219..b8bd056 100644
+--- a/core/services/voiceprofile/store.go
++++ b/core/services/voiceprofile/store.go
+@@ -141,6 +141,9 @@ type Store struct {
+ 	initErr  error
+ 	now      func() time.Time
+ 
++	// leaseOwner is this Store's locked owner file (lease_owner.go).
++	leaseOwner *os.File
++
+ 	initOnce sync.Once
+ 	mu       sync.RWMutex
+ }
+@@ -149,7 +152,7 @@ type Store struct {
+ // performs no filesystem I/O; errors are reported by the first operation.
+ func NewStore(dataPath string) *Store {
+ 	s := &Store{
+-		leaseDir: filepath.Join(".leases", uuid.NewString()),
++		leaseDir: filepath.Join(leasesDirName, uuid.NewString()),
+ 		now:      time.Now,
+ 	}
+ 	if strings.TrimSpace(dataPath) == "" {
+@@ -208,7 +211,14 @@ func (s *Store) initialize() error {
+ 		defer func() { _ = root.Close() }()
+ 		if err := root.MkdirAll(s.leaseDir, 0o700); err != nil {
+ 			s.initErr = fmt.Errorf("voiceprofile: create lease directory: %w", err)
++			return
+ 		}
++		if err := s.claimLeaseDirectory(root); err != nil {
++			s.initErr = fmt.Errorf("voiceprofile: claim lease directory: %w", err)
++			return
++		}
++		// what the processes before this one left behind
++		s.purgeAbandonedLeases(root)
+ 	})
+ 	return s.initErr
+ }
+@@ -503,7 +513,9 @@ func (s *Store) LeaseAudios(_ context.Context, id string) (Profile, []string, fu
+ }
+ 
+ // Delete removes one profile. Existing audio leases remain valid until their
+-// synthesis requests complete.
++// synthesis requests complete; the leases of processes that are gone are
++// removed with it, so that nothing of the recording outlives the delete but
++// a synthesis still running.
+ //
+ // Delete ignores ownership; callers that act for a user use DeleteFor.
+ func (s *Store) Delete(ctx context.Context, id string) error {
+@@ -541,6 +553,7 @@ func (s *Store) deleteIf(_ context.Context, id string, check func(Profile) error
+ 	if err := root.RemoveAll(id); err != nil {
+ 		return fmt.Errorf("voiceprofile: delete profile: %w", err)
+ 	}
++	s.purgeAbandonedLeases(root)
+ 	_ = syncDirectory(root)
+ 	return nil
+ }
+@@ -559,6 +572,11 @@ func (s *Store) Close() error {
+ 	if err := root.RemoveAll(s.leaseDir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+ 		return fmt.Errorf("voiceprofile: remove lease directory: %w", err)
+ 	}
++	if s.leaseOwner != nil {
++		// after the directory is gone: nobody finds an unlocked owner file in it
++		_ = s.leaseOwner.Close()
++		s.leaseOwner = nil
++	}
+ 	return nil
+ }
+ 
+-- 
+2.43.0
+

@@ -1,7 +1,7 @@
 # LocalAI: every action item for the LocalAI team
 
 *One place for everything this project owes or asks `mudler/LocalAI`: the
-defects found (B1–B19), the patches we carry (P1–P8, more staged), and the requests (R1–R6).
+defects found (B1–B20), the patches we carry (P1–P8, more staged), and the requests (R1–R6).
 The operator files them upstream. Started 2026-10-02 while mapping LocalAI
 against the model pool (`model-pool-prior-art.md`@c572c3b); the patches and
 requests come from `model-pool-over-localai.md`@c572c3b, accepted
@@ -122,6 +122,7 @@ the source):*
 | B17 | defect | `v5.0.1`, `/v1/audio/speech`: whether a model may be given a voice profile is decided from its `backend:` NAME against LocalAI's own table, before `tts.voice_cloning` is read — a backend installed under any other name (ours: the engine's digest in it) is refused "selected model does not support reference-audio voice cloning", and no key of the model file can say otherwise | OmniVoice on our engine cannot be asked for a recorded voice the way Louise asks (`localai://voice-profiles/<id>`): blocks the cut-over of speech, not the measurement | not filed; found on the card 2026-11-24 |
 | B18 | defect | llama.cpp (ggml-sycl): a device-memory refusal while a graph runs aborts the process — the pool's commit is under `SYCL_CHECK` (`ggml_sycl_pool_vmm::alloc`, `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY`) | on a card several models share, another model's load can kill a model with its request; it is what stands between the node and paging idle models instead of unloading them | not filed; seen on the card 2026-11-24; fixed by P14 (staged) |
 | B19 | defect | llama.cpp backend (LocalAI's `grpc-server.cpp`, the handler of llama.cpp's own server): a SECOND SIGTERM/SIGINT, arriving while the backend cleans up after the first, calls `exit(1)` INSIDE the signal handler — the exit handlers and static destructors then run against the clean-up in progress and can block, the process alive and its card memory held | 3 of 14 unloads of a model behind our wrapper took LocalAI's whole 15 s and ended in its SIGKILL (München, 2026-11-24): LocalAI signals the backend's process GROUP, and anything in that group that forwards the signal delivers it twice | not filed; avoided on our side since 2026-11-24 (the wrapper leaves a backend already told 2 s to go, #856); fixed by P15 (staged) |
+| B20 | defect | `v5.0.1`, voice profiles (`core/services/voiceprofile`): a request's lease on a profile's clip is a hard link under `voice-profiles/.leases/<store>/`, removed when the request ends — and by nothing else. A process that is killed leaves its lease directory and any lease in it for ever: no start, no delete looks at another process's directory | a deleted profile's RECORDING stays on disk behind a link that no listing of profiles shows — a person's voice outliving its delete. Seen on the node 2026-11-25 (München): nine lease directories dated 10-10 to 11-25, eight empty, one holding a 1,331,940-byte link made in October to a clip of a profile that still exists (same inode); had that profile been deleted, the bytes would have stayed | **to file upstream** (mudler/LocalAI); P19 (staged) |
 | **P1** | **patch we carry** | `GET /system` lists the options each loaded model was given, with their hash | none since VeGa: the wrapper receives `LoadModel` itself (vega.md §1). It was blocking for the model pool; kept for upstream. IN the node's LocalAI again since 2026-11-21 (v5.0.1 + P1, cherry-picked as 105104c32; operator: "Re-patch, then update"): its `/system` rows carry `load_options` (5 of 5 loaded models, as the runs state them). Before it, v4.12.1 upstream core carried none, and Louise read a model's options from the answering run's statement (`model_load.note_run_options`), as it still can | not filed; [`deploy/localai/patches/0001-system-list-load-options.patch`](../../deploy/localai/patches/0001-system-list-load-options.patch) |
 | **P2** | **patch we carry** | llama.cpp backend: `Embedding` embeds `EmbeddingTokens`, with the special tokens a text gets (B14) | **blocking** for the token cut: VeGa's wrapper sends a cut as its first tokens to a backend that embeds them (`Gate._probe`) | not filed; [`deploy/localai/patches/0002-llama-cpp-embed-token-ids.patch`](../../deploy/localai/patches/0002-llama-cpp-embed-token-ids.patch) |
 | **P3** | **patch we carry** | llama.cpp backend: the encoder of an encoder-decoder model runs (B16), as a llama.cpp patch in the backend's own `patches/` | MADLAD on llama.cpp (operator, 2026-10-27: "we need anyway a patched llama.cpp") | not filed; [`deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch`](../../deploy/localai/patches/0003-llama-cpp-encoder-decoder.patch) |
@@ -134,6 +135,7 @@ the source):*
 | **P13 (staged)** | **patch staged, not in the series yet** | LocalAI's server (`core/config`): `VoiceCloningForModel` honours a model's explicit `tts.voice_cloning: true` for a backend the capability table does not know, with the reference contract the cloning backends share | the fix of B17: a model on an engine installed under its own name can be asked for a saved voice profile, as Louise asks | **to file upstream** (the operator, 2026-11-24: "add the improvement to the list of the fixes I have at some point send"); [`deploy/localai/patches/staged/0011-config-voice-cloning-opt-in-unknown-backend.patch`](../../deploy/localai/patches/staged/0011-config-voice-cloning-opt-in-unknown-backend.patch); LocalAI's `core/config` tests pass with it; the node's server not rebuilt yet |
 | **P18 (staged)** | **patch staged, in the candidate `engine-refusal.series`** | llama.cpp (ggml-sycl): the pool's refusal is a plain struct, not a `std::exception` — `CHECK_TRY_ERROR` around every op catches those and `SYCL_CHECK` aborts — so that it reaches the graph's catch (two `static_assert`s hold the shape) | what P14 was meant to be: **P14 DID NOT HOLD ON THE CARD** (2026-11-25: each process gone at its first refusal, `ggml_sycl_op_mul_mat` line 4221) | to file upstream WITH P14, as one change; [`deploy/localai/patches/staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch`](../../deploy/localai/patches/staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch); the real macros under Intel's compiler and a CPU stand-in above the backend pass here; its card row is 0016's switch |
 | **P14 (staged)** | **live since 2026-11-24, and it does not do what it says: see P18** | llama.cpp (ggml-sycl): the pool's refused commit throws, `ggml_backend_sycl_graph_compute` answers `GGML_STATUS_ALLOC_FAILED`, the server's existing "Compute error." answers the request and the process lives | the fix of B18 | **to file upstream** (ggml-org/llama.cpp); [`deploy/localai/patches/staged/0013-llama-cpp-sycl-pool-refusal.patch`](../../deploy/localai/patches/staged/0013-llama-cpp-sycl-pool-refusal.patch); compiled here 2026-11-24, never run; its test is on the card |
+| **P19 (staged)** | **patch staged, for the SERVER** (v5.0.1 + P1, the node's server tree; not a patch of the engine and in no engine series) | LocalAI's server (`core/services/voiceprofile`): a Store keeps an owner file locked in its lease directory for as long as it lives; lease directories whose owner is gone are removed, with their leases, when a Store starts and at every profile delete; a living Store's leases are left alone; a directory with no owner file goes once it is a day old | the fix of B20 | **to file upstream** (mudler/LocalAI); [`deploy/localai/patches/staged/0019-voiceprofile-abandoned-leases.patch`](../../deploy/localai/patches/staged/0019-voiceprofile-abandoned-leases.patch); LocalAI's own tests pass with it on v5.0.1 + P1 and on the whole candidate tree (25 specs, 6 new; the first new one fails without the change), and `core/http/endpoints/openai`'s |
 | **P15 (staged)** | **patch staged, not in the series yet** | llama.cpp backend (`grpc-server.cpp`): a second termination signal leaves through `second_signal.h` — `write(2)` and `std::_Exit(1)`, async-signal-safe calls only — with a standalone test LocalAI's own unit-test runner picks up | the fix of B19 | **to file upstream** (mudler/LocalAI; the same handler is in ggml-org/llama.cpp's `tools/server/server.cpp`); [`deploy/localai/patches/staged/0014-llama-cpp-second-signal-exit.patch`](../../deploy/localai/patches/staged/0014-llama-cpp-second-signal-exit.patch); its test compiled and run here, the backend itself not built |
 | **P16 (staged, a prototype)** | **patch staged, in the next live engine's candidate, off unless a model's env sets it** | llama.cpp (ggml, ggml-sycl, the server): PARKING — a model's weights leave the device and come back at the same addresses (physical memory behind a reserved virtual range), switched on by a model's env only; the engine half of `models-beyond-the-card.md` | more models than the card holds without a process start per swap (operator, 2026-11-24) | not for upstream yet: a prototype for one measurement ([`parking-prototype.md`](parking-prototype.md)); [`deploy/localai/patches/staged/0015-llama-cpp-park-weights.patch`](../../deploy/localai/patches/staged/0015-llama-cpp-park-weights.patch); compiled and tested on a CPU stand-in here, never run on a card |
 | **P17 (staged)** | **patch staged, in the next live engine's candidate, off unless a model's env sets it** | llama.cpp (the MoE cache): the experts used are recorded beyond a context — in memory with the model and in a file — and a cache is filled from the record when it is created, its eviction order seeded from it | the first answer after every load of a MoE model with its experts in host memory is the slow one: the cache starts empty and uploads miss by miss (operator, 2026-11-24) | **to file upstream** (ggml-org/llama.cpp, whose cache it extends) once the card has measured it; [`deploy/localai/patches/staged/0017-llama-cpp-moe-record.patch`](../../deploy/localai/patches/staged/0017-llama-cpp-moe-record.patch); [`moe-expert-record.md`](moe-expert-record.md); the record tested here, the fill not run |
@@ -1447,6 +1449,58 @@ prototype's engine; parking-prototype.md §4).
 **PROVOKED, AND 0013 DID NOT HOLD (München, 2026-11-25, engine b190673dbdbf).** A reranker copy with `GGML_SYCL_POOL_REFUSE=2` against a control: the control served the short pair and the twelve long documents three times (1.54–1.59 s, the same scores, its process alive). With the switch, the first request that grew the pool ended the PROCESS — HTTP 500 "error reading from server: EOF" after 3.0 s — and so did LocalAI's two reloads, each at its first refusal. In each process, in one millisecond: "the device refused 6 MiB for the pool (2 MiB committed)", then "the SYCL pool could not commit device memory / Exception caught at … ggml-sycl.cpp, line:4221, func:operator()", then "SYCL error: CHECK_TRY_ERROR(op(ctx, src0, src1, dst, …)): Exception caught in this line of code … in function ggml_sycl_op_mul_mat". Never "the graph is abandoned", never "Compute error.". **Why:** 0013 threw the refusal as a `std::runtime_error`; the backend calls its ops under its own macros, `SYCL_CHECK(CHECK_TRY_ERROR(op(…)))`, and `CHECK_TRY_ERROR` catches ANY `std::exception` and aborts (72 call sites). The op that asked for the memory took the refusal; the graph's catch was never reached. The live engines since 2026-11-24 therefore die on a refused pool commit exactly as every engine before them: no worse, and not fixed. It was not seen before the card because nothing here runs the SYCL path, and filling the card did not provoke it.
 
 **The fix, staged 0018** (`0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch`, candidate `engine-refusal.series`: the live engine and this one patch): the refusal is a plain struct, neither a `sycl::exception` nor a `std::exception`, with a `static_assert` for each, so only the graph's own catch can take it. Checked without a card, in the three layers a card run crosses: (1) the backend's REAL macros under Intel's compiler (`tools/measure/sycl_refusal_macro_check.cpp`): the old type aborts with the card's own lines, exit 134; the new one reaches a catch outside the op, exit 0; (2) what an abandoned op leaves, read: its temporaries are the pool's and are released in reverse order as the stack unwinds; the one thing ops change for good, the layout of quantized weights, takes its scratch memory from the device allocator, not the pool; no handler between an op and the graph catches `(...)`; (3) everything ABOVE the backend, run: a CPU stand-in that fails two graphs with `GGML_STATUS_ALLOC_FAILED` (`tools/measure/refuse_cpu_standin.patch`, `tools/measure/refuse_cpu_test.py`, 13 of 13) — the request is answered 500 "Compute error." (503 from the canary when the context is made for the request), the process is the same one, and the next request returns the control's vectors bit for bit. What is left for the card is the one thing none of these is: a real device between (1) and (3) — the same row again. (room-on-the-card.md §4 has the same, with the steps.)
+
+### B20 and P19 (staged). A voice lease outlives the process that took it
+
+*Seen on the node 2026-11-25 (München, after deleting a TEST profile in the
+port's rows): `voice-profiles/.leases` held nine directories, eight empty,
+one with a single file — 1,331,940 bytes, link count 2, the same inode as
+the original 27.75 s clip in a living profile, made in October by a process
+long gone. Nothing of the deleted test profile remained. Base: LocalAI
+v5.0.1 (`dd5780a`) + P1, the node's server tree.*
+
+**What happens.** `Store.LeaseAudios` hard-links a profile's clip into the
+Store's own lease directory (`.leases/<uuid>`, one per process) so that a
+delete does not break a synthesis in flight; the handler of `/tts` and
+`/v1/audio/speech` gives it back with `defer release()` when the request
+ends (the realtime endpoint, when its session ends). `Store.Close` removes
+the directory. A process that is killed does neither, and no later process
+looks: `Delete` removes the profile's directory and leaves every lease
+directory alone. So a recording can stay on disk after its profile is
+deleted, for as long as the data directory lives.
+
+**The fix, P19** (`0019-voiceprofile-abandoned-leases.patch`, a patch of
+the SERVER): the Store keeps `.leases/<uuid>/.owner` locked while it lives
+— `flock` on Unix, `LockFileEx` on Windows, as LocalAI's add-on stores do;
+the kernel drops the lock when the process ends, however it ends. A lease
+directory whose owner file can be locked belongs to nobody: it is removed,
+with every lease in it, when a Store starts and whenever a profile is
+deleted. A living Store's leases are never touched. A directory without an
+owner file (every one made before the patch) is removed once the last lease
+made or released in it is a day old — by the directory's own time, since a
+lease is a link and carries its clip's. Only real directories are
+considered: a link under `.leases` is not followed, a stray file not
+removed.
+
+**Tested.** LocalAI's own suite for the package, 25 specs with 6 new: a
+killed process's lease is gone with the profile's delete and no WAV is left
+below the store (this one FAILS without the change); a living store's lease
+survives the delete and is readable until released; a new Store removes what
+the ones before it left; a directory without an owner file goes only once
+it is old; a symlink and a stray file are left alone; the owner file is
+0600 and gone at Close. `core/http/endpoints/openai`'s suite passes with it.
+Compiles for Windows (`GOOS=windows go vet`).
+
+**On the node.** It takes effect when the SERVER is rebuilt with it — the
+engine's tar does not carry it. At its first start it removes the nine
+lockless directories, the October link among them (all older than a day):
+that is a deletion on the node and is the operator's word, put to him with
+the pass by München. Until it is live, the rule the architecture session
+set stands: no recorded profile is deleted without `find … -samefile` on
+its clip under `.leases`, before and after, said in the report.
+
+**The same condition, one layer down, in our own port:** the engine kept
+the last clip's samples and rows in memory between requests (staged 0020).
 
 ### B19 and P15 (staged). The backend calls `exit()` inside its signal handler
 
