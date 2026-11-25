@@ -1,0 +1,48 @@
+backend: vega-louise-llama-cpp
+cache_type_k: q8_0
+cache_type_v: q8_0
+chat_template_kwargs:
+    enable_thinking: false
+context_size: 16384
+draft_model: ""
+env:
+    GGML_SYCL_ENABLE_DNN: "0"
+    GGML_SYCL_FA_ONEDNN: "0"
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+f16: true
+flash_attention: "on"
+function:
+    grammar:
+        disable: true
+gpu_layers: 999
+known_usecases:
+    - chat
+mmap: true
+mmproj: ""
+name: louise-chat-qwen3-8b-q8-kvq8
+options:
+    - parallel:1
+    - cache_ram:0
+    - ubatch:512
+    - use_jinja:true
+parameters:
+    batch: 2048
+    frequency_penalty: 0
+    min_p: 0
+    model: llama-cpp/models/Qwen3-8B-Q8_0.gguf
+    presence_penalty: 0
+    repeat_last_n: 64
+    repeat_penalty: 1
+    seed: 0
+    temperature: 0.7
+    top_k: 20
+    top_p: 0.8
+reasoning_effort: none
+stopwords:
+    - <|im_end|>
+    - <dummy32000>
+    - </s>
+    - <|endoftext|>
+template:
+    use_tokenizer_template: true
+threads: 6

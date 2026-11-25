@@ -1,0 +1,23 @@
+backend: vega-louise-llama-cpp
+context_size: 8192
+embeddings: true
+env:
+    GGML_SYCL_ENABLE_DNN: "0"
+    GGML_SYCL_FA_ONEDNN: "0"
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+flash_attention: "on"
+gpu_layers: 999
+mmap: true
+name: vega-bge-m3
+options:
+    - fit:off
+    - context_on_demand
+    - context_canary:true
+    - parallel:1
+    - pooling:cls
+    - ubatch:8192
+parameters:
+    batch: 8192
+    model: weights/bge-m3/bge-m3-FP16.gguf
+    seed: 0
+threads: 6

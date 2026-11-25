@@ -1,0 +1,24 @@
+backend: vega-louise-llama-cpp
+context_size: 8192
+embeddings: true
+env:
+    GGML_SYCL_ENABLE_DNN: "0"
+    GGML_SYCL_FA_ONEDNN: "0"
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+flash_attention: "on"
+gpu_layers: 999
+mmap: true
+name: vega-nemotron-3-embed-1b
+options:
+    - fit:off
+    - context_on_demand
+    - context_canary:true
+    - parallel:1
+    - pooling:mean
+    - ubatch:8192
+parameters:
+    batch: 8192
+    model: weights/llama-embed/nemotron-3-embed-1b-f16.gguf
+    seed: 0
+pinned: true
+threads: 6

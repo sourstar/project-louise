@@ -1,0 +1,19 @@
+backend: louise-sycl-f16-llama-cpp-d531d5d804f1-stack-7c301a7ba437
+context_size: 512
+env:
+    GGML_SYCL_ENABLE_DNN: "0"
+    GGML_SYCL_FA_ONEDNN: "0"
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+gpu_layers: 999
+known_usecases:
+    - tts
+mmproj: qual-omnivoice-port/omnivoice-Q8_0-mmproj.gguf
+name: louise-tts-omnivoice
+options:
+    - fit:off
+    - parallel:1
+    - verbosity:4
+parameters:
+    model: qual-omnivoice-port/omnivoice-Q8_0-lm.gguf
+tts:
+    voice_cloning: true

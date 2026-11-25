@@ -1,0 +1,25 @@
+backend: louise-sycl-f16-llama-cpp-d531d5d804f1-stack-7c301a7ba437
+context_size: 2048
+env:
+    GGML_SYCL_ENABLE_DNN: "0"
+    GGML_SYCL_FA_ONEDNN: "0"
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+flash_attention: "off"
+gpu_layers: 999
+known_usecases:
+    - completion
+mmap: true
+name: louise-translate-madlad
+options:
+    - parallel:4
+    - cache_ram:0
+    - ubatch:1024
+parameters:
+    batch: 1024
+    model: weights/madlad/madlad400-3b-mt-f16.gguf
+    seed: 0
+    temperature: 0
+    top_k: 1
+template:
+    completion: '{{.Input}}'
+threads: 6

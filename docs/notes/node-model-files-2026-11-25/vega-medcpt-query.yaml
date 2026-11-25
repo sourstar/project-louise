@@ -1,0 +1,21 @@
+backend: vega-louise-llama-cpp
+context_size: 513
+embeddings: true
+env:
+    GGML_SYCL_ENABLE_DNN: "0"
+    GGML_SYCL_FA_ONEDNN: "0"
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+flash_attention: "off"
+gpu_layers: 999
+mmap: true
+name: vega-medcpt-query
+options:
+    - fit:off
+    - parallel:1
+    - pooling:cls
+    - ubatch:512
+parameters:
+    batch: 512
+    model: weights/medcpt/MedCPT-Query-Encoder-f16.gguf
+    seed: 0
+threads: 6

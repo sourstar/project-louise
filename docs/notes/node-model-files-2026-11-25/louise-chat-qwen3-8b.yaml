@@ -1,0 +1,26 @@
+backend: vega-louise-llama-cpp
+context_size: 16384
+env:
+    GGML_SYCL_ENABLE_DNN: "0"
+    GGML_SYCL_FA_ONEDNN: "0"
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+flash_attention: "on"
+gpu_layers: 999
+mmap: true
+name: louise-chat-qwen3-8b
+options:
+    - parallel:1
+    - cache_ram:0
+    - ubatch:512
+    - use_jinja:true
+parameters:
+    batch: 2048
+    model: weights/chat/qwen3-8b.gguf
+    repeat_penalty: 1
+    seed: 0
+    top_k: 20
+    top_p: 0.95
+reasoning_effort: none
+template:
+    use_tokenizer_template: true
+threads: 6

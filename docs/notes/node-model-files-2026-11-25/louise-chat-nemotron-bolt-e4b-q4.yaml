@@ -1,0 +1,36 @@
+backend: vega-louise-llama-cpp
+context_size: 16384
+env:
+    GGML_SYCL_ENABLE_DNN: "0"
+    GGML_SYCL_FA_ONEDNN: "0"
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+flash_attention: "on"
+function:
+    automatic_tool_parsing_fallback: true
+    grammar:
+        disable: true
+gpu_layers: 999
+known_usecases:
+    - chat
+    - vision
+mmap: true
+mmproj: llama-cpp/mmproj/nemotron-3.5-bolt-e4b/mmproj-F16.gguf
+name: louise-chat-nemotron-bolt-e4b-q4
+options:
+    - use_jinja:true
+    - parallel:1
+    - cache_ram:0
+    - ubatch:512
+parameters:
+    batch: 2048
+    min_p: 0.01
+    model: llama-cpp/models/nemotron-3.5-bolt-e4b/NVIDIA-Nemotron-3.5-Bolt-E4B-UD-Q4_K_XL.gguf
+    repeat_penalty: 1
+    seed: 0
+    temperature: 1
+    top_k: 64
+    top_p: 0.95
+reasoning_effort: none
+template:
+    use_tokenizer_template: true
+threads: 6

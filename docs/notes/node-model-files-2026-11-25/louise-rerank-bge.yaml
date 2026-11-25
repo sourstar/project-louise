@@ -1,0 +1,22 @@
+backend: vega-louise-llama-cpp
+context_size: 2560
+embeddings: true
+env:
+    GGML_SYCL_ENABLE_DNN: "0"
+    GGML_SYCL_FA_ONEDNN: "0"
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+flash_attention: "on"
+gpu_layers: 999
+mmap: true
+name: louise-rerank-bge
+options:
+    - fit:off
+    - parallel:1
+    - cache_ram:0
+    - ubatch:2560
+parameters:
+    batch: 2560
+    model: weights/bge-m3/bge-reranker-v2-m3-f16.gguf
+    seed: 0
+reranking: true
+threads: 6

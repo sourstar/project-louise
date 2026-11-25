@@ -1,0 +1,16 @@
+backend: vega-louise-llama-cpp-cpu
+context_size: 513
+embeddings: true
+gpu_layers: 0
+mmap: true
+name: vega-medcpt-query-cpu
+options:
+    - fit:off
+    - parallel:1
+    - pooling:cls
+    - ubatch:512
+parameters:
+    batch: 512
+    model: weights/medcpt/MedCPT-Query-Encoder-f16.gguf
+    seed: 0
+threads: 8

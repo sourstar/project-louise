@@ -1,0 +1,17 @@
+backend: vega-louise-openvino
+context_size: 512
+env:
+    LOUISE_BITEXACT_MEASURED: louise-python-20261030
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+    OV_CACHE_DIR: /data/louise-cache/ov-cache
+gpu_layers: 0
+name: louise-rerank-medcpt
+options:
+    - task:medcpt-rerank
+    - device:xpu
+parameters:
+    batch: 16
+    model: weights/medcpt/medcpt-cross-ov
+    seed: 0
+reranking: true
+threads: 6

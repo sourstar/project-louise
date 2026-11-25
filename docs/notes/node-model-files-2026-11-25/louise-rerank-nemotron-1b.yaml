@@ -1,0 +1,22 @@
+backend: louise-sycl-f16-llama-cpp-d531d5d804f1-stack-7c301a7ba437
+context_size: 3072
+embeddings: true
+env:
+    GGML_SYCL_ENABLE_DNN: "0"
+    GGML_SYCL_FA_ONEDNN: "0"
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+flash_attention: "on"
+gpu_layers: 999
+mmap: true
+name: louise-rerank-nemotron-1b
+options:
+    - fit:off
+    - parallel:1
+    - cache_ram:0
+    - ubatch:3072
+parameters:
+    batch: 3072
+    model: weights/nemotron-rerank/llama-nemotron-rerank-1b-v2-f16.gguf
+    seed: 0
+reranking: true
+threads: 6

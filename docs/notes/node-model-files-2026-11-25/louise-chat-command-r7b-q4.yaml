@@ -1,0 +1,34 @@
+backend: vega-louise-llama-cpp
+context_size: 16384
+draft_model: ""
+env:
+    GGML_SYCL_ENABLE_DNN: "0"
+    GGML_SYCL_FA_ONEDNN: "0"
+    NEO_CACHE_DIR: /data/louise-cache/neo-cache
+flash_attention: "on"
+function:
+    automatic_tool_parsing_fallback: true
+    grammar:
+        disable: true
+gpu_layers: 999
+known_usecases:
+    - chat
+mmap: true
+mmproj: ""
+name: louise-chat-command-r7b-q4
+options:
+    - use_jinja:true
+    - parallel:1
+    - cache_ram:0
+    - ubatch:512
+parameters:
+    batch: 2048
+    model: llama-cpp/models/c4ai-command-r7b-12-2024-Q4_K_M.gguf
+    repeat_penalty: 1
+    seed: 0
+    temperature: 0.3
+stopwords:
+    - <|END_OF_TURN_TOKEN|>
+template:
+    use_tokenizer_template: true
+threads: 6
