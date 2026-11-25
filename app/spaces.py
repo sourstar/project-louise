@@ -369,6 +369,25 @@ def refuse_boot(collections: list) -> list[tuple]:
     return refused
 
 
+def verdict(con, collection) -> tuple[bool | None, str]:
+    """THE BOOT CHECK OF ONE COLLECTION, ON A CONNECTION THE CALLER HOLDS,
+    READ-ONLY (`pin_if_missing=False`: nothing is pinned, nothing written —
+    it runs on a manifest opened read-only, which is what the build's checks
+    hold, app/build_check.py). (True, …) the space is pinned and consistent;
+    (None, …) no space is pinned yet, so nothing can be compared; (False,
+    the reason) the refusal the worker's start would give (`refuse_boot`).
+    Any other failure is the caller's to report as not checked."""
+    try:
+        pinned = _validate_one(con, collection, pin_if_missing=False)
+    except BootValidationError as e:
+        return False, str(e)
+    except ValueError as e:
+        if type(e).__name__ != "NoEncoder":
+            raise
+        return False, str(e)
+    return (True, "space pinned & consistent") if pinned else (None, "no space is pinned yet")
+
+
 def report_boot_status(collections: list) -> list[dict]:
     """Non-raising per-collection boot-validation report for the System
     page's UI: same check validate_boot() runs at process startup, but

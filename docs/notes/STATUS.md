@@ -20,6 +20,16 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **The author's check gains `licence` and `space-pin` (`louise hold check <collection> --build`; the
+  compliance check, compliance-check.md §4).** Both are the node's OWN resolutions said to the author
+  before the worker meets them, never a second implementation: `licence` is `licensing.state_for` (a
+  yellow- or red-class source with no recorded acknowledgement FAILS — "not discovered, not imported, not
+  exchanged" — and names `hold collection ack`); `space-pin` is the start's own boot check on the check's
+  read-only connection (`spaces.verdict`, `pin_if_missing=False`: nothing is pinned by asking — a status
+  page once re-pinned a half-edited recipe that way): a space the start would refuse FAILS with the start's
+  reason, no space pinned yet is INCONCLUSIVE. Four of the build's checks exist now (units, chunkless,
+  licence, space-pin); `rescan`, `parse-bound`, `origin-hash`, `words` and `bulk-ledger` are still to
+  build, `rescan` only after its six isolations are each a test. Not run on the node's collections yet.
 - **THE TEXT INDEXES ARE OPENED AT THE WEB'S START, AND THE OPEN OF ONE HOLDS UP NO OTHER (the slow
   question, the text leg).** München's fact: his 12.6 s of fts were over gutenberg, whose text index is 54
   GB in 21 language groups on ssd3's SATA disk. But the same index measured 0.4 s at the median and 1.7 s at
