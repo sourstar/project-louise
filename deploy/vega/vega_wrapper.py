@@ -1737,7 +1737,7 @@ class Gate:
             # the same weights, still parked; the next LoadModel or the next
             # Embedding brings them back. So the run stays stated, as it does
             # for a refusal the backend words in its answer.
-            held = self.loaded
+            held, held_canon = self.loaded, self._load_canon
             early: bytes | None = None
             if (held is not None and self._load_canon == canon
                     and self.child.pid == held.pid and self.child.alive()):
@@ -1799,8 +1799,23 @@ class Gate:
                     log(f"{self.backend.name}: NVIDIA memory before the load not read: {e}")
             # (a repeated load the backend did NOT call a return was forwarded above)
             answer = early if early is not None else forward(raw)
-            if not self.pb.Result.FromString(answer).success:
+            result = self.pb.Result.FromString(answer)
+            if not result.success:
                 return answer                        # the backend's own refusal, as it said it
+            if early is None and ALREADY_LOADED in result.message:
+                # OTHER OPTIONS, AND THE BACKEND DID NOT LOAD (the independent
+                # reading of the park engine, 2026-11-25: its "already loaded"
+                # compares the model's NAME only): what computes is the load
+                # in force, under ITS options. A run stated here would name
+                # options that are not the ones computing — the artefact
+                # invariant 12 exists against. So nothing is stated for them:
+                # the run in force stands for the process that still serves
+                # it, and LocalAI is told the load failed, so that it stops
+                # this backend and loads afresh.
+                self.loaded, self._load_canon = held, held_canon
+                return self._refuse_load(loadopts.Unstatable(
+                    "the backend holds this model under other options and did not load again "
+                    f"(it answered {result.message!r}): stop it to load these"))
             deadline = time.monotonic() + WEIGHTS_TIMEOUT_S
             for t in hashers.values():
                 t.join(max(0.0, deadline - time.monotonic()))

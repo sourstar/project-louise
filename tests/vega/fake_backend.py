@@ -93,6 +93,10 @@ class Servicer(backend_pb2_grpc.BackendServicer):
         note(context, method="LoadModel", model=request.Model, options=list(request.Options))
         if not os.path.isfile(request.ModelFile):
             return backend_pb2.Result(success=False, message=f"no weights at {request.ModelFile}")
+        if os.environ.get("FAKE_REPEAT_NOOP") == "by-name" and self.loaded is not None \
+                and request.Model == self.loaded.Model and request != self.loaded:
+            # the backend as upstream has it: "already loaded" by the model's NAME, whatever the options
+            return backend_pb2.Result(success=True, message="Model already loaded")
         if os.environ.get("FAKE_REPEAT_NOOP") and self.loaded is not None and request == self.loaded:
             if os.path.exists(os.environ.get("FAKE_REPEAT_REFUSE", "") or os.devnull + ".none"):
                 # a parked model whose weights cannot come back to the card now (parking step 2)

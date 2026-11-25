@@ -89,7 +89,7 @@ def make_node(tmp_path, stubs, vega):
 
     def make(*, pairs=False, receipt_timeout_s=2.0, socket=None, tokenizer=False,
              cuts=None, token_ids=False, extra: dict[str, Any] | None = None,
-             canary_fail: str = "", repeat_noop: bool = False,
+             canary_fail: str = "", repeat_noop: bool | str = False,
              repeat_refuse: Path | None = None) -> Node:
         backends = tmp_path / "backends"
         real = backends / "fake-llama-cpp"
@@ -114,7 +114,8 @@ def make_node(tmp_path, stubs, vega):
                    **({"FAKE_TOKEN_IDS": "1"} if token_ids else {}),
                    **({"FAKE_CANARY_FAIL": canary_fail} if canary_fail else {}),
                    # the backend answers a repeated LoadModel as llama.cpp does: "already loaded"
-                   **({"FAKE_REPEAT_NOOP": "1"} if repeat_noop else {}),
+                   **({"FAKE_REPEAT_NOOP": repeat_noop if isinstance(repeat_noop, str) else "1"}
+                      if repeat_noop else {}),
                    # ...and refuses it while this file exists: no room on the card for the weights
                    **({"FAKE_REPEAT_REFUSE": str(repeat_refuse)} if repeat_refuse else {}),
                    PYTHONPATH=os.pathsep.join([str(stubs.dir), os.environ.get("PYTHONPATH", "")]))
@@ -440,6 +441,29 @@ def test_a_repeated_load_the_card_refuses_goes_through_as_it_is_and_the_run_stay
     batch, r = node.embed(["after"])
     _vectors, (second,) = node.verify(batch, r)
     assert gate.loaded is state and second == first
+
+
+def test_no_run_is_stated_for_options_the_backend_did_not_load(make_node):
+    """The independent reading of the park engine, 2026-11-25: the backend's
+    "already loaded" compares the model's NAME only, so a load under OTHER
+    options is answered success while the old options go on computing. A run
+    stated then would name options that are not the ones in force. The
+    wrapper states none: LocalAI is told the load failed (it then stops the
+    backend and loads afresh), and the run in force stands meanwhile."""
+    node = make_node(repeat_noop="by-name")
+    pb = node.stubs.pb
+    batch, r = node.embed(["before"])
+    _vectors, (first,) = node.verify(batch, r)
+    gate = node.running.gate
+    state = gate.loaded
+    other = {**node.models["vega-fake"].options, "ContextSize": 1024}
+    result = pb.Result.FromString(node.channel().unary_unary(vw.LOAD)(
+        pb.ModelOptions(**other).SerializeToString(), timeout=30))
+    assert not result.success and "other options" in result.message and "did not load again" in result.message
+    assert gate.loaded is state, "the run in force is the one that computes: it stands"
+    batch, r = node.embed(["after"])
+    _vectors, (second,) = node.verify(batch, r)
+    assert second == first
 
 
 def test_a_backend_that_loads_again_at_a_repeated_load_is_stated_again(make_node):
