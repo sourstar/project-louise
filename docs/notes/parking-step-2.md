@@ -270,13 +270,27 @@ applies after staged 0022 (`engine-lang.series`'s lines).
 | `LoadModel`, the model already held | the weights come back if they were away, then `Model already loaded`, the bytes the wrapper keys on | `Model already loaded`, today's no-op |
 | a request to a parked model | brings the weights back by itself, creates its context, answers; the model then STAYS on the device | — |
 | `Status` | `READY`/`BUSY`; `memory.total` = the weights' bytes in HOST memory now; breakdown `parked` (0/1), `park_size`, `parks`, `unparks` | `UNIMPLEMENTED`, as today: LocalAI samples the process |
-| no room when the weights must come back | `RESOURCE_EXHAUSTED`, the model still parked, the next request served | — |
+| no room when the weights must come back | `RESOURCE_EXHAUSTED`, message `no_room_on_device: the weights cannot come back to the device now`, the model still parked, the next request served | — |
 
 **One answer for "the device has no room now".** A new error type in
 llama.cpp's server (`no_room_on_device`, HTTP 503), which the backend answers
 as gRPC `RESOURCE_EXHAUSTED` on every request RPC and on the repeated
 `LoadModel`: parked weights that cannot come back; a context that cannot be
 created; a graph the device refused memory for (`llama_process` −2).
+
+**AMENDED once since it was sent (2026-11-25, found writing the server part): the refusal says its type at the head of
+its message.** `RESOURCE_EXHAUSTED` has other meanings on LocalAI's wire — a stream that is busy (`pkg/grpc/motion.go`,
+`tts_live.go`), a message over gRPC's size limit (`core/backend/embeddings.go` rewrites it as "conversation too long"), a
+rate-limited upstream (`localai-proxy`) — so LocalAI's HTTP layer could not have mapped the bare code to "no room" without
+calling those the same. Every refusal of the moment now reads `no_room_on_device: <what happened>`, built by ONE function in
+the backend and told by `is_no_room_message` (`park_reply.h`); the code is unchanged, and so is everything else in the
+patch. The llama.cpp half did not move.
+
+| | pros | cons |
+|---|---|---|
+| the type at the head of the message (built) | one test on the status — code AND head — in LocalAI and in any client; a person reading a log sees it too; nothing new on the wire | a string is an interface: pinned by the header's own test |
+| a gRPC trailer, as the canary's | not in the message | LocalAI's client makes a fresh call per RPC with no place that reads trailers: every call site would have to ask for them |
+| the bare code | nothing to add | a busy stream and an oversized message answered "no room on the device" |
 
 **Where it differs from §3.1 — ALL FIVE ACCEPTED by the architecture session (2026-11-25), the canary's as "the more
 important half: a model served unchecked behind a warning is the artefact invariant 12 exists against". The patch's own
@@ -316,7 +330,7 @@ poisons itself, refuses, or loses them — in no engine):
 
 | what | how | result |
 |---|---|---|
-| the backend's gRPC handlers, compiled against the patched engine | `tools/measure/park_told.py selftest` | 33 of 33 (29 of 29 when the patch was cut; four added since for a park that FAILS — no host memory for the copy: `Free` answers `INTERNAL`, nothing is parked, the model answers, the next `Free` parks): a model that cannot park answers as before; `Free`, `Status`, `LoadModel` as the table; the first vectors bit for bit over 12 cycles (6 returned by `LoadModel`, 6 by the request); a refused return `RESOURCE_EXHAUSTED`, still parked, the next served; 302 calls of `Free` beside live requests — 151 parked, 151 busy, every request's vectors intact |
+| the backend's gRPC handlers, compiled against the patched engine | `tools/measure/park_told.py selftest` | 33 of 33 on the amended patch (29 of 29 when it was first cut; four added since for a park that FAILS — no host memory for the copy: `Free` answers `INTERNAL`, nothing is parked, the model answers, the next `Free` parks): a model that cannot park answers as before; `Free`, `Status`, `LoadModel` as the table; the first vectors bit for bit over 12 cycles (6 returned by `LoadModel`, 6 by the request); a refused return `RESOURCE_EXHAUSTED`, still parked, the next served; 302 calls of `Free` beside live requests — 151 parked, 151 busy, every request's vectors intact |
 | llama.cpp's own server | `tools/measure/park_cpu_test.py` | 48 of 48 (43 of 43 when the patch was cut — 17 of step 1, 26 told; five added for a park that fails: 500 `server_error`, the weights on the device, the model answering) |
 | a refused graph | `tools/measure/refuse_cpu_test.py … --told` | 17 of 17: every refusal 503 `no_room_on_device`, none counted as a canary that failed, the same process, the next request the control's vectors |
 | llama.cpp's server tests | `tools/server/tests/unit/test_park_weights.py`, `test_context_on_demand.py` | 25 passed |

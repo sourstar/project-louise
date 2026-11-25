@@ -123,7 +123,7 @@ def test_which_code_each_outcome_is():
     header = _added(_sections()[BACKEND + "park_reply.h"])
     request = header[header.index("inline ParkCode code_of_request_error("):header.index("// Free: the answer of the park task")]
     assert "return type == ERROR_TYPE_NO_ROOM ? ParkCode::ResourceExhausted : ParkCode::Internal;" in request
-    free = header[header.index("inline ParkCode code_of_free_error("):header.index("// A repeated LoadModel")]
+    free = header[header.index("inline ParkCode code_of_free_error("):header.index("// RESOURCE_EXHAUSTED has other meanings on this wire")]
     assert re.search(r'"not_supported_error"\) \{\s+return ParkCode::Unimplemented;', free)
     assert re.search(r'"unavailable_error"\) \{\s+return ParkCode::FailedPrecondition;', free), \
         "busy is for now: never Unimplemented, which tells the caller to stop the process"
@@ -136,12 +136,32 @@ def test_which_code_each_outcome_is():
 def test_every_request_rpc_answers_the_refusal_by_its_type_and_nothing_else_moves():
     server = _sections()[BACKEND + "grpc-server.cpp"]
     added, removed = _added(server), _removed(server)
-    # PredictStream, Predict, Embedding, Rerank, TTS, TTSStream, Score, the slot cache, a decision's default
-    assert added.count("grpc_code_of_request_error(") == 9 + 1          # and its own definition
+    # PredictStream, Predict, Embedding, Rerank, TTS, TTSStream, Score, the slot cache, a decision's default - and
+    # the repeated LoadModel
+    assert added.count("grpc_status_of_request_error(") == 10 + 1       # and its own definition
     assert removed.count("grpc::StatusCode::INTERNAL") == 8, "each was INTERNAL; the decision's switch had a bare default"
-    assert "default: code = grpc_code_of_request_error(results.error->to_json()); break;" in added
+    assert "default: return grpc_status_of_request_error(results.error->to_json(), error->err_msg);" in added
     # the canary's trailer on an Embedding is still said: a real canary failure is not a room refusal
     assert "CONTEXT_CANARY_TRAILER" not in removed
+
+
+def test_the_refusal_says_its_type_at_the_head_of_its_message():
+    """RESOURCE_EXHAUSTED has other meanings on LocalAI's wire - a stream that is busy (pkg/grpc/motion.go,
+    tts_live.go), a message over the size limit (core/backend/embeddings.go), a rate-limited upstream - so the code
+    alone cannot be mapped to "no room": the message says which it is, and ONE function builds every such status."""
+    header = _added(_sections()[BACKEND + "park_reply.h"])
+    assert 'return std::string(ERROR_TYPE_NO_ROOM) + ": " + message;' in header
+    assert "inline bool is_no_room_message(const std::string & message)" in header
+    server = _added(_sections()[BACKEND + "grpc-server.cpp"])
+    build = server[server.index("static grpc::Status grpc_status_of_request_error("):]
+    build = build[:build.index("\n}\n")]
+    assert "return grpc::Status(grpc_code_of(code), llama_grpc::no_room_message(message));" in build
+    # no site builds a RESOURCE_EXHAUSTED by hand, past the one mapping of park_reply.h's codes
+    assert server.count("RESOURCE_EXHAUSTED") == server.count("return grpc::StatusCode::RESOURCE_EXHAUSTED;") \
+        + len(re.findall(r"^\s*//.*RESOURCE_EXHAUSTED", server, re.M))
+    test = _added(_sections()[BACKEND + "park_reply_test.cpp"])
+    assert '"no_room_on_device: the weights cannot come back to the device now"' in test
+    assert '!llama_grpc::is_no_room_message("backend is busy")' in test
 
 
 def test_free_status_and_the_return_exist_only_where_the_engine_can_park():
@@ -153,7 +173,8 @@ def test_free_status_and_the_return_exist_only_where_the_engine_can_park():
     assert guarded.count('grpc::Status(grpc::StatusCode::UNIMPLEMENTED,') == 2, "a model that cannot park: as before"
     # the return: only for a model that can park, the load lock released first, the message after
     back = server[server.index("load_lock.unlock();"):server.index("result->set_message(llama_grpc::LOAD_ALREADY_LOADED);")]
-    assert "#if LOCALAI_HAS_PARK" in back and "runPark(false)" in back and "code_of_return_error" in back
+    assert "#if LOCALAI_HAS_PARK" in back and "runPark(false)" in back and "grpc_status_of_request_error(" in back
+    assert "result->set_message(refused.error_message());" in back, "the answer and the status say the same words"
     prepare = _added(_sections()[BACKEND + "prepare.sh"])
     assert 'grep -q "SERVER_TASK_TYPE_PARK" llama.cpp/tools/server/server-task.h' in prepare
     assert "#define LOCALAI_HAS_PARK ${HAS_PARK}" in prepare
@@ -205,6 +226,7 @@ def test_the_refusal_switch_touches_only_a_return_and_at_its_last_piece():
 
 def test_the_note_says_what_differs_from_the_design_and_what_was_not_measured():
     section = NOTE[NOTE.index("## 6. The engine part, as built"):]
-    for said in ("FAILED_PRECONDITION", "Where it differs from §3.1", "COMMON_CANARY_NO_MEMORY", "29 of 29", "43 of 43",
+    for said in ("FAILED_PRECONDITION", "Where it differs from §3.1", "COMMON_CANARY_NO_MEMORY", "33 of 33", "48 of 48",
+                 "no_room_on_device: the weights cannot come back", "AMENDED",
                  "17 of 17", "NOT measured: anything on a card", "park_told.py cycles", "What an unpatched LocalAI does"):
         assert said in section, said

@@ -56,6 +56,8 @@ TEXTS = [f"sentence number {i}: the quick brown fox jumps over the lazy dog, {i}
 #: the backend's answer to a LoadModel for the model it already holds, parked or not: its bytes are an interface
 ALREADY_LOADED = "Model already loaded"
 PARKED = "parked"
+#: the head of a refusal's message: RESOURCE_EXHAUSTED alone has other meanings on LocalAI's wire
+NO_ROOM = "no_room_on_device: "
 
 
 def stubs(directory: str | None):
@@ -300,12 +302,14 @@ def selftest(binary: str, model: str, stubs_dir: str | None) -> int:
     b.free()
     code, answer, detail, _ = b.load(name)
     check("LoadModel with no room: RESOURCE_EXHAUSTED, never the message that says loaded",
-          code == "RESOURCE_EXHAUSTED" and "cannot come back" in detail and ALREADY_LOADED not in detail, f"{code} {detail}")
+          code == "RESOURCE_EXHAUSTED" and detail.startswith(NO_ROOM) and "cannot come back" in detail
+          and ALREADY_LOADED not in detail, f"{code} {detail}")
     check("the model is still parked", b.status()[1].get("parked") == 1)
     # ONE sentence: each asks for the weights again, and the stand-in counts refusals
     code, detail, _ = b.embed(TEXTS[0])
     check("a request with no room: RESOURCE_EXHAUSTED, never vectors",
-          code == "RESOURCE_EXHAUSTED" and "cannot come back" in str(detail), f"{code} {str(detail)[:80]}")
+          code == "RESOURCE_EXHAUSTED" and str(detail).startswith(NO_ROOM) and "cannot come back" in str(detail),
+          f"{code} {str(detail)[:80]}")
     check("still parked, the same process", b.status()[1].get("parked") == 1 and p.proc.poll() is None)
     code, got, _ = b.embed_all()
     check("the next request is served, the first vectors", code == "OK" and got == base and b.status()[1].get("parked") == 0)

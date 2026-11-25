@@ -39,6 +39,12 @@ it was (parked, if it was), and the same request can be sent again. Not
 UNAVAILABLE, which LocalAI reads as a backend it can no longer reach.
 Every other error is INTERNAL, as before.
 
+RESOURCE_EXHAUSTED has other meanings on this wire - a stream that is
+busy, a message over the size limit, a rate-limited upstream - so the
+refusal also says its type at the head of its message, where a caller
+that maps statuses can tell it from them without a list of messages:
+"no_room_on_device: the weights cannot come back to the device now".
+
 The messages and the codes are in park_reply.h, tested without a model
 (park_reply_test.cpp): a proxy in front of a backend tells a return from a
 load by the bytes of "Model already loaded". prepare.sh probes the
@@ -46,24 +52,25 @@ checkout (LOCALAI_HAS_PARK), so a fork without the llama.cpp patch builds
 this file as before, Free and Status unimplemented.
 
 Checked without a device, on a CPU build of this backend with a stand-in
-for a device that parks and refuses (a dev patch, in no build): 29 of 29
-over gRPC - a model that cannot park answers as before; Free, Status and
-LoadModel as above; the first vectors bit for bit over 12 cycles, returned
-by LoadModel and by the request; a refused return is RESOURCE_EXHAUSTED
-with the model still parked and the next request served; 302 calls of Free
-beside live requests, each done or refused busy, every request's vectors
-intact. NOT run: any of it on a device, or through LocalAI's server, which
+for a device that parks, refuses and fails to park (a dev patch, in no
+build): 33 of 33 over gRPC - a model that cannot park answers as before;
+Free, Status and LoadModel as above; the first vectors bit for bit over 12
+cycles, returned by LoadModel and by the request; a refused return is
+RESOURCE_EXHAUSTED "no_room_on_device: ..." with the model still parked
+and the next request served; a park that fails is INTERNAL with nothing
+parked; some 300 calls of Free beside live requests, each done or refused
+busy, every request's vectors intact. NOT run: any of it on a device, or through LocalAI's server, which
 today calls Free only before it stops a process.
 
 Assisted-by: Claude Code
 ---
  backend/cpp/llama-cpp/CMakeLists.txt          |   6 +
- backend/cpp/llama-cpp/grpc-server.cpp         | 159 +++-
- backend/cpp/llama-cpp/park_reply.h            |  67 ++
- backend/cpp/llama-cpp/park_reply_test.cpp     |  62 ++
+ backend/cpp/llama-cpp/grpc-server.cpp         | 169 +++-
+ backend/cpp/llama-cpp/park_reply.h            |  77 ++
+ backend/cpp/llama-cpp/park_reply_test.cpp     |  65 ++
  .../patches/0022-server-park-when-told.patch  | 806 ++++++++++++++++++
  backend/cpp/llama-cpp/prepare.sh              |  13 +
- 6 files changed, 1102 insertions(+), 11 deletions(-)
+ 6 files changed, 1125 insertions(+), 11 deletions(-)
  create mode 100644 backend/cpp/llama-cpp/park_reply.h
  create mode 100644 backend/cpp/llama-cpp/park_reply_test.cpp
  create mode 100644 backend/cpp/llama-cpp/patches/0022-server-park-when-told.patch
@@ -86,10 +93,10 @@ index 663ca11..111eef0 100644
      target_include_directories(passthrough_options_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
      target_compile_features(passthrough_options_test PRIVATE cxx_std_17)
 diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
-index f8d69d0..e79ddb6 100644
+index f8d69d0..7534de3 100644
 --- a/backend/cpp/llama-cpp/grpc-server.cpp
 +++ b/backend/cpp/llama-cpp/grpc-server.cpp
-@@ -118,6 +118,32 @@
+@@ -118,6 +118,41 @@
  
  #include "parent_watch.h" // best-effort parent-death backstop (see header)
  #include "second_signal.h" // a second signal leaves at once, without exit() (see header)
@@ -116,13 +123,22 @@ index f8d69d0..e79ddb6 100644
 +// weights to come back, for a context, for a graph. That is RESOURCE_EXHAUSTED,
 +// a request to send again, where it was INTERNAL like a fault. Every other
 +// error is INTERNAL, as before.
-+static grpc::StatusCode grpc_code_of_request_error(const json & error) {
-+    return grpc_code_of(llama_grpc::code_of_request_error(error_type_of(error)));
++//
++// RESOURCE_EXHAUSTED has other meanings on this wire - a stream that is busy,
++// a message over the size limit - so the refusal also says its type at the
++// head of its message, "no_room_on_device: ...", where a caller that maps
++// statuses can tell it from them (park_reply.h).
++static grpc::Status grpc_status_of_request_error(const json & error, const std::string & message) {
++    const llama_grpc::ParkCode code = llama_grpc::code_of_request_error(error_type_of(error));
++    if (code == llama_grpc::ParkCode::ResourceExhausted) {
++        return grpc::Status(grpc_code_of(code), llama_grpc::no_room_message(message));
++    }
++    return grpc::Status(grpc_code_of(code), message);
 +}
  
  
  using grpc::Server;
-@@ -2597,6 +2623,97 @@ public:
+@@ -2597,6 +2632,97 @@ public:
          return Status::OK;
      }
  
@@ -220,7 +236,7 @@ index f8d69d0..e79ddb6 100644
      grpc::Status LoadModel(ServerContext* context, const backend::ModelOptions* request, backend::Result* result) override {
          auto auth = checkAuth(context);
          if (!auth.ok()) return auth;
-@@ -2615,8 +2732,26 @@ public:
+@@ -2615,8 +2741,27 @@ public:
          }
          if (loaded_model) {
              if (loaded_model_identity == request->model()) {
@@ -238,10 +254,11 @@ index f8d69d0..e79ddb6 100644
 +                    server_task_result_ptr parked = runPark(false);
 +                    if (parked->is_error()) {
 +                        const json error = parked->to_json();
-+                        const std::string error_msg = error.value("message", "the weights cannot come back to the device now");
-+                        result->set_message(error_msg);
++                        const grpc::Status refused = grpc_status_of_request_error(
++                            error, error.value("message", "the weights cannot come back to the device now"));
++                        result->set_message(refused.error_message());
 +                        result->set_success(false);
-+                        return grpc::Status(grpc_code_of(llama_grpc::code_of_return_error(error_type_of(error))), error_msg);
++                        return refused;
 +                    }
 +                }
 +#endif
@@ -249,95 +266,95 @@ index f8d69d0..e79ddb6 100644
                  result->set_success(true);
                  return Status::OK;
              }
-@@ -3284,7 +3419,7 @@ public:
+@@ -3284,7 +3429,7 @@ public:
              // made it the first content chunk: LocalAI streamed the error text
              // as assistant output on an HTTP 200 instead of failing the request.
              json error_json = first_result->to_json();
 -            return grpc::Status(grpc::StatusCode::INTERNAL, error_json.value("message", "Error occurred"));
-+            return grpc::Status(grpc_code_of_request_error(error_json), error_json.value("message", "Error occurred"));
++            return grpc_status_of_request_error(error_json, error_json.value("message", "Error occurred"));
          }
  
          // Lambda to build a Reply from JSON + attach chat deltas from a result.
-@@ -3890,7 +4025,8 @@ public:
+@@ -3890,7 +4035,8 @@ public:
          } else if (all_results.error) {
              std::cout << "[DEBUG] Error in results: " << all_results.error->to_json().value("message", "") << std::endl;
              reply->set_message(all_results.error->to_json().value("message", ""));
 -            return grpc::Status(grpc::StatusCode::INTERNAL, all_results.error->to_json().value("message", "Error occurred"));
-+            return grpc::Status(grpc_code_of_request_error(all_results.error->to_json()),
-+                                all_results.error->to_json().value("message", "Error occurred"));
++            return grpc_status_of_request_error(all_results.error->to_json(),
++                                                all_results.error->to_json().value("message", "Error occurred"));
          } else {
              std::cout << "[DEBUG] Received " << all_results.results.size() << " results" << std::endl;
              if (all_results.results.size() == 1) {
-@@ -4080,7 +4216,7 @@ public:
+@@ -4080,7 +4226,7 @@ public:
              if (llama_grpc::is_context_canary_failure(message)) {
                  context->AddTrailingMetadata(llama_grpc::CONTEXT_CANARY_TRAILER, "failed");
              }
 -            return grpc::Status(grpc::StatusCode::INTERNAL, message);
-+            return grpc::Status(grpc_code_of_request_error(all_results.error->to_json()), message);
++            return grpc_status_of_request_error(all_results.error->to_json(), message);
          }
  
          // Extract the embeddings typed, straight from the task results (no
-@@ -4173,7 +4309,8 @@ public:
+@@ -4173,7 +4319,8 @@ public:
          if (all_results.is_terminated) {
              return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
          } else if (all_results.error) {
 -            return grpc::Status(grpc::StatusCode::INTERNAL, all_results.error->to_json().value("message", "Error in receiving results"));
-+            return grpc::Status(grpc_code_of_request_error(all_results.error->to_json()),
-+                                all_results.error->to_json().value("message", "Error in receiving results"));
++            return grpc_status_of_request_error(all_results.error->to_json(),
++                                                all_results.error->to_json().value("message", "Error in receiving results"));
          }
  
          // Collect responses
-@@ -4392,7 +4529,7 @@ public:
+@@ -4392,7 +4539,7 @@ public:
                  return grpc::Status(grpc::StatusCode::CANCELLED, "TTS request cancelled");
              }
              if (res->is_error()) {
 -                return grpc::Status(grpc::StatusCode::INTERNAL, res->to_json().dump());
-+                return grpc::Status(grpc_code_of_request_error(res->to_json()), res->to_json().dump());
++                return grpc_status_of_request_error(res->to_json(), res->to_json().dump());
              }
              auto * tts_res = dynamic_cast<server_task_result_tts *>(res.get());
              if (tts_res == nullptr) {
-@@ -4470,7 +4607,7 @@ public:
+@@ -4470,7 +4617,7 @@ public:
                  return grpc::Status(grpc::StatusCode::CANCELLED, "TTS request cancelled");
              }
              if (res->is_error()) {
 -                return grpc::Status(grpc::StatusCode::INTERNAL, res->to_json().dump());
-+                return grpc::Status(grpc_code_of_request_error(res->to_json()), res->to_json().dump());
++                return grpc_status_of_request_error(res->to_json(), res->to_json().dump());
              }
              auto * tts_res = dynamic_cast<server_task_result_tts *>(res.get());
              if (tts_res == nullptr) {
-@@ -4598,7 +4735,7 @@ public:
+@@ -4598,7 +4745,7 @@ public:
                      case ERROR_TYPE_INVALID_REQUEST:
                      case ERROR_TYPE_EXCEED_CONTEXT_SIZE: code = grpc::StatusCode::INVALID_ARGUMENT; break;
                      case ERROR_TYPE_NOT_SUPPORTED: code = grpc::StatusCode::UNIMPLEMENTED; break;
 -                    default: break;
-+                    default: code = grpc_code_of_request_error(results.error->to_json()); break;
++                    default: return grpc_status_of_request_error(results.error->to_json(), error->err_msg);
                  }
                  return grpc::Status(code, error->err_msg);
              }
-@@ -4812,7 +4949,7 @@ public:
+@@ -4812,7 +4959,7 @@ public:
                  return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
              }
              if (all_results.error) {
 -                return grpc::Status(grpc::StatusCode::INTERNAL,
-+                return grpc::Status(grpc_code_of_request_error(all_results.error->to_json()),
++                return grpc_status_of_request_error(all_results.error->to_json(),
                      all_results.error->to_json().value("message", "Error in receiving score results"));
              }
              if (all_results.results.size() != 1) {
-@@ -5018,7 +5155,7 @@ public:
+@@ -5018,7 +5165,7 @@ public:
          }
          if (res->is_error()) {
              drop_reserved();
 -            return grpc::Status(grpc::StatusCode::INTERNAL, res->to_json().dump());
-+            return grpc::Status(grpc_code_of_request_error(res->to_json()), res->to_json().dump());
++            return grpc_status_of_request_error(res->to_json(), res->to_json().dump());
          }
          auto * slot_res = dynamic_cast<server_task_result_slot_save_load *>(res.get());
          if (slot_res == nullptr) {
 diff --git a/backend/cpp/llama-cpp/park_reply.h b/backend/cpp/llama-cpp/park_reply.h
 new file mode 100644
-index 0000000..6171ecd
+index 0000000..d776363
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/park_reply.h
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,77 @@
 +// Parking: the words and the status codes the backend answers with.
 +//
 +// A model whose weights can leave the device (llama.cpp's llama_model_park)
@@ -399,18 +416,28 @@ index 0000000..6171ecd
 +    return ParkCode::Internal;
 +}
 +
-+// A repeated LoadModel that had to bring the weights back and could not.
-+inline ParkCode code_of_return_error(const std::string & type) {
-+    return code_of_request_error(type);
++// RESOURCE_EXHAUSTED has other meanings on this wire: a stream that is busy,
++// a message over the size limit, a rate-limited upstream. So the refusal of
++// the moment says its type at the HEAD OF ITS MESSAGE as well, where a caller
++// that maps statuses - LocalAI's HTTP layer, a client's deferral - can tell it
++// from them without a list of messages:
++//   "no_room_on_device: the weights cannot come back to the device now"
++inline std::string no_room_message(const std::string & message) {
++    return std::string(ERROR_TYPE_NO_ROOM) + ": " + message;
++}
++
++inline bool is_no_room_message(const std::string & message) {
++    const std::string head = std::string(ERROR_TYPE_NO_ROOM) + ": ";
++    return message.compare(0, head.size(), head) == 0;
 +}
 +
 +} // namespace llama_grpc
 diff --git a/backend/cpp/llama-cpp/park_reply_test.cpp b/backend/cpp/llama-cpp/park_reply_test.cpp
 new file mode 100644
-index 0000000..f11809e
+index 0000000..da1984a
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/park_reply_test.cpp
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,65 @@
 +// Unit test for the words and codes of parking (park_reply.h).
 +//
 +// Build & run standalone (standard library only):
@@ -464,11 +491,14 @@ index 0000000..f11809e
 +          "Free that could not park (no host memory): Internal");
 +    check(llama_grpc::code_of_free_error("") == ParkCode::Internal, "Free with an error of no type: Internal");
 +
-+    // a repeated LoadModel
-+    check(llama_grpc::code_of_return_error("no_room_on_device") == ParkCode::ResourceExhausted,
-+          "LoadModel that cannot bring the weights back: ResourceExhausted");
-+    check(llama_grpc::code_of_return_error("server_error") == ParkCode::Internal,
-+          "LoadModel that fails otherwise: Internal");
++    // the refusal's message says its type at its head: RESOURCE_EXHAUSTED alone has other meanings on this wire
++    check(llama_grpc::no_room_message("the weights cannot come back to the device now") ==
++          "no_room_on_device: the weights cannot come back to the device now",
++          "the refusal's message: \"no_room_on_device: <what happened>\"");
++    check(llama_grpc::is_no_room_message(llama_grpc::no_room_message("Compute error.")), "and it is told by that head");
++    check(!llama_grpc::is_no_room_message("backend is busy") && !llama_grpc::is_no_room_message("") &&
++          !llama_grpc::is_no_room_message("it said no_room_on_device: somewhere inside"),
++          "a busy stream, an empty message, the words elsewhere in a message: not the refusal");
 +
 +    fprintf(stderr, failures == 0 ? "all passed\n" : "%d FAILED\n", failures);
 +    return failures == 0 ? 0 : 1;
