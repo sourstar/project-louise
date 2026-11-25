@@ -1,5 +1,6 @@
 """The engine München built and swapped in on the operator's word of 2026-11-24,
-LIVE as 9ea95e93a83c: the live series and the three staged engine fixes,
+live as 9ea95e93a83c until b190673dbdbf replaced it on 2026-11-25, and the
+engine a rollback puts back: the live series and the three staged engine fixes,
 nothing else (deploy/localai/patches/staged/engine-fixes.series).
 
 A candidate series is a file build.sh takes by SERIES_FILE; its name is the

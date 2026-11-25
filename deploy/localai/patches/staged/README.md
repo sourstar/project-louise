@@ -20,7 +20,12 @@ while still staged here — the backend qualification's finding F4 — and are n
 0006's llama.cpp patch has 4 rejected hunks: each is rebased onto the series
 and passes its CPU tests again before its card gates.
 
-**The next live engine, a candidate: `engine-next.series`** (operator, 2026-11-24, relayed by München:
+**LIVE since 2026-11-25 00:55:18Z, engine `b190673dbdbf`: `engine-next.series`** (München: the byte check identical, the five
+llama.cpp gates exact with every fingerprint identical to `9ea95e93a83c`'s, twenty unloads through the wrapper at exit 0, none
+slow — so with every switch unset it computes the bytes the engine before it did. THE FILE AND ITS PATCHES ARE THE LIVE ENGINE'S
+NAME: not a comment of it changes without a new build and every gate again; tests/test_localai_engine_next_series.py holds it.
+`5f926f4efa04`, its first cut, was built and never gated: 0017 gained `LLAMA_MOE_RECORD_FILL` before the gates were spent.)
+Why one engine (operator, 2026-11-24, relayed by München:
 "I want it, and it is inside my "everything"" — the OmniVoice port becomes the speech backend — and
 "I want … the MoE preloading in VRAM based on the recent experts used"). ONE build, one swap, one
 gating of every run: the live series, then 0009, 0010 and 0012–0017 below, every new switch off.
@@ -32,7 +37,7 @@ With every switch off it gates as the live engine does, fingerprint for fingerpr
 back; the measurements of parking, of the pool's refusal, of the experts' record and of the port run
 on COPIES on it. No separate prototype engine is built (`parking-prototype.series` is gone).
 
-**LIVE since 2026-11-24, engine `9ea95e93a83c`: `engine-fixes.series`** (operator, relayed by München from the
+**Live 2026-11-24 to 2026-11-25, engine `9ea95e93a83c`, and the engine a rollback puts back: `engine-fixes.series`** (operator, relayed by München from the
 architecture session: "Do everything, also 721, everything, run unattended" — an engine build with
 the pool's refusal and the second signal's exit; swapped that night with the seven gates exact and
 identical fingerprints). The live series, then 0012, 0013 and 0014 below:
