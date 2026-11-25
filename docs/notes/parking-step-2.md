@@ -615,6 +615,15 @@ live moves. The swap and every gate follow when EUR-Lex5.next has drained;
 `792f050e318e` will not be swapped. München's pass carries this section's
 card row.
 
+**LIVE since 2026-11-25 15:18:30Z** (the operator, 13:40Z: "Deploy and
+engine swap"). München: the byte check identical, the five llama.cpp
+gates exact over three fresh loads with every fingerprint identical to
+before, twenty unloads at exit 0. `d531d5d804f1` stays installed: the
+engine a rollback puts back. The row on a copy is being taken in the same
+pass, with `keep_context_ms:0` on the copy — an on-demand context is not
+released by itself (its keep defaults to -1), so without it the two
+refusals would fall on the request's own graphs.
+
 `ed93e3c1b2e2` (`engine-park.series`) is NOT renamed and does not list
 0028: staged 0023 carries the same fix in its own form, on the same lines,
 with the answer's type its own (`no_room_on_device`). A test holds the two

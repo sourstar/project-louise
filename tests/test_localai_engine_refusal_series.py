@@ -1,4 +1,5 @@
-"""The LIVE engine, d531d5d804f1 (München, 2026-11-25 05:52:18Z):
+"""The engine a rollback puts back, d531d5d804f1 (live 2026-11-25 05:52:18Z to
+15:18:30Z, München; it stays installed):
 b190673dbdbf's series, then the pool's refusal reaching the graph (0018) and
 the speech port keeping nothing of a saved voice between requests (0020)
 (deploy/localai/patches/staged/engine-refusal.series).
@@ -45,8 +46,10 @@ def test_it_is_the_engine_before_it_and_the_two_fixes():
 
 def test_the_readme_and_the_status_say_what_is_live_and_what_a_rollback_puts_back():
     readme = (PATCHES / "staged" / "README.md").read_text(encoding="utf-8")
-    assert f"LIVE since 2026-11-25 05:52:18Z, engine `{LIVE}`: `engine-refusal.series`" in readme
-    assert "engine `b190673dbdbf`, and the engine a rollback puts back: `engine-next.series`" in readme
+    assert (f"Live 2026-11-25 05:52:18Z to 15:18:30Z, engine `{LIVE}`, and the engine a rollback puts back: "
+            "`engine-refusal.series`") in readme
+    assert readme.count("and the engine a rollback puts back") == 1, "one engine is the rollback engine, not three"
     assert "MIRRORS, not sources" in readme and "stay the source of every build and of an engine's name" in readme
     status = (ROOT / "docs" / "notes" / "STATUS.md").read_text(encoding="utf-8")
-    assert f"LIVE since 2026-11-25 05:52:18Z: engine `{LIVE}`" in status
+    assert f"Live 2026-11-25 05:52:18Z to 15:18:30Z, and the engine a rollback puts back: engine `{LIVE}`" in status
+    assert status.count("and the engine a rollback puts back") == 1

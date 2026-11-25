@@ -20,25 +20,22 @@ while still staged here — the backend qualification's finding F4 — and are n
 0006's llama.cpp patch has 4 rejected hunks: each is rebased onto the series
 and passes its CPU tests again before its card gates.
 
-**THE CANDIDATE TO BUILD NEXT: `engine-stream.series`** (`792f050e318e`; the architecture session, 2026-11-25: "THE STREAM FIX IS
-A DEFECT OF TODAY'S ENGINE"): `engine-lang.series` line for line, then 0025 — a stream that fails after its first chunk FAILS, where a
-chat answer cut short was delivered as complete (localai-bugs.md B21) — and 0026, the test switch that lets a card show it. One build
-and one gating for the paging default (0021), the language tag (0022) and the stream; it stands in `d658549772ca`'s and `aa88ab5c356a`'s
-place if neither is gated. docs/notes/parking-step-2.md §6a.
-
-    SERIES_FILE=deploy/localai/patches/staged/engine-stream.series \
-      sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
-
-**ITS SUCCESSOR, TO BUILD IN ITS PLACE IF IT IS NOT GATED YET: `engine-canary.series`** (`619655e5833b`, 2026-11-25):
-`engine-stream.series` line for line, then 0028 — a context canary the device REFUSES FOR MEMORY is not a canary that failed
-(localai-bugs.md B23; the node, 09:40:55Z: a collection's statements set aside and forty minutes of re-gating for one context
-discarded while the card filled). One build and one gating for the paging default, the language tag, the stream and this.
-docs/notes/parking-step-2.md §6b.
+**LIVE since 2026-11-25 15:18:30Z, engine `619655e5833b`: `engine-canary.series`** (the operator, to München: "Build 619655e5833b now,
+swap it after the drain, if it still applies", then "Deploy and engine swap"). München: the byte check VEGA/1 against VEGA/2 all
+identical (bge-m3, nemotron, qwen3-4b); the five llama.cpp gates passed, each "exact, 3 fresh load(s)", every fingerprint identical to
+before; twenty unloads of qwen3-embedding-4b through the wrapper at exit 0, none of a second or more. THE FILE AND ITS PATCHES ARE THE
+LIVE ENGINE'S NAME: nothing in them changes without a new build and every gate again; tests/test_localai_engine_canary_series.py holds
+it. What it is: `engine-stream.series` (`792f050e318e`, built 09:58:24Z, never gated, not swapped) line for line, then 0028 — so ONE
+swap carried the paging default (0021), the speech port's language tag (0022), a stream that fails after its first chunk failing (0025),
+the test switch for it (0026) and a canary refused for memory not being a canary that failed (0028). Its own rows on copies — 0028's,
+0025's through LocalAI's SSE, 0022's — are being taken in the same pass. The keeper's paging default follows it (5cb53eb).
+docs/notes/parking-step-2.md §6a, §6b.
 
     SERIES_FILE=deploy/localai/patches/staged/engine-canary.series \
       sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
 
-**After it, parking when told: `engine-park.series`** (`ed93e3c1b2e2`): `engine-stream.series` line for line, then 0023 — parking
+**The next candidate, parking when told: `engine-park.series`** (`ed93e3c1b2e2`, not built): `engine-stream.series` line for line,
+then 0023, which carries 0028's fix in its own form (the series does not list 0028 and must not) — parking
 step 2, the engine part, its second cut accepted for staging 2026-11-25 (docs/notes/parking-step-2.md §6). Another engine, a build and
 every gate; what changes for EVERY model the day it runs is a table in the note. NO model file may set `GGML_SYCL_PARKABLE=1` before the
 server part is live.
@@ -62,7 +59,8 @@ live engine; the keeper's own default is merged only once this engine is the liv
     SERIES_FILE=deploy/localai/patches/staged/engine-page.series \
       sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
 
-**LIVE since 2026-11-25 05:52:18Z, engine `d531d5d804f1`: `engine-refusal.series`** (München: the byte check identical, the five
+**Live 2026-11-25 05:52:18Z to 15:18:30Z, engine `d531d5d804f1`, and the engine a rollback puts back: `engine-refusal.series`**
+(it stays installed; München: the byte check identical, the five
 llama.cpp gates exact with every fingerprint identical to `b190673dbdbf`'s, twenty unloads at exit 0, none slow; LocalAI's server
 swapped first, with 0019, the seven run ids unchanged by it). THE FILE AND ITS PATCHES ARE THE LIVE ENGINE'S NAME: nothing in them
 changes without a new build and every gate again; tests/test_localai_engine_refusal_series.py holds it. Its own rows — the
@@ -82,7 +80,7 @@ and `louise/server-…` = the node's server tree; github.com/sourstar/llama.cpp 
 version + the files of `backend/cpp/llama-cpp/patches`, one commit each. München pushes a branch pair for every engine that goes
 live. The patch files here and `build.sh` stay the source of every build and of an engine's name.
 
-**Live 2026-11-25 00:55:18Z to 05:52:18Z, engine `b190673dbdbf`, and the engine a rollback puts back: `engine-next.series`** (München: the byte check identical, the five
+**Live 2026-11-25 00:55:18Z to 05:52:18Z, engine `b190673dbdbf`: `engine-next.series`** (the rollback engine until 15:18:30Z; München: the byte check identical, the five
 llama.cpp gates exact with every fingerprint identical to `9ea95e93a83c`'s, twenty unloads through the wrapper at exit 0, none
 slow — so with every switch unset it computes the bytes the engine before it did. THE FILE AND ITS PATCHES ARE THE LIVE ENGINE'S
 NAME: not a comment of it changes without a new build and every gate again; tests/test_localai_engine_next_series.py holds it.
@@ -99,7 +97,7 @@ With every switch off it gates as the live engine does, fingerprint for fingerpr
 back; the measurements of parking, of the pool's refusal, of the experts' record and of the port run
 on COPIES on it. No separate prototype engine is built (`parking-prototype.series` is gone).
 
-**Live 2026-11-24 to 2026-11-25, engine `9ea95e93a83c`, and the engine a rollback puts back: `engine-fixes.series`** (operator, relayed by München from the
+**Live 2026-11-24 to 2026-11-25, engine `9ea95e93a83c`: `engine-fixes.series`** (operator, relayed by München from the
 architecture session: "Do everything, also 721, everything, run unattended" — an engine build with
 the pool's refusal and the second signal's exit; swapped that night with the seven gates exact and
 identical fingerprints). The live series, then 0012, 0013 and 0014 below:

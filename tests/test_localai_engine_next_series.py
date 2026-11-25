@@ -53,10 +53,10 @@ def test_it_is_the_live_series_and_these_eight_patches_after_it():
 
 def test_the_readme_and_the_status_say_what_is_live_and_what_a_rollback_puts_back():
     readme = (PATCHES / "staged" / "README.md").read_text(encoding="utf-8")
-    assert f"engine `{LIVE}`, and the engine a rollback puts back: `engine-next.series`" in readme
-    assert "Live 2026-11-25 00:55:18Z to 05:52:18Z" in readme
-    assert "engine `9ea95e93a83c`, and the engine a rollback puts back: `engine-fixes.series`" in readme
+    assert f"Live 2026-11-25 00:55:18Z to 05:52:18Z, engine `{LIVE}`: `engine-next.series`" in readme
+    assert "the rollback engine until 15:18:30Z" in readme
+    assert "Live 2026-11-24 to 2026-11-25, engine `9ea95e93a83c`: `engine-fixes.series`" in readme
     # the first cut was built and never gated: nothing may say it ran
     assert "`5f926f4efa04`, its first cut, was built and never gated" in readme
     status = (ROOT / "docs" / "notes" / "STATUS.md").read_text(encoding="utf-8")
-    assert f"the engine a rollback puts back: engine `{LIVE}`" in status
+    assert f"Live 2026-11-25 00:55:18Z to 05:52:18Z: engine `{LIVE}`" in status
