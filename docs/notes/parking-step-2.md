@@ -278,14 +278,16 @@ as gRPC `RESOURCE_EXHAUSTED` on every request RPC and on the repeated
 `LoadModel`: parked weights that cannot come back; a context that cannot be
 created; a graph the device refused memory for (`llama_process` −2).
 
-**Where it differs from §3.1, each for the review to accept or refuse:**
+**Where it differs from §3.1 — ALL FIVE ACCEPTED by the architecture session (2026-11-25), the canary's as "the more
+important half: a model served unchecked behind a warning is the artefact invariant 12 exists against". The patch's own
+reading is still under way; nothing is staged before its findings:**
 
 | | §3.1 said | built | why |
 |---|---|---|---|
 | `Free` under a running request | "anything else → Unimplemented" | `FAILED_PRECONDITION` busy | Unimplemented means "this backend cannot park", for good; busy is for now. The server part takes the next candidate and never stops a model for it (agreed 11-25) |
 | `Status` | says parked and the host's bytes | only for a model that can park; one that cannot stays `UNIMPLEMENTED` | LocalAI's `/backend/monitor` falls back to sampling the process when `Status` is unimplemented: answering for every model would have changed that endpoint for all of them |
 | the return by `LoadModel` | "the weights come back" | the weights only; the context is the next request's, as with context on demand | a context created for nobody is freed at the next idle tick anyway; `/backend/prepare` (step 3) may ask for more |
-| automatic parking | removed | `LLAMA_SERVER_PARK_WEIGHTS` kept as the measuring switch it was, off by default | the rows of §3.1 can be run through today's LocalAI, which has no caller of `Free` but its stop path |
+| automatic parking | removed | `LLAMA_SERVER_PARK_WEIGHTS` kept as the measuring switch it was, off by default — a measuring switch, never set in a live model's file | the rows of §3.1 can be run through today's LocalAI, which has no caller of `Free` but its stop path |
 | a compute refusal at llama.cpp's own HTTP | (not said) | 503 `no_room_on_device`, where it was 500 `server_error` "Compute error." | one fact, one answer. Through LocalAI's HTTP nothing changes until the server part maps the gRPC code (today every backend error is 500) |
 
 **Found on the way, fixed in it: the canary took a room refusal for a wrong
@@ -304,6 +306,9 @@ file says `GGML_SYCL_PARKABLE=1` — that stop now parks first: E, about 0.04 s
 and 575 MiB of host memory for bge-m3, 0.4 s and 6 GiB for MADLAD (§3.4, 1),
 freed when the process dies a moment later. Harmless for the copies of the
 rows; the reason the server part's stop path skips `Free` for such a model.
+ACCEPTABLE ONLY BECAUSE no live model sets `GGML_SYCL_PARKABLE=1` before the server part is live
+(the architecture session, 2026-11-25); tests/test_localai_review_park_when_told.py holds
+every staged model file to it.
 
 **MEASURED, on CPU builds, the device a stand-in** (`tools/measure/
 park_cpu_standin.patch`: a weight buffer that copies its bytes aside and

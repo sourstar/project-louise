@@ -76,6 +76,21 @@ def test_it_is_under_review_in_no_series_and_not_staged():
     assert "## 6. The engine part, as built" in NOTE and "FOR REVIEW" in NOTE
 
 
+def test_no_model_file_can_park_before_the_server_part_is_live():
+    """An UNPATCHED LocalAI calls Free before it stops a process, so from this engine on every stop of a model that
+    CAN park first copies its weights to the host (0.4 s and 6 GiB for MADLAD) - acceptable only while no model's file
+    says it can (the architecture session, 2026-11-25). And the measuring switch is never a live model's."""
+    files = [f for d in sorted((ROOT / "deploy").glob("*/models")) + [ROOT / "deploy" / "vega" / "stage" / "models"]
+             for f in sorted(d.glob("*.yaml"))]
+    assert len(files) > 40, "the staged model files were not found"
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        for switch in ("GGML_SYCL_PARKABLE", "LLAMA_SERVER_PARK_WEIGHTS", "GGML_SYCL_PARK_REFUSE", "GGML_SYCL_PARK_VERIFY"):
+            assert switch not in text, f"{f.relative_to(ROOT)} sets {switch}: no live model parks before the server part"
+    assert "no live model sets `GGML_SYCL_PARKABLE=1` before the server part is live" in NOTE
+    assert "never set in a live model's file" in NOTE
+
+
 def test_the_message_the_wrapper_keys_on_is_pinned_byte_for_byte():
     header = _added(_sections()[BACKEND + "park_reply.h"])
     assert 'inline constexpr const char * LOAD_ALREADY_LOADED = "Model already loaded";' in header
