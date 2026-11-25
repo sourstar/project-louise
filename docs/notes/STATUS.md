@@ -29,9 +29,14 @@ measured (published figures disagree).
   patch") stands in embed and custom mode; in query mode the two things it waited for are there — the day's
   measurement (about 45 GiB of models on 32, 13–15 GiB in gtt, the 35B at phase-0 speed, a page-in 0.2–0.3 s,
   no backend lost) and engine 619655e5833b's 0028 (a context the card cannot hold is refused and asked
-  again). NOT DONE, and to read on the node first: LocalAI's memory reclaimer must be off where the card is
-  over-committed, and the stage script sets it from the node-wide key, not from the mode — it evicted
-  nothing in two hours at 99 %, so it is either off or does not fire; `resident show` notes it if it is on.
+  again). LOCALAI'S MEMORY RECLAIMER FOLLOWS THE RULE IN FORCE (`app/localai_reclaimer.py`,
+  `resident._reclaimer_follows`): München read it ON in query mode (threshold 0.98), and it had evicted
+  medcpt-article-ov a minute after the switch. It was the deploy's alone to set, from the node-wide key; the
+  keeper's beat now holds it OFF where idle models are paged — query mode, or `make_room = "page"` — and ON
+  otherwise, from the beat's own settings reading (nothing more is read while nothing is to change), so a
+  switch moves it within a beat and a deploy that put the file's value back is corrected at the next. The
+  settings object carries the API keys: it is read, one key set, written back whole and read again, and
+  nothing of it but that key is kept, said or put in an error (invariant 8; tested with a sentinel).
   Under this rule the earlier question (may the large chat model give way in query mode) is answered too:
   nothing is unloaded there while the host has memory. Parking (#48) remains the controlled form of it.
   (2) A STAGE WITH NO PROGRESS FOR THIRTY MINUTES IS REPORTED, NEVER PAUSED (`app/stage_progress.py`): the

@@ -443,6 +443,8 @@ def reset() -> None:
     global _over_said
     with _lock:
         _over_said = None
+        _reclaimer_seen.clear()
+        _reclaimer_failed.clear()
         _pids_seen = (frozenset(), frozenset())
         _last, _last_why, _last_switches = {}, None, Switches()
         _track.clear()
@@ -651,14 +653,72 @@ def _threshold(server: str) -> float:
     but this number is kept or said, docs/notes/node-runbook.md), else
     DEFAULT_THRESHOLD."""
     from app import httpc
+    on = None
     try:
         r = httpc.get(f"{server}/api/settings", timeout=SETTINGS_TIMEOUT_S)
-        v = r.json().get("memory_reclaimer_threshold") if r.status_code == 200 else None
+        body = r.json() if r.status_code == 200 else None
+        v = body.get("memory_reclaimer_threshold") if isinstance(body, dict) else None
+        on = body.get("memory_reclaimer_enabled") if isinstance(body, dict) else None
     except Exception:   # noqa: BLE001 — unread: the node's line
         v = None
+    # ...and whether the reclaimer is on, from the same answer: what
+    # `_reclaimer_follows` holds to the rule in force, at no read of its own
+    with _lock:
+        _reclaimer_seen[server] = on if isinstance(on, bool) else None
     if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v <= 1:
         return float(v)
     return DEFAULT_THRESHOLD
+
+
+#: server -> LocalAI's `memory_reclaimer_enabled` as its last settings answer
+#: gave it (None: unread, or not a boolean)
+_reclaimer_seen: dict[str, bool | None] = {}
+#: (server, wanted) for which the write failed and was said: said once
+_reclaimer_failed: set[tuple[str, bool]] = set()
+
+
+def _reclaimer_follows(servers: Iterable[str]) -> list[str]:
+    """LOCALAI'S MEMORY RECLAIMER HELD TO THE RULE IN FORCE (operator,
+    2026-11-25: "A for paging"; app/localai_reclaimer.py): off where idle
+    models are paged — `[models] make_room = "page"`, and query mode whatever
+    the file says — on otherwise. Acted on from the beat's own settings
+    reading (`_threshold`): nothing is read for it while nothing is to
+    change. A file that does not load changes nothing. Returns the servers
+    it changed. Never raises."""
+    from app import localai_reclaimer, model_evict, platform_config
+    try:
+        platform_config.load()
+        rule = model_evict.rule()[0]
+    except Exception:   # noqa: BLE001 — the rule is not known: nothing is set by a guess
+        return []
+    want = localai_reclaimer.wanted(rule)
+    why = ("the driver pages idle models to host memory here (query mode, or [models] make_room = \"page\"), "
+           "and a card that holds more than its size reads full at every tick" if not want else
+           "the rule in force unloads for room again, and the reclaimer is its net")
+    changed = []
+    for s in sorted(set(servers)):
+        with _lock:
+            seen = _reclaimer_seen.get(s)
+        if seen is None or seen is want:
+            _reclaimer_failed.discard((s, want))
+            continue
+        try:
+            localai_reclaimer.set_enabled(s, want)
+        except localai_reclaimer.NotTaken as e:
+            if (s, want) not in _reclaimer_failed:
+                _reclaimer_failed.add((s, want))
+                _say("warn", f"resident: LocalAI's memory reclaimer at {s} is {'ON' if seen else 'off'} and "
+                             f"should be {'ON' if want else 'OFF'} — {why} — but {e}; asked again at each beat")
+            continue
+        except Exception as e:   # noqa: BLE001 — never the keeper's beat
+            _say("warn", f"resident: LocalAI's memory reclaimer at {s} was not set ({type(e).__name__})")
+            continue
+        with _lock:
+            _reclaimer_seen[s] = want
+        _reclaimer_failed.discard((s, want))
+        changed.append(s)
+        _say("info", f"resident: LocalAI's memory reclaimer turned {'ON' if want else 'OFF'} at {s} — {why}")
+    return changed
 
 
 def room(r: Resident) -> Room | None:
@@ -1577,6 +1637,7 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
     if want:
         p = _plan_now(want, _remember(want))
         _say_budget(p)
+        _reclaimer_follows(r.server for r in want)
     else:
         with _lock:
             _out_said = frozenset()
@@ -1833,7 +1894,8 @@ def _make_room_shown(want: list[Resident]) -> dict[str, Any]:
             "over_the_card_at_most_mib": None if over_max is None else over_max // MIB,
             "says": ("QUERY MODE (operator, 2026-11-25): no load unloads anything while the host stays above "
                      "its floor — the driver pages idle models' memory out and brings a model back when it is "
-                     "used; no bound over the card but the host's floor. Any other mode: the file's rule"
+                     "used; no bound over the card but the host's floor. Any other mode: the file's rule. "
+                     "LocalAI's memory reclaimer is turned off by the keeper while this holds"
                      if over_max is None else
                      "a load work is waiting on that does not fit unloads nothing while the host stays above "
                      "its floor: the driver pages idle models' memory out; the keeper's preloads unload as before")}

@@ -2305,7 +2305,10 @@ variable, a file, a log line or a message.
              # of models on the 32 GiB card, 13–15 GiB of them in host memory, the large chat model at the speed
              # of an unloaded card, a query encoder wholly in host memory back in 0.2–0.3 s against 5–24 s for
              # a cold start; and since engine 619655e5833b a context the card cannot hold is refused and asked
-             # again, no longer a dead backend. In embed and custom mode this key and `page_over_gib` stand
+             # again, no longer a dead backend. In embed and custom mode this key and `page_over_gib` stand.
+             # LocalAI's memory reclaimer follows the rule IN FORCE, held by the keeper's beat: off where idle
+             # models are paged (query mode, or "page" here), on otherwise — a switch of mode moves it, and a
+             # deploy that set it from this key alone is corrected at the next beat (app/localai_reclaimer.py)
              chat_large = "louise-chat-qwen3.6-35b-a3b"   chat_small = "louise-chat-qwen3.5-9b-q4-p0"
              translate = "louise-translate-madlad"
              # the chat and translation models OVER the environment's CHAT_MODEL and TRANSLATE_MODEL, which stay
