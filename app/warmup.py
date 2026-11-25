@@ -72,9 +72,33 @@ def steps() -> list[tuple[str, str, Callable[[], object]]]:
     return out
 
 
+def held_by_the_mode() -> str | None:
+    """Why nothing is warmed now, or None: THE NODE'S MODE DECIDES, AS FOR
+    THE KEEPER (`resident.preloads`: paused, seed-only, or a profile that
+    holds the node there — "the GPU is the operator's", 2026-10-23). The
+    web's warm predates the keeper and never asked: on a PAUSED node, after
+    the model server's restart, it loaded MADLAD, a reranker and the chat
+    model by itself, onto a card a pass had emptied for its gates (München,
+    2026-11-25, twice that day). The node's state is read as the keeper
+    reads it — absent is "paused", unreadable "unknown", and neither warms;
+    only a resolution that itself fails holds nothing back, and the warm is
+    then what it was."""
+    try:
+        from app import node_state, resident
+        ok, why = resident.preloads(node_state.peek_worker_state())
+        return None if ok else why
+    except Exception:   # noqa: BLE001 — unread: as before
+        return None
+
+
 def warm_all(why: str, only: set[str] | None = None) -> None:
     """Warm each step, one at a time; `only` limits it to these servers.
-    Every outcome is said; none is raised."""
+    Every outcome is said; none is raised. Nothing is warmed where the
+    node's mode preloads nothing (`held_by_the_mode`): said in one line."""
+    held = held_by_the_mode()
+    if held is not None:
+        _log(f"nothing warmed ({why}): {held} — a question loads what it needs when it is asked")
+        return
     for name, server, warm in steps():
         if only is not None and server not in only:
             continue

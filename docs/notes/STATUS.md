@@ -20,6 +20,26 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **The web's warm follows the node's mode: a paused node warms nothing (München, during the parking pass,
+  22:49Z, and at the p19 swap that morning).** After the model server's restart the web loaded MADLAD (6.1
+  s), the nemotron reranker (5.7 s) and the 9B (11.0 s) by itself, on a PAUSED node, onto a card the pass
+  had emptied for its gates. The warm ("at the web's start, and when a model server comes back") predates
+  the keeper and never asked the mode; the keeper's rule is "paused or seed-only: nothing is preloaded —
+  the GPU is the operator's" (2026-10-23). `warmup.warm_all` now asks the same resolution
+  (`resident.preloads`) and says one line where it holds back; a question still loads what it needs when
+  it is asked, and the keeper preloads the set when the node runs again. The text indexes are still opened
+  at the web's start in every mode: that is the drive, not the card.
+- **The parking pass, first rows (München, started 22:46Z, the node paused): the SERVER is swapped —
+  "v5.0.1-6-gffb10fdf3" — and gates nothing.** Settings check exit 0 (reclaimer true, threshold 0.98,
+  drift {}); `/system`: 105 backends as before, no row with `parks`, none with a `state` — a model that
+  does not park carries NEITHER key, which is how my half reads it (absent = does not park, loaded);
+  `park_host_floor_bytes` 0. THE READINESS POLL (0024), three cold loads of louise-rerank-medcpt, the
+  first request: 4.84 / 4.48 / 4.45 s before, 2.98 / 2.83 / 2.67 s after. The seven run ids under the new
+  server: the same. THE PACKAGE: vega-louise-llama-cpp alone rebuilt in place (REVISION 1ac1ecc, backend
+  louise-sycl-f16-llama-cpp-ed93e3c1b2e2-stack-7c301a7ba437, wrapper sha256 47bf02eaae7c01e4, the saved
+  one 10833aab79818132; `ALREADY_LOADED = "Model already loaded"`), byte check VEGA/1 against VEGA/2
+  identical, gate 1 (wikipedia, bge-m3) PASS exact in 98 s, worst 0.999939, fingerprint as before. Gates
+  2–5, the unloads, rows A and B and parking on a copy follow.
 - **A SECOND DEFECT FROM THE SAME ROWS, OLDER THAN TONIGHT, FIXED IN THE SAME BRANCH: THE KEEPER TOOK
   LOUISE'S OWN UNLOADS FOR THE RECLAIMER'S EVICTIONS (München, 22:40:18–37Z, embed mode).** A question — the
   pinned runs of the 9B's AFTER — took the card as a question does ("a person's question holds the card;
