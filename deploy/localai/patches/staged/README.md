@@ -20,7 +20,21 @@ while still staged here — the backend qualification's finding F4 — and are n
 0006's llama.cpp patch has 4 rejected hunks: each is rebased onto the series
 and passes its CPU tests again before its card gates.
 
-**LIVE since 2026-11-25 15:18:30Z, engine `619655e5833b`: `engine-canary.series`** (the operator, to München: "Build 619655e5833b now,
+**LIVE since 2026-11-25 23:45:20Z, engine `ed93e3c1b2e2`: `engine-park.series`** (the operator: "Do parking."), on LocalAI's server
+`v5.0.1-6-gffb10fdf3` = the node's tree + staged 0024, 0027, 0029, swapped first in the same pass. München: the byte check VEGA/1 against
+VEGA/2 all identical; the five llama.cpp gates passed, each "exact, 3 fresh load(s)", every fingerprint identical to before; twenty unloads
+of qwen3-embedding-4b through the rebuilt wrapper at exit 0, none of a second or more. ONE vega package rebuilt for it,
+`vega-louise-llama-cpp`, with the wrapper's part for a return through it (#882). THE FILE AND ITS PATCHES ARE THE LIVE ENGINE'S NAME:
+nothing in them changes without a new build and every gate again; tests/test_localai_engine_park_series.py holds it. What it is:
+`engine-stream.series` line for line, then 0023 — parking when told, which carries 0028's fix in its own form (the series does not list
+0028 and must not). PARKING IS OFF until a model's file says `park: true` with `GGML_SYCL_PARKABLE=1` AND the host's floor is above 0:
+no model file does, and a test holds the staged ones to it. docs/notes/parking-step-2.md §6, §8.
+
+    SERIES_FILE=deploy/localai/patches/staged/engine-park.series \
+      sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
+
+**Live 2026-11-25 15:18:30Z to 23:45:20Z, engine `619655e5833b`, and the engine a rollback puts back: `engine-canary.series`**
+(it stays installed; the operator, to München: "Build 619655e5833b now,
 swap it after the drain, if it still applies", then "Deploy and engine swap"). München: the byte check VEGA/1 against VEGA/2 all
 identical (bge-m3, nemotron, qwen3-4b); the five llama.cpp gates passed, each "exact, 3 fresh load(s)", every fingerprint identical to
 before; twenty unloads of qwen3-embedding-4b through the wrapper at exit 0, none of a second or more. THE FILE AND ITS PATCHES ARE THE
@@ -35,15 +49,6 @@ passed (MADLAD 379/379, the reranker 20/20, the 9B within phase 0's). The keeper
 docs/notes/parking-step-2.md §6a, §6b.
 
     SERIES_FILE=deploy/localai/patches/staged/engine-canary.series \
-      sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
-
-**The next candidate, parking when told: `engine-park.series`** (`ed93e3c1b2e2`, not built): `engine-stream.series` line for line,
-then 0023, which carries 0028's fix in its own form (the series does not list 0028 and must not) — parking
-step 2, the engine part, its second cut accepted for staging 2026-11-25 (docs/notes/parking-step-2.md §6). Another engine, a build and
-every gate; what changes for EVERY model the day it runs is a table in the note. NO model file may set `GGML_SYCL_PARKABLE=1` before the
-server part is live.
-
-    SERIES_FILE=deploy/localai/patches/staged/engine-park.series \
       sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
 
 **A candidate after the paging one, the speech port's language tags: `engine-lang.series`** (`aa88ab5c356a`; the operator,
@@ -62,8 +67,8 @@ live engine; the keeper's own default is merged only once this engine is the liv
     SERIES_FILE=deploy/localai/patches/staged/engine-page.series \
       sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
 
-**Live 2026-11-25 05:52:18Z to 15:18:30Z, engine `d531d5d804f1`, and the engine a rollback puts back: `engine-refusal.series`**
-(it stays installed; München: the byte check identical, the five
+**Live 2026-11-25 05:52:18Z to 15:18:30Z, engine `d531d5d804f1`: `engine-refusal.series`** (the rollback engine until 23:45:20Z;
+München: the byte check identical, the five
 llama.cpp gates exact with every fingerprint identical to `b190673dbdbf`'s, twenty unloads at exit 0, none slow; LocalAI's server
 swapped first, with 0019, the seven run ids unchanged by it). THE FILE AND ITS PATCHES ARE THE LIVE ENGINE'S NAME: nothing in them
 changes without a new build and every gate again; tests/test_localai_engine_refusal_series.py holds it. Its own rows — the

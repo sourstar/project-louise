@@ -1,4 +1,5 @@
-"""The LIVE engine, 619655e5833b (München, 2026-11-25 15:18:30Z; the operator:
+"""The engine a rollback puts back, 619655e5833b (live 2026-11-25 15:18:30Z to
+23:45:20Z, München; it stays installed; the operator:
 "Build 619655e5833b now, swap it after the drain, if it still applies", then
 "Deploy and engine swap"): 792f050e318e's series - built, never gated, not
 swapped - then a canary refused for memory not being a canary that failed
@@ -52,12 +53,14 @@ def test_one_swap_carried_these_five_patches_over_the_engine_a_rollback_puts_bac
 
 def test_the_readme_and_the_status_say_what_is_live_and_what_a_rollback_puts_back():
     readme = (PATCHES / "staged" / "README.md").read_text(encoding="utf-8")
-    assert f"LIVE since 2026-11-25 15:18:30Z, engine `{LIVE}`: `engine-canary.series`" in readme
-    assert "engine `d531d5d804f1`, and the engine a rollback puts back: `engine-refusal.series`" in readme
+    assert (f"Live 2026-11-25 15:18:30Z to 23:45:20Z, engine `{LIVE}`, and the engine a rollback puts back: "
+            "`engine-canary.series`") in readme
+    assert readme.count("and the engine a rollback puts back") == 1, "one engine is the rollback engine"
     assert "`792f050e318e`, built 09:58:24Z, never gated, not swapped" in readme
     assert readme.count("LIVE since ") == 1, "one engine is live"
     status = (ROOT / "docs" / "notes" / "STATUS.md").read_text(encoding="utf-8")
-    assert f"LIVE since 2026-11-25 15:18:30Z: engine `{LIVE}`" in status
+    assert f"Live 2026-11-25 15:18:30Z to 23:45:20Z, and the engine a rollback puts back: engine `{LIVE}`" in status
+    assert status.count("and the engine a rollback puts back") == 1
     assert "every fingerprint identical to before" in status and "20 × exit 0" in status
     # the keeper's side is the mode's, not a node-wide default: the operator's decision of the same evening
     assert "THE KEEPER'S RULE IS NOT A NODE-WIDE DEFAULT" in status and "QUERY MODE'S ONLY" in status
@@ -65,10 +68,3 @@ def test_the_readme_and_the_status_say_what_is_live_and_what_a_rollback_puts_bac
     assert "The keeper pages in QUERY MODE only" in readme
     from app import platform_config
     assert platform_config.ModelsConfig().make_room == "unload", "the file's rule is still unload unless the file says page"
-
-
-def test_the_staged_speech_model_names_the_live_engine():
-    """The node's direct models' files were moved to the new engine's backend at the swap (München)."""
-    text = (ROOT / "deploy" / "vega" / "stage" / "models" / "louise-tts-omnivoice.yaml").read_text(encoding="utf-8")
-    assert f'"backend": "louise-sycl-f16-llama-cpp-{LIVE}-stack-7c301a7ba437"' in text
-    assert "d531d5d804f1" in text, "the engine its card rows were taken on is still said, as what it was"

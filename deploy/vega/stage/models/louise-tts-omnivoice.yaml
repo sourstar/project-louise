@@ -4,8 +4,9 @@
 # (639,153,792 and 311,285,504 bytes). docs/notes/omnivoice-on-our-backend.md §13.
 # THE NODE'S FILE AS IT RAN the card rows of 2026-11-25 (München, engine d531d5d804f1, server
 # v5.0.1 with P13 and P19): the same values, key for key, but for `backend`, which names the
-# engine that is LIVE - 619655e5833b since 2026-11-25 15:18:30Z, when the node's direct models'
-# files were moved to it (it adds the language tag, staged 0022: "it-IT" is read as "it").
+# engine that is LIVE - ed93e3c1b2e2 since 2026-11-25 23:45:20Z, as the node's direct models'
+# files are moved at each swap (619655e5833b before it, which added the language tag, staged
+# 0022: "it-IT" is read as "it"; this one adds parking, which a speech model does not use).
 # Read against the node's file again at that swap (München, 2026-11-25): the same, key for key.
 # LocalAI keeps that file with its keys sorted, in YAML; this is the same content as JSON,
 # which is YAML.
@@ -27,7 +28,7 @@
 # and a recorded voice's encoding is kept beside its profile's clip by the backend itself.
 {
   "name": "louise-tts-omnivoice",
-  "backend": "louise-sycl-f16-llama-cpp-619655e5833b-stack-7c301a7ba437",
+  "backend": "louise-sycl-f16-llama-cpp-ed93e3c1b2e2-stack-7c301a7ba437",
   "context_size": 512,
   "env": {
     "GGML_SYCL_ENABLE_DNN": "0",
