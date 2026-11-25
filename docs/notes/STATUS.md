@@ -27,20 +27,24 @@ measured (published figures disagree).
   loaded in 15.2 s, the corpus encoders in 6.2–42.3 s (dar-legal-it 42.3), and the KEEPER ALONE turned the
   reclaimer ON 32 s later ("the rule in force unloads for room again"; LocalAI: "memoryReclaimer=true
   memoryThreshold=0.98") — no eviction by LocalAI, no CANARY. BUT: gtt stayed at 15.9 GiB — MADLAD, both
-  rerankers and the speech model, each reading 0 MiB on the card, which embed mode does not use, the
-  keeper's set no longer held ("left loaded until LocalAI needs the space") and LocalAI, counting the CARD
-  at 15.6 of 32 GiB, would never claim — while the parse pool started (worker cgroup 14.6 GiB in two
-  minutes): MemAvailable 21.9 → 7.8 → 5.3 → 4.4 → 3.6 GiB, the ARC squeezed 16.4 → 4.3 GiB. München stopped
-  the four by hand at 22:32:20Z: gtt 15,488 → 1,720 MiB, MemAvailable 15.8 → 30.3 GiB at once. I made query
-  mode page (#908) and never said what leaving it does with what was paged. FIXED
-  (`model_evict.host_leftovers`, called by the keeper's beat; docs/07 §7.8): where the rule in force is not
-  "page", a model OUT of the mode's set, known to Louise (a use row), not pinned, not busy, not parked, not
-  on another card, that reads under its own floor of the most it was seen holding — 0 MiB included, which
-  the over-commitment line skips — is stopped at the keeper's first beat after the switch, all of them in
-  that beat, never while a question holds the card, and said in one line; one that is ON the card stays, as
-  the rule of 11-08 says. Space is claimed here by the host, under the mode that gives the host to the
-  parse pool: the budget still unloads nothing. Until its sha is live München's four shutdowns by hand stay
-  the remedy at each such switch.
+  rerankers and the speech model, each reading 0 MiB on the card. They are still of embed mode's set (the
+  11-08 rule preloads them in every mode), so the keeper took them as loaded and loaded nothing; no
+  question came, so nothing brought them back to the card; and LocalAI, counting the CARD at 15.6 of 32
+  GiB, would never claim them — while the parse pool started (worker cgroup 14.6 GiB in two minutes):
+  MemAvailable 21.9 → 7.8 → 5.3 → 4.4 → 3.6 GiB, the ARC squeezed 16.4 → 4.3 GiB. München stopped the four
+  by hand at 22:32:20Z: gtt 15,488 → 1,720 MiB, MemAvailable 15.8 → 30.3 GiB at once. I made query mode
+  page (#908) and never said what leaving it does with what was paged. FIXED (`model_evict.host_leftovers`,
+  called by the keeper's beat; docs/07 §7.8): where the rule in force is not "page", a model Louise knows
+  (of the set, or with a use row), IDLE for a minute, not pinned, not busy, not parked, not on another
+  card, that reads under its own floor of the most it was seen holding — 0 MiB included, which the
+  over-commitment line skips — is stopped at the keeper's first beat after the switch, all of them in that
+  beat, never while a question holds the card, said in one line; AND THE KEEPER LOADS BACK ONTO THE CARD
+  THOSE ITS BUDGET HOLDS, by its ordinary loads, with no back-off and no penalty (the stop is the mode's
+  doing, not the reclaimer's). A first cut left alone every model of the set — which would have left
+  exactly these four: read off `wanted()` before the merge. One ON the card stays, as the rule of 11-08
+  says; one in use is brought back by its own requests. Written down, not built: bringing each back with
+  one request instead of a stop and a load (it frees the host only as fast as the card takes each model).
+  Until its sha is live München's four shutdowns by hand stay the remedy at each such switch.
 - **The wrapper's package, decided for the parking pass: ONLY vega-louise-llama-cpp is rebuilt (Tensor's
   (i), mine too).** "Each package is what its gate saw" (invariant 12), not "one wrapper on the node": the
   change acts only on a LoadModel repeated for a model already held, which only the park engine's return
