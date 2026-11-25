@@ -1829,9 +1829,14 @@ def _make_room_shown(want: list[Resident]) -> dict[str, Any]:
         return out
     avail = model_evict.host_available()
     out |= {"host_floor_mib": floor // MIB, "host_available_mib": None if avail is None else avail // MIB,
-            "context_reserve_mib": CONTEXT_RESERVE // MIB, "over_the_card_at_most_mib": over_max // MIB,
-            "says": "a load work is waiting on that does not fit unloads nothing while the host stays above "
-                    "its floor: the driver pages idle models' memory out; the keeper's preloads unload as before"}
+            "context_reserve_mib": CONTEXT_RESERVE // MIB,
+            "over_the_card_at_most_mib": None if over_max is None else over_max // MIB,
+            "says": ("QUERY MODE (operator, 2026-11-25): no load unloads anything while the host stays above "
+                     "its floor — the driver pages idle models' memory out and brings a model back when it is "
+                     "used; no bound over the card but the host's floor. Any other mode: the file's rule"
+                     if over_max is None else
+                     "a load work is waiting on that does not fit unloads nothing while the host stays above "
+                     "its floor: the driver pages idle models' memory out; the keeper's preloads unload as before")}
     notes = []
     if avail is None:
         notes.append("the host's memory cannot be read here: every load unloads as before")

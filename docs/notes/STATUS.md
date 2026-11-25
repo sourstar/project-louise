@@ -20,6 +20,23 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **TWO DECISIONS OF THE OPERATOR, 2026-11-25 evening: "A for paging, and keep report only".**
+  (1) QUERY MODE RELIES ON THE DRIVER'S PAGING ON PURPOSE: nothing is unloaded to make room while system
+  memory allows. Built: in query mode `model_evict.rule()` is "page" whatever `[models] make_room` says, for
+  EVERY load (a question's, the keeper's own), and with no bound over the card but the host's floor
+  (`page_floor_gib`, 12 GiB, and a context's 3.2 GiB above it); `node resident show` says so. The bound of
+  2026-11-24 (3 GiB over the card, "raised only by a measurement, the engine's refusal made survivable by a
+  patch") stands in embed and custom mode; in query mode the two things it waited for are there — the day's
+  measurement (about 45 GiB of models on 32, 13–15 GiB in gtt, the 35B at phase-0 speed, a page-in 0.2–0.3 s,
+  no backend lost) and engine 619655e5833b's 0028 (a context the card cannot hold is refused and asked
+  again). NOT DONE, and to read on the node first: LocalAI's memory reclaimer must be off where the card is
+  over-committed, and the stage script sets it from the node-wide key, not from the mode — it evicted
+  nothing in two hours at 99 %, so it is either off or does not fire; `resident show` notes it if it is on.
+  Under this rule the earlier question (may the large chat model give way in query mode) is answered too:
+  nothing is unloaded there while the host has memory. Parking (#48) remains the controlled form of it.
+  (2) A STAGE WITH NO PROGRESS FOR THIRTY MINUTES IS REPORTED, NEVER PAUSED (`app/stage_progress.py`): the
+  monitor's pause is not taken into the worker.
+
 - **THE KEEPER COUNTED THE LARGE CHAT MODEL AT 13,275 MiB OF ITS 21,449 — a reading taken with a slice of it
   in host memory — and preloaded into the 8 GiB it thought it had (`resident._rest_size`; München's readings
   in query mode, 16:44–16:47Z).** A model that keeps its context was counted at the FEWEST bytes any reading
