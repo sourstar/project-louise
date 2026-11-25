@@ -22,6 +22,7 @@ by taking the minimum, alongside the global `[transfer] per_endpoint`.
 from __future__ import annotations
 
 import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -87,6 +88,10 @@ class TransferManager:
         self._platform = platform if platform is not None else _load_platform()
         bw = self._platform.bandwidth
         self._override_bps: float | None = None      # Tier-3, ephemeral
+        #: the budget of the node's mode (app/node_mode.py), where it sets
+        #: one: it stands in `[budget] down_max` / `up_max`'s place
+        self._mode_down: int | None = None
+        self._mode_up: int | None = None
         self._down = TokenBucket(bw.down_max_bps, clock=self._clock,
                                   burst_seconds=burst_seconds,
                                   reserve_fraction=bw.reserve_interactive, name="down")
@@ -138,6 +143,28 @@ class TransferManager:
             self._override_bps = None if rate_bps is None else max(0.0, float(rate_bps))
             self._apply_rates_locked()
 
+    def set_mode_budget(self, down_bps: int | None, up_bps: int | None) -> bool:
+        """The network budget of the node's MODE (embed or chat; operator,
+        2026-11-25: "For both modes a network budged shall be settable"),
+        from platform.toml's `[modes]`: each given stands in `[budget]
+        down_max` / `up_max`'s place, None leaves `[budget]`'s. The schedule's
+        factor, the reserve and an override apply on top, as to `[budget]`'s.
+        Desired state read from the file by the caller each round: nothing is
+        kept anywhere else. True when a ceiling changed."""
+        with self._lock:
+            if (down_bps, up_bps) == (self._mode_down, self._mode_up):
+                return False
+            self._mode_down, self._mode_up = down_bps, up_bps
+            self._apply_rates_locked()
+            return True
+
+    def configured(self) -> tuple[int | None, int | None]:
+        """(down, up) before the schedule and any override: the mode's
+        where it sets one, `[budget]`'s otherwise. None = unlimited."""
+        bw = self._platform.bandwidth
+        return (self._mode_down if self._mode_down is not None else bw.down_max_bps,
+                self._mode_up if self._mode_up is not None else bw.up_max_bps)
+
     def _ceiling(self, configured: int | None) -> float | None:
         """min(configured x schedule, override). None stays None (unlimited)."""
         factor = self._platform.bandwidth.schedule.factor_at(self._clock.wall_minutes())
@@ -148,8 +175,9 @@ class TransferManager:
     def _apply_rates_locked(self) -> None:
         bw = self._platform.bandwidth
         self._last_factor = bw.schedule.factor_at(self._clock.wall_minutes())
-        self._down.set_rate(self._ceiling(bw.down_max_bps))
-        self._up.set_rate(self._ceiling(bw.up_max_bps))
+        down, up = self.configured()
+        self._down.set_rate(self._ceiling(down))
+        self._up.set_rate(self._ceiling(up))
         self._last_schedule_check = self._clock.monotonic()
 
     def maybe_refresh(self) -> None:
@@ -414,6 +442,30 @@ _manager: TransferManager | None = None
 _manager_lock = threading.Lock()
 
 
+#: how often a process re-reads the budget of the node's mode of use
+MODE_FOLLOW_S = 5.0
+_mode_followed = -1e9
+
+
+def _follow_mode(manager: TransferManager) -> None:
+    """The network budget of the node's MODE OF USE (embed or chat,
+    app/node_mode.py), re-read at most every MODE_FOLLOW_S: every process
+    that moves bytes draws from the mode's budget — the web and an operator
+    pass in its own container as well as the worker, whose round applies it
+    itself. Never raises: a store or a file that cannot be read leaves the
+    budget as it stands."""
+    global _mode_followed
+    now = time.monotonic()
+    if now - _mode_followed < MODE_FOLLOW_S:
+        return
+    _mode_followed = now
+    try:
+        from .. import node_mode
+        node_mode.apply_budget(manager)
+    except Exception:   # noqa: BLE001 — bytes still move under the budget in force
+        pass
+
+
 def get_manager() -> TransferManager:
     """Lazily constructed, mirroring refs.get_store()'s single-call-site
     pattern so config is read once per process rather than per transport."""
@@ -422,11 +474,13 @@ def get_manager() -> TransferManager:
         with _manager_lock:
             if _manager is None:
                 _manager = TransferManager()
+    _follow_mode(_manager)
     return _manager
 
 
 def set_manager(manager: TransferManager | None) -> None:
     """Test seam: inject a manager with a fake clock / synthetic config."""
-    global _manager
+    global _manager, _mode_followed
+    _mode_followed = -1e9             # the next get_manager() reads the mode's budget afresh
     with _manager_lock:
         _manager = manager

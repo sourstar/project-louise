@@ -20,6 +20,23 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **The node has two MODES OF USE, embed and chat (operator, 2026-11-25; `app/node_mode.py`, 07 §7.3 `node
+  mode`, §7.8 `[modes]`).** One switch moves the three things that differ: the chat model (`[models]
+  chat_small` in embed mode, `chat_large` in chat mode — the one `chat` setting became two and is still what
+  each reads when unset), the run mode (embed: everything; chat: `[modes] chat_run`, download/seeding, seeding
+  or pause — never everything, which `/api/control` refuses there) and the network budget (`[modes]
+  <mode>_down_max|up_max`, standing in `[budget]`'s place; the worker re-reads it each round). Switched by
+  `louise node mode embed|chat`, the System page's Mode panel and `POST /api/mode` (a cron job). WHICH mode
+  is state in `state/node.sqlite` and survives a restart (invariant 10's exception, amended); what a mode
+  MEANS is the file's. At a switch the worker unloads the chat model left and loads the one entered, after
+  any answer in flight. `node resume` goes back to what the mode runs. A node never switched is in embed
+  mode with its run mode untouched and both settings reading today's model: NOTHING CHANGES AT DEPLOY.
+  Decided here, the operator's to reverse: the keeper's rule is unchanged (a paused or seed-only node
+  preloads nothing, so chat mode on "pause" loads its models at the switch and at a question, not behind);
+  a mode's budget may exceed `[budget]`'s. NOT measured: no reading on the node yet — the first switch there
+  is the measurement (the unload, the 35B's load, the memory each mode leaves). Point 8 of the same request,
+  paging as the engine's default, is the Tensor session's (staged 0021 + the keeper's `make_room` default),
+  held until 0018's refusal row.
 - **Live: web 8337d36a (23:52Z) and engine b190673dbdbf (00:55Z).** No traceback in the worker's log since
   the start (80 in fifteen minutes before); the German sentence read in the German profile (Sref 240); the
   engine's five llama.cpp gates exact with the fingerprints they had. The cold Ask from an EMPTIED card,

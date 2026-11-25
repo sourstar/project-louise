@@ -213,6 +213,12 @@ def healthz():
 
 # ---------------- status & stats ----------------
 
+def _node_mode_now() -> str:
+    """embed or chat (app/node_mode.py), for the status answer."""
+    from . import node_mode
+    return node_mode.current()
+
+
 @app.get("/api/status")
 def status():
     con = _con()
@@ -227,6 +233,7 @@ def status():
     queue = con.execute("SELECT COUNT(*) c FROM embed_queue").fetchone()["c"]
     return {
         "worker_state": node_state.worker_state(),
+        "mode": _node_mode_now(),
         "scope": scope,
         "counts": status_mod.api_counts(counts),
         "embed_queue": queue,
@@ -805,6 +812,11 @@ def job_status(job_id: int):
 def control(body: ControlBody, request: Request):
     if body.state not in db.WORKER_STATES:
         raise HTTPException(400, f"state must be {'|'.join(db.WORKER_STATES)}")
+    # chat mode never runs everything (app/node_mode.py): said, not done
+    from . import node_mode
+    refused = node_mode.refuses(body.state)
+    if refused:
+        raise HTTPException(409, refused)
     # node.sqlite, not the first collection's manifest: the ONE place every
     # process reads the node state from (app/node_state.py); the write
     # recorded with who made it (the caller's address and agent)
@@ -816,6 +828,41 @@ def control(body: ControlBody, request: Request):
     except Exception:   # noqa: BLE001 — the state is set; the event is a courtesy
         print(f"[info:control] worker set to {body.state}", flush=True)
     return {"worker_state": body.state}
+
+class ModeBody(BaseModel):
+    mode: str
+
+
+@app.get("/api/mode", dependencies=[Depends(auth.require_admin)])
+def mode_get():
+    """The node's mode of use (embed or chat), its run mode, the chat model
+    in force and what each mode sets (app/node_mode.py)."""
+    from . import node_mode
+    return node_mode.shown()
+
+
+@app.post("/api/mode", dependencies=[Depends(auth.require_admin)])
+def mode_set(body: ModeBody, request: Request):
+    """The node switched to embed or chat mode — for a cron job, as the
+    System page's buttons and `louise node mode` do it (operator, 2026-11-25:
+    "The mode shall be selectable through the api as well for cron jobs").
+    Synchronous, as `/api/control` is: the mode and its run mode are written
+    before the answer; the worker applies the budget and changes the chat
+    model at its next round. Calling it again with the same mode sets that
+    mode's run mode again."""
+    from . import node_mode
+    if body.mode not in node_mode.MODES:
+        raise HTTPException(400, f"mode must be {'|'.join(node_mode.MODES)}")
+    client = request.client.host if request.client else "?"
+    agent = (request.headers.get("user-agent") or "")[:80]
+    got = node_mode.switch(body.mode, by=f"POST /api/mode from {client} ({agent})")
+    line = f"node switched to {body.mode} mode (was {got['before']}); run mode {got['run']}"
+    try:
+        db.log_event(_con(), "info", "control", line)
+    except Exception:   # noqa: BLE001 — the mode is set; the event is a courtesy
+        print(f"[info:control] {line}", flush=True)
+    return {**node_mode.shown(), "before": got["before"], "run_before": got["run_before"]}
+
 
 class ScopeBody(BaseModel):
     languages: list[str] = []

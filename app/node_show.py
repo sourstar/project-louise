@@ -46,10 +46,14 @@ def _jobs(c) -> list[dict[str, Any]]:
 def overrides() -> dict[str, Any]:
     """Tier 3 in force (07 §7.8): the mode, the collections paused, a
     bandwidth override and when it expires."""
-    from app import db, node_state
+    from app import db, node_mode, node_state
     mode = node_state.peek_worker_state()
     bw = node_state.peek(db.get_bandwidth_override, None)
-    return {"mode": mode, "paused_collections": node_state.peek(_paused, []),
+    return {"mode": mode,
+            # embed or chat (app/node_mode.py): which chat model answers, and
+            # what `resume` goes back to; `mode` above is the RUN mode
+            "mode_of_use": node_mode.current(),
+            "paused_collections": node_state.peek(_paused, []),
             "bandwidth_bps": bw,
             # the last mode writes and who made them (node_state.set_worker_state)
             "mode_writes": node_state.peek(_mode_writes, []),

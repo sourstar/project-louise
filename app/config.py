@@ -106,7 +106,9 @@ TRANSLATE_URL = os.getenv("TRANSLATE_URL", "").rstrip("/")
 #   2026-11-15: "I want them to be editable from the page for quick testing"):
 #   platform.toml's `[models] translate` / `chat` where set, the environment's
 #   otherwise — module __getattr__ below (PEP 562), so every `config.CHAT_MODEL`
-#   in the app follows the file without a restart.
+#   in the app follows the file without a restart. The chat model is the
+#   one of the node's MODE (2026-11-25): `chat_small` in embed mode,
+#   `chat_large` in chat mode (`chat_model_for`).
 ENV_TRANSLATE_MODEL = os.getenv("TRANSLATE_MODEL", "")
 # The GPU probe (app/gpu_probe.py, the `gpu-probe` service): the System
 # page's GPU panel asks it for each card's memory and every process's
@@ -144,11 +146,35 @@ def _file_models():
     return _MODELS_SEEN[1]
 
 
+def chat_model_for(mode: str) -> str:
+    """The chat model of one of the node's two modes (app/node_mode.py;
+    operator, 2026-11-25: "The current chat model setting becomes 2 chat
+    settings, large one and a small one"): `[models] chat_large` in chat
+    mode, `chat_small` in embed mode; each unset reads `[models] chat`, the
+    one setting there was, then the environment's CHAT_MODEL."""
+    m = _file_models()
+    chosen = None
+    if m is not None:
+        chosen = getattr(m, "chat_large" if mode == "chat" else "chat_small", None) or m.chat
+    return chosen or ENV_CHAT_MODEL
+
+
+def _node_mode() -> str:
+    try:
+        from . import node_mode
+        return node_mode.current()
+    except Exception:   # noqa: BLE001 — a chat is never failed by a mode it cannot read
+        return "embed"
+
+
 def __getattr__(name: str):
-    if name in ("CHAT_MODEL", "TRANSLATE_MODEL"):
+    if name == "CHAT_MODEL":
+        # the model of the mode the node is in, on every read: a switch
+        # reaches every reader (chat, the keeper, the question card) by itself
+        return chat_model_for(_node_mode())
+    if name == "TRANSLATE_MODEL":
         m = _file_models()
-        chosen = getattr(m, "chat" if name == "CHAT_MODEL" else "translate", None) if m else None
-        return chosen or (ENV_CHAT_MODEL if name == "CHAT_MODEL" else ENV_TRANSLATE_MODEL)
+        return (m.translate if m else None) or ENV_TRANSLATE_MODEL
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

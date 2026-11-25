@@ -369,7 +369,13 @@ louise node
                                                                        every container of the node shares; it does not wait (built 2026-10-25)
   show                                                                 state per collection, the current stage, the last round's cost, overrides in force
   pause [<collection>] [--acquire-only | --seed-only]                  a runtime override: the node's mode — nothing, seeding only, or download and seeding only — until resume; it survives a restart (§7.8)
-  resume [<collection>]
+  resume [<collection>]                                                the node goes back to what its mode of use runs — everything in embed mode, chat mode's own run mode in
+                                                                       chat mode (amended 2026-11-25) — or one collection
+  mode [embed|chat]                                                    the node's MODE OF USE, read or switched (added 2026-11-25, operator): `embed` — heavy embedding: the
+                                                                       small chat model answers, the run mode is set to everything; `chat` — the large chat model answers, the
+                                                                       run mode is set to `[modes] chat_run` (download/seeding, seeding or pause), never everything; each with
+                                                                       its own network budget (§7.8 `[modes]`). It survives a restart (§7.8). The System page's Mode panel
+                                                                       and `POST /api/mode {"mode": …}` (§7.4, for a cron job) do the same
   freeze <collection>                                                  a runtime override: the collection keeps the version it holds — nothing fetched from its origin, its origin not scanned, nothing
                                                                        taken in from peers; parsed, indexed, embedded here, searched and checked as it is; shared, only its parts
                                                                        still current upstream (04 §4.3); it survives a restart (§7.8) (added 2026-11-07, operator)
@@ -1561,6 +1567,18 @@ clients that call them, each the same as a command: `/api/control` (`node
 pause` / `resume`), `/api/search` (`ask search`) and `/api/verify` (T4 on
 demand, 03 §3.5).
 
+**`/api/mode` is for a cron job** (*added 2026-11-25*, operator: "The mode
+shall be selectable through the api as well for cron jobs"): `POST
+/api/mode {"mode": "embed"|"chat"}` with the admin token switches the
+node's mode of use as `node mode` does — synchronous, the mode and its run
+mode written before the answer, which states the mode, the run mode, the
+chat model in force and what each mode sets; `GET /api/mode` reads the
+same. Called again with the mode the node is in, it sets that mode's run
+mode again, so a scheduled call means the same thing every time. In chat
+mode `/api/control` refuses `running` (409, saying to switch to embed
+mode): chat mode runs download/seeding, seeding or nothing. `/api/status`
+states the mode beside the run mode.
+
 **One route is not JSON, and it is the only one.**
 
 ```
@@ -2057,7 +2075,7 @@ one home.
 | **files** — desired state | `platform.toml` and `collections/<name>.toml` under `LOUISE_ROOT` | editing the file; `hold config apply` |
 | **files** — desired state | `users.toml` beside `platform.toml` (*amended 2026-10-22*): the users of §7.4, each token as its SHA-256 only; when each was last seen is `state/users-seen.json`, not desired state | `louise user …`, the admin API — never by hand |
 | **files** — desired state | `recipes/<plugin>.toml` beside `collections/` (*amended 2026-10-25, RULE 2*): this node's recipe for a plugin (06 §6.6) — what the Library's *new collection*, which names a plugin and a local name only, creates from | editing the file |
-| **state database** — runtime overrides | the node's mode — `node pause`, `--seed-only`, `--acquire-only` — in force until `resume`; a collection's pause until `resume <collection>`, and its freeze until `unfreeze <collection>` (*amended 2026-11-07*) | the commands; a restart keeps them |
+| **state database** — runtime overrides | the node's mode — `node pause`, `--seed-only`, `--acquire-only` — in force until `resume`; its mode of use — `node mode embed\|chat` — until switched (*amended 2026-11-25*); a collection's pause until `resume <collection>`, and its freeze until `unfreeze <collection>` (*amended 2026-11-07*) | the commands; a restart keeps them |
 
 Desired state is never written into the database, and a runtime override
 never survives the node applying the files — at start, at `hold config
@@ -2068,7 +2086,13 @@ a node the operator holds at acquire-only back into a running one, encoder
 and all, on every restart (operator decision, 2026-09-13). A collection's
 pause and its freeze survive a restart for the same reason: no file sets
 either, and an expiry would let a restart fetch the updates a freeze held
-out (*amended 2026-11-07*). What `hold config show` prints comes
+out (*amended 2026-11-07*). The node's MODE OF USE — embed or chat, `node
+mode` — survives a restart for the same reason again (*amended 2026-11-25*):
+no file says which of the two the node is in, and a node that came back
+from a restart in embed mode would start every encoder under the large chat
+model. What each mode MEANS — its chat model, chat mode's run mode, its
+network budget — is desired state, in `platform.toml` (`[models]`,
+`[modes]`). What `hold config show` prints comes
 from the same resolution the node uses, each value labelled with its
 tier; a value shown anywhere else comes from that resolution too.
 
@@ -2118,6 +2142,17 @@ variable, a file, a log line or a message.
 [budget]     down_max = "400Mbit"   up_max = "40Mbit"   schedule = "01:00-07:00 full; else 30%"
              # up_max is the swarm's upload ceiling too: the session uploads no faster (invariant 5; until
              # 2026-10-19 seeding was only counted); `[bandwidth]`, the older spelling, still loads
+[modes]      chat_run = "acquire-only"                  # THE NODE'S TWO MODES OF USE (added 2026-11-25, operator; §7.3
+             # `node mode`, app/node_mode.py): EMBED, for heavy embedding — the memory is the embedders', the small
+             # chat model answers, and a switch to it sets the run mode to everything; CHAT — the memory is the large
+             # chat model's, the embedders page in for a question, and a switch to it sets the run mode to `chat_run`:
+             # "acquire-only" (download/seeding, the default), "seed-only" or "paused" — never everything, which
+             # `/api/control` refuses in chat mode. Changed while the node is in chat mode, it is taken at once
+             embed_down_max = "400Mbit"   embed_up_max = "40Mbit"   chat_down_max = "50Mbit"   chat_up_max = "10Mbit"
+             # each mode's own network budget, in [budget]'s grammar: while the node is in the mode it stands in
+             # `[budget] down_max` / `up_max`'s place (the schedule, the reserve and an override apply on top);
+             # unset, [budget]'s. Read by the worker each round: an edit needs no restart. A key this table does
+             # not know is refused. WHICH mode the node is in is not here: it is the node's state (§7.8's tiers)
 [peers]      addresses = ["http://peer.example.org:8742"]   # the bootstrap of 04 §4.2, where the peer answers the
              # messages of 09 §9.9 (a bare host:port is http); `share peers add` writes here, each address once
 [peers.pins] "http://peer.example.org:8742" = "ed25519:…"   # a digest from that address under another key is discarded
@@ -2159,11 +2194,16 @@ variable, a file, a log line or a message.
              # 2026-11-08: "Chat, speech, rerankers, madlad are preloaded too"); false: loaded at their first use.
              # Paused or seed-only preloads neither. Either way nothing is unloaded for being idle — "only if
              # space is claimed", by LocalAI's reclaimer, which evicts the least recently used (added 2026-11-08)
-             chat = "louise-chat-…"   translate = "louise-translate-madlad"
+             chat_large = "louise-chat-qwen3.6-35b-a3b"   chat_small = "louise-chat-qwen3.5-9b-q4-p0"
+             translate = "louise-translate-madlad"
              # the chat and translation models OVER the environment's CHAT_MODEL and TRANSLATE_MODEL, which stay
              # the defaults; unset, the environment's. Read on every request, no restart (app/config.py). The
              # System page's Models panel writes them, with [translate] reading and [speech] (amended 2026-11-15,
-             # operator: "I want them to be editable from the page for quick testing")
+             # operator: "I want them to be editable from the page for quick testing"). TWO CHAT SETTINGS (amended
+             # 2026-11-25, operator: "The current chat model setting becomes 2 chat settings, large one and a small
+             # one"): `chat_large` answers in chat mode, `chat_small` in embed mode (§7.3 `node mode`). `chat`, the
+             # one setting there was, still loads and is what each of the two reads when unset — so a file that
+             # names only `chat` answers with it in both modes — before the environment's
 [speech]     stt_model = "whisper-large-v3"   vad_model = "silero-vad"   tts_model = "omnivoice-cpp"
              tts_voice = "localai://voice-profiles/<id>"   synthetic_voices = "it=<voice>, en=<voice>"
              tts_steps = "24"

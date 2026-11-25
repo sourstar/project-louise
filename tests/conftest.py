@@ -123,6 +123,11 @@ def fresh_worker_state():
     # one test's log into the next
     worker._last_shares_log = 0.0
     worker._last_keeps_read = 0.0
+    # the node's mode of use as the worker last acted on it, and what a
+    # reader of it remembers for a second (app/node_mode.py)
+    worker._node_mode_seen[:] = [None, None]
+    from app import node_mode
+    node_mode.forget()
     # the annotations cascade's memos: its graph, its listings, its decisions
     from app.hold import cascade, cascade_keeper
     cascade.reset()

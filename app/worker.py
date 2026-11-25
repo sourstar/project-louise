@@ -6379,6 +6379,97 @@ def _say_mode(state: str) -> None:
                           f"(read from {node_state.path()})")
 
 
+#: (the node's mode of use, its budget) as the worker last acted on them
+_node_mode_seen: list = [None, None]
+#: how long a switch waits for an answer in flight before it unloads the chat
+#: model that answer is using
+MODE_ANSWER_WAIT_S = 120.0
+
+
+def _rate_said(bps: int | None) -> str:
+    return "unlimited" if bps is None else f"{bps / 1_000_000:.1f} MB/s"
+
+
+def _apply_node_mode(node_con, *, manager=None, start=None) -> str:
+    """The node's MODE OF USE (embed or chat, app/node_mode.py; operator,
+    2026-11-25), acted on once a round: its network budget set on the
+    transfer manager (from platform.toml's `[modes]`, re-read when the file
+    changed, so the page's edit needs no restart), ONE LINE when the mode or
+    its budget changes and at the first read, and — at a SWITCH, never at
+    a first read that finds the mode it last acted on — the chat model the
+    node no longer uses unloaded and the one it does loaded, behind
+    (`_mode_models`): a round never waits for a model. Returns the mode."""
+    from . import node_mode, platform_config
+    mode = node_mode.apply_budget(manager or get_manager(), node_con)
+    in_force = node_mode.budget(mode, platform_config.seen())
+    before, budget_before = _node_mode_seen
+    if before == mode and budget_before == in_force:
+        return mode
+    _node_mode_seen[:] = [mode, in_force]
+    if before is None:
+        # THE FIRST READ OF THIS PROCESS: a switch made while the worker was
+        # down (a cron job's, during a deploy) is still a switch — the store
+        # remembers the mode whose chat model was last made the node's
+        before = node_mode.applied(node_con)
+        if before is None:
+            node_mode.set_applied(node_con, mode)
+        said = "read" if before in (None, mode) else f"{before} -> {mode}, switched while the worker was down"
+    else:
+        said = "budget changed" if before == mode else f"{before} -> {mode}"
+    _node_line("control")(
+        f"node in {mode} mode ({said}): chat model {config.chat_model_for(mode)}; network budget "
+        f"down {_rate_said(in_force['down'])}{'' if in_force['down_own'] else ' ([budget])'}, "
+        f"up {_rate_said(in_force['up'])}{'' if in_force['up_own'] else ' ([budget])'}")
+    if before is not None and before != mode:
+        node_mode.forget()          # this process's own readers follow at once
+        node_mode.set_applied(node_con, mode)
+        (start or _start_mode_models)(before, mode)
+    return mode
+
+
+def _start_mode_models(before: str, mode: str) -> None:
+    threading.Thread(target=_mode_models, args=(before, mode), daemon=True,
+                     name="mode-models").start()
+
+
+def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
+                 question=None, sleep=None) -> dict:
+    """A switch's models, off the round's thread: the chat model of the mode
+    left is unloaded (LocalAI's `/backend/shutdown`, `model_load.unload` —
+    its memory is what the switch is for), after any answer in flight has
+    ended or `wait_s` has passed, and the chat model of the mode entered is
+    loaded (`llm.warm`, which makes its room from the models used least
+    recently). Where both modes name one model nothing is unloaded. Never
+    raises: a model that does not load is said, and loads at its first
+    question as it always did."""
+    from . import llm
+    log = _node_line("models")
+    old, new = config.chat_model_for(before), config.chat_model_for(mode)
+    out = {"old": old, "new": new, "unloaded": False, "loaded": False}
+    if old == new:
+        log(f"{mode} mode: both modes name {new}: nothing unloaded "
+            f"(set [models] chat_large and chat_small on the System page)")
+        return out
+    question = question or resident._question_now
+    sleep = sleep or _stop.wait
+    until = time.monotonic() + wait_s
+    while question() and time.monotonic() < until and not _stop.is_set():
+        sleep(1.0)
+    try:
+        out["unloaded"] = model_load.unload(config.CHAT_URL, old)
+    except Exception as e:   # noqa: BLE001 — the runner keeps it; the load below makes its own room
+        log(f"{mode} mode: {old} was not unloaded ({type(e).__name__}: {e})")
+    try:
+        llm.warm()
+        out["loaded"] = True
+    except Exception as e:   # noqa: BLE001 — it loads at the first question
+        log(f"{mode} mode: {new} did not load now ({type(e).__name__}: {str(e)[:200]}); "
+            f"it loads at the first question")
+    log(f"{mode} mode: {old} {'unloaded' if out['unloaded'] else 'was not loaded'}; "
+        f"{new} {'loaded' if out['loaded'] else 'not loaded'}")
+    return out
+
+
 _profile_watch: list = []
 
 
@@ -7253,6 +7344,9 @@ def run_forever():
             # applies it. Re-read each round so it takes effect within one
             # document and expires on its own.
             get_manager().set_override(node_state.bandwidth_override(node_con))
+            # ...and the budget of the node's mode of use (embed or chat),
+            # with its models at a switch (app/node_mode.py)
+            _apply_node_mode(node_con)
             # ...and the same channel carries the measurement back the other
             # way: acquisition and seeding move their bytes HERE, so without
             # this the Network page's graph is a flat zero beside a saturated
