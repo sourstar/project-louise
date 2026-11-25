@@ -3356,3 +3356,37 @@ tools/sched_measure.sh 15` for the count parsed ahead and the parse seconds
 in each kind; fts and rdf stage seconds and documents; ms/doc for both; the
 children's states for 60 s; ten dumps of the pipeline thread. Believe
 ms/doc and the parse seconds, not docs/s: the slice moves.
+
+## 2026-11-25 — a collection's resume asks for the scan its pause cut short; the slice-scope wait says where it is
+
+**SCENARIO.** EUR-Lex5.next (970 k units, one-thread scan of 28–55 minutes),
+node running, three other collections at work. Paused by München's monitor at
+07:29Z, 22 minutes into its startup scan (Legal's rule: a row inserted);
+resumed at 07:36:29Z.
+
+**BEFORE** (München, from the node's log and a thread dump): the scan ended
+07:32:12Z with "discovery interrupted (stop requested) — progress committed,
+resumes next scan {'seen': 742001, 'added': 1881, 'changed': 321, 'withdrawn':
+1249, 'secs': 1683.4, 'interrupted': True}". After the resume: "embed producer
+started", "pipeline thread started", no "corpus scan" line and no scan thread
+among 112; the slice pass at row 970,426 of MAX(rowid) 980,178; the stages
+selected nothing. It stood until a `docker restart` of the worker at
+07:50:35Z (14 minutes; the interval's request would have come about 13:04Z).
+
+**CHANGE.** Scheduling pitfall 23: the scan is owed to the collection's
+resume; the wait behind the slice scope says "row N of M" and asks for a scan
+when none is running or asked for, once every 300 s. A scan says where it is
+once a minute (`DiscoverState.say`, the orchestrator's count, a heartbeat for
+a source that walks in silence). Cost counted here, not on the node: the
+progress count is 96 ns a unit (93 ms over 970,000 units); the wait costs one
+dictionary lookup at an idle pass between two periods.
+
+**EXPECTED.** After `node pause <collection>` during a scan and `node resume
+<collection>`: a "corpus scan (resume: its pause cut the last scan short)"
+line within one round of the resume, and no restart. While the stages wait:
+one "waiting for the slice scope: the pass is at row N of M …" line every
+five minutes.
+
+**AFTER.** Owed: München's reading the first time a collection is paused under
+a scan on this build.
+

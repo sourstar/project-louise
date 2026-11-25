@@ -316,6 +316,16 @@ class DiscoverState:       # not frozen: received/committed advance during the s
     #: (wikidata's pack pass) ends it at its unit when this is set, and the
     #: node profile's pause in that work waits on it (app/cpu_limit.py)
     stop: Any = None
+    #: `say("at lang=fr/2010, 412,000 units walked")`: one line into the
+    #: collection's own log, saying where the scan is. For a source whose
+    #: discover works long before it yields — it sorts its ids, it reads a
+    #: dump first — and would otherwise walk in silence (EUR-Lex5.next,
+    #: 2026-11-25: 28 to 55 minutes between "corpus scan" and "discovery
+    #: done", its position read with a debugger). Call it as often as is
+    #: convenient: the platform keeps one line a minute
+    #: (`discovery.SAY_EVERY_S`) and says "still walking" by itself for a
+    #: source that never calls it. None: nothing is said (tests, ad-hoc calls).
+    say: Any = None
 
 
 class UnindexableDocument(RuntimeError):
