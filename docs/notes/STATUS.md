@@ -65,6 +65,21 @@ measured (published figures disagree).
   - EUR-Lex5.next stands still in query mode (531,751 rdf and 1,089 fts pending): his mode, not a stall. The
     stalled-stage report (#904) says nothing of it — no step is started in query mode, so nothing is tried.
 
+- **A search nobody waits for stops BETWEEN two lists of one reranker, not after the last
+  (`retrieval._rerank_lists`).** München's finding beside the operator's French answer: a search replaced by a
+  second press went on for 9 s inside the rerank of its lists (17.9 s for them all) while the second search
+  queued behind it on the same reranker (`parallel:1`) — and it is what the Abort button waits for too. Lists
+  that share a reranker go one after another (2026-11-10), and nothing looked at the caller between them. A
+  checkpoint before each list: the call in flight still ends (one HTTP call cannot be interrupted), the next
+  is not made. Bound after it: one list's rerank (9.6 s budget) instead of all of them. NOT measured on the
+  node: the reading is München's own pair — the seconds from a second press to "cancelled" in the web log,
+  with three or more collections on one reranker.
+- **fts needs no time bound of its own for a large unit, on today's numbers (the open half of the two-lanes
+  work).** The bound a large part's answer is waited for is the parse's: 120 s + 1.24 µs a byte
+  (`LARGE_SECONDS_PER_BYTE`). fts on the node cost 0.76–1.10 µs a byte per large unit with the lane's
+  tokenizer threads (three units at 70, 85 and 86 s; Legal's profile), so a 136 MB unit has 288 s for some 90.
+  Nothing is built; revisit only if a large fts part is ever let go for time.
+
 - **A stage that makes no progress says so by itself (`app/stage_progress.py`; the lessons, row G3 — the
   monitor's "hang" and "done not rising").** The worker's step executor notes each step (when it started, on
   which document, whether it ended with a commit: two dictionary writes a step), and a watcher thread says,

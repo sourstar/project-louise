@@ -55,6 +55,26 @@ Every check reads only, costs one pass over the manifest at most, and has
 three outcomes: pass, fail, inconclusive. An inconclusive check says why it
 could not judge and is neither a pass nor a failure.
 
+### What `rescan` must isolate before it is built (read off `discovery.sync_collection`, 2026-11-25)
+
+A scan is not a writer of the manifest alone, so "a copy of the manifest" is
+not enough. A second scan run by a check must not reach any of these:
+
+| what a scan touches | where | what the check does about it |
+|---|---|---|
+| the manifest (rows, the scope, the events) | `manifest_path` | a copy, by SQLite's backup, in a directory of its own |
+| the plugin's SCAN CURSOR | files in `manifest_path.parent` (`DiscoverState.state_dir`) | copied WITH the manifest: a copy without them scans cold (hours on pubmed) and proves nothing about the cursor, which is half the lesson (C1, C4, C5) |
+| the indexes, through the withdrawer | `fts_dir`, `lance_dir` (`discovery.withdrawer` → `app/unindexable.py`) | a view of the collection whose withdrawer does nothing: a scan that WOULD withdraw is the failure the check reports, never an index it edits |
+| the update marker | `hold/update.note_scan` | not told: a check is not the scan an update by cadence waits for |
+| derived data under `LOUISE_CACHE_DIR` | the plugin's packs, keyed on the origin's physical identity | left: re-creatable and identical by construction; said in the verdict if the scan wrote any |
+| free space | the copy is as large as the manifest (pubmed: 51.5 GB) | refused as INCONCLUSIVE under twice the manifest's size free, with the number |
+
+So it is a check a builder ASKS for (`--build rescan`), never one of the
+default set, and it wants the collection's own lock or a stopped worker for
+its length: the corpus must not change under it, or "changed 3" is the
+origin's news and not the plugin's defect. Not built until those six are
+each a test.
+
 ## 5. What a failure looks like
 
 ```
