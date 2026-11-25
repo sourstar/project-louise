@@ -509,6 +509,19 @@ def test_the_shipped_bounds_name_every_model_louise_uses():
         assert m["load_timeout_s"] >= max(30, m["cold_max_s"]), name
 
 
+def test_the_large_chat_model_has_its_measured_bound_not_the_nodes_default():
+    """München, 2026-11-25: the 35B loaded in 99.2 s at the operator's first
+    switch to query mode, against the node's default bound of 120 s — it was
+    in no profile, so a load one fifth slower (a cold page cache) would have
+    ended as a timeout at the switch and again at his first question. By the
+    file's own rule its bound is three times its slowest cold start."""
+    raw = jsonlib.loads(model_load.BOUNDS_FILE.read_text(encoding="utf-8"))
+    m = raw["models"]["louise-chat-qwen3.6-35b-a3b"]
+    assert m["load_timeout_s"] >= 3 * m["cold_max_s"] and m["load_timeout_s"] % 5 == 0
+    model_load.reset()
+    assert model_load.load_timeout_s("louise-chat-qwen3.6-35b-a3b") == m["load_timeout_s"] == 300
+
+
 def test_a_cold_start_is_published_by_another_thread(monkeypatch):
     got: list = []
     done = threading.Event()
