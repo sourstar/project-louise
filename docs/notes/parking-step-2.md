@@ -255,14 +255,28 @@ Each part's patch is sent for review before it is staged.
   host — 575 MiB for bge-m3, about 2.2 GiB for nemotron, about 6 for MADLAD.
   On 11-24 the node had 4.7 GB available at its worst hour.
 
-## 6. The engine part, as built — FOR REVIEW, SECOND CUT (2026-11-25)
+## 6. The engine part, as built — SECOND CUT, STAGED (2026-11-25)
 
-`deploy/localai/patches/review/0023-llama-cpp-park-when-told.patch`: in no
-series, built by nobody, until the architecture session has read it. It
-applies after staged 0022 (`engine-lang.series`'s lines). The first cut
-(ddc2fa1) was read independently for the architecture session; what that
-reading found, and what was done about each finding, is the table below. The
-server part stopped until this part is right.
+**NO DEVICE HAS BEEN SEEN TO REFUSE A COMMIT.** That a refusal carries
+`errc::memory_allocation` is the extension's specification and the runtime's
+source, not an observation on the node, where the driver pages before it
+refuses. So München's row with `GGML_SYCL_PARK_REFUSE` is a row of the SWITCH,
+which raises that code by construction — and the first real refusal on a card
+is a finding to record, whatever code it carries (the architecture session's
+first condition on accepting this part).
+
+`deploy/localai/patches/staged/0023-llama-cpp-park-when-told.patch`, in
+`engine-park.series` = `engine-stream.series` line for line, then 0023:
+engine **`ed93e3c1b2e2`**, not built. The first cut (ddc2fa1) was read
+independently for the architecture session; what that reading found, and
+what was done about each finding, is the table below. The second cut was
+ACCEPTED for staging with three conditions: the lines above; the bound on
+"not now" retries is the architecture session's to build in Louise's clients
+with the keeper's half ("a deferral with Retry-After, and after N refusals
+for one model in M minutes the evictor makes room or the request fails with
+what it needs — never a silent loop"); and THE STREAM FIX IS NOT BEHIND
+PARKING — a chat answer cut short is delivered as whole by today's engine, so
+it is its own patch in the candidate built next (§6a).
 
 **What it is.** §3.1, with LocalAI's two calls and no new one:
 
@@ -309,7 +323,7 @@ architecture session's; its numbers):
 | 2 | a refused request to a parked model parked it again, ignoring that park's own result: a second copy of the weights per refused request, and a model that could be left on the device while the caller believed it parked | A REQUEST NEVER PARKS. Once back the weights stay; where they are is said (`Status`, `llamacpp:weights_parked`); the counts are of weights that left and came back, not of attempts. The measuring switch keeps its rule and reads what happened |
 | 3 | under TODAY's server a refusal on embeddings is rewritten "conversation too long…" | "Under today's server", below; the server part stops that rewrite for a refusal |
 | 4 | −2 and any context-creation failure meant "retry" for every model; a graph that never fits is deferred for ever | `llama_process` returns `LLAMA_PROCESS_NO_MEMORY` (−4) for the backend's allocation failure ALONE (the table below); the other −2 stay faults. What the engine cannot know — never against not now — is stated and counted, below |
-| 5 | refusals that did not surface: a stream after its first chunk; the realtime RPC; the canary at the first load; OmniVoice's own decodes | the stream and the realtime RPC: fixed (the stream's was a truncated answer delivered as complete, for ANY error, pre-existing). The other two: stated limits, below |
+| 5 | refusals that did not surface: a stream after its first chunk; the realtime RPC; the canary at the first load; OmniVoice's own decodes | the stream: a truncated answer delivered as complete, for ANY error, pre-existing — fixed as its OWN patch in the next candidate (§6a, staged 0025), and typed here; the realtime RPC: typed. The other two: stated limits, below |
 | 6 | `Status` reported total 0 for a model on the device, where `/backend/monitor` read the process's memory | total is the process's virtual size again, with `rss`; the park's bytes are in the breakdown only |
 | 7 | "Model already loaded" compared the NAME alone: the same name under other options un-parked and answered success while the old options computed — the dangerous one for invariant 12 | the backend keeps the options of its load and refuses a repeat that differs, `FAILED_PRECONDITION`, before anything is brought back, naming the fields and never their values (invariant 8). The wrapper's own refusal (#882) is the second lock |
 | 8 | not inert for a model that cannot park | "What changes for EVERY model", below: the gate must cover it |
@@ -409,7 +423,7 @@ every staged model file to it.
 
 **Stated limits — known, not built:**
 
-- **No device has been SEEN to refuse a commit.** That its exception carries
+- **No device has been seen to refuse a commit** (this section's first lines). That its exception carries
   `errc::memory_allocation` is the extension's specification and the runtime's
   source (intel/llvm `physical_mem_impl.hpp`: out of resources, of host or of
   device memory → `memory_allocation`; anything else → `runtime`), not an
@@ -456,15 +470,68 @@ address:
 
 and the gate's clause (§3.3): the sixteen fingerprints after N cycles.
 
-## 7. The server part, commit by commit — FOR REVIEW
+## 6a. The stream fix goes first: the candidate built next (2026-11-25)
+
+**The defect (localai-bugs.md B21), on every chat model today.** LocalAI's
+llama.cpp backend tested only the FIRST result of a stream for an error. A
+later one — a computation failing in the middle of a generation — became one
+more, empty, reply, and the call returned OK: an answer cut short by a
+failure, delivered as complete.
+
+| | pros | cons |
+|---|---|---|
+| its own patch in the candidate built NEXT, before parking (built: the architecture session's condition) | a wrong answer stops being delivered as right at the next engine swap, not two engines later; nine lines of LocalAI's backend, no llama.cpp change; one build and one gating with the paging default and the tag | one more line in a candidate the operator has not yet chosen |
+| left inside the park patch | one patch fewer | "fix it after": every truncated chat answer until parking is live |
+| status quo | nothing | a failure in the middle of an answer is invisible to every client |
+
+`engine-stream.series` = `engine-lang.series` line for line, then staged 0025
+(the fix) and 0026 (a test switch): engine **`792f050e318e`**, not built. It
+stands in `d658549772ca`'s and `aa88ab5c356a`'s place if neither is gated: one
+build, one gating for the paging default, the language tag and the stream.
+
+**MEASURED**, on a CPU build of the backend at that base, a stand-in refusing
+one graph when the first chunk of a stream is in
+(`tools/measure/stream_fails_test.py`):
+
+| the backend | the whole answer | a graph refused mid-way | the next answer |
+|---|---|---|---|
+| as it is in every engine so far | OK, 50 chunks | **OK, 4 chunks** — the defect | OK, 50 chunks |
+| with 0025 | OK, 50 chunks | **INTERNAL "Compute error.", 3 chunks** | OK, 50 chunks, the same process |
+
+**NOT measured: a card.** A card cannot be made to fail in the middle of an
+answer: its driver pages before it refuses, and `GGML_SYCL_POOL_REFUSE`
+refuses the next commits that GROW a pool, counted from the load — a pool has
+done its growing before the first token. Hence 0026:
+`GGML_SYCL_GRAPH_REFUSE=N` with `GGML_SYCL_GRAPH_REFUSE_ARM=<file>` — once the
+file exists the next N graphs are abandoned before anything of them is
+submitted, answered as a refused pool commit. Off unless a model's env sets
+both; a test holds every staged model file free of it.
+
+| | pros | cons |
+|---|---|---|
+| the switch in the candidate (built) | the card's own proof of the fix is in the pass; the same switch times any mid-request refusal later (parking's rows) | 29 lines of test code in the engine, one comparison per graph when unset |
+| the candidate without it (drop the series' last line: another name) | nothing but the fix | the fix reaches the node with no row: measured on a CPU build only |
+
+München's row, on a COPY of a chat model whose env has the two variables,
+through the backend's own address:
+
+    python3 -I tools/measure/stream_fails_test.py --addr ADDR --arm <file> --tokens 200
+
+— it must end "ok: the stream ended as a failure …"; "DEFECT" is the old
+behaviour. Through LocalAI's HTTP the same failure must end the SSE stream
+with an error, not with a normal `[DONE]` after a short answer.
+
+## 7. The server part, commit by commit
 
 Each is a patch of LocalAI's SERVER, in no engine series, written on the
 node's server tree (v5.0.1 + P1 + P13 + P19 = `v5.0.1-3`), and sent for
 review before it is staged. A server build, no gate: the server is in no run
 id.
 
-**1. The readiness poll** — `review/0024-model-readiness-poll.patch`
-(§3.2; separable, it parks nothing). After LocalAI starts a backend it asks
+**1. The readiness poll** — `staged/0024-model-readiness-poll.patch`
+(§3.2; separable, it parks nothing). ACCEPTED as written by the architecture
+session (2026-11-25): "it goes on the node with the server part, as the
+operator tied it". After LocalAI starts a backend it asks
 whether its gRPC service is ready, sleeps the configured delay — 2 s by
 default — and asks again, up to 20 times. A backend ready after 100 ms is
 seen two seconds later, on every cold load of every model.

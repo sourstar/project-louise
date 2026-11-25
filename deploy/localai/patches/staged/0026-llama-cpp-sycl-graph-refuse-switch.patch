@@ -1,0 +1,123 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 08:59:34 +0000
+Subject: [PATCH] test(llama-cpp): a switch that refuses a SYCL graph once a
+ file exists, to test a failure in the middle of an answer
+
+Carried as a llama.cpp patch beside the others
+(patches/0022-sycl-graph-refuse-switch.patch).
+
+A stream that fails after its first chunk must end as a failure, not as a
+complete answer (the commit before this one). Showing that on a device
+needs a computation that fails at a moment the test chooses, in the middle
+of an answer. A card does not refuse on demand, and GGML_SYCL_POOL_REFUSE
+refuses the next commits that grow a pool, counted from the load: a pool
+has done its growing before the first token.
+
+GGML_SYCL_GRAPH_REFUSE=N with GGML_SYCL_GRAPH_REFUSE_ARM=<file>: once the
+file exists, the next N graphs are abandoned before anything of them is
+submitted and answered as a refused pool commit is. A test starts an
+answer, creates the file when the first chunk is in, and reads how the
+answer ends.
+
+Off unless both variables are set; then it is a test. It changes no
+computation.
+
+Assisted-by: Claude Code
+---
+ .../0022-sycl-graph-refuse-switch.patch       | 83 +++++++++++++++++++
+ 1 file changed, 83 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0022-sycl-graph-refuse-switch.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0022-sycl-graph-refuse-switch.patch b/backend/cpp/llama-cpp/patches/0022-sycl-graph-refuse-switch.patch
+new file mode 100644
+index 0000000..f3fc236
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0022-sycl-graph-refuse-switch.patch
+@@ -0,0 +1,83 @@
++sycl: GGML_SYCL_GRAPH_REFUSE, the test of a graph that fails in the middle of an answer
++
++A graph the device refuses memory for fails that graph and the process goes
++on (0014, 0018). What a caller does with such a failure in the MIDDLE of an
++answer - after the first token of a stream - has to be shown on a device,
++and neither a card nor the switch there is can give it: a card's driver
++pages an idle neighbour out before it refuses, and GGML_SYCL_POOL_REFUSE
++refuses the next commits that GROW a pool, counted from the load - a pool
++has done its growing before the first token.
++
++GGML_SYCL_GRAPH_REFUSE=N with GGML_SYCL_GRAPH_REFUSE_ARM=<file>: once that
++file exists, the next N graphs are abandoned before anything of them is
++submitted - the device is as it was - and answered as the pool's refusal
++is (GGML_STATUS_ALLOC_FAILED). A test starts an answer, creates the file
++when the first chunk is in, and reads how the answer ends.
++
++Without both variables it is one comparison per graph and nothing else. It
++computes nothing and changes no result.
++
++Checked: ggml-sycl.cpp compiles with icpx. Its twin on the CPU backend, a
++dev patch in no engine, is what the callers above it were tested with.
++---
++diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
++index 67cafad..e8c1110 100644
++--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
++@@ -118,6 +118,12 @@ int g_ggml_sycl_park_verify = 0;
++ // for the TEST of a refused pool commit, which a card cannot be made to give on demand (its driver pages an idle
++ // neighbour out first): GGML_SYCL_POOL_REFUSE=N refuses the next N commits that GROW a pool, as a full device does
++ std::atomic<int> g_ggml_sycl_pool_refuse{0};
+++// for the TEST of a graph that fails at a moment the test chooses - in the middle of an answer - which neither a card
+++// nor GGML_SYCL_POOL_REFUSE can give (it refuses the next commits that grow a pool, counted from the load, and a pool
+++// has done its growing before the first token): GGML_SYCL_GRAPH_REFUSE=N with GGML_SYCL_GRAPH_REFUSE_ARM=<file>.
+++// Once that file exists, the next N graphs are abandoned as after a refused pool commit; the device is not asked
+++std::atomic<int> g_ggml_sycl_graph_refuse{0};
+++std::string g_ggml_sycl_graph_refuse_arm;
++ int g_ggml_sycl_enable_fusion = 1;
++ int g_ggml_sycl_enable_esimd = 1;
++ int g_ggml_sycl_mmvq_wide = 1;
++@@ -455,6 +461,10 @@ static void ggml_check_sycl() try {
++         g_ggml_sycl_parkable = ggml_sycl_get_env("GGML_SYCL_PARKABLE", 0);
++         g_ggml_sycl_park_verify = ggml_sycl_get_env("GGML_SYCL_PARK_VERIFY", 0);
++         g_ggml_sycl_pool_refuse = ggml_sycl_get_env("GGML_SYCL_POOL_REFUSE", 0);
+++        g_ggml_sycl_graph_refuse = ggml_sycl_get_env("GGML_SYCL_GRAPH_REFUSE", 0);
+++        if (const char * arm = getenv("GGML_SYCL_GRAPH_REFUSE_ARM")) {
+++            g_ggml_sycl_graph_refuse_arm = arm;
+++        }
++         g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
++         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
++         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
++@@ -619,6 +629,14 @@ static void ggml_check_sycl() try {
++             GGML_LOG_WARN("  GGML_SYCL_POOL_REFUSE: %d - the next commits that grow a pool are REFUSED, for a test\n",
++                           g_ggml_sycl_pool_refuse.load());
++         }
+++        if (g_ggml_sycl_graph_refuse > 0) {
+++            if (g_ggml_sycl_graph_refuse_arm.empty()) {
+++                GGML_LOG_WARN("%s", "  GGML_SYCL_GRAPH_REFUSE is set without GGML_SYCL_GRAPH_REFUSE_ARM: nothing is refused\n");
+++            } else {
+++                GGML_LOG_WARN("  GGML_SYCL_GRAPH_REFUSE: %d - once %s exists the next graphs are REFUSED, for a test\n",
+++                              g_ggml_sycl_graph_refuse.load(), g_ggml_sycl_graph_refuse_arm.c_str());
+++            }
+++        }
++ 
++         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FUSION: %d\n", g_ggml_sycl_enable_fusion);
++         GGML_LOG_INFO("  GGML_SYCL_UPLOAD_STAGING_SLOTS: %d\n", g_ggml_sycl_upload_staging_slots);
++@@ -7411,6 +7429,17 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
++ // the graph computed, or failed for want of device memory (the pool's refusal): the caller's decode returns an
++ // error for this batch and the process goes on
++ static ggml_status ggml_sycl_graph_compute_or_fail(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
+++    // the test's refusal (GGML_SYCL_GRAPH_REFUSE): before anything of this graph is submitted, so the device is as
+++    // it was, and answered as the pool's refusal is. Without the switch: one comparison
+++    if (g_ggml_sycl_graph_refuse > 0 && !g_ggml_sycl_graph_refuse_arm.empty()) {
+++        if (FILE * armed = fopen(g_ggml_sycl_graph_refuse_arm.c_str(), "rb")) {
+++            fclose(armed);
+++            if (g_ggml_sycl_graph_refuse.fetch_sub(1) > 0) {
+++                GGML_LOG_ERROR("%s: GGML_SYCL_GRAPH_REFUSE: this graph is refused for the test, the device was not asked\n", __func__);
+++                return GGML_STATUS_ALLOC_FAILED;
+++            }
+++        }
+++    }
++     try {
++         ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
++     } catch (const ggml_sycl_out_of_device_memory & e) {
+-- 
+2.43.0
+

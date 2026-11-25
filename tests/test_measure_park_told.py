@@ -21,7 +21,7 @@ spec = importlib.util.spec_from_file_location("park_told", ROOT / "tools" / "mea
 park_told = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(park_told)
 
-PATCH = ROOT / "deploy" / "localai" / "patches" / "review" / "0023-llama-cpp-park-when-told.patch"
+PATCH = ROOT / "deploy" / "localai" / "patches" / "staged" / "0023-llama-cpp-park-when-told.patch"
 BASE = [[0.1, 0.2], [0.3, 0.4]]
 
 

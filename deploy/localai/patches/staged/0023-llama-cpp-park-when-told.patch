@@ -5,7 +5,7 @@ Subject: [PATCH] feat(llama-cpp): Free parks a model that can park, and a full
  device answers RESOURCE_EXHAUSTED
 
 Carried as a llama.cpp patch beside the others
-(patches/0022-server-park-when-told.patch), with the backend's side here.
+(patches/0023-server-park-when-told.patch), with the backend's side here.
 
 A model that takes context on demand, on a device whose weight buffers can
 leave it and come back (SYCL with GGML_SYCL_PARKABLE=1), no longer has to
@@ -60,11 +60,9 @@ refusal also says its type at the head of its message, where a caller
 that maps statuses can tell it from them without a list of messages:
 "no_room_on_device: the weights cannot come back to the device now".
 
-A stream that fails after its first chunk FAILS. PredictStream tested
-only its first result for an error; a later one was written as one more
-reply - an empty one, its JSON has no content - and the stream then ended
-OK: a generation cut short by any failure was delivered as a complete
-answer. It now ends with the error's status, as at the first result.
+A stream that fails after its first chunk ends with the error's status
+(the commit before this one made it end as a failure at all): a refusal
+of the moment in the middle of an answer is RESOURCE_EXHAUSTED there too.
 
 The messages and the codes are in park_reply.h, tested without a model
 (park_reply_test.cpp): a proxy in front of a backend tells a return from a
@@ -92,15 +90,15 @@ it stops a process.
 Assisted-by: Claude Code
 ---
  backend/cpp/llama-cpp/CMakeLists.txt          |    6 +
- backend/cpp/llama-cpp/grpc-server.cpp         |  276 +++-
+ backend/cpp/llama-cpp/grpc-server.cpp         |  271 +++-
  backend/cpp/llama-cpp/park_reply.h            |   94 ++
  backend/cpp/llama-cpp/park_reply_test.cpp     |   76 +
- .../patches/0022-server-park-when-told.patch  | 1334 +++++++++++++++++
+ .../patches/0023-server-park-when-told.patch  | 1334 +++++++++++++++++
  backend/cpp/llama-cpp/prepare.sh              |   13 +
- 6 files changed, 1786 insertions(+), 13 deletions(-)
+ 6 files changed, 1779 insertions(+), 15 deletions(-)
  create mode 100644 backend/cpp/llama-cpp/park_reply.h
  create mode 100644 backend/cpp/llama-cpp/park_reply_test.cpp
- create mode 100644 backend/cpp/llama-cpp/patches/0022-server-park-when-told.patch
+ create mode 100644 backend/cpp/llama-cpp/patches/0023-server-park-when-told.patch
 
 diff --git a/backend/cpp/llama-cpp/CMakeLists.txt b/backend/cpp/llama-cpp/CMakeLists.txt
 index 663ca11..111eef0 100644
@@ -120,7 +118,7 @@ index 663ca11..111eef0 100644
      target_include_directories(passthrough_options_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
      target_compile_features(passthrough_options_test PRIVATE cxx_std_17)
 diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
-index f8d69d0..c878fa6 100644
+index 7ce46f2..c878fa6 100644
 --- a/backend/cpp/llama-cpp/grpc-server.cpp
 +++ b/backend/cpp/llama-cpp/grpc-server.cpp
 @@ -96,6 +96,7 @@
@@ -449,23 +447,18 @@ index f8d69d0..c878fa6 100644
          }
  
          // Lambda to build a Reply from JSON + attach chat deltas from a result.
-@@ -3408,6 +3647,15 @@ public:
-             if (result == nullptr) {
-                 break;
-             }
-+            if (result->is_error()) {
-+                // An error AFTER the first chunk. It was written as one more
-+                // reply - its JSON has no content, so an empty one - and the
-+                // stream then ended OK: a generation cut short by a failure
-+                // was delivered as a complete answer. It ends the stream as
-+                // what it is, like an error at the first result.
+@@ -3414,8 +3653,8 @@ public:
+                 // stream then ended OK: a generation cut short by a failure
+                 // was delivered as a complete answer. It ends the stream as
+                 // what it is, like an error at the first result.
+-                json error_json = result->to_json();
+-                return grpc::Status(grpc::StatusCode::INTERNAL, error_json.value("message", "Error occurred"));
 +                const json error_json = result->to_json();
 +                return grpc_status_of_request_error(error_json, error_json.value("message", "Error occurred"));
-+            }
+             }
  
              json res_json = result->to_json();
-             if (res_json.is_null()) {
-@@ -3890,7 +4138,8 @@ public:
+@@ -3899,7 +4138,8 @@ public:
          } else if (all_results.error) {
              std::cout << "[DEBUG] Error in results: " << all_results.error->to_json().value("message", "") << std::endl;
              reply->set_message(all_results.error->to_json().value("message", ""));
@@ -475,7 +468,7 @@ index f8d69d0..c878fa6 100644
          } else {
              std::cout << "[DEBUG] Received " << all_results.results.size() << " results" << std::endl;
              if (all_results.results.size() == 1) {
-@@ -4080,7 +4329,7 @@ public:
+@@ -4089,7 +4329,7 @@ public:
              if (llama_grpc::is_context_canary_failure(message)) {
                  context->AddTrailingMetadata(llama_grpc::CONTEXT_CANARY_TRAILER, "failed");
              }
@@ -484,7 +477,7 @@ index f8d69d0..c878fa6 100644
          }
  
          // Extract the embeddings typed, straight from the task results (no
-@@ -4173,7 +4422,8 @@ public:
+@@ -4182,7 +4422,8 @@ public:
          if (all_results.is_terminated) {
              return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
          } else if (all_results.error) {
@@ -494,7 +487,7 @@ index f8d69d0..c878fa6 100644
          }
  
          // Collect responses
-@@ -4392,7 +4642,7 @@ public:
+@@ -4401,7 +4642,7 @@ public:
                  return grpc::Status(grpc::StatusCode::CANCELLED, "TTS request cancelled");
              }
              if (res->is_error()) {
@@ -503,7 +496,7 @@ index f8d69d0..c878fa6 100644
              }
              auto * tts_res = dynamic_cast<server_task_result_tts *>(res.get());
              if (tts_res == nullptr) {
-@@ -4470,7 +4720,7 @@ public:
+@@ -4479,7 +4720,7 @@ public:
                  return grpc::Status(grpc::StatusCode::CANCELLED, "TTS request cancelled");
              }
              if (res->is_error()) {
@@ -512,7 +505,7 @@ index f8d69d0..c878fa6 100644
              }
              auto * tts_res = dynamic_cast<server_task_result_tts *>(res.get());
              if (tts_res == nullptr) {
-@@ -4598,7 +4848,7 @@ public:
+@@ -4607,7 +4848,7 @@ public:
                      case ERROR_TYPE_INVALID_REQUEST:
                      case ERROR_TYPE_EXCEED_CONTEXT_SIZE: code = grpc::StatusCode::INVALID_ARGUMENT; break;
                      case ERROR_TYPE_NOT_SUPPORTED: code = grpc::StatusCode::UNIMPLEMENTED; break;
@@ -521,7 +514,7 @@ index f8d69d0..c878fa6 100644
                  }
                  return grpc::Status(code, error->err_msg);
              }
-@@ -4812,7 +5062,7 @@ public:
+@@ -4821,7 +5062,7 @@ public:
                  return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
              }
              if (all_results.error) {
@@ -530,7 +523,7 @@ index f8d69d0..c878fa6 100644
                      all_results.error->to_json().value("message", "Error in receiving score results"));
              }
              if (all_results.results.size() != 1) {
-@@ -5018,7 +5268,7 @@ public:
+@@ -5027,7 +5268,7 @@ public:
          }
          if (res->is_error()) {
              drop_reserved();
@@ -721,11 +714,11 @@ index 0000000..8f37b0d
 +    fprintf(stderr, failures == 0 ? "all passed\n" : "%d FAILED\n", failures);
 +    return failures == 0 ? 0 : 1;
 +}
-diff --git a/backend/cpp/llama-cpp/patches/0022-server-park-when-told.patch b/backend/cpp/llama-cpp/patches/0022-server-park-when-told.patch
+diff --git a/backend/cpp/llama-cpp/patches/0023-server-park-when-told.patch b/backend/cpp/llama-cpp/patches/0023-server-park-when-told.patch
 new file mode 100644
-index 0000000..983794b
+index 0000000..00348bd
 --- /dev/null
-+++ b/backend/cpp/llama-cpp/patches/0022-server-park-when-told.patch
++++ b/backend/cpp/llama-cpp/patches/0023-server-park-when-told.patch
 @@ -0,0 +1,1334 @@
 +server: a model parks when it is told to, and one answer for "the device has no room now"
 +
@@ -1006,28 +999,28 @@ index 0000000..983794b
 + }
 + 
 +diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
-+index 67cafad..b362f95 100644
++index e8c1110..a7f6827 100644
 +--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
 ++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
-+@@ -118,6 +118,9 @@ int g_ggml_sycl_park_verify = 0;
-+ // for the TEST of a refused pool commit, which a card cannot be made to give on demand (its driver pages an idle
-+ // neighbour out first): GGML_SYCL_POOL_REFUSE=N refuses the next N commits that GROW a pool, as a full device does
-+ std::atomic<int> g_ggml_sycl_pool_refuse{0};
++@@ -124,6 +124,9 @@ std::atomic<int> g_ggml_sycl_pool_refuse{0};
++ // Once that file exists, the next N graphs are abandoned as after a refused pool commit; the device is not asked
++ std::atomic<int> g_ggml_sycl_graph_refuse{0};
++ std::string g_ggml_sycl_graph_refuse_arm;
 ++// the same for the TEST of a refused UNPARK: GGML_SYCL_PARK_REFUSE=N refuses the next N commits that bring a parked
 ++// buffer back, as a device with no room does
 ++std::atomic<int> g_ggml_sycl_park_refuse{0};
 + int g_ggml_sycl_enable_fusion = 1;
 + int g_ggml_sycl_enable_esimd = 1;
 + int g_ggml_sycl_mmvq_wide = 1;
-+@@ -455,6 +458,7 @@ static void ggml_check_sycl() try {
-+         g_ggml_sycl_parkable = ggml_sycl_get_env("GGML_SYCL_PARKABLE", 0);
-+         g_ggml_sycl_park_verify = ggml_sycl_get_env("GGML_SYCL_PARK_VERIFY", 0);
-+         g_ggml_sycl_pool_refuse = ggml_sycl_get_env("GGML_SYCL_POOL_REFUSE", 0);
++@@ -465,6 +468,7 @@ static void ggml_check_sycl() try {
++         if (const char * arm = getenv("GGML_SYCL_GRAPH_REFUSE_ARM")) {
++             g_ggml_sycl_graph_refuse_arm = arm;
++         }
 ++        g_ggml_sycl_park_refuse = ggml_sycl_get_env("GGML_SYCL_PARK_REFUSE", 0);
 +         g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
 +         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
 +         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
-+@@ -615,6 +619,10 @@ static void ggml_check_sycl() try {
++@@ -625,6 +629,10 @@ static void ggml_check_sycl() try {
 + #endif
 +         GGML_LOG_INFO("  GGML_SYCL_PARKABLE: %d\n", g_ggml_sycl_parkable);
 +         GGML_LOG_INFO("  GGML_SYCL_PARK_VERIFY: %d\n", g_ggml_sycl_park_verify);
@@ -1038,7 +1031,7 @@ index 0000000..983794b
 +         if (g_ggml_sycl_pool_refuse > 0) {
 +             GGML_LOG_WARN("  GGML_SYCL_POOL_REFUSE: %d - the next commits that grow a pool are REFUSED, for a test\n",
 +                           g_ggml_sycl_pool_refuse.load());
-+@@ -795,24 +803,37 @@ struct ggml_sycl_parkable_mem {
++@@ -813,24 +821,37 @@ struct ggml_sycl_parkable_mem {
 + 
 +     bool committed() const { return !mappings.empty(); }
 + 
@@ -1082,7 +1075,7 @@ index 0000000..983794b
 +     }
 + 
 +     // unmap exactly what was mapped, before the physical memory goes: its destructor does not unmap
-+@@ -1366,12 +1387,12 @@ static void ggml_sycl_park_copy(sycl::queue & q, void * dst, const void * src, s
++@@ -1384,12 +1405,12 @@ static void ggml_sycl_park_copy(sycl::queue & q, void * dst, const void * src, s
 + }
 + 
 + // the contents to host memory, then the device memory released; the buffer's addresses stay reserved
@@ -1097,7 +1090,7 @@ index 0000000..983794b
 +     }
 +     ggml_sycl_set_device(ctx->device);
 + 
-+@@ -1386,7 +1407,7 @@ static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
++@@ -1404,7 +1425,7 @@ static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
 +     if (mem->host == nullptr) {
 +         GGML_LOG_ERROR("%s: no host memory for the %.2f MiB of %s, it stays on the device\n", __func__,
 +                        buffer->size / 1024.0 / 1024.0, ctx->name.c_str());
@@ -1106,7 +1099,7 @@ index 0000000..983794b
 +     }
 +     ggml_sycl_park_copy(*ctx->stream, mem->host, ctx->dev_ptr, buffer->size);
 +     const int64_t t_copied = ggml_time_us();
-+@@ -1411,29 +1432,33 @@ static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
++@@ -1429,29 +1450,33 @@ static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
 +                   __func__, ctx->name.c_str(), buffer->size / 1024.0 / 1024.0,
 +                   (t_end - t_start - (t_summed - t_copied)) / 1000.0, (t_copied - t_start) / 1000.0,
 +                   (t_end - t_summed) / 1000.0, said, mem->n_park);
@@ -1147,7 +1140,7 @@ index 0000000..983794b
 +     }
 +     ggml_sycl_memtrace_add(GGML_SYCL_MEM_BUFFER, ctx->dev_ptr, mem->size);
 +     const int64_t t_committed = ggml_time_us();
-+@@ -1457,7 +1482,7 @@ static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
++@@ -1475,7 +1500,7 @@ static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
 +                                ctx->name.c_str());
 +                 mem->release();
 +                 ggml_sycl_memtrace_del(ctx->dev_ptr);
@@ -1156,7 +1149,7 @@ index 0000000..983794b
 +             }
 +             snprintf(said, sizeof(said), ", read back: the same bytes");
 +         }
-+@@ -1469,7 +1494,7 @@ static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
++@@ -1487,7 +1512,7 @@ static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
 +     GGML_LOG_INFO("%s: %s unparked, %.2f MiB to the device in %.1f ms (the commit %.1f, the copy %.1f)%s\n", __func__,
 +                   ctx->name.c_str(), buffer->size / 1024.0 / 1024.0, (t_copied - t_start) / 1000.0,
 +                   (t_committed - t_start) / 1000.0, (t_copied - t_committed) / 1000.0, said);
@@ -1165,7 +1158,7 @@ index 0000000..983794b
 + }
 + catch (sycl::exception const & exc) {
 +     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
-+@@ -1565,7 +1590,7 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
++@@ -1583,7 +1608,7 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
 +                 GGML_LOG_ERROR("%s: can't reserve %zu Bytes of virtual memory: %s\n", __func__, size, e.what());
 +                 return nullptr;
 +             }
@@ -1174,7 +1167,7 @@ index 0000000..983794b
 +                 GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on device\n", __func__, size);
 +                 return nullptr;
 +             }
-+@@ -2502,6 +2527,14 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
++@@ -2520,6 +2545,14 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
 +                 }
 +                 phys.emplace(dev, ctx, reserve_size);
 +             } catch (const sycl::exception & e) {

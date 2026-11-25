@@ -1,20 +1,21 @@
-"""Parking, step 2, the SERVER part's first commit, separable — SENT FOR
-REVIEW (docs/notes/parking-step-2.md §3.2 "The readiness poll"; operator,
-2026-11-24: "Patch localAI when clockwork is implemented").
+"""Parking, step 2, the SERVER part's first commit, separable — STAGED
+(docs/notes/parking-step-2.md §3.2 "The readiness poll"; operator, 2026-11-24:
+"Patch localAI when clockwork is implemented"; the architecture session,
+2026-11-25: "accepted as written; it goes on the node with the server part").
 
 LocalAI asks a backend it just started whether it is ready, sleeps 2 s, asks
 again: a backend ready after 100 ms is seen two seconds later, on every cold
 load. The patch asks every 50 ms inside the same wait. Its Go tests ran where
 it was written (the whole pkg/model suite, on v5.0.1 + P1 + P13 + P19). Held
 here: that the wait is the same wait — a model's own attempts and delay mean
-what they meant — that it is a patch of LocalAI's SERVER in no engine series,
-and under review."""
+what they meant — and that it is a patch of LocalAI's SERVER in no engine
+series."""
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PATCHES = ROOT / "deploy" / "localai" / "patches"
-PATCH = PATCHES / "review" / "0024-model-readiness-poll.patch"
+PATCH = PATCHES / "staged" / "0024-model-readiness-poll.patch"
 NOTE = (ROOT / "docs" / "notes" / "parking-step-2.md").read_text(encoding="utf-8")
 
 
@@ -45,12 +46,12 @@ def test_it_is_a_mail_under_localai_s_policy_for_the_server_alone():
     assert not any(f.startswith("backend/") for f in files), "the server's Go: no engine is rebuilt for it"
 
 
-def test_it_is_under_review_and_in_no_series():
-    assert not (PATCHES / "staged" / PATCH.name).exists()
+def test_it_is_staged_for_the_server_and_in_no_engine_series():
     for series in (PATCHES / "series", *(PATCHES / "staged").glob("*.series")):
         assert "readiness-poll" not in series.read_text(encoding="utf-8"), series.name
-    readme = (PATCHES / "review" / "README.md").read_text(encoding="utf-8")
-    assert PATCH.name in readme and "SERVER" in readme
+    readme = (PATCHES / "staged" / "README.md").read_text(encoding="utf-8")
+    row = next(line for line in readme.splitlines() if line.startswith("| `" + PATCH.name + "`"))
+    assert "SERVER" in row and "NO engine series" in row
 
 
 def test_the_wait_is_the_same_wait_asked_more_often():

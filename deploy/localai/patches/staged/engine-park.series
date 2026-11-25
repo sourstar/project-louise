@@ -1,0 +1,43 @@
+# A CANDIDATE: PARKING WHEN TOLD (parking step 2, the engine part;
+# docs/notes/parking-step-2.md §6 - its second cut, ACCEPTED for staging by
+# the architecture session, 2026-11-25). engine-stream.series, line for line,
+# then:
+#   0023  the backend's Free parks a model that can park; a LoadModel with the
+#         options of its load brings it back ("Model already loaded", byte for
+#         byte); a request brings it back by itself and never parks; Status
+#         says where the weights are; one answer for a full device
+#         (RESOURCE_EXHAUSTED "no_room_on_device: ..."), and a failure never
+#         answered as a refusal.
+#   SERIES_FILE=deploy/localai/patches/staged/engine-park.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
+# ANOTHER ENGINE: a build and every gate again - and what changes for EVERY
+# model the day it runs is a table in the note, for the gate to cover.
+# NO MODEL FILE may set GGML_SYCL_PARKABLE=1 before the SERVER part is live:
+# today's LocalAI calls Free before it stops a process, so such a model's
+# every stop would first copy its weights to the host (a test holds every
+# staged model file to it). Its rows are on COPIES (§6):
+#   python3 -I tools/measure/park_told.py cycles ADDR <model> -n 20 --return request
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0009-llama-cpp-omnivoice.patch
+staged/0010-llama-cpp-tts-voice-modes.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch
+staged/0016-llama-cpp-sycl-pool-refuse-switch.patch
+staged/0017-llama-cpp-moe-record.patch
+staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch
+staged/0020-llama-cpp-omnivoice-nothing-kept-between-requests.patch
+staged/0021-llama-cpp-sycl-paging-is-the-default.patch
+staged/0022-llama-cpp-omnivoice-language-tag.patch
+staged/0025-llama-cpp-stream-fails-after-its-first-chunk.patch
+staged/0026-llama-cpp-sycl-graph-refuse-switch.patch
+staged/0023-llama-cpp-park-when-told.patch

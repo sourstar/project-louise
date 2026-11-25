@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 08:58:31 +0000
+Subject: [PATCH] fix(llama-cpp): a stream that fails after its first chunk
+ fails, instead of ending as a complete answer
+
+PredictStream tested only its FIRST result for an error. An error that
+came later - a computation that failed in the middle of a generation, any
+error of llama.cpp's server after the first chunk - was turned into one
+more reply and written to the stream: its JSON has no content, so an empty
+chunk. The loop then ended and the call returned OK.
+
+The client saw a normal end of stream: an answer cut short by a failure,
+delivered as complete, and nothing anywhere said it was not.
+
+A later error now ends the stream with the error as its status, exactly
+as an error at the first result already did (the comment there says why
+the error is not written as a reply: it was streamed as assistant text on
+an HTTP 200).
+
+Checked on a CPU build with a stand-in that fails one computation after
+the first chunk of a stream: before, the call ended OK with fewer chunks
+than the same prompt gives; after, it ends INTERNAL "Compute error." and
+the next stream is whole, from the same process.
+
+Assisted-by: Claude Code
+---
+ backend/cpp/llama-cpp/grpc-server.cpp | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
+index f8d69d0..7ce46f2 100644
+--- a/backend/cpp/llama-cpp/grpc-server.cpp
++++ b/backend/cpp/llama-cpp/grpc-server.cpp
+@@ -3408,6 +3408,15 @@ public:
+             if (result == nullptr) {
+                 break;
+             }
++            if (result->is_error()) {
++                // An error AFTER the first chunk. It was written as one more
++                // reply - its JSON has no content, so an empty one - and the
++                // stream then ended OK: a generation cut short by a failure
++                // was delivered as a complete answer. It ends the stream as
++                // what it is, like an error at the first result.
++                json error_json = result->to_json();
++                return grpc::Status(grpc::StatusCode::INTERNAL, error_json.value("message", "Error occurred"));
++            }
+ 
+             json res_json = result->to_json();
+             if (res_json.is_null()) {
+-- 
+2.43.0
+

@@ -1,5 +1,5 @@
-"""Parking, step 2, the engine part — SENT FOR REVIEW, not staged
-(docs/notes/parking-step-2.md §6; deploy/localai/patches/review/).
+"""Parking, step 2, the engine part — STAGED after its second cut was accepted
+(docs/notes/parking-step-2.md §6; the architecture session, 2026-11-25).
 
 The backend's `Free` parks a model that can park, a `LoadModel` for the model
 already held brings it back, and every way a request finds the device full
@@ -8,7 +8,9 @@ a stand-in device (29/29 over gRPC, 43/43 and 17/17 over llama.cpp's server).
 Held here: the interface a caller builds against — the bytes of the message
 the wrapper keys on, which code each outcome is, compiled and run from the
 patch itself where a compiler is at hand — what the patch changes and what it
-leaves, and that nothing builds an engine from a patch still under review."""
+leaves, the one series that carries it and that engine's name, and that no
+model file can park before the server part is live."""
+import os
 import re
 import shutil
 import subprocess
@@ -18,10 +20,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PATCHES = ROOT / "deploy" / "localai" / "patches"
-REVIEW = PATCHES / "review"
-PATCH = REVIEW / "0023-llama-cpp-park-when-told.patch"
+STAGED = PATCHES / "staged"
+PATCH = STAGED / "0023-llama-cpp-park-when-told.patch"
+SERIES = STAGED / "engine-park.series"
+BEFORE = STAGED / "engine-stream.series"
+BUILD = ROOT / "deploy" / "localai" / "llama-cpp" / "build.sh"
+NAME = "ed93e3c1b2e2"
 BACKEND = "backend/cpp/llama-cpp/"
-INNER = BACKEND + "patches/0022-server-park-when-told.patch"
+INNER = BACKEND + "patches/0023-server-park-when-told.patch"
 NOTE = (ROOT / "docs" / "notes" / "parking-step-2.md").read_text(encoding="utf-8")
 
 
@@ -56,7 +62,7 @@ def test_it_is_a_mail_under_localai_s_policy_and_carries_one_engine_patch():
     assert not re.search(r"^(Signed-off-by|Co-Authored-By):", message, re.M | re.I)
     assert set(_sections()) == {BACKEND + name for name in (
         "CMakeLists.txt", "grpc-server.cpp", "park_reply.h", "park_reply_test.cpp", "prepare.sh",
-        "patches/0022-server-park-when-told.patch")}
+        "patches/0023-server-park-when-told.patch")}
     assert set(re.findall(r"^diff --git a/(\S+)", _inner(), re.M)) == {
         "common/common.cpp", "common/common.h", "ggml/include/ggml-backend.h", "ggml/src/ggml-backend-impl.h",
         "ggml/src/ggml-backend.cpp", "ggml/src/ggml-sycl/ggml-sycl.cpp", "include/llama.h", "src/llama-context.cpp",
@@ -68,13 +74,22 @@ def test_it_is_a_mail_under_localai_s_policy_and_carries_one_engine_patch():
     assert "GGML_CPU_PARK_TEST" not in text and "GGML_CPU_REFUSE" not in text and "DEV ONLY" not in text
 
 
-def test_it_is_under_review_in_no_series_and_not_staged():
-    assert not (PATCHES / "staged" / PATCH.name).exists(), "staged only after the review (parking-step-2.md §4)"
-    for series in (PATCHES / "series", *(PATCHES / "staged").glob("*.series")):
-        assert "park-when-told" not in series.read_text(encoding="utf-8"), series.name
-    readme = (REVIEW / "README.md").read_text(encoding="utf-8")
-    assert PATCH.name in readme and "in no series" in readme.lower()
-    assert "## 6. The engine part, as built" in NOTE and "FOR REVIEW" in NOTE
+def _lines(path: Path) -> list[str]:
+    return [line.strip() for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")]
+
+
+def test_one_series_carries_it_after_the_stream_candidate_and_its_engine_s_name_is_held():
+    assert _lines(SERIES) == _lines(BEFORE) + ["staged/" + PATCH.name]
+    for series in (PATCHES / "series", *STAGED.glob("*.series")):
+        if series != SERIES:
+            assert "park-when-told" not in series.read_text(encoding="utf-8"), series.name
+    done = subprocess.run(["sh", str(BUILD), "sycl_f16", "/nonexistent"], capture_output=True, text=True,
+                          env=dict(os.environ, SERIES_FILE=str(SERIES), NAME_ONLY="1"), cwd=ROOT)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == NAME
+    assert not (PATCHES / "review").exists(), "nothing is left under review"
+    assert "## 6. The engine part, as built" in NOTE and NAME in NOTE
 
 
 def test_no_model_file_can_park_before_the_server_part_is_live():
@@ -140,7 +155,9 @@ def test_every_request_rpc_answers_the_refusal_by_its_type_and_nothing_else_move
     # PredictStream (its first result, and every later one), Predict, Embedding, Rerank, TTS, TTSStream, Score, the
     # slot cache, a decision's default, a realtime session (twice) - and the repeated LoadModel
     assert added.count("grpc_status_of_request_error(") == 13 + 1       # and its own definition
-    assert removed.count("grpc::StatusCode::INTERNAL") == 10, "each was INTERNAL; the decision's switch had a bare default"
+    # each was INTERNAL (the stream's later result since 0025, the patch before it); the decision's switch had a
+    # bare default
+    assert removed.count("grpc::StatusCode::INTERNAL") == 11
     assert "default: return grpc_status_of_request_error(results.error->to_json(), error->err_msg);" in added
     # the canary's trailer on an Embedding is still said: a real canary failure is not a room refusal
     assert "CONTEXT_CANARY_TRAILER" not in removed
@@ -284,13 +301,14 @@ def test_already_loaded_is_said_only_to_the_options_that_are_loaded():
     assert "did not load again" in header and "they differ in: " in header
 
 
-def test_a_stream_that_fails_after_its_first_chunk_fails():
-    """Pre-existing in LocalAI's backend, found by the reading: only the stream's FIRST result was tested for an
-    error; a later one was written as an empty reply and the stream ended OK - a truncated answer as a complete one."""
-    server = _added(_sections()[BACKEND + "grpc-server.cpp"])
-    later = server[server.index("// An error AFTER the first chunk."):]
-    assert "return grpc_status_of_request_error(error_json, error_json.value(\"message\", \"Error occurred\"));" in later[:700]
-    assert server.index("if (result->is_error()) {\n                // An error AFTER the first chunk.") > 0
+def test_a_stream_s_later_error_carries_the_refusal_s_status_too():
+    """That a stream fails at all after its first chunk is 0025's (the stream candidate, before this one). Here its
+    status is typed like every other request's: a refusal of the moment in the middle of an answer is one too."""
+    server = _sections()[BACKEND + "grpc-server.cpp"]
+    assert re.search(r'^-\s+return grpc::Status\(grpc::StatusCode::INTERNAL, error_json\.value\("message", "Error occurred"\)\);\n'
+                     r'(?:[-+ ].*\n)*?\+\s+return grpc_status_of_request_error\(error_json, error_json\.value\("message", "Error occurred"\)\);',
+                     server, re.M)
+    assert "// An error AFTER the first chunk." not in _added(server), "the block itself is 0025's: here only its status moves"
 
 
 def test_status_keeps_the_process_s_own_memory_where_the_monitor_reads_it():
@@ -315,6 +333,7 @@ def test_the_note_says_what_differs_from_the_design_and_what_was_not_measured():
     section = NOTE[NOTE.index("## 6. The engine part, as built"):]
     for said in ("FAILED_PRECONDITION", "Where it differs from §3.1", "COMMON_CANARY_NO_MEMORY", "49 of 49", "56 of 56",
                  "no_room_on_device: the weights cannot come back", "SECOND CUT", "LLAMA_PROCESS_NO_MEMORY",
+                 "NO DEVICE HAS BEEN SEEN TO REFUSE A COMMIT", "a row of the SWITCH", "engine-park.series",
                  "What changes for EVERY model", "Under today's server", "errc::memory_allocation",
                  "19 of 19", "NOT measured: anything on a card", "park_told.py cycles", "What an unpatched LocalAI does"):
         assert said in section, said
