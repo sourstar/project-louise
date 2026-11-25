@@ -1,0 +1,33 @@
+# A CANDIDATE: THE LIVE ENGINE b190673dbdbf AND ONE FIX (2026-11-25).
+# Staged 0013 said "a refused pool commit fails the request" and did not: on
+# the card, with 0016's switch, the backend process ended at its first refusal
+# (München, 2026-11-25; docs/notes/room-on-the-card.md §4). The refusal was a
+# std::exception, and the op that asked for the memory catches those and
+# aborts. 0018 makes it a type nothing but the graph's own catch can take.
+#   SERIES_FILE=deploy/localai/patches/staged/engine-refusal.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
+# engine-next.series, line for line, then:
+#   0018  the pool's refusal is not a std::exception: it reaches the graph
+# With every switch off it must gate as b190673dbdbf does, fingerprint for
+# fingerprint, or it rolls back. Its own test is 0016's row: a reranker copy
+# with GGML_SYCL_POOL_REFUSE=2 against a control — the first two requests
+# that grow the pool answered with an error by the SAME process, the third
+# served with the control's scores.
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0009-llama-cpp-omnivoice.patch
+staged/0010-llama-cpp-tts-voice-modes.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch
+staged/0016-llama-cpp-sycl-pool-refuse-switch.patch
+staged/0017-llama-cpp-moe-record.patch
+staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch
