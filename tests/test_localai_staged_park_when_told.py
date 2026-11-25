@@ -336,3 +336,19 @@ def test_the_note_says_what_differs_from_the_design_and_what_was_not_measured():
                  "What changes for EVERY model", "Under today's server", "errc::memory_allocation",
                  "19 of 19", "NOT measured: anything on a card", "park_told.py cycles", "What an unpatched LocalAI does"):
         assert said in section, said
+
+
+def test_the_wrapper_and_the_engine_say_already_loaded_with_the_same_bytes():
+    """A return through VeGa's wrapper is a LoadModel the engine answers "already loaded" for the options that
+    ARE loaded; the wrapper (architecture's branch wrapper-same-load, #882) reads that answer by its text to keep
+    the run it stated. The two are built apart: the wrapper's constant and the engine's must be the same bytes,
+    and the engine's own test pins them one by one."""
+    wrapper = (ROOT / "deploy" / "vega" / "vega_wrapper.py").read_text(encoding="utf-8")
+    said = re.search(r'^ALREADY_LOADED = "([^"]+)"$', wrapper, re.M)
+    assert said is not None, "the wrapper's part for a repeated load is not in this tree"
+    engine = PATCH.read_text(encoding="utf-8")
+    held = re.search(r'inline constexpr const char \* LOAD_ALREADY_LOADED = "([^"]+)";', engine)
+    assert held is not None and held.group(1) == said.group(1) == "Model already loaded"
+    # the engine's own test compares it byte for byte with a literal array, not with itself
+    assert "std::memcmp(llama_grpc::LOAD_ALREADY_LOADED, already, sizeof(already)) == 0" in engine
+    assert "result->set_message(llama_grpc::LOAD_ALREADY_LOADED);" in engine
