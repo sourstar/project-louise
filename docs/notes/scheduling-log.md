@@ -3459,12 +3459,28 @@ off the node: a 28.5 M-character act on 4 cores, 63.9 s → 37.7 s, the same
 at its end, so the collection's rdf still waits behind a run of large units.
 Those are the next row.
 
-**AFTER** — owed. The same act's remaining languages (it, de, fr, en) and any
-unit of that size: each unit's seconds from the "has left the parse pool
-after N" line (#891), against ~100 s for ~100 MB; the lane child's peak RSS
-against 2.8 GiB (a batch of encodings is alive at a time); and the staged run
-5's count under the real tokenizer, which is the proof that the pieces are
-the same.
+**AFTER** (München, the node at 9811ca92, worker started 12:11:43Z; the first
+three large text units, each timed by the pool's own "has left the parse
+pool after N"): fr 32018R0688, 92,328,556 bytes, 70 s, 1,827 chunks; fr
+32019R0439, 77,865,673 bytes, 85 s; it 32019R0439, 80,733,615 bytes, 86 s —
+241 s for 250,927,844 bytes, 0.960 µs a byte. The staged run 5: "23 passed"
+under the real tokenizer (the same pieces).
+READ AGAINST THE RIGHT BEFORE: the like-for-like figure is the fifteen units
+one after the other, 1,513 s for 1,494,357,545 bytes = 1.012 µs a byte — not
+the 1.715 of the nine-unit commit line, whose 1,503 s held six more units
+parsed ahead. So: about 5 % faster a byte on three units, which three units
+cannot tell from nothing. NOT the 1.7x of the measure off the node, which
+timed the chunker alone on four cores. Either the tokenizer is a small part
+of a large unit's 70-86 s here (the package read, the rdf's text, the rest
+of the parse), or the lane child's four threads are not at work: from the
+host every pool child showed 19 threads at its most and nothing named which
+child was the lane's. Memory: the highest VmHWM of any child 3,159,196 kB
+(2,834,164 kB before): +11 %. No yield, no kill.
+WHAT FOLLOWS: the pool's line now names a large part's pid and its peak
+(the next row's instrument), so the lane child's threads and time can be
+read where it runs; and the chunker's share of a large unit's time is to be
+measured ON THE NODE before anything more is built on it (measuring.md: the
+deployed thing, not the bench).
 
 ## 2026-11-25 — a collection's embedding waits for the keeper's preload after a start
 
@@ -3495,8 +3511,51 @@ ends.
 the backlog's embedding: on this node's start the keeper said its piece ten
 seconds in, and the loads that followed are what the AFTER must time.
 
-**AFTER** — owed, at the next worker start on the node: the two lines
-("embedding waits: the keeper is still loading …" and "embedding goes on …")
-and the seconds between them; no CANARY line and no "GateDeferred … needs
-N MiB free" in the start's first ten minutes; gutenberg's first embed line
-after the wait.
+**AFTER** (München, the deploy of 9811ca92: worker started 12:11:43Z).
+"embedding waits: the keeper has not made its first beat yet (2 s / 5 s after
+the worker's start)" for the eight embedding collections at 12:11:46 and :50;
+"resident … preloading 13 model(s) for Ask" at 12:11:51; "embedding goes on"
+at 12:11:56 (five collections, 6 s after their wait began) and 12:11:59
+(three, 13 s). No CANARY line and no "GateDeferred … needs N MiB free" in the
+start's first ten minutes; the engine's counts at 12:22:34Z: 0 discarded for
+vega-qwen3-embedding-4b (323 contexts created), nemotron (232), bge-m3 (23);
+"it is discarded" in none of the 115 backend-ring files saved over the first
+five minutes. gutenberg: "embedding enabled … validated" at 12:12:27, 44 s
+after the start (BEFORE: forty minutes).
+WHAT THIS START DOES NOT PROVE: only the app restarted, so the model server
+still held the models — the preload's one cold start was vega-medcpt-article-ov,
+10.7 s, ten minutes later — and the wait was 6–13 s against no real loads.
+The row that proves the hold is a start on a COLD card: the first worker start
+after the model server itself restarts (the engine swap). Still owed.
+
+## 2026-11-25 — two large lanes; a batch puts at most a lane's worth of large units
+
+**SCENARIO.** As the row above (EUR-Lex5.next's large units, the pool
+otherwise nearly idle), with 452 rows of 50 MB and more still pending — 84.0 GB
+(rdf 406 / 80.2 GB, fts 46 / 3.8 GB) — at 10:33Z.
+
+**BEFORE** (the node at 1249b1d9; the row above has the lines whole). One lane:
+fifteen units of 32018R0688 (1,494,357,545 bytes) in 1,513 s, i.e. ~101 s a
+unit one after the other; ONE fts batch held nine of them and committed after
+1,513.5 s; rdf between two such commits: one transaction of 1,000 documents;
+10:08–10:25Z averaged ~100 documents and ~118 rdf a minute. Memory: a lane
+child's VmHWM 2,834,164 kB; the worker cgroup anon 12,875 MiB, peak 16,818 of
+24,576 MiB.
+
+**THE CHANGE.** `LARGE_LANES = 2` (the existing `_room` and `_reserve` decide
+whether the second is admitted), and a batch puts at most two large units in
+the lane — the others deferred to the next round at once.
+
+**EXPECTED, to be held against the AFTER.** Two units in flight where the
+memory allows (the pool's lines: two parts "in the large lane, a process of
+its own" at a time — #891's line said "ALONE", reworded here); an
+fts batch with large units committing after ~2 of them (~100–200 s, less
+with the tokenizer's threads of the row above) instead of nine; an rdf
+transaction between two such batches. The cgroup's peak with two in flight
+must stay under the yield's line (21,504 MiB anon): if `memory: … yields`
+appears, that line and its numbers are the finding.
+
+**AFTER** — owed: the fts batch lines and the rdf lines of a quarter of an
+hour with large units pending; the pool's large-lane lines; the cgroup's
+anon and peak with two in flight; documents and rdf a minute over the same
+window. To be deployed AFTER the row above has its AFTER, one change a deploy.

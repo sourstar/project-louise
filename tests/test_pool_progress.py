@@ -4,8 +4,8 @@ München, on the node, 2026-11-25: EUR-Lex5.next's pipeline sat in its fts
 stage for nine minutes and more on one 136 MB act — one pool child busy, ten
 idle, the counts still — and nothing in the log said a batch was in flight,
 or on what. The pool's own record of its parts, read once a minute by a
-watcher: the unit, its size, how long, and for a large part that it is alone
-in the large lane and how long its answer is still waited for."""
+watcher: the unit, its size, how long, and for a large part that it has
+the large lane and how long its answer is still waited for."""
 from __future__ import annotations
 
 import threading
@@ -45,7 +45,7 @@ def test_after_a_minute_it_says_the_unit_its_size_and_how_long_then_once_a_minut
 def test_a_large_part_says_it_is_alone_in_the_lane_and_how_long_it_is_still_waited_for():
     parts = [_part(since=100.0, large=True, until=388.0)]
     said = _look(parts, now=160.0)[0]
-    assert "ALONE in the large lane (one large unit at a time in the whole worker" in said
+    assert "in the large lane, a process of its own (at most 2 large units at a time in the whole worker" in said
     assert "its answer is waited for 4 min more" in said, said
     assert said.endswith("The collection's pipeline waits for it, its other stages behind it")
     late = _look(parts, now=688.0)[0]
@@ -83,7 +83,7 @@ def test_the_pool_records_when_a_part_entered_and_whether_it_has_the_large_lane(
         assert got["uids"] == [[ACT, 136_205_384]]
         said: list[str] = []
         pp.look(say=said.append, now=got["since"] + 600.0)       # the pool's own record, read as it is
-        assert said and ACT in said[0] and "ALONE in the large lane" in said[0], said
+        assert said and ACT in said[0] and "in the large lane, a process of its own" in said[0], said
     finally:
         parallel._leave(1)
 
@@ -116,3 +116,46 @@ def test_a_look_that_fails_does_not_end_the_watcher(monkeypatch):
     said: list[str] = []
     pp.watch(stop, said.append)
     assert calls and "look failed (RuntimeError: no)" in said[0]
+
+
+# ---- the lane child's pid and its peak (München, 2026-11-25) ----------------
+#
+# "I cannot tell from outside WHICH child is the lane's: nothing in its
+# command line or the log names its pid" — and its peak is the number the
+# second lane is judged on.
+
+def test_a_part_with_a_process_of_its_own_says_its_pid_and_its_peak():
+    part = {**_part(since=100.0, large=True, until=388.0), "pid": 4242}
+    readings = iter([1_500 * MIB, 3_085 * MIB, 2_000 * MIB])
+    said: list[str] = []
+
+    def look(now):
+        pp.look(in_flight=lambda: [part], say=said.append, now=now, peak=lambda pid: next(readings))
+    look(110.0)                                  # read, though nothing is said yet
+    assert said == []
+    look(160.0)
+    assert "— pid 4242, 3,085.0 MiB resident at its peak so far" in said[0], said
+    look(170.0)                                  # a lower reading does not lower the peak
+    said.clear()
+    pp.look(in_flight=lambda: [], say=said.append, now=180.0, peak=lambda pid: None)
+    assert said == [f"EUR-Lex5.next fts: {ACT} has left the parse pool after 80 s — pid 4242, 3,085.0 MiB "
+                    f"resident at its peak (the kernel's high-water mark, read every 10 s)"], said
+
+
+def test_a_part_of_the_shared_pool_names_no_pid():
+    said = _look([_part(since=100.0)], now=160.0)
+    assert "pid" not in said[0]
+
+
+def test_the_peak_is_the_kernels_high_water_mark_of_the_process():
+    import os
+    got = pp.peak_of_pid(os.getpid())
+    assert got is None or got > 10 * MIB, got     # None only where there is no /proc
+    assert pp.peak_of_pid(2 ** 30) is None, "a process that is gone reads as nothing"
+
+
+def test_the_pool_records_a_lane_tasks_pid_and_none_for_a_stand_in():
+    from types import SimpleNamespace
+    assert parallel._pid_of(SimpleNamespace(_procs=[SimpleNamespace(pid=77)])) == 77
+    assert parallel._pid_of(SimpleNamespace(_procs=[])) is None
+    assert parallel._pid_of(object()) is None

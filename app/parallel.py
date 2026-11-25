@@ -1252,17 +1252,29 @@ IN_FLIGHT_ROWS = 20
 
 
 def _enter(key: int, kind: str, collection, part: list[dict], *, peak: int = 0,
-           large: bool = False, until: float | None = None) -> None:
+           large: bool = False, until: float | None = None, pid: int | None = None) -> None:
     """`large`: the part has the large lane, a process of its own; `until`:
-    the monotonic time its answer is waited for (a large part's own bound).
-    `since` is when it was submitted — what `app/pool_progress.py` reads to
-    say what a batch has been waiting on."""
+    the monotonic time its answer is waited for (a large part's own bound);
+    `pid`: that process's, where it has one of its own. `since` is when it
+    was submitted — what `app/pool_progress.py` reads to say what a batch
+    has been waiting on, in which process, at what peak."""
     with _in_flight_lock:
         _in_flight[key] = {"collection": getattr(collection, "name", None), "kind": kind, "rows": len(part),
                            "bytes": sum(int(r.get("size") or 0) for r in part),
                            "parse_bytes": sum(parse_size_of(r) for r in part), "estimated_peak": peak,
                            "uids": [[r.get("uid"), r.get("size")] for r in part[:IN_FLIGHT_ROWS]],
-                           "since": time.monotonic(), "large": large, "until": until}
+                           "since": time.monotonic(), "large": large, "until": until, "pid": pid}
+
+
+def _pid_of(f) -> int | None:
+    """The pid of a large part's own process (`_LaneTask`), None for a part
+    of the shared pool — whose child is not known to the batch — and for a
+    stand-in."""
+    for p in getattr(f, "_procs", None) or ():
+        pid = getattr(p, "pid", None)
+        if isinstance(pid, int):
+            return pid
+    return None
 
 
 def _leave(key: int) -> None:
@@ -1285,7 +1297,40 @@ LARGE_SECONDS_PER_BYTE = 4 * 63.1 / 204_218_240
 #: deferred: bounded, and short enough that a stop is honoured soon after.
 #: Once: a row deferred is asked again, never waited for (`deferred_before`)
 LARGE_WAIT_S = 120.0
-_large_lane = threading.BoundedSemaphore(1)
+#: HOW MANY LARGE PARTS RUN AT ONCE in the whole worker. ONE until 2026-11-25
+#: (the memory rule made after the 43 kills of 11-19); TWO since, on the
+#: node's own numbers: a large unit of EUR-Lex5.next (32018R0688, 90-136 MB)
+#: peaks at ~2.8 GiB of RSS — its estimate, 26 bytes a byte of text, says
+#: 2.6-3.5 — and the worker's cgroup peaked at 16.8 of 24.6 GiB with one in
+#: flight. Fifteen such units took 1,513 s on the one lane while ten children
+#: idled. The lane is not what holds the memory: every large part still
+#: passes `_room` (the cgroup has its peak free NOW) and `_reserve` (its
+#: estimate fits beside every estimate in flight, under ADMIT_FRACTION of
+#: the limit, measured). On those numbers the guard admits a second and
+#: refuses a third; on a node whose other collections fill the memory it
+#: refuses the second, and the lane is one again by itself.
+LARGE_LANES = 2
+_large_lane = threading.BoundedSemaphore(LARGE_LANES)
+
+
+def lanes_free() -> int:
+    """How many large lanes nobody holds now (the semaphore's own count)."""
+    return int(_large_lane._value)
+
+
+class all_lanes_held:
+    """Every large lane taken, as other batches' large parts would hold them
+    (tests): `with parallel.all_lanes_held(): ...`."""
+
+    def __enter__(self):
+        self.taken = 0
+        while _large_lane.acquire(blocking=False):
+            self.taken += 1
+        return self
+
+    def __exit__(self, *exc) -> None:
+        for _ in range(self.taken):
+            _large_lane.release()
 
 
 class MemoryWait(RuntimeError):
@@ -2255,6 +2300,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
     short_of_room = False                 # a part deferred for the cgroup's room (`recycle_for_room`)
     stopped = False
     mine = 0
+    larges = 0                            # large parts this batch has put in the lane
     out: list[tuple[bool, object]] = []
     nxt = 0
     _want(name, 1)
@@ -2282,10 +2328,28 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                 # a part the pool deferred before is asked, never waited for
                 # again (`deferred_before`; defect 3 of the EUR-Lex5 review)
                 again = bool(k) and deferred_before(collection, part)
+                if peak and larges >= LARGE_LANES and not _stopped():
+                    # A BATCH PUTS AT MOST A LANE'S WORTH OF LARGE UNITS, and
+                    # does not queue the others behind them (2026-11-25,
+                    # EUR-Lex5.next: nine in one fts batch, one after the
+                    # other for 1,513 s — the collection's one pipeline thread
+                    # waiting, 91 light documents parsed and uncommitted, its
+                    # rdf, 134,618 pending, behind it). The others are asked
+                    # again next round: the batch commits when its own are
+                    # done, and the collection's other stages get their turn
+                    # between two rounds. A rule of the batch, not of the
+                    # lane's state at that instant: the same batch gives the
+                    # same split whatever the timing
+                    _note_deferred(collection, part)
+                    futures.append((part, _deferred(
+                        kind, collection, part,
+                        f"its batch has put its {larges} large unit(s) in the lane (at most {LARGE_LANES} "
+                        f"a batch): asked again next round")))
+                    nxt += 1
+                    continue
                 if peak:
-                    # one large part in flight in the process, with room for
-                    # its peak: wait for it only when nothing else is in
-                    # flight here to drain meanwhile
+                    # a lane, with room for its peak: wait for it only when
+                    # nothing else is in flight here to drain meanwhile
                     if not _take_lane(peak, wait=not futures and not again,
                                       until=time.monotonic() + LARGE_WAIT_S):
                         if futures or _stopped():
@@ -2338,10 +2402,12 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                                   + LARGE_SECONDS_PER_BYTE * parse_size_of(part[0]))
                 if idle:
                     progress = time.monotonic()   # the watchdog counts from a part in flight
-                _enter(id(f), kind, collection, part, peak=need, large=bool(peak), until=ext.get(id(f)))
+                _enter(id(f), kind, collection, part, peak=need, large=bool(peak), until=ext.get(id(f)),
+                       pid=_pid_of(f))
                 futures.append((part, f))
                 nxt += 1
                 w = lane_threads() if peak else 1
+                larges += 1 if peak else 0
                 if w > 1:
                     weight_of[id(f)] = w
                 mine += w

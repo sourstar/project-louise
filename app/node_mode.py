@@ -50,23 +50,47 @@ from contextlib import closing
 
 from . import db, node_state, platform_config
 
-EMBED, CHAT = "embed", "chat"
-MODES = (EMBED, CHAT)
-#: a node never switched: its one chat model answers and everything runs, as
-#: before there were two modes
-DEFAULT = EMBED
+EMBED, QUERY, CUSTOM = "embed", "query", "custom"
+#: THREE MODES (operator, 2026-11-25, the same day's second word: "Add a 3rd
+#: mode custom where you can freely select the chat model and what is
+#: currently available in the run mode, basically what we have now plus the
+#: selection of the chat model … In general, query keeps the system unloaded
+#: to optimize the query related model load, and embed is optimized to give to
+#: the embedders the maximum room on the card"):
+#:   embed   processing on, the small chat model;
+#:   query   processing off, the large chat model (he says "query"; the
+#:           morning's word for it was "chat", still taken everywhere);
+#:   custom  the node as it was before there were modes: the run mode is the
+#:           operator's, any of the four, and the chat model is `[models] chat`.
+MODES = (EMBED, QUERY, CUSTOM)
+#: the morning's name of query mode: code that says CHAT means QUERY, and the
+#: command, the API and a store written before the rename still say "chat"
+CHAT = QUERY
+ALIASES = {"chat": QUERY}
+#: a node never switched is in CUSTOM: exactly the node before modes — its
+#: one chat model, its run mode as it stands, nothing set by a mode
+DEFAULT = CUSTOM
+
+
+def named(mode: object) -> str | None:
+    """The mode a word names — one of MODES, or an alias of one — or None."""
+    word = str(mode or "").strip().lower()
+    word = ALIASES.get(word, word)
+    return word if word in MODES else None
 
 KEY = "node_mode"
 HISTORY_KEY = "node_mode_history"
 HISTORY_KEEP = 50
 
-#: the pages' words for the two, in the order they show them
-LABELS = ((EMBED, "embed mode"), (CHAT, "chat mode"))
+#: the pages' words for the three, in the order they show them
+LABELS = ((EMBED, "embed mode"), (QUERY, "query mode"), (CUSTOM, "custom mode"))
 SAYS = {
-    EMBED: "heavy embedding: the memory is the embedders', the small chat model "
-           "answers, and everything runs",
-    CHAT: "chat: the memory is the large chat model's, the embedders page in "
-          "for a question, and nothing is parsed, indexed or embedded",
+    EMBED: "heavy embedding: the card is the embedders', the small chat model "
+           "answers, and everything is parsed, indexed and embedded",
+    QUERY: "questions: the system is kept unloaded for a question's models, the "
+           "large chat model answers, and nothing is parsed, indexed or embedded",
+    CUSTOM: "your own: the run mode you set and the chat model you choose "
+            "([models] chat) — the node as it was before there were modes",
 }
 
 #: how long a reader that asks often (every `config.CHAT_MODEL`) keeps what
@@ -76,8 +100,7 @@ _seen: tuple[str, float, str] | None = None      # (store path, monotonic, mode)
 
 
 def _read(con: sqlite3.Connection) -> str:
-    mode = db.get_control(con, KEY, DEFAULT)
-    return mode if mode in MODES else DEFAULT
+    return named(db.get_control(con, KEY, DEFAULT)) or DEFAULT
 
 
 def forget() -> None:
@@ -111,13 +134,37 @@ def current(con: sqlite3.Connection | None = None) -> str:
     return mode
 
 
-def run_of(mode: str, modes: platform_config.ModesConfig | None = None) -> str:
+def run_of(mode: str, modes: platform_config.ModesConfig | None = None) -> str | None:
     """The run mode a switch to `mode` sets, and `node resume` goes back to:
     everything in embed mode ("In embed mode switch to run all"), `[modes]
-    chat_run` in chat mode."""
-    if mode != CHAT:
+    chat_run` in query mode, and NONE in custom mode — there the run mode is
+    the operator's own and a switch does not touch it."""
+    mode = named(mode) or DEFAULT
+    if mode == EMBED:
         return "running"
-    return (modes if modes is not None else platform_config.seen().modes).chat_run
+    if mode == QUERY:
+        return QUERY_RUN
+    return None
+
+
+#: QUERY MODE'S RUN MODE, always: nothing is parsed, indexed or embedded, and
+#: it is a run mode in which the keeper PRELOADS the question's models
+#: (resident.PRELOADING_MODES). The morning's cut let query mode be switched
+#: to seed-only or paused for its network choice — two run modes in which
+#: nothing is preloaded for Ask, the opposite of what query mode is for. What
+#: the network does is the mode's NETWORK CHOICE now (`network`), not its run mode
+QUERY_RUN = "acquire-only"
+
+
+def network(mode: str | None = None) -> str | None:
+    """The NETWORK CHOICE in force — `mode`'s, or the node's own mode's:
+    download-seed, seed or none (`platform_config.NETWORKS`), each of embed
+    and query mode having its own (operator, 2026-11-25: "set for each
+    embed/query mode, a cron job then simply switches that") — or None in
+    custom mode, where the run mode says what the network does, as before.
+    `node_state.runs` reads it for every gate that fetches or seeds."""
+    which = current() if mode is None else (named(mode) or DEFAULT)
+    return platform_config.seen().modes.network(which)
 
 
 def refuses(state: str, mode: str | None = None) -> str | None:
@@ -125,10 +172,11 @@ def refuses(state: str, mode: str | None = None) -> str | None:
     it does. Chat mode's run modes are three (`platform_config.CHAT_RUNS`):
     running everything is embed mode's, since it starts the embedders under
     the large chat model."""
-    if (current() if mode is None else mode) == CHAT and state == "running":
-        return ("the node is in chat mode, where nothing is parsed, indexed or embedded "
-                "(the memory is the large chat model's): switch to embed mode to run "
-                "everything — `louise node mode embed`, the System page, or "
+    if (current() if mode is None else named(mode)) == QUERY and state == "running":
+        return ("the node is in query mode, where nothing is parsed, indexed or embedded "
+                "(the system is kept unloaded for a question's models): switch to embed "
+                "mode to run everything, or to custom mode to set the run mode yourself — "
+                "`louise node mode embed|custom`, the System page, or "
                 "POST /api/mode {\"mode\": \"embed\"}")
     return None
 
@@ -148,40 +196,42 @@ def switch(mode: str, *, by: str = "") -> dict:
     and its caller. Switching to the mode the node is in sets its run mode
     again: a cron job's call means the same thing every time it runs.
     Returns {"mode", "before", "run", "run_before"}."""
-    if mode not in MODES:
-        raise ValueError(f"mode is {' or '.join(MODES)}, got {mode!r}")
+    asked = mode
+    mode = named(mode)
+    if mode is None:
+        raise ValueError(f"mode is {', '.join(MODES[:-1])} or {MODES[-1]}, got {asked!r}")
     run = run_of(mode)
     at = time.time()
     with closing(node_state.connect()) as c:
         c.execute("BEGIN IMMEDIATE")
         try:
             before, run_before = _read(c), db.worker_state(c)
+            if mode == before and db.get_control(c, KEY) is not None:
+                # THE MODE THE NODE IS ALREADY IN: nothing is written. A cron
+                # job that says "embed" every night must not un-pause a node
+                # someone paused by hand (operator, 2026-11-25: the run and
+                # network choices are personal, a switch is for the mode);
+                # `louise node resume` is what goes back to the mode's own
+                c.execute("ROLLBACK")
+                return {"mode": mode, "before": before, "run": run_before, "run_before": run_before,
+                        "changed": False}
             db.set_control(c, KEY, mode)
-            db.set_worker_state(c, run)
-            _noted(c, HISTORY_KEY, {"at": at, "mode": mode, "run": run, "by": by or "unnamed"},
+            if run is not None:
+                db.set_worker_state(c, run)
+            _noted(c, HISTORY_KEY, {"at": at, "mode": mode, "run": run or run_before, "by": by or "unnamed"},
                    HISTORY_KEEP)
-            _noted(c, node_state.MODE_HISTORY_KEY,
-                   {"at": at, "state": run, "by": f"{mode} mode, set by {by or 'unnamed'}"},
-                   node_state.MODE_HISTORY_KEEP)
+            if run is not None:
+                _noted(c, node_state.MODE_HISTORY_KEY,
+                       {"at": at, "state": run, "by": f"{mode} mode, set by {by or 'unnamed'}"},
+                       node_state.MODE_HISTORY_KEEP)
             c.execute("COMMIT")
         except BaseException:
-            c.execute("ROLLBACK")
+            if c.in_transaction:
+                c.execute("ROLLBACK")
             raise
     forget()
-    return {"mode": mode, "before": before, "run": run, "run_before": run_before}
-
-
-def set_chat_run(run: str, *, by: str = "") -> bool:
-    """Chat mode's run mode changed in the file: where the node IS in chat
-    mode it takes it at once (the page's select would otherwise wait for the
-    next switch). True when the node's run mode was written."""
-    if run not in platform_config.CHAT_RUNS:
-        raise ValueError(f"chat mode's run mode is one of {', '.join(platform_config.CHAT_RUNS)}, got {run!r}")
-    with closing(node_state.connect()) as c:
-        if _read(c) != CHAT or db.worker_state(c) == run:
-            return False
-    node_state.set_worker_state(run, by=f"chat mode's run mode, set by {by or 'unnamed'}")
-    return True
+    return {"mode": mode, "before": before, "run": run or run_before, "run_before": run_before,
+            "changed": True}
 
 
 def history() -> list[dict]:
@@ -224,8 +274,7 @@ def applied(con: sqlite3.Connection) -> str | None:
     """The mode the worker last acted on, None before it ever did: kept in
     the store, so a switch made while the worker was down — a cron job's,
     during a deploy — still changes the chat model when it comes back."""
-    mode = db.get_control(con, APPLIED_KEY)
-    return mode if mode in MODES else None
+    return named(db.get_control(con, APPLIED_KEY))
 
 
 def set_applied(con: sqlite3.Connection, mode: str) -> None:
@@ -243,7 +292,9 @@ def shown() -> dict:
         "mode": mode,
         "run": node_state.peek_worker_state(),
         "chat_model": config.chat_model_for(mode),
-        "modes": {m: {"chat_model": config.chat_model_for(m), "run": run_of(m, pc.modes),
+        "network": pc.modes.network(mode),
+        "modes": {m: {"chat_model": config.chat_model_for(m), "run": run_of(m, pc.modes) or "yours",
+                      "network": pc.modes.network(m),
                       "budget": {k: v for k, v in budget(m, pc).items() if k in ("down", "up")}}
                   for m in MODES},
     }

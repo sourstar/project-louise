@@ -20,6 +20,53 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **THE TOKENIZER THREADS ON THE NODE: ABOUT 5 %, NOT 1.7x — so far (München, three large units at
+  `9811ca92`).** 241 s for 250,927,844 bytes, 0.960 µs a byte, against 1.012 before on the like-for-like
+  figure (fifteen units one after the other; the 1.715 quoted from the nine-unit commit line held six more
+  units parsed ahead). The same pieces: run 5, 23 passed under the real tokenizer. Peak of a child +11 %
+  (3,159,196 kB). Three units cannot tell 5 % from nothing; what they do say is that the chunker's
+  tokenizing is not most of a large unit's 70–86 s on the node, or that the lane child's threads are not at
+  work — and nothing let München tell which child was the lane's. The pool's line now names a large part's
+  PID and its PEAK (the kernel's high-water mark, read every 10 s), in flight and when it leaves.
+  Also in this change, from the Legal session: a PDF manifestation's items are read by their CONTENT
+  (32007M4820: three TIFF page images declared application/pdf; PDFium was given a TIFF) — a non-PDF is
+  held and said (`item-not-its-form`); a PDF is known by the header a reader looks for, anywhere in its
+  first 1024 bytes.
+- **LIVE since 2026-11-25 12:11:43Z: main `9811ca92`** (deploy `d478805`: #888–#894). München's rows:
+  the staged run 5 — the pinned-tokenizer legal spans, the proof that the batched encode cuts the same
+  pieces under the REAL tokenizer — "23 passed" (the other lists 3260 passed / 2 skipped; 11; 92; 478 / 9
+  skipped). "memory: the yield is armed — the worker's limit is 24,576 MiB; … yields at 21,504 MiB
+  anonymous (87.5%), all go on under 17,940 MiB (73%); read every 10 s, now 102 MiB" at the start. The
+  preload hold: every embedding collection waited 6–13 s and said so, no CANARY and no gate deferred for
+  room in the first ten minutes, gutenberg validated 44 s after the start (forty minutes that morning) —
+  on a WARM model server, so the hold against real loads is still to be seen at the engine swap
+  (scheduling-log.md). Owed: the large units' lines (EUR-Lex5.next's scan was still walking), which are the
+  AFTER of the tokenizer threads and the condition for the next deploy (#895, two lanes).
+- **Two log lines ran together** at that start ("embedding goes on: …" of NeuRIS and of wikidata, no
+  newline between): `print(text, flush=True)` writes the text and its newline as two writes, and two
+  threads logging in the same instant interleave them. Now the worker's stdout itself writes whole lines
+  (`app/log_lines.py`, installed at the worker's start): what a thread writes is kept until its line is
+  complete and goes out in one write — every print, whoever makes it — and `db.log_event` and the node
+  lines write theirs in one write besides (`db.say_line`), for the processes that do not install it.
+- **TWO LARGE LANES, and a batch puts at most a lane's worth of large units (`parallel.LARGE_LANES`,
+  `compute`; scheduling.md pitfall 26).** The second half of the reading of EUR-Lex5.next's large units: the
+  lane of one made fifteen 100 MB units take 1,513 s while ten children idled, and one fts batch gathered
+  nine of them and committed only after all nine, the collection's rdf behind it. The lane is now two — the
+  memory is held by the existing guards (`_room`, `_reserve`), which on the node's numbers admit a second
+  and refuse a third — and a batch takes two and defers the rest to the next round, so it commits after two.
+  NOT YET DEPLOYED: it goes out after the tokenizer-threads change has its AFTER, one change a deploy. KNOWN
+  AND NOT TOUCHED: a unit whose estimate passes the worker's whole limit is `TooLarge`, an error a person
+  sees — 26 bytes a byte of text puts that line near 630 MB of text, and EUR-Lex5.next has one unit of
+  911,527,513 bytes pending. Whether its TEXT is that large, and what to do if it is, is the Legal session's
+  question (asked).
+- **THE NEXT ENGINE CANDIDATE IS `619655e5833b`, not `792f050e318e`** (operator, 2026-11-25: "Build
+  619655e5833b now, swap it after the drain, if it still applies"; Tensor's `staged/engine-canary.series`).
+  It is `engine-stream.series` line for line — the paging default (0021), the language tag (0022), a stream
+  that fails after its first chunk FAILS (0025), the test switch (0026) — plus 0028: a context canary
+  REFUSED FOR MEMORY at a request is HTTP 503 "the context cannot be created now …: try again later" (no
+  "context canary failed" words, so Louise reads a busy endpoint, a deferral, and counts no canary failure),
+  and at the load it fails the load instead of serving unchecked. Measured on a CPU build, 12 of 12; the
+  card row is München's at the swap. `792f050e318e` is built and will not be swapped.
 - **A collection's embedding waits for the keeper's preload after a start (`resident.holds_embedding`,
   `worker._preload_holds`; scheduling.md pitfall 25).** The cause of the morning's forty minutes (the entry on
   the canary count, below): the worker's embed producer started three seconds after the worker and the keeper

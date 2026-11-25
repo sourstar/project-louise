@@ -12,9 +12,9 @@ its own pool. The pool already records every part in flight
 (`parallel.in_flight`, kept for a memory kill's hold). This reads it: a part
 that has been in flight for SAY_AFTER_S is said, and again every SAY_EVERY_S
 while it stays — the collection, the stage, how many parts the pool holds for
-it, the oldest's unit and size, how long, and for a large part that it is
-ALONE in the large lane (one large unit at a time in the whole worker,
-parallel.py `_large_lane`) and how long its answer is still waited for.
+it, the oldest's unit and size, how long, and for a large part that it has
+the large lane (a process of its own; `parallel.LARGE_LANES` of them in the
+whole worker) and how long its answer is still waited for.
 When it has answered, one line says how long it took.
 
 Telemetry is published by someone other than the thread doing the work
@@ -43,11 +43,31 @@ MIB = 1 << 20
 _lock = threading.Lock()
 #: (collection, kind, the oldest part's first uid, its since) -> when it was last said
 _said: dict[tuple, float] = {}
+#: the same key -> (pid, the highest resident memory read for it, bytes)
+_peaks: dict[tuple, tuple[int, int]] = {}
 
 
 def reset() -> None:
     with _lock:
         _said.clear()
+        _peaks.clear()
+
+
+def peak_of_pid(pid: int) -> int | None:
+    """The process's peak resident memory so far, in bytes (`VmHWM` of
+    /proc/<pid>/status, the kernel's own high-water mark), or None where it
+    does not read (gone, or no /proc). WHY HERE (München, 2026-11-25): the
+    lane child's peak is the number the second lane is judged on, and it
+    took a sampler on the host, reading every process over 1 GiB, to get it —
+    without knowing which child was the lane's. The pool knows the pid."""
+    try:
+        with open(f"/proc/{pid}/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
 
 
 def _span(seconds: float) -> str:
@@ -61,9 +81,12 @@ def _size(n: int) -> str:
 
 
 def look(*, in_flight: Callable[[], list[dict]] | None = None,
-         say: Callable[[str], None] | None = None, now: float | None = None) -> list[str]:
+         say: Callable[[str], None] | None = None, now: float | None = None,
+         peak: Callable[[int], int | None] = peak_of_pid) -> list[str]:
     """ONE LOOK at the pool: the lines said (also returned). Per collection
-    and stage, the OLDEST part decides; the others are counted."""
+    and stage, the OLDEST part decides; the others are counted. A part with
+    a process of its own (the large lane's) has its peak memory read at
+    EVERY look, said or not, and its highest reading is said with it."""
     from . import parallel
     say = say or (lambda m: None)
     t = time.monotonic() if now is None else now
@@ -78,6 +101,12 @@ def look(*, in_flight: Callable[[], list[dict]] | None = None,
         uid = (oldest.get("uids") or [[None, None]])[0][0]
         key = (name, kind, uid, oldest["since"])
         live.add(key)
+        pid = oldest.get("pid")
+        if isinstance(pid, int):
+            got = peak(pid)
+            with _lock:
+                held = _peaks.get(key, (pid, 0))[1]
+                _peaks[key] = (pid, max(held, got or 0))
         age = t - oldest["since"]
         with _lock:
             last = _said.get(key)
@@ -89,9 +118,14 @@ def look(*, in_flight: Callable[[], list[dict]] | None = None,
         line = (f"{name} {kind}: {len(parts)} part{'s' if len(parts) != 1 else ''} in the parse pool; "
                 f"the oldest for {_span(age)} — {uid}"
                 + (f" and {rows - 1} more" if rows > 1 else "") + f", {_size(weight)}")
+        with _lock:
+            seen = _peaks.get(key)
+        if seen is not None:
+            line += f" — pid {seen[0]}" + (f", {_size(seen[1])} resident at its peak so far" if seen[1] else "")
         if oldest.get("large"):
-            line += (" — ALONE in the large lane (one large unit at a time in the whole worker; the others "
-                     "of its batch are deferred to a later round)")
+            line += (f" — in the large lane, a process of its own (at most {parallel.LARGE_LANES} large units "
+                     f"at a time in the whole worker; a batch puts at most that many, the others are asked "
+                     f"again next round)")
             until = oldest.get("until")
             if until is not None:
                 left = until - t
@@ -102,11 +136,16 @@ def look(*, in_flight: Callable[[], list[dict]] | None = None,
         out.append(line)
     # a part that has answered: said once, with how long it took, if it had been said at all
     with _lock:
-        gone = [k for k in _said if k not in live]
-        for k in gone:
+        gone = [(k, _peaks.get(k)) for k in _said if k not in live]
+        for k, _seen in gone:
             _said.pop(k, None)
-    for name, kind, uid, since in gone:
+        for k in [k for k in _peaks if k not in live]:
+            _peaks.pop(k, None)
+    for (name, kind, uid, since), seen in gone:
         line = f"{name} {kind}: {uid} has left the parse pool after {_span(t - since)}"
+        if seen is not None:
+            line += (f" — pid {seen[0]}" + (f", {_size(seen[1])} resident at its peak (the kernel's high-water "
+                                             f"mark, read every {CHECK_EVERY_S:.0f} s)" if seen[1] else ""))
         say(line)
         out.append(line)
     return out
