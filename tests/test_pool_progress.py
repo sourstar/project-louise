@@ -4,8 +4,8 @@ München, on the node, 2026-11-25: EUR-Lex5.next's pipeline sat in its fts
 stage for nine minutes and more on one 136 MB act — one pool child busy, ten
 idle, the counts still — and nothing in the log said a batch was in flight,
 or on what. The pool's own record of its parts, read once a minute by a
-watcher: the unit, its size, how long, and for a large part that it is alone
-in the large lane and how long its answer is still waited for."""
+watcher: the unit, its size, how long, and for a large part that it has
+the large lane and how long its answer is still waited for."""
 from __future__ import annotations
 
 import threading
@@ -45,7 +45,7 @@ def test_after_a_minute_it_says_the_unit_its_size_and_how_long_then_once_a_minut
 def test_a_large_part_says_it_is_alone_in_the_lane_and_how_long_it_is_still_waited_for():
     parts = [_part(since=100.0, large=True, until=388.0)]
     said = _look(parts, now=160.0)[0]
-    assert "ALONE in the large lane (one large unit at a time in the whole worker" in said
+    assert "in the large lane, a process of its own (at most 2 large units at a time in the whole worker" in said
     assert "its answer is waited for 4 min more" in said, said
     assert said.endswith("The collection's pipeline waits for it, its other stages behind it")
     late = _look(parts, now=688.0)[0]
@@ -83,7 +83,7 @@ def test_the_pool_records_when_a_part_entered_and_whether_it_has_the_large_lane(
         assert got["uids"] == [[ACT, 136_205_384]]
         said: list[str] = []
         pp.look(say=said.append, now=got["since"] + 600.0)       # the pool's own record, read as it is
-        assert said and ACT in said[0] and "ALONE in the large lane" in said[0], said
+        assert said and ACT in said[0] and "in the large lane, a process of its own" in said[0], said
     finally:
         parallel._leave(1)
 

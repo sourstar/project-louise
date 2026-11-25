@@ -3520,8 +3520,8 @@ whether the second is admitted), and a batch puts at most two large units in
 the lane — the others deferred to the next round at once.
 
 **EXPECTED, to be held against the AFTER.** Two units in flight where the
-memory allows (the pool's lines: two "ALONE in the large lane" parts at a
-time — the word "ALONE" then reads wrongly and is the next line to fix); an
+memory allows (the pool's lines: two parts "in the large lane, a process of
+its own" at a time — #891's line said "ALONE", reworded here); an
 fts batch with large units committing after ~2 of them (~100–200 s, less
 with the tokenizer's threads of the row above) instead of nine; an rdf
 transaction between two such batches. The cgroup's peak with two in flight
