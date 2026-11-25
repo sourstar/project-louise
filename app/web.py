@@ -559,8 +559,15 @@ def reading_said(body: dict) -> tuple[str, dict]:
     parts = [f"the answer's first word {_s(first_word)} after Ask"]
     if start is not None:
         parts.append(f"the reading started at {_s(start)} ({'by itself' if body.get('by_itself') else 'a tap'})")
-    if play is None:
-        parts.append("NO SOUND WAS PLAYED" + (" — the browser did not let the page play" if body.get("blocked") else ""))
+    if body.get("blocked"):
+        # the page TRIED to play and the browser refused (NotAllowedError: no
+        # tap close enough before it): its `play` time is the attempt, and
+        # nothing was heard until the reader tapped the speaker
+        parts.append("THE BROWSER DID NOT LET THE PAGE PLAY"
+                     + ("" if play is None else f" (tried at {_s(play)})")
+                     + ": nothing was heard until a tap — the next reading's line says when")
+    elif play is None:
+        parts.append("NO SOUND WAS PLAYED")
     else:
         after = None if first_word is None else play - first_word
         parts.append(f"FIRST SOUND at {_s(play)}" + ("" if after is None else f", {_s(after)} after the first word"))

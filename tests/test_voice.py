@@ -437,7 +437,13 @@ def test_a_reading_that_played_nothing_says_so(isolated_config, monkeypatch):
               "sentences": [{"chars": 62, "cut": 3100, "sent": 3110, "got": 6000, "synth": 2510, "audio": 4100}]}
     assert c.post("/ask/voice/timeline", json=silent).status_code == 204
     text = lines[-1][1]
-    assert "NO SOUND WAS PLAYED — the browser did not let the page play" in text and "(a tap)" in text
+    assert "THE BROWSER DID NOT LET THE PAGE PLAY: nothing was heard until a tap" in text and "(a tap)" in text
+    tried = {**READING, "blocked": True}            # it tried: the page's `play` time is the attempt, not a sound
+    assert c.post("/ask/voice/timeline", json=tried).status_code == 204
+    assert "THE BROWSER DID NOT LET THE PAGE PLAY (tried at 6.0 s)" in lines[-1][1] and "FIRST SOUND" not in lines[-1][1]
+    quiet = {**READING, "sentences": [{"chars": 62, "cut": 3100, "sent": 3110}]}
+    assert c.post("/ask/voice/timeline", json=quiet).status_code == 204
+    assert "NO SOUND WAS PLAYED" in lines[-1][1]
     assert c.post("/ask/voice/timeline", json={"sentences": "x" * 10, "first_word": "soon", "ua": 7}).status_code == 204
     assert "the answer's first word ? after Ask" in lines[-1][1], "what is not a number is not a time"
     assert c.post("/ask/voice/timeline", content=b"x" * 9000).status_code == 413
