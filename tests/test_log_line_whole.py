@@ -29,7 +29,6 @@ def test_a_log_line_and_its_newline_are_one_write(isolated_config, monkeypatch):
     monkeypatch.setattr(sys, "stdout", out)
     db.log_event(con, "info", "embed", "embedding goes on: the keeper's preload after the start has ended")
     worker._node_line("pool")("EUR-Lex5.next fts: 1 part in the parse pool")
-    monkeypatch.undo()
     assert len(out.calls) == 2, out.calls
     assert all(c.endswith("\n") and c.count("\n") == 1 for c in out.calls), \
         "the text and its newline in two writes are what two threads interleave"
@@ -87,3 +86,14 @@ def test_the_worker_installs_it_once(monkeypatch):
     assert real.calls == ["a line\n"]
     import inspect
     assert "log_lines.install()" in inspect.getsource(worker.main)
+
+
+def test_an_answers_lines_are_the_nodes_not_the_default_collections(isolated_config, monkeypatch):
+    """München, 2026-11-25: "[EUR-Lex5.next info:chat] answer: 2022 chars in
+    13.8 s" for a question answered from gutenberg — the chat stage logged
+    through the default manifest and took its name."""
+    con = db.connect()
+    out = _Writes()
+    monkeypatch.setattr(sys, "stdout", out)
+    db.log_event(con, "info", "chat", "answer: 2022 chars in 13.8 s, first word at 1.9 s")
+    assert "[node info:chat] answer: 2022 chars" in out.calls[0], out.calls
