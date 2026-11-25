@@ -439,8 +439,9 @@ def reset() -> None:
         _memory, _out_said, _write_failed = None, frozenset(), False
         _orphans_at = None
         _rested.clear()
-    global _first_beat
+    global _first_beat, _last_beat_wall
     _first_beat = None
+    _last_beat_wall = None
 
 
 def switches() -> Switches:
@@ -1498,10 +1499,32 @@ FIRST_BEAT_WAIT_S = 120.0
 _first_beat: float | None = None
 
 
+#: when (the wall's clock, as node_state's history keeps its times) this
+#: process's keeper last beat; None before its first
+_last_beat_wall: float | None = None
+
+
 def _note_first_beat() -> None:
-    global _first_beat
+    global _first_beat, _last_beat_wall
     if _first_beat is None:
         _first_beat = time.monotonic()
+    _last_beat_wall = time.time()
+
+
+def _resumed_at() -> float | None:
+    """When (wall clock) the node last turned from a mode that preloads
+    nothing into one that does, if that was less than SETTLE_S ago; None
+    otherwise (`_settling`, with its time)."""
+    from app import node_state
+    hist = node_state.mode_history()
+    if len(hist) < 2:
+        return None
+    last, prev = hist[-1], hist[-2]
+    at = float(last.get("at") or 0)
+    if (last.get("state") in PRELOADING_MODES and prev.get("state") not in PRELOADING_MODES
+            and 0 <= time.time() - at < SETTLE_S):
+        return at
+    return None
 
 
 def warming() -> bool:
@@ -1519,9 +1542,10 @@ def holds_embedding(started: float, now: float | None = None) -> str | None:
     since = t - started
     recent = since < START_HOLD_S
     try:
-        resumed = _settling()
+        resumed_at = _resumed_at()
     except Exception:   # noqa: BLE001 — a history that does not read holds nobody
-        resumed = False
+        resumed_at = None
+    resumed = resumed_at is not None
     if not (recent or resumed):
         return None
     try:
@@ -1533,6 +1557,16 @@ def holds_embedding(started: float, now: float | None = None) -> str | None:
     if _first_beat is None:
         if since < FIRST_BEAT_WAIT_S:
             return (f"the keeper has not made its first beat yet ({since:.0f} s after the worker's start): "
+                    f"it loads the models of Ask first")
+        return None
+    if resumed and (_last_beat_wall is None or _last_beat_wall < resumed_at):
+        # THE SAME GAP AS AT A START, at a resume: the run mode is written,
+        # the embed producers see it within two seconds, and the keeper
+        # starts its loads only at its next beat. Until it has beaten once
+        # SINCE the resume, nothing says whether loads are coming
+        waited = time.time() - resumed_at
+        if waited < FIRST_BEAT_WAIT_S:
+            return (f"the keeper has not made a beat since the node's resume ({waited:.0f} s ago): "
                     f"it loads the models of Ask first")
         return None
     if warming():
