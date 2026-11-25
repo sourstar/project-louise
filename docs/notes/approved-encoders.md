@@ -596,6 +596,26 @@ paused, warm only; /root/measure/onednnC-results.txt):
     use it (Known limits).
   First exception: louise-chat-qwen3.5-9b-q4 `GGML_SYCL_FA_ONEDNN=1`.
 
+### The speech port's own context (2026-11-25)
+
+`louise-tts-omnivoice` (OmniVoice on the one llama.cpp engine; not an
+encoder, not gated) is staged with NO `flash_attention` line, an exception
+to the set named in tests/vega/test_engine_settings.py. Read in the source,
+not assumed:
+- with the line unset LocalAI sends `"auto"` (`config.DefaultFlashAttention`),
+  and llama.cpp turns flash attention on where the backend supports it;
+- the model file's value reaches the model's MAIN context only, which for
+  this model reads one token. The backbone — every step of every sentence —
+  runs in a context the port creates itself at each request from
+  `llama_context_default_params()`, whose flash attention is `auto` whatever
+  the file says.
+So `"on"` in the file would be a flag that changes nothing the port
+computes, and every row was measured without it: the card rows of 2026-11-24
+and 2026-11-25 (omnivoice-on-our-backend.md §13: 2.24 s a sentence with the
+11 s clip, 2.53 s with the 27.75 s one, 32 steps). What `auto` resolved to
+for the backbone on the B70 was not read from its log; if it is ever in
+doubt, the context's own line says it (`flash_attn = …`) at verbosity 4.
+
 ## Known limits of the Arc Pro B70 (2026-10-28)
 
 What the card, its driver (`libze-intel-gpu1 26.05.37020.3` in the LocalAI
