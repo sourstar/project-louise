@@ -4284,9 +4284,43 @@ def _embedding_allowed(con, collection) -> bool:
         return False        # a wrong endpoint (404, 401, …): asked again on a bound
     if _endpoint_busy_holds(collection):
         return False        # it timed out answering nobody: asked again on a bound
+    if _preload_holds(con, collection):
+        return False        # the keeper is still loading after a start: bounded, and said
     if not backend_gate.embed_allowed(con, collection, stop=_stop.is_set):
         return False
     return _quarantine_allows(con, collection, "embedding")
+
+
+#: when (monotonic) this worker process started: what "after a start" is
+#: measured from (`resident.holds_embedding`)
+_BORN = time.monotonic()
+#: collection -> when its wait for the preload was last said
+_preload_said: dict[str, float] = {}
+PRELOAD_SAY_EVERY_S = 300.0
+
+
+def _preload_holds(con, collection) -> bool:
+    """A COLLECTION'S OWN EMBEDDING WAITS FOR THE KEEPER'S PRELOAD AFTER A
+    START (app/resident.py `holds_embedding`: gutenberg, 2026-11-25 — its
+    first embedding beside thirteen loads met a card with 1.5 GiB free, a
+    context failed its canary, and the run was gated again forty minutes
+    later). A deferral, never an error; bounded there; said once and then
+    every PRELOAD_SAY_EVERY_S, and once more when it ends."""
+    why = resident.holds_embedding(_BORN)
+    name = collection.name
+    now = time.monotonic()
+    if why is None:
+        if _preload_said.pop(name, None) is not None:
+            db.log_event(con, "info", "embed", "embedding goes on: the keeper's preload after the start "
+                                               "has ended (or its bound has passed)")
+        return False
+    if now - _preload_said.get(name, -1e9) >= PRELOAD_SAY_EVERY_S:
+        _preload_said[name] = now
+        db.log_event(con, "info", "embed",
+                     f"embedding waits: {why}. A collection's embedding and its gate do not start beside "
+                     f"those loads (a context created on a full card fails its canary); at most "
+                     f"{resident.START_HOLD_S / 60:.0f} min after a start (app/resident.py)")
+    return True
 
 
 #: collection path -> the violations last said, so the halt is logged on change
@@ -4332,6 +4366,8 @@ def _settle_the_run(con, collection) -> None:
     except Exception:   # noqa: BLE001
         return
     if gate is not None and gate.status == copy_state.OPEN:
+        if _preload_holds(con, collection):
+            return              # not beside the keeper's loads after a start: the next round
         backend_gate.embed_allowed(con, collection, stop=_stop.is_set)
 
 
@@ -6304,9 +6340,12 @@ def _read_engine_counts(con) -> None:
             # — and its run goes back to the gate, whoever's request it was
             # (run_check.canary_failed: a person's query from the web process
             # is in the engine's count and in nobody's exception here)
-            discarded = line.startswith("CANARY")
+            # ...counted as the ENGINE's: it confirms a failure a refused
+            # request of this process already counted, and counts only what
+            # nobody here saw (run_check.canary_failed: one discard, one failure)
+            discarded = rage_keep.discarded_in(line)
             if discarded:
-                run_check.canary_failed(url, model)
+                run_check.canary_failed(url, model, by_engine=discarded)
             db.log_event(con, "error" if discarded else "info", "sched", line)
 
 

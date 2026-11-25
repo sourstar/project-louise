@@ -606,6 +606,28 @@ yield on a node is the first measurement of whether a yield helps. The rule:
 what protects a collection is the platform's and is tested; what an operator
 runs beside it is, at most, a second pair of eyes.
 
+**25. Two things the worker starts at once, one starving the other.** 2026-11-25.
+gutenberg on the node: the worker started at 09:40:28Z, its embed producer
+three seconds later, the keeper's first beat began loading thirteen models at
+:36 — and at :55 a context of the collection's encoder failed its canary on a
+card with 1,493 MiB free. The run's statements were set aside and embedding
+paused, as invariant 12 demands; the gate, which loads its own copy, found no
+room either and ran forty minutes later. Nothing wrong was written. But every
+start of the worker — every deploy — could cost a collection forty minutes,
+through a race the worker made with itself.
+→ `resident.holds_embedding`, `worker._preload_holds`: a collection's own
+embedding, its gate and the at-once gate of an untested copy do not start
+while the keeper is still loading after a START — the worker's first ten
+minutes, or the ten after a resume from a mode that preloads nothing —
+bounded twice (a keeper that never beats holds nobody past two minutes;
+nothing is held past the window), said once with its reason and once when it
+ends. Later single reloads hold nothing: a hold at each would starve
+embedding under an eviction that repeats. The rule: WHAT A START LAUNCHES
+TOGETHER IS ORDERED, NOT RACED — when two of the worker's own subsystems want
+the same scarce thing in the same minute, one of them waits by design and
+says so. (Whether that canary was a graph REFUSED FOR MEMORY answered as a
+failure is the engine's question; the order is right either way.)
+
 ## 6. Before you change the scheduler — the checklist
 
 1. **Read the worker log as a time series first.** It is the first
