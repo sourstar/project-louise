@@ -192,6 +192,11 @@ when asked). It is a change of LocalAI's wire, so it is designed with the
 architecture session first; nothing changes on the node until that design
 is agreed, and nothing if the operator says nothing.
 
+**DECIDED (the operator, 2026-11-25: "I accept your recommendations for all
+the decisions above"): step 2 is built, designed with the architecture
+session first.** Its design is `parking-step-2.md`; nothing is built before
+it is agreed.
+
 ## 5. Open
 
 - Quantized models are handled by construction (the card's bytes come

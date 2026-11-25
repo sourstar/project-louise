@@ -270,6 +270,13 @@ project deploys measured gains however small. Before that it is a wash and
 stays off. It is the operator's word on the node (München's one line);
 nothing is switched on if he says nothing.
 
+**DECIDED (the operator, 2026-11-25: "I accept your recommendations for all
+the decisions above"): on, the whole cache, once the load ahead is live for
+the chat model — not before.** Then the 35B's file gets
+`LLAMA_MOE_RECORD_DIR` (a directory under the node's cache) and no
+`LLAMA_MOE_RECORD_FILL` line. München's, when the architecture session says
+the load ahead is live.
+
 What would change the picture: a model whose cache turns over harder, or a
 link where an upload is dear. The replay tool answers the first from traces;
 the fill's own log line answers the second.
