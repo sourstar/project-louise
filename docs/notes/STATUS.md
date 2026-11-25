@@ -27,6 +27,14 @@ measured (published figures disagree).
   model), dense 1.4 (every encoder cold at Ask: loaded ahead), rerank 15.6 (no load: the lists that share a
   reranker go one after the other, 2.45 s a list), 2.1 s in the answer. The loads inside stages that the load ahead was built for are gone;
   what is left is the first stage's, and work that is no load (ask-card-workflow.md). A warm row is owed.
+- **The engine pass found three defects, fixed in a second candidate before the port serves a voice.** The
+  pool's refusal (0013) is swallowed and the process still dies: 0018, and page mode stays off until its
+  row. A deleted voice could outlive its profile in LocalAI's leases (a process dead mid-request: 0019, a
+  server patch) and in the port's own memory (the last clip kept between requests: 0020). Engine
+  d531d5d804f1 and a patched server, one pause, on the operator's word (models-beyond-the-card.md §10).
+- **Live since 02:10Z: web 9a4cec4f** — the article list too long to be one (#872), Wikisource's origin
+  check by Range (#871, nothing calls it yet). EUR-Lex5.next paused for Legal; its Polish document never got
+  an error, and parses now.
 - **The port on the card:** 2.24 s a sentence with the 11 s clip, 2.70 s with Philippe's original 27.75 s
   clip; today's backend 3.60 and 8.65 s. The longer clip is nearly free on the port.
 

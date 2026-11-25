@@ -649,3 +649,60 @@ cold, on an emptied card (ask-card-workflow.md, "Measured on 8337d36a"):
 the query encoders and the answer's chat are no longer loads inside their
 stages; the first stage's own two models are, and only keeping or parking
 them changes that.
+
+## 10. The second candidate: what the first pass found (2026-11-25)
+
+The pass on b190673dbdbf found three things, each fixed before the port
+serves a voice. Tensor's branch ccr-b76578de-puq1g0 at 96b0cd1; the patches'
+own notes are there.
+
+**The pool's refusal did not hold** (staged 0013, live untested since the
+evening of 11-24 because it could not be provoked). Provoked on a reranker
+copy: the refusal is swallowed inside `ggml_sycl_op_mul_mat` and the process
+dies as on every engine before it; no "the graph is abandoned" line. Fixed
+by staged 0018. PAGE MODE STAYS OFF until 0018's row shows two requests
+answered 5xx, the line, and the same pid answering a third.
+
+**A deleted voice could outlive its profile in two places.**
+- In LocalAI, on disk: `voice-profiles/.leases` held a hard link to a
+  recorded clip from 10-27. On the path Louise uses a lease is given back
+  when the request's handler returns (`defer release()` in tts.go); only a
+  process that dies holding one leaves it. Staged 0019, a patch of
+  LocalAI's server (core/services/voiceprofile): an owner file a lease
+  directory, dropped by the kernel with its process; a dead process's
+  leases removed at the next start and at every delete, a living one's
+  left; a directory with no owner file removed once a day old. LocalAI's
+  suite passes with it (25 specs, 6 new).
+- In the port, in memory: it kept the last clip's samples and encoded rows
+  from one request to the next. Staged 0020: a clip that has a file for its
+  encoding — every profile's — leaves nothing in the engine between two
+  requests; its rows are read from the file each time (0.01 s), the samples
+  zeroed once hashed, the rows zeroed at the request's end. The kept
+  encoding's format does not move.
+So the condition of §9 ("a deleted voice's codes do not outlive it") is
+held at three layers — the profile's directory, the leases, the engine's
+memory — and the proof at step (c) reads all three after a TEST profile is
+deleted.
+
+**Two builds, one pause.** The ENGINE: d531d5d804f1 = b190673dbdbf's series
++ 0018 + 0020, one gating of the five llama.cpp runs. The SERVER: LocalAI
+v5.0.1 + P1 + 0011 + 0019, a restart of LocalAI; at its first start it
+removes the nine lease directories on the node that have no owner file, the
+October link among them — said to the operator with the pass, so that it
+is his word. (A server patch is never put in an engine's series: it would
+rename the engine for code the engine does not have.)
+
+**The order of §9 changes.** The port becomes the live voice only on
+d531d5d804f1 with the patched server: steps (c) to (e) move there, and
+b190673dbdbf never serves a voice through the port. No model on the node
+uses the port meanwhile.
+
+**The first sentence of a new speech process** costs 8.74 s against 2.24 s
+with the clip's encoding read in 0.01 s: about 5.1 s the load, 1.5 s the
+pipeline's first use. The load ahead's warm for speech is a real synthesis
+of one word (`POST /v1/audio/speech {"model", "input": "OK"}`), which the
+port answers with no voice named (run on its source, CPU: 200). Two rows in
+the pause decide whether that is enough: a new process warmed so and then a
+cloned sentence, against a new process whose first request is the cloned
+sentence. Near 2.24 s: nothing to build. A second or so kept: the warm
+speaks a sentence in the voice the reader will hear.
