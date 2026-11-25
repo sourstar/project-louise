@@ -40,10 +40,13 @@ measured (published figures disagree).
   old rule are dropped at the first read (`REST_BASIS`, `MARGIN_BASIS`): each model counts at its largest
   until it is known again. IT CHANGES WHAT THE KEEPER BELIEVES AND SAYS, NOT WHAT IS ON THE CARD (the budget
   unloads nothing). Open, the operator's: whether query mode should let the driver page on purpose or keep
-  the card under its line — waiting on München's two prices (a page-in against a reload). Also still to do
-  in the keeper: the mode's own chat model counted first in query mode (at 15:58:24Z the 35B was itself "not
-  preloaded" and its room handed to others), and no document-only encoder preloaded where nothing embeds
-  (medcpt-article-ov was, at 16:30Z).
+  the card under its line — waiting on München's two prices (a page-in against a reload). TWO MORE, in the
+  same change: a chat model over the budget is still "not preloaded", but its bytes are TAKEN — its room is
+  handed to nobody (at 15:58:24Z the 35B was out of the budget at 21,416 MiB and the budget filled with the
+  models below it, on the card beside it); and no DOCUMENT encoder is in the set where the node embeds
+  nothing (`resident.node_embeds`: medcpt-article-ov was preloaded in query mode at 16:30Z, "for resident
+  encoder (pubmed)"). With all three, on the node in query mode: the 35B counted at 21,449 MiB, over the
+  budget, nothing below it preloaded, nothing unloaded — the models already on the card stay, by use.
 
 - **THE NODE, 2026-11-25 afternoon (München's rows): the engine 619655e5833b live, the cold preload row, the
   operator's first switch to QUERY MODE, and the French answer's BEFORE on the large chat model.**

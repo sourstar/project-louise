@@ -481,10 +481,16 @@ def current() -> list[Resident]:
 
 
 def wanted(served: Iterable[Any], *, embed_mode: Callable[[Any], str],
-           sw: Switches | None = None) -> list[Resident]:
+           sw: Switches | None = None, embeds: bool = True) -> list[Resident]:
     """THE resident set, in the order a question meets its models; one entry
     per (server, model), its roles and collections merged. `served`: the
-    collections searched; `embed_mode(c)`: the mode the worker applies."""
+    collections searched; `embed_mode(c)`: the mode the worker applies;
+    `embeds`: whether the node, in its run mode, embeds anything at all
+    (`node_embeds`) — where it does not (query mode, acquire-only) no
+    DOCUMENT encoder is in the set: the node, 2026-11-25, preloaded
+    vega-medcpt-article-ov "for resident encoder (pubmed)" in query mode,
+    onto a card already over its line, for work the mode does not do. A
+    collection's query encoder is in the set either way."""
     from app import collections as collections_mod, config, embeddings, llm, model_load, retrieval, translate
     sw = sw or switches()
     found: dict[tuple[str, str], Resident] = {}
@@ -522,7 +528,7 @@ def wanted(served: Iterable[Any], *, embed_mode: Callable[[Any], str],
                 q = embeddings._side(recipe, True)
                 add(q.url, q.model, "query encoder", c.name,
                     lambda c=c, r=recipe: embeddings.warm_side(c, query=True, recipe=r))
-                if mode in collections_mod.EMBEDDING_MODES:
+                if embeds and mode in collections_mod.EMBEDDING_MODES:
                     add(recipe.url, recipe.model, "encoder", c.name,
                         lambda c=c, r=recipe: embeddings.warm_side(c, query=False, recipe=r))
             r = collections_mod.reranker_for(c)
@@ -1087,6 +1093,18 @@ def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
                       f"it take {taken // MIB:,} MiB and it needs {need // MIB:,} MiB"
                       + (f" ({seen})" if seen else "")
                       + " — loaded at its first request, then left to the reclaimer's LRU")
+            if "chat" in r.roles:
+                # THE CHAT MODEL'S ROOM IS HANDED TO NOBODY (2026-11-25). Every
+                # answer loads it, and a mode's switch loads it, whether the
+                # budget holds it or not; left out of the budget with its
+                # bytes uncounted, the budget filled with the models below it
+                # — on the card BESIDE it (the node in query mode, 15:58:24Z:
+                # the 35B "not preloaded" at 21,416 MiB of a 19,545 MiB budget,
+                # then MADLAD and four more "in the budget"). It is still not
+                # preloaded; its bytes are taken, and what is left for the
+                # rest may be nothing.
+                taken += need
+                detail += "; its room is kept for it — nothing below it is preloaded into it"
             fits, why = False, f"not preloaded — {head.says()}; {detail}"
         placed.append(Placed(r, rank, tier, size, _size(r, mem), need, t, fits, why, detail))
     return Plan(tuple(placed), line, threshold, margin, measured, median, penalty, keep, contexts)
@@ -1435,6 +1453,18 @@ def _due(r: Resident, now: float) -> bool:
     return due
 
 
+def node_embeds(state: str | None = None) -> bool:
+    """Whether the node embeds anything in this run mode (`node_state.runs`,
+    the one resolution every gate reads: the run mode, the mode of use's
+    network choice and the profile in force). Unreadable: taken as embedding,
+    the set as it always was."""
+    from app import node_state
+    try:
+        return bool(node_state.runs(state or node_state.worker_state(), node_state.EMBED))
+    except Exception:   # noqa: BLE001
+        return True
+
+
 def preloads(state: str | None = None) -> tuple[bool, str]:
     """(whether the node's mode preloads the set now, why, in words).
     `state`: the node's mode as read by the caller (a command peeks it);
@@ -1496,7 +1526,7 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
     global _last, _last_why, _out_said
     sw = switches()
     ok, why = preloads(state)
-    want = wanted(served, embed_mode=embed_mode, sw=sw) if ok else []
+    want = wanted(served, embed_mode=embed_mode, sw=sw, embeds=node_embeds(state)) if ok else []
     by_key = {r.key: r for r in want}
     with _lock:
         before = dict(_last)
@@ -1867,7 +1897,7 @@ def show() -> dict[str, Any]:
     ok, why = preloads(state)
     served, not_served = served_now()
     modes = {c.name: _mode_shown(effective_config, c) for c in served}
-    want = wanted(served, embed_mode=lambda c: modes[c.name], sw=sw)
+    want = wanted(served, embed_mode=lambda c: modes[c.name], sw=sw, embeds=node_embeds(state))
     holders = {(p["server"], p["model"]): sorted(p["holders"]) for p in model_pins.status()["pins"]}
     for r in want:
         model_load.loaded_models(r.server)       # this process's own reading: the sizes of what is loaded

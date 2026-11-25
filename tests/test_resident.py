@@ -1567,3 +1567,48 @@ def test_at_rest_sizes_kept_under_the_fewest_reading_rule_are_not_read(tmp_path,
         "the largest sizes are kept; a rest that may be a paged reading, and the margin measured against it, are not"
     p = resident.plan([_r("louise-chat", "chat")], mem, threshold=0.98, used={}, now=now)
     assert p.placed[0].counted == 21_449 * MIB
+
+
+def test_a_chat_model_over_the_budget_is_not_preloaded_and_its_room_is_handed_to_nobody(tmp_path, node):
+    # the node in query mode, 15:58:24Z: "louise-chat-qwen3.6-35b-a3b — chat — rank 1 of 13 … the models placed
+    # above it take 0 MiB and it needs 21,416 MiB" of a budget of 19,545 — "not preloaded", and the budget
+    # then filled with the models below it, on the card beside the 35B the mode had loaded
+    now = 1_800_000_000.0
+    chat, madlad, tts = (SERVER, "louise-chat"), (SERVER, "louise-translate"), (SERVER, "omnivoice")
+    mem = resident.Memory(sizes={chat: 21_449 * MIB, madlad: 8_005 * MIB, tts: 2_867 * MIB},
+                          total=32_656 * MIB, peaks={int(now // 600 * 600): 6_480 * MIB},
+                          penalty=919 * MIB, penalty_at=now)
+    p = resident.plan([_r("louise-chat", "chat"), _r("louise-translate", "translation"),
+                       _r("omnivoice", "text to speech")], mem, threshold=0.98, used={}, now=now)
+    first = p.placed[0]
+    assert first.resident.model == "louise-chat" and first.counted == 21_449 * MIB
+    assert max(0, 32_002 - 6_480 - resident.CONTEXT_RESERVE // MIB - 919) < 21_449, "it does not fit the budget"
+    assert not first.fits and "it needs 21,449 MiB" in first.detail, "still not preloaded: the budget's word"
+    assert "its room is kept for it" in first.detail
+    assert [x.fits for x in p.placed[1:]] == [False, False], "nothing is preloaded into room the chat model holds"
+    assert all("the models placed above it take 21,449 MiB" in x.detail for x in p.placed[1:])
+
+
+def test_a_chat_model_that_fits_is_placed_as_any_other(tmp_path, node):
+    now = 1_800_000_000.0
+    chat, madlad = (SERVER, "louise-chat"), (SERVER, "louise-translate")
+    mem = resident.Memory(sizes={chat: 5_790 * MIB, madlad: 8_005 * MIB}, total=32_656 * MIB)
+    p = resident.plan([_r("louise-chat", "chat"), _r("louise-translate", "translation")], mem,
+                      threshold=0.98, used={}, now=now)
+    assert [x.fits for x in p.placed] == [True, True]
+    assert all(x.why.startswith("in the budget") for x in p.placed)
+
+
+def test_no_document_encoder_is_in_the_set_where_the_node_embeds_nothing(tmp_path, node):
+    # the node in query mode, 16:30Z: "cold start: vega-medcpt-article-ov … (for resident encoder (pubmed))"
+    pubmed = _with(_collection(tmp_path, "pubmed"), "vega-medcpt-article-ov", "all", query_model="vega-medcpt-query")
+    books = _with(_collection(tmp_path, "gutenberg"), "vega-qwen3-embedding-4b", "all")
+    both = resident.wanted([pubmed, books], embed_mode=_mode)
+    roles = {r.model: r.roles for r in both}
+    assert "encoder" in roles["vega-medcpt-article-ov"] and "encoder" in roles["vega-qwen3-embedding-4b"]
+    none = {r.model: r.roles for r in resident.wanted([pubmed, books], embed_mode=_mode, embeds=False)}
+    assert "vega-medcpt-article-ov" not in none, "a document-only encoder: no question uses it"
+    assert none["vega-medcpt-query"] == ("query encoder",)
+    assert none["vega-qwen3-embedding-4b"] == ("query encoder",), "the same model answers the questions: it stays"
+    node_state.set_worker_state("acquire-only", by="query mode")
+    assert resident.node_embeds() is False and resident.node_embeds("running") is True

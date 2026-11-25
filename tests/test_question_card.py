@@ -264,7 +264,7 @@ def test_the_keeper_loads_nothing_while_a_question_holds_the_claim(monkeypatch):
     monkeypatch.setattr(resident, "_question_now", lambda: True)
     monkeypatch.setattr(resident, "preloads", lambda state=None: (True, ""))
     r = Resident(S, "chat", ("chat",), warm=lambda: None)
-    monkeypatch.setattr(resident, "wanted", lambda served, embed_mode, sw=None: [r])
+    monkeypatch.setattr(resident, "wanted", lambda served, embed_mode, sw=None, **kw: [r])
     monkeypatch.setattr(resident, "_loaded", lambda r: False)
     monkeypatch.setattr(resident, "_release_orphan_pins", lambda want, now: None)
     monkeypatch.setattr(resident, "_remember", lambda want: resident.Memory())
