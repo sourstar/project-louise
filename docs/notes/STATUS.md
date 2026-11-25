@@ -24,8 +24,8 @@ measured (published figures disagree).
   the start (80 in fifteen minutes before); the German sentence read in the German profile (Sref 240); the
   engine's five llama.cpp gates exact with the fingerprints they had. The cold Ask from an EMPTIED card,
   Quality: first word 48.1 s — languages 13.7 (the first stage's own two loads), fts 12.3 (wikidata, no
-  model), dense 1.4 (every encoder cold at Ask: loaded ahead), rerank 15.6 (no load: six lists one after the
-  other at 2.45 s), 2.1 s in the answer. The loads inside stages that the load ahead was built for are gone;
+  model), dense 1.4 (every encoder cold at Ask: loaded ahead), rerank 15.6 (no load: the lists that share a
+  reranker go one after the other, 2.45 s a list), 2.1 s in the answer. The loads inside stages that the load ahead was built for are gone;
   what is left is the first stage's, and work that is no load (ask-card-workflow.md). A warm row is owed.
 - **The port on the card:** 2.24 s a sentence with the 11 s clip, 2.70 s with Philippe's original 27.75 s
   clip; today's backend 3.60 and 8.65 s. The longer clip is nearly free on the port.
