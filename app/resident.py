@@ -431,10 +431,9 @@ def set_log(fn: Callable[[str, str], None]) -> None:
 def reset() -> None:
     """Forget the last beat, every model's history and the budget's memory
     as this process holds it — the file stays, as a restart finds it (tests)."""
-    global _last, _last_why, _last_switches, _memory, _out_said, _write_failed, _orphans_at, _pids_seen, _driver_seen
+    global _last, _last_why, _last_switches, _memory, _out_said, _write_failed, _orphans_at, _pids_seen
     with _lock:
         _pids_seen = (frozenset(), frozenset())
-        _driver_seen = None
         _last, _last_why, _last_switches = {}, None, Switches()
         _track.clear()
         _memory, _out_said, _write_failed = None, frozenset(), False
@@ -608,26 +607,16 @@ def _card() -> tuple[int, int] | None:
     here = frozenset(p.ns_pid for p in d.processes if p.ns_pid is not None)
     there = frozenset(p.ns_pid for o in devices if o is not d for p in o.processes
                       if p.ns_pid is not None) - here
-    global _pids_seen, _driver_seen
+    global _pids_seen
     with _lock:
         _pids_seen = (here, there)
-        _driver_seen = d.driver or None
     return int(d.vram_total), int(d.used)
-
-
-def card_driver() -> str | None:
-    """The driver of the card the models are on ("xe", "amdgpu", …) as
-    `_card` last read it; None before a read, or where the probe names none."""
-    with _lock:
-        return _driver_seen
 
 
 #: (backend pids on this card, backend pids on another card and not this
 #: one), as the last `_card` read them — namespace pids, as `/system` gives
 #: them; both empty where the probe gives none
 _pids_seen: tuple[frozenset[int], frozenset[int]] = (frozenset(), frozenset())
-#: the driver of the card the last `_card` read (`card_driver`)
-_driver_seen: str | None = None
 
 
 def _elsewhere(r: "Resident") -> bool:
@@ -1567,16 +1556,7 @@ def _make_room_shown(want: list[Resident]) -> dict[str, Any]:
     out: dict[str, Any] = {"rule": mode}
     if mode != "page":
         out["says"] = ("a load that does not fit unloads the model with the oldest real use "
-                       "(`[models] make_room = \"page\"`, the default, pages idle models to host memory instead)")
-        return out
-    _card()                                # the driver, as the card says it now
-    driver = card_driver()
-    if driver not in model_evict.PAGING_DRIVERS:
-        # the default, on a card where paging was never measured: said as what it does
-        out |= {"rule": "unload", "says": (
-            "a load that does not fit unloads the model with the oldest real use: `[models] make_room` is "
-            f"\"page\", and this card's driver ({driver or 'not read'}) was not measured to move idle models' "
-            f"memory to the host (measured: {', '.join(model_evict.PAGING_DRIVERS)})")}
+                       "(`[models] make_room = \"page\"` pages idle models to host memory instead)")
         return out
     avail = model_evict.host_available()
     out |= {"host_floor_mib": floor // MIB, "host_available_mib": None if avail is None else avail // MIB,
