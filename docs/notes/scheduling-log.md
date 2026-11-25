@@ -3465,3 +3465,38 @@ after N" line (#891), against ~100 s for ~100 MB; the lane child's peak RSS
 against 2.8 GiB (a batch of encodings is alive at a time); and the staged run
 5's count under the real tokenizer, which is the proof that the pieces are
 the same.
+
+## 2026-11-25 — a collection's embedding waits for the keeper's preload after a start
+
+**SCENARIO.** A worker start on the node (the deploy of 1249b1d9, 09:40:28Z),
+embed mode, everything running; gutenberg with embedding to do; the keeper's
+set at thirteen models for Ask; LocalAI and its models not restarted (the
+speech model loaded since 06:33Z).
+
+**BEFORE** (München, the worker's own lines). 09:40:31 "embed producer
+started for 'gutenberg'"; 09:40:36 "resident … preloading 13 model(s) for
+Ask"; 09:40:55 the CANARY error for the query run — one context of
+vega-qwen3-embedding-4b discarded, the engine's own count 1 of 492 by 10:21Z —
+and 09:40:56 "GateDeferred: gutenberg: the gate's own load of
+vega-qwen3-embedding-4b needs ~5,042 MiB free on the card and 1,493 MiB are",
+asked again every ~6 s (2,323 / 3,817 / 2,987 / 4,481 / 2,981 / 2,983 MiB
+free). "embedding PAUSED"; "10:20:41Z embedding enabled: run sha256:38c8791b…
+is validated for this space — gated again". FORTY MINUTES of gutenberg's
+embedding, and both of the run's statements set aside, for one start.
+
+**THE CHANGE.** `resident.holds_embedding` / `worker._preload_holds`: within
+ten minutes of the worker's start (or of a resume from a mode that preloads
+nothing), a collection's embedding, its gate and the at-once gate of an
+untested copy wait while the keeper has not made its first beat (at most two
+minutes) or is still loading. One line when the wait begins, one when it
+ends.
+
+**WHAT IT COSTS.** The seconds the preload takes, once a start, taken from
+the backlog's embedding: on this node's start the keeper said its piece ten
+seconds in, and the loads that followed are what the AFTER must time.
+
+**AFTER** — owed, at the next worker start on the node: the two lines
+("embedding waits: the keeper is still loading …" and "embedding goes on …")
+and the seconds between them; no CANARY line and no "GateDeferred … needs
+N MiB free" in the start's first ten minutes; gutenberg's first embed line
+after the wait.
