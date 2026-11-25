@@ -437,7 +437,8 @@ def test_system_page_shows_the_node_models(models_page):
     assert 'id="sys-models"' in html and 'action="/admin/system/models"' in html
     assert _model_inputs(html) == {"chat": "chat-env", "translate": "madlad-env", "reading": "",
                                    "stt_model": "stt-x", "vad_model": "vad-x", "tts_model": "", "tts_voice": "",
-                                   "synthetic_voices": ""}, "the readers' synthetic voices too (2026-11-16)"
+                                   "synthetic_voices": "", "tts_steps": ""}, \
+        "the readers' synthetic voices too (2026-11-16), and the steps of a synthesis (2026-11-25)"
     assert '<option value="madlad-f16">' in html, "the server's models as suggestions"
 
 
@@ -447,14 +448,14 @@ def test_the_models_are_edited_from_the_page(models_page):
     from app import config
     client, path = models_page
     form = {"chat": "chat-b", "translate": "madlad-env", "reading": "la = index-x, GRC = index-y",
-            "stt_model": "stt-x", "vad_model": "", "tts_model": "tts-z", "tts_voice": "v1"}
+            "stt_model": "stt-x", "vad_model": "", "tts_model": "tts-z", "tts_voice": "v1", "tts_steps": "24"}
     r = client.post("/admin/system/models", data=form, headers={"X-Admin-Token": "sekrit"}, follow_redirects=False)
     assert r.status_code == 303 and "models_saved=1" in r.headers["location"]
     text = path.read_text(encoding="utf-8")
     got = tomllib.loads(text)
     assert got["models"] == {"chat": "chat-b"}, "the environment's own value writes no key"
     assert got["translate"]["reading"] == {"la": "index-x", "grc": "index-y"}
-    assert got["speech"] == {"stt_model": "stt-x", "tts_model": "tts-z", "tts_voice": "v1"}
+    assert got["speech"] == {"stt_model": "stt-x", "tts_model": "tts-z", "tts_voice": "v1", "tts_steps": "24"}
     assert text.startswith("# the node\n") and got["ask"] == {"latency_budget_ms": 9000}, "the rest of the file kept"
     # in force at once: every config.CHAT_MODEL reads the file
     assert config.CHAT_MODEL == "chat-b" and config.TRANSLATE_MODEL == "madlad-env"

@@ -2166,6 +2166,7 @@ variable, a file, a log line or a message.
              # operator: "I want them to be editable from the page for quick testing")
 [speech]     stt_model = "whisper-large-v3"   vad_model = "silero-vad"   tts_model = "omnivoice-cpp"
              tts_voice = "localai://voice-profiles/<id>"   synthetic_voices = "it=<voice>, en=<voice>"
+             tts_steps = "24"
              # the Ask page's voice, on CHAT_URL's model server (§7.4 "Speech"; added 2026-11-07): speech to text,
              # voice activity (a clip trimmed to its speech, silence never transcribed), text to speech and its
              # voice. Each optional: a model unset is a voice the page does not offer. `node speech set` writes here.
@@ -2173,6 +2174,9 @@ variable, a file, a log line or a message.
              # are read to an admin (the admin token, a user of role admin); every other reader hears the
              # synthetic voice of the answer's language (`synthetic_voices`, the first named where its language
              # has none), chooses none, and with none set is not read to (`node speech show` says so)
+             # `tts_steps` (added 2026-11-25, operator): the steps of one synthesis, 4 to 64, sent with every
+             # request to the text-to-speech model; fewer are faster and coarser; unset, the model's own (32).
+             # The node's choice, never a reader's: `node speech set --steps N`, or the System page's Models panel
 [certifier]  valid_from = "2026-10-07T00:00:00Z"        # this node as a certifier (09 §9.11): from when its own key certifies, and
              # revoked_at = "…"                          # when it was revoked — the anchor document it serves at
                                                         # /.well-known/louise-certifier.json says so; the collections listed there are

@@ -114,7 +114,7 @@ def test_set_writes_the_table_and_keeps_every_other_line(cfgdir, capsys, no_serv
     assert code == 0
     assert out["changed"] == ["stt_model", "vad_model"]
     assert out["speech"] == {"stt_model": "whisper-large-v3", "vad_model": "silero-vad",
-                             "tts_model": None, "tts_voice": None, "synthetic_voices": None}
+                             "tts_model": None, "tts_voice": None, "synthetic_voices": None, "tts_steps": None}
     assert out["offered"]["input"]["available"] and not out["offered"]["output"]["available"]
     assert out["listed"] == {"silero-vad": True, "whisper-large-v3": True}
     text = (cfgdir / "platform.toml").read_text(encoding="utf-8")

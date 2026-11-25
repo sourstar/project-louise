@@ -63,7 +63,7 @@ import wave
 from contextlib import contextmanager
 from typing import Any, Iterable, Iterator
 
-from app import config, httpc, model_pins
+from app import config, httpc, model_pins, platform_config
 
 #: the pin is released this long after the last sentence: a client sends the
 #: next sentence well within it, and a reader who stopped frees the card
@@ -578,6 +578,14 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
             out["language"] = AUTO
     else:
         out.pop("voice", None)
+    # THE STEPS OF A SYNTHESIS ARE THE NODE'S (`[speech] tts_steps`, operator
+    # 2026-11-25): `params.flow_steps` of the request, over whatever a client
+    # sent — a reader chooses no cost on the card. Unset, nothing is sent and
+    # the model's own default stands. In the kept clip's key with the rest.
+    steps = platform_config.tts_steps(node.tts_steps)
+    if steps is not None:
+        out["params"] = {**(out.get("params") if isinstance(out.get("params"), dict) else {}),
+                         "flow_steps": str(steps)}
     # NUMBERS AND DATES IN THE TEXT'S OWN WORDS (operator, 2026-11-08, A): the
     # one voice reads digits as it learned them, in Italian (app/speech_numbers.py)
     from app import speech_numbers

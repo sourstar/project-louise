@@ -18,6 +18,26 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-25
+
+- **Live: web 8337d36a (23:52Z) and engine b190673dbdbf (00:55Z).** No traceback in the worker's log since
+  the start (80 in fifteen minutes before); the German sentence read in the German profile (Sref 240); the
+  engine's five llama.cpp gates exact with the fingerprints they had. The cold Ask from an EMPTIED card,
+  Quality: first word 48.1 s — languages 13.7 (the first stage's own two loads), fts 12.3 (wikidata, no
+  model), dense 1.4 (every encoder cold at Ask: loaded ahead), rerank 15.6 (no load: the lists that share a
+  reranker go one after the other, 2.45 s a list), 2.1 s in the answer. The loads inside stages that the load ahead was built for are gone;
+  what is left is the first stage's, and work that is no load (ask-card-workflow.md). A warm row is owed.
+- **The engine pass found three defects, fixed in a second candidate before the port serves a voice.** The
+  pool's refusal (0013) is swallowed and the process still dies: 0018, and page mode stays off until its
+  row. A deleted voice could outlive its profile in LocalAI's leases (a process dead mid-request: 0019, a
+  server patch) and in the port's own memory (the last clip kept between requests: 0020). Engine
+  d531d5d804f1 and a patched server, one pause, on the operator's word (models-beyond-the-card.md §10).
+- **Live since 02:10Z: web 9a4cec4f** — the article list too long to be one (#872), Wikisource's origin
+  check by Range (#871, nothing calls it yet). EUR-Lex5.next paused for Legal; its Polish document never got
+  an error, and parses now.
+- **The port on the card:** 2.24 s a sentence with the 11 s clip, 2.70 s with Philippe's original 27.75 s
+  clip; today's backend 3.60 and 8.65 s. The longer clip is nearly free on the port.
+
 ### 2026-11-24
 
 - **The worker held for 21 minutes by one document, and what was built against it.** 15:50–16:11Z: a pool

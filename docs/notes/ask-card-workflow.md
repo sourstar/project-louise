@@ -156,6 +156,42 @@ a cold question's first word at 42.4 s against 14.3 s warm.
 TO MEASURE (München, the protocol of models-beyond-the-card.md §5.3): the rows of the 11-09 table for one cold
 Italian Ask per mode, before and after this, and each load's seconds alone against beside three others.
 
+### Measured on 8337d36a, engine b190673dbdbf (München, 2026-11-25 ~01:37Z)
+
+THE WORST CASE, by construction: the card EMPTIED (25 MiB, nothing loaded), the node paused, one Italian
+question through `/ask/relay`, one run a mode. It is "the cold Ask now", not a pair with 11-09: that row was
+another build, another engine, fewer collections and a running node.
+
+| | first word from Ask | search | languages | catalog | fts (slowest) | dense | rerank | in the answer |
+|---|---|---|---|---|---|---|---|---|
+| Quality, cold, 11-25 | 48.1 s | 44.8 s | 13.7 s | 1.6 s | 12.3 s (wikidata) | 1.4 s | 15.6 s | 2.1 s |
+| Quality 1, 11-09 (for the legs only) | 42.4 s | 26.1 s | 12.3 s | | 5.6 s | 1.9 s | 6.7 s | 15.2 s |
+| Speed, 11-25, the SAME question again | 29.4 s | 27.3 s | 0.006 s | 0.007 s | 3.1 s (wikipedia) | 8.3 s (Normattiva-DAR) | 17.1 s | 1.5 s |
+
+The loads (Quality, ten models): started in three groups as slots freed — the 9B chat, MADLAD, nemotron,
+dar-legal-it (31,693 MiB free): 5.2 / 8.8 / 8.3 / 13.3 s; qwen3-4b, medcpt-query, bge-m3 (16,117 free): 4.8 / 5.4 /
+8.6 s; the two rerankers and the voice (9,865 free): 7.9 / 7.9 / 12.1 s, the last ended 28–32 s after Ask. Alone,
+on the unloaded node, a load is 4.3–6.6 s (models-beyond-the-card.md §5.2). The card after: 26,927 MiB.
+
+WHAT IT SAYS.
+- What was a load inside a stage and is no longer: DENSE 1.4 s with every query encoder cold at Ask (11-09's cold
+  rows: 4–5 cold encoders, 24–32 s of the search); THE ANSWER's first word 2.1 s after the search (11-09: 15.2 s,
+  chat cold 13.4 s). The rerankers were on the card 28 s after Ask; the rerank stage began at 29 s.
+- What a load ahead cannot give: LANGUAGES 13.7 s is the first stage's own two models from an empty card, the chat
+  (it reads the query) and MADLAD (it translates it). Nothing can be loaded ahead of the first stage; it is what
+  keeping them, or parking them, is for.
+- What is no load at all, and is now most of a cold Ask: RERANK 15.6 s — the lists that share a reranker go one
+  after the other (`retrieval._rerank_lists`, 2026-11-10: the reranker answers one sequence at a time, bit-exact),
+  2.45 s a list on this engine; and FTS 12.3 s on wikidata's index after a two-hour pause.
+- Four at once: each load is slower beside others (5–13 s against 4.3–6.6 alone) and the four are still on the
+  card in 13.3 s where one after the other would take about 25 s. `AHEAD_AT_ONCE` stays 4.
+- The Speed row is NOT a cold Speed question: asked second with the same words, its language plan was the cached
+  one (6 ms), so its stages reached the encoders 3 s after Ask, before a load of 5–13 s could end (dense 8.3 s).
+  A first question reads its language with the chat model first, as Quality does.
+
+STILL TO TAKE: a WARM row a mode on this build (a second, different question within the five minutes), so each
+leg's cold cost is cold less warm; and a cold Speed row with a question of its own.
+
 ## Measurement after the build (München)
 
 One Italian Ask: chat/MADLAD/TTS cold loads mid-answer (target 0), time to first word and first sound, wikidata's
