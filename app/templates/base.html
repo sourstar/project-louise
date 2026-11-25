@@ -2,7 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+{# interactive-widget=resizes-content (operator, on a phone, 2026-11-25: the
+   keyboard covered the question he was editing): where the browser knows it
+   (Chrome and Firefox on Android) the on-screen keyboard RESIZES the page
+   instead of lying over it, so the browser's own scroll to the focused box
+   and everything pinned to the bottom see the screen that is left. A browser
+   that does not know it ignores it (the Ask page keeps its box in view by
+   itself, ask.html `keepQuestionInView`). #}
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 <title>{% block title %}{{ site_title() }}{% endblock %}</title>
 <link rel="stylesheet" href="/static/admin.css?v={{ asset_v }}">
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png?v={{ asset_v }}">
