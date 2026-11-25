@@ -325,6 +325,12 @@ louise hold
                                                                        [--type T] [--partitions N]: the vector index type and its IVF partitions (default: VECTOR_INDEX_TYPE, from the row count)
               show <collection>
   check       <collection> [--checks …] [--sample F] [--seed HEX]      run the validation plan; print the report
+              <collection> --build [--checks …]                        the BUILD's checks instead (added 2026-11-25, operator: "a consistency check shall be available
+                                                                       also for whom is willing to create a compliant collection"): how the collection was MADE on this
+                                                                       node, read from its manifest, read-only — `units` (no unit held by two live rows) and `chunkless`
+                                                                       (a document indexed with no chunk states why, as an issue); in no Codex, never attested; each
+                                                                       verdict in plain words with what would supply what is missing; exit 1 when one failed
+                                                                       (app/build_check.py; docs/notes/compliance-check.md lists the checks still to come)
               [--live DIR]                                             `origin-seal` in live mode: the sealed files under DIR re-validated now (03 §3.7)
               [--shards S,…] [--origin DIR] [--against FILE]           --shards: these parts alone, how a received claim is reproduced (03 §3.6);
                                                                        --against: image-equivalence's reference lines (03 §3.4) (both 2026-10-07)

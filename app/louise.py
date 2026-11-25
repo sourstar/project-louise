@@ -6181,6 +6181,27 @@ def run_check(a):
     return name, codex, snapshot, seed, report
 
 
+def _check_build(a) -> int:
+    """`hold check <collection> --build` (07 §7.3; operator, 2026-11-25: "a
+    consistency check shall be available also for whom is willing to create a
+    compliant collection"): the BUILD's checks (app/build_check.py) — how the
+    collection was made on this node, from its manifest, read-only; in no
+    Codex, never attested. `--checks` names some of them. Exit 1 when one
+    failed; an inconclusive one says why and is neither."""
+    from app import build_check, collections as collections_mod
+    name, _ = col.resolve(a.root, a.collection)
+    c = collections_mod.by_name(name)
+    if c is None:
+        raise CodexError(f"{name}: no such collection on this node")
+    try:
+        verdicts = build_check.run(c, [x for x in (a.checks or "").split(",") if x] or None)
+    except ValueError as e:
+        raise CodexError(str(e)) from None
+    _print({"collection": name, "build": [v.shown() for v in verdicts],
+            "failed": [v.check for v in verdicts if v.result == build_check.FAIL]})
+    return 1 if any(v.result == build_check.FAIL for v in verdicts) else 0
+
+
 def cmd_check(a) -> int:
     """`hold check` — run the plan (03 §3.2) and attest what completed.
 
@@ -6189,6 +6210,8 @@ def cmd_check(a) -> int:
     attestation, is reported with its reason, and is retried.
     """
     from app.hold import check as chk
+    if getattr(a, "build", False):
+        return _check_build(a)
     _whole_quota()
     name, codex, snapshot, seed, report = run_check(a)
     written = report.attestations
@@ -8703,6 +8726,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "against the current trusted list and fresh revocation responses")
     p.add_argument("--json", action="store_true",
                    help="09 §9.8's report object")
+    p.add_argument("--build", action="store_true",
+                   help="the BUILD's checks instead of the plan's: how the collection was made on this "
+                        "node (one unit one live row; a document with no chunk states why), from its "
+                        "manifest, read-only, never attested; --checks names some of them")
     p.set_defaults(fn=cmd_check)
 
     user = surfaces.add_parser("user", help="who may search: tokens, roles, expiry (07 §7.4; app/users.py)")

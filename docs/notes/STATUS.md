@@ -37,6 +37,16 @@ measured (published figures disagree).
   route's log line says how many were cut and the first reason. `tests/test_translation_cut.py`. NOT known:
   how many cut translations the node's cache holds from before — it is in the web process's memory only, so a
   restart of the web (every deploy) empties it.
+- **The check a collection's author runs: `louise hold check <collection> --build` (`app/build_check.py`;
+  operator: "a consistency check shall be available also for whom is willing to create a compliant
+  collection").** The BUILD's checks, beside the plan's of 03 §3.2 and apart from them: about how the collection
+  was made on this node, read from its manifest, read-only, in no Codex and never attested. Built: `units` (no
+  unit held by two live rows; EUR-Lex5 held 37,695 and then 405) and `chunkless` (a document indexed with no
+  chunk states why, as an issue; 57 were told apart by hand). Each verdict in plain words with what would
+  supply what is missing. To build: `rescan`, `parse-bound`, and the generic forms of eurlex's word-coverage
+  test and bulk ledger. Design, the choice put to the operator and the list: `compliance-check.md`. NOT RUN on
+  the node's collections yet: the first run there is the reading (Wikipedia's redirects are indexed with no
+  chunk today).
 - **A collection yields to the worker's memory by itself (`app/memory_yield.py`; the lessons, row A4).** The
   rule München's monitor held — pause the heavy collection over 21,500 MiB of the worker cgroup's anonymous
   memory, resume under 18,000 — is the worker's own: over 87.5 % of its limit the collection holding the most of
