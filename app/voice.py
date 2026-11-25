@@ -15,19 +15,6 @@ the Ask page, `louise node speech show` and the System page's GPU panel.
     tts_model = "omnivoice-cpp"      # text to speech: POST /v1/audio/speech
     tts_voice = "localai://voice-profiles/<id>"            # an admin's, when none is chosen
     synthetic_voices = "it=<voice>, en=<voice>"            # everyone else's, by language
-    tts_steps = 16                   # the steps a sentence is decoded in: speed against quality
-
-SPEED AGAINST QUALITY IS THE NODE'S DIAL (operator, 2026-11-24: "controlling
-quality over speed is useful"). `tts_steps` is how many steps the
-text-to-speech model decodes a sentence in — OmniVoice's own is 32, and half
-the steps is about half the time (39.7 s against 81.8 s on a CPU,
-docs/notes/omnivoice-on-our-backend.md §11) for another, rougher audio. The
-platform file is read at every sentence, so `louise node speech set --steps
-16` holds from the next one, no restart; `--steps ""` gives the model its
-own again. Not a reader's choice and not on any page (RULE 2). It reaches
-the model server as `params.flow_steps` (app/speech.py); a server whose
-speech backend does not read that field speaks at its own steps and says
-nothing — `node speech show` says so beside the value.
 
 A RECORDED VOICE IS THE ADMIN'S ONLY (operator, 2026-11-16: "limit the
 cloned voices to the admin account … For the users account allow only
@@ -70,14 +57,7 @@ from app.platform_config import SPEECH_KEYS, SpeechConfig
 
 #: the command line's word for each key (`node speech set --stt …`)
 FLAGS = {"stt_model": "--stt", "vad_model": "--vad", "tts_model": "--tts", "tts_voice": "--voice",
-         "synthetic_voices": "--synthetic", "tts_steps": "--steps"}
-#: the keys of `[speech]` that name no model: nothing to look for on the server
-NOT_MODELS = ("tts_voice", "synthetic_voices", "tts_steps")
-#: said by `show` beside a step count: what Louise cannot see from here
-STEPS_NOTE = ("tts_steps goes with every sentence as the model server's params.flow_steps, from the next "
-              "sentence on. A speech backend that does not read it speaks at its own steps and says "
-              "nothing (LocalAI's omnivoice-cpp); OmniVoice on the llama.cpp backend reads it. "
-              "`louise node speech set --steps \"\"` removes it")
+         "synthetic_voices": "--synthetic"}
 #: `GET /v1/models` of the model server, for `show`: a typo is seen at once
 LIST_TIMEOUT_S = 5.0
 #: what the browser needs before it lets a page open the microphone
@@ -225,15 +205,13 @@ def show() -> dict[str, Any]:
     the server lists each model."""
     s = settings()
     values = {k: getattr(s, k) for k in SPEECH_KEYS}
-    models = sorted({v for k, v in values.items() if v and k not in NOT_MODELS})
+    models = sorted({v for k, v in values.items() if v and k not in ("tts_voice", "synthetic_voices")})
     listed = models_listed(server(), models) if models else {}
     out: dict[str, Any] = {"file": str(platform_config.platform_path()), "server": server(),
                            "speech": values, "offered": offered(), "listed": listed,
                            "synthetic": synthetic(s),
                            "offered_to_readers": offered(admin=False)["output"],
                            "note": MICROPHONE_NOTE}
-    if s.tts_steps:
-        out["steps_note"] = STEPS_NOTE
     if listed is None:
         out["listed_note"] = f"the model server at {server()} did not answer GET /v1/models"
     elif any(not ok for ok in listed.values()):
@@ -243,9 +221,7 @@ def show() -> dict[str, Any]:
 
 
 def _render(values: dict[str, str | None]) -> list[str]:
-    # a step count is written as the number it is, every other value as a string
-    body = [f"{k} = {values[k] if k == 'tts_steps' else json.dumps(values[k], ensure_ascii=False)}\n"
-            for k in SPEECH_KEYS if values.get(k)]
+    body = [f"{k} = {json.dumps(values[k], ensure_ascii=False)}\n" for k in SPEECH_KEYS if values.get(k)]
     if not body:
         return []
     return ["[speech]      # the Ask page's voice, on the node's model server (07 §7.8); "
@@ -313,7 +289,6 @@ def write(path: Path, changes: dict[str, str]) -> dict[str, Any]:
     after = dict(before)
     for k, v in changes.items():
         after[k] = (v or "").strip() or None
-    after["tts_steps"] = platform_config.tts_steps(after["tts_steps"])    # refused here, by name
     changed = [k for k in SPEECH_KEYS if after[k] != before[k]]
     if changed:
         tmp = path.with_name(path.name + ".speech.tmp")

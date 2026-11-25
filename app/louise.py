@@ -3946,12 +3946,12 @@ def cmd_node_speech(a) -> int:
         if a.speech_verb == "set":
             changes = {k: getattr(a, k) for k in SPEECH_KEYS if getattr(a, k) is not None}
             if not changes:
-                print("louise node speech set: nothing to set — give --stt, --vad, --tts, --voice, --synthetic "
-                      "or --steps (an empty value removes one)", file=sys.stderr)
+                print("louise node speech set: nothing to set — give --stt, --vad, --tts, --voice or --synthetic "
+                      "(an empty value removes one)", file=sys.stderr)
                 return 2
             out = voice.write(platform_config.platform_path(), changes)
             shown = voice.show()
-            out.update({k: shown[k] for k in ("server", "offered", "listed", "note", "listed_note", "steps_note")
+            out.update({k: shown[k] for k in ("server", "offered", "listed", "note", "listed_note")
                         if k in shown})
             _print(out)
             return 0
@@ -7808,10 +7808,6 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--synthetic", dest="synthetic_voices", default=None, metavar="LANG=VOICE,…",
                    help="the synthetic voice of each language, which every reader but an admin hears "
                         "(\"it=<voice>, en=<voice>\"); unset, the answer is read aloud to admins only")
-    q.add_argument("--steps", dest="tts_steps", default=None, metavar="N",
-                   help="speed against quality: the steps a sentence is decoded in, 1 to 1024 — fewer is a "
-                        "sooner clip and a rougher audio; it holds from the next sentence, no restart; "
-                        "unset, the model's own (OmniVoice: 32)")
     q.set_defaults(fn=cmd_node_speech)
 
     p = nverbs.add_parser("title", help="the node's title: the label at the top left of every page and a "

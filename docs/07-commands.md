@@ -405,10 +405,8 @@ louise node
                                                                        the model server they run on, what the page offers and why not, whether the server lists each
                                                                        model (`GET /v1/models`) (added 2026-11-07, operator)
   speech set [--stt M] [--vad M] [--tts M] [--voice V]                 the models into `[speech]`, every other line of the file kept; an empty value removes one, and its
-             [--synthetic LANG=VOICE,…] [--steps N]                    voice is no longer offered; nothing given is exit 2, and a file the result would not load is
-                                                                       refused, unchanged (exit 2). `--steps N` is the node's dial between speed and quality: the
-                                                                       steps a sentence is decoded in, 1–1024 (`tts_steps`, §7.8), in force from the next sentence
-                                                                       with no restart; `--steps ""` gives the model its own again (added 2026-11-24, operator)
+                                                                       voice is no longer offered; nothing given is exit 2, and a file the result would not load is
+                                                                       refused, unchanged (exit 2)
   pins                                                                 the models Louise holds pinned in LocalAI now, with their holders, the restores left failing and the pin failures (state/model-pins.json); read-only (added 2026-11-09)
   resident show                                                        the models the worker preloads on the card for Ask (a trial): `[models] keep_ask_resident`
                                                                        and `preload_speech` (§7.8), the node's mode and whether it preloads, the budget (the line,
@@ -1685,13 +1683,6 @@ sentence until 120 s after the end of the last; a request naming no model
 or voice gets `[speech] tts_model` and `tts_voice` (§7.8), and one naming a
 voice profile the model server no longer holds gets `tts_voice` too (the
 reader's voice, *added 2026-11-11*); 400 for a text that is only citations.
-Where `[speech] tts_steps` is set, every sentence goes to the model server
-with `params.flow_steps` — the steps it is decoded in, the node's dial
-between speed and quality (*added 2026-11-24*, operator: "controlling
-quality over speed is useful"); a request's own `params.flow_steps` is kept
-for an admin and dropped for every other reader, and a model that answers
-that it has no steps is asked the same sentence again without them, the
-node's log told once.
 `GET /ask/voices` → `{voices: [{name, voice, language}], default, account}`:
 the model server's recorded voice profiles, oldest first, the one the node
 speaks in, and `{name, voice}` for a reader with an account (§7.4 users);
@@ -2193,7 +2184,6 @@ variable, a file, a log line or a message.
              # operator: "I want them to be editable from the page for quick testing")
 [speech]     stt_model = "whisper-large-v3"   vad_model = "silero-vad"   tts_model = "omnivoice-cpp"
              tts_voice = "localai://voice-profiles/<id>"   synthetic_voices = "it=<voice>, en=<voice>"
-             tts_steps = 16
              # the Ask page's voice, on CHAT_URL's model server (§7.4 "Speech"; added 2026-11-07): speech to text,
              # voice activity (a clip trimmed to its speech, silence never transcribed), text to speech and its
              # voice. Each optional: a model unset is a voice the page does not offer. `node speech set` writes here.
@@ -2201,12 +2191,6 @@ variable, a file, a log line or a message.
              # are read to an admin (the admin token, a user of role admin); every other reader hears the
              # synthetic voice of the answer's language (`synthetic_voices`, the first named where its language
              # has none), chooses none, and with none set is not read to (`node speech show` says so)
-             # SPEED AGAINST QUALITY (added 2026-11-24, operator: "controlling quality over speed is useful"):
-             # `tts_steps`, a whole number 1–1024, is how many steps the text-to-speech model decodes a
-             # sentence in — fewer is a sooner clip and a rougher audio; unset, the model's own (OmniVoice:
-             # 32). Read at every sentence: `node speech set --steps N` holds from the next one. The node's
-             # choice, on no page, never a reader's (§7.4 "Speech"). A speech backend that does not read the
-             # field speaks at its own steps (`node speech show` says so beside the value)
 [certifier]  valid_from = "2026-10-07T00:00:00Z"        # this node as a certifier (09 §9.11): from when its own key certifies, and
              # revoked_at = "…"                          # when it was revoked — the anchor document it serves at
                                                         # /.well-known/louise-certifier.json says so; the collections listed there are

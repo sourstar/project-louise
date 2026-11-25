@@ -41,20 +41,6 @@ own `/v1/audio/speech` after the three things only Louise knows:
   Ask page sends the text alone, and `[speech] tts_model` / `tts_voice`
   (app/voice.py, the one resolution) fill them in. A client that names its
   own (Open WebUI) keeps it.
-- SPEED AGAINST QUALITY IS THE NODE'S DIAL (operator, 2026-11-24:
-  "controlling quality over speed is useful"). `[speech] tts_steps` — the
-  steps the model decodes a sentence in, OmniVoice's own being 32 — goes
-  with every sentence as the model server's `params.flow_steps`
-  (llama.cpp's field; LocalAI hands a request's `params` to the backend).
-  The platform file is read at each sentence, so `louise node speech set
-  --steps N` holds from the next one. A request's own `flow_steps` is kept
-  for an admin, who may be measuring or choosing sentence by sentence, and
-  dropped for every other reader: a guest could otherwise ask the card for
-  1,024 steps a sentence. A model that has no steps says so, and the
-  sentence is asked again without them — a reading is never lost to the
-  dial — with one line in the node's log. A backend that ignores the field
-  (LocalAI's omnivoice-cpp reads `seed` and `ref_text` only) speaks at its
-  own steps, and nothing here can tell: `node speech show` says so.
 
 THE LANGUAGE is told by the commonest words of the languages Louise's
 collections hold — enough to tell the model which language it reads. THE
@@ -457,43 +443,6 @@ def _clip_put(key: str, data: bytes, ctype: str) -> None:
         pass
 
 
-#: the model server's name for the steps a sentence is decoded in: llama.cpp's
-#: field, taken by LocalAI's llama.cpp backend among a request's `params`
-STEPS_PARAM = "flow_steps"
-#: (server, model, steps) already said to be refused: one line a process
-_steps_said: set[tuple[str, str, str]] = set()
-
-
-def with_steps(params: Any, node_steps: str | None, admin: bool) -> tuple[Any, bool]:
-    """A speech request's `params` with the decoding's steps settled, and
-    whether the steps put there are the node's (`[speech] tts_steps`).
-
-    A request's own `flow_steps` stays for an admin and goes for anyone
-    else; where none is left, the node's is written — as a string, which is
-    what the model server's `params` hold. `params` that is no table is not
-    ours to mend: it goes as sent, and the server answers for it."""
-    if params is not None and not isinstance(params, dict):
-        return params, False
-    got = dict(params or {})
-    if not admin:
-        got.pop(STEPS_PARAM, None)
-    if node_steps and STEPS_PARAM not in got:
-        got[STEPS_PARAM] = node_steps
-        return got, True
-    return (got or None), False
-
-
-def _steps_refused(url: str, model: str | None, steps: str) -> None:
-    key = (url, model or "", steps)
-    if key in _steps_said:
-        return
-    _steps_said.add(key)
-    model_pins.node_event(
-        "warn", f"speech: {model or 'the speech model'} at {url} has no steps to set — [speech] tts_steps = "
-                f"{steps} was refused and each sentence is asked again without it, at the model's own. "
-                f"`louise node speech set --steps \"\"` removes the setting")
-
-
 def synthesize(body: dict[str, Any], url: str | None = None, *,
                admin: bool = True) -> tuple[int, bytes, str]:
     """(status, audio or error body, content type) for an OpenAI speech
@@ -580,12 +529,6 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
             out["language"] = AUTO
     else:
         out.pop("voice", None)
-    # THE NODE'S DIAL (module docstring): its steps where the request may not, or does not, name its own
-    params, node_steps = with_steps(out.get("params"), node.tts_steps, admin)
-    if params is None:
-        out.pop("params", None)
-    else:
-        out["params"] = params
     # NUMBERS AND DATES IN THE TEXT'S OWN WORDS (operator, 2026-11-08, A): the
     # one voice reads digits as it learned them, in Italian (app/speech_numbers.py)
     from app import speech_numbers
@@ -601,13 +544,6 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
         return 200, kept[0], kept[1], [("cache", 1.0)] + ([("audio", clip)] if clip is not None else [])
     with _TURNS.turn(reading, n) as waited:
         status, content, ctype, timing = _synthesize_call(url, model, out, last=last)
-        if status != 200 and node_steps and STEPS_PARAM.encode() in (content or b""):
-            # A MODEL WITH NO STEPS TO SET says so by the field's name (llama.cpp: "the model may not
-            # support … flow_steps"): the same sentence without them, and the node's log told once
-            plain = {k: v for k, v in params.items() if k != STEPS_PARAM}
-            again = {k: v for k, v in out.items() if k != "params"} | ({"params": plain} if plain else {})
-            status, content, ctype, timing = _synthesize_call(url, model, again, last=last)
-            _steps_refused(url, model, node.tts_steps)
     if status == 200 and str(ctype).startswith("audio/"):
         _clip_put(key, content, ctype)
     return status, content, ctype, ([("turn", waited)] if reading is not None else []) + timing

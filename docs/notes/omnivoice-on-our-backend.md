@@ -538,27 +538,30 @@ own seconds say whether halving them is worth a hearing. If the operator
 says nothing: 32 steps.
 
 **The operator, the same day: "I already know the difference, implement it,
-controlling quality over speed is useful."** Built in Louise as the node's
-dial, not a reader's choice and on no page (RULE 2):
+controlling quality over speed is useful."** It is the node's dial, and the
+ONE implementation is main's (4a3201ee, München's #875; operator,
+2026-11-25: "add the steps to the admin settings"):
 
-- `[speech] tts_steps` in platform.toml (07 §7.8), a whole number 1–1024,
-  written by `louise node speech set --steps N`; `--steps ""` gives the
-  model its own steps again. The file is read at every sentence, so the
-  dial holds from the next one — no restart, mid-answer included;
-- the relay (`app/speech.py`) sends it with every sentence as
-  `params.flow_steps`. A request's own value is kept for an admin and
-  dropped for every other reader (a guest could otherwise ask the card for
-  1,024 steps a sentence); a kept clip is keyed on its steps;
-- a model that answers that it has no steps is asked the same sentence
-  again without them, with one line in the node's log: a reading is never
-  lost to the dial.
+- `[speech] tts_steps` in platform.toml (07 §7.8), a whole number 4–64,
+  written by `louise node speech set --steps N` or the Models panel's
+  field; unset, the model's own (32);
+- the relay (`app/speech.py`) sends it with every synthesis as
+  `params.flow_steps`, OVER whatever a client sent — a reader chooses no
+  cost on the card; a kept clip is keyed on its steps.
 
-What it needs to take effect on the node: this commit deployed, AND the
-speech model on the port with the second staged patch (§10) — today's
-`omnivoice-cpp` backend reads `seed` and `ref_text` among a request's
-parameters and nothing else, so it speaks at 32 steps whatever is set, and
-says nothing; `louise node speech show` says so beside the value. Unset,
-nothing changes for anyone. Not built: a rule that picks the steps by
+This branch built the dial a day earlier with other semantics (2edda1e: an
+admin's own `flow_steps` kept over the node's, a model that refuses steps
+asked again without them, 1–1024). WITHDRAWN 2026-11-25 for main's, at the
+architecture session's word that the two do not merge: no model on the node
+refuses steps (München's rows: the port at 16/20/24/28/32, `omnivoice-cpp`
+at 16), and an admin who wants another number sets the node's — the rows of
+20/24/28/32 were measured that way.
+
+What it needs to take effect on the node: the speech model on the port with
+the second staged patch (§10) — the old `omnivoice-cpp` backend reads `seed`
+and `ref_text` among a request's parameters and nothing else, so it speaks
+at 32 steps whatever is set. Unset, nothing changes for anyone.
+Not built: a rule that picks the steps by
 itself (the first sentence of an answer fast, the rest whole) — the dial
 first, the card's seconds and the operator's ear before a rule.
 

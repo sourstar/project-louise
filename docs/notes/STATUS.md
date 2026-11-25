@@ -111,8 +111,8 @@ measured (published figures disagree).
   without the decoded slots (0.9 → 0.4 s); taken out for want of a measured gain: states for target rows only. A
   line per request says where its time went — the card's proportions will not be the CPU's. **The node's dial
   between speed and quality (operator: "controlling quality over speed is useful"):** `[speech] tts_steps`,
-  written by `louise node speech set --steps N` and in force from the next sentence with no restart; sent as
-  `params.flow_steps`, a request's own an admin's only, a model without steps asked again without them. Inert on
+  written by `louise node speech set --steps N` or the Models panel's field, 4–64, sent as `params.flow_steps`
+  over any client's — main's implementation (#875); this branch's own (2edda1e) was withdrawn for it 11-25. Inert on
   today's `omnivoice-cpp` backend, which does not read the field: it needs the port and the second staged patch,
   which now also passes a request's seed and guidance (§10, §11). Left: the card — München's, in a window, with
   the operator's ear on the two voices (§10 of the note). **First rows on the B70 (München, 11-24, §12): the test
