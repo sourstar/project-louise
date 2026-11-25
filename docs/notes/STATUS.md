@@ -20,6 +20,18 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **THE TOKENIZER THREADS ON THE NODE: ABOUT 5 %, NOT 1.7x — so far (München, three large units at
+  `9811ca92`).** 241 s for 250,927,844 bytes, 0.960 µs a byte, against 1.012 before on the like-for-like
+  figure (fifteen units one after the other; the 1.715 quoted from the nine-unit commit line held six more
+  units parsed ahead). The same pieces: run 5, 23 passed under the real tokenizer. Peak of a child +11 %
+  (3,159,196 kB). Three units cannot tell 5 % from nothing; what they do say is that the chunker's
+  tokenizing is not most of a large unit's 70–86 s on the node, or that the lane child's threads are not at
+  work — and nothing let München tell which child was the lane's. The pool's line now names a large part's
+  PID and its PEAK (the kernel's high-water mark, read every 10 s), in flight and when it leaves.
+  Also in this change, from the Legal session: a PDF manifestation's items are read by their CONTENT
+  (32007M4820: three TIFF page images declared application/pdf; PDFium was given a TIFF) — a non-PDF is
+  held and said (`item-not-its-form`); a PDF is known by the header a reader looks for, anywhere in its
+  first 1024 bytes.
 - **LIVE since 2026-11-25 12:11:43Z: main `9811ca92`** (deploy `d478805`: #888–#894). München's rows:
   the staged run 5 — the pinned-tokenizer legal spans, the proof that the batched encode cuts the same
   pieces under the REAL tokenizer — "23 passed" (the other lists 3260 passed / 2 skipped; 11; 92; 478 / 9
