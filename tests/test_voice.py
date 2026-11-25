@@ -499,7 +499,10 @@ def test_the_microphone_turns_red_at_its_first_sound_not_when_it_is_opened():
     js = (Path(web.__file__).parent / "static" / "voice.js").read_text(encoding="utf-8")
     start = js[js.index("async function start()"):js.index("function wake(r, how)")]
     assert "micState('rec'" not in start, "opening the microphone no longer shows it recording"
-    assert "micState('wake', 'the microphone is waking up — speak when it turns red')" in start
+    assert ("micState('wake', 'the microphone is connecting (a car or a headset takes a few seconds) — "
+            "speak when it turns red')") in start
+    assert "const WAKE_MAX_MS = SILENT_MS;" in js, \
+        "his car takes about five seconds: the wait ends at the first sound or with the silence rule, not at three"
     assert "setTimeout(() => wake(r, 'timeout'), WAKE_MAX_MS)" in start, "never waited for without a bound"
     hear = js[js.index("function hear(r, buf, rate)"):js.index("// THE SECOND WAY TO RECORD")]
     assert "if (top > 0) { r.live = true; wake(r, 'sound'); } else r.zero_ms += ms;" in hear, \

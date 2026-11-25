@@ -26,9 +26,11 @@ measured (published figures disagree).
   browser handed it over. On Bluetooth the phone switches the car from its media profile to its call profile
   only then, and for a second or three the track gives nothing or samples that are all zero: he spoke into
   the switch (the Bug session's reading of the code; NOT measured — no clip of his car has reached the node's
-  log). NOW: opened, the page says "the microphone is waking up — speak when it turns red" (dashed, not red,
-  still tappable to stop); it turns red at the first window holding a sample that is not zero, or after 3 s
-  of zeros (`WAKE_MAX_MS` — never waited for without a bound; the silence rules speak then). Every
+  log; CONFIRMED BY HIM the same evening: waiting about 5 s after the tap "does the trick"). NOW: opened, the
+  page says "the microphone is connecting (a car or a headset takes a few seconds) — speak when it turns
+  red" (dashed, not red, still tappable to stop); it turns red at the first window holding a sample that is
+  not zero. The wait has the recording's own bounds and no shorter one — his car needs five seconds: no
+  window at all for 3 s and the second way to record is tried, nothing but zeros for 8 s and he is told. Every
   recording's report carries what it cost: `first_ms` (the first window), `wake_ms` (the first sound),
   `zero_ms` (the zeros before it), `woke` (sound | timeout) — the line "voice: microphone … " under `models`.
   WHAT IT DOES NOT DO: recover what is said before the route is up (nothing can), nor keep the microphone

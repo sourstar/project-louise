@@ -62,11 +62,15 @@
   // "recording" the instant it was opened, and the reader spoke into the
   // switch. So: the microphone turns red at the first window holding a
   // sample that is not zero (a microphone that is on is never exactly zero),
-  // and until then says it is waking up; WAKE_MAX_MS of nothing but zeros and
-  // it is shown anyway — the page cannot wait for ever, and the silence
-  // rules above speak then. What it cost is measured each time and goes to
-  // the node with the recording's report (`wake_ms`, `first_ms`, `zero_ms`).
-  const WAKE_MAX_MS = 3000;
+  // and until then says it is connecting. HIS CAR TAKES ABOUT FIVE SECONDS
+  // (the same evening: waiting 5 s after the tap "does the trick"), so the
+  // wait is not cut short at three: it ends at the first sound, or with the
+  // recording itself — no window at all for NO_SOUND_MS and the second way
+  // to record is tried, nothing but zeros for SILENT_MS and the reader is
+  // told. WAKE_MAX_MS is that same bound, so nothing is shown recording
+  // before it gives sound. What the wait cost is measured each time and goes
+  // to the node with the recording's report (`wake_ms`, `first_ms`, `zero_ms`).
+  const WAKE_MAX_MS = SILENT_MS;
   // a piece this short is read with the next (an "art." the segmenter cut off)
   const MIN_SENTENCE = 24;
   // A PIECE ENDING IN AN INITIAL OR A TITLE ends no sentence (operator,
@@ -338,7 +342,7 @@
     // NOT YET SHOWN RECORDING: at its first sound (`hear`), or after
     // WAKE_MAX_MS of none
     if (!r.shown) {
-      micState('wake', 'the microphone is waking up — speak when it turns red');
+      micState('wake', 'the microphone is connecting (a car or a headset takes a few seconds) — speak when it turns red');
       r.waking = setTimeout(() => wake(r, 'timeout'), WAKE_MAX_MS);
     }
   }
