@@ -436,6 +436,28 @@ def _add_process(rec: dict[str, Any], e: dict[str, Any]) -> None:
         procs.append(e)
 
 
+#: how long `run` reads a new child's command line again while it is empty
+EXEC_SETTLE_S = 2.0
+
+
+def _entry_after_exec(pid: int, note: str) -> dict[str, Any]:
+    """`dev_processes.entry` of a child just started, read once its COMMAND
+    LINE is there. Popen returns when the child's exec has closed the error
+    pipe — a moment before the kernel has set the new image's arguments, and
+    /proc/<pid>/cmdline then reads EMPTY (2026-11-25: 1 start in about 20,
+    found as a test that failed once in a while). An entry recorded so reads
+    `reused` at every later look (`dev_processes.state` compares the command
+    line), and a restore would never stop that step: the one thing the
+    watchdog is for. Read again, a few milliseconds apart, until it is there;
+    past EXEC_SETTLE_S the entry is recorded as read."""
+    until = time.monotonic() + EXEC_SETTLE_S
+    while True:
+        e = dev_processes.entry(pid, note=note, by="run")
+        if e["cmdline"] or time.monotonic() >= until:
+            return e
+        time.sleep(0.005)
+
+
 def run(argv: Sequence[str], *, note: str = "") -> int:
     """`node checkpoint run -- <command…>`: the command started as a child
     in its own session and recorded in the open checkpoint (pid, command
@@ -474,7 +496,7 @@ def run(argv: Sequence[str], *, note: str = "") -> int:
                 raise Refused(f"{argv[0]}: cannot be started: {ex}") from None
             p = child[0]
             try:
-                e = dev_processes.entry(p.pid, note=note, by="run")
+                e = _entry_after_exec(p.pid, note)
             except dev_processes.NotAStep:
                 # ended before it was read: recorded from what was run, and gone
                 e = {"pid": p.pid, "start": None, "cmdline": argv, "pgid": p.pid,
