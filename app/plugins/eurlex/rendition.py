@@ -820,4 +820,6 @@ def parse_pdf(files: dict[str, bytes], names: list[str], *, lang: str, root: str
     # words, as the legacy HTML's.
     read = _read(lines, recitals=False, footnotes=False)
     title = note.expression_title or ""
-    return _act(root, names[0], lang, title, note, read, {"pdf": info, "form": "pdf"}, {}), blank
+    # no PDF among the items (every one an image the origin declared a PDF:
+    # source.py states them, `item-not-its-form`): an act with no text, as a scan's
+    return _act(root, names[0] if names else "", lang, title, note, read, {"pdf": info, "form": "pdf"}, {}), blank

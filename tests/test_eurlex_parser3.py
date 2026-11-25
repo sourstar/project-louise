@@ -245,3 +245,36 @@ def test_a_unit_on_disk_as_recent_as_the_listing_keeps_its_bytes(tmp_path):
     assert cellar._current_unit(dest, held + 1, None) is None, "the origin changed since: fetched again"
     (dest / "31988D0540it.html").write_bytes(b"short")
     assert cellar._current_unit(dest, held, None) is None, "an item of another size: fetched again"
+
+
+def test_a_pdf_manifestation_s_image_is_held_and_never_read_as_a_pdf(renditions, monkeypatch):
+    """2026-11-25, 32007M4820 en: its pdf manifestation lists the decision's
+    PDF and three TIFF page images, all four declared application/pdf by
+    the origin. PDFium was given a TIFF and the unit refused (PdfiumError:
+    Data format error). An item that is not a PDF is held, said, not read."""
+    unit = renditions / src.unit_rel("it", "32004D0411")
+    (unit / "MTF_IT0001.tif").write_bytes(b"II*\x00" + b"\x00" * 600)
+    real = src.notice_mod.parse
+
+    def with_a_tiff(data):
+        note = real(data)
+        first = note.items["pdf"][0]
+        note.items["pdf"] = [*note.items["pdf"], cellar_item := type(first)(
+            uri=first.uri + "_tif", name="MTF_IT0001.tif", size=None, order=None)]
+        assert cellar_item.name == "MTF_IT0001.tif"
+        return note
+    monkeypatch.setattr(src.notice_mod, "parse", with_a_tiff)
+    doc = _doc(renditions, "32004D0411")
+    assert len(doc.sections) == 9, "the PDF's text, as without the image"
+    said = [i for i in doc.issues if i.code == "item-not-its-form"]
+    assert said and "MTF_IT0001.tif is a TIFF image, listed as pdf" in said[0].detail
+    assert "item-not-its-form" in src.ISSUES
+
+
+def test_a_pdf_manifestation_holding_only_images_is_a_record_without_text(renditions, monkeypatch):
+    unit = renditions / src.unit_rel("it", "32004D0411")
+    pdf = unit / "l_15120040430it00500053.pdf"
+    pdf.write_bytes(b"II*\x00" + b"\x00" * 600)                       # the listed PDF is an image
+    doc = _doc(renditions, "32004D0411")
+    assert doc.sections == [] and doc.extra["form"] == "pdf"
+    assert any(i.code == "item-not-its-form" for i in doc.issues)
