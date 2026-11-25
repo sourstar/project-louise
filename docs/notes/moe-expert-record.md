@@ -277,6 +277,41 @@ the chat model — not before.** Then the 35B's file gets
 `LLAMA_MOE_RECORD_FILL` line. München's, when the architecture session says
 the load ahead is live.
 
+**DECIDED AGAIN (the operator, 2026-11-25, 21:27Z, relayed by München): "Which experts of the 35B stay on the
+card: switch it on by default".** Done as the model's own setting, no engine
+change and no gate (a chat model is in no run): `LLAMA_MOE_RECORD_DIR:
+/data/louise-cache/moe-record` in the env of every mixture-of-experts
+model's file — the staged 35B here, the node's file München's — and no
+`LLAMA_MOE_RECORD_FILL` line. A test holds every such staged file to it.
+
+**THE LINE ALONE CHANGES NOTHING for the 35B as it runs.** The node's 35B is
+WHOLE on the card (about 20 GB, 98.8 / 97.2 tok/s in query mode with 45 GiB
+of models on the 32 GiB card): there is no cache of experts, so nothing is
+recorded and nothing is filled. What chooses experts exists only in the
+other arm — `cpu_moe:true`, `moe_cache_mib:8192`: experts in host memory,
+the most-used on the card — and that arm measured 57–70 tok/s on 11.3 GB
+(backend-qualification-2026-11-21.md §3). Moving the 35B there is a choice
+of its own, put to the operator and NOT made here:
+
+| | pros | cons |
+|---|---|---|
+| the 35B whole on the card, the record's line in place (in force) | 98.8 tok/s; nothing moves | when the card is over its line, what is paged is the driver's choice — it paged the idle models, not the busy 35B, on the day it was measured; a first answer after the 35B itself was pushed out is not measured |
+| experts in host memory, an 8 GiB cache, the record on | the engine decides what is on the card: the hottest experts by recent use, 8 GiB placed in 0.17 s before the first token; about 9 GB of card back; experts are host memory, never the driver's to page | 57–70 tok/s instead of 98.8; about 12 GB more host memory held, and embed mode's floor is already short; a file per model and engine build |
+| decide after row E | both arms in query mode over the line, and after a spell of other models | one more row in a pass |
+
+If he says nothing: the first row. **Row E** (München, on copies, no gate):
+arm W the file as it is, arm C with the cache options and a record built
+from three long prompts (§7); card MiB at rest, p128 and p2048 tok/s and
+time to first token, then — after the other large models were loaded and
+used until the copy was pushed out — the first and the second answer of
+each arm. That last pair is what nobody has.
+
+**With parking** (parking-step-2.md): a parked model's context is gone, and
+with it its cache; in the cache arm a return is the trunk copied back and a
+context whose cache is filled from the record, hot experts first. But
+parking is built for models on context on demand; a chat model keeps its
+context between questions and does not park as configured.
+
 What would change the picture: a model whose cache turns over harder, or a
 link where an upload is dear. The replay tool answers the first from traces;
 the fill's own log line answers the second.

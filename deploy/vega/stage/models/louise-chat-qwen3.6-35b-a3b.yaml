@@ -10,6 +10,14 @@
 # presence 1.5; Ask sends its own temperature per request).
 # FIT: ~20 GB loaded; checked beside the embedder and the reranker before the
 # pilot.
+# THE EXPERTS' RECORD IS ON (operator, 2026-11-25: "Which experts of the 35B stay on the card:
+# switch it on by default"): `LLAMA_MOE_RECORD_DIR` (staged 0017, docs/notes/moe-expert-record.md).
+# It ACTS ONLY WHERE THE MODEL RUNS WITH A CACHE OF EXPERTS (`cpu_moe:true` and `moe_cache_mib:N`
+# in `options`: experts in host memory, the most-used on the card) - then each context's cache
+# starts from the experts recently used. As this file loads it - WHOLE on the card, 98.8 tok/s
+# on the node in query mode - there is no cache and the line is inert: with the cache the card
+# holds 11.3 GB instead of ~20 and the decode measured 57-70 tok/s, and that move is the
+# operator's, not made here. No `LLAMA_MOE_RECORD_FILL` line: the whole cache.
 {
   "name": "louise-chat-qwen3.6-35b-a3b",
   "backend": "vega-louise-llama-cpp",
@@ -17,6 +25,7 @@
   "env": {
     "GGML_SYCL_ENABLE_DNN": "0",
     "GGML_SYCL_FA_ONEDNN": "0",
+    "LLAMA_MOE_RECORD_DIR": "/data/louise-cache/moe-record",
     "NEO_CACHE_DIR": "/data/louise-cache/neo-cache"
   },
   "flash_attention": "on",

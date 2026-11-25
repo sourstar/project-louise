@@ -144,3 +144,26 @@ def test_the_note_says_what_ran_and_what_the_node_measures():
         assert said in card, said
     assert "staged/" + PATCH.name in (STAGED / "engine-next.series").read_text(encoding="utf-8")
     assert PATCH.name not in (PATCHES / "series").read_text(encoding="utf-8")
+
+
+def test_the_record_is_on_by_default_for_every_mixture_of_experts_model_and_says_what_it_does_not_do():
+    """Operator, 2026-11-25: "Which experts of the 35B stay on the card: switch it on by default". The switch
+    is one env line of the model's file. It acts only where the model runs with a cache of experts; a file
+    that loads the model whole on the card must say so, and must not be moved to the cache unasked: that arm
+    measured 57-70 tok/s against 98.8."""
+    root = Path(__file__).resolve().parents[1]
+    files = [f for d in sorted((root / "deploy").glob("*/models")) + [root / "deploy" / "vega" / "stage" / "models"]
+             for f in sorted(d.glob("*.yaml"))]
+    moe = [f for f in files if re.search(r"-A\d+B\b|-a\d+b\b", f.read_text(encoding="utf-8"))]
+    assert [f.name for f in moe] == ["louise-chat-qwen3.6-35b-a3b.yaml"], "a new MoE model: give it the line and add it here"
+    for f in moe:
+        text = f.read_text(encoding="utf-8")
+        assert '"LLAMA_MOE_RECORD_DIR": "/data/louise-cache/moe-record"' in text, f.name
+        assert '"LLAMA_MOE_RECORD_FILL"' not in text, "the whole cache, as decided"
+        if "cpu_moe:true" not in text:
+            assert "there is no cache and the line is inert" in text, f.name
+            assert '"gpu_layers": 999' in text and "moe_cache_mib" not in text.split("{", 1)[1], "still whole on the card"
+    note = NOTE[NOTE.index("**DECIDED AGAIN (the operator, 2026-11-25, 21:27Z"):]
+    for said in ('"Which experts of the 35B stay on the\ncard: switch it on by default"', "THE LINE ALONE CHANGES NOTHING",
+                 "| | pros | cons |", "57–70 tok/s", "98.8", "If he says nothing", "row E"):
+        assert said in note, said
