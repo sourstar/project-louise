@@ -240,6 +240,39 @@ def test_a_collection_with_no_choice_made_is_never_written_by_a_switch(tmp_path,
     assert {n: _events(c) for n, c in cons.items()} == before
 
 
+def test_sharing_turned_on_under_the_p2p_choice_is_followed_within_a_round(tmp_path, platform, monkeypatch):
+    from dataclasses import replace
+    from app import discovery
+    platform('[modes]\nembed_embedding = "p2p"\n')
+    node_mode.switch("embed", by="test")
+    before = _collection(tmp_path, embed_mode="all", share=False)
+    con = db.connect(before)
+    discovery.sync_collection(con, before)
+    worker._apply_tier2_embed_mode(con, before, "restart")
+    assert _mode(con) == "all", "not shared: all local"
+    after = replace(before, share=True)
+    monkeypatch.setattr(collections_mod, "load_all", lambda: [after])
+    monkeypatch.setattr(worker, "_discover", lambda *a, **k: None)
+    worker._sync_collections([before], {before.name: con}, {}, pipeline=False)
+    assert _mode(con) == "p2p", "shared now: it follows the node's choice, no restart and no switch needed"
+
+
+def test_sharing_turned_with_no_choice_in_force_resets_no_override(tmp_path, platform, monkeypatch):
+    from dataclasses import replace
+    from app import discovery
+    before = _collection(tmp_path, embed_mode="all", share=False)
+    con = db.connect(before)
+    discovery.sync_collection(con, before)
+    worker._apply_tier2_embed_mode(con, before, "restart")
+    scope = db.get_scope(con)
+    scope["embed_mode"] = "off"                      # the Library's runtime override
+    db.set_scope(con, scope)
+    monkeypatch.setattr(collections_mod, "load_all", lambda: [replace(before, share=True)])
+    monkeypatch.setattr(worker, "_discover", lambda *a, **k: None)
+    worker._sync_collections([before], {before.name: con}, {}, pipeline=False)
+    assert _mode(con) == "off", "the share box is not an embed-mode edit: the override stands as before"
+
+
 # ---------------- what is shown ----------------
 
 def test_node_mode_says_the_choice_in_force(platform):

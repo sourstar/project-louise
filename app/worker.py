@@ -6190,7 +6190,13 @@ def _sync_collections(all_collections, cons, last_discover, pipeline: bool = Fal
         prev = previous_by_name.get(kept.name)
         if prev is None or kept.name not in cons or kept.name in replaced:
             continue
-        if prev.embed_mode_default != kept.embed_mode_default:
+        # ...or its `share` turned, where that changes what embed mode's
+        # embedding choice makes of it (p2p needs the collection shared:
+        # `collections.desired_embed_mode`) — asked only when `share` moved
+        shared_moved = getattr(prev, "share", False) != getattr(kept, "share", False)
+        if prev.embed_mode_default != kept.embed_mode_default or (
+                shared_moved and collections_mod.desired_embed_mode(prev)[0]
+                != collections_mod.desired_embed_mode(kept)[0]):
             _apply_tier2_embed_mode(cons[kept.name], kept, "TOML edit")
             # switched to off: its encoders leave the preload set, still
             # loaded (nothing is unloaded for being idle, 2026-11-08)
