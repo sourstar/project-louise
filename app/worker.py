@@ -6396,26 +6396,33 @@ def _apply_node_mode(node_con, *, manager=None, start=None) -> str:
     transfer manager (from platform.toml's `[modes]`, re-read when the file
     changed, so the page's edit needs no restart), ONE LINE when the mode or
     its budget changes and at the first read, and — at a SWITCH, never at
-    the first read — the chat model the node no longer uses unloaded and the
-    one it does loaded, behind (`_mode_models`): a round never waits for a
-    model. Returns the mode."""
+    a first read that finds the mode it last acted on — the chat model the
+    node no longer uses unloaded and the one it does loaded, behind
+    (`_mode_models`): a round never waits for a model. Returns the mode."""
     from . import node_mode, platform_config
-    mode = node_mode.current(node_con)
-    pc = platform_config.seen()
-    down, up = pc.modes.budget(mode)
-    (manager or get_manager()).set_mode_budget(down, up)
-    in_force = node_mode.budget(mode, pc)
+    mode = node_mode.apply_budget(manager or get_manager(), node_con)
+    in_force = node_mode.budget(mode, platform_config.seen())
     before, budget_before = _node_mode_seen
     if before == mode and budget_before == in_force:
         return mode
     _node_mode_seen[:] = [mode, in_force]
-    said = "read" if before is None else ("budget changed" if before == mode else f"{before} -> {mode}")
+    if before is None:
+        # THE FIRST READ OF THIS PROCESS: a switch made while the worker was
+        # down (a cron job's, during a deploy) is still a switch — the store
+        # remembers the mode whose chat model was last made the node's
+        before = node_mode.applied(node_con)
+        if before is None:
+            node_mode.set_applied(node_con, mode)
+        said = "read" if before in (None, mode) else f"{before} -> {mode}, switched while the worker was down"
+    else:
+        said = "budget changed" if before == mode else f"{before} -> {mode}"
     _node_line("control")(
         f"node in {mode} mode ({said}): chat model {config.chat_model_for(mode)}; network budget "
         f"down {_rate_said(in_force['down'])}{'' if in_force['down_own'] else ' ([budget])'}, "
         f"up {_rate_said(in_force['up'])}{'' if in_force['up_own'] else ' ([budget])'}")
     if before is not None and before != mode:
         node_mode.forget()          # this process's own readers follow at once
+        node_mode.set_applied(node_con, mode)
         (start or _start_mode_models)(before, mode)
     return mode
 

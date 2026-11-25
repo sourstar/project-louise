@@ -205,6 +205,33 @@ def budget(mode: str, platform: platform_config.PlatformConfig | None = None) ->
             "down_own": down is not None, "up_own": up is not None}
 
 
+def apply_budget(manager, con: sqlite3.Connection | None = None) -> str:
+    """The budget of the mode the node is in, set on a transfer manager
+    (`set_mode_budget`): the worker's each round, and every other process's
+    that moves bytes — the web, an operator pass — through
+    `transfer.manager.get_manager`. Returns the mode."""
+    mode = current(con)
+    down, up = platform_config.seen().modes.budget(mode)
+    manager.set_mode_budget(down, up)
+    return mode
+
+
+#: the mode whose chat model the worker last made the node's (`applied`)
+APPLIED_KEY = "node_mode_applied"
+
+
+def applied(con: sqlite3.Connection) -> str | None:
+    """The mode the worker last acted on, None before it ever did: kept in
+    the store, so a switch made while the worker was down — a cron job's,
+    during a deploy — still changes the chat model when it comes back."""
+    mode = db.get_control(con, APPLIED_KEY)
+    return mode if mode in MODES else None
+
+
+def set_applied(con: sqlite3.Connection, mode: str) -> None:
+    db.set_control(con, APPLIED_KEY, mode)
+
+
 def shown() -> dict:
     """What the node says of its mode, for `GET /api/mode`, `louise node
     mode` and the status answer: the mode, the run mode, the chat model in

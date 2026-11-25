@@ -266,6 +266,43 @@ def test_the_round_applies_the_modes_budget_and_follows_the_file_without_a_resta
         assert started == [("embed", "chat")], "a budget change is not a switch"
 
 
+def test_a_switch_made_while_the_worker_was_down_still_changes_the_model_when_it_is_back(platform, capsys):
+    # a cron job's call during a deploy: the worker that comes back reads chat mode for the first
+    # time in its life, and the store says the last chat model made the node's was embed mode's
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    m = TransferManager(platform=platform_config.load(), clock=FakeClock())
+    started: list = []
+    with node_state.connect() as c:
+        worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a))     # embed, acted on
+        assert node_mode.applied(c) == "embed" and started == []
+        node_mode.switch("chat", by="cron")
+        worker._node_mode_seen[:] = [None, None]                                       # a new worker process
+        capsys.readouterr()
+        worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a))
+        assert started == [("embed", "chat")] and node_mode.applied(c) == "chat"
+        assert "embed -> chat, switched while the worker was down" in _lines(capsys)[0]
+        worker._node_mode_seen[:] = [None, None]                                       # and one more restart
+        worker._apply_node_mode(c, manager=m, start=lambda *a: started.append(a))
+        assert started == [("embed", "chat")], "a restart in the mode already acted on changes no model"
+        assert "(read)" in _lines(capsys)[0]
+
+
+def test_every_process_that_moves_bytes_follows_the_modes_budget(platform, monkeypatch):
+    # the web and an operator pass have a manager of their own: get_manager() reads the mode's budget
+    from app.transfer import manager as tm
+    platform('[budget]\ndown_max = "10MB"\n[modes]\nembed_down_max = "8MB"\nchat_down_max = "2MB"\n')
+    tm.set_manager(None)
+    try:
+        assert tm.get_manager().bucket(Direction.DOWN).core.rate == pytest.approx(8 * MB)
+        node_mode.switch("chat", by="test")
+        assert tm.get_manager().bucket(Direction.DOWN).core.rate == pytest.approx(8 * MB), \
+            "re-read at most every MODE_FOLLOW_S: not a store read per transfer"
+        monkeypatch.setattr(tm, "_mode_followed", -1e9)                # MODE_FOLLOW_S later
+        assert tm.get_manager().bucket(Direction.DOWN).core.rate == pytest.approx(2 * MB)
+    finally:
+        tm.set_manager(None)
+
+
 class _Runner:
     """What a switch asks of the model server: the unload and the load."""
 

@@ -22,6 +22,7 @@ by taking the minimum, alongside the global `[transfer] per_endpoint`.
 from __future__ import annotations
 
 import threading
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -441,6 +442,30 @@ _manager: TransferManager | None = None
 _manager_lock = threading.Lock()
 
 
+#: how often a process re-reads the budget of the node's mode of use
+MODE_FOLLOW_S = 5.0
+_mode_followed = -1e9
+
+
+def _follow_mode(manager: TransferManager) -> None:
+    """The network budget of the node's MODE OF USE (embed or chat,
+    app/node_mode.py), re-read at most every MODE_FOLLOW_S: every process
+    that moves bytes draws from the mode's budget — the web and an operator
+    pass in its own container as well as the worker, whose round applies it
+    itself. Never raises: a store or a file that cannot be read leaves the
+    budget as it stands."""
+    global _mode_followed
+    now = time.monotonic()
+    if now - _mode_followed < MODE_FOLLOW_S:
+        return
+    _mode_followed = now
+    try:
+        from .. import node_mode
+        node_mode.apply_budget(manager)
+    except Exception:   # noqa: BLE001 — bytes still move under the budget in force
+        pass
+
+
 def get_manager() -> TransferManager:
     """Lazily constructed, mirroring refs.get_store()'s single-call-site
     pattern so config is read once per process rather than per transport."""
@@ -449,11 +474,13 @@ def get_manager() -> TransferManager:
         with _manager_lock:
             if _manager is None:
                 _manager = TransferManager()
+    _follow_mode(_manager)
     return _manager
 
 
 def set_manager(manager: TransferManager | None) -> None:
     """Test seam: inject a manager with a fake clock / synthetic config."""
-    global _manager
+    global _manager, _mode_followed
+    _mode_followed = -1e9             # the next get_manager() reads the mode's budget afresh
     with _manager_lock:
         _manager = manager
