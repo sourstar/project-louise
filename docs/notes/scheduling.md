@@ -654,6 +654,25 @@ SLOWEST MEMBERS, NOT BY ITS COUNT — a selection that can gather several
 units of minutes each must cap them, or one commit holds a collection for as
 long as all of them take.
 
+**27. A wait that asked for more than it needed.** 2026-11-25, the same
+collection, the same afternoon as 23's fix. Pitfall 23 made the stages' wait
+for the slice scope SAY where the pass was and ASK for the scan that runs it.
+Then a release (`dev rederive --release`) reset the pass to row 0 of
+1,025,283: the wait asked, as built, for a scan — and 627,868 released rows
+stood eighteen minutes (13:30:21Z the release's end, 13:48:40Z "slice scope:
+1025283 held") behind a corpus walk of 932,896 units that had nothing to
+find. The pass itself took the last fourteen seconds. The scan was the
+pass's only producer by history (new rows come from scans), not by need: the
+pass reads the manifest.
+→ `worker.PASS_ONLY`: a wait with no scan running and none asked for asks
+for THE PASS ALONE — a scan request that walks nothing, run by the scan
+thread (the pass's writer), followed by the embed selection as after a
+scan. A real scan takes a queued pass's place and is never lost to one; in
+a mode that parses nothing the pass alone owes nothing. The rule: ASK THE
+PRODUCER FOR WHAT YOU WAIT FOR, NOT FOR THE JOB IT USUALLY COMES WITH — and
+when you write a wait's request, time the thing requested against the
+thing needed.
+
 ## 6. Before you change the scheduler — the checklist
 
 1. **Read the worker log as a time series first.** It is the first

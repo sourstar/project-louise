@@ -3585,3 +3585,30 @@ appears, that line and its numbers are the finding.
 hour with large units pending; the pool's large-lane lines; the cgroup's
 anon and peak with two in flight; documents and rdf a minute over the same
 window. To be deployed AFTER the row above has its AFTER, one change a deploy.
+
+## 2026-11-25 — the slice-scope pass alone, where the stages wait for it
+
+**SCENARIO.** EUR-Lex5.next on the node at 9811ca92, embed mode: the Legal
+session's step 7 (`dev rederive --release`: 632,638 rows reset, 670,333
+released) at the 13:21:42Z drain; the release resets the slice-scope pass to
+row 0. No corpus change.
+
+**BEFORE** (München, the worker's lines). The release ended 13:30:21Z;
+"waiting for the slice scope: the pass is at row 0 of 1,025,283 … nothing is
+parsed, indexed or embedded until then" at 13:35:22Z, with a scan asked for;
+"discovery done {'seen': 932896, 'added': 0, 'changed': 0, 'missing_txt': 0}"
+at 13:48:26Z; "slice scope: 1025283 held, 0 not held; 243884 embedded here,
+781399 not" at 13:48:40Z. EIGHTEEN MINUTES with nothing parsed, of which the
+pass was fourteen seconds (the walk on other days: 22–28 minutes).
+
+**THE CHANGE.** The wait asks for the pass alone (`PASS_ONLY`) where no scan
+is running or asked for.
+
+**EXPECTED.** After a release, or anything else that sets the pass back
+without touching the corpus: "waiting for the slice scope: … its pass ALONE
+is asked for now", "slice scope: the pass alone, over the manifest", and the
+"slice scope: N held …" line within the pass's own seconds — about fourteen
+for a million rows on this node.
+
+**AFTER** — owed: those three lines and their times at the next release on
+the node (or at a slices change in a collection's file).
