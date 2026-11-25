@@ -32,9 +32,14 @@ def _v(value: Any, tier: str | None, **more: Any) -> dict[str, Any]:
 
 def _embed_mode(collection) -> dict[str, Any]:
     from app import collections as collections_mod, db
-    desired = collection.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
+    own = collection.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
+    # THE resolution the worker applies: embed mode's embedding choice
+    # (platform.toml) stands in the collection's own word where it is in force
+    desired, choice = collections_mod.desired_embed_mode(collection)
     set_in = (f"collections/{collection.name}.toml" if collection.embed_mode_default
               else "the default — the file sets none")
+    if desired != own:
+        set_in = f"platform.toml [modes] embed_embedding, while the node is in embed mode ({set_in}: {own})"
     try:
         with closing(db.connect(collection)) as con:
             effective = db.get_scope(con).get("embed_mode")
@@ -42,7 +47,7 @@ def _embed_mode(collection) -> dict[str, Any]:
         return _v(desired, FILES, set_in=set_in,
                   note=f"state database not readable ({type(e).__name__}); the file's value shown")
     if effective is None or effective == desired:
-        return _v(desired, FILES, set_in=set_in)
+        return _v(desired, FILES, set_in=set_in, **({"note": choice} if choice else {}))
     return _v(effective, STATE, files=desired, set_in=set_in,
               note="a runtime override: the node's next apply of the files "
                    "(start, `hold config apply`, an edit) puts the file's value back")
@@ -169,11 +174,11 @@ def apply(name: str | None = None) -> dict[str, Any]:
     served, refused, annotations = _loaded(name)
     applied = []
     for c in sorted(served, key=lambda c: c.name):
-        desired = c.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
+        desired = collections_mod.desired_embed_mode(c)[0]
         with closing(db.connect(c)) as con:
             con.execute("BEGIN IMMEDIATE")
             try:
-                replaced = db.apply_desired_embed_mode(con, c)
+                replaced = db.apply_desired_embed_mode(con, c, desired)
                 if replaced is not None:
                     with contextlib.redirect_stdout(sys.stderr):
                         db.log_event(con, "info", "control",
