@@ -28,6 +28,14 @@ measured (published figures disagree).
   never in the worker's (#859); the pool's lines say when and where (#860); a dead-man's switch for the
   worker and the web, and a journal of what the worker parses in its own process, read by its successor
   (operator: "Do everything"). scheduling.md, pitfall 21.
+- **A second document that never came back, and this time the worker was not held** (München, 23:21Z).
+  The Polish text of Directive (EU) 2018/410: a list of articles before the act, too long for the sixteen
+  tokens such a list may have, and "art." an alternative of twelve languages' forms in one union — the
+  failing match tried the same reading 12^n times (five articles: 94 s). #859's bound did what it was built
+  for: the part's 82 documents parsed again in processes of their own, that one answered as an error after
+  130 s, 5 min 22 s of one collection's stage, no other collection touched. Fixed at the root: each union
+  lists a reading once, in the engine's order (1 ms; the same citations as before on 1,621 texts). The
+  document's error is written at its own turn, not by the batch that carried it; the line now says so.
 - **A carried collection's text index ran without its look-ahead** (Legal's question, München's readings,
   22:09–22:19Z). EUR-Lex5.next's fts: 374 of the stage's 613 s were the pipeline thread waiting for its own
   batch's parse, the pool's children idle 88 % of their time, 0 of 21 batches "parsed ahead". The look-ahead

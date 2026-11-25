@@ -491,6 +491,19 @@ GIL with it. Rule 2's own remedy had turned a hung child into a hung worker.
   a test that runs every resolver on hostile texts in a child with a
   deadline (tests/test_refs_hostile_text.py). On the unfixed code 40 of
   some 600 such texts never came back, from any language's citation;
+  A SECOND PATTERN, seven hours later, and the bound below held it: the
+  Polish text of Directive (EU) 2018/410 did not come back from a process
+  of its own in 130 s (23:21Z; 5 min 22 s of ONE collection's stage, the
+  worker never held). A list of articles BEFORE the act, too long for the
+  sixteen tokens a list may have — and "art." was an alternative of twelve
+  languages' forms in the union the list is read with, so the failing match
+  tried the same reading 12 to the power of the list's articles (five
+  articles 94 s). The unions now list each reading once, in the engine's
+  own order (`eurlex._union`, `_readings`): the same strings read, the same
+  match found, 1 ms. Held against the old code on 1,621 texts (the
+  fixtures, the hostile set, the Hungarian directive): the same citations
+  on every one. The hostile set had only lists AFTER an act: it has lists
+  before one now, in eighteen languages;
 - the fallback (`parallel._isolated`): the parts IN FLIGHT when a batch's
   wait fails are parsed again in processes of their own, each bounded, a
   part and then each of its rows alone. A row that does not come back alone

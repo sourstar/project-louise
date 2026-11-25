@@ -597,8 +597,117 @@ _ORGS = rf"(?:{_ORG})(?:\s*,\s*(?:{_ORG}))*"
 _NO = r"(?:No|Nr|N:o|n\.?\s?[ºo°]|n°|n|č|št|br|" + _tonos("αριθ") + r"|№|Nru|Uimh)\.?"
 
 
+def _readings(pattern: str) -> list[str] | None:
+    """Every string `pattern` reads, in the order the regex engine tries
+    them, where it reads only finitely many and nothing but literals: the
+    forms' words — literals, escaped punctuation, a class of listed
+    characters, `(?:…)` groups, alternation, `?` and `??`. None for anything
+    else (a `\\s+` inside a phrase, a repeat, a named group): such an
+    alternative is kept as it is written."""
+    pos = 0
+
+    class Other(Exception):
+        pass
+
+    def alt() -> list[str]:
+        nonlocal pos
+        out = seq()
+        while pos < len(pattern) and pattern[pos] == "|":
+            pos += 1
+            out = out + seq()
+        return out
+
+    def seq() -> list[str]:
+        nonlocal pos
+        out = [""]
+        while pos < len(pattern) and pattern[pos] not in "|)":
+            item = atom()
+            if pos < len(pattern) and pattern[pos] == "?":
+                pos += 1
+                if pos < len(pattern) and pattern[pos] == "?":
+                    pos += 1
+                    item = [""] + item          # lazy: without it first
+                elif pos < len(pattern) and pattern[pos] == "+":
+                    raise Other
+                else:
+                    item = item + [""]          # greedy: with it first
+            elif pos < len(pattern) and pattern[pos] in "*+{":
+                raise Other
+            # the engine varies the LAST item fastest
+            out = [a + b for a in out for b in item]
+            if len(out) > 4096:
+                raise Other
+        return out
+
+    def atom() -> list[str]:
+        nonlocal pos
+        c = pattern[pos]
+        if c == "\\":
+            nxt = pattern[pos + 1]
+            if nxt.isalnum():                   # \s \d \w \b …: no literal
+                raise Other
+            pos += 2
+            return [nxt]
+        if c == "[":
+            end = pattern.index("]", pos + 2)
+            body = pattern[pos + 1:end]
+            if not body or body[0] == "^" or "\\" in body or "-" in body[1:-1]:
+                raise Other
+            pos = end + 1
+            return list(dict.fromkeys(body))
+        if c == "(":
+            if not pattern.startswith("(?:", pos):
+                raise Other
+            pos += 3
+            inner = alt()
+            if pos >= len(pattern) or pattern[pos] != ")":
+                raise Other
+            pos += 1
+            return inner
+        if c in ".^$*+?{}":
+            raise Other
+        pos += 1
+        return [c]
+
+    try:
+        out = alt()
+    except (Other, ValueError, IndexError):
+        return None
+    return out if pos == len(pattern) else None
+
+
 def _union(field: str, forms=_FORMS) -> str:
-    return "|".join(f"(?:{getattr(f, field)})" for f in forms if getattr(f, field))
+    """Every form's `field`, one alternation — EACH READING ONCE.
+
+    The forms are per language and the languages share words: "art." was an
+    alternative of twelve of them, "a" a conjunction in five. Joined as they
+    were written, a list of n articles could be read in 12^n ways, all the
+    same, and a list too long for `_ARTICLE`'s sixteen tokens was tried in
+    every one of them before the match failed: five articles 94 s, more
+    never. The Polish text of Directive (EU) 2018/410 has such a list ("…
+    art. 10b ust. 5, art. 19 ust. 3, art. 22, art. 24 ust. 3, art. 24a ust.
+    1, art. 25a ust. 1 i art. 28c dyrektywy") and did not come back from a
+    process of its own in 130 s (the node, 2026-11-24, 23:21Z).
+
+    So an alternative that reads only words is written out as its readings
+    (`_readings`), in the engine's own order, and a reading already listed
+    is left out; any other alternative stays as written, once. The
+    alternation reads exactly the strings it read, and tries them in the
+    order it tried them — a later copy of a reading could only find again
+    what the first found — so every match is the match it was, and a
+    failure is found without the copies."""
+    seen: dict[str, None] = {}
+    for f in forms:
+        source = getattr(f, field)
+        if not source:
+            continue
+        readings = _readings(source)
+        if readings is None:
+            seen.setdefault(f"(?:{source})")
+        else:
+            for r in readings:
+                seen.setdefault(re.escape(r) if r else "(?:)")
+    return "|".join(seen)
 
 
 #: IN AN `after` FORM A NUMBER IS NEVER SPLIT: every digit run is possessive
