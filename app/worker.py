@@ -5000,7 +5000,14 @@ def _run_step(con, collection, stage, row) -> bool:
             # deferred again is said once a LARGE_WAIT_S (`_deferral_news`); a
             # kill always
             _deferral.memory = True
-            if isinstance(e, parallel.MemoryKilled) or _deferral_news(collection, stage, row["uid"]):
+            if isinstance(e, parallel.MemoryKilled):
+                # WHAT THIS ROW WAS TO THE KILL, first (the lessons of
+                # EUR-Lex5, row A5): the same words on every row in flight
+                # made bystanders of 256 MiB read as the cause
+                db.log_event(con, "warn", stage,
+                             f"{stage} deferred — {e.role_of(row['uid'])}; {e}; the document is "
+                             f"untouched and will be retried"[:900], row["uid"])
+            elif _deferral_news(collection, stage, row["uid"]):
                 db.log_event(con, "warn", stage,
                              f"{stage} deferred — {e}; the document is untouched and will be "
                              f"retried"[:500], row["uid"])
@@ -7788,6 +7795,9 @@ def _on_oom_kill(before: int, after: int) -> None:
     stops at its units like a SIGTERM and its guard keeps it down."""
     from . import oom_hold, parallel
     rec = oom_hold.hold("cgroup", {"oom_kill": [before, after], "memory_peak": oom_hold.memory_peak(),
+                                   # WHICH process, and what it held (the lessons' A5):
+                                   # read by `oom_hold.killed` before this handler ran
+                                   "killed": oom_hold.victim_seen(),
                                    "in_flight": parallel.in_flight(), "reserved": parallel.reserved(),
                                    "processes_before": oom_hold.last_sample(),
                                    "processes_now": oom_hold.processes()})
