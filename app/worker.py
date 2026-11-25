@@ -6654,7 +6654,7 @@ def _node_line(stage: str):
     """A logger for a node-level thread with no manifest of its own: the
     line on stdout, naming the collection in its message."""
     def log(m: str) -> None:
-        print(f"{time.strftime('%H:%M:%S')} [node info:{stage}] {m[:500]}", flush=True)
+        db.say_line(f"{time.strftime('%H:%M:%S')} [node info:{stage}] {m[:500]}")     # one write: never run together
     return log
 
 

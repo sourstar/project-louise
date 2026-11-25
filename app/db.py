@@ -865,6 +865,19 @@ NODE_CONTROL_KEYS = (WORKER_STATE_KEY, BANDWIDTH_OVERRIDE_KEY)
 NODE_STAGES = frozenset({"sched", "share", "models"})   # share: the seeder and gossip lines cover every collection and name theirs in the message; models: a cold start (app/model_load.py) is the node's
 
 
+def say_line(line: str) -> None:
+    """ONE LINE, WRITTEN WHOLE. `print(line, flush=True)` writes the text and
+    its newline as two writes, and two threads that log in the same instant
+    interleave them: München, 2026-11-25, the worker's start — "embedding goes
+    on: …" of NeuRIS and of wikidata on ONE line of the log, no newline
+    between, and an empty line after. One write of the line with its newline;
+    a log read as a time series must have one event a line."""
+    import sys
+    out = sys.stdout
+    out.write(line + "\n")
+    out.flush()
+
+
 def log_event(con, level, stage, message, doc_uid=None):
     """stdout line: `HH:MM:SS [<collection> level:stage #uid] message`. The
     collection comes from the connection (ManifestConnection), so no caller
@@ -880,7 +893,7 @@ def log_event(con, level, stage, message, doc_uid=None):
     tag = f" #{doc_uid}" if doc_uid else ""
     who = "node" if stage in NODE_STAGES else getattr(con, "collection_name", "")
     prefix = f"{who} " if who else ""
-    print(f"{stamp} [{prefix}{level}:{stage}{tag}] {message}", flush=True)
+    say_line(f"{stamp} [{prefix}{level}:{stage}{tag}] {message}")
     try:
         con.execute(
             "INSERT INTO events(ts,level,stage,doc_uid,message) VALUES(?,?,?,?,?)",
@@ -895,8 +908,8 @@ def log_event(con, level, stage, message, doc_uid=None):
         # acquire thread's ERROR HANDLER then died in this very function,
         # and a survivable lock contention became a dead thread with a
         # stack trace. The stdout line above already carried the message.
-        print(f"{stamp} [{prefix}warn:db] event not persisted ({e}): "
-              f"[{level}:{stage}] {message[:200]}", flush=True)
+        say_line(f"{stamp} [{prefix}warn:db] event not persisted ({e}): "
+                 f"[{level}:{stage}] {message[:200]}")
 
 def log_query(con, endpoint, query, mode, k, timings, n_results, books):
     con.execute(

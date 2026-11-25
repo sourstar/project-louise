@@ -3495,11 +3495,22 @@ ends.
 the backlog's embedding: on this node's start the keeper said its piece ten
 seconds in, and the loads that followed are what the AFTER must time.
 
-**AFTER** — owed, at the next worker start on the node: the two lines
-("embedding waits: the keeper is still loading …" and "embedding goes on …")
-and the seconds between them; no CANARY line and no "GateDeferred … needs
-N MiB free" in the start's first ten minutes; gutenberg's first embed line
-after the wait.
+**AFTER** (München, the deploy of 9811ca92: worker started 12:11:43Z).
+"embedding waits: the keeper has not made its first beat yet (2 s / 5 s after
+the worker's start)" for the eight embedding collections at 12:11:46 and :50;
+"resident … preloading 13 model(s) for Ask" at 12:11:51; "embedding goes on"
+at 12:11:56 (five collections, 6 s after their wait began) and 12:11:59
+(three, 13 s). No CANARY line and no "GateDeferred … needs N MiB free" in the
+start's first ten minutes; the engine's counts at 12:22:34Z: 0 discarded for
+vega-qwen3-embedding-4b (323 contexts created), nemotron (232), bge-m3 (23);
+"it is discarded" in none of the 115 backend-ring files saved over the first
+five minutes. gutenberg: "embedding enabled … validated" at 12:12:27, 44 s
+after the start (BEFORE: forty minutes).
+WHAT THIS START DOES NOT PROVE: only the app restarted, so the model server
+still held the models — the preload's one cold start was vega-medcpt-article-ov,
+10.7 s, ten minutes later — and the wait was 6–13 s against no real loads.
+The row that proves the hold is a start on a COLD card: the first worker start
+after the model server itself restarts (the engine swap). Still owed.
 
 ## 2026-11-25 — two large lanes; a batch puts at most a lane's worth of large units
 
