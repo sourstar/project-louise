@@ -20,6 +20,21 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **A QUESTION SAYS WHAT ITS RERANK WAS MADE OF (the slow question, first step: measure).** The operator's
+  first question in query mode: search 44.5 s — "rerank 20,000", fts 12.6 s — and the line could not tell
+  five lists of four seconds from one list of twenty, nor the reranker's answers from a load, from the cut of
+  the texts to the model's window, or from the grouping of the works: the one `rerank` number covered all of
+  it, for every list together. Now each list's rerank notes itself (`retrieval._rerank_parts`, a context
+  variable `_rerank_held` fills; nothing of the search changes): records judged, texts and characters sent,
+  calls (one per query variant), and the ms of the answers, the load, the cut and the works — in the result's
+  `timings.rerank_parts` and on the search's own line, slowest list first: "…, rerank 20,000; rerank by
+  list: wikipedia 9,200 (50 records, 100 texts, 412k chars, 2 call(s): answers 4,100, load 4,900, works
+  160); gutenberg 3,900 (…)". The design's cost is already known and is not small: 50 records × 2 chunks,
+  each whole, per list, the lists that share a reranker one after the other (`parallel:1`, bit-exact) — what
+  is NOT known is which part the 20 s were, and tonight every Ask model was in host memory (row E), so a
+  question also pays their page-ins. No depth, no chunk count and no engine setting is touched before his
+  own questions have given these rows; each is a choice with a quality or a reproducibility cost, put to
+  him with the numbers.
 - **"CACHE THE MODEL TO RELOAD IT FROM DISK WARM" — MEASURED, AND IT DOES NOT PAY: THE DRIVE IS NOT WHAT A
   RELOAD COSTS (München, 21:08Z, after the boot for the ssd3 port swap; Louise stopped, nothing loaded).**
   `warm_model_files.py --all --json` twice in a row: 105 models, 469.8 GiB in 107.2 s and 108.4 s — 4,490 and
