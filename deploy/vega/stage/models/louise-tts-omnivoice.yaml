@@ -6,6 +6,7 @@
 # v5.0.1 with P13 and P19): the same values, key for key, but for `backend`, which names the
 # engine that is LIVE - 619655e5833b since 2026-11-25 15:18:30Z, when the node's direct models'
 # files were moved to it (it adds the language tag, staged 0022: "it-IT" is read as "it").
+# Read against the node's file again at that swap (München, 2026-11-25): the same, key for key.
 # LocalAI keeps that file with its keys sorted, in YAML; this is the same content as JSON,
 # which is YAML.
 # - `tts.voice_cloning`: P13 — a saved voice profile may be given to a model on a backend

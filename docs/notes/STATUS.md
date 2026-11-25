@@ -367,7 +367,8 @@ measured (published figures disagree).
 - **LIVE since 2026-11-25 15:18:30Z: engine `619655e5833b`** (`engine-canary.series`: `792f050e318e`'s series + 0028; the operator:
   "Deploy and engine swap"). München: byte check VEGA/1 against VEGA/2 all identical (bge-m3, nemotron, qwen3-4b); five gates passed,
   each "exact, 3 fresh load(s)", every fingerprint identical to before — wikipedia (bge-m3) 109 s, gutenberg (qwen3-embedding-4b)
-  2,046 s, worst 0.999226, pubmed query (medcpt-query) 92 s, NeuRIS (nemotron), wikidata (nemotron) 534 s, worst 1.000000; twenty
+  2,046 s, worst 0.999226, pubmed query (medcpt-query) 92 s, NeuRIS (nemotron) 530 s, worst 1.000000, 0 of 512 below 0.995, wikidata (nemotron) 534 s,
+  worst 1.000000 (both nemotron fingerprints sha256:9863c1d7…, as before); twenty
   unloads of qwen3-embedding-4b through the wrapper, 20 × exit 0, none of a second or more. ONE swap carried the paging default
   (0021), the language tag (0022), the stream fix (0025), its test switch (0026) and the canary fix (0028). `792f050e318e` and
   `d658549772ca` were built and never gated. THE KEEPER'S PAGING DEFAULT follows it as one commit (5cb53eb, for the architecture
