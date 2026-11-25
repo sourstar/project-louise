@@ -1,0 +1,12 @@
+# Patches sent for review — in no series, built by nobody
+
+A patch here is finished work waiting for a second reading. It is in **no
+`.series` file**, so no engine is built from it, and it is not in `staged/`
+(docs/notes/parking-step-2.md §4: "Each part's patch is sent for review
+before it is staged"). When the review agrees it moves to `staged/` under the
+same name, with its series file and its engine's name; until then nothing may
+name it in a series (tests/test_localai_review_park_when_told.py holds that).
+
+| patch | what | reviewed by | after the review |
+|---|---|---|---|
+| `0023-llama-cpp-park-when-told.patch` | PARKING, STEP 2, THE ENGINE PART (docs/notes/parking-step-2.md §6): the backend's `Free` parks a model that can park, a `LoadModel` for the model already held brings it back and answers `Model already loaded` byte for byte, a request brings it back by itself, `Status` says where the weights are; and ONE answer for "the device has no room now" — gRPC `RESOURCE_EXHAUSTED`, llama.cpp's HTTP 503 `no_room_on_device` — for parked weights that cannot come back, a context that cannot be created, a graph refused memory, and the same refusal when it falls on a new context's canary. `GGML_SYCL_PARK_REFUSE=N` for the test of a refused return. Applies after staged 0022 (`engine-lang.series`'s lines). MEASURED on CPU builds with a stand-in device: 29/29 over gRPC, 43/43 and 17/17 over llama.cpp's own server, 25 of llama.cpp's server tests; `ggml-sycl.cpp` compiles with icpx. NOT measured: anything on a card | the architecture session (it builds the wrapper's same-run `LoadModel`, #882, and the keeper's half against these shapes) | `staged/0023-…`, a series `engine-park.series` = `engine-lang.series` + 0023, its engine name, the rows of parking-step-2.md §3.1 on copies |

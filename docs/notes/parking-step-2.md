@@ -254,3 +254,77 @@ Each part's patch is sent for review before it is staged.
 - Host memory, above the floor: a parked model holds its card bytes on the
   host — 575 MiB for bge-m3, about 2.2 GiB for nemotron, about 6 for MADLAD.
   On 11-24 the node had 4.7 GB available at its worst hour.
+
+## 6. The engine part, as built — FOR REVIEW (2026-11-25)
+
+`deploy/localai/patches/review/0023-llama-cpp-park-when-told.patch`: in no
+series, built by nobody, until the architecture session has read it. It
+applies after staged 0022 (`engine-lang.series`'s lines).
+
+**What it is.** §3.1, with LocalAI's two calls and no new one:
+
+| the call | the model can park | it cannot (no context on demand, or weights that stay) |
+|---|---|---|
+| `Free` | the context is freed whatever keep it had, the weights leave: OK, message `parked`, metadata `{"parked":true,"park_size":…,"ms":…}`. Parked already: the same answer, nothing done | `UNIMPLEMENTED`, as today: the caller stops the process |
+| `Free` while a request runs | `FAILED_PRECONDITION`, "busy: …": the model stays | — |
+| `LoadModel`, the model already held | the weights come back if they were away, then `Model already loaded`, the bytes the wrapper keys on | `Model already loaded`, today's no-op |
+| a request to a parked model | brings the weights back by itself, creates its context, answers; the model then STAYS on the device | — |
+| `Status` | `READY`/`BUSY`; `memory.total` = the weights' bytes in HOST memory now; breakdown `parked` (0/1), `park_size`, `parks`, `unparks` | `UNIMPLEMENTED`, as today: LocalAI samples the process |
+| no room when the weights must come back | `RESOURCE_EXHAUSTED`, the model still parked, the next request served | — |
+
+**One answer for "the device has no room now".** A new error type in
+llama.cpp's server (`no_room_on_device`, HTTP 503), which the backend answers
+as gRPC `RESOURCE_EXHAUSTED` on every request RPC and on the repeated
+`LoadModel`: parked weights that cannot come back; a context that cannot be
+created; a graph the device refused memory for (`llama_process` −2).
+
+**Where it differs from §3.1, each for the review to accept or refuse:**
+
+| | §3.1 said | built | why |
+|---|---|---|---|
+| `Free` under a running request | "anything else → Unimplemented" | `FAILED_PRECONDITION` busy | Unimplemented means "this backend cannot park", for good; busy is for now. The server part takes the next candidate and never stops a model for it (agreed 11-25) |
+| `Status` | says parked and the host's bytes | only for a model that can park; one that cannot stays `UNIMPLEMENTED` | LocalAI's `/backend/monitor` falls back to sampling the process when `Status` is unimplemented: answering for every model would have changed that endpoint for all of them |
+| the return by `LoadModel` | "the weights come back" | the weights only; the context is the next request's, as with context on demand | a context created for nobody is freed at the next idle tick anyway; `/backend/prepare` (step 3) may ask for more |
+| automatic parking | removed | `LLAMA_SERVER_PARK_WEIGHTS` kept as the measuring switch it was, off by default | the rows of §3.1 can be run through today's LocalAI, which has no caller of `Free` but its stop path |
+| a compute refusal at llama.cpp's own HTTP | (not said) | 503 `no_room_on_device`, where it was 500 `server_error` "Compute error." | one fact, one answer. Through LocalAI's HTTP nothing changes until the server part maps the gRPC code (today every backend error is 500) |
+
+**Found on the way, fixed in it: the canary took a room refusal for a wrong
+context.** With context on demand and the canary on — every encoder — the
+first graph of a context created on a full card IS the canary. Refused for
+memory, it was answered `503 unavailable_error` "context canary failed" and
+counted in `context_canary_failures_total`: a determinism failure that never
+happened. The canary now says `COMMON_CANARY_NO_MEMORY`: at a request it is a
+context that cannot be created (`no_room_on_device`, counted nowhere as a
+failure); at the LOAD it fails the load, where before it left the model
+served UNCHECKED for the life of the process behind one warning line.
+
+**What an unpatched LocalAI does with it.** Today's server calls `Free` only
+before it stops a process. For a model that can park — none until a model's
+file says `GGML_SYCL_PARKABLE=1` — that stop now parks first: E, about 0.04 s
+and 575 MiB of host memory for bge-m3, 0.4 s and 6 GiB for MADLAD (§3.4, 1),
+freed when the process dies a moment later. Harmless for the copies of the
+rows; the reason the server part's stop path skips `Free` for such a model.
+
+**MEASURED, on CPU builds, the device a stand-in** (`tools/measure/
+park_cpu_standin.patch`: a weight buffer that copies its bytes aside and
+poisons itself, refuses, or loses them — in no engine):
+
+| what | how | result |
+|---|---|---|
+| the backend's gRPC handlers, compiled against the patched engine | `tools/measure/park_told.py selftest` | 29 of 29: a model that cannot park answers as before; `Free`, `Status`, `LoadModel` as the table; the first vectors bit for bit over 12 cycles (6 returned by `LoadModel`, 6 by the request); a refused return `RESOURCE_EXHAUSTED`, still parked, the next served; 302 calls of `Free` beside live requests — 151 parked, 151 busy, every request's vectors intact |
+| llama.cpp's own server | `tools/measure/park_cpu_test.py` | 43 of 43 (17 of step 1, 26 told) |
+| a refused graph | `tools/measure/refuse_cpu_test.py … --told` | 17 of 17: every refusal 503 `no_room_on_device`, none counted as a canary that failed, the same process, the next request the control's vectors |
+| llama.cpp's server tests | `tools/server/tests/unit/test_park_weights.py`, `test_context_on_demand.py` | 25 passed |
+| the messages and codes | `park_reply_test.cpp`, standalone | all passed; the bytes of `Model already loaded` pinned |
+| `ggml-sycl.cpp` with `GGML_SYCL_PARK_REFUSE` | icpx, the one object | compiles |
+
+**NOT measured: anything on a card.** After the review, on COPIES, with
+`GGML_SYCL_PARK_VERIFY=1` (the card's bytes read back at every return), the
+rows of §3.1 — München's, each through the backend's own address:
+
+    python3 -I tools/measure/park_told.py cycles ADDR <model> -n 20                 # the return by LoadModel
+    python3 -I tools/measure/park_told.py cycles ADDR <model> -n 20 --return request
+    # a refused return: GGML_SYCL_PARK_REFUSE=2 in the copy's env, then the same line:
+    # two cycles REFUSED (RESOURCE_EXHAUSTED, still parked), the rest served
+
+and the gate's clause (§3.3): the sixteen fingerprints after N cycles.

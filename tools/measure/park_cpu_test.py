@@ -2,7 +2,10 @@
 """What sits ABOVE the park hook, tested where there is no card: llama_model_park /
 unpark and the server's lifecycle (the weights leave when the context is freed, come
 back for the next request, a refusal leaves the model parked, the canary catches
-weights that did not come back).
+weights that did not come back) - and, from F on, parking when TOLD (step 2,
+docs/notes/parking-step-2.md §3.1): POST /park and /unpark of llama.cpp's own
+server, which post the task LocalAI's backend posts for Free and a repeated
+LoadModel.
 
 The device is a STAND-IN, tools/measure/park_cpu_standin.patch (never part of an
 engine): with GGML_CPU_PARK_TEST=1 a CPU weight buffer "parks" by copying its bytes
@@ -12,8 +15,9 @@ unparks (a device with no room); GGML_CPU_PARK_TEST_LOSE=N makes the next N succ
 without putting the bytes back.
 
 The server under test: llama.cpp at the series' pin with the series' llama.cpp
-patches, staged 0012-0015's, then the stand-in; built for CPU (no web UI). Any small
-embedding GGUF serves (run 2026-11-24 on bge-small-en-v1.5 f16: 16 of 16).
+patches, staged 0012-0015's (from F on: the park engine's), then the stand-in; built
+for CPU (no web UI). Any small embedding GGUF serves (run 2026-11-24 on
+bge-small-en-v1.5 f16: 16 of 16; 2026-11-25 with the told sections: see the note).
 docs/notes/parking-prototype.md §3.
 
     python3 -I tools/measure/park_cpu_test.py <llama-server> <model.gguf>
@@ -26,6 +30,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -33,7 +38,7 @@ from pathlib import Path
 
 TEXTS = [f"sentence number {i}: the quick brown fox jumps over the lazy dog, {i} times" for i in range(16)]
 BASE = ["--embedding", "--load-mode", "none", "--no-repack", "-c", "512", "-b", "512", "-ub", "512", "-np", "1", "-t", "4",
-        "--no-webui", "--log-verbosity", "4"]   # 4: the library's own lines too
+        "--no-webui", "--metrics", "--log-verbosity", "4"]   # 4: the library's own lines too
 ON_DEMAND = ["--context-on-demand", "--keep-context-ms", "0"]
 
 
@@ -75,15 +80,32 @@ class Server:
                 raise AssertionError(f"{what!r} seen {self.count(what)} times, expected {n}:\n{self.text()[-2500:]}")
             time.sleep(0.05)
 
-    def embed(self) -> tuple[int, object]:
+    def embed(self, texts: list[str] | None = None) -> tuple[int, object]:
         req = urllib.request.Request(f"http://127.0.0.1:{self.port}/v1/embeddings",
-                                     data=json.dumps({"input": TEXTS}).encode(), headers={"Content-Type": "application/json"})
+                                     data=json.dumps({"input": texts or TEXTS}).encode(),
+                                     headers={"Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=120) as r:
                 body = json.loads(r.read())
                 return r.status, [d["embedding"] for d in body["data"]]
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read() or b"{}")
+
+    def post(self, path: str) -> tuple[int, dict]:
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=b"{}",
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read() or b"{}")
+
+    def metric(self, name: str) -> float:
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/metrics", timeout=30) as r:
+            for line in r.read().decode().splitlines():
+                if line.startswith(f"llamacpp:{name} "):
+                    return float(line.split()[1])
+        raise AssertionError(f"no metric {name}")
 
     def stop(self) -> None:
         self.proc.terminate()
@@ -92,6 +114,10 @@ class Server:
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait()
+
+
+def _type(body: object) -> str:
+    return str((body.get("error") or {}).get("type")) if isinstance(body, dict) else ""
 
 
 def main() -> int:
@@ -139,7 +165,8 @@ def main() -> int:
     s.wait_for("weights parked in", 1)
     status, body = s.embed()
     check("with no room the request is refused, not answered wrong", status == 503, f"HTTP {status}: {str(body)[:120]}")
-    check("and the model is still parked", s.count("the weights cannot come back to the device") == 1)
+    check("and the refusal says what it is: no_room_on_device", _type(body) == "no_room_on_device", str(body)[:160])
+    check("and the model is still parked", s.count("the weights cannot come back to the device, is the memory") == 1)
     status, got = s.embed()
     check("the next request brings the weights back and answers the baseline", status == 200 and got == base)
     s.stop()
@@ -163,6 +190,129 @@ def main() -> int:
     check("weights that cannot park: the switch is ignored", s.count("cannot be parked on this backend") == 1)
     status, got = s.embed()
     check("and the model answers as ever", status == 200 and got == base and s.count("weights parked") == 0)
+    s.stop()
+
+    # ---- PARKING WHEN TOLD (step 2). No measuring switch from here on.
+    told = {"GGML_CPU_PARK_TEST": "1"}
+
+    # F. between two requests the weights STAY; they leave when told, and a request brings them back by itself
+    s = Server(binary, model, BASE + ON_DEMAND, told)
+    check("the server says the model can park, and how much", s.count("parking: this model can park,") == 1)
+    size = s.metric("weights_park_bytes")
+    check("the bytes that park are counted", size > 1_000_000, f"{size:.0f} bytes")
+    status, got = s.embed()
+    s.wait_for("context freed in", 2)        # the load's own context, then this request's (a keep of 0)
+    check("a request, its context freed: the weights are NOT parked by that", status == 200 and got == base
+          and s.count("weights parked in") == 0 and s.metric("weights_parked") == 0)
+    status, body = s.post("/park")
+    check("told to park: parked, and it says the bytes", status == 200 and body.get("parked") is True
+          and body.get("park_size") == size and s.count("weights parked in") == 1 and s.metric("weights_parked") == 1,
+          f"HTTP {status}: {body}")
+    status, body = s.post("/park")
+    check("told again: still parked, nothing done twice", status == 200 and body.get("parked") is True
+          and s.count("weights parked in") == 1)
+    status, got = s.embed()
+    check("a request to a parked model brings the weights back by itself and answers the baseline",
+          status == 200 and got == base and s.count("weights unparked in") == 1)
+    s.wait_for("context freed in", 3)
+    check("and after it the model is on the device, not parked again", s.metric("weights_parked") == 0
+          and s.count("weights parked in") == 1)
+    s.post("/park")
+    status, body = s.post("/unpark")
+    check("told to come back: on the device", status == 200 and body.get("parked") is False
+          and s.count("weights unparked in") == 2 and s.metric("weights_parked") == 0, f"HTTP {status}: {body}")
+    status, body = s.post("/unpark")
+    check("told again: nothing to do", status == 200 and body.get("parked") is False and s.count("weights unparked in") == 2)
+    same = True
+    for _ in range(8):
+        same = same and s.post("/park")[0] == 200
+        status, got = s.embed()
+        same = same and status == 200 and got == base
+    text = s.text()
+    check("8 more cycles told: the baseline's vectors bit for bit, each on weights that had left",
+          same and text.count("weights parked in") == 10 and text.count("the buffer poisoned") == 10,
+          f"parked {text.count('weights parked in')}, poisoned {text.count('the buffer poisoned')}")
+    check("counted", s.metric("weights_parks_total") == 10 and s.metric("weights_unparks_total") == 10)
+    s.stop()
+
+    # G. a context that is being KEPT is freed by the order: who tells is who manages the device's memory
+    s = Server(binary, model, BASE + ["--context-on-demand"], told)       # no keep: the context stays loaded
+    s.wait_for("context freed in", 1)        # the load's own context: nothing had asked for it to be kept yet
+    status, got = s.embed()
+    time.sleep(1.0)
+    check("a model that keeps its context between requests", status == 200 and got == base and s.count("context freed in") == 1
+          and s.metric("context_loaded") == 1, f"freed {s.count('context freed in')} times")
+    status, body = s.post("/park")
+    check("told to park, its context goes first", status == 200 and body.get("parked") is True
+          and s.count("context freed in") == 2 and s.count("weights parked in") == 1 and s.metric("context_loaded") == 0,
+          f"HTTP {status}: {body}")
+    status, got = s.embed()
+    check("and the next request answers the baseline on a context created for it",
+          status == 200 and got == base and s.count("weights unparked in") == 1)
+    s.stop()
+
+    # H. no room: told to come back, or asked by a request - refused as what it is, the model still parked
+    s = Server(binary, model, BASE + ON_DEMAND, dict(told, GGML_CPU_PARK_TEST_REFUSE="2"))
+    s.post("/park")
+    status, body = s.post("/unpark")
+    check("told to come back with no room: 503 no_room_on_device", status == 503 and _type(body) == "no_room_on_device",
+          f"HTTP {status}: {str(body)[:160]}")
+    check("the model is still parked", s.metric("weights_parked") == 1 and s.count("weights unparked in") == 0)
+    # ONE input: each input of a request is a task of its own and asks for the weights again, and the stand-in counts
+    # refusals, where a device with no room refuses them all
+    status, body = s.embed(TEXTS[:1])
+    check("a request with no room: 503 no_room_on_device, never vectors", status == 503 and _type(body) == "no_room_on_device",
+          f"HTTP {status}: {str(body)[:160]}")
+    check("still parked, the same process", s.metric("weights_parked") == 1 and s.proc.poll() is None)
+    status, got = s.embed()
+    check("the next request is served, the baseline's vectors", status == 200 and got == base and s.metric("weights_parked") == 0)
+    s.stop()
+
+    # I. a model that cannot park says so, and is left alone
+    for label, args, env in (("without context on demand", BASE, told),
+                             ("with weights that cannot leave the device", mapped + ON_DEMAND, {})):
+        s = Server(binary, model, args, env)
+        status, body = s.post("/park")
+        check(f"{label}: told to park, 501 not supported", status == 501 and _type(body) == "not_supported_error",
+              f"HTTP {status}: {str(body)[:120]}")
+        status, got = s.embed()
+        check(f"{label}: and the model answers as ever", status == 200 and got == base and s.count("weights parked") == 0
+              and s.metric("weights_park_bytes") == 0)
+        s.stop()
+
+    # J. told to park WHILE requests come: each request is answered whole, with the baseline's vectors, whatever the
+    # order the two met in - the park waits its turn on the server's own thread, or is refused "busy"
+    s = Server(binary, model, BASE + ON_DEMAND, told)
+    answers: list[tuple[int, object]] = []
+    stop = threading.Event()
+
+    def ask() -> None:
+        k = 0
+        while not stop.is_set():
+            answers.append(s.embed())
+            k += 1
+            time.sleep(0.004 * (k % 7))      # gaps of 0 to 24 ms: an order to park lands in one, or on a request
+
+    worker = threading.Thread(target=ask)
+    worker.start()
+    seen: dict[str, int] = {}
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        status, body = s.post("/park")
+        key = "parked" if status == 200 and body.get("parked") is True else f"{status} {_type(body)}"
+        seen[key] = seen.get(key, 0) + 1
+        time.sleep(0.007)
+    stop.set()
+    worker.join()
+    bad = [(st, str(b)[:80]) for st, b in answers if st != 200 or b != base]
+    check(f"{len(answers)} requests beside {sum(seen.values())} orders to park: every one the baseline's vectors",
+          not bad and len(answers) >= 10, f"{len(bad)} wrong: {bad[:2]}")
+    check("each order was either done or refused as busy, nothing else",
+          set(seen) <= {"parked", "503 unavailable_error"} and seen.get("parked", 0) >= 3, str(seen))
+    parks = s.count("weights parked in")
+    check("requests ran on weights that had left in between, and the process is alive and consistent",
+          s.proc.poll() is None and parks >= 3 and s.metric("weights_parks_total") == parks
+          and s.count("weights unparked in") >= parks - 1, f"parked {parks}, unparked {s.count('weights unparked in')}")
     s.stop()
 
     failed = [name for name, ok, _ in results if not ok]

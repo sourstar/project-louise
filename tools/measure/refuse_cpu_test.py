@@ -7,7 +7,9 @@ llama.cpp source and never in a series): with GGML_CPU_REFUSE_GRAPHS=N and GGML_
 refuses the next N graphs once the file exists. What the SYCL backend does BELOW this - its pool's refusal reaching
 the graph - is tools/measure/sycl_refusal_macro_check.cpp's and the card's.
 
-    python3 -I tools/measure/refuse_cpu_test.py tools/measure/park_cpu_test.py <llama-server> <model.gguf>
+    python3 -I tools/measure/refuse_cpu_test.py tools/measure/park_cpu_test.py <llama-server> <model.gguf> [--told]
+
+--told: on the park engine's source, where the refusal has a type of its own (503 no_room_on_device).
 
 Run 2026-11-25 on the candidate source of engine-refusal.series (CPU build, bge-small-en-v1.5 F16): 13 of 13.
 """
@@ -46,9 +48,17 @@ for label, args in (("the context kept", park.BASE), ("context on demand, a keep
         status, got = s.embed()
         if status == 200:
             break
-        refused.append((status, str(got)[:90]))
+        refused.append((status, str(got)[:90], park._type(got)))
     check(f"{label}: a refused graph is answered as an error, never with vectors",
-          len(refused) >= 1 and all(st >= 500 for st, _ in refused), str(refused))
+          len(refused) >= 1 and all(st >= 500 for st, _, _ in refused), str(refused))
+    # the park engine: a graph the device had no memory for is 503 no_room_on_device, where it was 500 server_error -
+    # and where it is the CANARY of a context being created that is refused, it is a context that cannot be created,
+    # not a canary that failed (it was 503 unavailable_error "context canary failed", and counted as one)
+    if "--told" in sys.argv:
+        check(f"{label}: every refusal is answered 503 no_room_on_device",
+              all((st, ty) == (503, "no_room_on_device") for st, _, ty in refused), str(refused))
+        check(f"{label}: no refusal is counted as a canary that failed",
+              s.metric("context_canary_failures_total") == 0 and "does not reproduce the canary" not in s.text())
     check(f"{label}: the process is the same one", s.proc.poll() is None and s.proc.pid == pid)
     check(f"{label}: the first request after the refusals is served, with the control's vectors bit for bit",
           status == 200 and got == base, f"HTTP {status} after {len(refused)} refused")

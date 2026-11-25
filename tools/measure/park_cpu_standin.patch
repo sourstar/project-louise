@@ -86,3 +86,19 @@ index b49b957..ee90495 100644
      return ggml_backend_buffer_init(buft, ggml_backend_cpu_buffer_i, data, size);
  }
  
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 0a2e9cf..5ceb58d 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -1254,6 +1254,11 @@ llm_ffn_op_type llm_ffn_op_type_from_string(const std::string & name, llm_ffn_op
+ 
+ // CPU: ACCEL -> GPU host -> CPU extra -> CPU
+ static buft_list_t make_cpu_buft_list(const std::vector<llama_device> & devices, bool use_extra_bufts, bool no_host) {
++    // DEV ONLY, NOT IN THE PATCH: with the CPU stand-in for parking, every weight goes to the plain CPU buffer type,
++    // the one the stand-in parks - a CPU's own repacking (AMX, AVX-512) would put some in buffers of another type
++    if (getenv("GGML_CPU_PARK_TEST")) {
++        use_extra_bufts = false;
++    }
+     buft_list_t buft_list;
+ 
+     // add ACCEL buffer types
