@@ -143,8 +143,28 @@ def run_of(mode: str, modes: platform_config.ModesConfig | None = None) -> str |
     if mode == EMBED:
         return "running"
     if mode == QUERY:
-        return (modes if modes is not None else platform_config.seen().modes).chat_run
+        return QUERY_RUN
     return None
+
+
+#: QUERY MODE'S RUN MODE, always: nothing is parsed, indexed or embedded, and
+#: it is a run mode in which the keeper PRELOADS the question's models
+#: (resident.PRELOADING_MODES). The morning's cut let query mode be switched
+#: to seed-only or paused for its network choice — two run modes in which
+#: nothing is preloaded for Ask, the opposite of what query mode is for. What
+#: the network does is the mode's NETWORK CHOICE now (`network`), not its run mode
+QUERY_RUN = "acquire-only"
+
+
+def network(mode: str | None = None) -> str | None:
+    """The NETWORK CHOICE in force — `mode`'s, or the node's own mode's:
+    download-seed, seed or none (`platform_config.NETWORKS`), each of embed
+    and query mode having its own (operator, 2026-11-25: "set for each
+    embed/query mode, a cron job then simply switches that") — or None in
+    custom mode, where the run mode says what the network does, as before.
+    `node_state.runs` reads it for every gate that fetches or seeds."""
+    which = current() if mode is None else (named(mode) or DEFAULT)
+    return platform_config.seen().modes.network(which)
 
 
 def refuses(state: str, mode: str | None = None) -> str | None:
@@ -214,19 +234,6 @@ def switch(mode: str, *, by: str = "") -> dict:
             "changed": True}
 
 
-def set_chat_run(run: str, *, by: str = "") -> bool:
-    """Chat mode's run mode changed in the file: where the node IS in chat
-    mode it takes it at once (the page's select would otherwise wait for the
-    next switch). True when the node's run mode was written."""
-    if run not in platform_config.CHAT_RUNS:
-        raise ValueError(f"chat mode's run mode is one of {', '.join(platform_config.CHAT_RUNS)}, got {run!r}")
-    with closing(node_state.connect()) as c:
-        if _read(c) != QUERY or db.worker_state(c) == run:
-            return False
-    node_state.set_worker_state(run, by=f"chat mode's run mode, set by {by or 'unnamed'}")
-    return True
-
-
 def history() -> list[dict]:
     """The recorded switches, oldest first; [] when none."""
     try:
@@ -285,7 +292,9 @@ def shown() -> dict:
         "mode": mode,
         "run": node_state.peek_worker_state(),
         "chat_model": config.chat_model_for(mode),
+        "network": pc.modes.network(mode),
         "modes": {m: {"chat_model": config.chat_model_for(m), "run": run_of(m, pc.modes) or "yours",
+                      "network": pc.modes.network(m),
                       "budget": {k: v for k, v in budget(m, pc).items() if k in ("down", "up")}}
                   for m in MODES},
     }

@@ -4532,10 +4532,12 @@ def _node_modes() -> dict:
             "up": pc.modes.written(f"{'chat' if mode == node_mode.QUERY else mode}_up_max"),
             "down_in_force": _rate(b["down"]), "up_in_force": _rate(b["up"]),
         })
-    return {"mode": node_mode.current(), "rows": rows, "chat_run": pc.modes.chat_run,
+    for r in rows:
+        r["network"] = pc.modes.network(r["mode"])      # None: custom, its run mode decides
+        r["network_key"] = {node_mode.QUERY: "query_network", node_mode.EMBED: "embed_network"}.get(r["mode"])
+    return {"mode": node_mode.current(), "rows": rows, "networks": platform_config.NETWORK_LABELS,
             # one model named for both: a switch changes no model, said on the page (RULE 2)
             "one_model": (rows[0]["chat_model"] if len({r["chat_model"] for r in rows}) == 1 else None),
-            "chat_runs": [(s, dict(node_state.MODE_LABELS)[s]) for s in platform_config.CHAT_RUNS],
             "budget": {"down": _rate(pc.bandwidth.down_max_bps), "up": _rate(pc.bandwidth.up_max_bps)}}
 
 
@@ -4561,12 +4563,12 @@ async def system_mode_set(request: Request):
 
 @admin_router.post("/system/modes")
 async def system_modes_set(request: Request):
-    """The Mode panel's settings: chat mode's run mode and each mode's
-    network budget, each one that changed written into platform.toml's
-    `[modes]` (read back before it replaces the file; an empty budget: the
-    key removed, `[budget]`'s in force). Chat mode's run mode is taken at
-    once where the node is in chat mode. The worker applies a budget at its
-    next round, no restart."""
+    """The Mode panel's settings: each mode's network choice and network
+    budget, each one that changed written into platform.toml's `[modes]`
+    (read back before it replaces the file; an empty budget: the key
+    removed, `[budget]`'s in force). Every gate reads the network choice
+    from the file, so it is in force at once; the worker applies a budget at
+    its next round. No restart."""
     from urllib.parse import quote
     from . import model_pins, voice
     form = await request.form()
@@ -4579,14 +4581,18 @@ async def system_modes_set(request: Request):
         if key not in form:
             continue
         got = str(form.get(key, "")).strip()
-        if got != (now.chat_run if key == "chat_run" else now.written(key)):
+        if key in ("embed_network", "query_network"):
+            if got != getattr(now, key):
+                values[key] = got
+                if key == "query_network" and now.written("chat_run"):
+                    values["chat_run"] = None          # its first name leaves the file with it
+            continue
+        if got != now.written(key):
             values[key] = got or None
     client = request.client.host if request.client else "?"
     try:
         if values:
             platform_config.set_keys(platform_config.platform_path(), "modes", values)
-        if values.get("chat_run"):
-            node_mode.set_chat_run(values["chat_run"], by=f"the System page, from {client}")
     except (ValueError, *voice.LOAD_ERRORS) as e:
         return RedirectResponse(f"/admin/system?mode_error={quote(str(e)[:300])}#sys-mode", status_code=303)
     if values:
