@@ -53,6 +53,24 @@
   // outcome goes to the node's log (POST /ask/voice/report) — what the
   // browser opened, at what rate, what came — the one way to see a car's.
   const NO_SOUND_MS = 3000, SILENT_MS = 8000, DIGITAL_SILENCE = 1e-4;
+  // THE MICROPHONE IS SHOWN RECORDING WHEN IT GIVES SOUND, NOT WHEN IT IS
+  // OPENED (operator, on the car's hands-free, 2026-11-25: "most of the time
+  // only the last part of the spoken sentence is written down"). On
+  // Bluetooth the phone switches the car from its media profile to its call
+  // profile only once the microphone is opened, and for a second or three
+  // the track gives nothing, or samples that are all zero; the page showed
+  // "recording" the instant it was opened, and the reader spoke into the
+  // switch. So: the microphone turns red at the first window holding a
+  // sample that is not zero (a microphone that is on is never exactly zero),
+  // and until then says it is connecting. HIS CAR TAKES ABOUT FIVE SECONDS
+  // (the same evening: waiting 5 s after the tap "does the trick"), so the
+  // wait is not cut short at three: it ends at the first sound, or with the
+  // recording itself — no window at all for NO_SOUND_MS and the second way
+  // to record is tried, nothing but zeros for SILENT_MS and the reader is
+  // told. WAKE_MAX_MS is that same bound, so nothing is shown recording
+  // before it gives sound. What the wait cost is measured each time and goes
+  // to the node with the recording's report (`wake_ms`, `first_ms`, `zero_ms`).
+  const WAKE_MAX_MS = SILENT_MS;
   // a piece this short is read with the next (an "art." the segmenter cut off)
   const MIN_SENTENCE = 24;
   // A PIECE ENDING IN AN INITIAL OR A TITLE ends no sentence (operator,
@@ -127,9 +145,10 @@
   function micState(kind, text) {
     if (!mic) return;
     mic.classList.toggle('rec', kind === 'rec');
-    mic.setAttribute('aria-pressed', kind === 'rec' ? 'true' : 'false');
+    mic.classList.toggle('waking', kind === 'wake');
+    mic.setAttribute('aria-pressed', kind === 'rec' || kind === 'wake' ? 'true' : 'false');
     mic.disabled = kind === 'busy' || kind === 'wait';
-    mic.title = kind === 'rec' ? 'stop recording'
+    mic.title = kind === 'rec' || kind === 'wake' ? 'stop recording'
       : kind === 'wait' ? 'the microphone comes back once the question is answered' : 'speak the question';
     if (status) { status.textContent = text || ''; status.hidden = !text; }
   }
@@ -146,8 +165,14 @@
   // true once it ended the recording
   function hear(r, buf, rate) {
     r.frames++;
-    let e = 0; for (let i = 0; i < buf.length; i++) { e += buf[i] * buf[i]; const a = Math.abs(buf[i]); if (a > r.peak) r.peak = a; }
+    let e = 0, top = 0;
+    for (let i = 0; i < buf.length; i++) { e += buf[i] * buf[i]; const a = Math.abs(buf[i]); if (a > top) top = a; }
+    if (top > r.peak) r.peak = top;
     const rms = Math.sqrt(e / (buf.length || 1)), ms = buf.length * 1000 / rate;
+    // the first window at all, and the first that is not all zeros: the
+    // microphone's route is up, and the page says so (`wake`)
+    if (r.first_ms === null) r.first_ms = Math.round(performance.now() - r.opened);
+    if (!r.live) { if (top > 0) { r.live = true; wake(r, 'sound'); } else r.zero_ms += ms; }
     const loud = rms > Math.max(FLOOR_MIN, FLOOR_X * (r.floor === null ? 0 : r.floor));
     r.floor = r.floor === null ? rms : Math.min(r.floor, rms);
     r.ms += ms;
@@ -220,6 +245,7 @@
              ns: set.noiseSuppression ?? null, agc: set.autoGainControl ?? null,
              ctx_rate: r.ctx ? r.ctx.sampleRate : null, ctx_state: r.ctx ? r.ctx.state : null,
              frames: r.frames, ms: Math.round(r.ms), peak: Math.round(r.peak * 1e5) / 1e5, heard: r.heard,
+             first_ms: r.first_ms, wake_ms: r.wake_ms, zero_ms: Math.round(r.zero_ms), woke: r.woke,
              mode: r.mode || 'webaudio', ctx_was: r.ctxWas ?? null, parts: r.parts ? r.parts.length : null,
              decode_fails: r.decodeFails ?? null, mime: r.mr ? r.mr.mimeType : null,
              inputs: r.inputs, ua: navigator.userAgent };
@@ -256,7 +282,11 @@
     const r = { stream, ctx: null, src: null, node: null, chunks: [], rate: 0,
                 ms: 0, quiet: 0, heard: false, floor: null, tick: null,
                 frames: 0, peak: 0, mutes: 0, why: null, watch: null, inputs: null, max: null,
-                mode: null, mr: null, parts: null };
+                mode: null, mr: null, parts: null,
+                // when the browser gave the microphone, and what came after:
+                // the first window, the first sound, the zeros before it
+                opened: performance.now(), first_ms: null, wake_ms: null, zero_ms: 0, live: false,
+                woke: null, shown: false, waking: null };
     const track = stream.getAudioTracks()[0];
     if (track) {
       track.addEventListener('mute', () => { r.mutes++; });
@@ -309,13 +339,29 @@
     }, NO_SOUND_MS);
     // the longest recording, whatever comes or does not
     r.max = setTimeout(() => { if (rec === r) { r.why = 'longest'; stop(); } }, MAX_MS + 2000);
+    // NOT YET SHOWN RECORDING: at its first sound (`hear`), or after
+    // WAKE_MAX_MS of none
+    if (!r.shown) {
+      micState('wake', 'the microphone is connecting (a car or a headset takes a few seconds) — speak when it turns red');
+      r.waking = setTimeout(() => wake(r, 'timeout'), WAKE_MAX_MS);
+    }
+  }
+
+  // the microphone gives sound (or WAKE_MAX_MS passed): shown recording, its
+  // clock started; once a recording
+  function wake(r, how) {
+    if (r.shown) return;
+    r.shown = true; r.woke = how;
+    r.wake_ms = Math.round(performance.now() - r.opened);
+    clearTimeout(r.waking);
+    if (rec !== r && !busy) return;            // ended meanwhile
     const t0 = performance.now();
-    const show = () => micState('rec', 'recording ' + clock(performance.now() - t0) + ' — tap the microphone to stop');
+    const show = () => { if (rec === r) micState('rec', 'recording ' + clock(performance.now() - t0) + ' — tap the microphone to stop'); };
     show(); r.tick = setInterval(show, 250);
   }
 
   function release(r) {
-    clearInterval(r.tick); clearTimeout(r.watch); clearTimeout(r.max);
+    clearInterval(r.tick); clearTimeout(r.watch); clearTimeout(r.max); clearTimeout(r.waking);
     if (r.mr && r.mr.state !== 'inactive') { try { r.mr.stop(); } catch (e) { /* already */ } }
     try { if (r.src) r.src.disconnect(); if (r.node) r.node.disconnect(); } catch (e) { /* already */ }
     for (const t of r.stream.getTracks()) t.stop();
@@ -495,8 +541,29 @@
     player.src = SILENT; player.play().catch(() => {});
   }
 
+  // A READING'S TIMES GO TO THE NODE'S LOG when it ends (operator, on a
+  // phone, 2026-11-25: "the voice starts very late after the answer
+  // begins" — and a phone has no console to read `timeline()` from): the
+  // numbers only, never a word of the answer; once a reading, and only for
+  // one that played or tried to (POST /ask/voice/timeline).
+  const TIMELINE_SENTENCES = 12;
+  function reportReading(r) {
+    if (r.reported || !times.started.length) return;
+    r.reported = true;
+    try {
+      const t = window.louiseVoice.timeline();
+      const body = { first_word: t.first_word, last_word: t.last_word, started: t.started.slice(0, 4),
+                     taps: t.taps.slice(0, 4), sentences: t.sentences.slice(0, TIMELINE_SENTENCES),
+                     count: t.sentences.length, by_itself: !t.taps.length, blocked: !!r.blocked,
+                     lang: r.lang || null, ua: navigator.userAgent };
+      fetch('/ask/voice/timeline', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
+                                     body: JSON.stringify(body) }).catch(() => {});
+    } catch (e) { /* the report is never in the way */ }
+  }
+
   function stopReading() {
     const r = reading; if (!r) return;
+    reportReading(r);
     reading = null; r.ctl.abort();             // the fetches in flight with it
     if (player) { player.pause(); player.removeAttribute('src'); }
     if (r.wake) r.wake();
@@ -741,8 +808,12 @@
                // each start of a reading: a tap, a question read by itself,
                // or a reading moved to a changed text (follow)
                started: times.started.map(rel), taps: times.taps.map(rel),
+               // `turn`, `synth`, `node`, `cache`: the node's own account of a
+               // sentence (its `Server-Timing`) — the wait behind the sentence
+               // before, the model's call, everything it spent, a kept clip
                sentences: times.items.map(t => ({ chars: t.chars, cut: rel(t.cut), sent: rel(t.sent),
                  got: rel(t.got), synth: t.synth ?? null, audio: t.audio ?? null,
+                 turn: t.turn ?? null, node: t.node ?? null, cache: t.cache ?? null,
                  play: rel(t.play), end: rel(t.end) })) };
     },
     sentences, cut, firstPieces, downsample, wavBytes,

@@ -1639,3 +1639,19 @@ def test_thirteen_models_at_rest_on_a_card_that_holds_them_are_not_over_committe
     assert not [t for _l, t in said if "OVER-COMMITTED" in t], said
     assert resident.read_memory().margin(resident._wall()) == (700 * MIB, True), "the growth is sampled as before"
     resident.set_log(lambda level, text: None)
+
+
+def test_an_over_committed_card_is_said_not_warned_of_where_the_rule_in_force_pages(tmp_path, node, monkeypatch):
+    # the operator, 2026-11-25: "A for paging" — in query mode the card holding more than its size is the
+    # card as it is meant to be; München's first line after 881caff was at "warn"
+    from app import node_mode
+    for mode, level in (("query", "info"), ("embed", "warn")):
+        resident.reset()
+        said: list[tuple[str, str]] = []
+        resident.set_log(lambda lv, text: said.append((lv, text)))
+        node_mode.switch(mode, by="test")
+        resident._say_overcommitted((48_090 * MIB, 32_656 * MIB, ("vega-bge-m3",)))
+        (lv, text), = [x for x in said if "OVER-COMMITTED" in x[1]]
+        assert lv == level, mode
+        assert ("the rule in force here" in text) == (mode == "query")
+    resident.set_log(lambda level, text: None)

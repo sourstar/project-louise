@@ -20,6 +20,55 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **ON THE CAR'S HANDS-FREE "ONLY THE LAST PART OF THE SPOKEN SENTENCE IS WRITTEN DOWN" (operator, Android
+  Chrome over Bluetooth, by the Bug session, 2026-11-25) — the microphone is shown recording when it GIVES
+  SOUND, not when it is opened; the wait is measured.** The page turned the microphone red the instant the
+  browser handed it over. On Bluetooth the phone switches the car from its media profile to its call profile
+  only then, and for a second or three the track gives nothing or samples that are all zero: he spoke into
+  the switch (the Bug session's reading of the code; NOT measured — no clip of his car has reached the node's
+  log; CONFIRMED BY HIM the same evening: waiting about 5 s after the tap "does the trick"). NOW: opened, the
+  page says "the microphone is connecting (a car or a headset takes a few seconds) — speak when it turns
+  red" (dashed, not red, still tappable to stop); it turns red at the first window holding a sample that is
+  not zero. The wait has the recording's own bounds and no shorter one — his car needs five seconds: no
+  window at all for 3 s and the second way to record is tried, nothing but zeros for 8 s and he is told. Every
+  recording's report carries what it cost: `first_ms` (the first window), `wake_ms` (the first sound),
+  `zero_ms` (the zeros before it), `woke` (sound | timeout) — the line "voice: microphone … " under `models`.
+  WHAT IT DOES NOT DO: recover what is said before the route is up (nothing can), nor keep the microphone
+  open between questions (the Bug session's third option: the car would stay in call mode and the answer
+  read aloud would play at call quality) — to be judged on the car's numbers. A quiet built-in microphone is
+  never exactly zero, so a phone turns red at once as before; if a device's does read zero in silence, it
+  turns red at his first word, and his words are recorded from the start either way.
+
+- **"THE VOICE STARTS VERY LATE AFTER THE ANSWER BEGINS" (operator, on a phone, by the Bug session,
+  2026-11-25) — NOT YET FOUND; the page now sends each reading's times to the node's log.** The Bug session's
+  three suspicions: the answer is not streamed, the speech model is not loaded ahead, or speech waits for the
+  whole answer. What the node shows of his readings that evening (München, the speech backend's lines, query
+  mode): the model loaded, every sentence read from its kept encoding, 2.2–3.4 s of synthesis a sentence at
+  32 steps (his setting), made one after another without a gap — the synthesiser runs at about the speed of
+  speech, with no head start; so not the load. Which of the rest it is lies in the page's own timeline
+  (`louiseVoice.timeline()`), which a phone has no console to show. NOW: when a reading ends the page posts
+  its times (`POST /ask/voice/timeline`: numbers only, never a word of the answer, once a reading) and the
+  node writes one line under `models` — "voice: reading (who, lang) — the answer's first word 2.4 s after
+  Ask; the reading started at 2.5 s (by itself); FIRST SOUND at 6.0 s, 3.6 s after the first word; sentence
+  1 (62 chars): cut 0.7 s after the first word, asked for 0.0 s later, here 2.9 s after that (the node made
+  it in 2.5 s, 4.1 s of sound), played 0.1 s after it arrived; the longest silence between two sentences
+  1.2 s; 7 sentence(s)" — and the numbers behind it. THE NODE'S SIDE IS IN IT (the Bug session, the same
+  evening: "the delay … is much more than 3 s … when the request arrived versus when synthesis started"):
+  the speech route's `Server-Timing` now carries `node`, everything between a sentence's arrival and its
+  answer, beside `turn` (the wait behind the sentence before) and `synth` (the model's call); the line says
+  "after N s waiting its turn", "N s elsewhere on the node (a thread, a lookup)" and "N s between the page
+  and the node" wherever one of them is 0.3 s or more. Known before any reading comes in: a first sentence is
+  cut only when the next begins, and then costs its synthesis (about 2.5 s at 32 steps, about half at 16).
+  THE FIX WAITS FOR HIS NEXT READING'S LINE: nothing is changed on a guess.
+- **After 881caff (the keeper's fix) on the node, 17:46Z, query mode (München):** "resident: THE CARD IS
+  OVER-COMMITTED — 5 model(s) read short on the card (…), and the models LocalAI holds take 48,090 MiB at
+  rest against the card's 32,656 MiB"; twelve models in the set (pubmed's document encoder no longer), the
+  35B counted whole and in the budget (21,449 of 24,749 MiB: the default margin, nothing measured yet);
+  after a question no "corpus encoder(s) unloaded" and no cold start. That line was logged at "warn"; where
+  the rule in force pages it is now said at "info" and says it is the rule. Left over, harmless: the
+  document encoder is still loaded in LocalAI (nothing unloads for being idle). ALSO READ: "languages" costs
+  2.6–3.7 s on a first search and 0.1 s on the second — with the task of the 40–54 s question.
+
 - **TWO DECISIONS OF THE OPERATOR, 2026-11-25 evening: "A for paging, and keep report only".**
   (1) QUERY MODE RELIES ON THE DRIVER'S PAGING ON PURPOSE: nothing is unloaded to make room while system
   memory allows. Built: in query mode `model_evict.rule()` is "page" whatever `[models] make_room` says, for
