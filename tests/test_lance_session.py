@@ -90,6 +90,10 @@ def made_sessions(monkeypatch):
     made: list[dict] = []
     seen: list = []
     real_session = lancedb.Session
+    # the connections are cached by path, and pytest gives a finished test's
+    # directory name to the next one (tmp_path_retention_policy=failed): a
+    # test must not be answered from another test's connection
+    monkeypatch.setattr(embeddings, "_dbs", {})
 
     def session(**kw):
         made.append(kw)

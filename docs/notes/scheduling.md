@@ -566,6 +566,113 @@ rows not yet embedded, or the embedded ones (`lookahead.Chain.kind`,
 seconds waited in each kind. The rule: when an optimisation applies to SOME
 rows, write down which, and make its own log line a number someone reads.
 
+**23. A wait with no request behind it.** EUR-Lex5.next, 2026-11-25. `node
+pause <collection>` cut its scan short at 22 minutes; the log said
+"discovery interrupted … resumes next scan". At the resume a pipeline thread
+started and nothing asked for a scan: the requests were the start's, the
+interval's (360 min), a fetch's end, a config change — never a collection's
+own resume. The interrupted scan had inserted rows, so the slice pass stood
+at row 970,426 of 980,178 and `slice_scope.ready` said no: the stages
+selected nothing ("0 units in 7 turns") behind one line said an hour before,
+for thirty minutes, until the worker was restarted. The next request would
+have been the interval's, about five hours later. The embed selection's
+wait, ten lines below it in the same loop, had asked for its scan since
+11-02; the slice scope's never had.
+→ A scan cut short by its collection's own stop is OWED to its resume
+(`_owe_scan(…, OWED_BY_PAUSE)`, kept owed round after round while the
+collection is not run, `_request_owed_scans`). And the wait itself asks:
+every `WAIT_SAID_EVERY_S` (300 s) it says where the pass is — "row N of M" —
+and whether a scan is running, asked for, or asked for now
+(`_wait_for_slice_scope`); the line and the request share the period, so a
+scan that cannot run is not started again at every idle pass. The rule:
+EVERY WAIT HAS ITS REQUEST AND ITS NUMBER. A thread that waits for something
+another thread produces checks that the producer is running or asked for,
+asks if not, and says how far it is — or it waits for a restart.
+
+**24. A rule of the node that lived in an operator's script.** 2026-11-25.
+EUR-Lex5.next ran its heavy units (package units of 14 MB in the large lane)
+beside three other collections under one 24 GiB cap, and what kept the kernel
+away was München's monitor: the worker cgroup's `anon` read every ten seconds,
+the collection paused over 21,500 MiB and resumed under 18,000. An agent
+standing guard — and a rule nobody could test, find or inherit: a collection
+built from scratch on another node would not have it.
+→ `app/memory_yield.py`: the same rule in the worker (87.5 % and 73 % of
+the cgroup's limit), the yielding collection chosen by what it holds of the
+parse pool in flight, its pipeline thread standing down after its unit
+(`_pipeline_worker`), bounded at ten minutes where the memory is not the
+pool's, and each step said with its numbers. NOT a measured cure: the
+monitor's rule never fired (its highest reading was 17,412 MiB), so the first
+yield on a node is the first measurement of whether a yield helps. The rule:
+what protects a collection is the platform's and is tested; what an operator
+runs beside it is, at most, a second pair of eyes.
+
+**25. Two things the worker starts at once, one starving the other.** 2026-11-25.
+gutenberg on the node: the worker started at 09:40:28Z, its embed producer
+three seconds later, the keeper's first beat began loading thirteen models at
+:36 — and at :55 a context of the collection's encoder failed its canary on a
+card with 1,493 MiB free. The run's statements were set aside and embedding
+paused, as invariant 12 demands; the gate, which loads its own copy, found no
+room either and ran forty minutes later. Nothing wrong was written. But every
+start of the worker — every deploy — could cost a collection forty minutes,
+through a race the worker made with itself.
+→ `resident.holds_embedding`, `worker._preload_holds`: a collection's own
+embedding, its gate and the at-once gate of an untested copy do not start
+while the keeper is still loading after a START — the worker's first ten
+minutes, or the ten after a resume from a mode that preloads nothing —
+bounded twice (a keeper that never beats holds nobody past two minutes;
+nothing is held past the window), said once with its reason and once when it
+ends. Later single reloads hold nothing: a hold at each would starve
+embedding under an eviction that repeats. The rule: WHAT A START LAUNCHES
+TOGETHER IS ORDERED, NOT RACED — when two of the worker's own subsystems want
+the same scarce thing in the same minute, one of them waits by design and
+says so. (Whether that canary was a graph REFUSED FOR MEMORY answered as a
+failure is the engine's question; the order is right either way.)
+
+**26. A batch that queued its own large units, on a lane of one.** 2026-11-25.
+EUR-Lex5.next's fts met the 23 languages of 32018R0688, 90–136 MB each. A
+large unit takes the large lane, and the lane was ONE in the whole worker;
+within a batch a large part that found the lane taken made the batch drain
+and ask again — so one fts batch ran nine of them one after the other
+("indexed 9 documents / 22637 chunks in one commit (1513.5s: parse 1503.0 …);
+91 more parsed, carried to the next batch"), the look-ahead six more in the
+same minutes, while ten children idled ("1.9 of 11 slots in flight (17%)"),
+91 light documents sat parsed and uncommitted, and the collection's rdf —
+134,618 pending — waited behind its one pipeline thread. Over the next
+quarter of an hour the collection averaged ~100 documents and ~118 rdf a
+minute, in bursts of thousands between waits of many minutes; an operator's
+monitor took one such wait for a stall and paused healthy work.
+→ `LARGE_LANES = 2`: the lane was never what held the memory — every large
+part still passes `_room` (its peak free in the cgroup now) and `_reserve`
+(its estimate beside every estimate in flight, under ADMIT_FRACTION,
+measured) — and on the node's numbers (a unit peaks at ~2.8 GiB, the cgroup
+at 16.8 of 24.6 GiB with one in flight) that guard admits a second and
+refuses a third. And A BATCH PUTS AT MOST A LANE'S WORTH OF LARGE UNITS: the
+others are deferred to the next round at once, whatever the lane's state at
+that instant, so the batch commits after two and the collection's other
+stages get their turn between rounds. The rule: A BATCH IS SIZED BY ITS
+SLOWEST MEMBERS, NOT BY ITS COUNT — a selection that can gather several
+units of minutes each must cap them, or one commit holds a collection for as
+long as all of them take.
+
+**27. A wait that asked for more than it needed.** 2026-11-25, the same
+collection, the same afternoon as 23's fix. Pitfall 23 made the stages' wait
+for the slice scope SAY where the pass was and ASK for the scan that runs it.
+Then a release (`dev rederive --release`) reset the pass to row 0 of
+1,025,283: the wait asked, as built, for a scan — and 627,868 released rows
+stood eighteen minutes (13:30:21Z the release's end, 13:48:40Z "slice scope:
+1025283 held") behind a corpus walk of 932,896 units that had nothing to
+find. The pass itself took the last fourteen seconds. The scan was the
+pass's only producer by history (new rows come from scans), not by need: the
+pass reads the manifest.
+→ `worker.PASS_ONLY`: a wait with no scan running and none asked for asks
+for THE PASS ALONE — a scan request that walks nothing, run by the scan
+thread (the pass's writer), followed by the embed selection as after a
+scan. A real scan takes a queued pass's place and is never lost to one; in
+a mode that parses nothing the pass alone owes nothing. The rule: ASK THE
+PRODUCER FOR WHAT YOU WAIT FOR, NOT FOR THE JOB IT USUALLY COMES WITH — and
+when you write a wait's request, time the thing requested against the
+thing needed.
+
 ## 6. Before you change the scheduler — the checklist
 
 1. **Read the worker log as a time series first.** It is the first
@@ -604,6 +711,11 @@ rows, write down which, and make its own log line a number someone reads.
    corpus are not comparable, and `docs/s` will happily show a win that is
    only a different set of articles. When `docs/s` and `ms/doc` disagree,
    believe `ms/doc`.
+10. **Exercise the path for EACH KIND of collection and each way it can be
+    entered** (pitfalls 22 and 23, 2026-11-25): embedded, carried (embedded
+    before its text is indexed), embed off; started, resumed after its own
+    pause, resumed after the node's, frozen and unfrozen. Both were paths
+    the common collection never took, and both passed every test there was.
 
 ## 7. How to measure
 

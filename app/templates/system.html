@@ -37,7 +37,7 @@
   <summary><h2>Mode</h2> <span class="note">the node is in <b>{{ node_mode_labels[node_modes.mode] }}</b></span></summary>
   {% if mode_error %}<div class="note"><span class="badge err">not saved</span> {{ mode_error }}</div>{% endif %}
   {% if mode_saved %}<div class="note"><span class="badge">saved</span> the worker takes it at its next round</div>{% endif %}
-  {% if node_modes.one_model %}<div class="note"><span class="badge">one chat model</span> both modes answer with <b>{{ node_modes.one_model }}</b>, so a switch changes no model: name the large one and the small one under Models, below.</div>{% endif %}
+  {% if node_modes.one_model %}<div class="note"><span class="badge">one chat model</span> every mode answers with <b>{{ node_modes.one_model }}</b>, so a switch changes no model: name the large one and the small one under Models, below.</div>{% endif %}
   <form method="post" action="/admin/system/mode" class="actions">
     {% for r in node_modes.rows %}
     <button class="mode{{ ' selected' if node_modes.mode==r.mode }}" name="mode" value="{{ r.mode }}"
@@ -46,21 +46,32 @@
     {% endfor %}
   </form>
   <form method="post" action="/admin/system/modes">
-  <table><tr><th>mode</th><th>chat model</th><th>switches the run mode to</th><th>network budget, down</th><th>network budget, up</th></tr>
+  <table><tr><th>mode</th><th>chat model</th><th>switches the run mode to</th><th>network</th><th>embedding</th><th>network budget, down</th><th>network budget, up</th></tr>
     {% for r in node_modes.rows %}
     <tr data-node-mode="{{ r.mode }}"><td>{{ r.label }}{% if node_modes.mode==r.mode %} <span class="badge">now</span>{% endif %}
         <div class="note">{{ r.says }}</div></td>
       <td>{{ r.chat_model }}</td>
-      <td>{% if r.mode == 'chat' %}<select name="chat_run">
-            {% for s, label in node_modes.chat_runs %}<option value="{{ s }}"{{ ' selected' if node_modes.chat_run==s }}>{{ label }}</option>{% endfor %}
-          </select>{% else %}{{ dict(mode_labels)[r.run] }}{% endif %}</td>
-      <td><input name="{{ r.mode }}_down_max" value="{{ r.down }}" placeholder="{{ node_modes.budget.down }} ([budget]'s)" style="width:15em">
+      <td>{% if r.mode == 'query' %}nothing is parsed, indexed or embedded{% elif r.run %}{{ dict(mode_labels)[r.run] }}{% else %}<span class="note">nothing: the run mode stays yours (the Library's four)</span>{% endif %}</td>
+      <td>{% if r.network_key %}<select name="{{ r.network_key }}">
+            {% for s, label in node_modes.networks %}<option value="{{ s }}"{{ ' selected' if r.network==s }}>{{ label }}</option>{% endfor %}
+          </select>{% else %}<span class="note">by the run mode</span>{% endif %}</td>
+      {# EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you
+         can also choose local/p2p embedding"): who embeds the backlog of the
+         collections that embed one #}
+      <td>{% if r.mode == 'embed' %}<select name="embed_embedding" title="who embeds the backlog of the collections whose own setting is all local or all p2p, while the node is in embed mode: every part here, or the parts the network gives this node, published as it goes. Collections set to off or on-demand keep their own setting.">
+            {% for s, label in node_modes.embeddings %}<option value="{{ s }}"{{ ' selected' if r.embedding==s }}>{{ label }}</option>{% endfor %}
+          </select>{% elif r.mode == 'query' %}<span class="note">nothing is embedded</span>{% else %}<span class="note">each collection's own</span>{% endif %}</td>
+      {% if r.key %}
+      <td><input name="{{ r.key }}_down_max" value="{{ r.down }}" placeholder="{{ node_modes.budget.down }} ([budget]'s)" style="width:15em">
         {% if r.down %}<div class="note">{{ r.down_in_force }}</div>{% endif %}</td>
-      <td><input name="{{ r.mode }}_up_max" value="{{ r.up }}" placeholder="{{ node_modes.budget.up }} ([budget]'s)" style="width:15em">
-        {% if r.up %}<div class="note">{{ r.up_in_force }}</div>{% endif %}</td></tr>
+      <td><input name="{{ r.key }}_up_max" value="{{ r.up }}" placeholder="{{ node_modes.budget.up }} ([budget]'s)" style="width:15em">
+        {% if r.up %}<div class="note">{{ r.up_in_force }}</div>{% endif %}</td>
+      {% else %}
+      <td class="note">{{ node_modes.budget.down }} ([budget]'s)</td><td class="note">{{ node_modes.budget.up }} ([budget]'s)</td>
+      {% endif %}</tr>
     {% endfor %}
   </table>
-  <button type="submit">save</button> <span class="note">a budget is a rate as [budget]'s: <code>50MB</code>, <code>400Mbit</code>; empty, [budget]'s own. Written into platform.toml [modes]; the two chat models are set under Models, below. A cron job switches with <code>POST /api/mode {"mode": "embed"}</code> or <code>louise node mode chat</code>.</span>
+  <button type="submit">save</button> <span class="note">a budget is a rate as [budget]'s: <code>50MB</code>, <code>400Mbit</code>; empty, [budget]'s own. Embedding is embed mode's: who embeds the backlog of the collections set to all local or all p2p — each as it is set, every part here, or the parts the network gives this node (a collection that is not shared stays all local; off and on-demand are not touched). Written into platform.toml [modes]; the two chat models are set under Models, below. A cron job switches with <code>POST /api/mode {"mode": "embed"}</code> or <code>louise node mode chat</code>.</span>
   </form>
 </details></div>
 
@@ -81,8 +92,10 @@
   <table><tr><th>use</th><th>model</th><th>server</th><th>written in</th></tr>
     {% for m in node_models %}
     <tr data-model-use="{{ m.use }}"><td>{{ m.use }}</td>
-      <td><input name="{{ m.field }}" value="{{ m.value }}" style="width:100%;min-width:16em"{% if m.field != 'reading' %} list="server-models"{% endif %}
-        placeholder="{% if m.default %}{{ m.default }} ({{ m.default_from }}'s){% elif m.field == 'reading' %}la = index-translate-9b, grc = …{% else %}not set: not offered{% endif %}">
+      <td>{% if m.field == 'tts_steps' %}{# a number, not a model's name: the admin picks it, 4 to 64 (platform_config.TTS_STEPS) #}<input name="{{ m.field }}" value="{{ m.value }}" type="number" min="{{ tts_steps_range[0] }}" max="{{ tts_steps_range[1] }}" step="1" inputmode="numeric" style="width:8em"
+        placeholder="32"> <span class="note">steps a sentence, {{ tts_steps_range[0] }} to {{ tts_steps_range[1] }}: fewer are faster and coarser; empty, the model's own (32)</span>
+        {% else %}<input name="{{ m.field }}" value="{{ m.value }}" style="width:100%;min-width:16em"{% if m.field != 'reading' %} list="server-models"{% endif %}
+        placeholder="{% if m.default %}{{ m.default }} ({{ m.default_from }}'s){% elif m.field == 'reading' %}la = index-translate-9b, grc = …{% else %}not set: not offered{% endif %}">{% endif %}
         {% if m.default is not none and m.overridden %}<div class="note">over {{ m.default_from }}'s {{ m.default }}; empty goes back to it</div>{% endif %}
         {% if m.in_force %}<div class="note"><span class="badge">in force</span> the node is in {{ node_mode_labels[node_modes.mode] }}</div>{% endif %}</td>
       <td>{{ m.server or '—' }}</td><td>{{ m.set_in }}</td></tr>

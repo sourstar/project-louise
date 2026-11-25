@@ -116,7 +116,7 @@ TEMPLATES.env.globals["label"] = display_names.label
 TEMPLATES.env.globals.update(mode_labels=node_state.MODE_LABELS,
                              mode_says=node_state.MODE_SAYS,
                              mode_runs=node_state.mode_runs)
-# ...and the node's mode of use, embed or chat (app/node_mode.py), read at
+# ...and the node's mode of use, embed, query or custom (app/node_mode.py), read at
 # each render: a run-mode button the mode refuses says so instead of failing
 TEMPLATES.env.globals.update(node_mode_now=node_mode.current,
                              node_mode_refuses=node_mode.refuses,
@@ -491,7 +491,11 @@ def ask_voices(request: Request):
 #: what a recording's report may say (app/static/voice.js `micInfo`), and its size
 VOICE_REPORT_KEYS = ("label", "ready", "muted", "mutes", "rate", "channels", "ec", "ns", "agc", "ctx_rate",
                      "ctx_state", "frames", "ms", "peak", "heard", "inputs", "stop", "vad", "chars", "ua",
-                     "mode", "ctx_was", "parts", "decode_fails", "mime")
+                     "mode", "ctx_was", "parts", "decode_fails", "mime",
+                     # how long the microphone took to give sound once opened (a car's Bluetooth
+                     # switching profile): the first window, the first sample that is not zero,
+                     # the zeros before it, and whether sound or WAKE_MAX_MS showed it recording
+                     "first_ms", "wake_ms", "zero_ms", "woke")
 VOICE_REPORT_MAX = 4096
 
 
@@ -520,6 +524,112 @@ async def ask_voice_report(request: Request):
     model_pins.node_event("info" if outcome == "heard" else "warn",
                           f"voice: microphone {outcome} ({who}) — "
                           + json.dumps(said, ensure_ascii=False, separators=(",", ":"))[:2000])
+    return Response(status_code=204)
+
+
+VOICE_TIMELINE_MAX = 8192
+#: the sentences of a reading the line names (the page sends as many at most)
+VOICE_TIMELINE_SENTENCES = 12
+
+
+def _ms(v) -> int | None:
+    """A time the page measured, in ms, or None: a number only."""
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v < 86_400_000 else None
+
+
+def _s(ms: int | None) -> str:
+    return "?" if ms is None else f"{ms / 1000:.1f} s"
+
+
+def reading_said(body: dict) -> tuple[str, dict]:
+    """ONE READING IN WORDS AND IN NUMBERS, from the times its page measured
+    (`louiseVoice.timeline()`, ms since Ask): where the wait for the first
+    sound went — the answer's first word, the first sentence's cut (it is cut
+    when the next begins), its synthesis, its arrival, its playing — and the
+    longest silence between two sentences. Numbers only: whatever else a
+    client sends is dropped."""
+    first_word, started = _ms(body.get("first_word")), [_ms(v) for v in (body.get("started") or [])[:4]]
+    rows = []
+    for t in (body.get("sentences") or [])[:VOICE_TIMELINE_SENTENCES]:
+        if isinstance(t, dict):
+            rows.append({k: _ms(t.get(k)) for k in ("chars", "cut", "sent", "got", "synth", "audio", "turn", "node",
+                                                    "cache", "play", "end")})
+    count = _ms(body.get("count"))
+    numbers = {"first_word": first_word, "last_word": _ms(body.get("last_word")),
+               "started": [v for v in started if v is not None], "sentences": rows,
+               "count": count if count is not None else len(rows)}
+    one = rows[0] if rows else {}
+    play, start = one.get("play"), (numbers["started"] or [None])[0]
+    parts = [f"the answer's first word {_s(first_word)} after Ask"]
+    if start is not None:
+        parts.append(f"the reading started at {_s(start)} ({'by itself' if body.get('by_itself') else 'a tap'})")
+    if body.get("blocked"):
+        # the page TRIED to play and the browser refused (NotAllowedError: no
+        # tap close enough before it): its `play` time is the attempt, and
+        # nothing was heard until the reader tapped the speaker
+        parts.append("THE BROWSER DID NOT LET THE PAGE PLAY"
+                     + ("" if play is None else f" (tried at {_s(play)})")
+                     + ": nothing was heard until a tap — the next reading's line says when")
+    elif play is None:
+        parts.append("NO SOUND WAS PLAYED")
+    else:
+        after = None if first_word is None else play - first_word
+        parts.append(f"FIRST SOUND at {_s(play)}" + ("" if after is None else f", {_s(after)} after the first word"))
+        cut, sent, got = one.get("cut"), one.get("sent"), one.get("got")
+        if None not in (cut, sent, got):
+            waited = None if first_word is None else cut - first_word
+            # THE NODE'S SIDE of the wait between asked-for and here: its turn
+            # behind the sentence before, the model's call, and whatever else
+            # the node spent on it; the rest was the way there and back
+            node, turn, synth = one.get("node"), one.get("turn") or 0, one.get("synth")
+            made = ("answered from the node's kept clips" if one.get("cache") else
+                    f"the node made it in {_s(synth)}"
+                    + (f" after {_s(turn)} waiting its turn" if turn >= 100 else ""))
+            if node is not None and synth is not None and not one.get("cache"):
+                other = node - turn - synth
+                if other >= 300:
+                    made += f" and {_s(other)} elsewhere on the node (a thread, a lookup)"
+            if node is not None:
+                away = (got - sent) - node
+                if away >= 300:
+                    made += f"; {_s(away)} between the page and the node"
+            parts.append(
+                f"sentence 1 ({one.get('chars')} chars): "
+                + ("" if waited is None else f"cut {_s(waited)} after the first word, ")
+                + f"asked for {_s(sent - cut)} later, here {_s(got - sent)} after that "
+                + f"({made}, {_s(one.get('audio'))} of sound), "
+                + f"played {_s(play - got)} after it arrived")
+    gaps = [b["play"] - a["end"] for a, b in zip(rows, rows[1:]) if a.get("end") is not None and b.get("play") is not None]
+    if gaps:
+        parts.append(f"the longest silence between two sentences {_s(max(gaps))}")
+    parts.append(f"{numbers['count']} sentence(s)")
+    return "; ".join(parts), numbers
+
+
+@ask_router.post("/ask/voice/timeline")
+async def ask_voice_timeline(request: Request):
+    """The times of one reading aloud, as its page measured them (operator, on
+    a phone, 2026-11-25: "the voice starts very late after the answer
+    begins"): one line in the node's log under `models` saying where the
+    wait for the first sound went, and the numbers behind it. Times only —
+    never a word of the answer; 204."""
+    from . import auth, model_pins
+    raw = await request.body()
+    if len(raw) > VOICE_TIMELINE_MAX:
+        raise HTTPException(413, f"a reading's times are at most {VOICE_TIMELINE_MAX} bytes")
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise HTTPException(400, "the body is not JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(400, "the body is not a JSON object")
+    said, numbers = reading_said(body)
+    v = getattr(request.state, "viewer", None)
+    who = auth.account(v) or (v.role if v is not None else "nobody")
+    lang = "".join(c for c in str(body.get("lang") or "") if c.isalnum() or c == "-")[:12] or "as written"
+    ua = " ".join(str(body.get("ua") or "?").split())[:160]
+    model_pins.node_event("info", f"voice: reading ({who}, {lang}) — {said} — "
+                          + json.dumps(numbers, separators=(",", ":"))[:1600] + f" — {ua}")
     return Response(status_code=204)
 
 
@@ -616,7 +726,8 @@ def _remember(lang: str, text: str, value: str) -> None:
     _translation_cache[(lang, text)] = value
 
 
-def _log_translation(lang: str, items: int, got: int, cached: int, missed: int, secs: float) -> None:
+def _log_translation(lang: str, items: int, got: int, cached: int, missed: int, secs: float,
+                     cut: list[str] | None = None) -> None:
     """One log line per stream request, so what the page did with a
     translation can be read back from the web log (2026-10-28: the answer
     stayed untranslated and nothing recorded whether it was asked for,
@@ -625,9 +736,11 @@ def _log_translation(lang: str, items: int, got: int, cached: int, missed: int, 
     try:
         con = db.connect()
         try:
-            db.log_event(con, "info", "translate",
+            db.log_event(con, "warn" if cut else "info", "translate",
                          f"stream into {lang}: {items} items — {got} translated ({cached} cached), "
-                         f"{missed} missed, {secs:.1f} s")
+                         f"{missed} missed, {secs:.1f} s"
+                         + (f"; {len(cut)} cut short and shown in the original, not kept "
+                            f"(the first: {cut[0]})" if cut else ""))
         finally:
             con.close()
     except Exception:   # noqa: BLE001 — a log line never fails the page
@@ -895,27 +1008,36 @@ def ask_translate_stream(body: TranslateBody):
         # a call that raised before writing a word marks the rest missed
         # instead of queueing each behind the same failure.
         down = False
+        cut: list[str] = []          # why each stream that did not end whole did not
         for cid, text, _src in long_:
             if down:
                 missed.append(cid)
                 yield line({"id": cid, "missed": True})
                 continue
             parts: list[str] = []
+            # WHOLE OR A MISS: only a stream that reached its end is shown as
+            # the passage's translation and kept for the next reader. One the
+            # model server cut (`llm.StreamCut`: an error in mid-stream, a
+            # cap, a stream closed early) or that failed under way was, until
+            # 2026-11-25, joined from what had arrived and remembered as whole.
+            whole = False
             try:
                 for delta in llm.translate_stream(text, lang):
                     parts.append(delta)
                     yield line({"id": cid, "delta": delta})
-            except Exception:   # noqa: BLE001 — the item is a miss, the page says so
+                whole = True
+            except Exception as e:   # noqa: BLE001 — the item is a miss, the page says so
                 down = not parts
+                cut.append(f"{type(e).__name__}: {e}"[:200])
             value = "".join(parts).strip()
-            if llm.is_translation(value, text, lang):
+            if whole and llm.is_translation(value, text, lang):
                 _remember(lang, text, value)
                 got += 1
                 yield line({"id": cid, "text": value})
             else:
                 missed.append(cid)
                 yield line({"id": cid, "missed": True})
-        _log_translation(lang, len(items), got, cached, len(missed), time.monotonic() - t0)
+        _log_translation(lang, len(items), got, cached, len(missed), time.monotonic() - t0, cut)
         yield line({"done": True, "failed": got == 0 and bool(missed), "missed": missed})
 
     def held():
@@ -2748,6 +2870,9 @@ def _collection_shelf(collection: collections_mod.Collection,
         # one the node will not run as written (07 §7.8, 2026-10-19)
         "embed_mode_file": collection.embed_mode_default,
         "embed_mode_note": getattr(collection, "embed_mode_note", None),
+        # what embed mode's embedding choice does to this collection, in
+        # words; None where it is not in force for it (`desired_embed_mode`)
+        "embed_mode_choice": collections_mod.desired_embed_mode(collection)[1],
         "share": bool(getattr(collection, "share", False)),
         # the SHARE box on every collection that can be served (a public
         # Codex, 04 §4.3) — never only where the p2p line happens to be
@@ -4377,8 +4502,9 @@ def _recent_events_all(limit: int = 60) -> list[dict]:
 
 #: the Models panel's fields, in its order: (form field, use, where it is written)
 MODEL_FIELDS = (
-    ("chat_large", "chat, large: chat mode's", "platform.toml [models] chat_large"),
+    ("chat_large", "chat, large: query mode's", "platform.toml [models] chat_large"),
     ("chat_small", "chat, small: embed mode's", "platform.toml [models] chat_small"),
+    ("chat", "chat: custom mode's, and the others' where theirs is empty", "platform.toml [models] chat"),
     ("translate", "translation", "platform.toml [models] translate"),
     ("reading", "translation, by source language", "platform.toml [translate] reading"),
     ("stt_model", "speech to text", "platform.toml [speech]"),
@@ -4428,8 +4554,10 @@ def _node_models() -> list[dict]:
         # THE TWO CHAT MODELS (operator, 2026-11-25: "The current chat model
         # setting becomes 2 chat settings, large one and a small one"): chat
         # mode's and embed mode's, each as `config.chat_model_for` resolves it
-        "chat_large": config.chat_model_for(node_mode.CHAT),
+        "chat_large": config.chat_model_for(node_mode.QUERY),
         "chat_small": config.chat_model_for(node_mode.EMBED),
+        # ...and custom mode's: `[models] chat`, the one setting there was
+        "chat": config.chat_model_for(node_mode.CUSTOM),
         "translate": config.TRANSLATE_MODEL,
         "reading": _reading_text(_reading_models()),
         **{k: getattr(speech, k) or "" for k in platform_config.SPEECH_KEYS},
@@ -4438,11 +4566,12 @@ def _node_models() -> list[dict]:
     # chat` there was where the file still names it, the environment's otherwise
     chat_default = files.chat or config.ENV_CHAT_MODEL
     chat_from = "[models] chat" if files.chat else "the environment"
-    default = {"chat_large": chat_default, "chat_small": chat_default,
+    default = {"chat_large": chat_default, "chat_small": chat_default, "chat": config.ENV_CHAT_MODEL,
                "translate": config.ENV_TRANSLATE_MODEL}
-    default_from = {"chat_large": chat_from, "chat_small": chat_from, "translate": "the environment"}
+    default_from = {"chat_large": chat_from, "chat_small": chat_from, "chat": "the environment",
+                    "translate": "the environment"}
     server = {"translate": config.TRANSLATE_URL, "reading": config.TRANSLATE_URL}
-    in_force = "chat_large" if node_mode.current() == node_mode.CHAT else "chat_small"
+    in_force = {node_mode.QUERY: "chat_large", node_mode.EMBED: "chat_small"}.get(node_mode.current(), "chat")
     return [{"field": f, "use": use, "set_in": where, "value": value[f] or "",
              "default": default.get(f), "default_from": default_from.get(f),
              "overridden": f in default and bool(getattr(files, f, None)),
@@ -4510,13 +4639,21 @@ def _node_modes() -> dict:
             "mode": mode, "label": label, "says": node_mode.SAYS[mode],
             "chat_model": config.chat_model_for(mode),
             "run": node_mode.run_of(mode, pc.modes),
-            "down": pc.modes.written(f"{mode}_down_max"), "up": pc.modes.written(f"{mode}_up_max"),
+            # query mode's keys keep the morning's name (`chat_*`); custom has none: [budget]'s
+            "key": {node_mode.QUERY: "chat", node_mode.EMBED: "embed"}.get(mode),
+            "down": pc.modes.written(f"{'chat' if mode == node_mode.QUERY else mode}_down_max"),
+            "up": pc.modes.written(f"{'chat' if mode == node_mode.QUERY else mode}_up_max"),
             "down_in_force": _rate(b["down"]), "up_in_force": _rate(b["up"]),
         })
-    return {"mode": node_mode.current(), "rows": rows, "chat_run": pc.modes.chat_run,
+    for r in rows:
+        r["network"] = pc.modes.network(r["mode"])      # None: custom, its run mode decides
+        r["network_key"] = {node_mode.QUERY: "query_network", node_mode.EMBED: "embed_network"}.get(r["mode"])
+        # embed mode's embedding choice (who embeds a backlog): embed mode's only
+        r["embedding"] = pc.modes.embedding(r["mode"])
+    return {"mode": node_mode.current(), "rows": rows, "networks": platform_config.NETWORK_LABELS,
+            "embeddings": platform_config.EMBEDDING_LABELS,
             # one model named for both: a switch changes no model, said on the page (RULE 2)
-            "one_model": rows[0]["chat_model"] if rows[0]["chat_model"] == rows[1]["chat_model"] else None,
-            "chat_runs": [(s, dict(node_state.MODE_LABELS)[s]) for s in platform_config.CHAT_RUNS],
+            "one_model": (rows[0]["chat_model"] if len({r["chat_model"] for r in rows}) == 1 else None),
             "budget": {"down": _rate(pc.bandwidth.down_max_bps), "up": _rate(pc.bandwidth.up_max_bps)}}
 
 
@@ -4528,25 +4665,27 @@ async def system_mode_set(request: Request):
     from urllib.parse import quote
     from . import model_pins
     form = await request.form()
-    mode = str(form.get("mode", "")).strip()
-    if mode not in node_mode.MODES:
-        return RedirectResponse(f"/admin/system?mode_error={quote('mode is embed or chat')}#sys-mode",
+    mode = node_mode.named(form.get("mode", ""))
+    if mode is None:
+        return RedirectResponse(f"/admin/system?mode_error={quote('mode is embed, query or custom')}#sys-mode",
                                 status_code=303)
     client = request.client.host if request.client else "?"
     got = node_mode.switch(mode, by=f"the System page, from {client}")
-    model_pins.node_event("info", f"node switched to {mode} mode from the System page "
-                                  f"(was {got['before']}); run mode {got['run']}")
+    if got["changed"]:
+        model_pins.node_event("info", f"node switched to {mode} mode from the System page "
+                                      f"(was {got['before']}); run mode {got['run']}")
     return RedirectResponse("/admin/system?mode_saved=1#sys-mode", status_code=303)
 
 
 @admin_router.post("/system/modes")
 async def system_modes_set(request: Request):
-    """The Mode panel's settings: chat mode's run mode and each mode's
-    network budget, each one that changed written into platform.toml's
-    `[modes]` (read back before it replaces the file; an empty budget: the
-    key removed, `[budget]`'s in force). Chat mode's run mode is taken at
-    once where the node is in chat mode. The worker applies a budget at its
-    next round, no restart."""
+    """The Mode panel's settings: each mode's network choice and network
+    budget and embed mode's embedding choice, each one that changed written
+    into platform.toml's `[modes]` (read back before it replaces the file;
+    an empty budget: the key removed, `[budget]`'s in force). Every gate
+    reads the network choice from the file, so it is in force at once; the
+    worker applies a budget, and the embedding choice to the collections it
+    governs, at its next round. No restart."""
     from urllib.parse import quote
     from . import model_pins, voice
     form = await request.form()
@@ -4559,19 +4698,29 @@ async def system_modes_set(request: Request):
         if key not in form:
             continue
         got = str(form.get(key, "")).strip()
-        if got != (now.chat_run if key == "chat_run" else now.written(key)):
+        if key in ("embed_network", "query_network"):
+            if got != getattr(now, key):
+                values[key] = got
+                if key == "query_network" and now.written("chat_run"):
+                    values["chat_run"] = None          # its first name leaves the file with it
+            continue
+        if key == "embed_embedding":
+            if got != now.embed_embedding:
+                # "each collection's own" is the key's absence: nothing in force
+                values[key] = None if got == platform_config.EMBEDDINGS[0] else got
+            continue
+        if got != now.written(key):
             values[key] = got or None
     client = request.client.host if request.client else "?"
     try:
         if values:
             platform_config.set_keys(platform_config.platform_path(), "modes", values)
-        if values.get("chat_run"):
-            node_mode.set_chat_run(values["chat_run"], by=f"the System page, from {client}")
     except (ValueError, *voice.LOAD_ERRORS) as e:
         return RedirectResponse(f"/admin/system?mode_error={quote(str(e)[:300])}#sys-mode", status_code=303)
     if values:
+        unset = {"embed_embedding": "each collection's own (unset)"}
         model_pins.node_event("info", "modes set from the System page: " + "; ".join(
-            f"{k} → {v or '[budget] (unset)'}" for k, v in values.items()))
+            f"{k} → {v or unset.get(k, '[budget] (unset)')}" for k, v in values.items()))
     return RedirectResponse("/admin/system?mode_saved=1#sys-mode" if values else "/admin/system#sys-mode",
                             status_code=303)
 
@@ -4585,6 +4734,7 @@ def system_page(request: Request):
         "node_modes": _node_modes(),
         "mode_error": request.query_params.get("mode_error"),
         "mode_saved": request.query_params.get("mode_saved"),
+        "tts_steps_range": platform_config.TTS_STEPS,     # the Models panel's number field for [speech] tts_steps
         # the model server's names, as the inputs' suggestions; [] when it does not answer
         "server_models": _models_at(config.CHAT_URL, timeout=1.5) if config.CHAT_URL else [],
         "models_error": request.query_params.get("models_error"),

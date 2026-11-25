@@ -320,7 +320,15 @@ PENALTY_HALVING_S = 2 * 3600.0
 REST_FLOOR = 0.5            # = app/model_load.py REST_FLOOR, where the readings are taken
 #: the margin's samples are kept under this basis; peaks of another (the
 #: at-rest sizes before REST_FLOOR) are dropped when the file is read
-MARGIN_BASIS = 2
+MARGIN_BASIS = 3            # 3 (2026-11-25): peaks sampled against the fewest-reading rests are dropped
+#: THE AT-REST SIZES ARE KEPT UNDER THIS BASIS, and those of another are
+#: dropped when the file is read. 2 (2026-11-25): a model that keeps its
+#: context rests at what its LOAD left (`_rest_size`); until then at the
+#: fewest reading over REST_FLOOR, which a card the driver pages lowers for
+#: ever (the 35B counted 13,275 of 21,449 MiB). A dropped size is learnt
+#: again — from the model's next load, or from a reading taken while the
+#: card holds everything whole — and counts at the largest until then
+REST_BASIS = 2
 #: AFTER A RESUME THE CARD IS NOT YET LOUISE'S (2026-11-23): phase 4's exit
 #: emptied the card, resumed the node, and reloaded the live set; 9 s after its
 #: 35B container exited, the first beat read a margin of 16,759 MiB, and the
@@ -432,13 +440,20 @@ def reset() -> None:
     """Forget the last beat, every model's history and the budget's memory
     as this process holds it — the file stays, as a restart finds it (tests)."""
     global _last, _last_why, _last_switches, _memory, _out_said, _write_failed, _orphans_at, _pids_seen
+    global _over_said
     with _lock:
+        _over_said = None
+        _reclaimer_seen.clear()
+        _reclaimer_failed.clear()
         _pids_seen = (frozenset(), frozenset())
         _last, _last_why, _last_switches = {}, None, Switches()
         _track.clear()
         _memory, _out_said, _write_failed = None, frozenset(), False
         _orphans_at = None
         _rested.clear()
+    global _first_beat, _last_beat_wall
+    _first_beat = None
+    _last_beat_wall = None
 
 
 def switches() -> Switches:
@@ -468,10 +483,16 @@ def current() -> list[Resident]:
 
 
 def wanted(served: Iterable[Any], *, embed_mode: Callable[[Any], str],
-           sw: Switches | None = None) -> list[Resident]:
+           sw: Switches | None = None, embeds: bool = True) -> list[Resident]:
     """THE resident set, in the order a question meets its models; one entry
     per (server, model), its roles and collections merged. `served`: the
-    collections searched; `embed_mode(c)`: the mode the worker applies."""
+    collections searched; `embed_mode(c)`: the mode the worker applies;
+    `embeds`: whether the node, in its run mode, embeds anything at all
+    (`node_embeds`) — where it does not (query mode, acquire-only) no
+    DOCUMENT encoder is in the set: the node, 2026-11-25, preloaded
+    vega-medcpt-article-ov "for resident encoder (pubmed)" in query mode,
+    onto a card already over its line, for work the mode does not do. A
+    collection's query encoder is in the set either way."""
     from app import collections as collections_mod, config, embeddings, llm, model_load, retrieval, translate
     sw = sw or switches()
     found: dict[tuple[str, str], Resident] = {}
@@ -509,7 +530,7 @@ def wanted(served: Iterable[Any], *, embed_mode: Callable[[Any], str],
                 q = embeddings._side(recipe, True)
                 add(q.url, q.model, "query encoder", c.name,
                     lambda c=c, r=recipe: embeddings.warm_side(c, query=True, recipe=r))
-                if mode in collections_mod.EMBEDDING_MODES:
+                if embeds and mode in collections_mod.EMBEDDING_MODES:
                     add(recipe.url, recipe.model, "encoder", c.name,
                         lambda c=c, r=recipe: embeddings.warm_side(c, query=False, recipe=r))
             r = collections_mod.reranker_for(c)
@@ -632,14 +653,72 @@ def _threshold(server: str) -> float:
     but this number is kept or said, docs/notes/node-runbook.md), else
     DEFAULT_THRESHOLD."""
     from app import httpc
+    on = None
     try:
         r = httpc.get(f"{server}/api/settings", timeout=SETTINGS_TIMEOUT_S)
-        v = r.json().get("memory_reclaimer_threshold") if r.status_code == 200 else None
+        body = r.json() if r.status_code == 200 else None
+        v = body.get("memory_reclaimer_threshold") if isinstance(body, dict) else None
+        on = body.get("memory_reclaimer_enabled") if isinstance(body, dict) else None
     except Exception:   # noqa: BLE001 — unread: the node's line
         v = None
+    # ...and whether the reclaimer is on, from the same answer: what
+    # `_reclaimer_follows` holds to the rule in force, at no read of its own
+    with _lock:
+        _reclaimer_seen[server] = on if isinstance(on, bool) else None
     if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v <= 1:
         return float(v)
     return DEFAULT_THRESHOLD
+
+
+#: server -> LocalAI's `memory_reclaimer_enabled` as its last settings answer
+#: gave it (None: unread, or not a boolean)
+_reclaimer_seen: dict[str, bool | None] = {}
+#: (server, wanted) for which the write failed and was said: said once
+_reclaimer_failed: set[tuple[str, bool]] = set()
+
+
+def _reclaimer_follows(servers: Iterable[str]) -> list[str]:
+    """LOCALAI'S MEMORY RECLAIMER HELD TO THE RULE IN FORCE (operator,
+    2026-11-25: "A for paging"; app/localai_reclaimer.py): off where idle
+    models are paged — `[models] make_room = "page"`, and query mode whatever
+    the file says — on otherwise. Acted on from the beat's own settings
+    reading (`_threshold`): nothing is read for it while nothing is to
+    change. A file that does not load changes nothing. Returns the servers
+    it changed. Never raises."""
+    from app import localai_reclaimer, model_evict, platform_config
+    try:
+        platform_config.load()
+        rule = model_evict.rule()[0]
+    except Exception:   # noqa: BLE001 — the rule is not known: nothing is set by a guess
+        return []
+    want = localai_reclaimer.wanted(rule)
+    why = ("the driver pages idle models to host memory here (query mode, or [models] make_room = \"page\"), "
+           "and a card that holds more than its size reads full at every tick" if not want else
+           "the rule in force unloads for room again, and the reclaimer is its net")
+    changed = []
+    for s in sorted(set(servers)):
+        with _lock:
+            seen = _reclaimer_seen.get(s)
+        if seen is None or seen is want:
+            _reclaimer_failed.discard((s, want))
+            continue
+        try:
+            localai_reclaimer.set_enabled(s, want)
+        except localai_reclaimer.NotTaken as e:
+            if (s, want) not in _reclaimer_failed:
+                _reclaimer_failed.add((s, want))
+                _say("warn", f"resident: LocalAI's memory reclaimer at {s} is {'ON' if seen else 'off'} and "
+                             f"should be {'ON' if want else 'OFF'} — {why} — but {e}; asked again at each beat")
+            continue
+        except Exception as e:   # noqa: BLE001 — never the keeper's beat
+            _say("warn", f"resident: LocalAI's memory reclaimer at {s} was not set ({type(e).__name__})")
+            continue
+        with _lock:
+            _reclaimer_seen[s] = want
+        _reclaimer_failed.discard((s, want))
+        changed.append(s)
+        _say("info", f"resident: LocalAI's memory reclaimer turned {'ON' if want else 'OFF'} at {s} — {why}")
+    return changed
 
 
 def room(r: Resident) -> Room | None:
@@ -696,7 +775,7 @@ class Memory:
         return self.penalty >> halvings if halvings < 63 else 0
 
     def as_json(self) -> dict[str, Any]:
-        return {"margin_basis": MARGIN_BASIS,
+        return {"margin_basis": MARGIN_BASIS, "rest_basis": REST_BASIS,
                 "margin_peaks": {str(t): v for t, v in sorted(self.peaks.items())},
                 "sizes": {f"{s}|{m}": v for (s, m), v in sorted(self.sizes.items())},
                 "rest": {f"{s}|{m}": v for (s, m), v in sorted(self.rest.items())},
@@ -731,7 +810,10 @@ def read_memory(path: Path | None = None) -> Memory:
     for k, v in (raw.get("margin_peaks") or {}).items() if raw.get("margin_basis") == MARGIN_BASIS else ():
         if str(k).isdigit() and count(v) is not None:
             out.peaks[int(k)] = v
-    for name, into in (("sizes", out.sizes), ("rest", out.rest)):
+    # at-rest sizes kept under another rule (the fewest reading) are not
+    # read: a paged reading among them would stay for ever (REST_BASIS)
+    for name, into in (("sizes", out.sizes),
+                       *((("rest", out.rest),) if raw.get("rest_basis") == REST_BASIS else ())):
         for k, v in (raw.get(name) or {}).items():
             server, sep, model = str(k).partition("|")
             if sep and model and count(v) is not None:
@@ -831,8 +913,22 @@ def _rest_size(r: Resident, mem: Memory) -> int | None:
         # ever (the node: nemotron 2,229 MiB counted, 2,513 at rest).
         weights = _weights(r.server, r.model, mem, largest)
         return weights if weights else largest
-    got = [v for v in (mem.rest.get(r.key), model_load.rest_vram(r.server, r.model)) if _whole(v, largest)]
-    return min(got) if got else largest
+    # A MODEL THAT KEEPS ITS CONTEXT RESTS AT WHAT ITS LOAD LEFT (2026-11-25):
+    # the first steady reading of a load this process saw begin
+    # (`model_load.rest_of_load`), else what the file remembers of an earlier
+    # one. NEVER THE FEWEST READING (the rule until then): in query mode the
+    # card held 45 GiB of models on 32, xe kept 13.3 GiB of them in host
+    # memory, and the 35B — 21,449 MiB loaded — was read at 13,275 while a
+    # slice of it was out: 0.62 of its largest, over REST_FLOOR, so "at rest",
+    # and kept for ever. The budget then held 8 GiB the card did not have and
+    # the keeper preloaded into them, which put more of the 35B out. A reading
+    # smaller than the load left is the model partly off the card, whatever
+    # share of it is left; the 11-09 floor told the two apart only while a
+    # partial reading was under 0.38 of the whole.
+    for v in (model_load.rest_of_load(r.server, r.model), mem.rest.get(r.key)):
+        if _whole(v, largest):
+            return v
+    return largest
 
 
 def _whole(rest: int | None, largest: int | None, floor: float = REST_FLOOR) -> bool:
@@ -1057,6 +1153,18 @@ def plan(want: Iterable[Resident], mem: Memory, *, threshold: float,
                       f"it take {taken // MIB:,} MiB and it needs {need // MIB:,} MiB"
                       + (f" ({seen})" if seen else "")
                       + " — loaded at its first request, then left to the reclaimer's LRU")
+            if "chat" in r.roles:
+                # THE CHAT MODEL'S ROOM IS HANDED TO NOBODY (2026-11-25). Every
+                # answer loads it, and a mode's switch loads it, whether the
+                # budget holds it or not; left out of the budget with its
+                # bytes uncounted, the budget filled with the models below it
+                # — on the card BESIDE it (the node in query mode, 15:58:24Z:
+                # the 35B "not preloaded" at 21,416 MiB of a 19,545 MiB budget,
+                # then MADLAD and four more "in the budget"). It is still not
+                # preloaded; its bytes are taken, and what is left for the
+                # rest may be nothing.
+                taken += need
+                detail += "; its room is kept for it — nothing below it is preloaded into it"
             fits, why = False, f"not preloaded — {head.says()}; {detail}"
         placed.append(Placed(r, rank, tier, size, _size(r, mem), need, t, fits, why, detail))
     return Plan(tuple(placed), line, threshold, margin, measured, median, penalty, keep, contexts)
@@ -1119,7 +1227,7 @@ def _held_now(servers: Iterable[str], mem: Memory,
             # caller (`_remember`), never counted in the model and in the margin
             floor = _rest_floor(s, m)
             known = ((_weights(s, m, mem, largest),) if floor != REST_FLOOR
-                     else (mem.rest.get((s, m)), model_load.rest_vram(s, m)))
+                     else (model_load.rest_of_load(s, m), mem.rest.get((s, m))))
             whole = [v for v in (size, *known) if _whole(v, largest, floor)]
             # a model partly off the card counts whole: what it will hold again once used
             rest = (min(whole) if whole else largest) if size else 0
@@ -1127,6 +1235,96 @@ def _held_now(servers: Iterable[str], mem: Memory,
             was = out.get(k, (0, 0, 0))
             out[k] = (max(rest, was[0]), max(int(size or 0), was[1]), max(context, was[2]))
     return out
+
+
+#: what `_overcommitted` last said, so it is said once per change
+_over_said: tuple[int, int, tuple[str, ...]] | None = None
+#: A MODEL NEVER KNOWN AT REST is learnt from a reading only while the card
+#: has clear room — its count at most this share of its total: a slice of a
+#: large idle model can be in host memory with no model reading short (the
+#: 35B at 0.62 of itself), and the card is then full to the brim (99 % on the
+#: node). At rest the node's card stands at 87 %, so the reading comes on a
+#: calm beat; until then the model counts at its largest
+LEARN_ROOM = 0.9
+
+
+def _overcommitted(servers: Iterable[str], mem: Memory, card: tuple[int, int],
+                   there: frozenset[int] = frozenset()) -> tuple[int, int, tuple[str, ...]] | None:
+    """Whether the driver holds part of this card's models in HOST memory
+    now: (the bytes the models LocalAI holds here take at rest, the card's
+    total bytes, the models read short) — or None: they are on the card
+    whole, or it cannot be told. Two signs, either one enough:
+
+      - a model READS SHORT: under its own floor of the most it was seen
+        holding (`_rest_floor`: the node in query mode, 2026-11-25 —
+        tts-omnivoice 1.1 MiB, dar-legal-it 0.5, nemotron 0.4, bge-m3 0.4 on
+        the card, 13.3 GiB of the models in the driver's gtt);
+      - what the models take AT REST — each at what is known of it, one not
+        known at this reading — is more than the card's total: they cannot
+        all be on it.
+
+    NOT the sum of their largest sizes: those include every working context,
+    and thirteen models at their largest are over the card on a node where
+    all thirteen rest on it with room to spare (28.4 of 32.7 GiB). Past its
+    total the driver MUST put something elsewhere — xe moves the buffers used
+    least recently — and then NO READING SAYS WHAT A MODEL HOLDS AT REST: its
+    `size_vram` is what is left of it, and the card's count stops at its
+    total. So nothing is learnt from such a reading: no at-rest size, no
+    margin sample (`_remember`)."""
+    from app import model_load
+    try:
+        whole, short = 0, []
+        for s in sorted(set(servers)):
+            got = model_load.held_sizes(s)
+            if got is None:
+                return None
+            for m, (pid, size) in sorted(got.items()):
+                if not size or (s, m) in mem.elsewhere or pid in there:
+                    continue
+                largest = max([int(size)] + [v for v in (mem.sizes.get((s, m)), model_load.size_vram(s, m)) if v])
+                floor = _rest_floor(s, m)
+                known = (_weights(s, m, mem, largest) if floor != REST_FLOOR else
+                         next((v for v in (model_load.rest_of_load(s, m), mem.rest.get((s, m)))
+                               if _whole(v, largest)), None))
+                if size < floor * largest:
+                    short.append(m)
+                    whole += known or largest       # certainly more than what is left of it
+                else:
+                    whole += known or int(size)
+    except Exception:   # noqa: BLE001 — cannot be told: taken as fitting, as before
+        return None
+    if short or (card[0] and whole > card[0]):
+        return whole, int(card[0]), tuple(short)
+    return None
+
+
+def _say_overcommitted(over: tuple[int, int, tuple[str, ...]] | None) -> None:
+    global _over_said
+    with _lock:
+        before, _over_said = _over_said, over
+    if over is not None and before is None:
+        short = over[2]
+        # WHERE THE RULE IN FORCE PAGES (query mode, operator 2026-11-25; or
+        # `make_room = "page"`) this is the card as it is meant to be: said,
+        # not warned of. Anywhere else nobody chose it
+        try:
+            from app import model_evict
+            expected = model_evict.rule()[0] == "page"
+        except Exception:   # noqa: BLE001 — the rule unread: a warning, as before
+            expected = False
+        _say("info" if expected else "warn", f"resident: THE CARD IS OVER-COMMITTED — "
+                     + (f"{len(short)} model(s) read short on the card ({', '.join(short[:6])}"
+                        f"{' …' if len(short) > 6 else ''}), and " if short else "")
+                     + f"the models LocalAI holds take {over[0] // MIB:,} MiB at rest against the card's "
+                       f"{over[1] // MIB:,} MiB: the driver keeps the difference in host memory and brings a "
+                       f"model back when it is used"
+                       + (" — the rule in force here (the driver pages; nothing is unloaded while the host "
+                          "has memory)" if expected else "")
+                       + ". No at-rest size and no margin is learnt from readings taken now; the budget "
+                         "stands on what was learnt before")
+    elif over is None and before is not None:
+        _say("info", f"resident: the card holds its models whole again (they took {before[0] // MIB:,} MiB "
+                     f"at rest against the card's {before[1] // MIB:,} MiB)")
 
 
 def _settling(now: float | None = None) -> bool:
@@ -1159,6 +1357,7 @@ def _remember(want: list[Resident]) -> Memory:
         loading = _warm_thread is not None and _warm_thread.is_alive()
     settling = _settling()
     card = sample = None
+    fits_whole = False                  # whether a reading taken now says what a model holds at rest
     moved: dict[tuple[str, str], bool] = {}
     if servers:
         with _lock:
@@ -1196,6 +1395,14 @@ def _remember(want: list[Resident]) -> Memory:
             beyond = max(0, card[1] - read_now)
             live = sum(sorted((v[2] for v in mine), reverse=True)[:CONTEXTS_AT_ONCE])
             sample = max(0, card[1] - at_rest - min(beyond, live))
+        # OVER-COMMITTED: the driver holds part of the models in host memory,
+        # and neither the card's count nor a model's says what rests where
+        over = None if card is None else _overcommitted(servers, frozen, card, there)
+        _say_overcommitted(over)
+        if over is not None:
+            sample = None
+        fits_whole = (card is not None and over is None and not loading and not settling
+                      and bool(card[0]) and card[1] <= LEARN_ROOM * card[0])
         if card is not None:
             moved = _where(servers, here, there)
     now = _wall()
@@ -1228,9 +1435,23 @@ def _remember(want: list[Resident]) -> Memory:
                 if _whole(v, largest, floor) and v != mem.rest.get(r.key):
                     mem.rest[r.key] = v
                 continue
-            v = model_load.rest_vram(r.server, r.model)
-            if _whole(v, largest, floor) and v < mem.rest.get(r.key, v + 1):
-                mem.rest[r.key] = v
+            # a model that keeps its context: what its LOAD left, where this
+            # process saw the load begin — REPLACING what the file had, as an
+            # on-demand model's weights do; never a later, smaller reading
+            # (`_rest_size`: that is the model partly in host memory)
+            v = model_load.rest_of_load(r.server, r.model)
+            if _whole(v, largest, floor):
+                if v != mem.rest.get(r.key):
+                    mem.rest[r.key] = v
+            elif r.key not in mem.rest and fits_whole:
+                # NEVER LEARNT, and this process did not see its load begin (it
+                # started with the model loaded): what its process holds now,
+                # read twice the same, while the card holds everything whole —
+                # as its load left it, or grown by a request since (the
+                # cautious side). Once: a later reading never lowers it
+                got = model_load.steady_vram(r.server, r.model)
+                if got is not None and got[1] > 0 and _whole(got[0], largest, floor):
+                    mem.rest[r.key] = got[0]
         if card is not None and card[0] != mem.total:
             mem.total = card[0]
         if sample is not None:
@@ -1334,6 +1555,18 @@ def _due(r: Resident, now: float) -> bool:
     return due
 
 
+def node_embeds(state: str | None = None) -> bool:
+    """Whether the node embeds anything in this run mode (`node_state.runs`,
+    the one resolution every gate reads: the run mode, the mode of use's
+    network choice and the profile in force). Unreadable: taken as embedding,
+    the set as it always was."""
+    from app import node_state
+    try:
+        return bool(node_state.runs(state or node_state.worker_state(), node_state.EMBED))
+    except Exception:   # noqa: BLE001
+        return True
+
+
 def preloads(state: str | None = None) -> tuple[bool, str]:
     """(whether the node's mode preloads the set now, why, in words).
     `state`: the node's mode as read by the caller (a command peeks it);
@@ -1395,7 +1628,7 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
     global _last, _last_why, _out_said
     sw = switches()
     ok, why = preloads(state)
-    want = wanted(served, embed_mode=embed_mode, sw=sw) if ok else []
+    want = wanted(served, embed_mode=embed_mode, sw=sw, embeds=node_embeds(state)) if ok else []
     by_key = {r.key: r for r in want}
     with _lock:
         before = dict(_last)
@@ -1415,6 +1648,7 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
     if want:
         p = _plan_now(want, _remember(want))
         _say_budget(p)
+        _reclaimer_follows(r.server for r in want)
     else:
         with _lock:
             _out_said = frozenset()
@@ -1429,6 +1663,7 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
     # would undo it. The keeper resumes when the claim ends.
     question = _question_now()
     warming = _start_warm(due, stop) if due and not question else []
+    _note_first_beat()          # after the loads have started: no gap for `holds_embedding`
     return {"set": sorted(by_key), "warming": [r.key for r in warming], "question": question,
             "backing_off": sorted(r.key for r in wanted_now if r.key not in on_time),
             "out_of_budget": sorted(k for k in by_key if k not in fits),
@@ -1463,6 +1698,112 @@ def _say_changes(before: dict, now: dict, sw: Switches, ok: bool, why: str,
             _last_why = why
         if not gone:
             _say("info", f"resident: nothing preloaded — {why}")
+
+
+# ---- a collection's own embedding waits for the preload after a start ------
+#
+# gutenberg on the node, 2026-11-25 09:40:55Z (München): the worker started at
+# 09:40:28, its embed producer at :31, the keeper's first beat began loading
+# thirteen models at :36 — and 24 s after the start one context of the
+# collection's encoder was discarded for not reproducing its canary, on a card
+# with 1,493 MiB free. The run's statements were set aside, embedding paused,
+# and the gate — which could not load its own copy for lack of room either —
+# ran again forty minutes later. Nothing wrong was written; forty minutes of
+# a collection's embedding went to a race the worker made with itself, at
+# EVERY start: a deploy restarts it.
+#
+# So a collection's own embedding (the backlog's, and its gate) does not
+# start while the keeper is still loading after a START: the worker's first
+# START_HOLD_S, or SETTLE_S after the node resumed from a mode that preloads
+# nothing. Bounded twice — a keeper that never beats holds nobody past
+# FIRST_BEAT_WAIT_S, and nothing is held past the window — and never a
+# reader's question, which loads what it needs itself (app/question_card.py).
+# Later single reloads hold nothing: a hold at each would starve embedding
+# under an eviction that repeats.
+
+#: the window after the worker's start in which the preload's loads hold a
+#: collection's own embedding
+START_HOLD_S = 600.0
+#: how long a start waits for the keeper's first beat before it stops waiting
+FIRST_BEAT_WAIT_S = 120.0
+#: when (monotonic) this process's keeper first beat; None before it
+_first_beat: float | None = None
+
+
+#: when (the wall's clock, as node_state's history keeps its times) this
+#: process's keeper last beat; None before its first
+_last_beat_wall: float | None = None
+
+
+def _note_first_beat() -> None:
+    global _first_beat, _last_beat_wall
+    if _first_beat is None:
+        _first_beat = time.monotonic()
+    _last_beat_wall = time.time()
+
+
+def _resumed_at() -> float | None:
+    """When (wall clock) the node last turned from a mode that preloads
+    nothing into one that does, if that was less than SETTLE_S ago; None
+    otherwise (`_settling`, with its time)."""
+    from app import node_state
+    hist = node_state.mode_history()
+    if len(hist) < 2:
+        return None
+    last, prev = hist[-1], hist[-2]
+    at = float(last.get("at") or 0)
+    if (last.get("state") in PRELOADING_MODES and prev.get("state") not in PRELOADING_MODES
+            and 0 <= time.time() - at < SETTLE_S):
+        return at
+    return None
+
+
+def warming() -> bool:
+    """Is the keeper loading models behind its beat now?"""
+    with _lock:
+        t = _warm_thread
+    return t is not None and t.is_alive()
+
+
+def holds_embedding(started: float, now: float | None = None) -> str | None:
+    """Why a collection's own embedding waits for the preload now, in
+    words; None when it does not. `started`: when (monotonic) the worker
+    started."""
+    t = time.monotonic() if now is None else now
+    since = t - started
+    recent = since < START_HOLD_S
+    try:
+        resumed_at = _resumed_at()
+    except Exception:   # noqa: BLE001 — a history that does not read holds nobody
+        resumed_at = None
+    resumed = resumed_at is not None
+    if not (recent or resumed):
+        return None
+    try:
+        ok, _why = preloads()
+    except Exception:   # noqa: BLE001
+        return None
+    if not ok:
+        return None                       # this mode preloads nothing: nothing to wait for
+    if _first_beat is None:
+        if since < FIRST_BEAT_WAIT_S:
+            return (f"the keeper has not made its first beat yet ({since:.0f} s after the worker's start): "
+                    f"it loads the models of Ask first")
+        return None
+    if resumed and (_last_beat_wall is None or _last_beat_wall < resumed_at):
+        # THE SAME GAP AS AT A START, at a resume: the run mode is written,
+        # the embed producers see it within two seconds, and the keeper
+        # starts its loads only at its next beat. Until it has beaten once
+        # SINCE the resume, nothing says whether loads are coming
+        waited = time.time() - resumed_at
+        if waited < FIRST_BEAT_WAIT_S:
+            return (f"the keeper has not made a beat since the node's resume ({waited:.0f} s ago): "
+                    f"it loads the models of Ask first")
+        return None
+    if warming():
+        return ("the keeper is still loading the models of Ask after "
+                + ("the node's resume" if resumed and not recent else f"the worker's start ({since:.0f} s ago)"))
+    return None
 
 
 def _start_warm(missing: list[Resident], stop: Callable[[], bool]) -> list[Resident]:
@@ -1547,6 +1888,50 @@ def _warm_all(items: list[Resident], stop: Callable[[], bool]) -> None:
             _track.setdefault(r.key, _Track()).warmed_at = _now()
 
 
+def _make_room_shown(want: list[Resident]) -> dict[str, Any]:
+    """`[models] make_room` for `show`: the rule, and in "page" what it
+    stands on — the host's memory against the floor, and LocalAI's reclaimer,
+    which must be off (app/model_evict.py)."""
+    from app import httpc, model_evict
+    mode, floor, over_max = model_evict.rule()
+    out: dict[str, Any] = {"rule": mode}
+    if mode != "page":
+        out["says"] = ("a load that does not fit unloads the model with the oldest real use "
+                       "(`[models] make_room = \"page\"` pages idle models to host memory instead)")
+        return out
+    avail = model_evict.host_available()
+    out |= {"host_floor_mib": floor // MIB, "host_available_mib": None if avail is None else avail // MIB,
+            "context_reserve_mib": CONTEXT_RESERVE // MIB,
+            "over_the_card_at_most_mib": None if over_max is None else over_max // MIB,
+            "says": ("QUERY MODE (operator, 2026-11-25): no load unloads anything while the host stays above "
+                     "its floor — the driver pages idle models' memory out and brings a model back when it is "
+                     "used; no bound over the card but the host's floor. Any other mode: the file's rule. "
+                     "LocalAI's memory reclaimer is turned off by the keeper while this holds"
+                     if over_max is None else
+                     "a load work is waiting on that does not fit unloads nothing while the host stays above "
+                     "its floor: the driver pages idle models' memory out; the keeper's preloads unload as before")}
+    notes = []
+    if avail is None:
+        notes.append("the host's memory cannot be read here: every load unloads as before")
+    elif avail < floor + CONTEXT_RESERVE:
+        notes.append(f"the host is under its floor plus a context's reserve now ({avail // MIB:,} of "
+                     f"{(floor + CONTEXT_RESERVE) // MIB:,} MiB): a load unloads as before")
+    for server in sorted({r.server for r in want}):
+        try:
+            r = httpc.get(f"{server}/api/settings", timeout=SETTINGS_TIMEOUT_S)
+            on = r.json().get("memory_reclaimer_enabled") if r.status_code == 200 else None
+        except Exception:   # noqa: BLE001 — unread: said
+            on = None
+        if on is not False:
+            notes.append(f"{server}: LocalAI's memory reclaimer is "
+                         + ("ON" if on else "not readable") + " — in this mode it must be off, or it unloads "
+                         "the least recently used model whenever the card reads full "
+                         "(deploy/vega/stage/localai_settings.py --platform <platform.toml>)")
+    if notes:
+        out["notes"] = notes
+    return out
+
+
 def _make_room(r: Resident, got: Room):
     """`model_evict.make_room` for the preload of `r`: horizon its own last
     real use (never used: nothing used gives way to it). Never raises."""
@@ -1621,7 +2006,7 @@ def show() -> dict[str, Any]:
     ok, why = preloads(state)
     served, not_served = served_now()
     modes = {c.name: _mode_shown(effective_config, c) for c in served}
-    want = wanted(served, embed_mode=lambda c: modes[c.name], sw=sw)
+    want = wanted(served, embed_mode=lambda c: modes[c.name], sw=sw, embeds=node_embeds(state))
     holders = {(p["server"], p["model"]): sorted(p["holders"]) for p in model_pins.status()["pins"]}
     for r in want:
         model_load.loaded_models(r.server)       # this process's own reading: the sizes of what is loaded
@@ -1657,6 +2042,7 @@ def show() -> dict[str, Any]:
                 "only within the budget (2026-11-08), which unloads nothing; every searched "
                 "collection's query encoder, an `off` one's included (2026-11-09)",
         "switches": {ASK: sw.ask, SPEECH: sw.speech}, "mode": state, "preloads": ok, "why": why,
+        "make_room": _make_room_shown(want),
         "budget": {"says": p.says(), "threshold": p.threshold,
                    "line_mib": None if p.line is None else p.line // MIB,
                    "margin_mib": p.margin // MIB,

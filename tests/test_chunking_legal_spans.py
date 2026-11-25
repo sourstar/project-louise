@@ -196,3 +196,78 @@ def test_the_identity_samples_only_documents_with_text(tmp_path):
     assert [r["uid"] for r in largest] == ["n:2", "n:6"], "no textless, out-of-scope or parked row"
     every = lci._rows(con, SimpleNamespace(uids=None, largest=None, every=1, limit=None))
     assert [r["uid"] for r in every] == ["n:2", "n:6"]
+
+
+class _OneAtATime:
+    """`tok` without `encode_batch`: every text encoded on its own, as the
+    chunker did until 2026-11-25 — the reference the batched read is held to."""
+
+    def __init__(self, tok):
+        self._tok = tok
+
+    def encode(self, text, **k):
+        return self._tok.encode(text, **k)
+
+    def to_str(self):
+        return self._tok.to_str()
+
+
+@pytest.mark.parametrize("make", TOKENIZERS)
+def test_the_batched_encode_cuts_the_same_pieces(make, monkeypatch):
+    """2026-11-25 (32018R0688, 90-136 MB a language on one child): the spans
+    and a piece's units encoded together by `encode_batch` give the pieces
+    one encode at a time gives, every level, small spans and small batches."""
+    tok = make()
+    rng = random.Random(410)
+    monkeypatch.setattr(cl, "SPAN_CHARS", 37)
+    for batch in (50, 10 ** 9):
+        monkeypatch.setattr(cl, "BATCH_CHARS", batch)
+        for _ in range(40):
+            text = _text(rng, rng.randint(50, 1500))
+            for budget in (8, 40, 300):
+                assert cl.split(tok, text, budget) == cl.split(_OneAtATime(tok), text, budget)
+        text = _text(rng, 4000)
+        assert cl._count_many(tok, [text, "", text[:99]]) == [cl._count(_OneAtATime(tok), t)
+                                                              for t in (text, "", text[:99])]
+        assert list(cl._token_ends(tok, text)) == list(cl._token_ends(_OneAtATime(tok), text))
+
+
+def test_no_batch_reads_more_than_its_bound(small_spans, monkeypatch):
+    tok = _words()
+    monkeypatch.setattr(cl, "BATCH_CHARS", 500)
+    seen: list[int] = []
+
+    class Counting(_OneAtATime):
+        padding = None
+
+        def encode_batch(self, texts, **k):
+            seen.append(sum(map(len, texts)))
+            return self._tok.encode_batch(texts, **k)
+    text = " ".join(f"w{i}" for i in range(5000))
+    c = Counting(tok)
+    assert cl._count(c, text) == cl._count(tok, text)
+    assert list(cl._token_ends(c, text)) == list(cl._token_ends(tok, text))
+    assert seen and max(seen) <= cl.BATCH_CHARS + cl.SPAN_CHARS + 10
+
+
+def test_a_tokenizer_that_pads_is_encoded_one_text_at_a_time():
+    tok = _words()
+    tok.enable_padding(length=64)
+    assert not cl._batched(tok)
+    assert cl._count_many(tok, ["a b c", "d"]) == [64, 64], "each text as `encode` gives it"
+
+
+@pytest.mark.parametrize("make", TOKENIZERS)
+def test_the_windows_read_only_their_cuts_and_cut_as_listed(make, monkeypatch):
+    """2026-11-25: `_windows` indexes each span's offsets at the cuts only
+    (every budget-th token, counted across spans), not every token's end.
+    The windows are the listed ones for every budget, a token count that is
+    a multiple of the budget, whitespace at the ends, an empty text."""
+    tok = make()
+    rng = random.Random(4820)
+    monkeypatch.setattr(cl, "SPAN_CHARS", 23)
+    texts = [_text(rng, rng.randint(1, 400)) for _ in range(60)] + ["", "   ", " a ", "a"]
+    for text in texts:
+        n = len(tok.encode(text, add_special_tokens=False).ids)
+        for budget in sorted({1, 2, 3, 7, 16, max(1, n), max(1, n // 2), n + 1}):
+            assert cl._windows(tok, text, budget) == cl._windows_listed(tok, text, budget), (text[:40], budget)

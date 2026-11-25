@@ -197,14 +197,69 @@ class ModelsConfig:
     #: environment's CHAT_MODEL.
     chat_large: str | None = None
     chat_small: str | None = None
+    #: HOW A LOAD THAT DOES NOT FIT THE CARD GETS ITS ROOM (added 2026-11-24,
+    #: operator: "Extend page instead of unload to the dense models").
+    #: "unload", the rule since 2026-11-16: the model with the oldest real use
+    #: is unloaded. "page": for a load WORK is waiting on, nothing is unloaded
+    #: while the host can hold what the card cannot — the driver moves idle
+    #: models' memory to host memory and back at their next use (measured on
+    #: the B70: 0.2–0.4 s more on a small model's next request, against
+    #: 7.5–8.7 s after an unload) — and the unload stays the fallback
+    #: (app/model_evict.py). The keeper's own preloads keep "unload" either way.
+    #: IN QUERY MODE the rule is "page" whatever this says, for every load and
+    #: with no bound over the card but the host's floor (operator, 2026-11-25:
+    #: "A for paging"; `model_evict.rule`).
+    make_room: str = "unload"
+    #: in "page", the host memory that must stay AVAILABLE once the overflow is
+    #: paged, in GiB: under it a load unloads as before. A default to be
+    #: replaced by the node's own measurement of its busy hours — the host's
+    #: OOM killer is what stands under it (2026-11-24: 4.7 GB available under
+    #: load, where nothing may be paged)
+    page_floor_gib: int = 12
+    #: in "page", the most the card may be committed OVER its size once the
+    #: load is in, in GiB — the loaded models at their largest plus the load,
+    #: less the card. 3: what was measured holds 3.5 (S5 part 2: a model whose
+    #: context is made on demand loaded and answered there, a 1.9 GiB
+    #: context); further over, nobody has seen a context's reservation
+    #: succeed, and a refused one kills its backend. Raised only by a
+    #: measurement
+    page_over_gib: int = 3
+
+
+#: `[models] make_room`
+MAKE_ROOM = ("unload", "page")
 
 
 #: the run modes CHAT mode may switch the node to (operator, 2026-11-25: "a
 #: run mode among download/seeding, seeding or pause"), in the page's order;
 #: the first is the one a file that names none gets
 CHAT_RUNS = ("acquire-only", "seed-only", "paused")
-#: `[modes]`'s keys: what chat mode runs, and each mode's network budget
-MODES_KEYS = ("chat_run", "embed_down_max", "embed_up_max", "chat_down_max", "chat_up_max")
+#: A MODE'S NETWORK CHOICE (operator, 2026-11-25: "In both embed and query
+#: modes you can choose to download and seed, seed only, no network"; and of
+#: where it is kept: "set for each embed/query mode, a cron job then simply
+#: switches that"): each of the two modes has its own, and a switch of mode
+#: brings it. The first is what a file that names none gets
+NETWORKS = ("download-seed", "seed", "none")
+NETWORK_LABELS = (("download-seed", "download and seed"), ("seed", "seed only"), ("none", "no network"))
+#: `chat_run`, the morning's key (query mode's run mode), read as query
+#: mode's network choice: the three it could be are the three networks
+CHAT_RUN_AS_NETWORK = {"acquire-only": "download-seed", "seed-only": "seed", "paused": "none"}
+#: EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you can
+#: also choose local/p2p embedding"; "Network and embedding mode remain
+#: personal choices"): who embeds the backlog of the collections that embed
+#: one — each as its own file says (the first, what a file that names none
+#: gets: nothing changes), every part here (`embed = "all"`, "all local"), or
+#: the parts rendezvous gives this node, published as it goes (`embed =
+#: "p2p"`, "all p2p"). In force in embed mode only, over the collections
+#: whose file says all or p2p (`collections.desired_embed_mode`)
+EMBEDDINGS = ("collection", "local", "p2p")
+EMBEDDING_LABELS = (("collection", "each collection's own"), ("local", "all local"), ("p2p", "all p2p"))
+#: `[modes]`'s rate keys: each mode's network budget. Query mode's keep the
+#: morning's name (`chat_*`)
+MODES_RATE_KEYS = ("embed_down_max", "embed_up_max", "chat_down_max", "chat_up_max")
+#: `[modes]`'s keys: each mode's network choice, embed mode's embedding
+#: choice, and the budgets
+MODES_KEYS = ("embed_network", "query_network", "chat_run", "embed_embedding") + MODES_RATE_KEYS
 
 
 @dataclass(frozen=True)
@@ -219,7 +274,9 @@ class ModesConfig:
     The texts are kept as written, for the page. WHICH mode the node is in
     is not here: it is the node's state, set by a command, the page or the
     API, and it survives a restart (invariant 10's exception)."""
-    chat_run: str = CHAT_RUNS[0]
+    embed_network: str = NETWORKS[0]
+    query_network: str = NETWORKS[0]
+    embed_embedding: str = EMBEDDINGS[0]
     embed_down_max_bps: int | None = None
     embed_up_max_bps: int | None = None
     chat_down_max_bps: int | None = None
@@ -228,9 +285,26 @@ class ModesConfig:
 
     def budget(self, mode: str) -> tuple[int | None, int | None]:
         """(down, up) of a mode, bytes a second; None where it sets none."""
-        if mode == "chat":
+        if mode in ("query", "chat"):          # query mode's keys keep the morning's name
             return self.chat_down_max_bps, self.chat_up_max_bps
-        return self.embed_down_max_bps, self.embed_up_max_bps
+        if mode == "embed":
+            return self.embed_down_max_bps, self.embed_up_max_bps
+        return None, None                       # custom: [budget]'s, as before there were modes
+
+    def network(self, mode: str) -> str | None:
+        """The network choice of a mode; None for a mode that has none
+        (custom: its run mode says what the network does, as before)."""
+        if mode in ("query", "chat"):
+            return self.query_network
+        if mode == "embed":
+            return self.embed_network
+        return None
+
+    def embedding(self, mode: str) -> str | None:
+        """Embed mode's embedding choice (`EMBEDDINGS`); None in a mode that
+        has none — query embeds nothing, custom leaves every collection its
+        own file's word, as before there were modes."""
+        return self.embed_embedding if mode == "embed" else None
 
     def written(self, key: str) -> str:
         return dict(self.text).get(key, "")
@@ -752,12 +826,19 @@ def _load_one(path: Path) -> PlatformConfig:
         if models_raw.get(key) is not None and not isinstance(models_raw[key], str):
             raise schedule_mod.ScheduleError(
                 f"models.{key} is a model name, got {models_raw[key]!r} (07 §7.8)")
+    make_room = models_raw.get("make_room", ModelsConfig().make_room)
+    if make_room not in MAKE_ROOM:
+        raise schedule_mod.ScheduleError(
+            f"models.make_room is \"unload\" or \"page\", got {make_room!r} (07 §7.8)")
     models = ModelsConfig(load_timeout_s=_positive_int(
         models_raw, "load_timeout_s", ModelsConfig().load_timeout_s),
         keep_ask_resident=models_raw.get("keep_ask_resident", True),
         preload_speech=models_raw.get("preload_speech", True),
         chat=(models_raw.get("chat") or "").strip() or None,
         translate=(models_raw.get("translate") or "").strip() or None,
+        make_room=make_room,
+        page_floor_gib=_positive_int(models_raw, "page_floor_gib", ModelsConfig().page_floor_gib),
+        page_over_gib=_positive_int(models_raw, "page_over_gib", ModelsConfig().page_over_gib),
         chat_large=(models_raw.get("chat_large") or "").strip() or None,
         chat_small=(models_raw.get("chat_small") or "").strip() or None)
     modes = _modes(raw.get("modes", {}) or {})
@@ -866,13 +947,33 @@ def _modes(raw: Any) -> ModesConfig:
     if unknown:
         raise schedule_mod.ScheduleError(
             f"[modes] has no key {', '.join(unknown)}: its keys are {', '.join(MODES_KEYS)} (07 §7.8)")
-    run = raw.get("chat_run", CHAT_RUNS[0])
-    if run not in CHAT_RUNS:
+    networks: dict[str, str] = {}
+    for key in ("embed_network", "query_network"):
+        value = raw.get(key, NETWORKS[0])
+        if value not in NETWORKS:
+            raise schedule_mod.ScheduleError(
+                f"[modes] {key} is that mode's network choice, one of {', '.join(NETWORKS)}, "
+                f"got {value!r} (07 §7.8)")
+        networks[key] = value
+    if "chat_run" in raw:
+        # the morning's key: query mode's run mode WAS its network choice
+        if "query_network" in raw:
+            raise schedule_mod.ScheduleError(
+                "[modes] names both chat_run and query_network: chat_run is the first name of "
+                "query_network — keep one (07 §7.8)")
+        run = raw["chat_run"]
+        if run not in CHAT_RUNS:
+            raise schedule_mod.ScheduleError(
+                f"[modes] chat_run (the first name of query_network) is one of "
+                f"{', '.join(CHAT_RUNS)}, got {run!r} (07 §7.8)")
+        networks["query_network"] = CHAT_RUN_AS_NETWORK[run]
+    embedding = raw.get("embed_embedding", EMBEDDINGS[0])
+    if embedding not in EMBEDDINGS:
         raise schedule_mod.ScheduleError(
-            f"[modes] chat_run is the run mode chat mode switches to, one of "
-            f"{', '.join(CHAT_RUNS)}, got {run!r} (07 §7.8)")
+            f"[modes] embed_embedding is embed mode's embedding choice, one of "
+            f"{', '.join(EMBEDDINGS)}, got {embedding!r} (07 §7.8)")
     rates: dict[str, int | None] = {}
-    for key in MODES_KEYS[1:]:
+    for key in MODES_RATE_KEYS:
         value = raw.get(key)
         if value is not None and (isinstance(value, bool) or not isinstance(value, (str, int, float))):
             raise schedule_mod.ScheduleError(
@@ -882,7 +983,8 @@ def _modes(raw: Any) -> ModesConfig:
         except schedule_mod.ScheduleError as e:
             raise schedule_mod.ScheduleError(f"[modes] {key}: {e}") from None
     return ModesConfig(
-        chat_run=run,
+        embed_network=networks["embed_network"], query_network=networks["query_network"],
+        embed_embedding=embedding,
         embed_down_max_bps=rates["embed_down_max"], embed_up_max_bps=rates["embed_up_max"],
         chat_down_max_bps=rates["chat_down_max"], chat_up_max_bps=rates["chat_up_max"],
         text=tuple((k, str(raw[k]).strip()) for k in MODES_KEYS if raw.get(k) is not None))

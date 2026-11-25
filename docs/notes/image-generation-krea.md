@@ -7,6 +7,41 @@ session"**. This note is that brief. Nothing has been measured, loaded or
 installed. Everything below is a file size, a published figure, or a line
 of source code, and is labelled as such.*
 
+**Amended 2026-11-17: the operator's target is Krea 2, not FLUX.1 Krea
+[dev].** `krea/Krea-2-Raw` (Krea-2-Turbo is a finetune of the same shape;
+both gated, a Diffusers `Krea2Pipeline`): transformer 26.3 GB bf16 (≈ 13 B,
+three shards), text encoder 8.9 GB bf16 (≈ 4.4 B, an LLM with a chat
+template), VAE 0.5 GB — **33 GiB as shipped, more than the whole card**.
+**Supported** (checked upstream 2026-11-17, on the operator's word "the
+model is already available"): stable-diffusion.cpp has Krea2 since
+2026-06-25 (its README news line; `docs/models/krea2.md`), and the commit
+LocalAI v4.12.1 — the node's version — pins for `stablediffusion-ggml`,
+`0518b34374761cb82aeda5ad3c2f0686fdad2cec`, already lists it (master pins
+`532d2c15…`). The backend's `gosd.cpp` reads `llm_path` and hands it to
+the engine (`ctx_params.llm_path`), beside `vae_path`, `keep_clip_on_cpu`,
+`offload_params_to_cpu`. **No gallery entry** names Krea 2, at v4.12.1 or
+master: the model YAML is written by hand, as flux's was, the DiT as the
+model. The three components, as the engine's page lists them:
+- the DiT, `--diffusion-model`: GGUF from `realrebelai/KREA-2_GGUFs`
+  (the page's link; `TURBO/` and `BASE/`) — Turbo Q8_0 13,625,717,856 B
+  (12.7 GiB), Q4_K_M 7,216,993,376 (6.7 GiB), Q3_K_M 5,514,578,016
+  (5.1 GiB); Base within 0.1 GiB of each;
+- the text encoder, `--llm`: Qwen3-VL 4B — `Qwen/Qwen3-VL-4B-Instruct-GGUF`
+  Q8_0 4,280,406,144 B (4.0 GiB), Q4_K_M 2,497,281,664 (2.3 GiB); no
+  mmproj for text prompts; or on the CPU (`keep_clip_on_cpu` — whether it
+  covers the LLM at the pin is read from the engine's source, step 1);
+- the VAE, `--vae`: Wan 2.1, `wan_2.1_vae.safetensors` 253,815,318 B
+  (0.24 GiB), from `Comfy-Org/Wan_2.1_ComfyUI_repackaged`.
+On the card, Turbo: Q4_K_M DiT with the encoder on the CPU ≈ 7.3 GiB,
+both at Q4_K_M ≈ 9.6, both at Q8_0 ≈ 17.2 (the 0.3 GiB process floor
+included), plus ~1 GiB while an image is made. The licence is Krea's own
+(`krea-2-community-license`, `LICENSE.pdf` in the gated repos): read and
+acknowledged before any byte moves (invariant 9). The
+FLUX.1 Krea figures below stand as this note's worked example; the budget
+of the whole set the operator wants (the 35B chat, Krea 2, today's models)
+is in [idle-context-brief.md](idle-context-brief.md) §6 "The set the
+operator wants": nothing of it is resident on 31.9 GiB.
+
 ## 1. What LocalAI already offers
 
 LocalAI's gallery (`gallery/models/index.yaml`, read 2026-11-11) has two

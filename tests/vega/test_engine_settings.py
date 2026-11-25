@@ -60,7 +60,7 @@ MEASURED: dict[str, dict[str, object]] = {
 
 #: (model, setting) → (value, where it was measured). Only that model differs
 #: from the set, only on that setting. An exception nobody measured is drift.
-EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {
+EXCEPTIONS: dict[tuple[str, str], tuple[str | None, str]] = {
     ("louise-translate-madlad", "flash_attention"): (
         "off", ("approved-encoders.md \"Known limits\": T5 cannot use flash attention "
                 "(its relative attention bias); MADLAD-400 is a T5")),
@@ -74,6 +74,13 @@ EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {
     ("louise-chat-qwen3.5-9b-q4-p0", "GGML_SYCL_FA_ONEDNN"): (
         "1", ("approved-encoders.md \"oneDNN switched on, measured\": C on q4-p0, the same text "
               "as A over 3 fresh loads, prompt 3,079 -> 3,187 tok/s (QUALITY: identical answers)")),
+    # the speech port (staged 2026-11-25): UNSET, as every one of its rows ran. The file's value
+    # never reaches the context that computes — the port makes its own from the engine's
+    # defaults — so "on" here would be a flag that does not run
+    ("louise-tts-omnivoice", "flash_attention"): (
+        None, ("approved-encoders.md \"The speech port's own context\": unset in every row of "
+               "2026-11-24 and 2026-11-25 (omnivoice-on-our-backend.md §13); LocalAI then sends "
+               "\"auto\", and the backbone's context is the port's own, not this file's")),
 }
 
 

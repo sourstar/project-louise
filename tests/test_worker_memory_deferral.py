@@ -183,8 +183,7 @@ def test_a_deferred_large_head_never_makes_the_round_wait_on_the_lane(stage, tmp
     con.commit()
     before = _state(con, head["uid"])
     col = 2 if stage == "rdf" else 3
-    assert parallel._large_lane.acquire(blocking=False), "another collection's large parse holds the lane"
-    try:
+    with parallel.all_lanes_held():                  # other collections' large parses hold every lane
         for n in (1, 2):
             selected, row = worker._next_book(con, scope, embed_allowed=False, collection=c)
             assert (selected, row["uid"]) == (stage, head["uid"]), "still pending, untouched: selected again"
@@ -195,8 +194,6 @@ def test_a_deferred_large_head_never_makes_the_round_wait_on_the_lane(stage, tmp
             done = [u for (u,) in con.execute("SELECT uid FROM documents WHERE uid<>?", (head["uid"],))
                     if _state(con, u)[col] == 1]
             assert len(done) == n, f"round {n}: the peer behind it written"
-    finally:
-        parallel._large_lane.release()
     assert asked[0][0] is True and asked[0][1] >= 0.5, "a fresh large row waits once, bounded, as before"
     assert asked[1][0] is False and asked[1][1] < 0.1, f"deferred: asked, never waited for ({asked})"
     assert took < 0.5, f"the second round did not wait LARGE_WAIT_S ({took:.2f} s)"
@@ -235,6 +232,37 @@ def test_a_memory_kill_is_held_and_never_written_on_the_document(tmp_path, monke
     assert worker._execute_step(con, c, "fts", row) is False
     assert _state(con, row["uid"]) == before
     assert worker.transient_failure(parallel.MemoryKilled(3, 4, "x"))
+
+
+def test_a_rows_deferral_after_a_kill_says_first_what_the_row_was_to_it(tmp_path, monkeypatch, isolated_config):
+    """The lessons of EUR-Lex5.next, row A5: the kill's words fell on every
+    row in flight, and the two units that carried them were bystanders of
+    256 MiB each. Each row's line says what THAT row was: the one whose
+    process was killed, or a bystander."""
+    from app import oom_hold
+    c, con, row = _setup(tmp_path, "fts")
+
+    def line():
+        return con.execute("SELECT message FROM events WHERE level='warn' AND doc_uid=? ORDER BY id DESC "
+                           "LIMIT 1", (row["uid"],)).fetchone()[0]
+
+    def killed(collection, rows, *, names):
+        raise parallel.MemoryKilled(3, 4, "fts of alpha")
+    monkeypatch.setattr(parallel, "fts_for_rows", killed)
+    part = {"collection": "alpha", "kind": "fts", "rows": 1, "bytes": 300 * 2 ** 20, "estimated_peak": 0,
+            "uids": [["another-document", 300 * 2 ** 20]], "large": True}
+    monkeypatch.setattr(oom_hold, "_victim", {"certain": True, "pid": 4242, "part": part, "others_killed": 0})
+    assert worker._execute_step(con, c, "fts", row) is False
+    assert line().startswith("fts deferred — this document is a bystander"), line()
+    assert "pid 4242" in line() and "another-document" in line() and "will be retried" in line()
+
+    part["uids"] = [[row["uid"], 300 * 2 ** 20]]
+    assert worker._execute_step(con, c, "fts", row) is False
+    assert line().startswith("fts deferred — THIS document is in the part whose process was killed"), line()
+
+    monkeypatch.setattr(oom_hold, "_victim", None)
+    assert worker._execute_step(con, c, "fts", row) is False
+    assert line().startswith("fts deferred — which document the killed process held is not known"), line()
 
 
 @pytest.mark.parametrize("why", ["stop", "mode"])

@@ -133,6 +133,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -607,6 +608,16 @@ def one_shot_body() -> dict[str, dict[str, str]]:
     `context_on_demand` gives its context back at once; any other ignores
     the key, as with `warm_body`. No stream, no trim: nothing to learn."""
     return {"metadata": {FIELD: "0"}}
+
+
+_DISCARDED = re.compile(r"^CANARY — the engine of .*? discarded (\d+) context")
+
+
+def discarded_in(line: str) -> int:
+    """How many contexts a line of `observe` says the engine newly discarded
+    for failing their canary; 0 for any other line."""
+    m = _DISCARDED.match(line)
+    return int(m.group(1)) if m else 0
 
 
 def observe(url: str, model: str, count: dict) -> list[str]:

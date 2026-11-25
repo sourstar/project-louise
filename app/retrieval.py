@@ -1384,7 +1384,13 @@ def _rerank_lists(per_collection: list, rerank_one) -> list:
     (`parallel:1`, bit-exact), and the fifth — wikipedia — spent its budget
     queued: "the reranker did not answer within 9.6 s", its list unreranked).
     The time is the same — one reranker does the work of all its lists in
-    turn either way — but no list loses its budget waiting for another's."""
+    turn either way — but no list loses its budget waiting for another's.
+
+    A SEARCH NOBODY WAITS FOR STOPS BETWEEN TWO LISTS, not after the last
+    (München, 2026-11-25: a search replaced by a second one went on for 9 s
+    inside this — 17.9 s of rerank for its lists — while the second search
+    queued behind it on the same reranker, `parallel:1`). One rerank call
+    cannot be interrupted (app/cancel.py); the next one is not started."""
     groups: dict[tuple, list[int]] = {}
     for i, (c, _hits) in enumerate(per_collection):
         r = collections_mod.reranker_for(c)
@@ -1392,10 +1398,14 @@ def _rerank_lists(per_collection: list, rerank_one) -> list:
         groups.setdefault(key, []).append(i)
     out: list = [None] * len(per_collection)
 
-    def run(idx: list[int]) -> list:
-        return [(i, rerank_one(per_collection[i])) for i in idx]
+    def rerank_in_turn(idx: list[int]) -> list:
+        got = []
+        for i in idx:
+            cancel.checkpoint()         # the caller has gone: the next list's call is not made
+            got.append((i, rerank_one(per_collection[i])))
+        return got
     with ThreadPoolExecutor(max_workers=max(1, len(groups))) as ex:
-        for part in ex.map(cancel.carry(run), list(groups.values())):
+        for part in ex.map(cancel.carry(rerank_in_turn), list(groups.values())):
             for i, got in part:
                 out[i] = got
     return out
@@ -1833,12 +1843,34 @@ def build_answer_messages(query: str, result: dict, answer_lang: str | None = No
     if any(h.get("reading") for h in shown_hits):
         from . import historical
         system += historical.SYSTEM_RULE
-    if answer_lang:
-        system += (f" Write your whole answer in the language with ISO code "
-                   f"'{answer_lang}', whatever language the question or the "
-                   f"sources are in.")
+    # THE ANSWER'S LANGUAGE IS NAMED, AND SAID LAST (operator, 2026-11-25: "I
+    # made a search with a query in italian and the answer was in french" —
+    # "Parlami della vita di Dante Alighieri" over gutenberg, the first source
+    # a French history of Italian literature, the small chat model, no answer
+    # language chosen on the page). Until then a question with no language
+    # chosen had ONE instruction, "answer in the user's language", in the
+    # system prompt, thousands of words of sources above the question; the
+    # model was left to work out which language that is, and followed its
+    # first source. The search already knows the question's language
+    # (`query_lang`, 05 §5.2): it is named — in the system prompt and again
+    # after the sources and the question — and where nobody knows it, that
+    # line still says whose language the answer takes.
+    asked = (answer_lang or "").strip().lower() or None
+    lang = asked or (str(result.get("query_lang") or "").strip().lower() or None)
+    if lang:
+        from . import llm            # it imports this module's neighbours: late
+        name = llm.language_phrase(lang)
+        system += (f" Write your whole answer in {name}, whatever language the question or the sources "
+                   f"are in." if asked else
+                   f" The question is written in {name}: write your whole answer in that language, "
+                   f"whatever language the sources are in.")
+        after = f"Write the answer in {name}, not in the language of the sources."
+    else:
+        after = "Write the answer in the language of the question above, not in the language of the sources."
     system += THINK_OFF
+    # after the sources and the question; the citation reminder stays the very
+    # last thing the model reads (2026-10-13: without it last, it stopped citing)
     return [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"Sources:\n\n{context}\n\nQuestion: {query}\n\n{CITE_REMINDER}"},
+        {"role": "user", "content": f"Sources:\n\n{context}\n\nQuestion: {query}\n\n{after} {CITE_REMINDER}"},
     ]

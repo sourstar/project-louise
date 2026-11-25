@@ -66,8 +66,16 @@ def test_a_reader_who_is_not_an_admin_hears_the_synthetic_voice_of_the_language(
         assert calls[-1]["voice"] == want, (text, "the language's voice, the first named for one with none")
     speech.synthesize_timed({"input": IT}, url="http://ai", account_voice=RECORDED, admin=False)
     assert calls[-1]["voice"] == SYNTH_IT, "an account's recorded voice is not used either"
+    # THE SENTENCE'S OWN LANGUAGE, NOT THE REQUEST'S TAG (operator, 2026-11-25: "the language/country
+    # tag must be aligned to the language to speak, otherwise the voice has always a thick italian
+    # accent"): the page sends the language the answer was ASKED in; an English sentence is English
     speech.synthesize({"input": EN, "language": "it-IT"}, url="http://ai", admin=False)
-    assert calls[-1]["voice"] == SYNTH_IT, "the language the request says"
+    assert calls[-1]["voice"] == SYNTH_EN and calls[-1]["language"] == "en", "voice and tag: the sentence's"
+    # the tag is what is left for a sentence too short to tell — as a LANGUAGE, never with its country
+    speech.synthesize({"input": "Dante, 1321.", "language": "it-IT"}, url="http://ai", admin=False)
+    assert calls[-1]["voice"] == SYNTH_IT and calls[-1]["language"] == "it"
+    speech.synthesize({"input": "Dante, 1321.", "language": "en_GB"}, url="http://ai", admin=False)
+    assert calls[-1]["voice"] == SYNTH_EN and calls[-1]["language"] == "en"
     # an admin: as before, the voice asked for, else the node's
     speech.synthesize({"input": IT, "voice": RECORDED}, url="http://ai")
     assert calls[-1]["voice"] == RECORDED

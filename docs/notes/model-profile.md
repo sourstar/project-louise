@@ -105,6 +105,12 @@ under 30 s, rounded up to 5 s.
    - Earlier first loads from disk were 33.7 s for qwen3-4b and 11.9 s for
      bge-m3.
    - The bounds take the slowest of all of these.
+   - KEPT WARM SINCE 2026-11-25 (operator: "cache the model to reload it from
+     disk warm"): `deploy/vega/warm_model_files.py` reads the embedders'
+     weight files again on a timer, so a model unloaded for room is loaded
+     back from the file cache; each pass says per model whether it came from
+     memory or from the drive. Host-side; installed and measured by the node
+     (STATUS.md, that day).
 4. **LocalAGI's 2B model loads in 45–47 s, almost all of it upload**
    (VRAM grows from 2.2 s to 46 s). That is 17 times slower per byte than
    `louise-chat-qwen3-8b`, which uploads 7.4 GB in 2.6 s. Its weights are

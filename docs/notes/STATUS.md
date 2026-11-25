@@ -20,6 +20,481 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **THE OPERATOR ON PAGING, 2026-11-25 evening, the rest of it: "and C when it is ready"; asked why not in
+  every mode, "A. And cache the model to reload it from disk warm".** So: parking (C) is wanted as the
+  controlled form of query mode's paging, when its engine is ready — not instead of it. Paging stays QUERY
+  MODE'S ONLY (A): in embed mode the host's memory is the parse pool's (4.7 GB available at the worst hour on
+  11-24, under the 12 GiB floor) and the embedders make a 2–3 GiB context a request on a card where only 3.5
+  GiB over was ever measured to hold. What he asked for instead: A MODEL UNLOADED FOR ROOM COMES BACK FROM
+  THE FILE CACHE, NOT FROM THE DRIVE — `deploy/vega/warm_model_files.py`, host-side (the app never touches a
+  model's files, invariant 7). The gain is on record (model-profile.md): qwen3-embedding-4b 33.7 s from the
+  drive against about 6, medcpt-article-ov 21.1 against 3.5, MADLAD 38.0 against 16.7. It reads the
+  embedders' weight files again, whole, each time it runs — the list from LocalAI's own model files
+  (`embeddings: true`; `--all` for every model), each path taken from the container's to the host's through
+  the container's mounts — writes nothing, and SAYS per model the bytes, the seconds and the rate: several
+  GiB a second is memory, a few hundred MiB a second is the drive ("FROM THE DRIVE: it had been dropped"),
+  which is the measurement nothing on the node recorded. No RAM of its own: the cache is the host's (the ZFS
+  ARC, capped at 16 GB — the embedders' ~8 GB then stand in for as many corpus blocks). NOT INSTALLED AND NOT
+  MEASURED: a timer on the host is a node action (his word, by München); the first pass by hand says which
+  files were cold, and a reload timed after it against one without it is the AFTER. The standard tool is
+  vmtouch; locking the files in RAM (`vmtouch -dl`) is written down and not taken — that RAM is the parse
+  pool's.
+
+- **ON THE CAR'S HANDS-FREE "ONLY THE LAST PART OF THE SPOKEN SENTENCE IS WRITTEN DOWN" (operator, Android
+  Chrome over Bluetooth, by the Bug session, 2026-11-25) — the microphone is shown recording when it GIVES
+  SOUND, not when it is opened; the wait is measured.** The page turned the microphone red the instant the
+  browser handed it over. On Bluetooth the phone switches the car from its media profile to its call profile
+  only then, and for a second or three the track gives nothing or samples that are all zero: he spoke into
+  the switch (the Bug session's reading of the code; NOT measured — no clip of his car has reached the node's
+  log; CONFIRMED BY HIM the same evening: waiting about 5 s after the tap "does the trick"). NOW: opened, the
+  page says "the microphone is connecting (a car or a headset takes a few seconds) — speak when it turns
+  red" (dashed, not red, still tappable to stop); it turns red at the first window holding a sample that is
+  not zero. The wait has the recording's own bounds and no shorter one — his car needs five seconds: no
+  window at all for 3 s and the second way to record is tried, nothing but zeros for 8 s and he is told. Every
+  recording's report carries what it cost: `first_ms` (the first window), `wake_ms` (the first sound),
+  `zero_ms` (the zeros before it), `woke` (sound | timeout) — the line "voice: microphone … " under `models`.
+  WHAT IT DOES NOT DO: recover what is said before the route is up (nothing can), nor keep the microphone
+  open between questions (the Bug session's third option: the car would stay in call mode and the answer
+  read aloud would play at call quality) — to be judged on the car's numbers. A quiet built-in microphone is
+  never exactly zero, so a phone turns red at once as before; if a device's does read zero in silence, it
+  turns red at his first word, and his words are recorded from the start either way.
+
+- **"THE VOICE STARTS VERY LATE AFTER THE ANSWER BEGINS" (operator, on a phone, by the Bug session,
+  2026-11-25) — NOT YET FOUND; the page now sends each reading's times to the node's log.** The Bug session's
+  three suspicions: the answer is not streamed, the speech model is not loaded ahead, or speech waits for the
+  whole answer. What the node shows of his readings that evening (München, the speech backend's lines, query
+  mode): the model loaded, every sentence read from its kept encoding, 2.2–3.4 s of synthesis a sentence at
+  32 steps (his setting), made one after another without a gap — the synthesiser runs at about the speed of
+  speech, with no head start; so not the load. Which of the rest it is lies in the page's own timeline
+  (`louiseVoice.timeline()`), which a phone has no console to show. NOW: when a reading ends the page posts
+  its times (`POST /ask/voice/timeline`: numbers only, never a word of the answer, once a reading) and the
+  node writes one line under `models` — "voice: reading (who, lang) — the answer's first word 2.4 s after
+  Ask; the reading started at 2.5 s (by itself); FIRST SOUND at 6.0 s, 3.6 s after the first word; sentence
+  1 (62 chars): cut 0.7 s after the first word, asked for 0.0 s later, here 2.9 s after that (the node made
+  it in 2.5 s, 4.1 s of sound), played 0.1 s after it arrived; the longest silence between two sentences
+  1.2 s; 7 sentence(s)" — and the numbers behind it. THE NODE'S SIDE IS IN IT (the Bug session, the same
+  evening: "the delay … is much more than 3 s … when the request arrived versus when synthesis started"):
+  the speech route's `Server-Timing` now carries `node`, everything between a sentence's arrival and its
+  answer, beside `turn` (the wait behind the sentence before) and `synth` (the model's call); the line says
+  "after N s waiting its turn", "N s elsewhere on the node (a thread, a lookup)" and "N s between the page
+  and the node" wherever one of them is 0.3 s or more. Known before any reading comes in: a first sentence is
+  cut only when the next begins, and then costs its synthesis (about 2.5 s at 32 steps, about half at 16).
+  THE FIX WAITS FOR HIS NEXT READING'S LINE: nothing is changed on a guess.
+- **After 881caff (the keeper's fix) on the node, 17:46Z, query mode (München):** "resident: THE CARD IS
+  OVER-COMMITTED — 5 model(s) read short on the card (…), and the models LocalAI holds take 48,090 MiB at
+  rest against the card's 32,656 MiB"; twelve models in the set (pubmed's document encoder no longer), the
+  35B counted whole and in the budget (21,449 of 24,749 MiB: the default margin, nothing measured yet);
+  after a question no "corpus encoder(s) unloaded" and no cold start. That line was logged at "warn"; where
+  the rule in force pages it is now said at "info" and says it is the rule. Left over, harmless: the
+  document encoder is still loaded in LocalAI (nothing unloads for being idle). ALSO READ: "languages" costs
+  2.6–3.7 s on a first search and 0.1 s on the second — with the task of the 40–54 s question.
+
+- **TWO DECISIONS OF THE OPERATOR, 2026-11-25 evening: "A for paging, and keep report only".**
+  (1) QUERY MODE RELIES ON THE DRIVER'S PAGING ON PURPOSE: nothing is unloaded to make room while system
+  memory allows. Built: in query mode `model_evict.rule()` is "page" whatever `[models] make_room` says, for
+  EVERY load (a question's, the keeper's own), and with no bound over the card but the host's floor
+  (`page_floor_gib`, 12 GiB, and a context's 3.2 GiB above it); `node resident show` says so. The bound of
+  2026-11-24 (3 GiB over the card, "raised only by a measurement, the engine's refusal made survivable by a
+  patch") stands in embed and custom mode; in query mode the two things it waited for are there — the day's
+  measurement (about 45 GiB of models on 32, 13–15 GiB in gtt, the 35B at phase-0 speed, a page-in 0.2–0.3 s,
+  no backend lost) and engine 619655e5833b's 0028 (a context the card cannot hold is refused and asked
+  again). LOCALAI'S MEMORY RECLAIMER FOLLOWS THE RULE IN FORCE (`app/localai_reclaimer.py`,
+  `resident._reclaimer_follows`): München read it ON in query mode (threshold 0.98), and it had evicted
+  medcpt-article-ov a minute after the switch. It was the deploy's alone to set, from the node-wide key; the
+  keeper's beat now holds it OFF where idle models are paged — query mode, or `make_room = "page"` — and ON
+  otherwise, from the beat's own settings reading (nothing more is read while nothing is to change), so a
+  switch moves it within a beat and a deploy that put the file's value back is corrected at the next. The
+  settings object carries the API keys: it is read, one key set, written back whole and read again, and
+  nothing of it but that key is kept, said or put in an error (invariant 8; tested with a sentinel).
+  Under this rule the earlier question (may the large chat model give way in query mode) is answered too:
+  nothing is unloaded there while the host has memory. Parking (#48) remains the controlled form of it.
+  (2) A STAGE WITH NO PROGRESS FOR THIRTY MINUTES IS REPORTED, NEVER PAUSED (`app/stage_progress.py`): the
+  monitor's pause is not taken into the worker.
+
+- **THE KEEPER COUNTED THE LARGE CHAT MODEL AT 13,275 MiB OF ITS 21,449 — a reading taken with a slice of it
+  in host memory — and preloaded into the 8 GiB it thought it had (`resident._rest_size`; München's readings
+  in query mode, 16:44–16:47Z).** A model that keeps its context was counted at the FEWEST bytes any reading
+  gave over half its largest (REST_FLOOR, the rule of 2026-11-09, made when partial readings were 0.007–0.38
+  of the whole and whole ones 0.75–1.0), and the fewest was kept in the file for ever. In query mode the card
+  held 45 GiB of models on 32: xe kept 13,332 MiB of them in host memory (gtt), six models read under 2 MiB on
+  the card, and the idle 35B was caught at 0.62. The budget (19,171 MiB) then admitted MADLAD and others; the
+  card's counter went 31,544 -> 32,285 -> 32,417 MiB, over its 0.98 line; each MiB added put more of the idle
+  models out. NOTHING FAILED and LocalAI evicted nothing: the driver pages by use, which is close to what the
+  operator described for this mode ("embedders paging") — but nobody chose it, and the keeper could not see it.
+  THE RULE NOW: a model that keeps its context rests at what its LOAD left — the first steady reading of a
+  load the worker saw begin (`model_load.rest_of_load`), replacing the file's; a smaller reading of the same
+  process later is the model partly off the card, never its rest. A worker that started with the model loaded
+  keeps the file's figure, or learns one once from a reading taken on a calm beat (the card at most 90 % full
+  and nothing over-committed). WHILE THE CARD IS OVER-COMMITTED — a model reads short of its own floor on the
+  card, or what the models take AT REST is more than the card's total; never the sum of their largest sizes,
+  which is over the card on a node where everything rests on it — nothing is learnt from a reading, no
+  at-rest size and no margin sample, and one line says so ("resident: THE CARD IS OVER-COMMITTED — … model(s)
+  read short on the card (…), and the models LocalAI holds take … MiB at rest against the card's … MiB"). The file's at-rest sizes and margin peaks of the
+  old rule are dropped at the first read (`REST_BASIS`, `MARGIN_BASIS`): each model counts at its largest
+  until it is known again. IT CHANGES WHAT THE KEEPER BELIEVES AND SAYS, NOT WHAT IS ON THE CARD (the budget
+  unloads nothing). Open, the operator's: whether query mode should let the driver page on purpose or keep
+  the card under its line — waiting on München's two prices (a page-in against a reload). TWO MORE, in the
+  same change: a chat model over the budget is still "not preloaded", but its bytes are TAKEN — its room is
+  handed to nobody (at 15:58:24Z the 35B was out of the budget at 21,416 MiB and the budget filled with the
+  models below it, on the card beside it); and no DOCUMENT encoder is in the set where the node embeds
+  nothing (`resident.node_embeds`: medcpt-article-ov was preloaded in query mode at 16:30Z, "for resident
+  encoder (pubmed)"). With all three, on the node in query mode: the 35B counted at 21,449 MiB, over the
+  budget, nothing below it preloaded, nothing unloaded — the models already on the card stay, by use.
+  THE TWO PRICES (München, 16:48:54–16:49:49Z, the card over its line, gtt 13.3 GiB): the 35B answers at
+  the SAME speed as on an unloaded card (p0chat: decode 98.8 and 97.2 tok/s against phase 0's 99.6 and 97.3;
+  ttft 0.286 s and 2.505 s against 0.292 and 2.512); and a search whose query encoder was wholly in host
+  memory paid 0.2–0.3 s for it in its dense step (Normattiva-DAR 397 ms against 174 on the second search;
+  NeuRIS 366 against 78; pubmed none seen) — against the 5–24 s of a cold start. Each page-in put something
+  else out at once (MADLAD 5,635 -> 3,590 MiB, the other embedder to 0, and on the third search 2 GiB of the
+  35B). So paging by the driver is what makes this mode work today, and it is cheap; whether to rely on it on
+  purpose is the operator's (the node's rule says "unload"). ALSO MEASURED there: the document encoder is
+  unloaded at every question ("a person's question holds the card; corpus encoder(s) unloaded in 0.2 s") and
+  loaded again by the keeper 44 s later (5.8 s), in a mode that never embeds — the third change ends it.
+
+- **THE NODE, 2026-11-25 afternoon (München's rows): the engine 619655e5833b live, the cold preload row, the
+  operator's first switch to QUERY MODE, and the French answer's BEFORE on the large chat model.**
+  - *The engine.* 619655e5833b (engine-stream's series + 0028) live since 15:18:30Z; the pass ended 15:52:00Z,
+    the node paused 5,573 s. Five gates exact with identical fingerprints (wikipedia 109 s, gutenberg 2,046 s,
+    pubmed's query side 92 s, NeuRIS 530 s, wikidata 534 s); 20 unloads clean; MADLAD 379/379 identical to the
+    11-22 rebuilt-engine run; the reranker 20/20 lists equal to phase 0, max |delta| 0.0; the 9B within 1 % of
+    phase 0. 0028: a canary refused for MEMORY answers "the context cannot be created now, the memory it needs
+    may be in use: try again later" — HTTP 500 through LocalAI, no "context canary failed", nothing counted as a
+    mismatch, the next requests served with the same vector. In the app that answer is an `EndpointBusy`
+    (`embeddings._endpoint_error`: every 5xx that is not the canary's or VeGa's words) — a deferral, no document
+    touched, no run set aside: read in the code, not yet seen through the worker. 0025: a stream cut mid-way
+    ends with an SSE error object then [DONE] (7 of 155 chunks), the next stream whole. 0022: "en-GB" read as
+    language en; the wav bytes are not stable run to run, so no sha comparison (with Tensor).
+  - *The cold preload row* (the resume after the pass, 3e6b6cc): scheduling-log.md, "a collection's embedding
+    waits for the keeper's preload". Held 34–55 s on an emptied card, CANARY 0, GateDeferred 0; the twenty
+    seconds before the keeper's beat at a resume are real (four embedders cold-started for corpus embedding in
+    them) and are what #900 closes — in deploy 51ae16c.
+  - *His first switch to query mode*, from the System page, 15:56:21Z, on 3e6b6cc: "node in query mode (custom
+    -> query): chat model louise-chat-qwen3.6-35b-a3b", "node mode running -> acquire-only: runs fetch, seed",
+    the 9B unloaded and the 35B loaded by 15:58:01Z — "loaded in 99.2 s (for chat; load bound 120 s)". THE
+    BOUND WAS THE NODE'S DEFAULT: the 35B is in no profile, so a load one fifth slower would have timed out at
+    the switch and again at his first question. `app/model_loads.json` now carries it by the file's own rule
+    (3 x the slowest cold start: 300 s), from this one reading. He then set query mode's budget (down 6.2
+    MB/s, up 1.2 MB/s): "node in query mode (budget changed)", no restart. THE CARD IN QUERY MODE: 31,544 MiB
+    used of 32 GiB with twelve models loaded — the 35B and every model of Ask — over the reclaimer's 0.95 line,
+    and three "resident: not preloaded" lines in six minutes. THE KEEPER'S BUDGET THERE (its own lines): the
+    0.98 line 32,002 MiB − 6,480 of growth measured over the last 6 h (embedding hours) − 5,304 for the two
+    embedders' working contexts (qwen3-embedding-4b 3,195 + nemotron 2,109) − 919 of eviction penalty =
+    19,298 MiB for weights. The 35B counts 17,247 of it (size 21,449; at 15:58:24Z, "never used here", it
+    did not fit at 21,416 and was itself "not preloaded"), the TTS fits behind it (1,672), and EVERYTHING
+    ELSE OF ASK is out — MADLAD 4,850, rerank-nemotron 2,465, qwen3-embedding-4b 2,736, nemotron 2,295,
+    bge-m3 900, the two medcpt — "loaded at its first request, then left to the reclaimer's LRU". So in
+    query mode the keeper guarantees two models; the rest stay while nothing needs their room and come back
+    at a reload's price (5–24 s each on the cold row). The budget unloads nothing, so nothing left the card.
+    OPEN, asked of München: whether the 35B itself was ever made to give way — room is made from the model
+    used least recently, a never-used one first, and nothing exempts the mode's own chat model
+    (`model_evict.make_room`). This is the case parking is for (parking-step-2.md): not solved today. No
+    reading of the card from before the switch.
+  - *The French answer, BEFORE on the 35B*: his question with four of his hits pinned, query_lang 'it', the
+    code live (old prompt), in query mode — three answers byte for byte the same (sha 10ed4c650136, 2,676
+    chars), ITALIAN. So the old prompt fails on the 9B (the single French run of 14:22Z) and not on the 35B;
+    the AFTER on the 9B needs the node out of query mode, which is his.
+  - EUR-Lex5.next stands still in query mode (531,751 rdf and 1,089 fts pending): his mode, not a stall. The
+    stalled-stage report (#904) says nothing of it — no step is started in query mode, so nothing is tried.
+
+- **A search nobody waits for stops BETWEEN two lists of one reranker, not after the last
+  (`retrieval._rerank_lists`).** München's finding beside the operator's French answer: a search replaced by a
+  second press went on for 9 s inside the rerank of its lists (17.9 s for them all) while the second search
+  queued behind it on the same reranker (`parallel:1`) — and it is what the Abort button waits for too. Lists
+  that share a reranker go one after another (2026-11-10), and nothing looked at the caller between them. A
+  checkpoint before each list: the call in flight still ends (one HTTP call cannot be interrupted), the next
+  is not made. Bound after it: one list's rerank (9.6 s budget) instead of all of them. NOT measured on the
+  node: the reading is München's own pair — the seconds from a second press to "cancelled" in the web log,
+  with three or more collections on one reranker.
+- **fts needs no time bound of its own for a large unit, on today's numbers (the open half of the two-lanes
+  work).** The bound a large part's answer is waited for is the parse's: 120 s + 1.24 µs a byte
+  (`LARGE_SECONDS_PER_BYTE`). fts on the node cost 0.76–1.10 µs a byte per large unit with the lane's
+  tokenizer threads (three units at 70, 85 and 86 s; Legal's profile), so a 136 MB unit has 288 s for some 90.
+  Nothing is built; revisit only if a large fts part is ever let go for time.
+
+- **A stage that makes no progress says so by itself (`app/stage_progress.py`; the lessons, row G3 — the
+  monitor's "hang" and "done not rising").** The worker's step executor notes each step (when it started, on
+  which document, whether it ended with a commit: two dictionary writes a step), and a watcher thread says,
+  after thirty minutes — the Library's own bound for "no progress" — either "fts has been in ONE step for 47
+  min — it started on <uid> and has not come back" or "rdf has made NO PROGRESS for 31 min: 31 step(s) ended
+  without a commit, the last on <uid>"; again every thirty minutes, and one line when the stage commits
+  again. "Did work" is not "made progress": a deferral is a try. A stage nobody tries any more (paused, held
+  by a mode) is not a stall. IT REPORTS AND PAUSES NOTHING — the monitor paused the collection where a rule
+  fired; whether the worker should is the operator's decision, not taken. It does not see a stage with work
+  pending whose steps never start: that is a wait, and each wait says its own line (#885). Not measured on
+  the node: the first stall is the reading (the pool's watcher already says a part in flight after a minute).
+
+- **A memory kill names the process killed and its part; a row in flight beside it says it is a bystander
+  (the lessons of EUR-Lex5.next, row A5; `oom_hold.victim`).** The kill's words — "not computed again until the
+  cause is known" — were written on every row of the batch in flight, and the two units that carried them were
+  bystanders of 256 MiB each. The hold already recorded the parts in flight and two samples of the cgroup's
+  processes; now it reads the killed one off them, at the kill, before anything leaves the pool: FOR CERTAIN
+  where a large part's own process ended by SIGKILL (`parallel.in_flight` reads the exit code of a part that
+  has a process of its own), LIKELY otherwise — the largest process gone since the watcher's last sample, with
+  its part where that pid is a large part's. In the hold (`killed`), the guard's line, `node show`, the
+  exception, and FIRST on each row's deferral: "THIS document is in the part whose process was killed" or
+  "this document is a bystander". WHAT IT DOES NOT DO: a child of the shared pool is named by pid and memory
+  only — the pool does not know which part a child holds (a slot per child that the child writes at each
+  part would say it; not built: the kills of 11-19 and 11-25 were all large parts, and it is a write on the
+  pool's hot path that would need measuring first). Not measured on the node: there has been no kill since
+  the lanes' own processes (#869); the first one is the reading.
+
+- **EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you can also choose local/p2p
+  embedding"; "Network and embedding mode remain personal choices") — `[modes] embed_embedding`.** The last
+  part of the modes' second cut, built as put to him (B1: a node choice in embed mode; he answered the network
+  half in his own words and left this one). `"local"` or `"p2p"` — absent, each collection's own, so a node
+  that sets nothing changes nothing: while the node is in embed mode, every collection that embeds its
+  backlog (its file says all or p2p) embeds it the node's way. The choice says WHO embeds a backlog, never
+  WHETHER: off and on-demand keep their own word; p2p on a collection that is not shared stays all local and
+  the card says why. ONE resolution, `collections.desired_embed_mode`, behind the worker's apply
+  (`db.apply_desired_embed_mode`), `hold config show` and the Library card (invariant 10); the worker's round
+  follows a switch or an edit of the key (`worker._apply_embedding_choice`: one comparison a round, the
+  collections' stores written only when the choice in force changed, and only those it governs — a Library
+  override of an on-demand collection survives a switch). Set on the System page's mode table (a third
+  select on embed mode's row) or in platform.toml; `louise node mode` and `GET /api/mode` show it. Not a
+  scheduling change: under p2p the backfill already leaves a part another live peer leads and embeds
+  everything where none does (`_backfill_rows`, 04 §4.5) — the choice only says which of the two existing
+  modes a collection is at. OWED from the node: one switch with the key set, the line "embed mode's
+  embedding choice (all p2p): N collection(s) … follow it" and each card's note.
+
+- **AN ITALIAN QUESTION WAS ANSWERED IN FRENCH (operator, 2026-11-25: "I made a search with a query in
+  italian and the answer was in french") — the answer's language is now NAMED and said after the sources
+  (`retrieval.build_answer_messages`).** "Parlami della vita di Dante Alighieri" over gutenberg at 14:07Z: five
+  hits, the first a French history of Italian literature, the small chat model (the 9B), Quality, no answer
+  language chosen on the page. With none chosen, the prompt's one instruction was the system prompt's
+  "answer in the user's language", above the sources; the model was left to work out which language that is
+  and followed its first source. The search already knows the question's language (`query_lang`): the prompt
+  now names it — "The question is written in Italian (ISO code 'it'): write your whole answer in that
+  language" — and says it again after the sources and the question ("Write the answer in Italian, not in the
+  language of the sources."), the citation reminder still last. A language chosen on the page wins; where
+  nobody knows the question's language the line says "the language of the question above". REPRODUCED
+  on the node once (München, 14:20Z, the code then live, his question with four of his five hits pinned in
+  his order and no older-language rule in the prompt: 3,653 characters in French, "Dante Alighieri est né à
+  Florence en 1265…"; two earlier re-runs with other hits were Italian) — so the cause is the first source's
+  language with nothing naming the answer's. BEFORE/AFTER owed: ten pinned runs on each side of the deploy
+  (`/root/measure/ask-french/pinned.py`), counted by language. From the same report: the answer's log lines went
+  out under the default collection's name ("[EUR-Lex5.next info:chat]" for a gutenberg answer) — `chat` is
+  a node stage now; and a search replaced by a second press took 9 s to stop (its next checkpoint, inside
+  the rerank) — what the Abort button will also wait for.
+
+- **The slice-scope pass runs ALONE where the stages wait for it (`worker.PASS_ONLY`; scheduling.md pitfall
+  27; the Legal session's finding).** EUR-Lex5.next's release reset the pass to row 0 of 1,025,283 and the
+  stages' wait asked — as the morning's fix had built it — for a scan: 627,868 released rows stood eighteen
+  minutes behind a corpus walk with nothing to find, for a pass of fourteen seconds. The wait now asks for
+  the pass by itself (it reads the manifest, not the corpus); a real scan takes a queued pass's place and is
+  never lost to one. AFTER owed at the next release.
+- **Also from the afternoon:** the legal chunker's `_windows` reads only its cuts' offsets (the Legal
+  session; 8.96 s -> 7.87 s on a 19.6 M-character sentence off the node, the same windows — the rest of
+  that time is the encode, so the "17 s of Python steps" read from the profile was mostly encode inside the
+  walk); the preload hold covers the seconds between a RESUME and the keeper's next beat (an engine swap's
+  resume is the cold start that matters); a rescan is offered in query mode ("The rescan all collections
+  remains usable from any profile"), its dialog saying that what it finds is parsed in embed mode.
+- **THE TOKENIZER THREADS, MEASURED LIKE FOR LIKE: 1.31x ON A LARGE TEXT UNIT (the Legal session's profile,
+  the same afternoon; it corrects the entry below).** fts of fr 32018R0688 (92,328,556 bytes) on the live
+  tree, one unit, 4 CPUs: 94 s with one tokenizer thread, 72 s with four (the lane ran it in 70 s);
+  `encode_batch` 62.7 s -> 40.5 s, 1.55x; peak the same (2.68 GiB). So the threads are at work and #892 buys
+  about a quarter of a large text unit's time — not the 1.7x of the bench (the chunker alone) and not the
+  "5 %" below, which set three DIFFERENT units against the morning's fifteen. The tokenizer is still more
+  than half of the unit; of the rest, `_windows` walks every token in Python (13.7 M steps, ~17 s) to find
+  the few it cuts at. Both are leads for the Legal session; the table is in scheduling-log.md.
+- **(superseded by the entry above) The tokenizer threads on the node: about 5 %, not 1.7x — so far
+  (München, three large units at `9811ca92`).** 241 s for 250,927,844 bytes, 0.960 µs a byte, against 1.012 before on the like-for-like
+  figure (fifteen units one after the other; the 1.715 quoted from the nine-unit commit line held six more
+  units parsed ahead). The same pieces: run 5, 23 passed under the real tokenizer. Peak of a child +11 %
+  (3,159,196 kB). Three units cannot tell 5 % from nothing; what they do say is that the chunker's
+  tokenizing is not most of a large unit's 70–86 s on the node, or that the lane child's threads are not at
+  work — and nothing let München tell which child was the lane's. The pool's line now names a large part's
+  PID and its PEAK (the kernel's high-water mark, read every 10 s), in flight and when it leaves.
+  Also in this change, from the Legal session: a PDF manifestation's items are read by their CONTENT
+  (32007M4820: three TIFF page images declared application/pdf; PDFium was given a TIFF) — a non-PDF is
+  held and said (`item-not-its-form`); a PDF is known by the header a reader looks for, anywhere in its
+  first 1024 bytes.
+- **LIVE since 2026-11-25 12:11:43Z: main `9811ca92`** (deploy `d478805`: #888–#894). München's rows:
+  the staged run 5 — the pinned-tokenizer legal spans, the proof that the batched encode cuts the same
+  pieces under the REAL tokenizer — "23 passed" (the other lists 3260 passed / 2 skipped; 11; 92; 478 / 9
+  skipped). "memory: the yield is armed — the worker's limit is 24,576 MiB; … yields at 21,504 MiB
+  anonymous (87.5%), all go on under 17,940 MiB (73%); read every 10 s, now 102 MiB" at the start. The
+  preload hold: every embedding collection waited 6–13 s and said so, no CANARY and no gate deferred for
+  room in the first ten minutes, gutenberg validated 44 s after the start (forty minutes that morning) —
+  on a WARM model server, so the hold against real loads is still to be seen at the engine swap
+  (scheduling-log.md). Owed: the large units' lines (EUR-Lex5.next's scan was still walking), which are the
+  AFTER of the tokenizer threads and the condition for the next deploy (#895, two lanes).
+- **Two log lines ran together** at that start ("embedding goes on: …" of NeuRIS and of wikidata, no
+  newline between): `print(text, flush=True)` writes the text and its newline as two writes, and two
+  threads logging in the same instant interleave them. Now the worker's stdout itself writes whole lines
+  (`app/log_lines.py`, installed at the worker's start): what a thread writes is kept until its line is
+  complete and goes out in one write — every print, whoever makes it — and `db.log_event` and the node
+  lines write theirs in one write besides (`db.say_line`), for the processes that do not install it.
+- **TWO LARGE LANES, and a batch puts at most a lane's worth of large units (`parallel.LARGE_LANES`,
+  `compute`; scheduling.md pitfall 26).** The second half of the reading of EUR-Lex5.next's large units: the
+  lane of one made fifteen 100 MB units take 1,513 s while ten children idled, and one fts batch gathered
+  nine of them and committed only after all nine, the collection's rdf behind it. The lane is now two — the
+  memory is held by the existing guards (`_room`, `_reserve`), which on the node's numbers admit a second
+  and refuse a third — and a batch takes two and defers the rest to the next round, so it commits after two.
+  NOT YET DEPLOYED: it goes out after the tokenizer-threads change has its AFTER, one change a deploy. KNOWN
+  AND NOT TOUCHED: a unit whose estimate passes the worker's whole limit is `TooLarge`, an error a person
+  sees — 26 bytes a byte of text puts that line near 630 MB of text, and EUR-Lex5.next has one unit of
+  911,527,513 bytes pending. Whether its TEXT is that large, and what to do if it is, is the Legal session's
+  question (asked).
+- **THE NEXT ENGINE CANDIDATE IS `619655e5833b`, not `792f050e318e`** (operator, 2026-11-25: "Build
+  619655e5833b now, swap it after the drain, if it still applies"; Tensor's `staged/engine-canary.series`).
+  It is `engine-stream.series` line for line — the paging default (0021), the language tag (0022), a stream
+  that fails after its first chunk FAILS (0025), the test switch (0026) — plus 0028: a context canary
+  REFUSED FOR MEMORY at a request is HTTP 503 "the context cannot be created now …: try again later" (no
+  "context canary failed" words, so Louise reads a busy endpoint, a deferral, and counts no canary failure),
+  and at the load it fails the load instead of serving unchecked. Measured on a CPU build, 12 of 12; the
+  card row is München's at the swap. `792f050e318e` is built and will not be swapped.
+- **A collection's embedding waits for the keeper's preload after a start (`resident.holds_embedding`,
+  `worker._preload_holds`; scheduling.md pitfall 25).** The cause of the morning's forty minutes (the entry on
+  the canary count, below): the worker's embed producer started three seconds after the worker and the keeper
+  began loading thirteen models five seconds later; a context created beside those loads, on a card with
+  1.5 GiB free, failed its canary, and the gate could not load its own copy until the card had room. Now a
+  collection's embedding, its gate and the at-once gate of an untested copy wait while the keeper is still
+  loading after a start or a resume — bounded (two minutes for a keeper that never beats, ten for the
+  window), said when it begins and when it ends; a later single reload holds nothing. AFTER owed at the next
+  worker start (scheduling-log.md).
+- **ONE DISCARDED CONTEXT WAS COUNTED AS TWO CANARY FAILURES, and said fifty times (`run_check.canary_failed`,
+  `_send_back`; gutenberg on the node, 09:40:55Z).** 27 s after the worker's start, while the keeper's preload
+  of 13 models was loading (1,493 MiB free on the card a second later), the engine discarded ONE context of
+  vega-qwen3-embedding-4b for not reproducing its canary. Louise set the run's statements aside, paused
+  embedding and gated the run again (validated 10:20:41Z: forty minutes, nothing wrong written) — as designed.
+  NOT as designed: the refused request counted the discard and, thirty seconds later, the worker's beat read
+  the engine's own count and counted it AGAIN (the counter's comment said "compared and never summed"; the
+  code summed). So the run's history holds two times a role for one discard ("A REPEAT: time 2 for this run
+  (before: 2026-11-25T09:40:55Z)", fifteen seconds after the first), and a second count arriving after a gate
+  that had passed would have gated the run again for the same discard. And the CANARY error was written at
+  every asking of the gate, which was deferred for room every six seconds: fifty lines in three minutes, two
+  more an hour later. FIXED: one discard is one failure whoever saw it — the request counts at once, the
+  engine's count confirms what requests saw before it counts anything of its own, never fewer than happened
+  (a failure only the engine saw is counted; one the engine's count does not show within 90 s stops waiting,
+  so it cannot swallow a later discard); the error is said once an episode, as its history is written once.
+  gutenberg's `gate-canary.json` keeps its four entries: a record of what the code did. STILL OPEN from the
+  same minute: embedding must not start while the keeper's preload is still loading; a gate deferred for room
+  says that, with the room it needs; and whether the discard was a canary REFUSED FOR MEMORY answered as a
+  failure is the engine session's (its 0023, point 5; neither `d531d5d804f1` nor `792f050e318e` has it).
+- **THE LEGAL CHUNKER ENCODES A TEXT'S SPANS TOGETHER, AND EVERY POOL CHILD IS TOLD ITS TOKENIZER THREADS
+  (Legal's `chunking_legal._encode_many`; `parallel.tokenizer_threads`, `lane_threads`).** From the reading of
+  EUR-Lex5.next's large units (below): the counts tokenized span after span on one thread. Legal: the spans of
+  a text and the units of a piece go to the tokenizers library's own `encode_batch` — the same encodings, so
+  the same pieces and no chunker version (held by tests/test_chunking_legal_spans.py and, under the REAL
+  tokenizer, by the staged run 5 of the deploy); a 28.5 M-character act on 4 cores 63.9 s → 37.7 s, the same
+  30,988 pieces. Architecture: that library starts one thread a CORE in every process by default, so each
+  spawned child is told its number before it encodes (`RAYON_NUM_THREADS`): ONE for a child of the shared pool
+  and of an operator's pass; four, held to the node profile's cores, for the large lane's child — which then
+  counts as that many parts against the profile's cap while it runs. The spans are cut as they are encoded,
+  not listed (a list is a second copy of a 136 MB act in the child whose peak the lane's room is reckoned on).
+  BEFORE, counted on the node (München): fifteen units of 32018R0688 (1,494,357,545 bytes) parsed in 1,513 s
+  on the one lane — nine in a batch's commit (876,560,544 bytes, 1,503.0 s of parse wall), six parsed ahead —
+  with the pool otherwise idle. AFTER: the same act's remaining languages (it, de, fr, en) and the
+  "has left the parse pool after N" lines, owed. STILL OPEN, the next change: a second lane (a unit peaks at
+  ~2.8 GiB of RSS, the cgroup at 16.8 of 24.6 GiB with one in flight) and a batch that does not hold the
+  collection's other stages behind several large units — 10:08–10:25Z averaged ~100 documents and ~118 rdf a
+  minute, in bursts of thousands between waits of many minutes.
+- **A BATCH IN FLIGHT SAYS ON WHAT (`app/pool_progress.py`; München, 2026-11-25 09:57Z).** EUR-Lex5.next's
+  pipeline sat in its fts stage for nine minutes and more on ONE 136 MB act (bg 32018R0688; hr, et, fi, sl of
+  the same act queued at ~100 MB each): one pool child at 98 % of a core in `chunk_legal_article`, ten idle,
+  rdf (134,618 pending) behind it, the scheduler's line "0% in 9 turns" — and no line saying a batch was in
+  flight or on what. BUILT: the pool records when each part entered and whether it has the large lane; a
+  watcher says, a minute in and every minute after, the collection, the stage, the unit, its size, how long,
+  that a large part is ALONE in the lane and how long its answer is still waited for; then how long it took.
+  Telemetry only: what runs when is unchanged. WHAT THE READING OF THE POOL FOUND, not yet fixed, each waiting
+  for a number from the node: (1) large units (estimated peak ≥ 2 GiB) run ONE AT A TIME in the whole worker
+  (`_large_lane`, the memory rule of 11-19), the others of the batch deferred a round each — so five such
+  units are five rounds on one core; a second lane where the measured room holds two peaks needs the busy
+  child's peak. (2) The time a large part may take, 120 s + 1.24 µs a byte (288 s for this one), was
+  measured on the PARSE of 32021R2017 and is applied to fts, whose cost on a legal act is six to eight
+  tokenizer passes: if these units end as "did not answer" errors, that is a bound calibrated on another
+  stage — the platform's defect, first in line. (3) The collection's one pipeline thread waits for the large
+  part, so its rdf waits too; a batch that commits its light rows and leaves the large part to a later round
+  is the scheduling change, after `schedule-report`. (4) The chunker's speed on such a unit is the Legal
+  session's: its counts tokenize span by span on one thread, and the spans are independent
+  (`encode_batch`: the same ids, on the idle cores).
+- **LIVE since 2026-11-25 09:40:28Z: main `1249b1d9`** (deploy `fa354241`; #877 the two modes, #878, #879,
+  #880 the voice ping, #881, #883–#887). München's readings from the first minutes, as logged:
+  - the mode, at start: "node in embed mode (read): chat model louise-chat-qwen3.5-9b-q4-p0; network budget
+    down unlimited ([budget]), up 12.5 MB/s ([budget])". `[models] chat_large` written through the System
+    page (the 35B); `chat_small` is the environment's, so no key was written. Nothing switched yet: the first
+    switch to chat mode is the operator's, and its rows (the worker's lines, the card and the RAM before and
+    after) are still owed.
+  - THE VOICE PING: five lines, once, twenty seconds after the start, under engine `d531d5d804f1` — Philippe
+    5.1 s, Synthetic it C 3.1 s, en 2.7 s, fr 2.3 s, de 1.9 s. The profiles the node is not set to (Louis, the
+    replaced Synthetic it) were not pinged. Expected: the record was empty. The row that proves the rule is
+    the NEXT start under the same engine (no line) and the first after the engine swap (five again).
+  - the scan's progress, once a minute: Normattiva "corpus scan: 290,816 units taken so far, 0 new, 0 changed
+    (60 s in)"; a source that does not say where it is: "still walking; 342,000 units taken so far, and the
+    source has not said where it is (DiscoverState.say)".
+  - the slice-scope wait: no line yet (the old worker's slice pass ran as it stopped: 1,025,283 held, 243,884
+    embedded here). The scan rate after `forget_many`: owed, when the walk ends and the apply starts.
+  - THE MEMORY YIELD SAID NOTHING AT START, so nobody could tell an armed watcher from an absent one, and
+    the operator's monitor is dropped only when the worker's rule has been seen live. Fixed the same day: the
+    watcher says once whether it is armed, with its limit, its two lines and the reading
+    (`memory_yield.watch`).
+- **The Ask button is Abort while a question is being answered (operator, 2026-11-25: "while a query is in
+  processing I want the Ask button to switch to Abort"; `app/templates/ask.html`, 07 §7.4).** Pressed, the
+  question's search and answer jobs are cancelled on the node (`DELETE /ask/relay/<id>`, the route the "stuck"
+  notice's Cancel already used), their streams closed, and the page says so: the hits and the words already
+  shown stay, the question stays in its box. A job whose start the node had not answered yet is cancelled when
+  named. The same guard closes a race that was there: a question replaced while its start was on its way could
+  take the newer one's stream, and released its hold on the model. `tests/browser/ask_abort.js`.
+- **A TRANSLATION THE MODEL SERVER CUT WAS SHOWN AND KEPT AS WHOLE — fixed the same day (`llm.translate_stream`,
+  `/ask/translate/stream`).** Found from the engine session's reading of LocalAI's chat route: a failure after
+  chunks have gone out is an error event and THEN the ordinary `[DONE]`. The answer's path read it (the page
+  says "answer cut"); the translation's dropped the stream's end, joined what had arrived — after an error
+  event, a token cap, a stream closed early or an exception under way — and both sent it as the passage's
+  finished text and kept it in the translation cache for every later reader. Now a stream that does not end
+  whole raises `llm.StreamCut`; the passage is a miss (its original shown, counted), is not kept, and the
+  route's log line says how many were cut and the first reason. `tests/test_translation_cut.py`. NOT known:
+  how many cut translations the node's cache holds from before — it is in the web process's memory only, so a
+  restart of the web (every deploy) empties it.
+- **The check a collection's author runs: `louise hold check <collection> --build` (`app/build_check.py`;
+  operator: "a consistency check shall be available also for whom is willing to create a compliant
+  collection").** The BUILD's checks, beside the plan's of 03 §3.2 and apart from them: about how the collection
+  was made on this node, read from its manifest, read-only, in no Codex and never attested. Built: `units` (no
+  unit held by two live rows; EUR-Lex5 held 37,695 and then 405) and `chunkless` (a document indexed with no
+  chunk states why, as an issue; 57 were told apart by hand). Each verdict in plain words with what would
+  supply what is missing. To build: `rescan`, `parse-bound`, and the generic forms of eurlex's word-coverage
+  test and bulk ledger. Design, the choice put to the operator and the list: `compliance-check.md`. NOT RUN on
+  the node's collections yet: the first run there is the reading (Wikipedia's redirects are indexed with no
+  chunk today).
+- **A collection yields to the worker's memory by itself (`app/memory_yield.py`; the lessons, row A4).** The
+  rule München's monitor held — pause the heavy collection over 21,500 MiB of the worker cgroup's anonymous
+  memory, resume under 18,000 — is the worker's own: over 87.5 % of its limit the collection holding the most of
+  the parse pool yields (its thread stands down after its unit), the next after two minutes still over, all go on
+  under 73 %; a yield that does not bring the memory down ends after ten minutes and says the memory is not the
+  pool's. NOT MEASURED AS A CURE: the monitor's rule never fired (highest reading 17,412 MiB); the first yield
+  is the first measurement (scheduling-log.md). Still open from the same row group: a stage that makes no
+  progress saying so by itself (the monitor's hang and "done not rising" rules), and a memory kill naming its
+  part and not the bystanders (A5).
+- **THE LESSONS OF EUR-LEX5.NEXT BECOME THE PLATFORM'S (operator: "All the workaround made on the spot must be
+  reflected in RAGE so that the same collection made from scratch can run smoothly"; "Every problem encountered
+  with a collection must become a lesson learned reflected in RAGE"; "a consistency check shall be available
+  also for whom is willing to create a compliant collection").** The inventory is Legal's
+  `eurlex5-lessons-2026-11-25.md`; the platform's rows are built in order. FIRST, the waits (this entry's
+  change, scheduling.md pitfall 23): a scan cut short by `node pause <collection>` is owed to its resume
+  (EUR-Lex5.next stood 14 minutes behind the slice scope, the pass at row 970,426 of 980,178, until the worker
+  was restarted); the stages' wait behind the slice scope says "row N of M" every five minutes and asks for the
+  scan it needs; a scan says where it is once a minute (`DiscoverState.say` for a source that walks before it
+  yields, the orchestrator's count, a heartbeat for a source that says nothing); "do not fetch" is a key of the
+  collection's file (`hold config apply --set acquire_enabled=false`, 07 §7.8). NEXT: the worker's own memory
+  yield and health lines (München's monitor does it today, an agent standing guard), then one unit one live row
+  with the check a collection's author can run, the voice commands, the engine swap as a command.
+- **Counted, for the language rule above (München, the live port on d531d5d804f1, Philippe's voice, seed 7, 32
+  steps, one English sentence):** tag "en-GB" gave the bytes of NO language (sha 2092a8d3e98a both); "it" gave
+  7cf56dcd126e, "en" ee74f805da39. So a country tag was no language to the engine: measured. Which of the three
+  sounds right is the operator's ear.
+- **Main's staged model files are NOT what runs** (München's count against main 6033dfe1: of 43, 14 identical,
+  21 different, 8 not on the node — the three live encoders run context on demand with its canary, qwen3-4b at
+  batch 2048, MADLAD at parallel 4 / ctx 2048, the backends four engine names later). Until main's files are
+  the node's, nobody runs the stage from main. The node's 35 files are on branch `node-model-files-2026-11-25`.
+- **The voice speaks the sentence's own language (operator: "the language/country tag must be aligned to the
+  language to speak, otherwise the voice has always a thick italian accent").** Two causes, both in what Louise
+  sent (München read them in the code and the engine's language map): the Ask page sends the language the
+  answer was ASKED in and it was passed on over the sentence's own, so an English answer on a page set to
+  Italian went out tagged Italian; and a tag with a country ("it-IT", "en-GB") is no language to the engine,
+  which then leaves a cloned voice to its recording's. Now `speech.spoken_language`: the sentence's own where it
+  is clear, else the answer's (`context`), else the request's tag — always as a primary subtag; the synthetic
+  voice of a reader who is not an admin is chosen by that same language. NOT measured: an accent is heard, not
+  counted — the check is the operator's ear after the deploy (an English answer with the page on Italian).
+  With it, München's change: the steps of a synthesis are a number field on the System page (4 to 64).
 - **A voice's encoding is made before a reader waits for it (`app/voice_ping.py`; operator, in the Tensor
   session: "The only voice ping purpose is to do the re-encode for voices without it cached to avoid the extra
   delay upon the first usage").** The port keeps a clip's encoding beside the clip, bound to the clip and the
@@ -74,6 +549,13 @@ measured (published figures disagree).
 
 ### 2026-11-24
 
+- **THE OPERATOR'S DECISIONS OF 2026-11-25** ("I accept your recommendations for all the decisions above", to the table put to him): (1) the paging-default engine `d658549772ca` (staged 0021; building, his "yes to the build now") is SWAPPED IN after EUR-Lex5.next is repaired and drained — every gate again; the keeper's own default (956d9a7, reverted on the branch tip by c2dc747 so that the branch is always safe to merge) comes back as one commit once that engine is live; the host's floor and the 30-minute soak stay conditions after it. (2) Philippe: the original 27.75 s clip, his number of steps to come (20–32, not 16). (3) the experts' record ON, the whole cache, ONCE THE LOAD AHEAD IS LIVE for the chat model. (4) PARKING STEP 2 IS BUILT, designed with the architecture session first ([parking-step-2.md](parking-step-2.md)). Also his: a voice is pinged — one short synthesis in it — only when it has no encoding the engine can read (a new profile, or another engine build), to take that encoding off a reader's first sentence; the architecture session's to build.
+- **ITS ROWS ON THE CARD PASSED (München, 2026-11-25 06:25Z).** The refusal: with the test switch, two requests answered HTTP 500 "Compute error." by ONE process, the third and fourth served with the control's scores — a refused pool commit now fails its request and nothing else; page mode's step 0 is met ([room-on-the-card.md](room-on-the-card.md) §4). The port: 0 lines "rows kept" over every log, one digest four ways for a seeded sentence, and after a test profile's delete nothing of it on disk, under `.leases` or in the engine ([omnivoice-on-our-backend.md](omnivoice-on-our-backend.md) §13). The load ahead's no-voice warm pays the pipeline's first use: nothing to build. A count over the node's 101 GGUF files: no live model has a tensor above 2 GiB, one installed candidate does.
+- **LIVE since 2026-11-25 05:52:18Z: engine `d531d5d804f1`** (`engine-refusal.series`: `b190673dbdbf` + 0018, the pool's refusal reaching the graph, + 0020, the port keeping nothing of a saved voice between requests). München: byte check identical, five gates exact with every fingerprint identical, twenty unloads at exit 0. LocalAI's SERVER swapped first, with 0019 (v5.0.1-3-g3ee38c799): the seven run ids unchanged; its first start removed the stale voice-lease directories, the October link among them. Its own rows — the refusal's two errors from one process, the port's "read from its kept encoding" — in the same pause. Mirrors of every live engine's tree on the operator's word: github.com/sourstar/LocalAI and /llama.cpp, `louise/engine-<name>`; the patch files here stay the source. Philippe's voice: the ORIGINAL 27.75 s clip (the operator), the steps a node setting.
+- **THE CARD ROWS OF `b190673dbdbf` (München, 2026-11-25 00:55–01:40Z), and what they led to.** **Parking** ([parking-prototype.md](parking-prototype.md) §4a): the same bytes at every cycle, a parked bge-m3 back in 15.5 ms (the design derived 0.3–0.9 s), 575 MiB given back — step 2 recommended, the operator's choice. **The experts' record** ([moe-expert-record.md](moe-expert-record.md) §7): right (the same text seven ways, 47 % fewer MiB uploaded under the tokens) and worth about 0.1 s, because an upload costs 8,186 MiB in 173 ms on this card — off until chosen. **The port** ([omnivoice-on-our-backend.md](omnivoice-on-our-backend.md) §13): 2.24 s a sentence with Philippe's 11 s clip, 2.70 s with his ORIGINAL 27.75 s clip (my estimate of 5–8 s was wrong), 3.60 / 8.65 s on today's backend; the kept encoding read in 0.01 s — his ear chooses the clip. **THREE DEFECTS, each fixed before anything else:** (1) the pool's refusal KILLS the process — staged 0013, live since 11-24, never did what it says (the op's own error macro takes the exception); staged 0018, checked against the backend's real macros and a CPU stand-in above it; PAGE MODE WAITS FOR ITS ROW. (2) LocalAI leaves a killed process's voice leases for ever, so a deleted profile's recording can stay on disk (B20); staged 0019, a patch of LocalAI's SERVER. (3) our own port kept the last clip's SAMPLES in the backend's memory between requests; staged 0020. **Candidate engine `d531d5d804f1`** (`engine-refusal.series`: the live engine + 0018 + 0020), not built yet; THE PORT BECOMES THE LIVE VOICE ONLY ON IT (the architecture session), with the server rebuilt for 0019 in the same pass.
+- **Live 2026-11-25 00:55:18Z to 05:52:18Z, and the engine a rollback puts back: engine `b190673dbdbf`** (München: byte check identical, the five llama.cpp gates exact with every fingerprint identical to `9ea95e93a83c`'s, twenty unloads at exit 0, none slow; every new switch unset). Its rows — the experts' record, parking, the pool's refusal, the port — are measured on copies in the same pause. **The next live engine, ONE candidate build** (`deploy/localai/patches/staged/engine-next.series`; operator, relayed by München: "I want it, and it is inside my \"everything\""; agreed with the architecture session: a build costs every run its gate, so one for everything due). The live series, then: the OmniVoice port and LocalAI's speech call (0009, 0010), the three fixes live since tonight (0012–0014), parking and its test switch (0015, 0016, off), the MoE record (0017, off). No prototype engine of its own is built.
+- **The first sentence in a voice: the clip's encoding is kept WITH THE PROFILE** ([omnivoice-on-our-backend.md](omnivoice-on-our-backend.md) §13; operator: "Why first sentence takes more time, didn't we optimize it?"). One file beside the profile's own clip, found by the lease's inode, gone with LocalAI's delete; the rows and the clip's SHA-256, never the samples. CPU: a new process reads it in 0.01 s where it encoded in 2 s, the audio the same bytes. The longer clip of Philippe is NOT made free by it: the reference is computed again at each of the 32 steps (the model reads in both directions) — 2–3.5× a sentence; the choices are in the note, the rows München's.
+- **The MoE cache filled from a record of the experts used — BUILT, THE FILL NOT YET RUN** ([moe-expert-record.md](moe-expert-record.md); operator: "the MoE preloading in VRAM based on the recent experts used"). The engine's cache forgot everything with its context; the record keeps the uses per layer and expert across contexts and loads, fills a new cache inside the load and seeds its eviction. Its own logic is tested (35 checks) and its choices replayed against the engine's own cache class without a device (`tools/measure/moe_record_replay.py`). **The node's four traced answers of the 35B, replayed (2026-11-24): the fill removes 40–53 % of the uploads under the first 64 tokens, the other-language answer included (a wrong record does not cost here) — but a whole fill uploads the whole 8.2 GiB cache inside every load to remove 3.0–4.1 GiB, so `LLAMA_MOE_RECORD_FILL` (the share filled, best-ranked first) was added before the candidate's gates were spent: engine `b190673dbdbf`, replacing `5f926f4efa04`, built and never gated.** The fill itself needs a card beside the host and is München's to measure, with the token ids equal, whole, at a half and at a quarter.
 - **The worker held for 21 minutes by one document, and what was built against it.** 15:50–16:11Z: a pool
   child hung on a Hungarian directive (a citation pattern that tried every split of a list of numbers), the
   watchdog fired, and the fallback parsed the same document in the worker's own process: one C call, the
@@ -138,6 +620,8 @@ measured (published figures disagree).
   a wrapper change IS a new run for every vega space — the wrapper's code is in the engine's image since
   10-31 — and its PR said otherwise, corrected there). The keeper counted an on-demand model's weights at
   the fewest reading ever seen, one taken mid-load: now what the model holds at rest (#857).
+- **Parking step 1, the engine prototype — BUILT, NOT YET RUN ON THE CARD** ([parking-prototype.md](parking-prototype.md); operator, relayed: "Do everything, … run unattended"). The weights are released and committed again at the SAME addresses (a reserved virtual range), so no tensor, extra or reorder changes across a park. Staged 0015, env switches only; its engine is the next live candidate (above), where it is off. Here: compiled with Intel's compiler, 16 of 16 on a CPU stand-in that poisons a parked buffer, the engine's 21 context-on-demand tests. The node's measurement (R0–R3, the floor, a refusal) is München's, the card free after tonight's pass.
+- **A candidate engine with the staged fixes** (`engine-fixes.series`: 0012 the expert-layout switch, 0013 the pool's refusal, 0014 the second signal's exit; engine `9ea95e93a83c`), compiled here for the first time (Intel's compiler installed in the cloud session), built on the node by München 19:44Z for one swap-and-gate pass with the wrapper's rebuild.
 - **More models than the card holds: parking — DESIGNED, nothing built** (operator: "it is a matter of
   allowing use cases that today we couldn't afford"; "Both engines"). A model parked in host RAM and put
   back on the card by a copy, after Clockwork (OSDI 2020): the mechanism in the engine, the lifecycle and
@@ -146,6 +630,132 @@ measured (published figures disagree).
   warm (11-09), and the aim is that it costs the same. Measurements come first (a cold load's split, the
   copy's rate, a parked process's floor on the card, a question's timeline cold and warm). The note:
   [models-beyond-the-card.md](models-beyond-the-card.md).
+
+### 2026-11-24 (the engine, the 35B and speech; its older entries carry their own dates)
+
+- **2026-11-24, room on the card — the order of work** ([room-on-the-card.md](room-on-the-card.md); operator:
+  "Extend page instead of unload to the dense models", "the 'shared' context is mandatory improvement"). (1) The
+  shared context (context on demand, P8) is on for three embedders only and the keeper still counts them whole —
+  5,554 MiB counted and not held; every other llama.cpp model still takes its option, a keep, a reading on the
+  card and, for the one encoder, its gate. (2) **Page instead of unload is BUILT, off by default**:
+  `[models] make_room = "page"` lets a load work is waiting on over the line while the host stays above a floor,
+  the driver paging idle models (0.2–0.4 s on their next use against 7.5–8.7 s after an unload, S5); the
+  keeper's preloads, a host under its floor and a model whose paged load failed keep the unload; LocalAI's
+  reclaimer follows the node's file at every deploy. It needs, on the node, the engine's two switches in every
+  llama.cpp model's file, the encoders re-gated, a floor measured in the busy hours (4.7 GB were available under
+  load that day) and a soak. (3) **The 35B's experts paged by use: measured and ended** — the whole model was on
+  the card after one answer, and a neighbour's load died (the qualification note §3); what the run showed
+  besides, long prompts starting 39 % sooner with the experts not reordered, has a switch staged for a clean
+  comparison.
+
+- **2026-11-24, omnivoice on our backend — evaluated, nothing changed** (operator: "I would like to have only one
+  backend"). omnivoice.cpp builds unchanged against our engine's ggml and gives the same audio on the CPU (68 of
+  159,120 samples off by one unit); its own ggml fork is ours a few days older on SYCL. Four ways, with their costs,
+  in [omnivoice-on-our-backend.md](omnivoice-on-our-backend.md): the same engine as a second package (two build
+  arguments), one binary (a carried patch in `grpc-server.cpp`), a native model (Qwen3-TTS, which
+  our backend already serves, no patch), a port into llama.cpp. **The operator chose the port ("Go with option D"):**
+  in progress in stages, each gated — design, synthesis from text, audio parity with omnivoice.cpp, cloning and the
+  server route, the series and the card (§6 of the note). Speech stays on today's backend until the card checks pass.
+  **Same day: the design, synthesis from text and its gate are done on the CPU** (§7–§8). Two findings: today's backend
+  ADDS its attention mask where the model blocks with it (a quirk of PyTorch's "eager" attention that omnivoice.cpp
+  copied; 1,298 of 1,344 codes change), so the port masks as the model does and its audio is not today's sample for
+  sample; and the decoding is chaotic under rounding (a neutral change in omnivoice.cpp alone moves 1,147 of 1,344
+  codes), so the gate compares step by step: prompt identical, logits within the reference's own noise at steps 0–31,
+  the reference's scoring on the port's logits gives the port's codes at all 32 steps, decoders equal to 1.25e-6 but
+  for a chunk's last 83 ms (the port computes two samples omnivoice.cpp zero-pads), two runs byte-identical. Staged as
+  `deploy/localai/patches/staged/0009-llama-cpp-omnivoice.patch`. **Cloning from a clip, described voices and the
+  server's speech route followed the same day** (§9): a clip's codes equal the reference's on 158 of 159 frames (the
+  other on a near-tie), prompts identical, the server gives the tool's bytes. A second staged patch
+  (`0010-llama-cpp-tts-voice-modes.patch`, in LocalAI's backend) passes a voice profile's transcript on and accepts a
+  request without a voice, which Louise's own requests need. Streaming a long text chunk by chunk is not ported:
+  Louise sends a sentence per request. **Speed, measured at equal threads with one job on the machine (§11; the first
+  figures, 60 s against 158 s, compared 4 threads with 2 and are withdrawn):** the port is 1.2–1.5 times faster than
+  omnivoice.cpp on a sentence and 2.1 times with a voice clip, on the CPU; 95 % of its time is the backbone, which
+  nothing that keeps the audio shortens. Kept, audio unchanged byte for byte: a slot reuses the last clip's frames
+  (2.1–2.6 s a sentence here, every sentence after the first of an answer), the scoring on the caller's threads and
+  without the decoded slots (0.9 → 0.4 s); taken out for want of a measured gain: states for target rows only. A
+  line per request says where its time went — the card's proportions will not be the CPU's. **The node's dial
+  between speed and quality (operator: "controlling quality over speed is useful"):** `[speech] tts_steps`,
+  written by `louise node speech set --steps N` or the Models panel's field, 4–64, sent as `params.flow_steps`
+  over any client's — main's implementation (#875); this branch's own (2edda1e) was withdrawn for it 11-25. Inert on
+  today's `omnivoice-cpp` backend, which does not read the field: it needs the port and the second staged patch,
+  which now also passes a request's seed and guidance (§10, §11). Left: the card — München's, in a window, with
+  the operator's ear on the two voices (§10 of the note). **First rows on the B70 (München, 11-24, §12): the test
+  engine builds (staged 0010's LocalAI half compiles); a 6-second sentence in 1.23–1.41 s at 32 steps and 0.74 s at
+  16, the model's own voice. **Both backends in one window: the port is 1.1 times as fast as today's on a long
+  sentence in the model's voice, 1.6–2.1 times in a recorded voice, 2.0–3.5 times on short sentences** (0.40 /
+  0.73 / 0.78 s against 1.4 / 1.6 / 1.6 s); the kept clip reads 0.00 s from the second request; every word found
+  by the node's speech-to-text on every clip; 1.9–2.0 GiB at rest against 1.5. A recorded voice is refused by LocalAI
+  itself, by the engine's name (localai-bugs.md B17): a blocker for the cut-over, with its options in §12.**
+- **2026-11-24, "Engine now, chat later" (operator): the new engine is adopted, the chat model decided after the
+  POC.** The cut-over's order is in [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §5:
+  BACKOUT first; the wrapper `vega-louise-llama-cpp` repointed at `c3294e050ff2`, MADLAD and the nemotron reranker
+  naming it directly (their YAMLs here), `fit:off` on the thirteen; every collection's gate with its acceptance;
+  NeuRIS gates with its space like the rest (the per-model CPU reference is live since 11-23: no collection
+  waits); the old engines archived and deleted. It went after architecture's deploy 7f118736, on the
+  operator's word to München ("Deploy and step 3 right after"). **First attempt 2026-11-24 06:16Z: backed out cleanly
+  at the first gate** — the node held no CPU reference for bge-m3 (not an engine fault; the web was down two
+  minutes; the live set back on the old engine). A preflight of every gate's reference comes before the retry
+  (§5, F11). NOT yet done on the node.
+  **Second attempt, 06:40Z: the gates and the checks PASSED, the engine `c3294e050ff2` serves** — wikipedia, gutenberg
+  (both sides), pubmed's query side, NeuRIS (for legi_F and Normattiva too) and wikidata all exact, each within its
+  CPU reference; MADLAD 379/379 identical to the qualified engine, the reranker's scores equal on 20 of 20 lists, the
+  9B at 78.0 / 75.7 tok/s. Left: the web up and the thirty-minute watch, the old engines' retirement, the live model
+  files back into the repository (MADLAD runs without `fit:off`; the repository's file has it). **The POC was cut down
+  by the operator the same morning**: the whole-buffer driver swap is cancelled, the 2 GiB-buffer test (S5) is the
+  swap arm, and the offloaded 35B is measured further only if S5's numbers are bad (the bar proposed in
+  backend-qualification-2026-11-21.md, phase 5).
+- **2026-11-23, the new llama.cpp engine is QUALIFIED — the report** ([backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md) §4). Engine `c3294e050ff2` (LocalAI
+  v5.0.1, llama.cpp `78e0529`, the eight-patch series): the series' checks pass, every gate that could run passes,
+  every encoder bit-identical and equal to the live engine's bytes, the reranker's scores equal in 175/175 lists,
+  MADLAD equal on 379/379. No model slower: encoders, reranker and MADLAD 2–4 % faster, chat prefill +3 to +13 %.
+  The 35B resident: 100.4 / 97.9 tok/s, 21,782 MiB (+6 % prefill on short prompts, otherwise under 1 %; the
+  device-side MoE scheduler changes nothing here). The 35B offloaded: 7,474 MiB on the card at 69.7 / 65.3 tok/s
+  with a 4 GiB cache, 11,562 MiB at 84.3 / 80.6 with 8 GiB, and 19.3 GiB of host memory held by the driver either
+  way. Not done: the POC (phase 5, needs a window) and the cut-over (the operator's to start; NeuRIS waits for its
+  CPU reference).
+- **2026-11-22, the qualification's finding F4 — the series file did not record what was live.** The first v5.0.1
+  engine lacked P10 (the nemotron reranker's architecture) and P11 (context on demand): both were "staged" in the
+  repository while the node's live engines were built from candidate `.series` files carrying them. The gate refused
+  the new engine for every `context_on_demand` encoder and the reranker's GGUF did not load. Fixed: P10 and P11 are
+  series 0007 and 0008 on v5.0.1 (eight patches, every hunk exact, `git am` verified), the staged copies and their
+  `.series` files removed, localai-bugs.md renumbered (P7 nemotron rerank, P8 context on demand; the staged
+  encoder-decoder pair P9/P10). The engine is rebuilt and phase 3 rerun. Phases 0–2 stand: the series' checks
+  green, MADLAD −2 % against live when paused (F3 closed as a loaded-card artifact), bytes identical to live on every
+  encoder measured so far. [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md).
+- **The backend qualification is running** (operator, 2026-11-21: "Run unattended, you are in charge of the backend
+  qualification. When done I want a full report of the performance improvement or loss, and how the 35B MoE
+  performs. Test also the tensor layer split as a POC with all the current models (not those used for ocr) plus
+  the 35B replacing the chat model."). The protocol, six phases with their harnesses and acceptance, and the report
+  as it fills: [backend-qualification-2026-11-21.md](backend-qualification-2026-11-21.md). The cloud session
+  holds it; München runs the node's steps and sends each phase's figures back. The live engine serves until the new
+  one is qualified (RULE 1); the cut-over is the operator's to start.
+- **A — the series moved to LocalAI v5.0.1** (operator, 2026-11-21, after the report below): base
+  `dd5780a` (llama.cpp `78e0529`); P1, P2 unchanged; P3–P6 regenerated on the new llama.cpp with LocalAI's own
+  patch applied first, code unchanged, every hunk exact; P7 deleted (in the base). `fit:off` in every llama.cpp
+  encoder, reranker and MADLAD YAML. Not built, not deployed: München's steps are in
+  [llama-cpp-update-2026-11-21.md](llama-cpp-update-2026-11-21.md) §8 — build, the series' checks, room before
+  every load (a buffer that does not fit is refused now), the re-gate of every space, the 35B measured with and
+  without the MoE cache.
+- **What updating the llama.cpp backend to LocalAI 5.0.1's pin gains — the report** (operator: "run unattended,
+  give me a report later"): [llama-cpp-update-2026-11-21.md](llama-cpp-update-2026-11-21.md). For the 35B MoE: the
+  SYCL device-side MoE scheduler (#30156: prefill +23 % at 2k tokens, +136 % at short prompts, B60) and the completed
+  MoE cache (≈ 9 GiB on the card instead of 21.6, E; SYCL unmeasured); for every model: the BMG VRAM check (#31285)
+  ends the silent spill — a load onto a full card fails instead, so the resident budget must hold before each load;
+  for the encoders: nothing but a re-gate of every space. Our live series rebases with context refreshes (P5 and
+  P10 apply as they are, P7 is upstream and dropped, P11 applies in its upstream form); the staged P8/P9 conflict.
+  `--fit` is ON by default in LocalAI's backend at both bases: `fit: off` goes into every encoder YAML. Recommended:
+  the chat model first on its own backend at the new pin (the P10 precedent), the series after, in a window.
+- **Latest llama.cpp checked against our pin, for the full card** (operator: "check latest llama.cpp"; master b12600
+  of 11-20 against `ddf48f8`). Nothing newer on SYCL, offload or the server; everything relevant is ALREADY AT OUR
+  PIN: the **MoE cache** (`--cpu-moe` + `--moe-cache-mib N` + `--moe-cache-cpu-share F`, merged 11-06/07) — the
+  experts in host RAM, the hottest cached on the card: the 35B would hold ≈ 9 GiB with a 4 GiB cache instead of
+  21.6 (E), the first arrangement in which the wanted set fits with MADLAD; SYCL unreported, to measure on the B70;
+  llama-server's **router mode** with `--models-memory-margin` (measured min/max per model, LRU unload with a fit
+  check) — the standard form of LocalAI's reclaimer + app/resident.py, written down, not adopted; `--fit` (on by
+  default: a model without `-c` takes the largest context that fits); `GGML_OP_OFFLOAD_MIN_BATCH`, which makes
+  partial offload's GPU/CPU path independent of the batch size and so measurable under invariant 12.
+  [idle-context-brief.md](idle-context-brief.md) §6, [model-set-summary.md](model-set-summary.md).
 
 ### 2026-11-23
 
@@ -298,6 +908,33 @@ measured (published figures disagree).
 
 ### 2026-11-17
 
+- **The B70's bus and the host's RAM, and what a VRAM overcommit would cost** (operator, 2026-11-17: the card is
+  on PCIe 5.0 x16, the RAM is DDR5-6400; "keep the numbers in mind for future development"). A model switch under
+  overcommit swaps whole buffers at ~35 GB/s effective (CORRECTED 2026-11-19 after the operator's reads: the slot
+  link IS Gen5 x16 on the card's upstream bridge `01:00.0` — the endpoint `03:00.0` reports an internal 2.5 GT/s x1,
+  read the bridge; the RAM is 2 × 32 GB dual channel RUNNING AT 5200 MT/s per the firmware, the BIOS's EXPO-6400
+  profile not in effect — open): ~1.3 s for the 35B as measured (21.6 GiB), ~0.3 s for MADLAD,
+  against 28.6 s for the 35B's measured load and 8–13 s for LocalAI's unload-and-reload of the others; a working set that does not fit beside what cannot leave
+  thrashes at ~12× slower decode; the spill takes 8–18 GB of the ~20 GB of host RAM headroom, and nothing reports
+  it. Estimates, not measurements. Recorded in [idle-context-brief.md](idle-context-brief.md) §6 "What the spill
+  costs" and [node-runbook.md](node-runbook.md) §1.
+- **The set the operator wants on the B70, costed** (operator, 2026-11-17: today's models, the 35B MoE chat for
+  qwen3-8b, Krea 2 image generation; STT stays on the iGPU, "500 MB are anyway reserved"). The 35B UD-Q4_K_M
+  loads at ≈ 22.1 GiB (file 20.6); Krea 2 is 33 GiB in bf16 as shipped and does not fit alone; the whole set is
+  ≈ 44–62 GiB resident, ≈ 38–56 GiB with the shared context the operator assumes (3.2 GiB, the measured peak),
+  ≈ 34–52 GiB weights-only, against 31.9 GiB — nothing of it is resident as the set stands; the one fit is the 35B
+  at Q3 with MADLAD dropped (the 35B translating), ≈ 27.6 GiB, Krea 2 loaded per use. Krea 2 IS supported by the
+  stable-diffusion.cpp that the node's LocalAI v4.12.1 pins (0518b343; upstream since 2026-06-25; checked on the
+  operator's word): DiT GGUF Turbo Q4_K_M 6.7 GiB / Q8_0 12.7, text encoder Qwen3-VL-4B GGUF 2.3 / 4.0 or on the
+  CPU, Wan 2.1 VAE 0.24; no gallery entry, a hand-written YAML. [idle-context-brief.md](idle-context-brief.md) §6 "The set the operator wants",
+  [image-generation-krea.md](image-generation-krea.md) (amended: Krea 2 is not FLUX.1 Krea dev). The whole set in
+  one table, measured against estimated, with what was asked of München: [model-set-summary.md](model-set-summary.md).
+  **München's figures (2026-11-18, the node's records):** today's set at rest 32,367 MiB — the card's size, the
+  spill already in use; the 35B MEASURED 21,642 MiB at one stream (28.6 s to the first token, 606.5 tok/s prefill,
+  92.2 tok/s decode); the live chat is qwen3.5-9b, the rerankers nemotron-1b and medcpt; on disk a Krea 2 finetune's
+  Q8_0 DiT (moodyKrea2Mix v4.0) with a misconfigured YAML, no Qwen3-VL-4B text encoder and no Wan 2.1 VAE; the
+  installed image backend's stable-diffusion.cpp commit unrecorded; no measurement of the spill's speed. Nothing of
+  the set is resident; the nearest fit (35B Q3, MADLAD gone, two grown encoders trimmed) sits at the reclaimer's line.
 - **gutenberg-book-editions re-makes itself every month from the node's own collections** (operator: no hand-run
   tools, no web APIs; "if there is a local wikipedia collection it is pointless to download a wikipedia snapshot").
   The method is `gutenberg-editions`. It re-derives the Wikidata tier through the node's wikipedia: the title as the

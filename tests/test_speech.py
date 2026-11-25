@@ -358,6 +358,44 @@ def test_a_recorded_voice_is_never_left_to_its_profile_s_own_tag(server):
     assert calls[-1][1]["language"] == "de", "the page's language stands"
 
 
+def test_the_sentence_s_own_language_is_sent_not_the_language_the_answer_was_asked_in(server):
+    """Operator, 2026-11-25: "the language/country tag must be aligned to the
+    language to speak, otherwise the voice has always a thick italian accent".
+    The Ask page sends the language the answer was ASKED in as `language`;
+    until that day it was sent on as it came, and an English answer on a page
+    set to Italian reached the model tagged Italian."""
+    calls, _ = server
+    english = "The poem was written by Dante in the fourteenth century and it is read in every school."
+    speech.synthesize({"model": "omnivoice-cpp", "input": english, "voice": VOICE_A, "language": "it"},
+                      url="http://ai:8080")
+    assert calls[-1][1]["language"] == "en", "an English sentence is spoken as English"
+    italian = "Il poema fu scritto da Dante nel Trecento ed è letto in tutte le scuole."
+    speech.synthesize({"model": "omnivoice-cpp", "input": italian, "voice": VOICE_A, "language": "en-US"},
+                      url="http://ai:8080")
+    assert calls[-1][1]["language"] == "it"
+
+
+def test_a_tag_with_a_country_is_sent_as_its_language(server):
+    # the engine knows "it", "en", "de": to it "it-IT" or "en-GB" is NO language, and a cloned
+    # voice then speaks in its recording's (München, 2026-11-25, from the engine's language map)
+    calls, _ = server
+    for tag, want in (("en-GB", "en"), ("it_IT", "it"), ("DE-at", "de"), ("fr", "fr")):
+        speech.synthesize({"model": "omnivoice-cpp", "input": "Dante, 1321.", "voice": VOICE_A,
+                           "language": tag}, url="http://ai:8080")
+        assert calls[-1][1]["language"] == want, tag
+    assert speech.primary("") is None and speech.primary(None) is None
+
+
+def test_the_answer_around_a_short_sentence_says_more_than_the_tag(server):
+    calls, _ = server
+    context = "The poem was written by Dante in the fourteenth century. It is read in every school."
+    speech.synthesize({"model": "omnivoice-cpp", "input": "Dante.", "voice": VOICE_A, "context": context,
+                       "language": "it-IT"}, url="http://ai:8080")
+    assert calls[-1][1]["language"] == "en", "the answer it is part of is English, whatever was asked for"
+    assert speech.spoken_language("Dante.", "", "it-IT") == "it", "nothing around it: the tag, as a language"
+    assert speech.spoken_language("Dante.") is None
+
+
 def test_a_model_s_own_voice_is_sent_as_before(server):
     calls, _ = server
     speech.synthesize({"model": "kokoro", "input": "Dante.", "voice": "alloy"}, url="http://ai:8080")

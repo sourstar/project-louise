@@ -90,7 +90,11 @@
       <option value="{{ lang[0] }}" dir="auto">{{ lang[2] if lang|length > 2 else lang[1] }}</option>
       {% endfor %}
     </select>
-    <button class="ask" onclick="go()">Ask</button>
+    {# ONE BUTTON: Ask, and Abort while the question is being answered
+       (operator, 2026-11-25: "while a query is in processing I want the Ask
+       button to switch to Abort to be able to abort the query in case I
+       change my mind or I want to change the query") #}
+    <button class="ask" id="ask-btn" onclick="askOrAbort()">Ask</button>
   </div>
   <details class="settings">
   <summary>Settings</summary>
@@ -217,6 +221,8 @@
   .voice-btn[hidden]{display:none}
   #mic{flex:0 0 auto;min-width:44px;padding:0 10px}
   #mic.rec{border-color:var(--err);color:var(--err);animation:mic-pulse 1.2s ease-in-out infinite}
+  /* opened and not yet giving sound (a car's Bluetooth switching to its call profile): not red, dashed */
+  #mic.waking{border-style:dashed;opacity:.75}
   /* a phone keeps :hover on the button last tapped: the accent border stayed
      on the microphone after speaking — red in the warm themes (operator,
      2026-11-12: "the button remains red"). Without a hover, no hover look. */
@@ -447,14 +453,17 @@ async function search(){
   const replaces=['search','answer'].map(k=>relays[k]).filter(r=>r&&!r.ended).map(r=>r.id);
   for(const k of ['search','answer'])if(relays[k]){if(relays[k].es)relays[k].es.close(); relays[k]=null}
   let id;
+  const mine=goSeq;
   try{
     id=await relayStart('search',{query:q,speed:speedOn(),quick:quickOn(),collections:scopeCollections(),annotations:scopeAnnotations(),
                                   mode:document.getElementById('mode').value,
                                   show_in:selectedLang(),...counts()},replaces);
   }catch(e){
+    if(mine!==goSeq)return false;            // aborted meanwhile: nothing to say
     document.getElementById('results').innerHTML='';
     relayDropped('search','it could not start ('+(e.message||e)+')'); return false;
   }
+  if(!relayStarted(mine,id))return false;
   relayState={q}; relaySave();
   let got=false;
   const end=await relayListen('search',id,{result:d=>{showResults(d); got=true}});
@@ -528,17 +537,73 @@ function quickOn(){return speedOn()}
 // 2026-11-12). A newer question replaces an older one, whose stream never
 // ends, so only the latest one's end gives the microphone back.
 let goSeq=0;
+// THE ASK BUTTON IS ABORT WHILE THE QUESTION IS BEING ANSWERED (operator,
+// 2026-11-25). `asking` is true from the press until the NEWEST question
+// ends: a question a newer one replaced never reaches its end here (its
+// stream is closed under it), so the newest alone decides what the button says.
+let asking=false;
+function askButton(){
+  const b=document.getElementById('ask-btn'); if(!b)return;
+  b.textContent=asking?'Abort':'Ask';
+  b.classList.toggle('abort',asking);
+  b.title=asking?'stop this question: nothing more of it is searched or written':'';
+}
+function askOrAbort(){return asking?abortAsk():go()}
 async function running(fn){
   const mine=++goSeq;
+  asking=true; askButton();
   if(window.louiseVoice)louiseVoice.question(true);
   try{return await fn()}
-  finally{if(mine===goSeq&&window.louiseVoice)louiseVoice.question(false)}
+  finally{if(mine===goSeq){asking=false; askButton(); if(window.louiseVoice)louiseVoice.question(false)}}
 }
 function go(){return running(()=>howAsk()==='search'?search():ask())}
+// ABORT: the question's search and answer are cancelled ON THE NODE (DELETE
+// /ask/relay/<id>: the search stops at its next checkpoint, the model stops
+// writing), their streams closed here so nothing more of them reaches the
+// page, and the page says so. What was already shown stays: the hits of a
+// search that had finished, the words of an answer cut short, marked as
+// such. The question stays in its box, with the cursor in it. A job whose
+// start was still on its way when Abort was pressed is cancelled when its id
+// arrives (`relayStarted`). The page is then what a search alone leaves:
+// the hits shown, if any, are translated as they are read (`tqPump`).
+async function abortAsk(){
+  ++goSeq;                                   // whatever still arrives of it is nobody's
+  asking=false; askButton();
+  const live=['search','answer'].map(k=>relays[k]).filter(r=>r&&!r.ended);
+  for(const k of ['search','answer']){
+    const r=relays[k]; if(!r)continue;
+    clearTimeout(r.timer); if(r.es)r.es.close(); r.ended=true; relays[k]=null;
+  }
+  relayState={}; try{sessionStorage.removeItem(RELAY_STORE)}catch(e){}   // a reload picks nothing up
+  tq.hold=false;                             // the answer it held the model for is not coming
+  if(window.louiseVoice){louiseVoice.answerCleared(); louiseVoice.question(false)}
+  relayNote('');
+  const res=document.getElementById('results');
+  if(res&&!res.querySelector('#hits'))res.innerHTML='<div class="note" id="aborted-note">aborted — nothing more of this question is searched.</div>';
+  const pane=document.getElementById('answer-pane'), a=document.getElementById('answer');
+  if(pane&&pane.style.display!=='none'){
+    if(answerSrc.trim()){
+      setAnswer(answerSrc);
+      const n=document.createElement('div'); n.className='note'; n.id='aborted-answer';
+      n.textContent='aborted — the answer stops here.'; a.appendChild(n);
+    }else pane.style.display='none';
+  }
+  const q=document.getElementById('q'); if(q)q.focus();
+  await Promise.all(live.map(r=>fetch('/ask/relay/'+encodeURIComponent(r.id),{method:'DELETE'}).catch(()=>{})));
+  if(res&&res.querySelector('#hits'))tqPump();
+}
+// a job just started for a question that is no longer the page's (aborted,
+// or replaced, while its start was on its way): cancelled, never listened to
+function relayStarted(mine,id){
+  if(mine===goSeq)return true;
+  fetch('/ask/relay/'+encodeURIComponent(id),{method:'DELETE'}).catch(()=>{});
+  return false;
+}
 async function ask(){
   // inside the press: a question the microphone wrote is answered aloud
   if(window.louiseVoice)louiseVoice.asking();
   const want=selectedLang();
+  const me=goSeq;        // this question; another one's hold on the model is not ours to release
   // THE ANSWER BEFORE THE ENTRIES (operator, 2026-10-21: the answer box
   // first). The model is one queue, and the entries are minutes of it:
   // the queue holds the page's ranks while the answer is written, directly
@@ -552,17 +617,19 @@ async function ask(){
   // an answer was asked for: it starts where the reader can see its first word
   pane.scrollIntoView({block:'start'});
   let id;
+  const mine=goSeq;
   delete (document.getElementById('hits')||{dataset:{}}).dataset.read;
   try{
     id=await relayStart('answer',{messages:[{role:'user',content:q}],collections:scopeCollections(),
                                   annotations:scopeAnnotations(),answer_lang:want,search_id:lastSearch,speed:speedOn(),
                                   ...counts()},[]);
-  }catch(e){setAnswer(''); relayDropped('answer','it could not start ('+(e.message||e)+')'); return}
+  }catch(e){if(mine!==goSeq)return; setAnswer(''); relayDropped('answer','it could not start ('+(e.message||e)+')'); return}
+  if(!relayStarted(mine,id))return;
   relaySave({answer_lang:want});
   await relayListen('answer',id,{delta,reading:readingBadges,read:readCount});
   finishAnswer(a,want);
-  }finally{tq.hold=false}
-  tqPump();              // the entries, now that the answer is out
+  }finally{if(me===goSeq)tq.hold=false}
+  if(me===goSeq)tqPump();   // the entries, now that the answer is out
 }
 // A RELOAD PICKS THE QUESTION UP AGAIN: the tab's last search and answer,
 // from the node, replayed from their first event — still running or
@@ -582,6 +649,8 @@ async function relayRestore(){
   document.getElementById('q').value=s.q||'';
   document.getElementById('results').innerHTML='<div class="note">picking up the last question…</div>';
   tq.hold=!!s.answer;
+  const mine=++goSeq;                        // it is in flight: the button aborts it
+  asking=true; askButton();
   try{
     let got=false;
     await relayListen('search',s.search.id,{result:d=>{showResults(d); got=true}});
@@ -592,7 +661,7 @@ async function relayRestore(){
       await relayListen('answer',s.answer.id,{delta,reading:readingBadges,read:readCount});
       finishAnswer(a,want);
     }
-  }finally{tq.hold=false}
+  }finally{tq.hold=false; if(mine===goSeq){asking=false; askButton()}}
   tqPump();
 }
 // ---- translated content -------------------------------------------------

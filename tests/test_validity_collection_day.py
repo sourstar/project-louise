@@ -54,4 +54,9 @@ def test_discovery_s_retirement_forgets_on_the_collection_s_day(monkeypatch):
     assert seen == [DAY]
     import inspect
     src = inspect.getsource(discovery._apply_batch)
-    assert "(uid_alt, vday)" in src and "_validity.today(collection)" in src
+    # the batch's retirements forget once, on the collection's day (2026-11-25)
+    assert "(forgotten, vday)" in src and "_validity.today(collection)" in src
+    seen.clear()
+    monkeypatch.setattr(validity, "forget_many", lambda con, uids, day=None: seen.append((list(uids), day)))
+    discovery._forget_validity_many(None, ["e:x", "e:y"], DAY)
+    assert seen == [(["e:x", "e:y"], DAY)]

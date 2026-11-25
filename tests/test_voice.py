@@ -393,3 +393,135 @@ def test_every_field_the_page_reports_is_one_the_node_keeps():
     sent = set(re.findall(r"(\w+):", block.split("return {", 1)[1]))
     sent |= {"stop", "vad", "chars"}            # added where the clip is written down
     assert sent <= set(web.VOICE_REPORT_KEYS), sorted(sent - set(web.VOICE_REPORT_KEYS))
+
+
+# ---- a reading's times in the node's log (operator, on a phone, 2026-11-25: "the voice starts very late
+# after the answer begins" — and a phone has no console to read `louiseVoice.timeline()` from)
+
+READING = {"first_word": 2400, "last_word": 9100, "started": [2450], "taps": [], "by_itself": True, "blocked": False,
+           "count": 7, "lang": "it", "ua": "Mozilla/5.0 (Linux; Android 15) Chrome/142 Mobile",
+           "sentences": [{"chars": 62, "cut": 3100, "sent": 3110, "got": 6000, "synth": 2510, "audio": 4100,
+                          "turn": 0, "node": 2700, "cache": None,
+                          "play": 6050, "end": 10150, "text": "Dante nacque a Firenze."},
+                         {"chars": 80, "cut": 3900, "sent": 6010, "got": 8700, "synth": 2600, "audio": 5200,
+                          "play": 11400, "end": 16600}]}
+
+
+def test_a_readings_times_are_one_line_saying_where_the_wait_went(isolated_config, monkeypatch):
+    from app import model_pins
+    lines = []
+    monkeypatch.setattr(model_pins, "node_event", lambda level, text: lines.append((level, text)))
+    c = TestClient(api.app)
+    assert c.post("/ask/voice/timeline", json=READING).status_code == 204
+    (level, text), = lines
+    assert level == "info" and text.startswith("voice: reading (guest, it) — ")
+    assert "the answer's first word 2.4 s after Ask" in text and "the reading started at 2.5 s (by itself)" in text
+    assert "FIRST SOUND at 6.0 s, 3.6 s after the first word" in text
+    assert ("sentence 1 (62 chars): cut 0.7 s after the first word, asked for 0.0 s later, here 2.9 s after that "
+            "(the node made it in 2.5 s, 4.1 s of sound), played 0.1 s after it arrived") in text
+    assert "the longest silence between two sentences 1.2 s" in text and "7 sentence(s)" in text
+    assert "Dante" not in text and "Firenze" not in text, "times only: never a word of the answer"
+    numbers = json.loads(text.split(" — ")[2])
+    assert numbers["first_word"] == 2400 and numbers["sentences"][0] == {
+        "chars": 62, "cut": 3100, "sent": 3110, "got": 6000, "synth": 2510, "audio": 4100, "turn": 0, "node": 2700,
+        "cache": None, "play": 6050, "end": 10150}
+    assert text.endswith("Chrome/142 Mobile")
+
+
+def test_a_reading_that_played_nothing_says_so(isolated_config, monkeypatch):
+    from app import model_pins
+    lines = []
+    monkeypatch.setattr(model_pins, "node_event", lambda level, text: lines.append((level, text)))
+    c = TestClient(api.app)
+    silent = {**READING, "blocked": True, "by_itself": False, "taps": [5000], "started": [5000],
+              "sentences": [{"chars": 62, "cut": 3100, "sent": 3110, "got": 6000, "synth": 2510, "audio": 4100}]}
+    assert c.post("/ask/voice/timeline", json=silent).status_code == 204
+    text = lines[-1][1]
+    assert "THE BROWSER DID NOT LET THE PAGE PLAY: nothing was heard until a tap" in text and "(a tap)" in text
+    tried = {**READING, "blocked": True}            # it tried: the page's `play` time is the attempt, not a sound
+    assert c.post("/ask/voice/timeline", json=tried).status_code == 204
+    assert "THE BROWSER DID NOT LET THE PAGE PLAY (tried at 6.0 s)" in lines[-1][1] and "FIRST SOUND" not in lines[-1][1]
+    quiet = {**READING, "sentences": [{"chars": 62, "cut": 3100, "sent": 3110}]}
+    assert c.post("/ask/voice/timeline", json=quiet).status_code == 204
+    assert "NO SOUND WAS PLAYED" in lines[-1][1]
+    assert c.post("/ask/voice/timeline", json={"sentences": "x" * 10, "first_word": "soon", "ua": 7}).status_code == 204
+    assert "the answer's first word ? after Ask" in lines[-1][1], "what is not a number is not a time"
+    assert c.post("/ask/voice/timeline", content=b"x" * 9000).status_code == 413
+    assert c.post("/ask/voice/timeline", json=[1]).status_code == 400
+
+
+def test_the_page_sends_a_readings_times_once_when_it_ends():
+    from pathlib import Path
+    from app import web
+    js = (Path(web.__file__).parent / "static" / "voice.js").read_text(encoding="utf-8")
+    block = js[js.index("function reportReading(r)"):js.index("function stopReading()")]
+    assert "r.reported" in block and "'/ask/voice/timeline'" in block and "keepalive: true" in block
+    stop = js[js.index("function stopReading()"):js.index("function play(r, url)")]
+    assert stop.index("reportReading(r)") < stop.index("reading = null"), "before the reading is let go"
+    sent = set(re.findall(r"(\w+):", block.split("const body = {", 1)[1].split("};", 1)[0]))
+    assert sent <= {"first_word", "last_word", "started", "taps", "sentences", "count", "by_itself", "blocked",
+                    "lang", "ua"}, sent
+    assert "text" not in sent and "answer" not in sent
+
+
+def test_the_line_says_where_the_node_spent_a_sentences_wait(isolated_config, monkeypatch):
+    # the Bug session, 2026-11-25: "the delay before the first sound is much more than 3 s … make sure the
+    # line also gives the node's side: when the request arrived versus when synthesis started"
+    from app import web
+    def first(**t):
+        row = {"chars": 62, "cut": 3100, "sent": 3110, "got": 14_110, "synth": 2500, "audio": 4100, "turn": 0,
+               "node": 2540, "play": 14_150, "end": 18_250, **t}
+        return web.reading_said({**READING, "sentences": [row]})[0]
+    assert "the node made it in 2.5 s; 8.5 s between the page and the node" in first(), \
+        "eleven seconds from asked-for to here and the node had it for 2.5: the rest was on the way"
+    assert "the node made it in 2.5 s after 6.0 s waiting its turn" in first(turn=6000, node=8540)
+    assert "the node made it in 2.5 s and 8.4 s elsewhere on the node (a thread, a lookup)" in first(node=10_900)
+    assert "answered from the node's kept clips" in first(cache=1, synth=None, node=12, got=3200, play=3250)
+    assert "elsewhere" not in first() and "waiting its turn" not in first()
+
+
+def test_the_speech_route_says_how_long_the_node_had_the_request(isolated_config, monkeypatch):
+    from app import speech
+    monkeypatch.setattr(speech, "synthesize_timed",
+                        lambda body, **kw: (200, b"RIFF", "audio/wav", [("turn", 0.0), ("synth", 12.0)]))
+    r = TestClient(api.app).post("/v1/audio/speech", json={"input": "Dante."})
+    assert r.status_code == 200
+    parts = dict(p.strip().split(";dur=") for p in r.headers["server-timing"].split(","))
+    assert set(parts) == {"turn", "synth", "node"} and float(parts["node"]) >= 0.0
+
+
+# ---- the microphone is shown recording when it gives sound (operator, on the car's hands-free, 2026-11-25:
+# "most of the time only the last part of the spoken sentence is written down")
+
+def test_the_microphone_turns_red_at_its_first_sound_not_when_it_is_opened():
+    from pathlib import Path
+    from app import web
+    js = (Path(web.__file__).parent / "static" / "voice.js").read_text(encoding="utf-8")
+    start = js[js.index("async function start()"):js.index("function wake(r, how)")]
+    assert "micState('rec'" not in start, "opening the microphone no longer shows it recording"
+    assert ("micState('wake', 'the microphone is connecting (a car or a headset takes a few seconds) — "
+            "speak when it turns red')") in start
+    assert "const WAKE_MAX_MS = SILENT_MS;" in js, \
+        "his car takes about five seconds: the wait ends at the first sound or with the silence rule, not at three"
+    assert "setTimeout(() => wake(r, 'timeout'), WAKE_MAX_MS)" in start, "never waited for without a bound"
+    hear = js[js.index("function hear(r, buf, rate)"):js.index("// THE SECOND WAY TO RECORD")]
+    assert "if (top > 0) { r.live = true; wake(r, 'sound'); } else r.zero_ms += ms;" in hear, \
+        "a microphone that is on is never exactly zero; the zeros before it are counted"
+    wake = js[js.index("function wake(r, how)"):js.index("function release(r)")]
+    assert "if (r.shown) return;" in wake and "micState('rec'" in wake and "r.wake_ms" in wake
+    assert "clearTimeout(r.waking)" in js[js.index("function release(r)"):js.index("async function stop()")]
+    html = (Path(web.__file__).parent / "templates" / "ask.html").read_text(encoding="utf-8")
+    assert "#mic.waking{" in html
+
+
+def test_the_recordings_report_carries_how_long_the_microphone_took_to_give_sound(isolated_config, monkeypatch):
+    from app import model_pins, web
+    lines = []
+    monkeypatch.setattr(model_pins, "node_event", lambda level, text: lines.append((level, text)))
+    c = TestClient(api.app)
+    c.post("/ask/voice/report", json={"outcome": "heard", "label": "Car hands-free", "first_ms": 180, "wake_ms": 2350,
+                                      "zero_ms": 2170, "woke": "sound", "chars": 9})
+    said = json.loads(lines[-1][1].split(" — ", 1)[1])
+    assert said == {"label": "Car hands-free", "chars": 9, "first_ms": 180, "wake_ms": 2350, "zero_ms": 2170,
+                    "woke": "sound"}, "the car's number: 2.2 s of zeros before the first sound"
+    assert {"first_ms", "wake_ms", "zero_ms", "woke"} <= set(web.VOICE_REPORT_KEYS)

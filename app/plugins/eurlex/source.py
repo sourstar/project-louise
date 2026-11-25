@@ -193,6 +193,7 @@ import hashlib
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 from app import chunking_legal
 from .. import eli
@@ -289,6 +290,8 @@ ISSUES = {
                                 "validity: it stays open-ended, labelled (under-closed)",
     "form-disagrees-with-celex": "the Formex body is a consolidation (CONS.ACT) and the CELEX an "
                                  "original, or the reverse; the CELEX decides the version",
+    "item-not-its-form": "an item the origin lists under a manifestation is not of that form (a TIFF "
+                         "page image declared application/pdf): held in the unit, not read as that form",
     "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
                      "unit, its text is what the other pages give",
     "start-from-document-date": "no publication and no entry into force is stated: the act's own date "
@@ -412,6 +415,31 @@ def eli_work_of(path: str | None) -> str | None:
     return None
 
 
+#: where a PDF's header may sit: ISO 32000-1 asks for it at byte 0, and its
+#: readers (Acrobat's implementation note, PDFium) take it anywhere in the
+#: first 1024 bytes — files with a BOM or a few stray bytes before `%PDF-`
+#: exist, and one read by its first five bytes alone would be held unread
+PDF_HEADER_WINDOW = 1024
+
+
+def _is_pdf(data: bytes) -> bool:
+    """Is this file a PDF by its CONTENT — the header a PDF reader looks for?"""
+    return b"%PDF-" in data[:PDF_HEADER_WINDOW]
+
+
+def _content_kind(data: bytes) -> str:
+    """What a file's first bytes say it is, in words, for an issue."""
+    if data[:4] in (b"II*\x00", b"MM\x00*"):
+        return "a TIFF image"
+    if data[:3] == b"\xff\xd8\xff":
+        return "a JPEG image"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "a PNG image"
+    if data[:4] == b"PK\x03\x04":
+        return "a zip"
+    return f"not a PDF (its first bytes {data[:8]!r})"
+
+
 def _form_held(note, files: dict[str, bytes], skip: tuple[str, ...] = ()) -> str | None:
     """The best form (cellar.FORMS) whose every listed item is in the unit."""
     from ...acquire.cellar import FORMS
@@ -447,24 +475,49 @@ def wrapper_head(celex: str, entries: list[os.DirEntry], listed: set[str] | None
         return f.read(_HEAD)
 
 
-def _tree_listing(unit: Path, celex: str, entries: list[os.DirEntry]) -> tuple[set[str], str | None] | None:
+class _Tree:
+    """A unit's tree read and decoded ONCE for its day (2026-11-25, München's
+    ten dumps of EUR-Lex5.next's scan: three of them in the tree's JSON),
+    its failure kept to be raised where the one read raised it."""
+
+    def __init__(self, entries: list[os.DirEntry]) -> None:
+        self.path = next((e.path for e in entries if e.name == rdf_mod.TREE_FILE), None)
+        self._got: Any = None
+        self._error: BaseException | None = None
+        self._read = False
+
+    def get(self):
+        if not self._read:
+            self._read = True
+            try:
+                with open(self.path, "rb") as f:
+                    self._got = rdf_mod.loads(f.read())
+            except Exception as e:   # noqa: BLE001 — kept and raised again, as reading it raised it
+                self._error = e
+        if self._error is not None:
+            raise self._error
+        return self._got
+
+
+def _tree_listing(unit: Path, celex: str, entries: list[os.DirEntry],
+                  tree: "_Tree | None" = None) -> tuple[set[str], str | None] | None:
     """The tree's word on the unit's Formex, as the parse reads it: the items
     the expression's tree lists for its fmx4 manifestation, and the act's own
     date (`EurlexSource.parse`'s `listed` and `note.date_document`). None
     where the tree does not read (the parse says why)."""
     lang = unit.parent.parent.name.partition("=")[2]
-    tree = next((e.path for e in entries if e.name == rdf_mod.TREE_FILE), None)
-    if lang not in LANGUAGES or tree is None:
+    tree = tree or _Tree(entries)
+    if lang not in LANGUAGES or tree.path is None:
         return None
     try:
-        with open(tree, "rb") as f:
-            note = from_tree.notice(rdf_mod.loads(f.read()), lang3(lang), celex)
+        note = from_tree.notice(tree.get(), lang3(lang), celex)
     except (OSError, ValueError, KeyError, from_tree.TreeError):
         return None
     return {it.name for it in note.items.get("fmx4", []) if it.name}, note.date_document
 
 
-def _listed_head(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool) -> bytes | None:
+def _listed_head(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool,
+                 tree: "_Tree | None" = None) -> bytes | None:
     """`wrapper_head` as the PARSE decides it (2026-11-25, 7,871 EUR-Lex5.next
     rows inserted under new ids by the night's scans): discovery asked
     `own_wrapper` without the tree's listing and the act's date, so since the
@@ -478,7 +531,12 @@ def _listed_head(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts:
         return wrapper_head(celex, entries)
     except formex.FormexError:
         pass
-    listing = _tree_listing(unit, celex, entries) if tree_facts else None
+    # a unit holding no wrapper and no package (an XHTML, HTML or PDF act,
+    # half the corpus) is refused whatever the listing says: no tree read
+    # for it here — its day is its tree's, read once below
+    if not tree_facts or not any(formex.is_wrapper(e.name) or formex.is_package(e.name) for e in entries):
+        return None
+    listing = _tree_listing(unit, celex, entries, tree)
     if listing is None:
         return None
     try:
@@ -527,7 +585,8 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
     if m:
         return formex.iso(m["date"])
     # no wrapper, or none this act's as the parse decides it: its work's own day below
-    head = _listed_head(unit, celex, entries, tree_facts)
+    tree = _Tree(entries)
+    head = _listed_head(unit, celex, entries, tree_facts, tree)
     if head is not None:
         got = _PUB_DATE.search(head)
         if got:
@@ -543,11 +602,7 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
         if got:
             return formex.iso(got.group(1).decode())
     if tree_facts:
-        for e in entries:
-            if e.name == rdf_mod.TREE_FILE:
-                with open(e.path, "rb") as f:
-                    return from_tree.work_day(rdf_mod.loads(f.read()), celex)
-        return None
+        return from_tree.work_day(tree.get(), celex) if tree.path is not None else None
     # an act without Formex (rendition.py): the notice's work, read only as
     # far as its date (notice.work_day)
     for e in entries:
@@ -966,7 +1021,17 @@ class EurlexSource:
                 names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
                 act = rendition.parse_html(files, names, lang=stated_lang, root=root_tag, note=note)
             elif form is not None:
-                names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
+                listed_names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
+                # A PDF MANIFESTATION'S ITEMS BY THEIR CONTENT (2026-11-25,
+                # 32007M4820 en: its pdf manifestation lists the decision's PDF
+                # and three TIFF page images, all four declared application/pdf
+                # by the origin; PDFium was given a TIFF and the unit refused).
+                # An item that is not a PDF is held in the unit, not read as one
+                names = [n for n in listed_names if _is_pdf(files[n])]
+                others = [n for n in listed_names if n not in names]
+                if others:
+                    found.append(Issue("item-not-its-form", "; ".join(
+                        f"{n} is {_content_kind(files[n])}, listed as {form}" for n in others)))
                 act, blank = rendition.parse_pdf(files, names, lang=stated_lang, root=root_tag, note=note)
                 if blank:
                     found.append(Issue("no-text-layer", f"{blank} page(s) of {', '.join(names)} hold no text "

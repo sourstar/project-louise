@@ -118,14 +118,35 @@ def test_the_heap_stays_flat_over_many_update_files(tmp_path, isolated_config, s
         assert pending == 0, "every revision and new citation indexed"
     finally:
         con.close()
-    # FLAT: the heap's TREND over the files after the warm-up, by least
-    # squares (statistics.linear_regression), held under what a per-RECORD
+    # FLAT: the heap's TREND over the files after the warm-up (how it is
+    # read: below), held under what a per-RECORD
     # leak would add — 16 bytes kept a record is 7.5 KiB a file, a record's
     # XML kept ~1.2 MiB. A spot difference (last − second, the test until
     # 2026-11-12) read Python's free lists and one-time builds as growth:
     # ±15 KiB file to file, more than the bound, with nothing kept per record.
-    from statistics import linear_regression
-    slope = linear_regression(list(range(WARM, FILES)), after[WARM:]).slope
+    #
+    # THE MEDIAN OF THE FILE-TO-FILE STEPS, not least squares, since
+    # 2026-11-25. In a process that had run other test files first, the heap
+    # read [.., 623891, 627090, 8318764, 8320723, 8304253]: ONE step of
+    # 7.7 MiB at the tenth file, flat before and after — something built once
+    # by the process at that moment (seen by the engine session among 17
+    # files, reproduced among the 25 that read the scheduling notes; alone the
+    # test passed). Least squares turned that single step into "1,154,845
+    # bytes a file". A per-record leak moves EVERY step — 16 bytes a record
+    # is +7.5 KiB on each — and the median of the steps reads exactly that,
+    # whatever one of them holds (the Theil–Sen idea, on consecutive points).
+    from statistics import median
+    steps = [b - a for a, b in zip(after[WARM:], after[WARM + 1:])]
+    slope = median(steps)
     assert slope < SLOPE_MAX, \
-        f"the path's heap grows {slope:,.0f} bytes a file ({PER_FILE} records each): {after}"
-    assert max(peaks[2:]) < 1.25 * max(peaks[:2]), f"the per-file peak grows: {peaks}"
+        f"the path's heap grows {slope:,.0f} bytes a file ({PER_FILE} records each): {after} (steps {steps})"
+    # THE PER-FILE WORKING MEMORY — a file's peak over what was held before
+    # it — and its SECOND highest, since 2026-11-25: the same one-time build
+    # sits in the peak of the file it falls in ([.., 2482303, 10189761,
+    # 10192099, 10152147]: the tenth file and, through the heap it left, every
+    # peak after it). Over the baseline, only that one file carries it; the
+    # second highest is as sharp as the highest for a working set that GROWS
+    # (its two largest are its last two) and blind to one file's build.
+    work = [peak - after[i - 1] for i, peak in enumerate(peaks) if i]
+    assert sorted(work[WARM - 1:])[-2] < 1.25 * max(work[:WARM - 1]), \
+        f"the per-file working memory grows: {work} (peaks {peaks}, held {after})"

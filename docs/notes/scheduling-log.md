@@ -3356,3 +3356,334 @@ tools/sched_measure.sh 15` for the count parsed ahead and the parse seconds
 in each kind; fts and rdf stage seconds and documents; ms/doc for both; the
 children's states for 60 s; ten dumps of the pipeline thread. Believe
 ms/doc and the parse seconds, not docs/s: the slice moves.
+
+## 2026-11-25 — a collection's resume asks for the scan its pause cut short; the slice-scope wait says where it is
+
+**SCENARIO.** EUR-Lex5.next (970 k units, one-thread scan of 28–55 minutes),
+node running, three other collections at work. Paused by München's monitor at
+07:29Z, 22 minutes into its startup scan (Legal's rule: a row inserted);
+resumed at 07:36:29Z.
+
+**BEFORE** (München, from the node's log and a thread dump): the scan ended
+07:32:12Z with "discovery interrupted (stop requested) — progress committed,
+resumes next scan {'seen': 742001, 'added': 1881, 'changed': 321, 'withdrawn':
+1249, 'secs': 1683.4, 'interrupted': True}". After the resume: "embed producer
+started", "pipeline thread started", no "corpus scan" line and no scan thread
+among 112; the slice pass at row 970,426 of MAX(rowid) 980,178; the stages
+selected nothing. It stood until a `docker restart` of the worker at
+07:50:35Z (14 minutes; the interval's request would have come about 13:04Z).
+
+**CHANGE.** Scheduling pitfall 23: the scan is owed to the collection's
+resume; the wait behind the slice scope says "row N of M" and asks for a scan
+when none is running or asked for, once every 300 s. A scan says where it is
+once a minute (`DiscoverState.say`, the orchestrator's count, a heartbeat for
+a source that walks in silence). Cost counted here, not on the node: the
+progress count is 96 ns a unit (93 ms over 970,000 units); the wait costs one
+dictionary lookup at an idle pass between two periods.
+
+**EXPECTED.** After `node pause <collection>` during a scan and `node resume
+<collection>`: a "corpus scan (resume: its pause cut the last scan short)"
+line within one round of the resume, and no restart. While the stages wait:
+one "waiting for the slice scope: the pass is at row N of M …" line every
+five minutes.
+
+**AFTER.** Owed: München's reading the first time a collection is paused under
+a scan on this build.
+
+## 2026-11-25 — a collection yields to the worker's memory by itself
+
+**SCENARIO.** The node as on 11-24/25: EUR-Lex5.next's rdf and fts with heavy
+units beside Normattiva, legi_F and NeuRIS at work, one worker cgroup of
+24 GiB. Until now München's monitor held the rule (pause over 21,500 MiB of
+`anon`, resume under 18,000).
+
+**BEFORE** (München's samples, usage / anon in MiB): the highest under the
+rule were 18,959 / 17,303, 17,734 / 17,412 and 17,469 / 16,356, all in the
+night's run of 11-24 (21:41–23:29Z, the stages working); the morning's scan
+and its apply 11,283–13,711 / 9,824–13,340. THE RULE NEVER FIRED: 0 memory
+pauses since it was set (04:35Z). The one real kill of these days (11-23) was
+a records build run by `docker exec` inside the worker's cgroup: memory that
+was not the pool's.
+
+**CHANGE.** Scheduling pitfall 24, `app/memory_yield.py`: a watcher of the
+worker's own cgroup every 10 s; at 87.5 % of the limit (21,504 MiB) the
+collection holding the most of the parse pool in flight yields, the next
+heaviest after 120 s still over; all go on under 73 % (17,940 MiB); a yield
+with nothing of its collection in flight and the memory still over ends after
+600 s, saying the memory is not the pool's.
+
+**EXPECTED.** Nothing, on these readings: the lines are above everything the
+samples show. If it fires: "[node info:memory] memory: <collection> yields —
+the worker holds N MiB anonymous, over 21,504 of 24,576; it has the most in
+the parse pool — …", the collection's own "yielding to the worker's memory …"
+every five minutes, and "… goes on — … under 17,940 …; it yielded for S s".
+
+**AFTER.** Owed, and only an event gives it: the first yield's lines, the
+`anon` curve across it (does it fall, how fast), and how long the collection
+stood. Until then München's monitor stays as a second pair of eyes, its pause
+at the same line.
+
+
+## 2026-11-25 — a large unit's tokenizer runs on four threads; every other pool child on one
+
+**SCENARIO.** The node at 1249b1d9, embed mode, everything running. EUR-Lex5.next
+(carried: embedded before its text is indexed) with rdf 134,618 and fts 1,491
+pending, among them the 23 languages of 32018R0688 at 89.8–136.2 MB each; a
+corpus scan of the same collection walking on one thread beside it (22 min
+23 s, nothing to apply); the other collections with nothing in the pool
+("parse pool — 1.9 of 11 slots in flight (17%) over 602s").
+
+**BEFORE** (München, counted from the manifest and the worker's own lines).
+Fifteen units of 32018R0688, 1,494,357,545 bytes, parsed in 1,513 s on the one
+large lane: nine committed by one batch — "indexed 9 documents / 22637 chunks
+in one commit (1513.5s: parse 1503.0, index 8.2, the rest 2.2); 91 more
+parsed, carried to the next batch" (876,560,544 bytes) — and six parsed ahead
+in the same minutes, committed seven seconds later (617,797,001 bytes). A
+lane child lived 75–95 s and peaked at ~2.8 GiB of RSS (VmHWM 2,834,164 kB);
+the worker cgroup: anon 12,875 MiB, peak 16,818 of 24,576. No unit met its
+time bound; no error. Around it, 10:08–10:25Z: done 38,496 → 40,188,
+rdf_pending 133,618 → 131,618 — about 100 documents and 118 rdf a minute on
+average, in bursts ("23 batches, 554 documents, 26079 chunks in 30.0s of stage
+time") between waits of many minutes behind large parts.
+
+**THE CHANGE.** Two commits, one cause. The Legal session's: the legal
+chunker encodes a text's spans, and a piece's units, together
+(`encode_batch`; the same pieces). Architecture's: each spawned child is told
+its tokenizer threads — one for a child of the shared pool and of a pass,
+four (held to the profile's cores) for the large lane's child, which counts
+as that many parts against the profile's cap while it runs. Legal's measure
+off the node: a 28.5 M-character act on 4 cores, 63.9 s → 37.7 s, the same
+30,988 pieces.
+
+**WHAT IT DOES NOT CHANGE.** One large unit at a time; a batch still commits
+at its end, so the collection's rdf still waits behind a run of large units.
+Those are the next row.
+
+**AFTER** (München, the node at 9811ca92, worker started 12:11:43Z; the first
+three large text units, each timed by the pool's own "has left the parse
+pool after N"): fr 32018R0688, 92,328,556 bytes, 70 s, 1,827 chunks; fr
+32019R0439, 77,865,673 bytes, 85 s; it 32019R0439, 80,733,615 bytes, 86 s —
+241 s for 250,927,844 bytes, 0.960 µs a byte. The staged run 5: "23 passed"
+under the real tokenizer (the same pieces).
+READ AGAINST THE RIGHT BEFORE: the like-for-like figure is the fifteen units
+one after the other, 1,513 s for 1,494,357,545 bytes = 1.012 µs a byte — not
+the 1.715 of the nine-unit commit line, whose 1,503 s held six more units
+parsed ahead. So: about 5 % faster a byte on three units, which three units
+cannot tell from nothing. NOT the 1.7x of the measure off the node, which
+timed the chunker alone on four cores. Either the tokenizer is a small part
+of a large unit's 70-86 s here (the package read, the rdf's text, the rest
+of the parse), or the lane child's four threads are not at work: from the
+host every pool child showed 19 threads at its most and nothing named which
+child was the lane's. Memory: the highest VmHWM of any child 3,159,196 kB
+(2,834,164 kB before): +11 %. No yield, no kill.
+WHAT FOLLOWS: the pool's line now names a large part's pid and its peak
+(the next row's instrument), so the lane child's threads and time can be
+read where it runs; and the chunker's share of a large unit's time is to be
+measured ON THE NODE before anything more is built on it (measuring.md: the
+deployed thing, not the bench).
+
+MEASURED THE SAME DAY, and it corrects the reading above (the Legal session's
+cProfile, München running it: fts of fr 32018R0688, 92,328,556 bytes, the
+live tree, its own container of 8 GiB and 4 CPUs, PARSE_PROCESSES=1; files
+prof-threads-{4,1}.out):
+
+| | wall | `encode_batch` | its share | peak |
+|---|---|---|---|---|
+| RAYON_NUM_THREADS=1 | 94 s | 62.7 s (217 calls) | 65 % | 2,686 MiB |
+| RAYON_NUM_THREADS=4 | 72 s | 40.5 s | 55 % | 2,677 MiB |
+
+So on ONE unit, like for like: the four threads buy 1.55x on the tokenizer
+and 1.31x on the unit (94 -> 72 s; the lane ran this very unit in 70 s). The
+threads ARE at work in the lane. The "about 5 %" above came from setting
+three DIFFERENT units against the morning's fifteen: the two of 32019R0439
+cost more a byte than 32018R0688 does. The like-for-like figure for #892 is
+this table: -23 % of a large text unit's time, not 1.7x (the bench timed the
+chunker alone) and not 5 %.
+WHERE THE REST GOES, with four threads (72 s): the tokenizer still 40.5 s;
+the ~33.5 s outside it are the same in both runs — the Formex walk
+(`attributes_of` 4.7 s), `_windows` 19.0 s cumulative of which `_token_ends`
+is 13,717,825 Python steps (16.9 s cumulative, one per token), the citations
+1.8 s, the XML parse about 3 s. Two leads, both the Legal session's file:
+`_windows` needs a token's end only at each window's cut, and walks every
+token to find them; and 217 batches for 1,594 calls says most calls carry
+too few texts for four threads to share.
+
+## 2026-11-25 — a collection's embedding waits for the keeper's preload after a start
+
+**SCENARIO.** A worker start on the node (the deploy of 1249b1d9, 09:40:28Z),
+embed mode, everything running; gutenberg with embedding to do; the keeper's
+set at thirteen models for Ask; LocalAI and its models not restarted (the
+speech model loaded since 06:33Z).
+
+**BEFORE** (München, the worker's own lines). 09:40:31 "embed producer
+started for 'gutenberg'"; 09:40:36 "resident … preloading 13 model(s) for
+Ask"; 09:40:55 the CANARY error for the query run — one context of
+vega-qwen3-embedding-4b discarded, the engine's own count 1 of 492 by 10:21Z —
+and 09:40:56 "GateDeferred: gutenberg: the gate's own load of
+vega-qwen3-embedding-4b needs ~5,042 MiB free on the card and 1,493 MiB are",
+asked again every ~6 s (2,323 / 3,817 / 2,987 / 4,481 / 2,981 / 2,983 MiB
+free). "embedding PAUSED"; "10:20:41Z embedding enabled: run sha256:38c8791b…
+is validated for this space — gated again". FORTY MINUTES of gutenberg's
+embedding, and both of the run's statements set aside, for one start.
+
+**THE CHANGE.** `resident.holds_embedding` / `worker._preload_holds`: within
+ten minutes of the worker's start (or of a resume from a mode that preloads
+nothing), a collection's embedding, its gate and the at-once gate of an
+untested copy wait while the keeper has not made its first beat (at most two
+minutes) or is still loading. One line when the wait begins, one when it
+ends.
+
+**WHAT IT COSTS.** The seconds the preload takes, once a start, taken from
+the backlog's embedding: on this node's start the keeper said its piece ten
+seconds in, and the loads that followed are what the AFTER must time.
+
+**AFTER** (München, the deploy of 9811ca92: worker started 12:11:43Z).
+"embedding waits: the keeper has not made its first beat yet (2 s / 5 s after
+the worker's start)" for the eight embedding collections at 12:11:46 and :50;
+"resident … preloading 13 model(s) for Ask" at 12:11:51; "embedding goes on"
+at 12:11:56 (five collections, 6 s after their wait began) and 12:11:59
+(three, 13 s). No CANARY line and no "GateDeferred … needs N MiB free" in the
+start's first ten minutes; the engine's counts at 12:22:34Z: 0 discarded for
+vega-qwen3-embedding-4b (323 contexts created), nemotron (232), bge-m3 (23);
+"it is discarded" in none of the 115 backend-ring files saved over the first
+five minutes. gutenberg: "embedding enabled … validated" at 12:12:27, 44 s
+after the start (BEFORE: forty minutes).
+WHAT THIS START DOES NOT PROVE: only the app restarted, so the model server
+still held the models — the preload's one cold start was vega-medcpt-article-ov,
+10.7 s, ten minutes later — and the wait was 6–13 s against no real loads.
+The row that proves the hold is a start on a COLD card: the first worker start
+after the model server itself restarts (the engine swap). Still owed.
+
+**THE COLD ROW** (München; the resume after the engine pass, 15:52:02Z, the
+card emptied by the swap to 619655e5833b; the code live was 3e6b6cc, where the
+hold did not yet cover a resume's first seconds — #900). Local times.
+"16:52:02 node mode paused -> running". IN THE GAP, before the keeper's beat:
+four cold starts "for corpus embedding" — vega-qwen3-embedding-4b 6.0 s
+(16:52:10), nemotron 10.0 s (:13), bge-m3 10.2 s (:14), medcpt-article-ov
+12.2 s (:16) — and "embedding enabled" for wikipedia and NeuRIS at 16:52:15,
+all before "16:52:22 … preloading 13 model(s) for Ask". The first "embedding
+waits: the keeper is still loading the models of Ask after the node's resume"
+at 16:52:23 (legi_F), then :24, :26, :27, :43, :45. The keeper's nine loads —
+medcpt-query 7.0 s, dar-legal-it 23.8, the 9B 7.9, madlad 12.1, tts 9.6,
+rerank-nemotron 7.8, rerank-medcpt 5.3, parakeet 5.7, silero 2.4 — the last at
+16:53:14. "embedding goes on" 16:53:15–19: HELD 34–55 s. A second round of
+waits at 16:53:23–26 around one more load (medcpt-article-ov 5.1 s, pubmed's
+resident encoder), on again 16:53:28–31. CANARY lines 0; GateDeferred 0;
+wikidata had embedded 5,693 chunks by 16:54:27.
+READING: on a cold card the hold costs the backlog under a minute and no run
+is set aside (BEFORE: forty minutes of gutenberg). The twenty seconds between
+the resume and the keeper's beat are the gap #900 closes; nothing was refused
+in them here, with four embedders loading at once into an empty card. OWED on
+51ae16c: the next resume shows no cold start "for corpus embedding" before
+"preloading".
+
+## 2026-11-25 — two large lanes; a batch puts at most a lane's worth of large units
+
+**SCENARIO.** As the row above (EUR-Lex5.next's large units, the pool
+otherwise nearly idle), with 452 rows of 50 MB and more still pending — 84.0 GB
+(rdf 406 / 80.2 GB, fts 46 / 3.8 GB) — at 10:33Z.
+
+**BEFORE** (the node at 1249b1d9; the row above has the lines whole). One lane:
+fifteen units of 32018R0688 (1,494,357,545 bytes) in 1,513 s, i.e. ~101 s a
+unit one after the other; ONE fts batch held nine of them and committed after
+1,513.5 s; rdf between two such commits: one transaction of 1,000 documents;
+10:08–10:25Z averaged ~100 documents and ~118 rdf a minute. Memory: a lane
+child's VmHWM 2,834,164 kB; the worker cgroup anon 12,875 MiB, peak 16,818 of
+24,576 MiB.
+
+**THE CHANGE.** `LARGE_LANES = 2` (the existing `_room` and `_reserve` decide
+whether the second is admitted), and a batch puts at most two large units in
+the lane — the others deferred to the next round at once.
+
+**EXPECTED, to be held against the AFTER.** Two units in flight where the
+memory allows (the pool's lines: two parts "in the large lane, a process of
+its own" at a time — #891's line said "ALONE", reworded here); an
+fts batch with large units committing after ~2 of them (~100–200 s, less
+with the tokenizer's threads of the row above) instead of nine; an rdf
+transaction between two such batches. The cgroup's peak with two in flight
+must stay under the yield's line (21,504 MiB anon): if `memory: … yields`
+appears, that line and its numbers are the finding.
+
+**AFTER** — owed: the fts batch lines and the rdf lines of a quarter of an
+hour with large units pending; the pool's large-lane lines; the cgroup's
+anon and peak with two in flight; documents and rdf a minute over the same
+window. To be deployed AFTER the row above has its AFTER, one change a deploy.
+
+## 2026-11-25 — the slice-scope pass alone, where the stages wait for it
+
+**SCENARIO.** EUR-Lex5.next on the node at 9811ca92, embed mode: the Legal
+session's step 7 (`dev rederive --release`: 632,638 rows reset, 670,333
+released) at the 13:21:42Z drain; the release resets the slice-scope pass to
+row 0. No corpus change.
+
+**BEFORE** (München, the worker's lines). The release ended 13:30:21Z;
+"waiting for the slice scope: the pass is at row 0 of 1,025,283 … nothing is
+parsed, indexed or embedded until then" at 13:35:22Z, with a scan asked for;
+"discovery done {'seen': 932896, 'added': 0, 'changed': 0, 'missing_txt': 0}"
+at 13:48:26Z; "slice scope: 1025283 held, 0 not held; 243884 embedded here,
+781399 not" at 13:48:40Z. EIGHTEEN MINUTES with nothing parsed, of which the
+pass was fourteen seconds (the walk on other days: 22–28 minutes).
+
+**THE CHANGE.** The wait asks for the pass alone (`PASS_ONLY`) where no scan
+is running or asked for.
+
+**EXPECTED.** After a release, or anything else that sets the pass back
+without touching the corpus: "waiting for the slice scope: … its pass ALONE
+is asked for now", "slice scope: the pass alone, over the manifest", and the
+"slice scope: N held …" line within the pass's own seconds — about fourteen
+for a million rows on this node.
+
+**AFTER** — owed: those three lines and their times at the next release on
+the node (or at a slices change in a collection's file).
+
+## 2026-11-25 — the keeper counts a model at what its load left, and learns nothing from an over-committed card
+
+**SCENARIO.** The node in QUERY mode since 15:56:21Z (the operator's first
+switch), nothing parsed or embedded; the 35B loaded by the mode (99.2 s),
+thirteen models listed by LocalAI; the worker restarted at 16:23:49Z (deploy
+51ae16c) with all of them loaded.
+
+**BEFORE** (München, `louise node resident show`, /system and the card's
+counters). 16:14Z: budget 19,298 MiB (the 0.98 line 32,002 − growth 6,480 −
+shared context 5,304 − penalty 919); the 35B size 21,449, COUNTED 17,247.
+16:44Z: budget 19,171; the 35B COUNTED 13,275; in the budget: the 35B, MADLAD
+4,850, rerank-medcpt 242, medcpt-query 251, medcpt-article-ov 308 (taken
+18,928). The card: vram counter 31,544 (16:09Z) -> 32,285 (16:31Z) -> 32,417
+MiB (16:44Z); gtt_mm 13,332 MiB in host memory at 16:47Z; /system then: the
+35B 21,169 MiB, MADLAD 5,635, rerank-nemotron 2,844, qwen3-embedding-4b
+2,429, medcpt-article-ov 312, and tts-omnivoice 1.1, dar-legal-it 0.5,
+nemotron-embed 0.4, medcpt-query 0.4, bge-m3 0.4, rerank-medcpt 0.3 MiB.
+"card: unloaded" lines 0; LocalAI evictions 0; one cold start since the
+restart (medcpt-article-ov 6.4 s, a document encoder, in query mode) — and
+again after each question: unloaded "in 0.2 s" when a person's question
+holds the card, loaded back by the keeper 44 s later in 5.8 s (16:49:24Z).
+What paging costs a question there (16:48:54–16:49:49Z): the dense step of a
+search whose query encoder was wholly in host memory, 397 ms against 174 on
+the second search (Normattiva-DAR), 366 against 78 (NeuRIS); the 35B's
+decode 98.8 / 97.2 tok/s against 99.6 / 97.3 on an unloaded card.
+
+**THE CHANGE.** `model_load.rest_of_load` and `resident._rest_size`: a model
+that keeps its context is counted at the first steady reading of a load the
+worker saw begin; never at a later, smaller reading of the same process. No
+at-rest size and no margin sample is taken while the card is over-committed
+— a model reads short of its floor on the card, or what the models take at
+rest exceeds the card's total (not the sum of their largest sizes: that is
+over the card in normal work) — said once per change; a model never known
+is learnt only on a beat with the card at most 90 % full. The file's rests
+and margin peaks of the fewest-reading rule are dropped at the first read.
+With it: a chat model over the budget keeps its room (nothing below it is
+preloaded into it), and no document encoder is in the set where the node
+embeds nothing.
+
+**WHAT IT COSTS.** Nothing a round: one sum over the models LocalAI lists, on
+readings the beat already takes (the cost test: a beat's reads unchanged —
+`/system` 3, the probe 1, the settings 1). Until a model is known again it
+counts at its largest, so fewer models are in the budget for a while: on the
+node in query mode the 35B at 21,449 MiB is over the budget alone, and
+nothing below it is preloaded — which is what the card can hold. It unloads
+nothing.
+
+**AFTER.** Owed: `resident show` after the deploy (the 35B counted at its
+largest, the line "THE CARD IS OVER-COMMITTED" if it still is), and after
+the node's next load of the 35B under the worker's eyes (a mode switch) its
+at-rest size as the load left it.

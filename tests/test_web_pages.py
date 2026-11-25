@@ -267,7 +267,8 @@ def test_one_ask_button_a_switch_and_the_settings_out_of_the_way(client):
     # the question's form ends where the answer pane begins: the answer's own
     # buttons (read aloud, save pdf) are the answer's, not the form's
     form = html[html.index('id="q"'):html.index('id="answer-pane"')]
-    assert form.count("<button") == 1 and 'onclick="go()">Ask</button>' in form
+    # one button: Ask, and Abort while the question is being answered (operator, 2026-11-25)
+    assert form.count("<button") == 1 and 'id="ask-btn" onclick="askOrAbort()">Ask</button>' in form
     assert "<span>Search only</span></label>" in form and "<span>Search + AI summary</span></label>" in form
     assert "Ask (RAG)" not in html and 'onclick="search()"' not in form
     settings = form[form.index('<details class="settings">'):form.index("</details>")]
@@ -438,11 +439,15 @@ def test_system_page_shows_the_node_models(models_page):
     html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
     assert 'id="sys-models"' in html and 'action="/admin/system/models"' in html
     # the two chat settings (operator, 2026-11-25), each the environment's until set
-    assert _model_inputs(html) == {"chat_large": "chat-env", "chat_small": "chat-env",
+    assert _model_inputs(html) == {"chat_large": "chat-env", "chat_small": "chat-env", "chat": "chat-env",
                                    "translate": "madlad-env", "reading": "",
                                    "stt_model": "stt-x", "vad_model": "vad-x", "tts_model": "", "tts_voice": "",
                                    "synthetic_voices": "", "tts_steps": ""}, \
         "the readers' synthetic voices too (2026-11-16), and the steps of a synthesis (2026-11-25)"
+    # the steps are a NUMBER the admin picks, within the range the file accepts (operator, 2026-11-25:
+    # "in the web gui I shall be able to select the number of steps from the admin account")
+    steps = re.search(r'<input name="tts_steps"[^>]*>', html).group(0)
+    assert 'type="number"' in steps and 'min="4"' in steps and 'max="64"' in steps and 'list=' not in steps
     assert '<option value="madlad-f16">' in html, "the server's models as suggestions"
 
 
@@ -462,10 +467,11 @@ def test_the_models_are_edited_from_the_page(models_page):
     assert got["translate"]["reading"] == {"la": "index-x", "grc": "index-y"}
     assert got["speech"] == {"stt_model": "stt-x", "tts_model": "tts-z", "tts_voice": "v1", "tts_steps": "24"}
     assert text.startswith("# the node\n") and got["ask"] == {"latency_budget_ms": 9000}, "the rest of the file kept"
-    # in force at once: every config.CHAT_MODEL reads the file — the small
-    # one, the model of embed mode, which a node never switched is in
-    assert config.CHAT_MODEL == "chat-b" and config.TRANSLATE_MODEL == "madlad-env"
-    assert config.chat_model_for("chat") == "chat-env"
+    # in force at once: every reader asks the file — the small one is embed
+    # mode's; a node never switched is in custom mode, whose model is
+    # `[models] chat`, here the environment's
+    assert config.chat_model_for("embed") == "chat-b" and config.TRANSLATE_MODEL == "madlad-env"
+    assert config.chat_model_for("query") == "chat-env" and config.CHAT_MODEL == "chat-env"
     html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
     assert _model_inputs(html)["chat_small"] == "chat-b" and "over the environment's chat-env" in html
     # empty: back to the environment's
@@ -1571,28 +1577,40 @@ def _mode_row(html: str, mode: str) -> str:
     return re.search(rf'<tr data-node-mode="{mode}">.*?</tr>', html, re.S).group(0)
 
 
-def test_the_system_page_shows_the_mode_and_what_each_of_the_two_sets(models_page):
-    # operator, 2026-11-25: embed mode and chat mode; "In system tab shall be selectable for chat
-    # mode a run mode among download/seeding, seeding or pause"; "For both modes a network budged
-    # shall be settable"
+def _select(html: str, name: str) -> str:
+    """One <select> of a piece of the page, its options included."""
+    return re.search(rf'<select name="{name}".*?</select>', html, re.S).group(0)
+
+
+def test_the_system_page_shows_the_mode_and_what_each_of_the_three_sets(models_page):
+    # operator, 2026-11-25: embed mode and query mode, then "Add a 3rd mode custom"; "In both embed
+    # and query modes you can choose to download and seed, seed only, no network"; "For both modes a
+    # network budged shall be settable"
     client, path = models_page
     path.write_text(path.read_text(encoding="utf-8") + '\n[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n'
-                    '\n[budget]\ndown_max = "10MB"\n\n[modes]\nchat_down_max = "2MB"\n', encoding="utf-8")
+                    '\n[budget]\ndown_max = "10MB"\n\n[modes]\nchat_down_max = "2MB"\nembed_network = "seed"\n',
+                    encoding="utf-8")
     html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
-    assert 'id="sys-mode"' in html and "the node is in <b>embed mode</b>" in html
+    assert 'id="sys-mode"' in html and "the node is in <b>custom mode</b>" in html, "a node never switched"
     assert html.index('id="sys-mode"') < html.index('id="sys-models"'), "above the models it chooses between"
-    assert "both modes answer with" not in html
-    embed, chat = _mode_row(html, "embed"), _mode_row(html, "chat")
+    assert "every mode answers with" not in html
+    embed, query, custom = _mode_row(html, "embed"), _mode_row(html, "query"), _mode_row(html, "custom")
     assert "chat-9b" in embed and "run everything" in embed, "embed mode switches to run all"
-    assert "chat-35b" in chat
-    assert re.findall(r'<option value="([a-z-]+)"( selected)?>([^<]+)</option>', chat) == [
-        ("acquire-only", " selected", "download/seeding only"), ("seed-only", "", "seeding only"),
-        ("paused", "", "pause")], "the three the operator named, and never run everything"
-    assert 'name="chat_down_max" value="2MB"' in chat and 'name="chat_up_max" value=""' in chat
+    assert "chat-35b" in query and "nothing is parsed, indexed or embedded" in query
+    options = r'<option value="([a-z-]+)"( selected)?>([^<]+)</option>'
+    assert 'name="query_network"' in query and re.findall(options, query) == [
+        ("download-seed", " selected", "download and seed"), ("seed", "", "seed only"), ("none", "", "no network")]
+    assert 'name="embed_network"' in embed and re.findall(options, _select(embed, "embed_network")) == [
+        ("download-seed", "", "download and seed"), ("seed", " selected", "seed only"), ("none", "", "no network")], \
+        "each mode its own"
+    assert 'name="chat_down_max" value="2MB"' in query and 'name="chat_up_max" value=""' in query
     assert '''name="embed_down_max" value="" placeholder="10.0 MB/s ([budget]'s)"''' in embed, \
         "a mode that sets no budget shows [budget]'s, which is in force"
-    assert re.search(r'<button class="mode selected" name="mode" value="embed"\s+disabled', html)
-    assert re.search(r'<button class="mode" name="mode" value="chat"', html)
+    assert "chat-env" in custom and "the run mode stays yours" in custom and "by the run mode" in custom
+    assert "<select" not in custom and "<input" not in custom, "custom mode sets nothing of its own here"
+    assert re.search(r'<button class="mode selected" name="mode" value="custom"\s+disabled', html)
+    assert re.search(r'<button class="mode" name="mode" value="query"', html)
+    assert re.search(r'<button class="mode" name="mode" value="embed"', html)
 
 
 def test_the_mode_is_switched_from_the_system_page(models_page):
@@ -1600,23 +1618,31 @@ def test_the_mode_is_switched_from_the_system_page(models_page):
     client, path = models_page
     # nothing named yet: the page says a switch would change no model, and what supplies it
     html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
-    assert "both modes answer with <b>chat-env</b>" in html and "under Models" in html
+    assert "every mode answers with <b>chat-env</b>" in html and "under Models" in html
     path.write_text(path.read_text(encoding="utf-8") + '\n[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n',
                     encoding="utf-8")
-    r = client.post("/admin/system/mode", data={"mode": "chat"}, headers={"X-Admin-Token": "sekrit"},
+    r = client.post("/admin/system/mode", data={"mode": "query"}, headers={"X-Admin-Token": "sekrit"},
                     follow_redirects=False)
     assert r.status_code == 303 and "mode_saved=1" in r.headers["location"]
-    assert node_mode.current() == "chat" and node_state.worker_state() == "acquire-only"
+    assert node_mode.current() == "query" and node_state.worker_state() == "acquire-only"
     assert config.CHAT_MODEL == "chat-35b"
     assert "the System page" in node_mode.history()[-1]["by"]
     html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
-    assert "the node is in <b>chat mode</b>" in html
+    assert "the node is in <b>query mode</b>" in html
     large = re.search(r'<tr data-model-use="chat, large[^"]*">.*?</tr>', html, re.S).group(0)
     small = re.search(r'<tr data-model-use="chat, small[^"]*">.*?</tr>', html, re.S).group(0)
-    assert "in force" in large and "in force" not in small, "the Models panel says which of the two answers now"
+    own = re.search(r'<tr data-model-use="chat: custom[^"]*">.*?</tr>', html, re.S).group(0)
+    assert "in force" in large and "in force" not in small and "in force" not in own, \
+        "the Models panel says which of the three answers now"
     r = client.post("/admin/system/mode", data={"mode": "turbo"}, headers={"X-Admin-Token": "sekrit"},
                     follow_redirects=False)
-    assert "mode_error=" in r.headers["location"] and node_mode.current() == "chat"
+    assert "mode_error=" in r.headers["location"] and node_mode.current() == "query"
+    r = client.post("/admin/system/mode", data={"mode": "custom"}, headers={"X-Admin-Token": "sekrit"},
+                    follow_redirects=False)
+    assert node_mode.current() == "custom" and node_state.worker_state() == "acquire-only", \
+        "custom mode: the run mode stays as it was"
+    html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
+    assert "in force" in re.search(r'<tr data-model-use="chat: custom[^"]*">.*?</tr>', html, re.S).group(0)
     assert client.post("/admin/system/mode", data={"mode": "embed"}).status_code in (401, 403), "the admin's only"
 
 
@@ -1624,17 +1650,22 @@ def test_the_modes_settings_are_written_into_the_file_and_taken_at_once(models_p
     import tomllib
     from app import node_mode, node_state, platform_config
     client, path = models_page
-    node_mode.switch("chat", by="test")
-    form = {"chat_run": "seed-only", "embed_down_max": "400Mbit", "embed_up_max": "",
-            "chat_down_max": "2MB", "chat_up_max": "500KB"}
+    node_mode.switch("query", by="test")
+    form = {"query_network": "seed", "embed_network": "download-seed", "embed_down_max": "400Mbit",
+            "embed_up_max": "", "chat_down_max": "2MB", "chat_up_max": "500KB"}
     r = client.post("/admin/system/modes", data=form, headers={"X-Admin-Token": "sekrit"}, follow_redirects=False)
     assert r.status_code == 303 and "mode_saved=1" in r.headers["location"]
     text = path.read_text(encoding="utf-8")
-    assert tomllib.loads(text)["modes"] == {"chat_run": "seed-only", "embed_down_max": "400Mbit",
-                                            "chat_down_max": "2MB", "chat_up_max": "500KB"}
+    assert tomllib.loads(text)["modes"] == {"query_network": "seed", "embed_down_max": "400Mbit",
+                                            "chat_down_max": "2MB", "chat_up_max": "500KB"}, \
+        "a choice left as it was (embed's) is not written"
     assert text.startswith("# the node\n"), "the rest of the file kept"
-    assert node_state.worker_state() == "seed-only", "the node IS in chat mode: its run mode follows at once"
-    assert platform_config.load().modes.budget("chat") == (2_000_000, 500_000)
+    node_mode.forget()
+    st = node_state.worker_state()
+    assert st == "acquire-only", "query mode's run mode does not move with its network choice"
+    assert node_state.runs(st, node_state.SEED) and not node_state.runs(st, node_state.FETCH), \
+        "the node IS in query mode: its network choice is in force at once"
+    assert platform_config.load().modes.budget("query") == (2_000_000, 500_000)
     # an empty budget: the key removed, [budget]'s in force; the same form again writes nothing
     r = client.post("/admin/system/modes", data={**form, "chat_up_max": ""}, headers={"X-Admin-Token": "sekrit"},
                     follow_redirects=False)
@@ -1645,31 +1676,90 @@ def test_the_modes_settings_are_written_into_the_file_and_taken_at_once(models_p
     assert "mode_saved" not in r.headers["location"] and path.read_text(encoding="utf-8") == before
 
 
+def test_a_file_that_still_names_chat_run_loses_it_when_the_page_sets_query_modes_network(models_page):
+    import tomllib
+    client, path = models_page
+    path.write_text(path.read_text(encoding="utf-8") + '\n[modes]\nchat_run = "paused"\n', encoding="utf-8")
+    html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
+    assert re.search(r'<option value="none" selected>no network</option>', _mode_row(html, "query")), \
+        "the first name is read as the choice it was"
+    r = client.post("/admin/system/modes", data={"query_network": "seed", "embed_network": "download-seed"},
+                    headers={"X-Admin-Token": "sekrit"}, follow_redirects=False)
+    assert "mode_saved=1" in r.headers["location"]
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["modes"] == {"query_network": "seed"}
+
+
 def test_a_budget_that_does_not_read_changes_nothing(models_page):
     from app import node_state
     client, path = models_page
     before = path.read_text(encoding="utf-8")
     node_state.set_worker_state("running")
-    r = client.post("/admin/system/modes", data={"chat_run": "paused", "chat_down_max": "fast"},
+    r = client.post("/admin/system/modes", data={"query_network": "none", "chat_down_max": "fast"},
                     headers={"X-Admin-Token": "sekrit"}, follow_redirects=False)
     assert r.status_code == 303 and "mode_error=" in r.headers["location"]
     assert path.read_text(encoding="utf-8") == before and node_state.worker_state() == "running"
     assert "not saved" in client.get(r.headers["location"], headers={"X-Admin-Token": "sekrit"}).text
 
 
-def test_the_library_does_not_offer_run_everything_in_chat_mode(client):
+def test_the_system_page_offers_embed_modes_embedding_choice_on_its_row_only(models_page):
+    # operator, 2026-11-25: "In embed mode you can also choose local/p2p embedding"
+    client, path = models_page
+    html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
+    embed, query, custom = _mode_row(html, "embed"), _mode_row(html, "query"), _mode_row(html, "custom")
+    options = r'<option value="([a-z0-9-]+)"( selected)?>([^<]+)</option>'
+    assert re.findall(options, _select(embed, "embed_embedding")) == [
+        ("collection", " selected", "each collection&#39;s own"), ("local", "", "all local"), ("p2p", "", "all p2p")], \
+        "a file that says nothing: each collection's own"
+    assert 'name="embed_embedding"' not in query and "nothing is embedded" in query
+    assert 'name="embed_embedding"' not in custom and "each collection's own" in custom
+    path.write_text(path.read_text(encoding="utf-8") + '\n[modes]\nembed_embedding = "p2p"\n', encoding="utf-8")
+    html = client.get("/admin/system", headers={"X-Admin-Token": "sekrit"}).text
+    assert '<option value="p2p" selected>all p2p</option>' in _select(_mode_row(html, "embed"), "embed_embedding")
+
+
+def test_the_page_writes_the_embedding_choice_and_removes_the_key_for_each_collections_own(models_page):
+    import tomllib
+    client, path = models_page
+    post = lambda value: client.post("/admin/system/modes", data={"embed_embedding": value},   # noqa: E731
+                                     headers={"X-Admin-Token": "sekrit"}, follow_redirects=False)
+    r = post("p2p")
+    assert r.status_code == 303 and "mode_saved=1" in r.headers["location"]
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["modes"] == {"embed_embedding": "p2p"}
+    assert "mode_saved" not in post("p2p").headers["location"], "the same choice again writes nothing"
+    assert "mode_saved=1" in post("collection").headers["location"]
+    assert "embed_embedding" not in tomllib.loads(path.read_text(encoding="utf-8")).get("modes", {}), \
+        "each collection's own is the key's absence"
+    before = path.read_text(encoding="utf-8")
+    r = post("everything")
+    assert "mode_error=" in r.headers["location"] and path.read_text(encoding="utf-8") == before, \
+        "a word that is not one of the three is said, not written"
+
+
+def test_a_card_says_what_embed_modes_choice_did_to_its_collection(client, monkeypatch):
+    from app import node_mode
+    note = ("embed mode's embedding choice is all p2p ([modes] embed_embedding = \"p2p\"): while the node "
+            "is in embed mode this collection embeds its backlog that way")
+    monkeypatch.setattr(collections_mod, "desired_embed_mode", lambda c, **kw: ("p2p", note))
+    html = client.get("/admin/library", headers={"X-Admin-Token": "sekrit"}).text
+    assert "data-embed-choice" in html and "embed mode&#39;s embedding choice is all p2p" in html
+    monkeypatch.setattr(collections_mod, "desired_embed_mode", lambda c, **kw: ("all", None))
+    assert "data-embed-choice" not in client.get("/admin/library", headers={"X-Admin-Token": "sekrit"}).text
+    assert node_mode.current() == "custom"
+
+
+def test_the_library_does_not_offer_run_everything_in_query_mode(client):
     from app import node_mode
 
     def buttons(html):
         return {label: bool(disabled) for disabled, label in re.findall(
             r'<button class="mode[^"]*"\s+(disabled)?[^>]*onclick="setWorkerState\([^)]*\)">([^<]+)</button>', html)}
     html = client.get("/admin/library", headers={"X-Admin-Token": "sekrit"}).text
-    assert "chat mode</span>" not in html
-    node_mode.switch("chat", by="test")
+    assert "query mode</span>" not in html and "embed mode</span>" not in html, "custom mode: no badge"
+    node_mode.switch("query", by="test")
     html = client.get("/admin/library", headers={"X-Admin-Token": "sekrit"}).text
-    assert "chat mode</span>" in html
+    assert "query mode</span>" in html
     got = buttons(html)
-    assert got["run everything"] is True, "chat mode never runs everything: grey, not a button that fails"
+    assert got["run everything"] is True, "query mode never runs everything: grey, not a button that fails"
     assert got["download/seeding only"] is True, "the mode the node is in"
     assert got["seeding only"] is False and got["pause"] is False
     assert "embed mode runs everything" in html

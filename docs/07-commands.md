@@ -325,6 +325,12 @@ louise hold
                                                                        [--type T] [--partitions N]: the vector index type and its IVF partitions (default: VECTOR_INDEX_TYPE, from the row count)
               show <collection>
   check       <collection> [--checks …] [--sample F] [--seed HEX]      run the validation plan; print the report
+              <collection> --build [--checks …]                        the BUILD's checks instead (added 2026-11-25, operator: "a consistency check shall be available
+                                                                       also for whom is willing to create a compliant collection"): how the collection was MADE on this
+                                                                       node, read from its manifest, read-only — `units` (no unit held by two live rows) and `chunkless`
+                                                                       (a document indexed with no chunk states why, as an issue); in no Codex, never attested; each
+                                                                       verdict in plain words with what would supply what is missing; exit 1 when one failed
+                                                                       (app/build_check.py; docs/notes/compliance-check.md lists the checks still to come)
               [--live DIR]                                             `origin-seal` in live mode: the sealed files under DIR re-validated now (03 §3.7)
               [--shards S,…] [--origin DIR] [--against FILE]           --shards: these parts alone, how a received claim is reproduced (03 §3.6);
                                                                        --against: image-equivalence's reference lines (03 §3.4) (both 2026-10-07)
@@ -369,13 +375,21 @@ louise node
                                                                        every container of the node shares; it does not wait (built 2026-10-25)
   show                                                                 state per collection, the current stage, the last round's cost, overrides in force
   pause [<collection>] [--acquire-only | --seed-only]                  a runtime override: the node's mode — nothing, seeding only, or download and seeding only — until resume; it survives a restart (§7.8)
-  resume [<collection>]                                                the node goes back to what its mode of use runs — everything in embed mode, chat mode's own run mode in
-                                                                       chat mode (amended 2026-11-25) — or one collection
-  mode [embed|chat]                                                    the node's MODE OF USE, read or switched (added 2026-11-25, operator): `embed` — heavy embedding: the
-                                                                       small chat model answers, the run mode is set to everything; `chat` — the large chat model answers, the
-                                                                       run mode is set to `[modes] chat_run` (download/seeding, seeding or pause), never everything; each with
-                                                                       its own network budget (§7.8 `[modes]`). It survives a restart (§7.8). The System page's Mode panel
-                                                                       and `POST /api/mode {"mode": …}` (§7.4, for a cron job) do the same
+  resume [<collection>]                                                the node goes back to what its mode of use runs — everything in embed mode and in custom mode,
+                                                                       query mode's own run mode in query mode (amended 2026-11-25) — or one collection
+  mode [embed|query|custom]                                            the node's MODE OF USE, read or switched (added 2026-11-25, operator; a third mode and the word
+                                                                       "query" the same day): `embed` — heavy embedding: the small chat model answers, everything is parsed,
+                                                                       indexed and embedded; `query` — the system is kept unloaded for a question's models: the large chat
+                                                                       model answers, nothing is parsed, indexed or embedded; `custom` — the node as it was before modes:
+                                                                       the run mode stays the operator's (any of the four) and the chat model is `[models] chat`. Embed and
+                                                                       query mode each have their own NETWORK CHOICE (download and seed, seed only, none) and network
+                                                                       budget (§7.8 `[modes]`), which a switch brings with it. A switch to the mode the node is in changes
+                                                                       nothing. `chat`, the first word for query mode, is still taken. A RESCAN asked for on the Library
+                                                                       is offered in every mode (operator: "The rescan all collections remains usable from any
+                                                                       profile"): in query mode, whose run mode parses nothing, the scan runs all the same and records
+                                                                       what is new or changed, parsed and indexed once the node is in embed mode; in custom mode it
+                                                                       follows the run mode, as before. It survives a restart (§7.8). The
+                                                                       System page's Mode panel and `POST /api/mode {"mode": …}` (§7.4, for a cron job) do the same
   freeze <collection>                                                  a runtime override: the collection keeps the version it holds — nothing fetched from its origin, its origin not scanned, nothing
                                                                        taken in from peers; parsed, indexed, embedded here, searched and checked as it is; shared, only its parts
                                                                        still current upstream (04 §4.3); it survives a restart (§7.8) (added 2026-11-07, operator)
@@ -421,7 +435,9 @@ louise node
                                                                        weights; operator, 2026-11-24 — the eviction penalty, and what is left for weights; a model
                                                                        loaded with context_on_demand counts at its weights), each model in priority order with its rank, tier, roles, collections, loaded
                                                                        state, at-rest and largest size, in the budget or not and why, last use, and pin holders
-                                                                       (an embed batch's, the operator's; never the preload's); read-only (added 2026-11-08,
+                                                                       (an embed batch's, the operator's; never the preload's); and how a load that does not fit
+                                                                       gets its room (`[models] make_room`, §7.8: in "page" the host's available memory against
+                                                                       its floor, and LocalAI's reclaimer if it is still on); read-only (added 2026-11-08,
                                                                        operator; the budget the same day)
 
 louise dev                                                             operator instruments; read-only unless the line says otherwise
@@ -932,7 +948,12 @@ reader needs at the command line:
   `encoder.url`, `encoder.query_url`, `encoder.api`,
   `encoder.embed_model`, `encoder.query_model`, `reranker.url` (empty:
   no `[reranker]`), `reranker.api`, `reranker.rerank_model`,
-  `reranker.window`, and for an annotations collection `method`
+  `reranker.window`, `acquire_enabled` (*added 2026-11-25*: `false`, the
+  node fetches nothing for this collection from its origin — what is there
+  is still scanned, parsed, indexed and embedded; `true`; `default`, the
+  line removed and the collection's kind decides — it was written into a
+  file by hand before, and a from-scratch collection must not need a hand),
+  and for an annotations collection `method`
   (2026-11-12: the method the node re-runs, `wikipedia-versions`; empty:
   none; refused where the method did not make the claims and they are
   not of its kind, since its output becomes the whole claim set —
@@ -1569,14 +1590,19 @@ demand, 03 §3.5).
 
 **`/api/mode` is for a cron job** (*added 2026-11-25*, operator: "The mode
 shall be selectable through the api as well for cron jobs"): `POST
-/api/mode {"mode": "embed"|"chat"}` with the admin token switches the
+/api/mode {"mode": "embed"|"query"|"custom"}` with the admin token switches the
 node's mode of use as `node mode` does — synchronous, the mode and its run
 mode written before the answer, which states the mode, the run mode, the
-chat model in force and what each mode sets; `GET /api/mode` reads the
-same. Called again with the mode the node is in, it sets that mode's run
-mode again, so a scheduled call means the same thing every time. In chat
-mode `/api/control` refuses `running` (409, saying to switch to embed
-mode): chat mode runs download/seeding, seeding or nothing. `/api/status`
+network choice, the chat model in force and what each mode sets; `GET
+/api/mode` reads the same. *Amended the same day* (operator: "Add a 3rd
+mode custom"; "The API constrain is only for query mode"; of the network
+choice: "set for each embed/query mode, a cron job then simply switches
+that"): `chat` is still taken for `query`; called again with the mode the
+node is in, it changes NOTHING (`"changed": false`) — a scheduled call
+never undoes a pause set by hand, and `node resume` is what goes back to
+the mode's own run mode; a real switch brings the mode's own network
+choice with it. In query mode, and only there, `/api/control` refuses
+`running` (409, saying to switch to embed or custom mode). `/api/status`
 states the mode beside the run mode.
 
 **One route is not JSON, and it is the only one.**
@@ -1684,6 +1710,23 @@ It says how a model searches with the three tools and how it cites.
 The MCP server's `initialize` gives the same text as its
 `instructions`.
 
+**The Ask page's question** (*2026-10-28; amended 2026-11-25*;
+`app/relay.py`): the page starts its search and its answer as jobs
+(`POST /ask/relay`), listens to each (`GET /ask/relay/<id>/events`,
+Server-Sent Events) and may cancel one (`DELETE /ask/relay/<id>`). Its
+one button is **Ask**, and **Abort** from the press until the question
+ends (operator, 2026-11-25: "while a query is in processing I want the
+Ask button to switch to Abort to be able to abort the query in case I
+change my mind or I want to change the query"). Pressed, the question's
+jobs are cancelled on the node — a search at its next checkpoint, an
+answer between two words of the model; a call to a model already made
+finishes first — and nothing more of them reaches the page, which says
+so, keeps the hits and the words it had already shown (the answer marked
+as cut short) and leaves the question in its box with the cursor in it.
+A job whose start the node had not answered yet is cancelled when the
+node names it. A new question asked over one still running (Ctrl/Cmd+
+Enter) replaces it, as before.
+
 **Speech** (*added 2026-11-06, -07*; `app/speech.py`, `app/transcribe.py`,
 `app/voice.py`). OpenAI's two audio endpoints, relayed to the node's model
 server with what only Louise knows. `POST /v1/audio/speech` `{input, model,
@@ -1691,7 +1734,16 @@ voice, language, context}`: nothing in square brackets is read (a citation, in
 whatever shape the language writes it), one voice for every language, the
 text's language sent as `language`. Where the sentence alone cannot tell its
 language, `context` (the answer so far, which the page sends when it shows
-the answer in its original language; never relayed) tells it. A recorded
+the answer in its original language; never relayed) tells it. THE SENTENCE'S
+OWN LANGUAGE COMES FIRST (*amended 2026-11-25*, operator: "the
+language/country tag must be aligned to the language to speak, otherwise the
+voice has always a thick italian accent"): the sentence's where it is clear,
+else the answer's (`context`), and only then the `language` the request
+carries — the page sends the language the answer was asked in, which is not
+always the one it is written in. What is sent is a language's primary
+subtag, lower case (`en-GB` → `en`): the engine knows languages, not
+countries, and a tag with a region is no language to it. A reader who is
+not an admin hears the synthetic voice of that same language. A recorded
 voice with no language known is sent `language = "none"`, OmniVoice's auto,
 never left to its profile's own tag, which is the recording's language and
 read every language with its accent (*2026-11-23*). The model is pinned from the first
@@ -2102,12 +2154,14 @@ a node the operator holds at acquire-only back into a running one, encoder
 and all, on every restart (operator decision, 2026-09-13). A collection's
 pause and its freeze survive a restart for the same reason: no file sets
 either, and an expiry would let a restart fetch the updates a freeze held
-out (*amended 2026-11-07*). The node's MODE OF USE — embed or chat, `node
-mode` — survives a restart for the same reason again (*amended 2026-11-25*):
-no file says which of the two the node is in, and a node that came back
-from a restart in embed mode would start every encoder under the large chat
-model. What each mode MEANS — its chat model, chat mode's run mode, its
-network budget — is desired state, in `platform.toml` (`[models]`,
+out (*amended 2026-11-07*). The node's MODE OF USE — embed, query or
+custom, `node mode` — survives a restart for the same reason again
+(*amended 2026-11-25*): no file says which of them the node is in, and a
+node that came back from a restart in embed mode would start every encoder
+under the large chat model. A node never switched is in custom mode: the
+node as it was before there were modes. What each mode MEANS — its chat
+model, embed and query mode's network choice and network budget, embed
+mode's embedding choice — is desired state, in `platform.toml` (`[models]`,
 `[modes]`). What `hold config show` prints comes
 from the same resolution the node uses, each value labelled with its
 tier; a value shown anywhere else comes from that resolution too.
@@ -2158,15 +2212,33 @@ variable, a file, a log line or a message.
 [budget]     down_max = "400Mbit"   up_max = "40Mbit"   schedule = "01:00-07:00 full; else 30%"
              # up_max is the swarm's upload ceiling too: the session uploads no faster (invariant 5; until
              # 2026-10-19 seeding was only counted); `[bandwidth]`, the older spelling, still loads
-[modes]      chat_run = "acquire-only"                  # THE NODE'S TWO MODES OF USE (added 2026-11-25, operator; §7.3
-             # `node mode`, app/node_mode.py): EMBED, for heavy embedding — the memory is the embedders', the small
-             # chat model answers, and a switch to it sets the run mode to everything; CHAT — the memory is the large
-             # chat model's, the embedders page in for a question, and a switch to it sets the run mode to `chat_run`:
-             # "acquire-only" (download/seeding, the default), "seed-only" or "paused" — never everything, which
-             # `/api/control` refuses in chat mode. Changed while the node is in chat mode, it is taken at once
+[modes]      embed_network = "download-seed"   query_network = "seed"   # THE NODE'S MODES OF USE (added 2026-11-25, operator;
+             # §7.3 `node mode`, app/node_mode.py). EMBED, for heavy embedding — the card is the embedders', the
+             # small chat model answers, a switch to it sets the run mode to everything. QUERY — the system is kept
+             # unloaded for a question's models, the large chat model answers, a switch to it sets the run mode to
+             # download/seeding only (nothing parsed, indexed or embedded, and the question's models preloaded);
+             # `/api/control` refuses "running" there. CUSTOM — the node before modes: the run mode stays the
+             # operator's, the chat model is `[models] chat`, and nothing here applies. EACH OF EMBED AND QUERY MODE
+             # HAS ITS OWN NETWORK CHOICE (operator: "In both embed and query modes you can choose to download and
+             # seed, seed only, no network"; "set for each embed/query mode, a cron job then simply switches that"):
+             # "download-seed" (the default), "seed" or "none". It holds fetching and seeding only — in embed mode
+             # with "none" everything is still parsed, indexed and embedded — and every gate reads it from this
+             # file, so an edit is in force at once. `chat_run`, the first name of query mode's choice
+             # ("acquire-only" | "seed-only" | "paused"), is still read as it; naming both is refused
+             embed_embedding = "p2p"   # EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you
+             # can also choose local/p2p embedding"; "Network and embedding mode remain personal choices"): who
+             # embeds the backlog of the collections that embed one — "collection" (the default, and the key's
+             # absence: each as its own file says), "local" (every part here, as `embed = "all"`) or "p2p" (the
+             # parts rendezvous gives this node, published as it goes, as `embed = "p2p"`). In force while the
+             # node is in embed mode, over the collections whose own file says all or p2p; one whose file says off
+             # or on-demand keeps its word (the choice says WHO embeds a backlog, never WHETHER), and p2p on a
+             # collection that is not shared stays all local and says so. The worker applies it at its next
+             # round — an edit or a switch needs no restart — and each collection's file is in force again in
+             # any other mode. One resolution for the worker and every page (`collections.desired_embed_mode`)
              embed_down_max = "400Mbit"   embed_up_max = "40Mbit"   chat_down_max = "50Mbit"   chat_up_max = "10Mbit"
              # each mode's own network budget, in [budget]'s grammar: while the node is in the mode it stands in
-             # `[budget] down_max` / `up_max`'s place (the schedule, the reserve and an override apply on top);
+             # `[budget] down_max` / `up_max`'s place (the schedule, the reserve and an override apply on top;
+             # query mode's keys keep the first name, `chat_*`; custom mode has none: [budget]'s);
              # unset, [budget]'s. Read by the worker each round: an edit needs no restart. A key this table does
              # not know is refused. WHICH mode the node is in is not here: it is the node's state (§7.8's tiers)
 [peers]      addresses = ["http://peer.example.org:8742"]   # the bootstrap of 04 §4.2, where the peer answers the
@@ -2210,6 +2282,33 @@ variable, a file, a log line or a message.
              # 2026-11-08: "Chat, speech, rerankers, madlad are preloaded too"); false: loaded at their first use.
              # Paused or seed-only preloads neither. Either way nothing is unloaded for being idle — "only if
              # space is claimed", by LocalAI's reclaimer, which evicts the least recently used (added 2026-11-08)
+             make_room = "unload"   page_floor_gib = 12   page_over_gib = 3
+             # HOW A LOAD THAT DOES NOT FIT THE CARD GETS ITS ROOM (added
+             # 2026-11-24, operator: "Extend page instead of unload to the dense models"). "unload" (the default,
+             # the rule of 2026-11-16): the model with the oldest real use is unloaded. "page": for a load WORK
+             # is waiting on, nothing is unloaded while the host can hold what the card cannot — MemAvailable
+             # less the shortfall stays at or above `page_floor_gib` — and the driver moves idle models' memory
+             # to host memory and back at their next use (measured on the B70: 0.2–0.4 s more on a small model's
+             # next request, 7.5–8.7 s after an unload); under the floor, the host unread, or a model whose
+             # paged load failed: unloaded as before. NEVER FURTHER OVER THE CARD THAN WAS MEASURED: the loaded
+             # models at their largest plus the load may exceed the card by `page_over_gib` at most (3; 3.5 held
+             # on the B70 with a context made on demand in it), and the host keeps a context's worth
+             # (3,262 MiB, the keeper's reserve) above its floor — a context a full card refuses kills its
+             # backend. Past either, unloaded as before. The keeper's own preloads keep "unload" either way. It
+             # needs the engine's two switches in every llama.cpp model's file and LocalAI's memory reclaimer
+             # off (deploy/vega/stage/localai_settings.py reads this key); `node resident show` says the rule,
+             # the host's memory against the floor, and a reclaimer left on (app/model_evict.py).
+             # IN QUERY MODE THE RULE IS "page" WHATEVER THIS KEY SAYS (amended 2026-11-25, operator: "A for
+             # paging" — in query mode nothing is unloaded to make room while system memory allows): for every
+             # load, the keeper's own too, and with no bound over the card but the host's floor
+             # (`page_floor_gib` and a context's worth above it). Measured that day in query mode: about 45 GiB
+             # of models on the 32 GiB card, 13–15 GiB of them in host memory, the large chat model at the speed
+             # of an unloaded card, a query encoder wholly in host memory back in 0.2–0.3 s against 5–24 s for
+             # a cold start; and since engine 619655e5833b a context the card cannot hold is refused and asked
+             # again, no longer a dead backend. In embed and custom mode this key and `page_over_gib` stand.
+             # LocalAI's memory reclaimer follows the rule IN FORCE, held by the keeper's beat: off where idle
+             # models are paged (query mode, or "page" here), on otherwise — a switch of mode moves it, and a
+             # deploy that set it from this key alone is corrected at the next beat (app/localai_reclaimer.py)
              chat_large = "louise-chat-qwen3.6-35b-a3b"   chat_small = "louise-chat-qwen3.5-9b-q4-p0"
              translate = "louise-translate-madlad"
              # the chat and translation models OVER the environment's CHAT_MODEL and TRANSLATE_MODEL, which stay
@@ -2217,9 +2316,10 @@ variable, a file, a log line or a message.
              # System page's Models panel writes them, with [translate] reading and [speech] (amended 2026-11-15,
              # operator: "I want them to be editable from the page for quick testing"). TWO CHAT SETTINGS (amended
              # 2026-11-25, operator: "The current chat model setting becomes 2 chat settings, large one and a small
-             # one"): `chat_large` answers in chat mode, `chat_small` in embed mode (§7.3 `node mode`). `chat`, the
-             # one setting there was, still loads and is what each of the two reads when unset — so a file that
-             # names only `chat` answers with it in both modes — before the environment's
+             # one"): `chat_large` answers in query mode, `chat_small` in embed mode (§7.3 `node mode`). `chat`, the
+             # one setting there was, is CUSTOM mode's model ("freely select the chat model") and what each of the
+             # two reads when unset — so a file that names only `chat` answers with it in every mode — before the
+             # environment's
 [speech]     stt_model = "whisper-large-v3"   vad_model = "silero-vad"   tts_model = "omnivoice-cpp"
              tts_voice = "localai://voice-profiles/<id>"   synthetic_voices = "it=<voice>, en=<voice>"
              tts_steps = "24"
@@ -2417,6 +2517,13 @@ Library asks before writing either pair — setting `all p2p` with sharing
 off enables sharing; disabling sharing under `all p2p` switches the mode
 to `all local`; proceed or abort — and a file edited by hand to say
 `p2p` with `share = false` runs as `all`, shown as such on its card.
+*Amended 2026-11-25* (operator: "In embed mode you can also choose
+local/p2p embedding"): while the node is in EMBED MODE, its embedding
+choice (`platform.toml` `[modes] embed_embedding`, the System page) may
+stand in the `all` / `p2p` word of every collection whose file says one of
+the two — all local or all p2p for the node at once; `off` and
+`on-demand` keep their own word, `p2p` still needs the collection shared,
+and the card says what the choice did to it.
 Beside the drop-down the card reads the two axes: the bounty list (the
 open parts of the current snapshot — any peer may embed any of them, 04
 §4.5; the parts this node is first for, and those it leaves to the fetch)

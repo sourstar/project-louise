@@ -1,0 +1,1031 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 24 Nov 2026 19:55:54 +0000
+Subject: [PATCH] feat(llama-cpp): a prototype - a model's weights leave the
+ device and come back (parking)
+
+Carried as a llama.cpp patch beside the others
+(patches/0015-park-weights.patch), after the two SYCL patches before it.
+
+For a server that holds more models than the GPU has memory for. Today a
+model that has to make room is unloaded: its backend process ends, and the
+next request pays a process start, the kernel programs and the first run
+again - 4 to 6 s on an Intel Arc Pro B70, of which the copy of the weights
+is 0.2 to 0.8 s. A PARKED model keeps its process and gives back only the
+device memory of its weights; the next request copies them back.
+
+Off unless the model's environment says so:
+  GGML_SYCL_PARKABLE=1          the weight buffers are allocated so that they can park
+  LLAMA_SERVER_PARK_WEIGHTS=1   with context_on_demand: when the context is freed the
+                                weights are parked, the next request brings them back
+  GGML_SYCL_PARK_VERIFY=1       every unparked buffer is read back and compared
+Without them the backend allocates and behaves as before.
+
+The mechanism keeps every address: on SYCL the weights are physical memory
+mapped into a reserved virtual range (the extension the pool already uses),
+released at a park and committed again at the same place, so no tensor,
+extra or in-place reorder changes. A device with no room refuses the
+request (503) and the model stays parked. Details and what was tested are
+in the llama.cpp patch's own message.
+
+STAGED, a prototype for one measurement: N park cycles on one encoder, the
+park, the unpark and the first request timed apart, the same bytes after
+each. The SYCL path compiles (icpx 2025.3.3) and has not run where it was
+written: no device there. No new load option and no new RPC: LocalAI's side
+(a parked state, two calls) is a later patch.
+
+Assisted-by: Claude Code
+---
+ .../llama-cpp/patches/0015-park-weights.patch | 980 ++++++++++++++++++
+ 1 file changed, 980 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0015-park-weights.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0015-park-weights.patch b/backend/cpp/llama-cpp/patches/0015-park-weights.patch
+new file mode 100644
+index 0000000..73f1934
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0015-park-weights.patch
+@@ -0,0 +1,980 @@
++park: a model's weights leave the device and come back at the same addresses
++
++A PROTOTYPE, off unless two environment switches are set. For a server that
++holds more models than the device has memory for: a model that is not
++working keeps its process, its kernel programs and its tensors, and gives
++the device memory of its weights back; the next request copies the weights
++onto the device again instead of loading the model.
++
++ggml: a buffer may implement park() and unpark() (ggml_backend_buffer_i, both
++optional). The contract is ADDRESS-STABLE: park saves the contents and frees
++the memory behind the buffer's address range, unpark commits memory at the
++same addresses and restores the contents - so every tensor, view and extra
++that refers to the buffer stays valid, and nothing that was done to the
++weights in place (ggml-sycl's reorder of quantized tensors) is undone or
++done twice. ggml_backend_buffer_can_park/park/unpark handle multi-buffers,
++all parts or none. ggml_backend_set_alloc_usage_hint() lets the caller say
++what the buffers it is about to allocate are for, which alloc_buffer cannot
++know otherwise.
++
++ggml-sycl: with GGML_SYCL_PARKABLE=1 a weight buffer is physical memory
++mapped into a reserved virtual range (sycl_ext_oneapi_virtual_mem, which the
++pool already grows with), committed in pieces of 1 GiB. park copies the
++buffer to host memory and releases the physical memory; unpark commits it
++again, copies back and frees the host copy. A device with no room refuses
++the commit and the buffer stays parked. GGML_SYCL_PARK_VERIFY=1 reads every
++unparked buffer back and compares it with what was parked (a mismatch parks
++it again and fails the unpark), and logs a checksum at each park. Both log
++their times: the copy apart from the commit or the release. Reading or
++writing a parked buffer aborts with a message. Without the switch nothing is
++allocated differently.
++
++llama: llama_model_can_park / park / unpark / is_parked over the model's
++weight buffers: every buffer that can park does, and a model with a device
++buffer that cannot is refused whole. A model may be parked only with no
++context; llama_init_from_model() refuses a parked model.
++
++server: with LLAMA_SERVER_PARK_WEIGHTS=1 and --context-on-demand, when the
++context is freed the weights are parked, and the next request unparks them
++before its context is created. A device with no room refuses that request
++as it refuses a context (503, the model stays parked, a later request tries
++again). The context canary, when on, then holds each context created on
++unparked weights to the load's output. A request refused after an unpark
++leaves the weights parked again.
++
++Tested where there is no device: tools/server/tests/unit/test_park_weights.py
++(the switch changes nothing where the weights cannot park). The cycles were
++run on CPU against a stand-in for the hook that poisons the buffer while it
++is parked: 12 requests, each on weights that had been parked, gave the
++unparked server's embeddings bit for bit; a refused unpark was answered 503
++and the next request served; weights that did not come back failed the
++canary. ggml-sycl.cpp compiles with icpx 2025.3.3; the SYCL path itself has
++not run: it needs the device.
++---
++diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
++index afb8633..3293616 100644
++--- a/ggml/include/ggml-backend.h
+++++ b/ggml/include/ggml-backend.h
++@@ -69,6 +69,20 @@ extern "C" {
++     GGML_API ggml_backend_buffer_type_t     ggml_backend_buffer_get_type      (ggml_backend_buffer_t buffer);
++     GGML_API void                           ggml_backend_buffer_reset         (ggml_backend_buffer_t buffer);
++ 
+++    // Parking: the device memory of a buffer released while its contents are kept on the host and its addresses stay
+++    // valid; unparking puts the contents back at the same addresses. Nothing may use the buffer in between.
+++    // can_park: the buffer (every part of a multi-buffer) supports it. park/unpark return false and leave the buffer
+++    // as it was when they cannot; parking a parked buffer or unparking one that is not are no-ops that return true.
+++    GGML_API bool                           ggml_backend_buffer_can_park      (ggml_backend_buffer_t buffer);
+++    GGML_API bool                           ggml_backend_buffer_park          (ggml_backend_buffer_t buffer);
+++    GGML_API bool                           ggml_backend_buffer_unpark        (ggml_backend_buffer_t buffer);
+++
+++    // What the buffers this thread is about to allocate are for: a backend reads it in alloc_buffer, where the usage
+++    // set by ggml_backend_buffer_set_usage is not known yet (weights that can park are allocated differently).
+++    // GGML_BACKEND_BUFFER_USAGE_ANY, the default, says nothing. Set it back after the allocations.
+++    GGML_API void                           ggml_backend_set_alloc_usage_hint (enum ggml_backend_buffer_usage usage);
+++    GGML_API enum ggml_backend_buffer_usage ggml_backend_get_alloc_usage_hint (void);
+++
++     // tensor copy between different backends
++     GGML_API void ggml_backend_tensor_copy  (const struct ggml_tensor * src, struct ggml_tensor * dst);
++     GGML_API void ggml_backend_tensor_copy_n(const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors);
++diff --git a/ggml/src/ggml-backend-impl.h b/ggml/src/ggml-backend-impl.h
++index 545880b..4709a63 100644
++--- a/ggml/src/ggml-backend-impl.h
+++++ b/ggml/src/ggml-backend-impl.h
++@@ -76,6 +76,14 @@ extern "C" {
++         void         (*get_tensor_n) (ggml_backend_buffer_t buffer, const struct ggml_tensor * const * tensors,       void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors);
++         // (optional) batched tensor copies: returns true if all copies were performed, false if unsupported and no copies were performed
++         bool         (*cpy_tensor_n) (ggml_backend_buffer_t buffer, const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors);
+++        // (optional) parking: release the device memory of the buffer and keep its contents and its ADDRESSES.
+++        // park() saves the contents and frees the memory behind the buffer's address range; unpark() commits memory at
+++        // the same addresses and restores the contents, so every tensor, view and extra that refers to the buffer stays
+++        // valid across the two. Nothing may read or write the buffer in between. Both return false, leaving the buffer
+++        // as it was, when they cannot (unpark: the device has no room). A backend that cannot keep addresses leaves
+++        // them NULL.
+++        bool         (*park)         (ggml_backend_buffer_t buffer);
+++        bool         (*unpark)       (ggml_backend_buffer_t buffer);
++     };
++ 
++     struct ggml_backend_buffer {
++diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
++index 2e2f9c0..b49b957 100644
++--- a/ggml/src/ggml-backend.cpp
+++++ b/ggml/src/ggml-backend.cpp
++@@ -1113,6 +1113,8 @@ static const struct ggml_backend_buffer_i ggml_backend_multi_buffer_i = {
++     /* .set_tensor_n    = */ NULL,
++     /* .get_tensor_n    = */ NULL,
++     /* .cpy_tensor_n    = */ NULL,
+++    /* .park            = */ NULL,
+++    /* .unpark          = */ NULL,
++ };
++ 
++ ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers) {
++@@ -1136,6 +1138,70 @@ bool ggml_backend_buffer_is_multi_buffer(ggml_backend_buffer_t buffer) {
++     return buffer->iface.free_buffer == ggml_backend_multi_buffer_free_buffer;
++ }
++ 
+++// parking
+++
+++static thread_local enum ggml_backend_buffer_usage ggml_backend_alloc_usage_hint = GGML_BACKEND_BUFFER_USAGE_ANY;
+++
+++void ggml_backend_set_alloc_usage_hint(enum ggml_backend_buffer_usage usage) {
+++    ggml_backend_alloc_usage_hint = usage;
+++}
+++
+++enum ggml_backend_buffer_usage ggml_backend_get_alloc_usage_hint(void) {
+++    return ggml_backend_alloc_usage_hint;
+++}
+++
+++// the buffers a buffer is made of: itself, or the parts of a multi-buffer
+++static std::vector<ggml_backend_buffer_t> ggml_backend_buffer_parts(ggml_backend_buffer_t buffer) {
+++    GGML_ASSERT(buffer);
+++    if (ggml_backend_buffer_is_multi_buffer(buffer)) {
+++        ggml_backend_multi_buffer_context * ctx = (ggml_backend_multi_buffer_context *) buffer->context;
+++        return std::vector<ggml_backend_buffer_t>(ctx->buffers, ctx->buffers + ctx->n_buffers);
+++    }
+++    return { buffer };
+++}
+++
+++bool ggml_backend_buffer_can_park(ggml_backend_buffer_t buffer) {
+++    const std::vector<ggml_backend_buffer_t> parts = ggml_backend_buffer_parts(buffer);
+++    for (ggml_backend_buffer_t part : parts) {
+++        if (part->iface.park == NULL || part->iface.unpark == NULL) {
+++            return false;
+++        }
+++    }
+++    return !parts.empty();
+++}
+++
+++// park (or unpark) every part; if one cannot, the parts already done are put back as they were
+++static bool ggml_backend_buffer_park_all(ggml_backend_buffer_t buffer, bool park) {
+++    if (!ggml_backend_buffer_can_park(buffer)) {
+++        return false;
+++    }
+++    const std::vector<ggml_backend_buffer_t> parts = ggml_backend_buffer_parts(buffer);
+++    for (size_t i = 0; i < parts.size(); i++) {
+++        const bool ok = park ? parts[i]->iface.park(parts[i]) : parts[i]->iface.unpark(parts[i]);
+++        if (ok) {
+++            continue;
+++        }
+++        for (size_t j = 0; j < i; j++) {
+++            const bool back = park ? parts[j]->iface.unpark(parts[j]) : parts[j]->iface.park(parts[j]);
+++            if (!back) {
+++                // half of a buffer on the device and half not: nothing above can use it, and nothing can repair it
+++                GGML_ABORT("%s: part %zu of a buffer could not be %s again after part %zu failed\n", __func__, j,
+++                           park ? "unparked" : "parked", i);
+++            }
+++        }
+++        return false;
+++    }
+++    return true;
+++}
+++
+++bool ggml_backend_buffer_park(ggml_backend_buffer_t buffer) {
+++    return ggml_backend_buffer_park_all(buffer, true);
+++}
+++
+++bool ggml_backend_buffer_unpark(ggml_backend_buffer_t buffer) {
+++    return ggml_backend_buffer_park_all(buffer, false);
+++}
+++
++ void ggml_backend_multi_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage) {
++     GGML_ASSERT(buffer);
++     GGML_ASSERT(ggml_backend_buffer_is_multi_buffer(buffer));
++@@ -2892,6 +2958,8 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
++     /* .set_tensor_n    = */ NULL,
++     /* .get_tensor_n    = */ NULL,
++     /* .cpy_tensor_n    = */ NULL,
+++    /* .park            = */ NULL,
+++    /* .unpark          = */ NULL,
++ };
++ 
++ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
++@@ -2909,6 +2977,8 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
++     /* .set_tensor_n    = */ NULL,
++     /* .get_tensor_n    = */ NULL,
++     /* .cpy_tensor_n    = */ NULL,
+++    /* .park            = */ NULL,
+++    /* .unpark          = */ NULL,
++ };
++ 
++ // CPU backend buffer type
++diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
++index dd33bf3..720db24 100644
++--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
++@@ -110,6 +110,10 @@ int g_ggml_sycl_fa_dpas = 1;
++ int g_ggml_sycl_memtrace = 0;
++ int g_ggml_sycl_memtrace_step = 64;
++ int g_ggml_sycl_enable_vmm = 1;
+++// weights that can park (ggml_backend_buffer_park): GGML_SYCL_PARKABLE=1 allocates the weight buffers as physical memory
+++// mapped into a reserved virtual range, GGML_SYCL_PARK_VERIFY=1 reads each unparked buffer back and compares it
+++int g_ggml_sycl_parkable = 0;
+++int g_ggml_sycl_park_verify = 0;
++ int g_ggml_sycl_enable_fusion = 1;
++ int g_ggml_sycl_enable_esimd = 1;
++ int g_ggml_sycl_mmvq_wide = 1;
++@@ -444,6 +448,8 @@ static void ggml_check_sycl() try {
++         g_ggml_sycl_memtrace = ggml_sycl_get_env("GGML_SYCL_MEMTRACE", 0);
++         g_ggml_sycl_memtrace_step = ggml_sycl_get_env("GGML_SYCL_MEMTRACE_STEP", 64);
++         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
+++        g_ggml_sycl_parkable = ggml_sycl_get_env("GGML_SYCL_PARKABLE", 0);
+++        g_ggml_sycl_park_verify = ggml_sycl_get_env("GGML_SYCL_PARK_VERIFY", 0);
++         g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
++         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
++         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
++@@ -592,6 +598,8 @@ static void ggml_check_sycl() try {
++ #else
++         GGML_LOG_INFO("  GGML_SYCL_ENABLE_VMM: virtual memory extension is not available\n");
++ #endif
+++        GGML_LOG_INFO("  GGML_SYCL_PARKABLE: %d\n", g_ggml_sycl_parkable);
+++        GGML_LOG_INFO("  GGML_SYCL_PARK_VERIFY: %d\n", g_ggml_sycl_park_verify);
++ 
++         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FUSION: %d\n", g_ggml_sycl_enable_fusion);
++         GGML_LOG_INFO("  GGML_SYCL_UPLOAD_STAGING_SLOTS: %d\n", g_ggml_sycl_upload_staging_slots);
++@@ -722,6 +730,82 @@ inline void free_aligned_mem_host(void * memblock) {
++ #endif
++ }
++ 
+++#if defined(GGML_SYCL_SUPPORT_VMM)
+++// The device memory of a buffer that can PARK: physical memory mapped into a reserved virtual range, the extension the
+++// pool grows with. Releasing the physical memory and committing it again leaves the range, and so every address into
+++// the buffer, where it was: nothing that refers to a tensor of the buffer (its data pointer, its extra, a reorder that
+++// was done on it) has to change across a park. While it is parked the contents are in host memory.
+++struct ggml_sycl_parkable_mem {
+++    // committed in pieces of at most this (a multiple of the granularity), none large enough to need relaxed limits
+++    static constexpr size_t PIECE = 1ull << 30;
+++
+++    struct mapping {
+++        sycl::ext::oneapi::experimental::physical_mem phys;
+++        void * ptr;
+++    };
+++
+++    sycl::context ctx;
+++    sycl::device  dev;
+++    uintptr_t     addr = 0; // the reserved range
+++    size_t        size = 0; // its size, a multiple of the granularity
+++    std::vector<mapping> mappings; // empty: nothing is committed
+++
+++    void *   host      = nullptr; // the contents while parked
+++    uint64_t n_park    = 0;
+++    uint64_t first_sum = 0;       // the checksum of the contents at the first park (GGML_SYCL_PARK_VERIFY)
+++
+++    ggml_sycl_parkable_mem(queue_ptr qptr, int device, size_t bytes) : ctx(qptr->get_context()), dev(qptr->get_device()) {
+++        const size_t granularity = ggml_sycl_info().devices[device].vmm_granularity;
+++        GGML_ASSERT(granularity > 0 && PIECE % granularity == 0);
+++        size = GGML_PAD(std::max(bytes, (size_t) 1), granularity);
+++        addr = sycl::ext::oneapi::experimental::reserve_virtual_mem(size, ctx);
+++    }
+++
+++    ~ggml_sycl_parkable_mem() {
+++        release();
+++        if (addr != 0) {
+++            SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::free_virtual_mem(addr, size, ctx)));
+++        }
+++        if (host != nullptr) {
+++            free_aligned_mem_host(host);
+++        }
+++    }
+++
+++    ggml_sycl_parkable_mem(const ggml_sycl_parkable_mem &)             = delete;
+++    ggml_sycl_parkable_mem & operator=(const ggml_sycl_parkable_mem &) = delete;
+++
+++    bool committed() const { return !mappings.empty(); }
+++
+++    // physical memory behind the whole range; false, with nothing committed, when the device refuses it
+++    bool commit() {
+++        GGML_ASSERT(!committed());
+++        try {
+++            mappings.reserve((size + PIECE - 1) / PIECE);
+++            for (size_t off = 0; off < size; off += PIECE) {
+++                const size_t n = std::min(PIECE, size - off);
+++                sycl::ext::oneapi::experimental::physical_mem phys(dev, ctx, n);
+++                void * ptr = phys.map(addr + off, n, sycl::ext::oneapi::experimental::address_access_mode::read_write);
+++                mappings.push_back({ std::move(phys), ptr });
+++            }
+++        } catch (const sycl::exception & e) {
+++            GGML_LOG_ERROR("%s: the device refused memory for a parkable buffer (%zu of %zu MiB committed): %s\n", __func__,
+++                           mappings.size() * PIECE / (1024 * 1024), size / (1024 * 1024), e.what());
+++            release();
+++            return false;
+++        }
+++        return true;
+++    }
+++
+++    // unmap exactly what was mapped, before the physical memory goes: its destructor does not unmap
+++    void release() {
+++        for (auto & m : mappings) {
+++            SYCL_CHECK(CHECK_TRY_ERROR(sycl::ext::oneapi::experimental::unmap(m.ptr, m.phys.size(), ctx)));
+++        }
+++        mappings.clear();
+++    }
+++};
+++#endif // defined(GGML_SYCL_SUPPORT_VMM)
+++
++ // sycl buffer
++ 
++ struct ggml_backend_sycl_buffer_context {
++@@ -743,6 +827,10 @@ struct ggml_backend_sycl_buffer_context {
++     std::vector<ggml_tensor_extra_gpu *> tensor_extras;
++     host_staging staging;
++     bool is_usm_system;
+++#if defined(GGML_SYCL_SUPPORT_VMM)
+++    // set: dev_ptr is its reserved range, and the buffer can park
+++    std::unique_ptr<ggml_sycl_parkable_mem> parkable;
+++#endif
++ 
++     ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream, bool is_usm_system) :
++         device(device), dev_ptr(dev_ptr), stream(stream), is_usm_system(is_usm_system) {
++@@ -767,6 +855,17 @@ struct ggml_backend_sycl_buffer_context {
++ 
++     ~ggml_backend_sycl_buffer_context() {
++         drop_host_staging();
+++#if defined(GGML_SYCL_SUPPORT_VMM)
+++        if (parkable) {
+++            // parked or not, the range and whatever is committed in it go with it
+++            ggml_sycl_set_device(device);
+++            if (parkable->committed()) {
+++                ggml_sycl_memtrace_del(dev_ptr);
+++            }
+++            parkable.reset();
+++            dev_ptr = nullptr;
+++        }
+++#endif
++         if (dev_ptr != nullptr) {
++             ggml_sycl_set_device(device);
++             if (is_usm_system)
++@@ -783,6 +882,18 @@ struct ggml_backend_sycl_buffer_context {
++     }
++ };
++ 
+++// a parked buffer has no memory behind its addresses: reading or writing it is a bug of the caller, said here
+++static inline void ggml_sycl_buffer_on_device(const ggml_backend_sycl_buffer_context * ctx) {
+++#if defined(GGML_SYCL_SUPPORT_VMM)
+++    if (ctx->parkable && !ctx->parkable->committed()) {
+++        GGML_ABORT("%s: the buffer of %s is parked, nothing may read or write it before it is unparked\n", __func__,
+++                   ctx->name.c_str());
+++    }
+++#else
+++    GGML_UNUSED(ctx);
+++#endif
+++}
+++
++ static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_type_t buft);
++ 
++ static bool ggml_backend_buffer_is_sycl(ggml_backend_buffer_t buffer) {
++@@ -884,6 +995,7 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
++     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
++     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
++     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
+++    ggml_sycl_buffer_on_device(ctx);
++     ggml_sycl_set_device(ctx->device);
++ 
++     // copy through pinned memory so the device never reads mmap()ed pages directly
++@@ -936,6 +1048,7 @@ static void ggml_backend_sycl_buffer_set_tensor_2d(ggml_backend_buffer_t buffer,
++                                                    size_t n_copies, size_t stride_tensor,
++                                                    size_t stride_data) try {
++     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
+++    ggml_sycl_buffer_on_device(ctx);
++     const char * src = (const char *) data;
++     ggml_sycl_set_device(ctx->device);
++ 
++@@ -981,6 +1094,7 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
++     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
++     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
++     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
+++    ggml_sycl_buffer_on_device(ctx);
++ 
++     ggml_sycl_set_device(ctx->device);
++     auto stream = dpct::dev_mgr::instance().get_device(ctx->device).default_queue();
++@@ -1127,6 +1241,7 @@ static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer,
++                                            uint8_t value) try {
++     GGML_SYCL_DEBUG("[SYCL] call %s: size=%zu\n", __func__, buffer->size);
++     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
+++    ggml_sycl_buffer_on_device(ctx);
++ 
++     ggml_sycl_set_device(ctx->device);
++     queue_ptr stream = ctx->stream;
++@@ -1155,6 +1270,7 @@ static void ggml_backend_sycl_buffer_memset_tensor(ggml_backend_buffer_t buffer,
++     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
++     GGML_SYCL_DEBUG(" size=%zu offset=%zu value=%u\n", size, offset, value);
++     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
+++    ggml_sycl_buffer_on_device(ctx);
++     SYCL_CHECK(ggml_sycl_set_device(ctx->device));
++     auto stream = &(dpct::dev_mgr::instance().get_device(ctx->device).default_queue());
++     if (size == 0) {
++@@ -1199,7 +1315,167 @@ static const ggml_backend_buffer_i ggml_backend_sycl_buffer_interface = {
++     /* .set_tensor_n    = */ NULL,
++     /* .get_tensor_n    = */ NULL,
++     /* .cpy_tensor_n    = */ NULL,
+++    /* .park            = */ NULL,
+++    /* .unpark          = */ NULL,
+++};
+++
+++inline void * aligned_malloc_host(size_t alignment, size_t size);
+++
+++#if defined(GGML_SYCL_SUPPORT_VMM)
+++// FNV-1a over 8-byte words: only to say that two copies of a buffer are the same bytes (GGML_SYCL_PARK_VERIFY)
+++static uint64_t ggml_sycl_park_checksum(const void * data, size_t size) {
+++    const uint8_t * p = (const uint8_t *) data;
+++    uint64_t h = 1469598103934665603ull;
+++    size_t i = 0;
+++    for (; i + 8 <= size; i += 8) {
+++        uint64_t w;
+++        memcpy(&w, p + i, 8);
+++        h = (h ^ w) * 1099511628211ull;
+++    }
+++    for (; i < size; i++) {
+++        h = (h ^ p[i]) * 1099511628211ull;
+++    }
+++    return h;
+++}
+++
+++// host <-> device over the whole buffer, in pieces, each waited for
+++static void ggml_sycl_park_copy(sycl::queue & q, void * dst, const void * src, size_t size) {
+++    for (size_t off = 0; off < size; off += ggml_sycl_parkable_mem::PIECE) {
+++        const size_t n = std::min(ggml_sycl_parkable_mem::PIECE, size - off);
+++        q.memcpy((char *) dst + off, (const char *) src + off, n).wait_and_throw();
+++    }
+++}
+++
+++// the contents to host memory, then the device memory released; the buffer's addresses stay reserved
+++static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
+++    ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
+++    ggml_sycl_parkable_mem * mem = ctx->parkable.get();
+++    GGML_ASSERT(mem != nullptr);
+++    if (!mem->committed()) {
+++        return true; // parked already
+++    }
+++    ggml_sycl_set_device(ctx->device);
+++
+++    const int64_t t_start = ggml_time_us();
+++
+++    // nothing queued may still read or write the buffer
+++    ctx->drop_host_staging();
+++    SYCL_CHECK(CHECK_TRY_ERROR(dpct::get_current_device().queues_wait_and_throw()));
+++
+++    GGML_ASSERT(mem->host == nullptr);
+++    mem->host = aligned_malloc_host(MEM_SIZE_2M, GGML_PAD(buffer->size, MEM_SIZE_2M));
+++    if (mem->host == nullptr) {
+++        GGML_LOG_ERROR("%s: no host memory for the %.2f MiB of %s, it stays on the device\n", __func__,
+++                       buffer->size / 1024.0 / 1024.0, ctx->name.c_str());
+++        return false;
+++    }
+++    ggml_sycl_park_copy(*ctx->stream, mem->host, ctx->dev_ptr, buffer->size);
+++    const int64_t t_copied = ggml_time_us();
+++
+++    char said[64] = "";
+++    if (g_ggml_sycl_park_verify) {
+++        const uint64_t sum = ggml_sycl_park_checksum(mem->host, buffer->size);
+++        if (mem->n_park == 0) {
+++            mem->first_sum = sum;
+++        }
+++        snprintf(said, sizeof(said), ", checksum %016" PRIx64 "%s", sum,
+++                 mem->n_park == 0 ? "" : sum == mem->first_sum ? " (the first park's)" : " (NOT the first park's)");
+++    }
+++    const int64_t t_summed = ggml_time_us();
+++
+++    mem->release();
+++    ggml_sycl_memtrace_del(ctx->dev_ptr);
+++    mem->n_park++;
+++
+++    const int64_t t_end = ggml_time_us();
+++    GGML_LOG_INFO("%s: %s parked, %.2f MiB to the host in %.1f ms (the copy %.1f, the release %.1f)%s; park %" PRIu64 "\n",
+++                  __func__, ctx->name.c_str(), buffer->size / 1024.0 / 1024.0,
+++                  (t_end - t_start - (t_summed - t_copied)) / 1000.0, (t_copied - t_start) / 1000.0,
+++                  (t_end - t_summed) / 1000.0, said, mem->n_park);
+++    return true;
+++}
+++catch (sycl::exception const & exc) {
+++    std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+++    std::exit(1);
+++}
+++
+++// device memory at the same addresses, then the contents back; false, the buffer left parked, if the device has no room
+++static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
+++    ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
+++    ggml_sycl_parkable_mem * mem = ctx->parkable.get();
+++    GGML_ASSERT(mem != nullptr);
+++    if (mem->committed()) {
+++        return true; // not parked
+++    }
+++    GGML_ASSERT(mem->host != nullptr);
+++    ggml_sycl_set_device(ctx->device);
+++
+++    const int64_t t_start = ggml_time_us();
+++    if (!mem->commit()) {
+++        GGML_LOG_WARN("%s: no room on the device for the %.2f MiB of %s, it stays parked\n", __func__,
+++                      buffer->size / 1024.0 / 1024.0, ctx->name.c_str());
+++        return false;
+++    }
+++    ggml_sycl_memtrace_add(GGML_SYCL_MEM_BUFFER, ctx->dev_ptr, mem->size);
+++    const int64_t t_committed = ggml_time_us();
+++
+++    ggml_sycl_park_copy(*ctx->stream, ctx->dev_ptr, mem->host, buffer->size);
+++    const int64_t t_copied = ggml_time_us();
+++
+++    char said[64] = "";
+++    if (g_ggml_sycl_park_verify) {
+++        // what the device holds now, read back, against what was parked
+++        void * back = aligned_malloc_host(MEM_SIZE_2M, GGML_PAD(buffer->size, MEM_SIZE_2M));
+++        if (back == nullptr) {
+++            GGML_LOG_ERROR("%s: no host memory to verify %s\n", __func__, ctx->name.c_str());
+++        } else {
+++            ggml_sycl_park_copy(*ctx->stream, back, ctx->dev_ptr, buffer->size);
+++            const bool same = memcmp(back, mem->host, buffer->size) == 0;
+++            free_aligned_mem_host(back);
+++            if (!same) {
+++                // the weights on the device are not the weights that left it: nothing may compute on them
+++                GGML_LOG_ERROR("%s: %s read back from the device is NOT what was parked; it is parked again\n", __func__,
+++                               ctx->name.c_str());
+++                mem->release();
+++                ggml_sycl_memtrace_del(ctx->dev_ptr);
+++                return false;
+++            }
+++            snprintf(said, sizeof(said), ", read back: the same bytes");
+++        }
+++    }
+++
+++    free_aligned_mem_host(mem->host);
+++    mem->host = nullptr;
+++
+++    GGML_LOG_INFO("%s: %s unparked, %.2f MiB to the device in %.1f ms (the commit %.1f, the copy %.1f)%s\n", __func__,
+++                  ctx->name.c_str(), buffer->size / 1024.0 / 1024.0, (t_copied - t_start) / 1000.0,
+++                  (t_committed - t_start) / 1000.0, (t_copied - t_committed) / 1000.0, said);
+++    return true;
+++}
+++catch (sycl::exception const & exc) {
+++    std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+++    std::exit(1);
+++}
+++
+++static const ggml_backend_buffer_i ggml_backend_sycl_parkable_buffer_interface = {
+++    /* .free_buffer     = */ ggml_backend_sycl_buffer_free_buffer,
+++    /* .get_base        = */ ggml_backend_sycl_buffer_get_base,
+++    /* .init_tensor     = */ ggml_backend_sycl_buffer_init_tensor,
+++    /* .memset_tensor   = */ ggml_backend_sycl_buffer_memset_tensor,
+++    /* .set_tensor      = */ ggml_backend_sycl_buffer_set_tensor,
+++    /* .get_tensor      = */ ggml_backend_sycl_buffer_get_tensor,
+++    /* .set_tensor_2d   = */ ggml_backend_sycl_buffer_set_tensor_2d,
+++    /* .get_tensor_2d   = */ NULL,
+++    /* .cpy_tensor      = */ ggml_backend_sycl_buffer_cpy_tensor,
+++    /* .clear           = */ ggml_backend_sycl_buffer_clear,
+++    /* .reset           = */ ggml_backend_sycl_buffer_reset,
+++    /* .set_tensor_n    = */ NULL,
+++    /* .get_tensor_n    = */ NULL,
+++    /* .cpy_tensor_n    = */ NULL,
+++    /* .park            = */ ggml_backend_sycl_buffer_park,
+++    /* .unpark          = */ ggml_backend_sycl_buffer_unpark,
++ };
+++#endif // defined(GGML_SYCL_SUPPORT_VMM)
++ 
++ // sycl buffer type
++ struct ggml_backend_sycl_buffer_type_context {
++@@ -1255,6 +1531,35 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
++     size_t aligned_size = ((size + alignment - 1) / alignment) * alignment;
++     bool use_usm_system = check_usm_system(buft_ctx->device, aligned_size);
++ 
+++#if defined(GGML_SYCL_SUPPORT_VMM)
+++    // weights that can park: said by the caller before it allocates (ggml_backend_set_alloc_usage_hint)
+++    if (g_ggml_sycl_parkable && ggml_backend_get_alloc_usage_hint() == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+++        if (use_usm_system || !g_ggml_sycl_enable_vmm || !ggml_sycl_info().devices[buft_ctx->device].vmm) {
+++            GGML_LOG_WARN("%s: GGML_SYCL_PARKABLE: this buffer of %.2f MiB cannot park (%s), it is allocated as usual\n",
+++                          __func__, size / 1024.0 / 1024.0,
+++                          use_usm_system ? "USM system memory" : "no virtual memory on the device, or GGML_SYCL_ENABLE_VMM=0");
+++        } else {
+++            std::unique_ptr<ggml_sycl_parkable_mem> mem;
+++            try {
+++                mem.reset(new ggml_sycl_parkable_mem(stream, buft_ctx->device, size));
+++            } catch (const sycl::exception & e) {
+++                GGML_LOG_ERROR("%s: can't reserve %zu Bytes of virtual memory: %s\n", __func__, size, e.what());
+++                return nullptr;
+++            }
+++            if (!mem->commit()) {
+++                GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on device\n", __func__, size);
+++                return nullptr;
+++            }
+++            ggml_sycl_memtrace_add(GGML_SYCL_MEM_BUFFER, (void *) mem->addr, mem->size);
+++            ggml_backend_sycl_buffer_context * ctx =
+++                new ggml_backend_sycl_buffer_context(buft_ctx->device, (void *) mem->addr, buft_ctx->stream, false);
+++            ctx->parkable = std::move(mem);
+++            GGML_LOG_INFO("%s: %.2f MiB of weights that can park\n", __func__, size / 1024.0 / 1024.0);
+++            return ggml_backend_buffer_init(buft, ggml_backend_sycl_parkable_buffer_interface, ctx, size);
+++        }
+++    }
+++#endif
+++
++     void * dev_ptr;
++     if (use_usm_system) {
++         GGML_SYCL_DEBUG("[SYCL] allocating %zu Bytes with USM system\n", size);
++@@ -1710,6 +2015,8 @@ static struct ggml_backend_buffer_i ggml_backend_sycl_split_buffer_interface = {
++     /* .set_tensor_n    = */ NULL,
++     /* .get_tensor_n    = */ NULL,
++     /* .cpy_tensor_n    = */ NULL,
+++    /* .park            = */ NULL,
+++    /* .unpark          = */ NULL,
++ };
++ 
++ // sycl split buffer type
++diff --git a/include/llama.h b/include/llama.h
++index 7122143..e4ccb13 100644
++--- a/include/llama.h
+++++ b/include/llama.h
++@@ -652,6 +652,18 @@ extern "C" {
++     // Returns the total size of all the tensors in the model in bytes
++     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
++ 
+++    // Parking: the weights leave the device and stay in host memory, the model and everything that refers to its
+++    // tensors stay valid; unparking copies them back. A model may be parked only while NO context of it exists, and
+++    // a context can be created again only after it is unparked.
+++    // can_park:  every weight buffer on a device supports it (ggml_backend_buffer_can_park), and there is one
+++    // park:      false, with the model left on the device, if a buffer cannot be parked
+++    // unpark:    false, with the model left parked, if the device has no room for the weights now
+++    // Parking a parked model and unparking one that is not are no-ops that return true. Not thread-safe.
+++    LLAMA_API bool llama_model_can_park (const struct llama_model * model);
+++    LLAMA_API bool llama_model_is_parked(const struct llama_model * model);
+++    LLAMA_API bool llama_model_park     (struct llama_model * model);
+++    LLAMA_API bool llama_model_unpark   (struct llama_model * model);
+++
++     // Get the default chat template. Returns nullptr if not available
++     // If name is NULL, returns the default chat template
++     LLAMA_API const char * llama_model_chat_template(const struct llama_model * model, const char * name);
++diff --git a/src/llama-context.cpp b/src/llama-context.cpp
++index 6cd39ac..8626e12 100644
++--- a/src/llama-context.cpp
+++++ b/src/llama-context.cpp
++@@ -4480,6 +4480,12 @@ llama_context * llama_init_from_model(
++         return nullptr;
++     }
++ 
+++    if (llama_model_is_parked(model)) {
+++        // its weights are not on the device: a context would compute on memory that is not there
+++        LLAMA_LOG_ERROR("%s: the model is parked, llama_model_unpark() comes first\n", __func__);
+++        return nullptr;
+++    }
+++
++     if (params.n_batch == 0 && params.n_ubatch == 0) {
++         LLAMA_LOG_ERROR("%s: n_batch and n_ubatch cannot both be zero\n", __func__);
++         return nullptr;
++diff --git a/src/llama-model.cpp b/src/llama-model.cpp
++index ac5266a..9749a8d 100644
++--- a/src/llama-model.cpp
+++++ b/src/llama-model.cpp
++@@ -1382,6 +1382,9 @@ struct llama_model::impl {
++     // contexts where the model tensors metadata is stored as well as the corresponding buffers:
++     std::vector<std::pair<ggml_context_ptr, std::vector<ggml_backend_buffer_ptr>>> ctxs_bufs;
++ 
+++    // the weights are parked (llama_model_park): no buffer in ctxs_bufs that can park may be read or written
+++    bool parked = false;
+++
++     buft_list_t cpu_buft_list;
++     std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
++ 
++@@ -2103,7 +2106,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
++                     t->buffer = buf; // set dummy buffer for weights so that the backend scheduler won't try to allocate them
++                 }
++             } else {
+++                // said before the allocation: a backend whose weights can park allocates them differently
+++                ggml_backend_set_alloc_usage_hint(GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++                 buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft); // real buffer
+++                ggml_backend_set_alloc_usage_hint(GGML_BACKEND_BUFFER_USAGE_ANY);
++             }
++             if (buf == nullptr) {
++                 throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
++@@ -4001,6 +4007,89 @@ uint64_t llama_model_size(const llama_model * model) {
++     return model->size();
++ }
++ 
+++// parking
+++
+++// the weight buffers that park: every buffer that can; false if a buffer on a device cannot (the model would stay
+++// half on the device) or if nothing would leave it
+++bool llama_model::park_buffers(std::vector<ggml_backend_buffer_t> & out) const {
+++    out.clear();
+++    for (const auto & [ctx, bufs] : pimpl->ctxs_bufs) {
+++        for (const auto & buf : bufs) {
+++            if (ggml_backend_buffer_can_park(buf.get())) {
+++                out.push_back(buf.get());
+++            } else if (!ggml_backend_buffer_is_host(buf.get())) {
+++                return false;
+++            }
+++        }
+++    }
+++    return !out.empty();
+++}
+++
+++bool llama_model::can_park() const {
+++    std::vector<ggml_backend_buffer_t> bufs;
+++    return park_buffers(bufs);
+++}
+++
+++bool llama_model::is_parked() const {
+++    return pimpl->parked;
+++}
+++
+++// park (or unpark) every buffer; if one cannot, those already done are put back as they were
+++bool llama_model::park_all(bool park) {
+++    if (pimpl->parked == park) {
+++        return true;
+++    }
+++    std::vector<ggml_backend_buffer_t> bufs;
+++    if (!park_buffers(bufs)) {
+++        LLAMA_LOG_WARN("%s: the model's weights cannot be parked\n", __func__);
+++        return false;
+++    }
+++    for (size_t i = 0; i < bufs.size(); i++) {
+++        const bool ok = park ? ggml_backend_buffer_park(bufs[i]) : ggml_backend_buffer_unpark(bufs[i]);
+++        if (ok) {
+++            continue;
+++        }
+++        LLAMA_LOG_WARN("%s: buffer %zu of %zu (%s, %.2f MiB) could not be %s\n", __func__, i + 1, bufs.size(),
+++                       ggml_backend_buffer_name(bufs[i]), ggml_backend_buffer_get_size(bufs[i]) / 1024.0 / 1024.0,
+++                       park ? "parked" : "unparked");
+++        for (size_t j = 0; j < i; j++) {
+++            const bool back = park ? ggml_backend_buffer_unpark(bufs[j]) : ggml_backend_buffer_park(bufs[j]);
+++            if (!back) {
+++                // some weights on the device and some not: no context could be created on this model again
+++                GGML_ABORT("%s: buffer %zu could not be %s again after buffer %zu failed\n", __func__, j + 1,
+++                           park ? "unparked" : "parked", i + 1);
+++            }
+++        }
+++        return false;
+++    }
+++    pimpl->parked = park;
+++    return true;
+++}
+++
+++bool llama_model::park() {
+++    return park_all(true);
+++}
+++
+++bool llama_model::unpark() {
+++    return park_all(false);
+++}
+++
+++bool llama_model_can_park(const llama_model * model) {
+++    return model->can_park();
+++}
+++
+++bool llama_model_is_parked(const llama_model * model) {
+++    return model->is_parked();
+++}
+++
+++bool llama_model_park(llama_model * model) {
+++    return model->park();
+++}
+++
+++bool llama_model_unpark(llama_model * model) {
+++    return model->unpark();
+++}
+++
++ const char * llama_model_chat_template(const llama_model * model, const char * name) {
++     const auto key = name ? LLM_KV(model->arch, name)(LLM_KV_TOKENIZER_CHAT_TEMPLATE)
++         : LLM_KV(model->arch)(LLM_KV_TOKENIZER_CHAT_TEMPLATE);
++diff --git a/src/llama-model.h b/src/llama-model.h
++index 8d2f562..9033973 100644
++--- a/src/llama-model.h
+++++ b/src/llama-model.h
++@@ -1028,6 +1028,12 @@ struct llama_model {
++     // total number of parameters in the model
++     uint64_t n_elements() const;
++ 
+++    // parking, see llama_model_park() in llama.h
+++    bool can_park() const;
+++    bool is_parked() const;
+++    bool park();
+++    bool unpark();
+++
++     void print_info() const;
++ 
++     ggml_backend_dev_t dev_layer(int il) const;
++@@ -1069,6 +1075,10 @@ protected:
++ 
++     struct impl;
++     std::unique_ptr<impl> pimpl;
+++
+++    // the weight buffers that park, and both directions of it
+++    bool park_buffers(std::vector<ggml_backend_buffer_t> & out) const;
+++    bool park_all(bool park);
++ };
++ 
++ llama_model * llama_model_create(llm_arch arch, const llama_model_params & params);
++diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
++index b3f98b1..ce8e3fc 100644
++--- a/tools/server/server-context.cpp
+++++ b/tools/server/server-context.cpp
++@@ -1186,6 +1186,12 @@ private:
++     int ctx_canary_fail = 0; // env: LLAMA_SERVER_CTX_CANARY_FAIL, for the tests: the next N contexts created fail their canary
++     bool ctx_canary_stale = false; // the adapters changed since the canary was recorded: the next context created records it again
++ 
+++    // env: LLAMA_SERVER_PARK_WEIGHTS, with context_on_demand: when the context is freed the weights leave the device too
+++    // (llama_model_park), and the next request brings them back before its context is created
+++    bool park_weights = false;
+++    uint64_t n_weights_park   = 0;
+++    uint64_t n_weights_unpark = 0;
+++
++     int n_empty_consecutive = 0;
++ 
++     std::unique_ptr<server_prompt_cache> prompt_cache;
++@@ -1262,6 +1268,23 @@ private:
++ 
++         SRV_INF("context freed in %.2f ms, it lived %.3f s\n",
++                 (ggml_time_us() - t_start) / 1000.0, (ggml_time_ms() - t_ctx_created) / 1000.0);
+++
+++        if (park_weights) {
+++            weights_park();
+++        }
+++    }
+++
+++    // no context is left: the weights leave the device as well; if they cannot, they stay and the model works as before
+++    void weights_park() {
+++        GGML_ASSERT(ctx_tgt == nullptr);
+++
+++        const int64_t t_start = ggml_time_us();
+++        if (!llama_model_park(model_tgt)) {
+++            SRV_WRN("%s", "the weights could not be parked, they stay on the device\n");
+++            return;
+++        }
+++        n_weights_park += 1;
+++        SRV_INF("weights parked in %.2f ms (%" PRIu64 " so far)\n", (ggml_time_us() - t_start) / 1000.0, n_weights_park);
++     }
++ 
++     enum context_acquire_result {
++@@ -1283,8 +1306,23 @@ private:
++             return CONTEXT_NOT_CREATED;
++         }
++ 
+++        // parked weights come back first; a device with no room for them refuses the request as it refuses a context
+++        const bool was_parked = llama_model_is_parked(model_tgt);
+++        if (was_parked) {
+++            const int64_t t_unpark = ggml_time_us();
+++            if (!llama_model_unpark(model_tgt)) {
+++                SRV_WRN("%s", "the weights cannot come back to the device, is the memory they need available?\n");
+++                return CONTEXT_NOT_CREATED;
+++            }
+++            n_weights_unpark += 1;
+++            SRV_INF("weights unparked in %.2f ms (%" PRIu64 " so far)\n", (ggml_time_us() - t_unpark) / 1000.0, n_weights_unpark);
+++        }
+++
++         if (!common_init_context_from_params(*llama_init, params_base)) {
++             SRV_WRN("%s", "failed to create the context, is the memory it needs available?\n");
+++            if (was_parked) {
+++                weights_park(); // a request that is refused leaves the device as it found it
+++            }
++             return CONTEXT_NOT_CREATED;
++         }
++ 
++@@ -1308,6 +1346,9 @@ private:
++                 metrics.n_ctx_canary_fail += 1;
++                 SRV_ERR("the context created does not reproduce the canary of the load, it is discarded (%" PRIu64 " so far)\n",
++                         metrics.n_ctx_canary_fail);
+++                if (was_parked) {
+++                    weights_park();
+++                }
++                 return CONTEXT_NOT_SAME;
++             }
++         }
++@@ -1903,6 +1944,23 @@ private:
++             }
++         }
++ 
+++        {
+++            const char * LLAMA_SERVER_PARK_WEIGHTS = getenv("LLAMA_SERVER_PARK_WEIGHTS");
+++            park_weights = LLAMA_SERVER_PARK_WEIGHTS && atoi(LLAMA_SERVER_PARK_WEIGHTS) != 0;
+++
+++            if (park_weights && !params_base.context_on_demand) {
+++                SRV_WRN("%s", "LLAMA_SERVER_PARK_WEIGHTS needs context on demand (a model is parked only with no context), ignored\n");
+++                park_weights = false;
+++            }
+++            if (park_weights && !llama_model_can_park(model_tgt)) {
+++                SRV_WRN("%s", "LLAMA_SERVER_PARK_WEIGHTS: the weights of this model cannot be parked on this backend, ignored\n");
+++                park_weights = false;
+++            }
+++            if (park_weights) {
+++                SRV_INF("%s", "parking: when the context is freed the weights leave the device, the next request brings them back\n");
+++            }
+++        }
+++
++         {
++             const char * LLAMA_SERVER_CTX_CANARY_FAIL = getenv("LLAMA_SERVER_CTX_CANARY_FAIL");
++             ctx_canary_fail = LLAMA_SERVER_CTX_CANARY_FAIL ? atoi(LLAMA_SERVER_CTX_CANARY_FAIL) : 0;
++diff --git a/tools/server/tests/unit/test_park_weights.py b/tools/server/tests/unit/test_park_weights.py
++new file mode 100644
++index 0000000..eff14f0
++--- /dev/null
+++++ b/tools/server/tests/unit/test_park_weights.py
++@@ -0,0 +1,55 @@
+++import pytest
+++from utils import *
+++
+++# Parking (LLAMA_SERVER_PARK_WEIGHTS, with context on demand): when the context is freed the weights leave the
+++# device too, and the next request brings them back. It needs weight buffers that can park
+++# (ggml_backend_buffer_can_park), which only a device backend has: what is tested here, on any machine, is that the
+++# switch changes NOTHING where it cannot apply. The cycles themselves are tested on a device.
+++
+++server = ServerPreset.bert_bge_small()
+++
+++
+++@pytest.fixture(autouse=True)
+++def create_server():
+++    global server
+++    server = ServerPreset.bert_bge_small()
+++    server.server_metrics = True
+++
+++
+++def embedding(server: ServerProcess):
+++    res = server.make_request("POST", "/v1/embeddings", data={
+++        "input": "I believe the meaning of life is",
+++        "keep_context_ms": 0,
+++    })
+++    assert res.status_code == 200
+++    return res.body["data"][0]["embedding"]
+++
+++
+++def test_weights_that_cannot_park_are_left_alone():
+++    global server
+++    server.context_on_demand = True
+++    server.start()
+++    plain = [embedding(server) for _ in range(2)]
+++    server.stop()
+++
+++    server = ServerPreset.bert_bge_small()
+++    server.server_metrics = True
+++    server.context_on_demand = True
+++    server.park_weights = True
+++    server.start()
+++    # host memory cannot park: the same vectors, each on a context created for it
+++    assert [embedding(server) for _ in range(3)] == [plain[0]] * 3
+++    assert plain[0] == plain[1]
+++
+++
+++def test_without_context_on_demand_the_switch_is_ignored():
+++    global server
+++    server.start()
+++    plain = embedding(server)
+++    server.stop()
+++
+++    server = ServerPreset.bert_bge_small()
+++    server.server_metrics = True
+++    server.park_weights = True
+++    server.start()
+++    assert embedding(server) == plain
++diff --git a/tools/server/tests/utils.py b/tools/server/tests/utils.py
++index 74c61f0..0f3c801 100644
++--- a/tools/server/tests/utils.py
+++++ b/tools/server/tests/utils.py
++@@ -126,6 +126,7 @@ class ServerProcess:
++     context_create_fail: int | None = None  # LLAMA_SERVER_CTX_CREATE_FAIL
++     context_canary: bool | None = None  # None = the server's default
++     context_canary_fail: int | None = None  # LLAMA_SERVER_CTX_CANARY_FAIL
+++    park_weights: bool = False  # LLAMA_SERVER_PARK_WEIGHTS
++     cache_ram: int | None = None
++     override_kv: str | None = None
++     no_cache_idle_slots: bool = False
++@@ -316,6 +317,8 @@ class ServerProcess:
++             server_args.extend(["--keep-context-ms", self.keep_context_ms])
++         if self.context_create_fail is not None:
++             env["LLAMA_SERVER_CTX_CREATE_FAIL"] = str(self.context_create_fail)
+++        if self.park_weights:
+++            env["LLAMA_SERVER_PARK_WEIGHTS"] = "1"
++         if self.context_canary is not None:
++             server_args.append("--context-canary" if self.context_canary else "--no-context-canary")
++         if self.context_canary_fail is not None:
+-- 
+2.43.0
+

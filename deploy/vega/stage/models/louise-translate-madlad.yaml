@@ -23,10 +23,17 @@
 # wrapper refuses a llama.cpp load without parallel:1 (determinism_lacks), and
 # MADLAD decodes 7 slots in waves. The gates above are re-run on it (t5waves
 # T4/T3/in-wave), the old engine's bytes the reference.
+# 2026-11-24 (operator: "Engine now, chat later"): the engine of LocalAI v5.0.1 / llama.cpp
+# 78e0529 with the eight-patch series, below. The node had run it on
+# louise-sycl-f16-llama-cpp-281e1ee481b6-stack-7c301a7ba437 since the 11-12 rename (this file
+# had lagged at ea2417d91dcc). Qualified 2026-11-22: 379 of 379 translations identical to that
+# engine, 0.42 s a translation against 0.43; the reference is torch (345/379, none wrong) and
+# the byte record is re-cut from this engine at the cut-over
+# (backend-qualification-2026-11-21.md, F1).
 # JSON, which is YAML.
 {
   "name": "louise-translate-madlad",
-  "backend": "louise-sycl-f16-llama-cpp-ea2417d91dcc",
+  "backend": "louise-sycl-f16-llama-cpp-c3294e050ff2-stack-7c301a7ba437",
   "context_size": 4096,
   "env": {
     "GGML_SYCL_ENABLE_DNN": "0",
@@ -39,6 +46,7 @@
   "threads": 6,
   "known_usecases": ["completion"],
   "options": [
+    "fit:off",
     "parallel:7",
     "cache_ram:0",
     "ubatch:1024"

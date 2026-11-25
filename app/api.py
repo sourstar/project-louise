@@ -214,7 +214,7 @@ def healthz():
 # ---------------- status & stats ----------------
 
 def _node_mode_now() -> str:
-    """embed or chat (app/node_mode.py), for the status answer."""
+    """embed, query or custom (app/node_mode.py), for the status answer."""
     from . import node_mode
     return node_mode.current()
 
@@ -848,20 +848,24 @@ def mode_set(body: ModeBody, request: Request):
     "The mode shall be selectable through the api as well for cron jobs").
     Synchronous, as `/api/control` is: the mode and its run mode are written
     before the answer; the worker applies the budget and changes the chat
-    model at its next round. Calling it again with the same mode sets that
-    mode's run mode again."""
+    model at its next round. `embed`, `query` or `custom` (`chat`, the
+    morning's word for query, is still taken). Calling it again with the
+    mode the node is in changes nothing: a pause set by hand stays."""
     from . import node_mode
-    if body.mode not in node_mode.MODES:
+    mode = node_mode.named(body.mode)
+    if mode is None:
         raise HTTPException(400, f"mode must be {'|'.join(node_mode.MODES)}")
     client = request.client.host if request.client else "?"
     agent = (request.headers.get("user-agent") or "")[:80]
-    got = node_mode.switch(body.mode, by=f"POST /api/mode from {client} ({agent})")
-    line = f"node switched to {body.mode} mode (was {got['before']}); run mode {got['run']}"
+    got = node_mode.switch(mode, by=f"POST /api/mode from {client} ({agent})")
+    line = (f"node switched to {mode} mode (was {got['before']}); run mode {got['run']}" if got["changed"]
+            else f"node asked for {mode} mode, which it is in: nothing changed (run mode {got['run']})")
     try:
         db.log_event(_con(), "info", "control", line)
     except Exception:   # noqa: BLE001 — the mode is set; the event is a courtesy
         print(f"[info:control] {line}", flush=True)
-    return {**node_mode.shown(), "before": got["before"], "run_before": got["run_before"]}
+    return {**node_mode.shown(), "before": got["before"], "run_before": got["run_before"],
+            "changed": got["changed"]}
 
 
 class ScopeBody(BaseModel):
@@ -1183,6 +1187,7 @@ async def audio_speech(request: Request):
     """OpenAI's speech endpoint, relayed to the node's model server without
     the citations, in a voice that speaks the text's language, the model
     kept loaded while sentences come (app/speech.py)."""
+    arrived = time.perf_counter()
     try:
         body = await request.json()
     except ValueError:
@@ -1203,6 +1208,13 @@ async def audio_speech(request: Request):
         lambda: speech.synthesize_timed(body, reading=reading, n=n, last=last, account_voice=mine,
                                         admin=admin))
     from . import transcribe
+    # `node`: everything between the request's arrival and its answer, HERE —
+    # the wait for a thread of the pool, the voices' lookup, the turn, the
+    # model's call. What it holds beyond `turn` and `synth` is a wait nobody
+    # else measures (the Bug session, 2026-11-25: "when the request arrived
+    # versus when synthesis started")
+    if timing:
+        timing = list(timing) + [("node", round((time.perf_counter() - arrived) * 1000.0, 1))]
     headers = {"Server-Timing": transcribe.server_timing(timing)} if timing else {}
     return Response(content=content, status_code=status, media_type=ctype, headers=headers)
 

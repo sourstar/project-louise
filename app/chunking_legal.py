@@ -509,14 +509,71 @@ def _spans(tok: Any, text: str) -> list[tuple[int, int]]:
     return out
 
 
+#: characters given to one `encode_batch` (2026-11-25, architecture's
+#: reading of EUR-Lex5.next's fts: 32018R0688 in 23 languages, 90-136 MB
+#: each, 75-90 s apiece on ONE child while ten idled, the chunker encoding
+#: span after span on one thread). The spans of a text, and the units a
+#: piece packs, are independent texts: the tokenizers library's own
+#: `encode_batch` encodes them on its own threads (Rust, rayon) and gives
+#: each the encoding `encode` gives it, so the counts, offsets and pieces
+#: are the same (no chunker version moves; tests/test_chunking_legal_spans.py).
+#: Bounded, so a batch holds a few MB of encodings, never a whole act's.
+BATCH_CHARS = 4_000_000
+
+
+def _batched(tok: Any) -> bool:
+    """May `tok` encode many texts in one call with each one's own
+    encoding? A tokenizer that pads (`padding`) pads a batch to its longest."""
+    return callable(getattr(tok, "encode_batch", None)) and getattr(tok, "padding", None) is None
+
+
+def _encode_many(tok: Any, texts):
+    """`tok.encode(t, add_special_tokens=False)` for each text, in order:
+    in batches of up to BATCH_CHARS where the tokenizer batches."""
+    if not _batched(tok):
+        for t in texts:
+            yield tok.encode(t, add_special_tokens=False)
+        return
+    group: list[str] = []
+    size = 0
+    for t in texts:
+        group.append(t)
+        size += len(t)
+        if size >= BATCH_CHARS:
+            yield from tok.encode_batch(group, add_special_tokens=False)
+            group, size = [], 0
+    if group:
+        yield from tok.encode_batch(group, add_special_tokens=False)
+
+
 def _count(tok: Any, text: str) -> int:
-    return sum(len(tok.encode(text[a:b], add_special_tokens=False).ids) for a, b in _spans(tok, text))
+    # the spans are CUT AS THEY ARE ENCODED (a generator): a list of them is
+    # a second copy of the text, alive for the whole count — 136 MB of an
+    # act in a child whose peak the large lane's room is reckoned on
+    return sum(len(e.ids) for e in _encode_many(tok, (text[a:b] for a, b in _spans(tok, text))))
+
+
+def _count_many(tok: Any, texts: Sequence[str]) -> list[int]:
+    """`_count` of each text, their spans encoded together — cut as they
+    are encoded, a batch of them alive at a time."""
+    owner: list[int] = []                # the text each span sent so far belongs to
+
+    def parts():
+        for i, t in enumerate(texts):
+            for a, b in _spans(tok, t):
+                owner.append(i)
+                yield t[a:b]
+    out = [0] * len(texts)
+    for k, e in enumerate(_encode_many(tok, parts())):
+        out[owner[k]] += len(e.ids)
+    return out
 
 
 def _token_ends(tok: Any, text: str):
     """Each token's end offset in `text`, in order, a span at a time."""
-    for a, b in _spans(tok, text):
-        for _s, e in tok.encode(text[a:b], add_special_tokens=False).offsets:
+    spans = _spans(tok, text)
+    for (a, _b), enc in zip(spans, _encode_many(tok, (text[a:b] for a, b in spans))):
+        for _s, e in enc.offsets:
             yield a + e
 
 
@@ -591,21 +648,28 @@ def _sentences_v4(text: str) -> list[str]:
 def _windows(tok: Any, text: str, budget: int) -> list[str]:
     """Consecutive windows of `budget` tokens, cut at token boundaries, the
     whole text kept: the last resort for one sentence past the window.
-    The tokens' ends are read a span at a time (`_token_ends`): a window is
-    cut after its `budget`-th token where another token follows, the last
-    one runs to the text's end — as when every offset was listed first."""
+    The text is encoded a span at a time: a window is cut after its
+    `budget`-th token where another token follows, the last one runs to the
+    text's end — as when every offset was listed first."""
     out: list[str] = []
     begin = 0
     n = 0
-    pending: int | None = None          # the end of a window's last token, cut once another follows
-    for end in _token_ends(tok, text):
-        if pending is not None:
-            out.append(text[begin:pending])
-            begin = pending
-            pending = None
-        n += 1
-        if n % budget == 0:
-            pending = end
+    # ONLY THE CUTS ARE READ (2026-11-25, architecture's reading of München's
+    # profile of 32018R0688 fr: 13,717,825 Python steps over every token's
+    # end, 16.9 s of 72): the tokens whose end a window is cut at are the
+    # budget-th, 2·budget-th, … counted across the spans, so each span's
+    # offsets are indexed at those positions, n/budget reads, not n
+    cuts: list[int] = []
+    spans = _spans(tok, text)
+    for (a, _b), enc in zip(spans, _encode_many(tok, (text[a:b] for a, b in spans))):
+        offsets = enc.offsets
+        cuts.extend(a + offsets[i][1] for i in range((budget - 1 - n) % budget, len(offsets), budget))
+        n += len(offsets)
+    if cuts and n % budget == 0:
+        cuts.pop()                      # the last token itself: no token follows it, no cut
+    for c in cuts:
+        out.append(text[begin:c])
+        begin = c
     if n:
         out.append(text[begin:])
         begin = len(text)
@@ -640,7 +704,7 @@ def _pack_linear(tok: Any, units: Sequence[str], budget: int, sep: str) -> list[
     units then held to the bound by its own exact count, a unit given back
     while it is over. One count per unit and about one per piece: linear in
     the text. A single unit past the budget is the caller's."""
-    counts = [_count(tok, u) for u in units]
+    counts = _count_many(tok, units)
     sep_n = _count(tok, sep) if sep else 0
     out: list[tuple[str, int]] = []
     i, n = 0, len(units)
