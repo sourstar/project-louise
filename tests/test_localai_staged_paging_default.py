@@ -148,20 +148,3 @@ def test_it_is_a_candidate_after_the_refusal_s_and_waits_for_it():
     assert "is merged only once THIS engine is the live" in head
 
 
-
-
-def test_the_keeper_and_the_deploy_default_with_it_and_the_conditions_stay():
-    from app import model_evict, platform_config
-    assert platform_config.ModelsConfig().make_room == "page"
-    assert model_evict.PAGING_DRIVERS == ("xe",), "the default pages where paging was measured, and unloads elsewhere"
-    section = NOTE[NOTE.index("## 3. "):NOTE.index("## 4. ")]
-    assert "**THE DEFAULT\nsince 2026-11-25**" in section and "staged 0021" in section
-    assert "The default\nreplaces none of the conditions below" in section
-    for kept in ("the engine's refusal fix (§4) in the live engine", "the floor measured in the busy hours",
-                 "a soak the POC never had"):
-        assert kept in section, kept
-    spec = (ROOT / "docs" / "07-commands.md").read_text(encoding="utf-8")
-    assert 'make_room = "page"   page_floor_gib = 12   page_over_gib = 3' in spec
-    assert "WHERE THE CARD'S" in spec and "DRIVER WAS MEASURED TO PAGE" in spec
-    readme = (STAGED / "README.md").read_text(encoding="utf-8")
-    assert f"`{PATCH.name}`" in readme and "`engine-page.series`" in readme

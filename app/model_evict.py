@@ -49,10 +49,7 @@ Louise frees the room itself, so the reclaimer never has to choose:
 
 PAGE INSTEAD OF UNLOAD (operator, 2026-11-24, verbatim: "Extend page instead
 of unload to the dense models"; platform.toml `[models] make_room = "page"`,
-07 §7.8; THE DEFAULT since 2026-11-25, operator: "Set the new paging mode as
-the default in the engine" — where the card's driver is one that was measured
-to page, `PAGING_DRIVERS`; under any other the rule is today's unload, said
-once). Measured on the B70 that morning (München,
+07 §7.8; off by default). Measured on the B70 that morning (München,
 docs/notes/backend-qualification-2026-11-21.md §3 phase 5, S5 part 2): with
 the engine's VRAM check off and its buffers cut in 2 GiB pieces, a card
 overcommitted by 3.5 GiB kept every model loaded — the xe driver moved the
@@ -222,7 +219,6 @@ def reset() -> None:
     """Forget which loads were paged and which failed (tests)."""
     _paged.clear()
     _no_page.clear()
-    _driver_said.clear()
 
 
 def host_available() -> int | None:
@@ -238,17 +234,6 @@ def host_available() -> int | None:
     except (OSError, ValueError, IndexError):
         pass
     return None
-
-
-#: the drivers under which idle models' memory was MEASURED to move to host
-#: memory and back on a card committed over its size: xe (Intel Arc Pro B70,
-#: S5 part 2, 2026-11-24). Under a driver that does not page, a load over the
-#: card is a failed load or a killed backend — so there "page" unloads, as
-#: before, and a driver joins this list by a measurement, never by its name.
-PAGING_DRIVERS = ("xe",)
-
-#: the drivers `_page` has said it does not page under (once each)
-_driver_said: set[str] = set()
 
 
 def rule() -> tuple[str, int, int]:
@@ -284,14 +269,6 @@ def _page(server: str, *, need: int, free: int, total: int, used: int, t: float,
     from app import resident
     mode, floor, over_max = rule()
     if mode != "page":
-        return None
-    driver = resident.card_driver()             # as `make_room` has just read the card
-    if driver not in PAGING_DRIVERS:
-        if (driver or "") not in _driver_said:
-            _driver_said.add(driver or "")
-            _say("info", f"card: `[models] make_room` is \"page\", and this card's driver "
-                         f"({driver or 'not read'}) was not measured to move idle models' memory to the host "
-                         f"(measured: {', '.join(PAGING_DRIVERS)}): room is made by unloading, as before")
         return None
     keys = [(server, m) for m in loading]
     now = time.time()
