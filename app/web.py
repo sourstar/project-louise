@@ -616,7 +616,8 @@ def _remember(lang: str, text: str, value: str) -> None:
     _translation_cache[(lang, text)] = value
 
 
-def _log_translation(lang: str, items: int, got: int, cached: int, missed: int, secs: float) -> None:
+def _log_translation(lang: str, items: int, got: int, cached: int, missed: int, secs: float,
+                     cut: list[str] | None = None) -> None:
     """One log line per stream request, so what the page did with a
     translation can be read back from the web log (2026-10-28: the answer
     stayed untranslated and nothing recorded whether it was asked for,
@@ -625,9 +626,11 @@ def _log_translation(lang: str, items: int, got: int, cached: int, missed: int, 
     try:
         con = db.connect()
         try:
-            db.log_event(con, "info", "translate",
+            db.log_event(con, "warn" if cut else "info", "translate",
                          f"stream into {lang}: {items} items — {got} translated ({cached} cached), "
-                         f"{missed} missed, {secs:.1f} s")
+                         f"{missed} missed, {secs:.1f} s"
+                         + (f"; {len(cut)} cut short and shown in the original, not kept "
+                            f"(the first: {cut[0]})" if cut else ""))
         finally:
             con.close()
     except Exception:   # noqa: BLE001 — a log line never fails the page
@@ -895,27 +898,36 @@ def ask_translate_stream(body: TranslateBody):
         # a call that raised before writing a word marks the rest missed
         # instead of queueing each behind the same failure.
         down = False
+        cut: list[str] = []          # why each stream that did not end whole did not
         for cid, text, _src in long_:
             if down:
                 missed.append(cid)
                 yield line({"id": cid, "missed": True})
                 continue
             parts: list[str] = []
+            # WHOLE OR A MISS: only a stream that reached its end is shown as
+            # the passage's translation and kept for the next reader. One the
+            # model server cut (`llm.StreamCut`: an error in mid-stream, a
+            # cap, a stream closed early) or that failed under way was, until
+            # 2026-11-25, joined from what had arrived and remembered as whole.
+            whole = False
             try:
                 for delta in llm.translate_stream(text, lang):
                     parts.append(delta)
                     yield line({"id": cid, "delta": delta})
-            except Exception:   # noqa: BLE001 — the item is a miss, the page says so
+                whole = True
+            except Exception as e:   # noqa: BLE001 — the item is a miss, the page says so
                 down = not parts
+                cut.append(f"{type(e).__name__}: {e}"[:200])
             value = "".join(parts).strip()
-            if llm.is_translation(value, text, lang):
+            if whole and llm.is_translation(value, text, lang):
                 _remember(lang, text, value)
                 got += 1
                 yield line({"id": cid, "text": value})
             else:
                 missed.append(cid)
                 yield line({"id": cid, "missed": True})
-        _log_translation(lang, len(items), got, cached, len(missed), time.monotonic() - t0)
+        _log_translation(lang, len(items), got, cached, len(missed), time.monotonic() - t0, cut)
         yield line({"done": True, "failed": got == 0 and bool(missed), "missed": missed})
 
     def held():
