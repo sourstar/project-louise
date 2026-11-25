@@ -1691,7 +1691,16 @@ voice, language, context}`: nothing in square brackets is read (a citation, in
 whatever shape the language writes it), one voice for every language, the
 text's language sent as `language`. Where the sentence alone cannot tell its
 language, `context` (the answer so far, which the page sends when it shows
-the answer in its original language; never relayed) tells it. A recorded
+the answer in its original language; never relayed) tells it. THE SENTENCE'S
+OWN LANGUAGE COMES FIRST (*amended 2026-11-25*, operator: "the
+language/country tag must be aligned to the language to speak, otherwise the
+voice has always a thick italian accent"): the sentence's where it is clear,
+else the answer's (`context`), and only then the `language` the request
+carries — the page sends the language the answer was asked in, which is not
+always the one it is written in. What is sent is a language's primary
+subtag, lower case (`en-GB` → `en`): the engine knows languages, not
+countries, and a tag with a region is no language to it. A reader who is
+not an admin hears the synthetic voice of that same language. A recorded
 voice with no language known is sent `language = "none"`, OmniVoice's auto,
 never left to its profile's own tag, which is the recording's language and
 read every language with its accent (*2026-11-23*). The model is pinned from the first
