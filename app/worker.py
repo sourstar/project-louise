@@ -6304,9 +6304,12 @@ def _read_engine_counts(con) -> None:
             # — and its run goes back to the gate, whoever's request it was
             # (run_check.canary_failed: a person's query from the web process
             # is in the engine's count and in nobody's exception here)
-            discarded = line.startswith("CANARY")
+            # ...counted as the ENGINE's: it confirms a failure a refused
+            # request of this process already counted, and counts only what
+            # nobody here saw (run_check.canary_failed: one discard, one failure)
+            discarded = rage_keep.discarded_in(line)
             if discarded:
-                run_check.canary_failed(url, model)
+                run_check.canary_failed(url, model, by_engine=discarded)
             db.log_event(con, "error" if discarded else "info", "sched", line)
 
 

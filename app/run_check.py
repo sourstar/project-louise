@@ -1279,8 +1279,17 @@ def _flights(collection) -> list[str]:
 #: discard a context that did not reproduce its canary: by the request that
 #: was refused (embeddings._endpoint_error) and, for every other caller's, by
 #: the worker's beat from the engine's own count (worker._read_engine_counts).
-#: One failure may be seen by both: a count, compared and never summed
+#: ONE DISCARD IS ONE FAILURE, WHOEVER SAW IT (`canary_failed`): the refused
+#: request counts it at once, and the engine's count, read up to thirty
+#: seconds later, CONFIRMS it instead of counting it again.
 _canary: dict[tuple[str, str], int] = {}
+#: (endpoint, model) -> when (monotonic) each failure a refused request
+#: counted was seen, until the engine's own count has shown it
+_canary_unconfirmed: dict[tuple[str, str], list[float]] = {}
+#: how long a request's failure waits for the engine's count to show it:
+#: three readings (worker.KEEPS_READ_INTERVAL_S). Past it the count was not
+#: read, or showed it first; either way nothing later is taken for it
+CANARY_CONFIRM_S = 90.0
 #: (the collection's place, role) -> `_canary`'s count when its run was last
 #: gated from scratch: failures seen since are what makes it suspect
 _canary_gated: dict[tuple[str, str], int] = {}
@@ -1290,13 +1299,45 @@ _canary_recorded: dict[tuple[str, str], int] = {}
 _canary_lock = threading.Lock()
 
 
-def canary_failed(url: str, model: str | None) -> None:
+def canary_failed(url: str, model: str | None, *, by_engine: int = 0) -> None:
     """The engine that answers as `model` at `url` discarded a context that
     did not reproduce its canary. A count and nothing else: whoever reads it
     (`check_write`, `embed_allowed`) acts. Safe from any thread and process;
-    only the worker gates."""
+    only the worker gates.
+
+    `by_engine`: how many discards the engine's own count newly shows (the
+    worker's beat); 0, a request that was refused saw one.
+
+    ONE DISCARD, ONE FAILURE (2026-11-25, gutenberg on the node: one context
+    discarded by the engine's count, and the run's history written twice in
+    fifteen seconds — "A REPEAT: time 2 for this run" — because the refused
+    request counted it and the beat's reading of the engine's count counted
+    it again). Worse than the wording: counted after a gate that had already
+    passed, the second count made the run suspect again for the same
+    discard. So the request counts at once — the run stops being relied on
+    that second — and the engine's count confirms what requests have seen
+    before it counts anything of its own.
+
+    NEVER FEWER THAN HAPPENED: a failure the engine shows that no request of
+    this process saw (a reader's query from the web) is counted; a request's
+    failure the engine's count does not show within CANARY_CONFIRM_S stops
+    waiting, so no later discard is taken for it. The one race left counts
+    one too many (the beat reads the engine's count before the refused
+    request's error is handled): a gate run once for nothing, never a
+    failure missed."""
+    key = (url, model or "")
+    now = time.monotonic()
     with _canary_lock:
-        _canary[(url, model or "")] = _canary.get((url, model or ""), 0) + 1
+        waiting = [t for t in _canary_unconfirmed.get(key, []) if now - t < CANARY_CONFIRM_S]
+        if by_engine <= 0:
+            _canary[key] = _canary.get(key, 0) + 1
+            waiting.append(now)
+        else:
+            confirmed = min(len(waiting), by_engine)
+            del waiting[:confirmed]
+            if by_engine > confirmed:
+                _canary[key] = _canary.get(key, 0) + by_engine - confirmed
+        _canary_unconfirmed[key] = waiting
 
 
 def _suspect(collection, role: str = "document") -> bool:
@@ -1326,12 +1367,18 @@ def _send_back(collection, run_id: str, role: str,
         seen = _canary.get(_who(collections_mod.recipe_for(collection), role == "query"), 0)
     except Exception:                                   # noqa: BLE001
         seen = 0
-    if seen > _canary_recorded.get(key, 0):
+    # SAID ONCE AN EPISODE, as it is written once: a gate that is deferred (no
+    # room on the card for its own load) is asked again every few seconds, and
+    # each asking used to write this error again — fifty lines in three
+    # minutes for one discarded context, and two more an hour later when the
+    # gate finally ran (gutenberg, 2026-11-25). The deferral has its own line
+    new = seen > _canary_recorded.get(key, 0)
+    if new:
         history = runs_mod.record_canary(_root(), collection.name, role, run_id, _now())
         _canary_recorded[key] = seen
     else:
         history = runs_mod.canary_history(_root(), collection.name, role, run_id)
-    if log is not None:
+    if log is not None and new:
         repeat = "" if len(history) < 2 else (
             f" — A REPEAT: time {len(history)} for this run (before: "
             f"{', '.join(history[:-1][-3:])})")
@@ -1366,6 +1413,7 @@ def reset_cache() -> None:
     _verdicts.clear()
     _answering.clear()
     _canary.clear()
+    _canary_unconfirmed.clear()
     _canary_gated.clear()
     _canary_recorded.clear()
     _noted.clear()
