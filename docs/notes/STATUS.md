@@ -20,6 +20,25 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **A BATCH IN FLIGHT SAYS ON WHAT (`app/pool_progress.py`; München, 2026-11-25 09:57Z).** EUR-Lex5.next's
+  pipeline sat in its fts stage for nine minutes and more on ONE 136 MB act (bg 32018R0688; hr, et, fi, sl of
+  the same act queued at ~100 MB each): one pool child at 98 % of a core in `chunk_legal_article`, ten idle,
+  rdf (134,618 pending) behind it, the scheduler's line "0% in 9 turns" — and no line saying a batch was in
+  flight or on what. BUILT: the pool records when each part entered and whether it has the large lane; a
+  watcher says, a minute in and every minute after, the collection, the stage, the unit, its size, how long,
+  that a large part is ALONE in the lane and how long its answer is still waited for; then how long it took.
+  Telemetry only: what runs when is unchanged. WHAT THE READING OF THE POOL FOUND, not yet fixed, each waiting
+  for a number from the node: (1) large units (estimated peak ≥ 2 GiB) run ONE AT A TIME in the whole worker
+  (`_large_lane`, the memory rule of 11-19), the others of the batch deferred a round each — so five such
+  units are five rounds on one core; a second lane where the measured room holds two peaks needs the busy
+  child's peak. (2) The time a large part may take, 120 s + 1.24 µs a byte (288 s for this one), was
+  measured on the PARSE of 32021R2017 and is applied to fts, whose cost on a legal act is six to eight
+  tokenizer passes: if these units end as "did not answer" errors, that is a bound calibrated on another
+  stage — the platform's defect, first in line. (3) The collection's one pipeline thread waits for the large
+  part, so its rdf waits too; a batch that commits its light rows and leaves the large part to a later round
+  is the scheduling change, after `schedule-report`. (4) The chunker's speed on such a unit is the Legal
+  session's: its counts tokenize span by span on one thread, and the spans are independent
+  (`encode_batch`: the same ids, on the idle cores).
 - **LIVE since 2026-11-25 09:40:28Z: main `1249b1d9`** (deploy `fa354241`; #877 the two modes, #878, #879,
   #880 the voice ping, #881, #883–#887). München's readings from the first minutes, as logged:
   - the mode, at start: "node in embed mode (read): chat model louise-chat-qwen3.5-9b-q4-p0; network budget
