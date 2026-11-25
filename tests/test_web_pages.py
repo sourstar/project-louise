@@ -267,7 +267,8 @@ def test_one_ask_button_a_switch_and_the_settings_out_of_the_way(client):
     # the question's form ends where the answer pane begins: the answer's own
     # buttons (read aloud, save pdf) are the answer's, not the form's
     form = html[html.index('id="q"'):html.index('id="answer-pane"')]
-    assert form.count("<button") == 1 and 'onclick="go()">Ask</button>' in form
+    # one button: Ask, and Abort while the question is being answered (operator, 2026-11-25)
+    assert form.count("<button") == 1 and 'id="ask-btn" onclick="askOrAbort()">Ask</button>' in form
     assert "<span>Search only</span></label>" in form and "<span>Search + AI summary</span></label>" in form
     assert "Ask (RAG)" not in html and 'onclick="search()"' not in form
     settings = form[form.index('<details class="settings">'):form.index("</details>")]

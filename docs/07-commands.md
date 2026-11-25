@@ -1691,6 +1691,23 @@ It says how a model searches with the three tools and how it cites.
 The MCP server's `initialize` gives the same text as its
 `instructions`.
 
+**The Ask page's question** (*2026-10-28; amended 2026-11-25*;
+`app/relay.py`): the page starts its search and its answer as jobs
+(`POST /ask/relay`), listens to each (`GET /ask/relay/<id>/events`,
+Server-Sent Events) and may cancel one (`DELETE /ask/relay/<id>`). Its
+one button is **Ask**, and **Abort** from the press until the question
+ends (operator, 2026-11-25: "while a query is in processing I want the
+Ask button to switch to Abort to be able to abort the query in case I
+change my mind or I want to change the query"). Pressed, the question's
+jobs are cancelled on the node — a search at its next checkpoint, an
+answer between two words of the model; a call to a model already made
+finishes first — and nothing more of them reaches the page, which says
+so, keeps the hits and the words it had already shown (the answer marked
+as cut short) and leaves the question in its box with the cursor in it.
+A job whose start the node had not answered yet is cancelled when the
+node names it. A new question asked over one still running (Ctrl/Cmd+
+Enter) replaces it, as before.
+
 **Speech** (*added 2026-11-06, -07*; `app/speech.py`, `app/transcribe.py`,
 `app/voice.py`). OpenAI's two audio endpoints, relayed to the node's model
 server with what only Louise knows. `POST /v1/audio/speech` `{input, model,
