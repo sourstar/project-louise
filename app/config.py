@@ -155,7 +155,10 @@ def chat_model_for(mode: str) -> str:
     m = _file_models()
     chosen = None
     if m is not None:
-        chosen = getattr(m, "chat_large" if mode == "chat" else "chat_small", None) or m.chat
+        # custom mode (app/node_mode.py): `[models] chat`, the one setting
+        # there was — "what we have now plus the selection of the chat model"
+        own = {"query": "chat_large", "chat": "chat_large", "embed": "chat_small"}.get(mode)
+        chosen = (getattr(m, own, None) if own else None) or m.chat
     return chosen or ENV_CHAT_MODEL
 
 
@@ -164,7 +167,7 @@ def _node_mode() -> str:
         from . import node_mode
         return node_mode.current()
     except Exception:   # noqa: BLE001 — a chat is never failed by a mode it cannot read
-        return "embed"
+        return "custom"
 
 
 def __getattr__(name: str):

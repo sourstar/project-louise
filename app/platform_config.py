@@ -256,9 +256,11 @@ class ModesConfig:
 
     def budget(self, mode: str) -> tuple[int | None, int | None]:
         """(down, up) of a mode, bytes a second; None where it sets none."""
-        if mode == "chat":
+        if mode in ("query", "chat"):          # query mode's keys keep the morning's name
             return self.chat_down_max_bps, self.chat_up_max_bps
-        return self.embed_down_max_bps, self.embed_up_max_bps
+        if mode == "embed":
+            return self.embed_down_max_bps, self.embed_up_max_bps
+        return None, None                       # custom: [budget]'s, as before there were modes
 
     def written(self, key: str) -> str:
         return dict(self.text).get(key, "")

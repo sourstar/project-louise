@@ -37,7 +37,7 @@
   <summary><h2>Mode</h2> <span class="note">the node is in <b>{{ node_mode_labels[node_modes.mode] }}</b></span></summary>
   {% if mode_error %}<div class="note"><span class="badge err">not saved</span> {{ mode_error }}</div>{% endif %}
   {% if mode_saved %}<div class="note"><span class="badge">saved</span> the worker takes it at its next round</div>{% endif %}
-  {% if node_modes.one_model %}<div class="note"><span class="badge">one chat model</span> both modes answer with <b>{{ node_modes.one_model }}</b>, so a switch changes no model: name the large one and the small one under Models, below.</div>{% endif %}
+  {% if node_modes.one_model %}<div class="note"><span class="badge">one chat model</span> every mode answers with <b>{{ node_modes.one_model }}</b>, so a switch changes no model: name the large one and the small one under Models, below.</div>{% endif %}
   <form method="post" action="/admin/system/mode" class="actions">
     {% for r in node_modes.rows %}
     <button class="mode{{ ' selected' if node_modes.mode==r.mode }}" name="mode" value="{{ r.mode }}"
@@ -51,13 +51,17 @@
     <tr data-node-mode="{{ r.mode }}"><td>{{ r.label }}{% if node_modes.mode==r.mode %} <span class="badge">now</span>{% endif %}
         <div class="note">{{ r.says }}</div></td>
       <td>{{ r.chat_model }}</td>
-      <td>{% if r.mode == 'chat' %}<select name="chat_run">
+      <td>{% if r.mode == 'query' %}<select name="chat_run">
             {% for s, label in node_modes.chat_runs %}<option value="{{ s }}"{{ ' selected' if node_modes.chat_run==s }}>{{ label }}</option>{% endfor %}
-          </select>{% else %}{{ dict(mode_labels)[r.run] }}{% endif %}</td>
-      <td><input name="{{ r.mode }}_down_max" value="{{ r.down }}" placeholder="{{ node_modes.budget.down }} ([budget]'s)" style="width:15em">
+          </select>{% elif r.run %}{{ dict(mode_labels)[r.run] }}{% else %}<span class="note">nothing: the run mode stays yours (the Library's four)</span>{% endif %}</td>
+      {% if r.key %}
+      <td><input name="{{ r.key }}_down_max" value="{{ r.down }}" placeholder="{{ node_modes.budget.down }} ([budget]'s)" style="width:15em">
         {% if r.down %}<div class="note">{{ r.down_in_force }}</div>{% endif %}</td>
-      <td><input name="{{ r.mode }}_up_max" value="{{ r.up }}" placeholder="{{ node_modes.budget.up }} ([budget]'s)" style="width:15em">
-        {% if r.up %}<div class="note">{{ r.up_in_force }}</div>{% endif %}</td></tr>
+      <td><input name="{{ r.key }}_up_max" value="{{ r.up }}" placeholder="{{ node_modes.budget.up }} ([budget]'s)" style="width:15em">
+        {% if r.up %}<div class="note">{{ r.up_in_force }}</div>{% endif %}</td>
+      {% else %}
+      <td class="note">{{ node_modes.budget.down }} ([budget]'s)</td><td class="note">{{ node_modes.budget.up }} ([budget]'s)</td>
+      {% endif %}</tr>
     {% endfor %}
   </table>
   <button type="submit">save</button> <span class="note">a budget is a rate as [budget]'s: <code>50MB</code>, <code>400Mbit</code>; empty, [budget]'s own. Written into platform.toml [modes]; the two chat models are set under Models, below. A cron job switches with <code>POST /api/mode {"mode": "embed"}</code> or <code>louise node mode chat</code>.</span>

@@ -4065,11 +4065,12 @@ def cmd_node_resume(a) -> int:
         _print({"paused": sorted(names)})
         return 0
     # back to what the node's MODE runs (app/node_mode.py): everything in
-    # embed mode, chat mode's own run mode in chat mode — where running
-    # everything would start the embedders under the large chat model
+    # embed mode, query mode's own run mode in query mode — where running
+    # everything would start the embedders under the large chat model — and
+    # everything in custom mode, where resume means what it always meant
     from app import node_mode
     mode = node_mode.current()
-    state = node_mode.run_of(mode)
+    state = node_mode.run_of(mode) or "running"
     node_state.set_worker_state(state, by=f"louise node resume ({mode} mode)")
     # the store written, said: the worker obeys the one it reads (its log
     # names it: "node mode … (read from …)"), and a command run with another
@@ -4080,14 +4081,16 @@ def cmd_node_resume(a) -> int:
 
 
 def cmd_node_mode(a) -> int:
-    """`node mode [embed|chat]` (07 §7.3): the node's mode of use, read or
-    switched. A switch sets the chat model, the run mode and the network
-    budget of the mode together (app/node_mode.py) and survives a restart."""
+    """`node mode [embed|query|custom]` (07 §7.3): the node's mode of use,
+    read or switched. A switch sets the chat model, the run mode (not in
+    custom mode, where it is the operator's own) and the network budget of
+    the mode together (app/node_mode.py) and survives a restart. `chat`, the
+    first word for query mode, is still taken."""
     from app import node_mode, node_state
     if a.mode:
         got = node_mode.switch(a.mode, by=f"louise node mode {a.mode} ({node_state.invoker()})")
         _print({**node_mode.shown(), "before": got["before"], "run_before": got["run_before"],
-                "store": str(node_state.path())})
+                "changed": got["changed"], "store": str(node_state.path())})
         return 0
     _print({**node_mode.shown(), "store": str(node_state.path())})
     return 0
@@ -7776,7 +7779,7 @@ def build_parser() -> argparse.ArgumentParser:
                                       "the small chat model, everything runs) or chat (the large chat "
                                       "model; download/seeding, seeding or pause); each with its own "
                                       "network budget; across restarts")
-    p.add_argument("mode", nargs="?", default=None, choices=("embed", "chat"))
+    p.add_argument("mode", nargs="?", default=None, choices=("embed", "query", "custom", "chat"))
     p.set_defaults(fn=cmd_node_mode)
     p = nverbs.add_parser("freeze", help="ONE collection keeps the version it holds: nothing fetched, "
                                         "scanned or taken in from peers; parsed, indexed, embedded here "

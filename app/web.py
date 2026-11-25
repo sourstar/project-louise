@@ -116,7 +116,7 @@ TEMPLATES.env.globals["label"] = display_names.label
 TEMPLATES.env.globals.update(mode_labels=node_state.MODE_LABELS,
                              mode_says=node_state.MODE_SAYS,
                              mode_runs=node_state.mode_runs)
-# ...and the node's mode of use, embed or chat (app/node_mode.py), read at
+# ...and the node's mode of use, embed, query or custom (app/node_mode.py), read at
 # each render: a run-mode button the mode refuses says so instead of failing
 TEMPLATES.env.globals.update(node_mode_now=node_mode.current,
                              node_mode_refuses=node_mode.refuses,
@@ -4389,8 +4389,9 @@ def _recent_events_all(limit: int = 60) -> list[dict]:
 
 #: the Models panel's fields, in its order: (form field, use, where it is written)
 MODEL_FIELDS = (
-    ("chat_large", "chat, large: chat mode's", "platform.toml [models] chat_large"),
+    ("chat_large", "chat, large: query mode's", "platform.toml [models] chat_large"),
     ("chat_small", "chat, small: embed mode's", "platform.toml [models] chat_small"),
+    ("chat", "chat: custom mode's, and the others' where theirs is empty", "platform.toml [models] chat"),
     ("translate", "translation", "platform.toml [models] translate"),
     ("reading", "translation, by source language", "platform.toml [translate] reading"),
     ("stt_model", "speech to text", "platform.toml [speech]"),
@@ -4440,8 +4441,10 @@ def _node_models() -> list[dict]:
         # THE TWO CHAT MODELS (operator, 2026-11-25: "The current chat model
         # setting becomes 2 chat settings, large one and a small one"): chat
         # mode's and embed mode's, each as `config.chat_model_for` resolves it
-        "chat_large": config.chat_model_for(node_mode.CHAT),
+        "chat_large": config.chat_model_for(node_mode.QUERY),
         "chat_small": config.chat_model_for(node_mode.EMBED),
+        # ...and custom mode's: `[models] chat`, the one setting there was
+        "chat": config.chat_model_for(node_mode.CUSTOM),
         "translate": config.TRANSLATE_MODEL,
         "reading": _reading_text(_reading_models()),
         **{k: getattr(speech, k) or "" for k in platform_config.SPEECH_KEYS},
@@ -4450,11 +4453,12 @@ def _node_models() -> list[dict]:
     # chat` there was where the file still names it, the environment's otherwise
     chat_default = files.chat or config.ENV_CHAT_MODEL
     chat_from = "[models] chat" if files.chat else "the environment"
-    default = {"chat_large": chat_default, "chat_small": chat_default,
+    default = {"chat_large": chat_default, "chat_small": chat_default, "chat": config.ENV_CHAT_MODEL,
                "translate": config.ENV_TRANSLATE_MODEL}
-    default_from = {"chat_large": chat_from, "chat_small": chat_from, "translate": "the environment"}
+    default_from = {"chat_large": chat_from, "chat_small": chat_from, "chat": "the environment",
+                    "translate": "the environment"}
     server = {"translate": config.TRANSLATE_URL, "reading": config.TRANSLATE_URL}
-    in_force = "chat_large" if node_mode.current() == node_mode.CHAT else "chat_small"
+    in_force = {node_mode.QUERY: "chat_large", node_mode.EMBED: "chat_small"}.get(node_mode.current(), "chat")
     return [{"field": f, "use": use, "set_in": where, "value": value[f] or "",
              "default": default.get(f), "default_from": default_from.get(f),
              "overridden": f in default and bool(getattr(files, f, None)),
@@ -4522,12 +4526,15 @@ def _node_modes() -> dict:
             "mode": mode, "label": label, "says": node_mode.SAYS[mode],
             "chat_model": config.chat_model_for(mode),
             "run": node_mode.run_of(mode, pc.modes),
-            "down": pc.modes.written(f"{mode}_down_max"), "up": pc.modes.written(f"{mode}_up_max"),
+            # query mode's keys keep the morning's name (`chat_*`); custom has none: [budget]'s
+            "key": {node_mode.QUERY: "chat", node_mode.EMBED: "embed"}.get(mode),
+            "down": pc.modes.written(f"{'chat' if mode == node_mode.QUERY else mode}_down_max"),
+            "up": pc.modes.written(f"{'chat' if mode == node_mode.QUERY else mode}_up_max"),
             "down_in_force": _rate(b["down"]), "up_in_force": _rate(b["up"]),
         })
     return {"mode": node_mode.current(), "rows": rows, "chat_run": pc.modes.chat_run,
             # one model named for both: a switch changes no model, said on the page (RULE 2)
-            "one_model": rows[0]["chat_model"] if rows[0]["chat_model"] == rows[1]["chat_model"] else None,
+            "one_model": (rows[0]["chat_model"] if len({r["chat_model"] for r in rows}) == 1 else None),
             "chat_runs": [(s, dict(node_state.MODE_LABELS)[s]) for s in platform_config.CHAT_RUNS],
             "budget": {"down": _rate(pc.bandwidth.down_max_bps), "up": _rate(pc.bandwidth.up_max_bps)}}
 
@@ -4540,14 +4547,15 @@ async def system_mode_set(request: Request):
     from urllib.parse import quote
     from . import model_pins
     form = await request.form()
-    mode = str(form.get("mode", "")).strip()
-    if mode not in node_mode.MODES:
-        return RedirectResponse(f"/admin/system?mode_error={quote('mode is embed or chat')}#sys-mode",
+    mode = node_mode.named(form.get("mode", ""))
+    if mode is None:
+        return RedirectResponse(f"/admin/system?mode_error={quote('mode is embed, query or custom')}#sys-mode",
                                 status_code=303)
     client = request.client.host if request.client else "?"
     got = node_mode.switch(mode, by=f"the System page, from {client}")
-    model_pins.node_event("info", f"node switched to {mode} mode from the System page "
-                                  f"(was {got['before']}); run mode {got['run']}")
+    if got["changed"]:
+        model_pins.node_event("info", f"node switched to {mode} mode from the System page "
+                                      f"(was {got['before']}); run mode {got['run']}")
     return RedirectResponse("/admin/system?mode_saved=1#sys-mode", status_code=303)
 
 
