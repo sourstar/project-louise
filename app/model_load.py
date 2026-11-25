@@ -207,6 +207,7 @@ def reset() -> None:
         _sizes.clear()
         _held.clear()
         _cpu.clear()
+        _backends.clear()
         _rest.clear()
         _anchor.clear()
         _seen.clear()
@@ -245,6 +246,8 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         raise _NoRoute()
     held = [m for m in rows if isinstance(m, dict) and isinstance(m.get("id"), str)]
     pids, sizes, now, cpu = {}, {}, {}, {}
+    # the backend each loaded model runs on, where the listing names it (our P1)
+    backends = {m["id"]: m["backend"] for m in held if isinstance(m.get("backend"), str) and m["backend"]}
     # only a row that LISTS its options says whether it was loaded on demand
     listed = {m["id"]: _options_on_demand(m["load_options"]) for m in held
               if isinstance(m.get("load_options"), dict)}
@@ -266,6 +269,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         _pids[server] = pids
         _held[server] = now
         _cpu[server] = cpu
+        _backends[server] = backends
         _seen.update((server, m) for m in now)
         for m in now:
             if m in listed:
@@ -447,6 +451,26 @@ def loaded_models(server: str, max_age_s: float | None = None) -> frozenset[str]
         with _lock:
             _systems[server] = (time.monotonic(), ids, ttl)
         return ids
+
+
+#: server -> {model: its backend's name} as the LAST `/system` answer gave them
+_backends: dict[str, dict[str, str]] = {}
+
+
+def backend_of(url: str, model: str | None, max_age_s: float | None = None) -> str | None:
+    """The BACKEND `model` is loaded on at `url`'s runner, as `/system`
+    names it (`loaded_models[].backend`: a Louise engine's package name
+    carries the engine's id, e.g. `louise-sycl-f16-llama-cpp-d531d5d804f1-…`);
+    None when the model is not loaded or the runner does not say. Only a
+    LOADED model has one: the listing is of what runs."""
+    if not model:
+        return None
+    server = server_of(url)
+    ids = loaded_models(server, max_age_s)
+    if not ids or model not in ids:
+        return None
+    with _lock:
+        return _backends.get(server, {}).get(model)
 
 
 def backend_pid(url: str, model: str | None, max_age_s: float = INTERACTIVE_TTL_S) -> int | None:

@@ -305,3 +305,36 @@ def test_the_pool_is_stopped_before_the_library_joins_it_at_exit():
         return getattr(hook, "func", None) or next((c for c in cells if callable(c)), hook)
     hooks = [func(h) for h in threading._threading_atexits]
     assert hooks.index(parallel._stop_at_exit) > hooks.index(cf._python_exit)
+
+
+LANE = """
+    import time
+    from app import parallel
+
+    def compute(kind, collection, rows):
+        return [(True, r["n"]) for r in rows]
+    parallel._compute = compute
+
+    if __name__ == "__main__":
+        for i in range(6):
+            task = parallel._LaneTask("fts", None, [{"n": i}], None)
+            assert task.result(timeout=60) == [(True, i)], i
+        time.sleep(1.5)                 # each executor's manager thread has had its last word
+        print("done", flush=True)
+    """
+
+
+@pytest.mark.parametrize("argv", INTERPRETERS, ids=IDS)
+def test_a_large_part_s_own_process_ends_without_a_word(tmp_path, argv):
+    """München, 2026-11-24, the live worker on 3.12: 80 tracebacks in fifteen
+    minutes, one a large part — "TypeError: object of type 'NoneType' has no
+    len()" in `_adjust_process_count`, each in a thread of its own. The lane
+    gives a large part a process used ONCE (`max_tasks_per_child=1`) and lets
+    go of its executor the moment the answer is read; 3.12's manager thread
+    then asks that executor to replace the retired child, and the standard
+    library's method reads `len(None)`. The manager dies there, before it
+    closes the executor's queues. The lane's executor is the pool's own class
+    now, whose method leaves a shut-down executor alone."""
+    code, out, err, _ = _run(argv, tmp_path, LANE, timeout=120)
+    assert code == 0 and out.strip() == "done", (code, out, err[-800:])
+    assert "Traceback" not in err and "Exception in thread" not in err, err[-1500:]

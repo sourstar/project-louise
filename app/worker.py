@@ -621,8 +621,20 @@ def _with_rid(con, row) -> dict:
 #   2. then the pending rows after the selection's last rowid, walked by the
 #      scope index from that rowid (`_FTS_NEXT`): the rows of this batch,
 #      still unmarked, are behind the cursor, so nothing is taken twice.
-# Fresh batches only, and only while the pending set has no embedded row (the
-# index orders those last); anything else is selected afresh, as before.
+# Fresh batches only (never a re-index), of ONE CLASS: the scope index orders
+# the pending rows by `embed_done` and then by rowid, so the rows not yet
+# embedded come first and the embedded ones after them, each class in rowid
+# order. A chain walks the class of the batch that started it (`Chain.kind`).
+#
+# THE EMBEDDED CLASS WAS LEFT OUT UNTIL 2026-11-24, and that was a whole
+# collection's text index: a CARRIED collection's rows (a re-creation, a
+# rechunk — M1's four legal collections) are embedded before their text is
+# indexed, so no batch of theirs was ever parsed ahead. München, EUR-Lex5.next,
+# 21:55–22:09Z: 0 of 21 batch lines "parsed ahead", no fts-ahead thread, the
+# pipeline thread in `parallel.compute` in 8 dumps of 10, the pool's children
+# idle 88 % of their time; 374 s of the stage's 613 s (841 s of wall) were the
+# thread waiting for its own batch's parse, beside 252 s of rdf it could have
+# hidden them behind (docs/notes/scheduling.md §5, pitfall 22).
 #
 # TAKEN ONLY WHEN IT IS STILL TRUE. The next round takes it only if its own
 # selected row is the one the look-ahead starts at; and every row is read
@@ -646,7 +658,7 @@ def _with_rid(con, row) -> dict:
 # alone, written as a batch of its own.
 _FTS_NEXT = (
     "SELECT rowid AS rid, * FROM documents "
-    "WHERE in_scope=1 AND rdf_done=1 AND fts_done=0 AND embed_done=0 AND rowid>? "
+    "WHERE in_scope=1 AND rdf_done=1 AND fts_done=0 AND embed_done=? AND rowid>? "
     "AND error IS NULL AND retries<? ORDER BY rowid LIMIT ?")
 #: a look-ahead's rows read again, by rowid, in parts of this many (the `IN`
 #: size `_RESIDUAL_SQL` sends too; plan-checked at it)
@@ -675,10 +687,17 @@ def _fts_overlap() -> bool:
             and parallel.prefetch_allowed())
 
 
-def _fts_pending(r) -> bool:
-    """Still a fresh text-index candidate, in the look-ahead's order."""
+def _fts_class(r) -> int:
+    """The class of a pending row in the scope index's order: 0 not yet
+    embedded, 1 embedded already (a carried collection's rows)."""
+    return 1 if r["embed_done"] else 0
+
+
+def _fts_pending(r, kind: int = 0) -> bool:
+    """Still a fresh text-index candidate of the look-ahead's class `kind`,
+    in its order."""
     return (r["in_scope"] == 1 and r["rdf_done"] == 1 and r["fts_done"] == 0
-            and not r["embed_done"] and r["error"] is None
+            and _fts_class(r) == kind and r["error"] is None
             and int(r["retries"] or 0) < config.MAX_RETRIES)
 
 
@@ -751,7 +770,7 @@ def _fts_extend(con, collection, chain: lookahead.Chain, want: int, names: bool)
     added = 0
     while room > 0:
         n = min(room, want)
-        rows = [dict(r) for r in con.execute(_FTS_NEXT, (chain.cursor, config.MAX_RETRIES, n))]
+        rows = [dict(r) for r in con.execute(_FTS_NEXT, (chain.kind, chain.cursor, config.MAX_RETRIES, n))]
         if not rows:
             break
         chain.add(_fts_link(collection, rows, [None] * len(rows), names),
@@ -793,7 +812,7 @@ def _fts_take_ahead(con, row, collection) -> list | None:
         now = current.get(int(r["rid"]))
         if now == r:
             out.append((r, res))
-        elif now is not None and now["uid"] == r["uid"] and _fts_pending(now):
+        elif now is not None and now["uid"] == r["uid"] and _fts_pending(now, chain.kind):
             out.append((now, _CHANGED))
     if not out or out[0][0]["uid"] != row["uid"] or out[0][1] is _CHANGED:
         _fts_ahead.drop(key)                # the selected row itself changed: parse it now
@@ -817,13 +836,17 @@ def _fts_start_ahead(con, collection, computed: list, written: set, want: int,
     if not _fts_overlap():
         _fts_ahead.drop(key)
         return
-    if any(r["rid"] is None or r["embed_done"] for r, _ in computed):
+    kinds = {_fts_class(r) for r, _ in computed}
+    if any(r["rid"] is None for r, _ in computed) or len(kinds) != 1:
+        # a batch across the two classes (the last rows not yet embedded and
+        # the first embedded ones): the next one is selected afresh, once
         _fts_ahead.drop(key)
         return
+    kind = kinds.pop()
     anchor = max(int(r["rid"]) for r, _ in computed)
     chain = _fts_ahead.get(key)
-    if chain is None or chain.broken:
-        chain = lookahead.Chain(anchor)
+    if chain is None or chain.broken or chain.kind != kind:
+        chain = lookahead.Chain(anchor, kind=kind)
         _fts_ahead.put(key, chain)
     else:
         chain.cursor = max(chain.cursor, anchor)
@@ -1068,6 +1091,12 @@ def stage_fts(con, row, collection) -> None:
     if not row["fts_done"]:
         _fts_start_ahead(con, collection, computed, {r["uid"] for r, _ in batch}, want,
                          with_names)
+    # PARSED AND NOT WRITTEN: the peers past the cut. The look-ahead carries
+    # them into the next batch; where none is held they are parsed again, and
+    # the line says which (2026-11-24: 240 MB parsed for a batch that wrote
+    # 28, and no line had the number)
+    past = sum(1 for _r, (o, _v) in computed if o) - len(batch)
+    carried = _fts_ahead.get(str(collection.manifest_path)) is not None
 
     # the validity columns of a versioned collection (app/validity.py), read
     # before the lock like every other load; `{}` for every other collection
@@ -1154,6 +1183,8 @@ def stage_fts(con, row, collection) -> None:
                f"indexed {len(batch)} documents / {n_chunks} chunks in one commit ({took:.1f}s: "
                f"parse {parse_s:.1f}, index {index_s:.1f}, the rest {max(0.0, took - parse_s - index_s):.1f}"
                + (", parsed ahead)" if ahead else ")")
+               + (f"; {past} more parsed, {'carried to the next batch' if carried else 'thrown away'}"
+                  if past > 0 else "")
                + (f"; {deferred[0]['uid']} deferred, left pending ({str(deferred[1].get('msg', ''))[:200]})"
                   if deferred else ""),
                docs=len(batch), chunks=n_chunks, secs=took, emit=len(batch) > 1 or deferred is not None,
@@ -6348,6 +6379,97 @@ def _say_mode(state: str) -> None:
                           f"(read from {node_state.path()})")
 
 
+#: (the node's mode of use, its budget) as the worker last acted on them
+_node_mode_seen: list = [None, None]
+#: how long a switch waits for an answer in flight before it unloads the chat
+#: model that answer is using
+MODE_ANSWER_WAIT_S = 120.0
+
+
+def _rate_said(bps: int | None) -> str:
+    return "unlimited" if bps is None else f"{bps / 1_000_000:.1f} MB/s"
+
+
+def _apply_node_mode(node_con, *, manager=None, start=None) -> str:
+    """The node's MODE OF USE (embed or chat, app/node_mode.py; operator,
+    2026-11-25), acted on once a round: its network budget set on the
+    transfer manager (from platform.toml's `[modes]`, re-read when the file
+    changed, so the page's edit needs no restart), ONE LINE when the mode or
+    its budget changes and at the first read, and — at a SWITCH, never at
+    a first read that finds the mode it last acted on — the chat model the
+    node no longer uses unloaded and the one it does loaded, behind
+    (`_mode_models`): a round never waits for a model. Returns the mode."""
+    from . import node_mode, platform_config
+    mode = node_mode.apply_budget(manager or get_manager(), node_con)
+    in_force = node_mode.budget(mode, platform_config.seen())
+    before, budget_before = _node_mode_seen
+    if before == mode and budget_before == in_force:
+        return mode
+    _node_mode_seen[:] = [mode, in_force]
+    if before is None:
+        # THE FIRST READ OF THIS PROCESS: a switch made while the worker was
+        # down (a cron job's, during a deploy) is still a switch — the store
+        # remembers the mode whose chat model was last made the node's
+        before = node_mode.applied(node_con)
+        if before is None:
+            node_mode.set_applied(node_con, mode)
+        said = "read" if before in (None, mode) else f"{before} -> {mode}, switched while the worker was down"
+    else:
+        said = "budget changed" if before == mode else f"{before} -> {mode}"
+    _node_line("control")(
+        f"node in {mode} mode ({said}): chat model {config.chat_model_for(mode)}; network budget "
+        f"down {_rate_said(in_force['down'])}{'' if in_force['down_own'] else ' ([budget])'}, "
+        f"up {_rate_said(in_force['up'])}{'' if in_force['up_own'] else ' ([budget])'}")
+    if before is not None and before != mode:
+        node_mode.forget()          # this process's own readers follow at once
+        node_mode.set_applied(node_con, mode)
+        (start or _start_mode_models)(before, mode)
+    return mode
+
+
+def _start_mode_models(before: str, mode: str) -> None:
+    threading.Thread(target=_mode_models, args=(before, mode), daemon=True,
+                     name="mode-models").start()
+
+
+def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
+                 question=None, sleep=None) -> dict:
+    """A switch's models, off the round's thread: the chat model of the mode
+    left is unloaded (LocalAI's `/backend/shutdown`, `model_load.unload` —
+    its memory is what the switch is for), after any answer in flight has
+    ended or `wait_s` has passed, and the chat model of the mode entered is
+    loaded (`llm.warm`, which makes its room from the models used least
+    recently). Where both modes name one model nothing is unloaded. Never
+    raises: a model that does not load is said, and loads at its first
+    question as it always did."""
+    from . import llm
+    log = _node_line("models")
+    old, new = config.chat_model_for(before), config.chat_model_for(mode)
+    out = {"old": old, "new": new, "unloaded": False, "loaded": False}
+    if old == new:
+        log(f"{mode} mode: both modes name {new}: nothing unloaded "
+            f"(set [models] chat_large and chat_small on the System page)")
+        return out
+    question = question or resident._question_now
+    sleep = sleep or _stop.wait
+    until = time.monotonic() + wait_s
+    while question() and time.monotonic() < until and not _stop.is_set():
+        sleep(1.0)
+    try:
+        out["unloaded"] = model_load.unload(config.CHAT_URL, old)
+    except Exception as e:   # noqa: BLE001 — the runner keeps it; the load below makes its own room
+        log(f"{mode} mode: {old} was not unloaded ({type(e).__name__}: {e})")
+    try:
+        llm.warm()
+        out["loaded"] = True
+    except Exception as e:   # noqa: BLE001 — it loads at the first question
+        log(f"{mode} mode: {new} did not load now ({type(e).__name__}: {str(e)[:200]}); "
+            f"it loads at the first question")
+    log(f"{mode} mode: {old} {'unloaded' if out['unloaded'] else 'was not loaded'}; "
+        f"{new} {'loaded' if out['loaded'] else 'not loaded'}")
+    return out
+
+
 _profile_watch: list = []
 
 
@@ -6724,6 +6846,14 @@ def _resident_keeper() -> None:
                     except Exception:   # noqa: BLE001
                         cons.pop(stale, None)
                 resident.beat(_served_now(collections), embed_mode=embed_mode, stop=_stop.is_set)
+            except Exception:   # noqa: BLE001 — never the thread; the next beat
+                pass
+            try:
+                # a voice with no encoding under this engine and this clip is
+                # pinged once, off this thread (app/voice_ping.py)
+                from . import voice_ping
+                voice_ping.beat(preloads=resident.preloads()[0], question=resident._question_now,
+                                stop=_stop.is_set, say=model_pins.node_event)
             except Exception:   # noqa: BLE001 — never the thread; the next beat
                 pass
             if _stop.wait(SETTLE_BEAT_S):
@@ -7222,6 +7352,9 @@ def run_forever():
             # applies it. Re-read each round so it takes effect within one
             # document and expires on its own.
             get_manager().set_override(node_state.bandwidth_override(node_con))
+            # ...and the budget of the node's mode of use (embed or chat),
+            # with its models at a switch (app/node_mode.py)
+            _apply_node_mode(node_con)
             # ...and the same channel carries the measurement back the other
             # way: acquisition and seeding move their bytes HERE, so without
             # this the Network page's graph is a flat zero beside a saturated

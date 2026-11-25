@@ -1164,6 +1164,39 @@ function readerScrolled(){
 }
 document.getElementById('reader-content').addEventListener('scroll',readerScrolled,{passive:true});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeReader()});
+// THE KEYBOARD NEVER COVERS THE QUESTION (operator, on a phone, 2026-11-25:
+// to change a question already asked he taps it, and the keyboard opens over
+// the box and over the system's cut/copy/paste menu — he cannot see what he
+// edits). After an answer the page is scrolled down, so the box sits
+// wherever that scroll left it. While the box has the focus it is kept inside
+// what the keyboard leaves — the VISUAL viewport, which is what shrinks under
+// a keyboard that overlays the page (iOS, Android's older default) and under
+// one that resizes it (base.html's interactive-widget=resizes-content) alike
+// — with QUESTION_ROOM_PX above it for the menu, which opens above the
+// selection. A box already there is not moved: a click on a desktop scrolls
+// nothing.
+const QUESTION_ROOM_PX=56;
+function keepQuestionInView(){
+  const q=document.getElementById('q');
+  if(!q||document.activeElement!==q)return false;
+  const vv=window.visualViewport;
+  const top=vv?vv.offsetTop:0, height=vv?vv.height:window.innerHeight;
+  const r=q.getBoundingClientRect();
+  if(r.top>=top+QUESTION_ROOM_PX&&r.bottom<=top+height-8)return false;
+  // out of sight, or with no room above: its middle to the middle of what is
+  // left — or its top just under the room, where the box is taller than that
+  const want=Math.max(top+QUESTION_ROOM_PX,top+(height-r.height)/2);
+  window.scrollBy(0,r.top-want);
+  return true;
+}
+(function(){
+  const q=document.getElementById('q');
+  // at the focus, and again once the keyboard has finished opening (a browser
+  // that reports no visual viewport change still gets the second look)
+  q.addEventListener('focus',()=>{keepQuestionInView(); setTimeout(keepQuestionInView,400)});
+  if(window.visualViewport)window.visualViewport.addEventListener('resize',keepQuestionInView);
+  window.addEventListener('resize',keepQuestionInView);
+})();
 // [n] in the answer opens hit n in the reader
 // THE ANSWER, FORMATTED (operator, 2026-11-12: "the text box seems to
 // receive a md formatting that is printed as it is; show the formatted

@@ -190,6 +190,14 @@ moves models for a question, with today's loads and unloads. RAGE's claim
 - The page knows the collections chosen before Ask is pressed: preparing
   their encoders then is a later refinement, measured first.
 - Louise uses the two calls and nothing else (invariant 7).
+- BUILT ON TODAY'S LOADS (2026-11-24, operator: "I want the preemptive
+  model load to be implemented"): `question_card.load_ahead` is this plan
+  with the warm request in place of "prepare". Every model the question
+  meets is loaded ahead, in the order of use, four at a time, each only
+  into room measured on the card; the room is made first from the models
+  the question does not use, never from one it uses
+  (ask-card-workflow.md, "Ahead of the stage"). With step 2 the same plan
+  calls "prepare", and a load becomes a copy.
 - No corpus schedule changes. Planned turns between corpus encoders are
   out of this note's scope.
 
@@ -326,6 +334,8 @@ THE CONDITIONS, as §5.3 asks them, and as they were:
 - **The unload frees the card in 0.11 to 0.21 s.** Today it ends the
   process. A park is the same free with the process kept; it copies nothing
   back, since an F16 model's host copy is the file in the page cache.
+  (Written before the prototype: Tensor's design DOES copy the card's bytes
+  back, into a reserved range. §9.)
 - **The warm-up run is the largest part after LocalAI's wait,** and for
   bge-m3 the largest of all: 3.4 to 3.5 s of 6.2 (its ubatch is 8,192). It
   is the cost of a process's first compute on the card; the same request
@@ -483,7 +493,8 @@ every time was high; the "0.3 to 0.7 GiB a parked model" was wrong.
 | 0. the four measurements | München | the numbers are in this note; go or no go |
 | 1. the engine parks one encoder (bge-m3, 621 MiB) | Tensor | N park cycles give the same bytes; timed apart: the park, the un-park (allocate, copy, reorder), the first request after; the parked process's floor on the card read |
 | 2. LocalAI's parked state, its two calls, the RAM budget; the wrapper; the health-check poll at ~50 ms (operator, 2026-11-24) | Tensor, then upstream | a parked model answers after an un-park; the gates pass on the build |
-| 3. the question's plan on the two calls (`question_card`) | architecture | a cold question's first word within a second or two of the warm one's, measured on the node |
+| 3a. the question's plan on today's loads (`question_card.load_ahead`) | architecture | BUILT 2026-11-24; a cold question's timeline before and after, measured on the node |
+| 3b. the same plan on the two calls | architecture | a cold question's first word within a second or two of the warm one's, measured on the node |
 
 WHAT STEP 0 SAYS (§5.2, the unloaded node): a cold load is 4.3 to 6.6 s,
 and almost none of it is the copy. 2.0 s are LocalAI's wait, 1.5 to 3.5 s
@@ -542,3 +553,156 @@ Existing tools, and why they are not the answer by themselves:
 - The chat model's prompt cache across a park.
 - Page mode once parking exists: kept as the fallback for a backend that
   cannot park, or retired.
+
+## 9. Decided on 2026-11-24, after the note was written
+
+What the evening settled, each from the session that said it (München's
+relays, verbatim there; here the outcome).
+
+**The prototype corrects §5.2's "a park copies nothing".** Tensor's design:
+the weights sit in a reserved virtual range; a PARK copies the card's bytes
+back to host RAM and frees the card; an UN-PARK commits them into the same
+range, so no tensor's address moves (§3.1's "every tensor's address changes
+at an un-park" does not hold for it). Its runs R0–R3 are Tensor's to write
+(docs/notes/parking-prototype.md, §4), with the timings this note's step 1
+asks for.
+
+**One engine build, one gating** (RULE 1; operator: "I would like to have
+only one backend"). The next live engine is ONE candidate series: the live
+series, 0012–0014 as tonight, the OmniVoice port (0009 with the clip's
+entry, 0010), parking (0015, off) and its test switch (0016, off), the
+experts' record (0017, off). Candidate 5f926f4efa04 was built and
+installed beside the live one (München, 23:00Z) and re-cut the same hour as
+b190673dbdbf (below, the record's fill); the separate prototype engine was
+not built. On the node, each a pass of its own:
+
+| step | what | done when |
+|---|---|---|
+| a | the swap and its seven gates, every switch off | every fingerprint identical to today's, or it rolls back |
+| b | R0–R3, the pool's refusal row, the MoE three-ways, on copies of that engine | the rows are in the notes |
+| c | the port as a speech MODEL beside today's; its rows unloaded, both clips, both backends | the keeper shows its size; a deleted test profile's directory is gone, entry included |
+| d | the operator's ear on the four synthetic voices and Philippe through the port | his word |
+| e | `[speech] tts_model` moved to it; today's backend left installed | his word; a one-line rollback |
+
+**The port becomes the live voice** (operator, 21:58Z: "I want it, and it is
+inside my "everything"")). Today's backend encodes the reference clip at
+every sentence; the port once per load (0.94 s on the card), and with the
+entry on disk once per clip and engine build.
+
+**The clip's encoding on disk** (Tensor's 0009; conditions set here): the
+entry sits in the profile's own directory, found by the lease's inode, so
+LocalAI's delete of a profile removes it and it has the clip's permissions;
+its key is the samples' SHA-256, the text and audio models' identity and the
+engine's build; it holds the encoding, never the samples; written by
+temporary name and rename; an entry that does not match is ignored with one
+line (the digest only) and the clip encoded. Where no hard link is found:
+memory only, as today. Not built: a warm request in the reader's voice — an
+encoding happens once per clip per build, and the words check after a swap
+speaks every profile.
+
+**The longer clip is not free with the cache** (operator: "With the encoded
+reference clip cached this overhead should be gone, correct?"). No: the
+cache removes the encoding only. Each of the 32 steps computes the whole
+sequence again, reference frames included, and the backbone attends both
+ways, so nothing of the reference can be kept between steps. München, the
+current backend, one sentence, a BUSY node (a ratio, not a figure): the
+11.0 s clip, 249 reference frames, 5.0 and 12.3 s; the original 27.75 s
+clip, 673 frames, 25.1 and 20.4 s. The unloaded retake on both backends
+decides; three choices are with the operator (11 s, the original, a cut of
+15–18 s).
+THE RETAKE, unloaded (München, 2026-11-25, in the engine pass's pause): on
+the PORT a sentence takes 2.24 s with the 11 s clip and 2.70 s with the
+original 27.75 s clip; on today's backend 3.60 and 8.65 s. So on the port
+the original clip costs under half a second a sentence, where today's
+backend more than doubles. The port at rest holds 1,864 MiB of the card
+(both clips, four synthetic voices). The kept encoding was read by a new
+process and went with its profile when the profile was deleted (HTTP 204).
+
+**The experts' record** (operator: "the MoE preloading in VRAM based on the
+recent experts used"; Tensor's 0017, off without its env). Per layer and
+expert, a use count decayed over thousands of tokens, kept in memory with
+the model and in a file per weights identity and engine build beside the
+engine's cache. Conditions set here and taken as written: the FILL is in
+the context's creation, which LocalAI does inside the load — hidden by the
+load Louise now starts ahead (`question_card.load_ahead`) — and never at a
+token; the file is written at the unload by temporary name and rename; the
+card bytes at rest do not change (the buffer is allocated whole today);
+counts only, on the node only; the proof is the same tokens at temperature
+0 with and without the record, with no miss computed on the CPU. First
+replay (München, 23:00Z): the record removes 40–55 % of the first 64
+tokens' uploads on the next answers, one in another language included.
+The same trace showed the fill uploading the WHOLE 8 GB cache inside every
+load, so 0017 gained a switch of its own (`LLAMA_MOE_RECORD_FILL`; unset:
+the record orders the cache and fills nothing ahead) and the candidate was
+re-cut (b190673dbdbf at 012e00e). What a full fill adds to a load, against
+what it saves at the first tokens, is the fourth figure of its measurement
+and decides the switch.
+
+**Step (a) is done** (München, 2026-11-25 00:55Z): b190673dbdbf live, the
+five llama.cpp gates exact with the fingerprints they had (wikipedia,
+gutenberg, pubmed query, NeuRIS, wikidata), twenty unloads clean, MADLAD
+18 of 18 and the reranker's 20 lists identical to the morning's, nothing
+rolled back. Every new switch is off by the fingerprints.
+
+**§6's step 3a is built** (`question_card.load_ahead`, #865) and read once,
+cold, on an emptied card (ask-card-workflow.md, "Measured on 8337d36a"):
+the query encoders and the answer's chat are no longer loads inside their
+stages; the first stage's own two models are, and only keeping or parking
+them changes that.
+
+## 10. The second candidate: what the first pass found (2026-11-25)
+
+The pass on b190673dbdbf found three things, each fixed before the port
+serves a voice. Tensor's branch ccr-b76578de-puq1g0 at 96b0cd1; the patches'
+own notes are there.
+
+**The pool's refusal did not hold** (staged 0013, live untested since the
+evening of 11-24 because it could not be provoked). Provoked on a reranker
+copy: the refusal is swallowed inside `ggml_sycl_op_mul_mat` and the process
+dies as on every engine before it; no "the graph is abandoned" line. Fixed
+by staged 0018. PAGE MODE STAYS OFF until 0018's row shows two requests
+answered 5xx, the line, and the same pid answering a third.
+
+**A deleted voice could outlive its profile in two places.**
+- In LocalAI, on disk: `voice-profiles/.leases` held a hard link to a
+  recorded clip from 10-27. On the path Louise uses a lease is given back
+  when the request's handler returns (`defer release()` in tts.go); only a
+  process that dies holding one leaves it. Staged 0019, a patch of
+  LocalAI's server (core/services/voiceprofile): an owner file a lease
+  directory, dropped by the kernel with its process; a dead process's
+  leases removed at the next start and at every delete, a living one's
+  left; a directory with no owner file removed once a day old. LocalAI's
+  suite passes with it (25 specs, 6 new).
+- In the port, in memory: it kept the last clip's samples and encoded rows
+  from one request to the next. Staged 0020: a clip that has a file for its
+  encoding — every profile's — leaves nothing in the engine between two
+  requests; its rows are read from the file each time (0.01 s), the samples
+  zeroed once hashed, the rows zeroed at the request's end. The kept
+  encoding's format does not move.
+So the condition of §9 ("a deleted voice's codes do not outlive it") is
+held at three layers — the profile's directory, the leases, the engine's
+memory — and the proof at step (c) reads all three after a TEST profile is
+deleted.
+
+**Two builds, one pause.** The ENGINE: d531d5d804f1 = b190673dbdbf's series
++ 0018 + 0020, one gating of the five llama.cpp runs. The SERVER: LocalAI
+v5.0.1 + P1 + 0011 + 0019, a restart of LocalAI; at its first start it
+removes the nine lease directories on the node that have no owner file, the
+October link among them — said to the operator with the pass, so that it
+is his word. (A server patch is never put in an engine's series: it would
+rename the engine for code the engine does not have.)
+
+**The order of §9 changes.** The port becomes the live voice only on
+d531d5d804f1 with the patched server: steps (c) to (e) move there, and
+b190673dbdbf never serves a voice through the port. No model on the node
+uses the port meanwhile.
+
+**The first sentence of a new speech process** costs 8.74 s against 2.24 s
+with the clip's encoding read in 0.01 s: about 5.1 s the load, 1.5 s the
+pipeline's first use. The load ahead's warm for speech is a real synthesis
+of one word (`POST /v1/audio/speech {"model", "input": "OK"}`), which the
+port answers with no voice named (run on its source, CPU: 200). Two rows in
+the pause decide whether that is enough: a new process warmed so and then a
+cloned sentence, against a new process whose first request is the cloned
+sentence. Near 2.24 s: nothing to build. A second or so kept: the warm
+speaks a sentence in the voice the reader will hear.

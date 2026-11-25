@@ -48,6 +48,14 @@ def _synthetic(tmp_path, n: int, name: str = "s"):
     return c, con
 
 
+def _embedded(con, ids) -> None:
+    """These documents embedded already, their text not yet indexed: a
+    CARRIED collection's rows (a re-creation, a rechunk)."""
+    con.execute("BEGIN")
+    con.executemany("UPDATE documents SET embed_done=1 WHERE native_id=?", [(str(i),) for i in ids])
+    con.execute("COMMIT")
+
+
 def _chunks_of(i: int) -> list[dict]:
     return [{"id": f"s:{i}:{k}", "chapter": "", "text": f"word{i} common text", "tokens": 10 + i + k}
             for k in range(1 + i % 3)]
@@ -284,14 +292,18 @@ def test_a_batch_marks_and_tags_in_a_constant_number_of_statements(tmp_path, mon
 
 def test_the_next_batch_is_walked_from_a_rowid_on_the_scope_index_and_never_sorted(tmp_path):
     _c, con = _synthetic(tmp_path, 5_000)
-    for limit in (1, 500, 4_000):
-        plan = " ".join(r[-1] for r in con.execute(
-            "EXPLAIN QUERY PLAN " + worker._FTS_NEXT, (100, config.MAX_RETRIES, limit)))
-        assert ("idx_documents_scope (in_scope=? AND rdf_done=? AND fts_done=? AND embed_done=? "
-                "AND rowid>?)") in plan, plan
-        assert "TEMP B-TREE" not in plan and "SCAN documents" not in plan, plan
-    got = con.execute(worker._FTS_NEXT, (100, config.MAX_RETRIES, 3)).fetchall()
+    _embedded(con, range(2_001, 5_001))
+    for kind in (0, 1):                      # not yet embedded; embedded already (a carried collection)
+        for limit in (1, 500, 4_000):
+            plan = " ".join(r[-1] for r in con.execute(
+                "EXPLAIN QUERY PLAN " + worker._FTS_NEXT, (kind, 100, config.MAX_RETRIES, limit)))
+            assert ("idx_documents_scope (in_scope=? AND rdf_done=? AND fts_done=? AND embed_done=? "
+                    "AND rowid>?)") in plan, plan
+            assert "TEMP B-TREE" not in plan and "SCAN documents" not in plan, plan
+    got = con.execute(worker._FTS_NEXT, (0, 100, config.MAX_RETRIES, 3)).fetchall()
     assert [r["uid"] for r in got] == ["s:101", "s:102", "s:103"] and got[0]["rid"] == 101
+    got = con.execute(worker._FTS_NEXT, (1, 100, config.MAX_RETRIES, 3)).fetchall()
+    assert [r["uid"] for r in got] == ["s:2001", "s:2002", "s:2003"], "its own class only, from the rowid"
 
 
 def test_the_recheck_reads_its_rows_by_rowid_in_parts_of_the_size_checked(tmp_path):
@@ -350,6 +362,121 @@ def test_each_document_is_parsed_once_the_rows_past_the_chunk_cap_are_carried(
     assert set(parse.parsed().values()) == {1}, parse.parsed().most_common(3)
     on_thread = [t for t, _rows in parse.calls if not t.startswith("fts-ahead-")]
     assert len(on_thread) == 1, on_thread
+
+
+def test_a_carried_collection_s_batches_are_parsed_ahead_too(tmp_path, monkeypatch, parse, overlap,
+                                                             instrumented):
+    """München, 2026-11-24, EUR-Lex5.next (a re-creation: every row embedded
+    before its text is indexed): 0 of 21 batch lines "parsed ahead", the
+    pipeline thread in `parallel.compute` in 8 dumps of 10, the pool's
+    children idle 88 % of their time. The look-ahead walked only the rows
+    not yet embedded. A COST test: one parse a document, and after the first
+    batch the pipeline thread starts no parse itself."""
+    monkeypatch.setattr(config, "FTS_BATCH_DOCS", 10)
+    monkeypatch.setattr(config, "FTS_BATCH_CHUNKS", 12)
+    c, con = _synthetic(tmp_path, 80)
+    _embedded(con, range(1, 81))
+    rounds = _drain(con, c)
+    _assert_all_indexed_once(con, c, 80)
+    assert set(parse.parsed().values()) == {1}, parse.parsed().most_common(3)
+    on_thread = [t for t, _rows in parse.calls if not t.startswith("fts-ahead-")]
+    assert len(on_thread) == 1 and rounds > 5, (on_thread, rounds)
+    assert sum(instrumented["ahead_at_mark"]) >= rounds - 2, "a batch parsing behind nearly every write"
+    assert {r["embed_done"] for r in con.execute("SELECT embed_done FROM documents")} == {1}, \
+        "the text index marks nothing of the vectors"
+
+
+def test_the_look_ahead_follows_the_selection_from_one_class_to_the_other(tmp_path, monkeypatch, parse,
+                                                                          overlap):
+    """The scope index gives the rows not yet embedded first, then the
+    embedded ones: a chain walks one class, the batch across the two starts
+    none, and the next class gets its own. Everything indexed, exactly once;
+    a parse lost at the change of class is a parse, never a document."""
+    monkeypatch.setattr(config, "FTS_BATCH_DOCS", 7)
+    monkeypatch.setattr(config, "FTS_BATCH_CHUNKS", 12)          # a batch stops at the chunk cap: ~6 documents
+    c, con = _synthetic(tmp_path, 60)
+    _embedded(con, [i for i in range(1, 61) if i % 3 == 0])     # the two classes interleaved by rowid
+    order = []
+    real = worker._mark_indexed_many
+
+    def mark(con_, marks, now):
+        order.extend(int(uid.split(":")[1]) for _r, uid, *_ in marks)
+        real(con_, marks, now)
+    monkeypatch.setattr(worker, "_mark_indexed_many", mark)
+    _drain(con, c)
+    _assert_all_indexed_once(con, c, 60)
+    fresh, carried = [i for i in range(1, 61) if i % 3], [i for i in range(1, 61) if i % 3 == 0]
+    assert order == fresh + carried, "the selection's order: not yet embedded first, then embedded, by rowid"
+    ahead = [int(r["native_id"]) for t, rows in parse.calls if t.startswith("fts-ahead-") for r in rows]
+    assert set(ahead) & set(fresh) and set(ahead) & set(carried), \
+        ("each class parsed ahead in its turn", [(t, [int(r["native_id"]) for r in rows]) for t, rows in parse.calls])
+    assert max(parse.parsed().values()) <= 2
+
+
+def test_a_row_not_yet_embedded_that_arrives_takes_the_round_from_a_chain_of_embedded_ones(
+        tmp_path, monkeypatch, parse, overlap):
+    """A carried collection goes on acquiring: a new document is not yet
+    embedded, the scope index puts it first, and the chain of embedded rows
+    is let go of — its parses dropped, its rows parsed again in their turn."""
+    monkeypatch.setattr(config, "FTS_BATCH_DOCS", 5)
+    c, con = _synthetic(tmp_path, 30)
+    _embedded(con, range(1, 31))
+    assert _round(con, c)
+    assert worker._fts_ahead.keys(), "a chain of embedded rows is held"
+    con.execute("INSERT INTO documents(uid,source,native_id,path,lang,title,in_scope,rdf_done,fts_done,"
+                "embed_done,updated_at) VALUES ('s:31','s','31','/x/31','en','title 31',1,1,0,0,1)")
+    con.commit()
+    assert _round(con, c)
+    assert con.execute("SELECT fts_done FROM documents WHERE uid='s:31'").fetchone()[0] == 1
+    _drain(con, c)
+    _assert_all_indexed_once(con, c, 31)
+
+
+def test_a_row_whose_class_changed_after_its_parse_is_left_to_its_own_turn(tmp_path, monkeypatch, parse,
+                                                                          overlap):
+    """A row parsed ahead as not yet embedded, embedded since (an imported
+    bundle): it is no longer the chain's, is not written from that parse,
+    and is indexed when the selection reaches its class."""
+    monkeypatch.setattr(config, "FTS_BATCH_DOCS", 5)
+    c, con = _synthetic(tmp_path, 20)
+    assert _round(con, c)                           # 1-5 written, 6-15 parsing ahead
+    _embedded(con, [8])
+    assert _round(con, c)
+    assert con.execute("SELECT fts_done FROM documents WHERE uid='s:8'").fetchone()[0] == 0
+    _drain(con, c)
+    _assert_all_indexed_once(con, c, 20)
+
+
+def _batch_lines(monkeypatch) -> list[str]:
+    lines: list[str] = []
+    real = worker._batch_log
+    monkeypatch.setattr(worker, "_batch_log",
+                        lambda con, stage, c, text, **kw: lines.append(text) or real(con, stage, c, text, **kw))
+    return lines
+
+
+def test_the_batch_line_says_what_was_parsed_past_the_cap_and_what_became_of_it(tmp_path, monkeypatch, parse):
+    """München, 2026-11-24: 240 MB parsed for a batch that wrote 28, and no
+    line had the number. Without a look-ahead the peers past the chunk cap
+    are thrown away and parsed again; with one they are carried."""
+    monkeypatch.setattr(config, "FTS_BATCH_DOCS", 10)
+    monkeypatch.setattr(config, "FTS_BATCH_CHUNKS", 12)
+    lines = _batch_lines(monkeypatch)
+    c, con = _synthetic(tmp_path, 40)
+    assert _round(con, c)
+    assert " more parsed, thrown away" in lines[-1] and "parsed ahead" not in lines[-1], lines[-1]
+    n = int(lines[-1].split("; ")[1].split()[0])
+    assert n == 10 - int(lines[-1].split("indexed ")[1].split()[0]), "the rows parsed, less the rows written"
+    # on a pipeline thread with a pool: carried
+    monkeypatch.setattr(parallel, "prefetch_allowed", lambda: True)
+    monkeypatch.setattr(config, "FTS_OVERLAP", 1)
+    worker._ahead_here.on = True
+    try:
+        assert _round(con, c)
+        assert " more parsed, carried to the next batch" in lines[-1], lines[-1]
+    finally:
+        worker._ahead_here.on = False
+        worker.drop_fts_ahead()
 
 
 def test_without_the_overlap_the_stage_is_what_it_was(tmp_path, monkeypatch, parse, instrumented):

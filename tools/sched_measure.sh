@@ -55,6 +55,20 @@ docker logs --since ${WIN}m ix-louise-rag-worker-1 2>&1 \
   | awk -v w=$WIN '{d+=$1; s+=$2; n++} END {
       printf "%d batches, %d documents, %.0fs inside batches of %ds wall -> %.1f docs/s, %.0f%% of wall inside batches\n",
       n, d, s, w*60, d/s, 100*s/(w*60) }'
+# THE LOOK-AHEAD, COUNTED. Each fts batch line says whether its parse was
+# done while the batch before was written (", parsed ahead)"). The line had
+# said so since 2026-11-07 and nothing counted it: EUR-Lex5.next's whole
+# re-creation ran with 0 of its batches parsed ahead before anyone looked
+# (2026-11-24; docs/notes/scheduling.md pitfall 22). A collection with work
+# behind its batch and a pool reads near all; near none is a defect.
+echo "--- fts batches parsed ahead, and the parse seconds waited, last ${WIN} min ---"
+docker logs --since ${WIN}m ix-louise-rag-worker-1 2>&1 \
+  | grep -E 'indexed [0-9]+ documents / [0-9]+ chunks in one commit' \
+  | awk '{ a = ($0 ~ /parsed ahead\)/); n[a]++
+           if (match($0, /parse [0-9.]+/)) p[a] += substr($0, RSTART + 6, RLENGTH - 6)
+           if (match($0, /; [0-9]+ more parsed, thrown away/)) lost += substr($0, RSTART + 2, RLENGTH - 2) + 0 }
+         END { printf "%d of %d parsed ahead (parse %.1fs waited); %d not (parse %.1fs); %d documents parsed and thrown away\n",
+               n[1], n[0] + n[1], p[1], n[0], p[0], lost }'
 echo "--- deferrals (a writer that lost the manifest lock) ---"
 docker logs --since ${WIN}m ix-louise-rag-worker-1 2>&1 | grep -c "round deferred" || true
 echo "--- errors ---"

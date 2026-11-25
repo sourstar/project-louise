@@ -9,6 +9,7 @@
 <div class="panel">
   <span class="dot {{ 'running' if worker_state=='running' else 'paused' }}"></span>
   worker: <b>{{ dict(mode_labels).get(worker_state, worker_state) }}</b>
+  {% if node_mode_now() == 'chat' %}<span class="badge" title="the large chat model answers; nothing is parsed, indexed or embedded — the System page switches">chat mode</span>{% endif %}
   <div class="actions">
     {# The accent marks the state the node IS in. It used to mark every
        state it was NOT in, so the current mode was the one button that
@@ -18,10 +19,14 @@
        worker reads (app/node_state.py: MODE_RUNS). Embedding is not a
        mode: where everything runs, each collection's own drop-down below
        sets it, and no mode changes that setting. #}
+    {# ...and the node's mode of use (embed or chat, app/node_mode.py)
+       refuses one of them: chat mode never runs everything. Grey, saying
+       where to switch, rather than a button that fails. #}
     {% for mode, label in mode_labels %}
+    {% set refused = node_mode_refuses(mode) %}
     <button class="mode{{ ' selected' if worker_state==mode }}"
-            {% if worker_state==mode %}disabled aria-current="true"{% endif %}
-            title="{{ mode_says[mode] }}{{ ' — the node is in this mode' if worker_state==mode }}"
+            {% if worker_state==mode %}disabled aria-current="true"{% elif refused %}disabled{% endif %}
+            title="{% if refused and worker_state!=mode %}the node is in chat mode: embed mode runs everything — switch on the System page{% else %}{{ mode_says[mode] }}{{ ' — the node is in this mode' if worker_state==mode }}{% endif %}"
             onclick="setWorkerState('{{ mode }}')">{{ label }}</button>
     {% endfor %}
     {# Grey wherever the mode parses nothing, because it would genuinely do

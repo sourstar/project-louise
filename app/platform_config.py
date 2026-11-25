@@ -189,6 +189,14 @@ class ModelsConfig:
     #: (app/config.py resolves both on every read).
     chat: str | None = None
     translate: str | None = None
+    #: `chat_large` and `chat_small` (added 2026-11-25, operator: "The current
+    #: chat model setting becomes 2 chat settings, large one and a small one"):
+    #: the chat model of CHAT mode and of EMBED mode (app/node_mode.py). Each
+    #: unset reads `chat`, the one setting there was — so a file that names
+    #: only `chat` answers with it in both modes, as before — and then the
+    #: environment's CHAT_MODEL.
+    chat_large: str | None = None
+    chat_small: str | None = None
     #: HOW A LOAD THAT DOES NOT FIT THE CARD GETS ITS ROOM (added 2026-11-24,
     #: operator: "Extend page instead of unload to the dense models").
     #: "unload", the rule since 2026-11-16: the model with the oldest real use
@@ -219,6 +227,43 @@ class ModelsConfig:
 MAKE_ROOM = ("unload", "page")
 
 
+#: the run modes CHAT mode may switch the node to (operator, 2026-11-25: "a
+#: run mode among download/seeding, seeding or pause"), in the page's order;
+#: the first is the one a file that names none gets
+CHAT_RUNS = ("acquire-only", "seed-only", "paused")
+#: `[modes]`'s keys: what chat mode runs, and each mode's network budget
+MODES_KEYS = ("chat_run", "embed_down_max", "embed_up_max", "chat_down_max", "chat_up_max")
+
+
+@dataclass(frozen=True)
+class ModesConfig:
+    """`[modes]` (07 §7.8, added 2026-11-25): what the node's two modes of
+    use — EMBED and CHAT, app/node_mode.py — set when the node is switched
+    to one. `chat_run` is the run mode chat mode switches to (embed mode
+    switches to `running`, "run all"). `<mode>_down_max` / `<mode>_up_max`
+    are that mode's network budget, in `[budget]`'s grammar, standing in
+    `[budget] down_max` / `up_max`'s place while the node is in the mode
+    (the schedule and the reserve stay `[budget]`'s); unset, `[budget]`'s.
+    The texts are kept as written, for the page. WHICH mode the node is in
+    is not here: it is the node's state, set by a command, the page or the
+    API, and it survives a restart (invariant 10's exception)."""
+    chat_run: str = CHAT_RUNS[0]
+    embed_down_max_bps: int | None = None
+    embed_up_max_bps: int | None = None
+    chat_down_max_bps: int | None = None
+    chat_up_max_bps: int | None = None
+    text: tuple[tuple[str, str], ...] = ()      # (key, as written) of the keys the file sets
+
+    def budget(self, mode: str) -> tuple[int | None, int | None]:
+        """(down, up) of a mode, bytes a second; None where it sets none."""
+        if mode == "chat":
+            return self.chat_down_max_bps, self.chat_up_max_bps
+        return self.embed_down_max_bps, self.embed_up_max_bps
+
+    def written(self, key: str) -> str:
+        return dict(self.text).get(key, "")
+
+
 @dataclass(frozen=True)
 class SpeechConfig:
     """`[speech]` (07 §7.8, added 2026-11-07): the models the Ask page's
@@ -235,9 +280,31 @@ class SpeechConfig:
     #: — synthetic voices, never a recorded person's: "it=<voice>, en=<voice>"
     #: (`synthetic_voices`, app/voice.py `synthetic`)
     synthetic_voices: str | None = None
+    #: the steps of one synthesis ("24"): `params.flow_steps` of every request
+    #: to the text-to-speech model — fewer are faster and coarser. Unset, the
+    #: model's own default (OmniVoice: 32). The node's choice, never a
+    #: reader's (operator, 2026-11-25: "add the steps to the admin settings")
+    tts_steps: str | None = None
 
 
-SPEECH_KEYS = ("stt_model", "vad_model", "tts_model", "tts_voice", "synthetic_voices")
+SPEECH_KEYS = ("stt_model", "vad_model", "tts_model", "tts_voice", "synthetic_voices", "tts_steps")
+#: `[speech] tts_steps`: the range a synthesis is asked for (the model's
+#: default is 32, and 16 and 32 are what was measured; the bounds only refuse a typo)
+TTS_STEPS = (4, 64)
+
+
+def tts_steps(text: str | None) -> int | None:
+    """`[speech] tts_steps` read: the steps of one synthesis, or None where
+    unset. Raises ScheduleError for a value that is not a whole number in
+    TTS_STEPS."""
+    if text is None or not str(text).strip():
+        return None
+    t = str(text).strip()
+    if not t.isdecimal() or not TTS_STEPS[0] <= int(t) <= TTS_STEPS[1]:
+        raise schedule_mod.ScheduleError(
+            f"speech.tts_steps: {t!r} is not a whole number of steps from {TTS_STEPS[0]} to "
+            f"{TTS_STEPS[1]} (the model's own default is 32)")
+    return int(t)
 
 
 def synthetic_voices(text: str | None) -> dict[str, str]:
@@ -338,6 +405,7 @@ class PlatformConfig:
     ask: AskConfig = AskConfig()
     web: WebConfig = WebConfig()
     models: ModelsConfig = ModelsConfig()
+    modes: ModesConfig = ModesConfig()
     speech: SpeechConfig = SpeechConfig()
     certifier: CertifierConfig = CertifierConfig()
     deposit: DepositConfig = DepositConfig()
@@ -708,7 +776,7 @@ def _load_one(path: Path) -> PlatformConfig:
         if not isinstance(models_raw.get(key, True), bool):
             raise schedule_mod.ScheduleError(
                 f"models.{key} is true or false, got {models_raw[key]!r} (07 §7.8)")
-    for key in ("chat", "translate"):
+    for key in ("chat", "translate", "chat_large", "chat_small"):
         if models_raw.get(key) is not None and not isinstance(models_raw[key], str):
             raise schedule_mod.ScheduleError(
                 f"models.{key} is a model name, got {models_raw[key]!r} (07 §7.8)")
@@ -724,7 +792,10 @@ def _load_one(path: Path) -> PlatformConfig:
         translate=(models_raw.get("translate") or "").strip() or None,
         make_room=make_room,
         page_floor_gib=_positive_int(models_raw, "page_floor_gib", ModelsConfig().page_floor_gib),
-        page_over_gib=_positive_int(models_raw, "page_over_gib", ModelsConfig().page_over_gib))
+        page_over_gib=_positive_int(models_raw, "page_over_gib", ModelsConfig().page_over_gib),
+        chat_large=(models_raw.get("chat_large") or "").strip() or None,
+        chat_small=(models_raw.get("chat_small") or "").strip() or None)
+    modes = _modes(raw.get("modes", {}) or {})
 
     speech = _speech(raw.get("speech", {}) or {})
 
@@ -809,6 +880,7 @@ def _load_one(path: Path) -> PlatformConfig:
                           ask=ask,
                           web=web_cfg,
                           models=models,
+                          modes=modes,
                           speech=speech,
                           title=title_raw.strip(),
                           certifier=certifier,
@@ -818,6 +890,37 @@ def _load_one(path: Path) -> PlatformConfig:
                           quarantine_in_use_before=tuple(before_raw),
                           profiles=_profiles(raw),
                           source_path=path)
+
+
+def _modes(raw: Any) -> ModesConfig:
+    """`[modes]`, checked at load: a key this does not know is refused (a
+    misspelt budget would otherwise read as "no budget")."""
+    if not isinstance(raw, dict):
+        raise schedule_mod.ScheduleError("modes must be a table (07 §7.8)")
+    unknown = sorted(set(raw) - set(MODES_KEYS))
+    if unknown:
+        raise schedule_mod.ScheduleError(
+            f"[modes] has no key {', '.join(unknown)}: its keys are {', '.join(MODES_KEYS)} (07 §7.8)")
+    run = raw.get("chat_run", CHAT_RUNS[0])
+    if run not in CHAT_RUNS:
+        raise schedule_mod.ScheduleError(
+            f"[modes] chat_run is the run mode chat mode switches to, one of "
+            f"{', '.join(CHAT_RUNS)}, got {run!r} (07 §7.8)")
+    rates: dict[str, int | None] = {}
+    for key in MODES_KEYS[1:]:
+        value = raw.get(key)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (str, int, float))):
+            raise schedule_mod.ScheduleError(
+                f"[modes] {key} is a rate as [budget]'s (\"50MB\", \"400Mbit\"), got {value!r} (07 §7.8)")
+        try:
+            rates[key] = schedule_mod.parse_rate(value)
+        except schedule_mod.ScheduleError as e:
+            raise schedule_mod.ScheduleError(f"[modes] {key}: {e}") from None
+    return ModesConfig(
+        chat_run=run,
+        embed_down_max_bps=rates["embed_down_max"], embed_up_max_bps=rates["embed_up_max"],
+        chat_down_max_bps=rates["chat_down_max"], chat_up_max_bps=rates["chat_up_max"],
+        text=tuple((k, str(raw[k]).strip()) for k in MODES_KEYS if raw.get(k) is not None))
 
 
 def _profiles(raw: dict[str, Any]):
@@ -842,6 +945,7 @@ def _speech(raw: Any) -> SpeechConfig:
             raise schedule_mod.ScheduleError(
                 f"speech.{k} is a model's (or a voice's) name, a non-empty string, got {v!r}")
     synthetic_voices(raw.get("synthetic_voices"))       # refused at load, not at a reading
+    tts_steps(raw.get("tts_steps"))
     return SpeechConfig(**{k: raw[k].strip() for k in raw})
 
 
@@ -921,3 +1025,27 @@ def load() -> PlatformConfig:
     if not path.is_file():
         return PlatformConfig()
     return _load_one(path)
+
+
+_SEEN: tuple = (None, None)     # ((path, mtime_ns, size), PlatformConfig)
+
+
+def seen() -> PlatformConfig:
+    """`load()`, re-read only when the file changed (its path, mtime and
+    size): for a reader on a hot path — the worker's round reads `[modes]`
+    (app/node_mode.py), as `config._file_models` reads `[models]`. A file that
+    does not load gives the last one that did, the defaults where there was
+    none: the System page says a broken file, a round does not stop on it."""
+    global _SEEN
+    path = platform_path()
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return PlatformConfig()
+    if _SEEN[0] != key:
+        try:
+            _SEEN = (key, _load_one(path))
+        except Exception:   # noqa: BLE001 — said by the System page (its own load)
+            _SEEN = (key, _SEEN[1] if _SEEN[1] is not None else PlatformConfig())
+    return _SEEN[1]

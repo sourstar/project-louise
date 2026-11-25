@@ -424,18 +424,67 @@ def _form_held(note, files: dict[str, bytes], skip: tuple[str, ...] = ()) -> str
     return None
 
 
-def wrapper_head(celex: str, entries: list[os.DirEntry]) -> bytes:
+def wrapper_head(celex: str, entries: list[os.DirEntry], listed: set[str] | None = None,
+                 adopted: str | None = None) -> bytes:
     """The head (`_HEAD` bytes) of the act's own Formex wrapper among the
     unit's files — inside its package where the manifestation is one zip
-    (formex.unpack). Raises FormexError where there is none of this act's."""
+    (formex.unpack). Raises FormexError where there is none of this act's.
+    `listed`, `adopted`: the tree's word (`_tree_listing`), as the parse
+    gives them to `formex.own_wrapper`; a listed package's members are
+    listed with it, as the parse counts them."""
     paths = {e.name: e.path for e in entries}
     if any(formex.is_package(n) for n in paths):
-        held = {n: Path(p).read_bytes() for n, p in paths.items() if formex.is_package(n) or formex.is_wrapper(n)}
-        view = formex.unpack(held)[0]
-        return view[formex.own_wrapper(view, celex, view.__getitem__)][:_HEAD]
-    own = formex.own_wrapper(paths, celex, lambda n: Path(paths[n]).read_bytes())
+        # a package by its path: its central directory, its text members and
+        # its figures' heads are read, never the whole zip (formex.unpack)
+        held = {n: (Path(p) if formex.is_package(n) else Path(p).read_bytes()) for n, p in paths.items()
+                if formex.is_package(n) or formex.is_wrapper(n)}
+        view, came = formex.unpack(held)
+        if listed is not None:
+            listed = set(listed) | {m for m, pkg in came.items() if pkg in listed}
+        return view[formex.own_wrapper(view, celex, view.__getitem__, listed, adopted)][:_HEAD]
+    own = formex.own_wrapper(paths, celex, lambda n: Path(paths[n]).read_bytes(), listed, adopted)
     with open(paths[own], "rb") as f:
         return f.read(_HEAD)
+
+
+def _tree_listing(unit: Path, celex: str, entries: list[os.DirEntry]) -> tuple[set[str], str | None] | None:
+    """The tree's word on the unit's Formex, as the parse reads it: the items
+    the expression's tree lists for its fmx4 manifestation, and the act's own
+    date (`EurlexSource.parse`'s `listed` and `note.date_document`). None
+    where the tree does not read (the parse says why)."""
+    lang = unit.parent.parent.name.partition("=")[2]
+    tree = next((e.path for e in entries if e.name == rdf_mod.TREE_FILE), None)
+    if lang not in LANGUAGES or tree is None:
+        return None
+    try:
+        with open(tree, "rb") as f:
+            note = from_tree.notice(rdf_mod.loads(f.read()), lang3(lang), celex)
+    except (OSError, ValueError, KeyError, from_tree.TreeError):
+        return None
+    return {it.name for it in note.items.get("fmx4", []) if it.name}, note.date_document
+
+
+def _listed_head(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool) -> bytes | None:
+    """`wrapper_head` as the PARSE decides it (2026-11-25, 7,871 EUR-Lex5.next
+    rows inserted under new ids by the night's scans): discovery asked
+    `own_wrapper` without the tree's listing and the act's date, so since the
+    lone-wrapper rules of 2026-11-21/23 it refused wrappers the parse reads
+    as the act's own (31958D1006(02) en: its wrapper's NO.CELEX says (01),
+    the tree lists it as (02)'s) and dated the unit by its tree's work day:
+    a new id for an unchanged unit, and the old row never retired. Asked
+    without them first (cheap: no tree read); the listing and the date only
+    ever make it accept more, so a refusal is asked again with them."""
+    try:
+        return wrapper_head(celex, entries)
+    except formex.FormexError:
+        pass
+    listing = _tree_listing(unit, celex, entries) if tree_facts else None
+    if listing is None:
+        return None
+    try:
+        return wrapper_head(celex, entries, *listing)
+    except formex.FormexError:
+        return None
 
 
 def _wrapper_by_content(celex: str, entries: list[os.DirEntry]) -> bytes | None:
@@ -456,6 +505,19 @@ def _wrapper_by_content(celex: str, entries: list[os.DirEntry]) -> bytes | None:
     return own[0] if len(own) == 1 else None
 
 
+def _lone_wrapper_head(entries: list[os.DirEntry]) -> bytes | None:
+    """The head of the manifestation's ONLY wrapper, whatever act or OJ it
+    names: how a unit was dated before 2026-11-21's rules, kept so
+    `superseded_ids` can name the id it had then. None where there are
+    several or none."""
+    paths = {e.name: e.path for e in entries}
+    held = {n: (Path(p) if formex.is_package(n) else Path(p).read_bytes()) for n, p in paths.items()
+            if formex.is_package(n) or formex.is_wrapper(n)}
+    view = formex.unpack(held)[0] if any(formex.is_package(n) for n in held) else held
+    wrappers = [n for n in view if formex.is_wrapper(n)]
+    return view[wrappers[0]][:_HEAD] if len(wrappers) == 1 else None
+
+
 def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool = False) -> str | None:
     """The day the unit's id sorts under: a consolidation's CELEX date, an
     original's OJ publication date from its wrapper's head. An act without
@@ -464,10 +526,8 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
     m = _CONSOLIDATED.match(celex)
     if m:
         return formex.iso(m["date"])
-    try:
-        head = wrapper_head(celex, entries)
-    except formex.FormexError:
-        head = None                        # no wrapper, or none this act's: its work's own day below
+    # no wrapper, or none this act's as the parse decides it: its work's own day below
+    head = _listed_head(unit, celex, entries, tree_facts)
     if head is not None:
         got = _PUB_DATE.search(head)
         if got:
@@ -692,7 +752,9 @@ class EurlexSource:
         unit is dated by its wrapper's OJ day where it holds one, by its
         tree's work day otherwise: a unit that gained or lost its Formex
         (a re-form into a package, a rendition replaced) moved between the
-        two. Both are computed; the other one is the answer."""
+        two, and a unit whose lone wrapper a later rule refused moved from
+        that wrapper's day to its tree's. Every one is computed; the others
+        are the answer."""
         unit = Path(ref.locator)
         celex, lang = unit.name, unit.parent.parent.name.partition("=")[2]
         if lang not in LANGUAGES or _CONSOLIDATED.match(celex):
@@ -702,13 +764,27 @@ class EurlexSource:
         except OSError:
             return []
         days: set[str] = set()
+        # every wrapper day the unit has had a rule for: as the parse decides
+        # it (the tree's listing), and the lone wrapper's whatever it states
+        # (the rule before 2026-11-21, which dated hr 32009D0480 by the 1998
+        # act's package it holds and 31958D1006(02) by its (01)-labelled one)
+        heads = []
         try:
-            head = wrapper_head(celex, entries)
-            got = _PUB_DATE.search(head)
-            if got:
-                days.add(formex.iso(got.group(1).decode()))
+            heads.append(_listed_head(unit, celex, entries, self.TREE_FACTS))
+        except OSError:
+            pass
+        try:
+            heads.append(_lone_wrapper_head(entries))
         except (formex.FormexError, OSError):
             pass
+        try:
+            heads.append(_wrapper_by_content(celex, entries))
+        except OSError:
+            pass
+        for head in heads:
+            got = _PUB_DATE.search(head or b"")
+            if got:
+                days.add(formex.iso(got.group(1).decode()))
         for e in entries:
             if e.name == rdf_mod.TREE_FILE:
                 try:

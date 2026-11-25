@@ -18,6 +18,60 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-25
+
+- **A voice's encoding is made before a reader waits for it (`app/voice_ping.py`; operator, in the Tensor
+  session: "The only voice ping purpose is to do the re-encode for voices without it cached to avoid the extra
+  delay upon the first usage").** The port keeps a clip's encoding beside the clip, bound to the clip and the
+  engine's build; without one a voice's first sentence pays 0.8 s (an 11 s clip) to 3.2 s (the synthetic voices;
+  München's rows on d531d5d804f1). Beside the keeper's beat, once a minute, each voice the node is set to use
+  (`tts_voice`, the synthetic voices, the accounts' kept voices) that has no ping recorded under the engine the
+  speech model is loaded on (`/system`'s `backend`) AND the clip its profile lists (size, length, `updated_at`:
+  Philippe's clip was replaced in place twice under one id) gets one `{"input": "OK", "voice"}`; its 200 is
+  recorded in `state/node.sqlite` `voice_pings`. Never a warm, never because a voice was chosen, never a load of
+  the speech model, never under a question. NOT measured on the node: the first engine swap after its deploy is
+  the reading (five pings, once, then none).
+- **`node checkpoint run` recorded a step with an EMPTY command line about once in twenty starts** (read from
+  /proc a moment after the exec, before the kernel had set the arguments): such a step reads `reused` and a
+  restore would never stop it. Found as a test that failed now and then, reproduced on main; `run` now reads
+  again until the command line is there (≤ 2 s).
+- **The cold Speed row** (first word 58.7 s; rerank 23.3 s for six lists is not a load and is NOT explained yet):
+  ask-card-workflow.md.
+- **The node has two MODES OF USE, embed and chat (operator, 2026-11-25; `app/node_mode.py`, 07 §7.3 `node
+  mode`, §7.8 `[modes]`).** One switch moves the three things that differ: the chat model (`[models]
+  chat_small` in embed mode, `chat_large` in chat mode — the one `chat` setting became two and is still what
+  each reads when unset), the run mode (embed: everything; chat: `[modes] chat_run`, download/seeding, seeding
+  or pause — never everything, which `/api/control` refuses there) and the network budget (`[modes]
+  <mode>_down_max|up_max`, standing in `[budget]`'s place; the worker re-reads it each round). Switched by
+  `louise node mode embed|chat`, the System page's Mode panel and `POST /api/mode` (a cron job). WHICH mode
+  is state in `state/node.sqlite` and survives a restart (invariant 10's exception, amended); what a mode
+  MEANS is the file's. At a switch the worker unloads the chat model left and loads the one entered, after
+  any answer in flight. `node resume` goes back to what the mode runs. A node never switched is in embed
+  mode with its run mode untouched and both settings reading today's model: NOTHING CHANGES AT DEPLOY.
+  Decided here, the operator's to reverse: the keeper's rule is unchanged (a paused or seed-only node
+  preloads nothing, so chat mode on "pause" loads its models at the switch and at a question, not behind);
+  a mode's budget may exceed `[budget]`'s. NOT measured: no reading on the node yet — the first switch there
+  is the measurement (the unload, the 35B's load, the memory each mode leaves). Point 8 of the same request,
+  paging as the engine's default, is the Tensor session's (staged 0021 + the keeper's `make_room` default),
+  held until 0018's refusal row.
+- **Live: web 8337d36a (23:52Z) and engine b190673dbdbf (00:55Z).** No traceback in the worker's log since
+  the start (80 in fifteen minutes before); the German sentence read in the German profile (Sref 240); the
+  engine's five llama.cpp gates exact with the fingerprints they had. The cold Ask from an EMPTIED card,
+  Quality: first word 48.1 s — languages 13.7 (the first stage's own two loads), fts 12.3 (wikidata, no
+  model), dense 1.4 (every encoder cold at Ask: loaded ahead), rerank 15.6 (no load: the lists that share a
+  reranker go one after the other, 2.45 s a list), 2.1 s in the answer. The loads inside stages that the load ahead was built for are gone;
+  what is left is the first stage's, and work that is no load (ask-card-workflow.md). A warm row is owed.
+- **The engine pass found three defects, fixed in a second candidate before the port serves a voice.** The
+  pool's refusal (0013) is swallowed and the process still dies: 0018, and page mode stays off until its
+  row. A deleted voice could outlive its profile in LocalAI's leases (a process dead mid-request: 0019, a
+  server patch) and in the port's own memory (the last clip kept between requests: 0020). Engine
+  d531d5d804f1 and a patched server, one pause, on the operator's word (models-beyond-the-card.md §10).
+- **Live since 02:10Z: web 9a4cec4f** — the article list too long to be one (#872), Wikisource's origin
+  check by Range (#871, nothing calls it yet). EUR-Lex5.next paused for Legal; its Polish document never got
+  an error, and parses now.
+- **The port on the card:** 2.24 s a sentence with the 11 s clip, 2.70 s with Philippe's original 27.75 s
+  clip; today's backend 3.60 and 8.65 s. The longer clip is nearly free on the port.
+
 ### 2026-11-24
 
 - **THE OPERATOR'S DECISIONS OF 2026-11-25** ("I accept your recommendations for all the decisions above", to the table put to him): (1) the paging-default engine `d658549772ca` (staged 0021; building, his "yes to the build now") is SWAPPED IN after EUR-Lex5.next is repaired and drained — every gate again; the keeper's own default (956d9a7, reverted on the branch tip by c2dc747 so that the branch is always safe to merge) comes back as one commit once that engine is live; the host's floor and the 30-minute soak stay conditions after it. (2) Philippe: the original 27.75 s clip, his number of steps to come (20–32, not 16). (3) the experts' record ON, the whole cache, ONCE THE LOAD AHEAD IS LIVE for the chat model. (4) PARKING STEP 2 IS BUILT, designed with the architecture session first ([parking-step-2.md](parking-step-2.md)). Also his: a voice is pinged — one short synthesis in it — only when it has no encoding the engine can read (a new profile, or another engine build), to take that encoding off a reader's first sentence; the architecture session's to build.
@@ -35,6 +89,42 @@ measured (published figures disagree).
   never in the worker's (#859); the pool's lines say when and where (#860); a dead-man's switch for the
   worker and the web, and a journal of what the worker parses in its own process, read by its successor
   (operator: "Do everything"). scheduling.md, pitfall 21.
+- **A second document that never came back, and this time the worker was not held** (München, 23:21Z).
+  The Polish text of Directive (EU) 2018/410: a list of articles before the act, too long for the sixteen
+  tokens such a list may have, and "art." an alternative of twelve languages' forms in one union — the
+  failing match tried the same reading 12^n times (five articles: 94 s). #859's bound did what it was built
+  for: the part's 82 documents parsed again in processes of their own, that one answered as an error after
+  130 s, 5 min 22 s of one collection's stage, no other collection touched. Fixed at the root: each union
+  lists a reading once, in the engine's order (1 ms; the same citations as before on 1,621 texts). The
+  document's error is written at its own turn, not by the batch that carried it; the line now says so.
+- **A carried collection's text index ran without its look-ahead** (Legal's question, München's readings,
+  22:09–22:19Z). EUR-Lex5.next's fts: 374 of the stage's 613 s were the pipeline thread waiting for its own
+  batch's parse, the pool's children idle 88 % of their time, 0 of 21 batches "parsed ahead". The look-ahead
+  of 11-07 walked only the rows not yet embedded, and a re-created collection's rows are embedded before
+  their text is indexed: M1's four legal collections indexed this way. Fixed (a chain per class of rows);
+  the measuring script now counts the batches parsed ahead. Expected 1.5–1.7x on that stage; the AFTER is
+  München's (scheduling-log.md, scheduling.md pitfall 22).
+- **A traceback for every large part on the live worker** (München, 80 in fifteen minutes on 89c6b6da:
+  "TypeError: object of type 'NoneType' has no len()" in `_adjust_process_count`). A large part runs in a
+  process used once; its executor was the standard library's, and 3.12's manager thread asked it to replace
+  the retired child after it was let go of. The thread died there, the answers were all in. The lane's
+  executor is the pool's own class now (`parallel._Executor`, the gh-115634 fix), reproduced and held by a
+  test on 3.12.
+- **A question's models are loaded ahead of the stage that needs them** (operator: "I want the preemptive
+  model load to be implemented"). Each was loaded when its stage reached it, one cold load after the other
+  (11-09: MADLAD 8.5 s in the language step, chat 13.4 s in the answer, first word 42.4 s cold against
+  14.3 s warm). Now the ask route starts them all as the search starts, in the order of use, four at a
+  time, each only into room measured on the card; the room is made first from the models the question does
+  not use, the oldest real use first, and never from one of its own
+  (`question_card.load_ahead`; ask-card-workflow.md, "Ahead of the stage"). The gain is
+  NOT measured: München takes a cold question's timeline before and after, on an unloaded node.
+- **A German sentence read in the Italian voice** (München, #721's first hour live). A reader who is not
+  an admin hears the synthetic voice of the sentence's language, and the language is told by its commonest
+  words: twenty a language, and "Das Dekret tritt am Tag nach seiner Veröffentlichung im Amtsblatt in
+  Kraft." holds one of them. No language, so the first voice named. The lists are some seventy words a
+  language now, a word common to several counts a share for each, and a language is named only with a lead
+  over the next; too short to tell is still None, and the answer the sentence is part of says. lingua-py is
+  the named standard and a new dependency: the operator's word first (app/speech.py).
 - **Measured on a busy node, published, withdrawn, taken again.** The first load timings for the parking
   note were taken with the worker paused and nothing else (operator: "Your measurements are garbage");
   measuring.md §10 had asked for an unloaded system since 11-03. The retake (node paused 28 minutes, the

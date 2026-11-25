@@ -43,12 +43,15 @@ own `/v1/audio/speech` after the three things only Louise knows:
   own (Open WebUI) keeps it.
 
 THE LANGUAGE is told by the commonest words of the languages Louise's
-collections hold — enough to tell the model which language it reads. THE
+collections hold — enough to tell the model which language it reads, and,
+for a reader who is not an admin, which synthetic voice reads it. THE
 STANDARD ALTERNATIVE (CLAUDE.md, "Do not reinvent the wheel"): a language
 identifier — lingua-py (n-gram models, 75 languages) or langid.py — is the
-named tool; it is a new dependency and pays once voices exist for more
-languages than these word lists cover, or once a short sentence picks the
-wrong language.
+named tool; it is a new dependency (the operator's word first) and pays
+once voices exist for more languages than these word lists cover, or once
+these lists name the WRONG language. On 2026-11-24 they named NONE for a
+plain German sentence; the lists were made longer, and a sentence too short
+for them is still told by the answer it is part of.
 """
 from __future__ import annotations
 
@@ -60,7 +63,7 @@ import wave
 from contextlib import contextmanager
 from typing import Any, Iterable, Iterator
 
-from app import config, httpc, model_pins
+from app import config, httpc, model_pins, platform_config
 
 #: the pin is released this long after the last sentence: a client sends the
 #: next sentence well within it, and a reader who stopped frees the card
@@ -109,15 +112,48 @@ _TITLES = frozenset("""
     sra srta dña
 """.split())
 
+# THE COMMONEST WORDS of each language: its articles, prepositions, pronouns,
+# auxiliaries and conjunctions, and the letters left of an elision ("l'", "d'",
+# "qu'"). Some seventy each since 2026-11-24; there were twenty, and a German
+# sentence with none of them but "das" — "Das Dekret tritt am Tag nach seiner
+# Veröffentlichung im Amtsblatt in Kraft." — had no language, so a reader who
+# is not an admin heard it in the first synthetic voice, the Italian one
+# (München, #721's first hour live).
 _WORDS = {
-    "it": "il lo la gli le di che è e un una per non con del della sono nel alla questo anche",
-    "en": "the of and to is in that it was for on are with as his they be at this which",
-    "de": "der die und das ist nicht ein eine zu den von mit sich des auf für dem wird",
-    "fr": "le la les et est des un une du que pas pour dans qui sur au avec ce sont",
-    "es": "el la los las y es que un una de del en por con para no se su al",
-    "pt": "o a os as e é que um uma do da em por com para não se dos das",
+    "it": "il lo la i gli le un uno una di a da in con su per tra fra e ed o ma che non è sono era ha hanno del dello "
+          "della dei degli delle al allo alla ai agli alle dal dalla dai nel nello nella nei nelle sul sulla come più "
+          "anche se si ci questo questa questi queste quello quella essere stato stata suo sua loro cui dove quando "
+          "perché ogni l d c viene vengono può deve",
+    "en": "the of and to a in is that it was for on are with as his they be at this which by from or an have had not "
+          "but what all were when we there can their has been would who will more if no so about its into than them "
+          "only other some could these may then do any such our over shall must should",
+    "de": "der die das und ist nicht ein eine einer eines einem einen zu den von mit sich des auf für dem wird im am in "
+          "an als auch es nach bei aus um wie oder aber wurde wurden werden sind war hat haben durch über unter zur zum "
+          "vom bis noch nur wenn dass sie er wir ich seiner seine ihrer ihre dieser diese dieses kann muss gilt",
+    "fr": "le la les et est des un une du que pas pour dans qui sur au aux avec ce sont de en à il elle ils elles ne se "
+          "par plus ou mais comme être été a ont son sa ses leur leurs cette ces où nous vous je on y dont entre sans "
+          "sous aussi fait l d qu n j c s peut doit",
+    "es": "el la los las y es que un una de del en por con para no se su al lo como más pero sus le ya o fue este esta "
+          "ha sí porque cuando muy sin sobre también hasta hay donde quien desde todo nos durante todos uno les ni "
+          "contra otros ese eso ante ellos e esto antes él son fueron ser está están entre puede debe",
+    "pt": "o a os as e é que um uma do da em por com para não se dos das no na nos nas ao aos à às mais como mas foi "
+          "ele ela seu sua ou ser quando muito há já está eu também só pelo pela até isso entre era depois sem mesmo "
+          "ter seus quem esse eles estão foram essa num nem suas são pode deve",
 }
 _LEXICON = {lang: frozenset(words.split()) for lang, words in _WORDS.items()}
+#: in how many of the languages each word is one of the commonest: a word of
+#: one language alone counts 1 for it, "in" (it, en, de) a third for each
+_SHARED: dict[str, int] = {}
+for _lex in _LEXICON.values():
+    for _w in _lex:
+        _SHARED[_w] = _SHARED.get(_w, 0) + 1
+#: letters only one of these languages writes: at most LETTERS_MOST for a text
+_LETTERS = {"de": "äöüß", "es": "ñ¿¡", "pt": "ãõ", "fr": "œ"}
+LETTERS_MOST = 2.0
+#: a language is named with this much for it, and this much more than for
+#: the next: one word of its own and a shared one, never one word alone
+LANGUAGE_NEED = 1.25
+LANGUAGE_LEAD = 1.0
 
 
 def _is_citation(inner: str) -> bool:
@@ -212,16 +248,29 @@ def spaced_citations(text: str, tail: str = "") -> str:
 TAIL = 64
 
 
+def language_scores(text: str) -> dict[str, float]:
+    """What speaks for each language of `_WORDS` in `text`: its commonest
+    words, each shared among the languages it is common in (`_SHARED`), and
+    the letters it alone writes (`_LETTERS`)."""
+    low = text.casefold()
+    words = re.findall(r"[^\W\d_]+", low)
+    out = {lang: sum(1.0 / _SHARED[w] for w in words if w in lex) for lang, lex in _LEXICON.items()}
+    for lang, letters in _LETTERS.items():
+        out[lang] += min(LETTERS_MOST, float(sum(low.count(ch) for ch in letters)))
+    return out
+
+
 def language(text: str) -> str | None:
     """The text's language among those `_WORDS` knows, or None when no
-    language clearly leads."""
-    words = re.findall(r"[^\W\d_]+", text.casefold())
-    score = sorted(((sum(w in lex for w in words), lang) for lang, lex in _LEXICON.items()),
-                   reverse=True)
-    best, runner = score[0], score[1]
-    if best[0] < 2 or best[0] == runner[0]:
+    language clearly leads (LANGUAGE_NEED, LANGUAGE_LEAD): a name, a date, a
+    sentence too short to tell. The caller then asks the answer it is part
+    of (`context`), and failing that says none."""
+    score = sorted(((v, lang) for lang, v in language_scores(text).items()), reverse=True)
+    (best, lang), (runner, _other) = score[0], score[1]
+    # rounded: the shares are thirds and fifths, and 5/3 - 2/3 is not 1.0 in floats
+    if round(best, 6) < LANGUAGE_NEED or round(best - runner, 6) < LANGUAGE_LEAD:
         return None
-    return best[1]
+    return lang
 
 
 def voice_for(asked: str | None, profiles: list[dict]) -> str | None:
@@ -267,6 +316,24 @@ def profiles(url: str) -> list[dict]:
     with _lock:
         _profiles = (now, got)
     return got
+
+
+#: the bound on one voice ping: a clip's encoding and a second of synthesis
+PING_TIMEOUT_S = 60.0
+
+
+def ping(url: str, model: str, voice: str, timeout: float = PING_TIMEOUT_S) -> bool:
+    """One short synthesis IN THE VOICE (app/voice_ping.py): the engine
+    encodes the profile's clip where it holds no encoding of it it can read,
+    and writes it beside the clip; where it holds one, it reads it. True for
+    a 200: the next sentence in that voice pays no encoding. The answer's
+    audio is not kept. Never raises."""
+    try:
+        r = httpc.post(f"{url}/v1/audio/speech", json={"model": model, "input": "OK", "voice": voice},
+                       timeout=timeout)
+    except Exception:   # noqa: BLE001 — not pinged: asked again later
+        return False
+    return r.status_code == 200
 
 
 _timers: dict[str, threading.Timer] = {}
@@ -529,6 +596,14 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
             out["language"] = AUTO
     else:
         out.pop("voice", None)
+    # THE STEPS OF A SYNTHESIS ARE THE NODE'S (`[speech] tts_steps`, operator
+    # 2026-11-25): `params.flow_steps` of the request, over whatever a client
+    # sent — a reader chooses no cost on the card. Unset, nothing is sent and
+    # the model's own default stands. In the kept clip's key with the rest.
+    steps = platform_config.tts_steps(node.tts_steps)
+    if steps is not None:
+        out["params"] = {**(out.get("params") if isinstance(out.get("params"), dict) else {}),
+                         "flow_steps": str(steps)}
     # NUMBERS AND DATES IN THE TEXT'S OWN WORDS (operator, 2026-11-08, A): the
     # one voice reads digits as it learned them, in Italian (app/speech_numbers.py)
     from app import speech_numbers
