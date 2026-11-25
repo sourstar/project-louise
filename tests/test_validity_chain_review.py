@@ -58,3 +58,33 @@ def test_record_moving_a_version_to_another_work(tmp_path):
     rows = _rows(con)
     print(rows)
     assert rows["t:1"] == ("W", 20200101, None, 1)
+
+
+def test_forget_many_gives_forget_one_after_another_and_recomputes_each_work_once(tmp_path, monkeypatch):
+    """2026-11-25: discovery retired thousands of re-formed rows one `forget`
+    each, a language's versions of one act each recomputing the same Work."""
+    def build(path):
+        c = collections_mod.Collection(
+            name="t", plugin="normattiva", profile=None, embed_mode_default=None,
+            corpus_dir=path / "c", manifest_path=path / "m.db", fts_dir=path / "fts", lance_dir=path / "l")
+        con = db.connect(c)
+        for i in range(1, 7):
+            con.execute("INSERT INTO documents(uid, source, native_id, path, rdf_done, fts_done, embed_done) "
+                        "VALUES(?,?,?,?,1,1,1)", (f"t:{i}", "t", str(i), f"/x/{i}"))
+        for i, (start, work) in enumerate([(20200101, "W"), (20210101, "W"), (20220101, "W"),
+                                           (20200101, "V"), (20210101, "V"), (20230101, "V")], 1):
+            validity.record(con, f"t:{i}", i, _meta(start, work=work), day=DAY)
+        con.commit()
+        return con
+    one = build(tmp_path / "one")
+    for uid in ("t:2", "t:3", "t:5"):
+        validity.forget(one, uid, day=DAY)
+    one.commit()
+    many = build(tmp_path / "many")
+    calls = []
+    real = validity.recompute
+    monkeypatch.setattr(validity, "recompute", lambda con, work, **k: calls.append(work) or real(con, work, **k))
+    validity.forget_many(many, ["t:2", "t:3", "t:5", "t:2"], day=DAY)
+    many.commit()
+    assert _rows(many) == _rows(one)
+    assert sorted(calls) == ["V", "W"], "each Work once"

@@ -388,6 +388,13 @@ def _forget_validity(con, uid: str, day: int | None = None) -> None:
     validity.forget(con, uid, day=day)
 
 
+def _forget_validity_many(con, uids: list[str], day: int | None = None) -> None:
+    """The batch's retired documents' validity rows out, each Work's chain
+    recomputed once (`validity.forget_many`), inside the batch's transaction."""
+    from app import validity
+    validity.forget_many(con, uids, day=day)
+
+
 def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                  withdraw, collection, adopt: bool = False, superseded: bool = True) -> bool:
     """Apply one batch of refs to the manifest. Two phases, so the write
@@ -425,6 +432,7 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
     writes: list[tuple[str, tuple]] = []
     order = getattr(plugin, "origin_order", None)
     to_withdraw: list[str] = []
+    forgotten: list[str] = []                # retired here: their validity rows out, once, after the loop
     regroup: dict[str, list[int]] = {}       # group -> documents whose language left it
     # THE ROWS AND THE HASHES FIRST: every document's row read once, and the
     # fetch-and-hash of those whose signature moved done for the whole batch
@@ -555,7 +563,7 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                     continue
                 if held["rdf_done"] or held["fts_done"] or held["embed_done"]:
                     to_withdraw.append(uid_alt)
-                writes.append((_forget_validity, (uid_alt, vday)))
+                forgotten.append(uid_alt)
                 writes.append((
                     "UPDATE documents SET error=?,rdf_done=0,fts_done=0,embed_done=0,summary_done=0,"
                     "updated_at=? WHERE uid=?",
@@ -637,6 +645,11 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                 (ref.locator, txt_name, now, uid)))
             local["relocated"] += 1
 
+    if forgotten:
+        # every retired version out, then each Work's chain once (2026-11-25:
+        # one `forget` a row, the same Work recomputed for each of its
+        # languages, ~900 rows a minute after EUR-Lex5.next's walk)
+        writes.append((_forget_validity_many, (forgotten, vday)))
     if to_withdraw and withdraw is not None:
         # BEFORE the tombstones commit (app/unindexable.py's order): a stop or
         # a crash in between leaves the batch uncommitted, the cursor short of
