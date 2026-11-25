@@ -320,7 +320,15 @@ PENALTY_HALVING_S = 2 * 3600.0
 REST_FLOOR = 0.5            # = app/model_load.py REST_FLOOR, where the readings are taken
 #: the margin's samples are kept under this basis; peaks of another (the
 #: at-rest sizes before REST_FLOOR) are dropped when the file is read
-MARGIN_BASIS = 2
+MARGIN_BASIS = 3            # 3 (2026-11-25): peaks sampled against the fewest-reading rests are dropped
+#: THE AT-REST SIZES ARE KEPT UNDER THIS BASIS, and those of another are
+#: dropped when the file is read. 2 (2026-11-25): a model that keeps its
+#: context rests at what its LOAD left (`_rest_size`); until then at the
+#: fewest reading over REST_FLOOR, which a card the driver pages lowers for
+#: ever (the 35B counted 13,275 of 21,449 MiB). A dropped size is learnt
+#: again — from the model's next load, or from a reading taken while the
+#: card holds everything whole — and counts at the largest until then
+REST_BASIS = 2
 #: AFTER A RESUME THE CARD IS NOT YET LOUISE'S (2026-11-23): phase 4's exit
 #: emptied the card, resumed the node, and reloaded the live set; 9 s after its
 #: 35B container exited, the first beat read a margin of 16,759 MiB, and the
@@ -432,7 +440,9 @@ def reset() -> None:
     """Forget the last beat, every model's history and the budget's memory
     as this process holds it — the file stays, as a restart finds it (tests)."""
     global _last, _last_why, _last_switches, _memory, _out_said, _write_failed, _orphans_at, _pids_seen
+    global _over_said
     with _lock:
+        _over_said = None
         _pids_seen = (frozenset(), frozenset())
         _last, _last_why, _last_switches = {}, None, Switches()
         _track.clear()
@@ -699,7 +709,7 @@ class Memory:
         return self.penalty >> halvings if halvings < 63 else 0
 
     def as_json(self) -> dict[str, Any]:
-        return {"margin_basis": MARGIN_BASIS,
+        return {"margin_basis": MARGIN_BASIS, "rest_basis": REST_BASIS,
                 "margin_peaks": {str(t): v for t, v in sorted(self.peaks.items())},
                 "sizes": {f"{s}|{m}": v for (s, m), v in sorted(self.sizes.items())},
                 "rest": {f"{s}|{m}": v for (s, m), v in sorted(self.rest.items())},
@@ -734,7 +744,10 @@ def read_memory(path: Path | None = None) -> Memory:
     for k, v in (raw.get("margin_peaks") or {}).items() if raw.get("margin_basis") == MARGIN_BASIS else ():
         if str(k).isdigit() and count(v) is not None:
             out.peaks[int(k)] = v
-    for name, into in (("sizes", out.sizes), ("rest", out.rest)):
+    # at-rest sizes kept under another rule (the fewest reading) are not
+    # read: a paged reading among them would stay for ever (REST_BASIS)
+    for name, into in (("sizes", out.sizes),
+                       *((("rest", out.rest),) if raw.get("rest_basis") == REST_BASIS else ())):
         for k, v in (raw.get(name) or {}).items():
             server, sep, model = str(k).partition("|")
             if sep and model and count(v) is not None:
@@ -834,8 +847,22 @@ def _rest_size(r: Resident, mem: Memory) -> int | None:
         # ever (the node: nemotron 2,229 MiB counted, 2,513 at rest).
         weights = _weights(r.server, r.model, mem, largest)
         return weights if weights else largest
-    got = [v for v in (mem.rest.get(r.key), model_load.rest_vram(r.server, r.model)) if _whole(v, largest)]
-    return min(got) if got else largest
+    # A MODEL THAT KEEPS ITS CONTEXT RESTS AT WHAT ITS LOAD LEFT (2026-11-25):
+    # the first steady reading of a load this process saw begin
+    # (`model_load.rest_of_load`), else what the file remembers of an earlier
+    # one. NEVER THE FEWEST READING (the rule until then): in query mode the
+    # card held 45 GiB of models on 32, xe kept 13.3 GiB of them in host
+    # memory, and the 35B — 21,449 MiB loaded — was read at 13,275 while a
+    # slice of it was out: 0.62 of its largest, over REST_FLOOR, so "at rest",
+    # and kept for ever. The budget then held 8 GiB the card did not have and
+    # the keeper preloaded into them, which put more of the 35B out. A reading
+    # smaller than the load left is the model partly off the card, whatever
+    # share of it is left; the 11-09 floor told the two apart only while a
+    # partial reading was under 0.38 of the whole.
+    for v in (model_load.rest_of_load(r.server, r.model), mem.rest.get(r.key)):
+        if _whole(v, largest):
+            return v
+    return largest
 
 
 def _whole(rest: int | None, largest: int | None, floor: float = REST_FLOOR) -> bool:
@@ -1122,7 +1149,7 @@ def _held_now(servers: Iterable[str], mem: Memory,
             # caller (`_remember`), never counted in the model and in the margin
             floor = _rest_floor(s, m)
             known = ((_weights(s, m, mem, largest),) if floor != REST_FLOOR
-                     else (mem.rest.get((s, m)), model_load.rest_vram(s, m)))
+                     else (model_load.rest_of_load(s, m), mem.rest.get((s, m))))
             whole = [v for v in (size, *known) if _whole(v, largest, floor)]
             # a model partly off the card counts whole: what it will hold again once used
             rest = (min(whole) if whole else largest) if size else 0
@@ -1130,6 +1157,55 @@ def _held_now(servers: Iterable[str], mem: Memory,
             was = out.get(k, (0, 0, 0))
             out[k] = (max(rest, was[0]), max(int(size or 0), was[1]), max(context, was[2]))
     return out
+
+
+#: what `_overcommitted` last said, so it is said once per change
+_over_said: tuple[int, int] | None = None
+
+
+def _overcommitted(servers: Iterable[str], mem: Memory, card: tuple[int, int],
+                   there: frozenset[int] = frozenset()) -> tuple[int, int] | None:
+    """(the bytes of the models LocalAI holds on this card, each WHOLE — at
+    the most it was ever seen holding — and the card's total bytes) when the
+    first is over the second; None when they fit, or it cannot be told. The
+    card's total, not the reclaimer's line: past the total the driver MUST
+    put something elsewhere, which is the fact this is about (and it costs no
+    read of LocalAI's settings). THEN THE DRIVER KEEPS THE DIFFERENCE IN HOST MEMORY (xe
+    pages the buffers used least recently; the node in query mode,
+    2026-11-25: 45 GiB of models on a 32 GiB card, 13.3 GiB in gtt, six
+    models at under 2 MiB on the card), and NO READING SAYS WHAT A MODEL
+    HOLDS AT REST any more: a model's `size_vram` is what is left of it, and
+    the card's count stops at its total. So nothing is learnt from such a
+    reading — no at-rest size, no margin sample (`_remember`)."""
+    from app import model_load
+    try:
+        whole = 0
+        for s in sorted(set(servers)):
+            got = model_load.held_sizes(s)
+            if got is None:
+                return None
+            for m, (pid, size) in got.items():
+                if not size or (s, m) in mem.elsewhere or pid in there:
+                    continue
+                whole += max([int(size)] + [v for v in (mem.sizes.get((s, m)), model_load.size_vram(s, m)) if v])
+    except Exception:   # noqa: BLE001 — cannot be told: taken as fitting, as before
+        return None
+    return (whole, int(card[0])) if card[0] and whole > card[0] else None
+
+
+def _say_overcommitted(over: tuple[int, int] | None) -> None:
+    global _over_said
+    with _lock:
+        before, _over_said = _over_said, over
+    if over is not None and before is None:
+        _say("warn", f"resident: THE CARD IS OVER-COMMITTED — the models LocalAI holds are "
+                     f"{over[0] // MIB:,} MiB whole against the card's {over[1] // MIB:,} MiB: the driver "
+                     f"keeps the difference in host memory and brings a model back when it is used. No "
+                     f"at-rest size and no margin is learnt from readings taken now; the budget stands on "
+                     f"what was learnt before")
+    elif over is None and before is not None:
+        _say("info", f"resident: the card holds its models whole again (they were {before[0] // MIB:,} MiB "
+                     f"against the card's {before[1] // MIB:,} MiB)")
 
 
 def _settling(now: float | None = None) -> bool:
@@ -1162,6 +1238,7 @@ def _remember(want: list[Resident]) -> Memory:
         loading = _warm_thread is not None and _warm_thread.is_alive()
     settling = _settling()
     card = sample = None
+    fits_whole = False                  # whether a reading taken now says what a model holds at rest
     moved: dict[tuple[str, str], bool] = {}
     if servers:
         with _lock:
@@ -1199,6 +1276,13 @@ def _remember(want: list[Resident]) -> Memory:
             beyond = max(0, card[1] - read_now)
             live = sum(sorted((v[2] for v in mine), reverse=True)[:CONTEXTS_AT_ONCE])
             sample = max(0, card[1] - at_rest - min(beyond, live))
+        # OVER-COMMITTED: the driver holds part of the models in host memory,
+        # and neither the card's count nor a model's says what rests where
+        over = None if card is None else _overcommitted(servers, frozen, card, there)
+        _say_overcommitted(over)
+        if over is not None:
+            sample = None
+        fits_whole = card is not None and over is None and not loading and not settling
         if card is not None:
             moved = _where(servers, here, there)
     now = _wall()
@@ -1231,9 +1315,23 @@ def _remember(want: list[Resident]) -> Memory:
                 if _whole(v, largest, floor) and v != mem.rest.get(r.key):
                     mem.rest[r.key] = v
                 continue
-            v = model_load.rest_vram(r.server, r.model)
-            if _whole(v, largest, floor) and v < mem.rest.get(r.key, v + 1):
-                mem.rest[r.key] = v
+            # a model that keeps its context: what its LOAD left, where this
+            # process saw the load begin — REPLACING what the file had, as an
+            # on-demand model's weights do; never a later, smaller reading
+            # (`_rest_size`: that is the model partly in host memory)
+            v = model_load.rest_of_load(r.server, r.model)
+            if _whole(v, largest, floor):
+                if v != mem.rest.get(r.key):
+                    mem.rest[r.key] = v
+            elif r.key not in mem.rest and fits_whole:
+                # NEVER LEARNT, and this process did not see its load begin (it
+                # started with the model loaded): what its process holds now,
+                # read twice the same, while the card holds everything whole —
+                # as its load left it, or grown by a request since (the
+                # cautious side). Once: a later reading never lowers it
+                got = model_load.steady_vram(r.server, r.model)
+                if got is not None and got[1] > 0 and _whole(got[0], largest, floor):
+                    mem.rest[r.key] = got[0]
         if card is not None and card[0] != mem.total:
             mem.total = card[0]
         if sample is not None:

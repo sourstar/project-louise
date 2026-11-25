@@ -20,6 +20,31 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **THE KEEPER COUNTED THE LARGE CHAT MODEL AT 13,275 MiB OF ITS 21,449 — a reading taken with a slice of it
+  in host memory — and preloaded into the 8 GiB it thought it had (`resident._rest_size`; München's readings
+  in query mode, 16:44–16:47Z).** A model that keeps its context was counted at the FEWEST bytes any reading
+  gave over half its largest (REST_FLOOR, the rule of 2026-11-09, made when partial readings were 0.007–0.38
+  of the whole and whole ones 0.75–1.0), and the fewest was kept in the file for ever. In query mode the card
+  held 45 GiB of models on 32: xe kept 13,332 MiB of them in host memory (gtt), six models read under 2 MiB on
+  the card, and the idle 35B was caught at 0.62. The budget (19,171 MiB) then admitted MADLAD and others; the
+  card's counter went 31,544 -> 32,285 -> 32,417 MiB, over its 0.98 line; each MiB added put more of the idle
+  models out. NOTHING FAILED and LocalAI evicted nothing: the driver pages by use, which is close to what the
+  operator described for this mode ("embedders paging") — but nobody chose it, and the keeper could not see it.
+  THE RULE NOW: a model that keeps its context rests at what its LOAD left — the first steady reading of a
+  load the worker saw begin (`model_load.rest_of_load`), replacing the file's; a smaller reading of the same
+  process later is the model partly off the card, never its rest. A worker that started with the model loaded
+  keeps the file's figure, or learns one once from a reading taken while the card holds everything whole.
+  WHILE THE CARD IS OVER-COMMITTED (the models LocalAI holds, each whole, exceed the card's total) nothing is
+  learnt from a reading — no at-rest size, no margin sample — and one line says so ("resident: THE CARD IS
+  OVER-COMMITTED — … MiB whole against the card's … MiB"). The file's at-rest sizes and margin peaks of the
+  old rule are dropped at the first read (`REST_BASIS`, `MARGIN_BASIS`): each model counts at its largest
+  until it is known again. IT CHANGES WHAT THE KEEPER BELIEVES AND SAYS, NOT WHAT IS ON THE CARD (the budget
+  unloads nothing). Open, the operator's: whether query mode should let the driver page on purpose or keep
+  the card under its line — waiting on München's two prices (a page-in against a reload). Also still to do
+  in the keeper: the mode's own chat model counted first in query mode (at 15:58:24Z the 35B was itself "not
+  preloaded" and its room handed to others), and no document-only encoder preloaded where nothing embeds
+  (medcpt-article-ov was, at 16:30Z).
+
 - **THE NODE, 2026-11-25 afternoon (München's rows): the engine 619655e5833b live, the cold preload row, the
   operator's first switch to QUERY MODE, and the French answer's BEFORE on the large chat model.**
   - *The engine.* 619655e5833b (engine-stream's series + 0028) live since 15:18:30Z; the pass ended 15:52:00Z,
