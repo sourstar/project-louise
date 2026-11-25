@@ -401,3 +401,29 @@ def test_durations():
             ws.parse_duration(bad)
     assert ws.parse_when("2026-11-07T18:00:00Z") == ws.parse_when("2026-11-07T19:00:00+01:00")
     assert re.fullmatch(r"\d+ h \d\d min", ws.span(2 * H + 300))
+
+
+def test_a_restore_goes_back_to_the_mode_of_use_first_and_then_to_the_run_mode(node):
+    """The node's mode of use (embed or chat, app/node_mode.py; 2026-11-25) is
+    part of the working state: a development step that switched to chat mode
+    and froze is switched back, and the run mode recorded is written AFTER the
+    switch — which sets its own — so chat mode is never left running everything."""
+    from app import node_mode
+    node_state.set_worker_state("paused", by="the operator, for a deploy")     # embed mode, paused
+    ws.save()
+    assert ws.read()["state"]["use"] == "embed"
+    node_mode.switch("chat", by="dev")
+    node_state.set_worker_state("paused", by="dev")       # the run mode reads as it was recorded
+    got = ws.restore(by="t")
+    assert [c["what"] for c in got["changed"]] == ["use", "mode"]
+    assert node_mode.current() == "embed" and node_state.worker_state() == "paused", \
+        "not the `running` the switch to embed mode sets"
+    assert ws.said({"what": "use", "from": "chat", "to": "embed"}) == "chat mode -> embed mode"
+
+
+def test_a_record_made_before_there_were_two_modes_leaves_the_mode_of_use(node):
+    from app import node_mode
+    saved = {**ws.current()}
+    saved.pop("use")
+    node_mode.switch("chat", by="dev")
+    assert [c["what"] for c in ws.plan(saved, ws.current())["changes"]] == ["mode"]

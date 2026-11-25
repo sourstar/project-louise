@@ -10,8 +10,10 @@ the patch as the node builds it: [localai-bugs.md](../../../../docs/notes/locala
 
 - **The diffs:** three, in order, against ggml-org/llama.cpp master
   `b8abe41a5081728f9f4c824ef810902a11ab7ffd` (2026-11-11). `git apply` each.
-- **Their source:** `deploy/localai/patches/staged/llama.cpp/0011-server-context-on-demand.patch`
-  (P11, on our pin), moved onto master and cut where a reviewer can stop.
+- **Their source:** the llama.cpp half of `deploy/localai/patches/0008-llama-cpp-context-on-demand.patch`
+  (P8 in the series since 2026-11-22, staged P11 before; it adds
+  `backend/cpp/llama-cpp/patches/0011-server-context-on-demand.patch`, which since the
+  2026-11-22 rebase IS these three diffs applied in order), moved onto master and cut where a reviewer can stop.
   Against it they differ only in comments (shortened to upstream's rule:
   one or two lines, not wrapped), the order of the tests and of two members
   of one struct, and one row of the README's flag table.
@@ -172,6 +174,6 @@ What a reviewer may ask, and where you stand:
 The diffs are cut from three commits on `b8abe41`. To move them: apply the
 three in order on the new master (`git apply --3way`), build
 `llama-server`, run `tools/server/tests/unit/test_context_on_demand.py`, cut
-them again and update the hash at the top. The staged patch the node builds
-from is separate (`patches/staged/llama.cpp/0011-…`, on our pin) and does not
-move with them.
+them again and update the hash at the top. The series patch the node builds
+from (`patches/0008-llama-cpp-context-on-demand.patch`, on our pin) is
+regenerated from them at each rebase and does not move with them otherwise.

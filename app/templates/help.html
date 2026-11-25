@@ -1095,6 +1095,7 @@ louise dev embedder-profile --url &lt;URL&gt; [--concurrency 1,2,3,4]</pre>
     <tr><td>POST /api/search</td><td>open</td><td>retrieval without generation</td></tr>
     <tr><td>POST /v1/chat/completions</td><td>open</td><td>OpenAI-compatible RAG chat (usable as a model provider)</td></tr>
     <tr><td>POST /api/control</td><td>admin</td><td><code>{"state": "running"|"paused"}</code> — the worker toggle</td></tr>
+    <tr><td>POST /api/mode</td><td>admin</td><td><code>{"mode": "embed"|"chat"}</code> — the node's mode of use, for a cron job: embed (the small chat model, everything runs) or chat (the large chat model; download/seeding, seeding or pause); <code>GET</code> reads it</td></tr>
     <tr><td>POST /api/scope</td><td>admin</td><td>set languages/limits/<b>embed_mode</b>; send the full scope object (read it from /api/status first)</td></tr>
     <tr><td>POST /api/reset</td><td>admin</td><td>re-run a stage: <code>{"stage": "rdf"|"fts"|"embed"|"errors", "book_ids": []}</code></td></tr>
     <tr><td>POST /api/discover</td><td>admin</td><td>rescan the corpus now</td></tr>

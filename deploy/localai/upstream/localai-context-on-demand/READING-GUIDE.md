@@ -9,8 +9,8 @@ It follows llama.cpp's half, the package beside this one:
 - **The diff:** `context-on-demand.diff`, against LocalAI master
   `4b3c4ec72fcd25fdef26d24a7816eb59a1c342d1` (2026-11-11). Apply it with
   `git apply`.
-- **Its source:** `deploy/localai/patches/staged/0009-llama-cpp-context-on-demand.patch`
-  (P11 in our staged series), WITHOUT the llama.cpp patch file it carries
+- **Its source:** `deploy/localai/patches/0008-llama-cpp-context-on-demand.patch`
+  (P8 in our series since 2026-11-22; staged P11 before), WITHOUT the llama.cpp patch file it carries
   there: upstream LocalAI gets the feature from its llama.cpp pin. The C++
   is unchanged but for one merge in `CMakeLists.txt`; the docs section is
   new, because LocalAI requires docs in the same change.

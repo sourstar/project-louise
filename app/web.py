@@ -51,6 +51,7 @@ from . import (auth, cancel, collections as collections_mod, config, db, discove
 from . import translate as mt
 from . import collection_file
 from . import display_names
+from . import node_mode
 from .ask_pdf import AskPdf
 from . import site_title as site_title_mod
 # the collection file's one writer, moved to app/collection_file.py (2026-10-25);
@@ -115,6 +116,11 @@ TEMPLATES.env.globals["label"] = display_names.label
 TEMPLATES.env.globals.update(mode_labels=node_state.MODE_LABELS,
                              mode_says=node_state.MODE_SAYS,
                              mode_runs=node_state.mode_runs)
+# ...and the node's mode of use, embed or chat (app/node_mode.py), read at
+# each render: a run-mode button the mode refuses says so instead of failing
+TEMPLATES.env.globals.update(node_mode_now=node_mode.current,
+                             node_mode_refuses=node_mode.refuses,
+                             node_mode_labels=dict(node_mode.LABELS))
 # Dot-grouped digits ("4.020.578"): a comma reads as a decimal separator to
 # half the world — an operator read "+377,217/h" as 377.217 docs/h and
 # computed an 11-year ETA from a 4-day one. Dots as thousands separators,
@@ -4228,7 +4234,8 @@ def _effective_config() -> dict:
     tier1 = {
         "CHAT_URL": config.CHAT_URL,
         "CHAT_API": f"{config.CHAT_API} — the protocol CHAT_URL speaks",
-        "CHAT_MODEL": config.ENV_CHAT_MODEL + (f" — platform.toml [models] chat = {config.CHAT_MODEL} is in force"
+        "CHAT_MODEL": config.ENV_CHAT_MODEL + (f" — platform.toml [models]: {config.CHAT_MODEL} is in force "
+                                               f"({node_mode.current()} mode's)"
                                                if config.CHAT_MODEL != config.ENV_CHAT_MODEL else ""),
         "VEGA_URL": config.VEGA_URL or "(unset — an api = \"vega\" encoder embeds nothing)",
         "TRANSLATE_URL": config.TRANSLATE_URL or "(unset — the chat model translates, slowly)",
@@ -4256,13 +4263,17 @@ def _effective_config() -> dict:
     # per-collection.
     pc = platform_config.load()
     def _rate(value):
-        return f"{value / 1_000_000:.1f} MB/s" if value else "unlimited"
+        return f"{value / 1_000_000:.1f} MB/s" if value is not None else "unlimited"
     tier2_platform = {
         "source": str(pc.source_path) if pc.source_path else "(no platform.toml — defaults)",
         "bandwidth.down_max": _rate(pc.bandwidth.down_max_bps),
         "bandwidth.up_max": _rate(pc.bandwidth.up_max_bps),
         "bandwidth.reserve_interactive": f"{pc.bandwidth.reserve_interactive:.0%}",
         "bandwidth.schedule": pc.bandwidth.schedule_text or "always full",
+        # each mode's own budget, where [modes] sets one (app/node_mode.py)
+        **{f"modes.{m}": (f"run mode {node_mode.run_of(m, pc.modes)}; budget down "
+                          f"{_rate(node_mode.budget(m, pc)['down'])}, up {_rate(node_mode.budget(m, pc)['up'])}")
+           for m in node_mode.MODES},
         "transfer.workers": pc.transfer.workers,
         "transfer.per_endpoint": pc.transfer.per_endpoint,
         "transfer.segments_per_file": pc.transfer.segments_per_file,
@@ -4281,7 +4292,8 @@ def _effective_config() -> dict:
     # the node's overrides from THE resolution the worker uses
     # (app/node_state.py); scope is per-collection and stays in its manifest
     override = node_state.bandwidth_override()
-    tier3 = {"worker_state (state/node.sqlite)": node_state.worker_state(),
+    tier3 = {"mode (state/node.sqlite, survives a restart)": node_mode.current(),
+             "worker_state (state/node.sqlite)": node_state.worker_state(),
              "scope (control table)": db.get_scope(db.connect()),
              "bandwidth override (state/node.sqlite, expires)":
                  _rate(override) if override else "(none)"}
@@ -4365,7 +4377,8 @@ def _recent_events_all(limit: int = 60) -> list[dict]:
 
 #: the Models panel's fields, in its order: (form field, use, where it is written)
 MODEL_FIELDS = (
-    ("chat", "chat", "platform.toml [models] chat"),
+    ("chat_large", "chat, large: chat mode's", "platform.toml [models] chat_large"),
+    ("chat_small", "chat, small: embed mode's", "platform.toml [models] chat_small"),
     ("translate", "translation", "platform.toml [models] translate"),
     ("reading", "translation, by source language", "platform.toml [translate] reading"),
     ("stt_model", "speech to text", "platform.toml [speech]"),
@@ -4412,14 +4425,28 @@ def _node_models() -> list[dict]:
     except Exception:   # noqa: BLE001 — the page shows the rest
         files = platform_config.ModelsConfig()
     value = {
-        "chat": config.CHAT_MODEL, "translate": config.TRANSLATE_MODEL,
+        # THE TWO CHAT MODELS (operator, 2026-11-25: "The current chat model
+        # setting becomes 2 chat settings, large one and a small one"): chat
+        # mode's and embed mode's, each as `config.chat_model_for` resolves it
+        "chat_large": config.chat_model_for(node_mode.CHAT),
+        "chat_small": config.chat_model_for(node_mode.EMBED),
+        "translate": config.TRANSLATE_MODEL,
         "reading": _reading_text(_reading_models()),
         **{k: getattr(speech, k) or "" for k in platform_config.SPEECH_KEYS},
     }
-    default = {"chat": config.ENV_CHAT_MODEL, "translate": config.ENV_TRANSLATE_MODEL}
-    server = {"chat": config.CHAT_URL, "translate": config.TRANSLATE_URL, "reading": config.TRANSLATE_URL}
+    # what an empty field goes back to, and whose it is: the one `[models]
+    # chat` there was where the file still names it, the environment's otherwise
+    chat_default = files.chat or config.ENV_CHAT_MODEL
+    chat_from = "[models] chat" if files.chat else "the environment"
+    default = {"chat_large": chat_default, "chat_small": chat_default,
+               "translate": config.ENV_TRANSLATE_MODEL}
+    default_from = {"chat_large": chat_from, "chat_small": chat_from, "translate": "the environment"}
+    server = {"translate": config.TRANSLATE_URL, "reading": config.TRANSLATE_URL}
+    in_force = "chat_large" if node_mode.current() == node_mode.CHAT else "chat_small"
     return [{"field": f, "use": use, "set_in": where, "value": value[f] or "",
-             "default": default.get(f), "overridden": f in default and bool(getattr(files, f, None)),
+             "default": default.get(f), "default_from": default_from.get(f),
+             "overridden": f in default and bool(getattr(files, f, None)),
+             "in_force": f == in_force,
              "server": server.get(f, config.CHAT_URL)}
             for f, use, where in MODEL_FIELDS]
 
@@ -4427,8 +4454,9 @@ def _node_models() -> list[dict]:
 @admin_router.post("/system/models")
 async def system_models_set(request: Request):
     """The Models panel's form: each field that changed written into
-    platform.toml — `[models] chat|translate` (empty, or the environment's
-    own value: the key removed, the environment's in force), `[translate]
+    platform.toml — `[models] chat_large|chat_small|translate` (empty, or
+    the value it falls back to: the key removed, `[models] chat`'s or the
+    environment's in force), `[translate]
     reading`, `[speech]` through `voice.write` (as `node speech set`). Each
     write is read back before it replaces the file. What changed goes to the
     node's log; an error comes back on the page, nothing changed."""
@@ -4441,10 +4469,12 @@ async def system_models_set(request: Request):
     said: list[str] = []
     try:
         models: dict[str, str | None] = {}
-        for f, env in (("chat", config.ENV_CHAT_MODEL), ("translate", config.ENV_TRANSLATE_MODEL)):
+        default = {m["field"]: (m["default"], m["default_from"]) for m in _node_models()}
+        for f in ("chat_large", "chat_small", "translate"):
             if f in got and got[f] != now[f]:
-                models[f] = None if got[f] in ("", env) else got[f]
-                said.append(f"{f} → {got[f] or env + ' (the environment)'}")
+                back, whose = default[f]
+                models[f] = None if got[f] in ("", back) else got[f]
+                said.append(f"{f} → " + (got[f] or f"{back} ({whose}'s)"))
         if "reading" in got and got["reading"] != now["reading"]:
             reading = _parse_reading(got["reading"])
             platform_config.set_keys(path, "translate", {"reading": reading or None})
@@ -4463,12 +4493,99 @@ async def system_models_set(request: Request):
                             status_code=303)
 
 
+def _node_modes() -> dict:
+    """The System page's Mode panel (operator, 2026-11-25): the mode the node
+    is in, and what each of the two sets — its chat model, the run mode it
+    switches to, its network budget as written and as in force."""
+    try:
+        pc = platform_config.load()
+    except Exception:   # noqa: BLE001 — the page shows the rest; Models says the file
+        pc = platform_config.PlatformConfig()
+    def _rate(value):
+        return f"{value / 1_000_000:.1f} MB/s" if value is not None else "unlimited"
+    rows = []
+    for mode, label in node_mode.LABELS:
+        b = node_mode.budget(mode, pc)
+        rows.append({
+            "mode": mode, "label": label, "says": node_mode.SAYS[mode],
+            "chat_model": config.chat_model_for(mode),
+            "run": node_mode.run_of(mode, pc.modes),
+            "down": pc.modes.written(f"{mode}_down_max"), "up": pc.modes.written(f"{mode}_up_max"),
+            "down_in_force": _rate(b["down"]), "up_in_force": _rate(b["up"]),
+        })
+    return {"mode": node_mode.current(), "rows": rows, "chat_run": pc.modes.chat_run,
+            # one model named for both: a switch changes no model, said on the page (RULE 2)
+            "one_model": rows[0]["chat_model"] if rows[0]["chat_model"] == rows[1]["chat_model"] else None,
+            "chat_runs": [(s, dict(node_state.MODE_LABELS)[s]) for s in platform_config.CHAT_RUNS],
+            "budget": {"down": _rate(pc.bandwidth.down_max_bps), "up": _rate(pc.bandwidth.up_max_bps)}}
+
+
+@admin_router.post("/system/mode")
+async def system_mode_set(request: Request):
+    """The Mode panel's two buttons: the node switched to embed or chat mode
+    (`node_mode.switch`, as `louise node mode` and `POST /api/mode` do),
+    recorded with who asked, and back to the page."""
+    from urllib.parse import quote
+    from . import model_pins
+    form = await request.form()
+    mode = str(form.get("mode", "")).strip()
+    if mode not in node_mode.MODES:
+        return RedirectResponse(f"/admin/system?mode_error={quote('mode is embed or chat')}#sys-mode",
+                                status_code=303)
+    client = request.client.host if request.client else "?"
+    got = node_mode.switch(mode, by=f"the System page, from {client}")
+    model_pins.node_event("info", f"node switched to {mode} mode from the System page "
+                                  f"(was {got['before']}); run mode {got['run']}")
+    return RedirectResponse("/admin/system?mode_saved=1#sys-mode", status_code=303)
+
+
+@admin_router.post("/system/modes")
+async def system_modes_set(request: Request):
+    """The Mode panel's settings: chat mode's run mode and each mode's
+    network budget, each one that changed written into platform.toml's
+    `[modes]` (read back before it replaces the file; an empty budget: the
+    key removed, `[budget]`'s in force). Chat mode's run mode is taken at
+    once where the node is in chat mode. The worker applies a budget at its
+    next round, no restart."""
+    from urllib.parse import quote
+    from . import model_pins, voice
+    form = await request.form()
+    try:
+        now = platform_config.load().modes
+    except Exception as e:   # noqa: BLE001 — a file that does not load is said, not rewritten
+        return RedirectResponse(f"/admin/system?mode_error={quote(str(e)[:300])}#sys-mode", status_code=303)
+    values: dict[str, str | None] = {}
+    for key in platform_config.MODES_KEYS:
+        if key not in form:
+            continue
+        got = str(form.get(key, "")).strip()
+        if got != (now.chat_run if key == "chat_run" else now.written(key)):
+            values[key] = got or None
+    client = request.client.host if request.client else "?"
+    try:
+        if values:
+            platform_config.set_keys(platform_config.platform_path(), "modes", values)
+        if values.get("chat_run"):
+            node_mode.set_chat_run(values["chat_run"], by=f"the System page, from {client}")
+    except (ValueError, *voice.LOAD_ERRORS) as e:
+        return RedirectResponse(f"/admin/system?mode_error={quote(str(e)[:300])}#sys-mode", status_code=303)
+    if values:
+        model_pins.node_event("info", "modes set from the System page: " + "; ".join(
+            f"{k} → {v or '[budget] (unset)'}" for k, v in values.items()))
+    return RedirectResponse("/admin/system?mode_saved=1#sys-mode" if values else "/admin/system#sys-mode",
+                            status_code=303)
+
+
 @admin_router.get("/system", response_class=HTMLResponse)
 def system_page(request: Request):
     collections = collections_mod.load_all()
     from .api import _models_at
     return TEMPLATES.TemplateResponse(request, "system.html", {
         "node_models": _node_models(),
+        "node_modes": _node_modes(),
+        "mode_error": request.query_params.get("mode_error"),
+        "mode_saved": request.query_params.get("mode_saved"),
+        "tts_steps_range": platform_config.TTS_STEPS,     # the Models panel's number field for [speech] tts_steps
         # the model server's names, as the inputs' suggestions; [] when it does not answer
         "server_models": _models_at(config.CHAT_URL, timeout=1.5) if config.CHAT_URL else [],
         "models_error": request.query_params.get("models_error"),

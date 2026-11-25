@@ -1,0 +1,38 @@
+# A CANDIDATE: PAGING AS THE ENGINE'S DEFAULT (operator, 2026-11-25, relayed
+# by the architecture session: "Set the new paging mode as the default in the
+# engine"). d531d5d804f1's series, line for line, then:
+#   0021  on SYCL a model pages by default: GGML_SYCL_BMG_VRAM_CHECK 0 and
+#         GGML_SYCL_HOST_PINNED_MEM_2G 1 where upstream has 1 and 0. A
+#         model's own file still decides for that model.
+#   SERIES_FILE=deploy/localai/patches/staged/engine-page.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
+# ANOTHER ENGINE: a build and every gate again, and two defaults carried
+# against upstream's. Every encoder runs under buffers of 2 GiB at most: it
+# must gate as d531d5d804f1 does, fingerprint for fingerprint, or it rolls
+# back - where a buffer ends is not what is computed in it, and the gate is
+# what says so.
+# NOT BEFORE 0018's ROW HAS PASSED on the live engine (a refused pool commit
+# answered by the same process): a default that pages before the refusal
+# reaches the graph is the defect already seen. And the keeper's own default
+# (`[models] make_room = "page"`) is merged only once THIS engine is the live
+# one - docs/notes/room-on-the-card.md §3.
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0009-llama-cpp-omnivoice.patch
+staged/0010-llama-cpp-tts-voice-modes.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch
+staged/0016-llama-cpp-sycl-pool-refuse-switch.patch
+staged/0017-llama-cpp-moe-record.patch
+staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch
+staged/0020-llama-cpp-omnivoice-nothing-kept-between-requests.patch
+staged/0021-llama-cpp-sycl-paging-is-the-default.patch

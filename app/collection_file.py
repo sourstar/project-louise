@@ -502,6 +502,8 @@ SETTABLE: dict[str, str] = {
     "reranker.api": "jina | tei",
     "reranker.rerank_model": "the reranker's model",
     "reranker.window": "the longest candidate read, in tokens; 0 uncut",
+    "acquire_enabled": "true | false: whether the node fetches from the origin; default: as the "
+                       "collection's kind does",
 }
 #: `hold config show` prints the mode as `embed_mode`
 ALIASES = {"embed_mode": "embed"}
@@ -605,6 +607,12 @@ def _parse(key: str, text: str, where: str) -> Any:
             if not text.isdigit():
                 raise ValueError(f"reranker.window is a number of tokens (0: uncut), got {text!r}")
             return int(text)
+        if key == "acquire_enabled":
+            # DO NOT FETCH, as a documented key (2026-11-25: it was written
+            # into EUR-Lex5.next's file by hand, `--set` refused it and 07
+            # §7.8 did not list it). "default": the line removed, the
+            # collection fetches as its kind does (`derived`)
+            return None if text in ("", "default") else _bool(key, text)
         return text.rstrip("/") if key.endswith("url") else text
     except ValueError as e:
         raise SetRefused(str(e)) from None
@@ -688,6 +696,8 @@ def _apply(c, raw: dict[str, Any], path: Path, parsed: dict[str, Any], *,
             kw[field] = parsed[key]
     if "share" in parsed:
         kw["share"] = parsed["share"]
+    if "acquire_enabled" in parsed:
+        kw["acquire_enabled"] = parsed["acquire_enabled"]      # None: the derivation
     if "embed" in parsed:
         kw["embed_mode"] = parsed["embed"]
     if not annotations:
@@ -743,6 +753,8 @@ def _read_back(back, kw: dict[str, Any], parsed: dict[str, Any]) -> None:
            "share_slices": back.share_slices, "share_kinds": back.share_kinds,
            "embed_slices": back.embed_slices, "embed_select": back.embed_select,
            "share": back.share, "method": back.method}
+    if parsed.get("acquire_enabled") is not None:
+        got["acquire_enabled"] = back.acquire_enabled
     enc, rr = back.embed, back.reranker
     if enc is not None:
         got.update({"encoder.url": enc.url, "encoder.query_url": enc.query_url or "",

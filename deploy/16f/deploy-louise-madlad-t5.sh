@@ -564,9 +564,13 @@ say "6a'. LocalAI's runtime settings Louise depends on (deploy/vega/stage/locala
 # written from its UI, win over LOCALAI_AUTO_UPGRADE_BACKENDS=false, and v5 upgraded three
 # upstream backends by itself): applied, idempotent, printed by its managed keys alone (the
 # object carries api_keys), and the deploy fails where LocalAI does not take them
-python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" "${LOCALAI_URL:-http://127.0.0.1:30286}" \
+# THE NODE'S FILE DECIDES THE RECLAIMER (2026-11-24: platform.toml `[models] make_room = "page"` wants it
+# off — a card paging idle models reads full at every tick): the mode is read from the live file, so this
+# stage applies and checks the mode the node is in and never puts the other back
+PLATFORM_ARG=""; [ -r "$ROOT/config/platform.toml" ] && PLATFORM_ARG="--platform $ROOT/config/platform.toml"
+python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" $PLATFORM_ARG "${LOCALAI_URL:-http://127.0.0.1:30286}" \
   || { echo "LocalAI did not take the settings Louise depends on (above)"; exit 1; }
-python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" --check "${LOCALAI_URL:-http://127.0.0.1:30286}"
+python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" $PLATFORM_ARG --check "${LOCALAI_URL:-http://127.0.0.1:30286}"
 say "6a''. the CPU references collections kept before the node's store, held to it (read-only)"
 # operator, 2026-11-22: "The CPU reference is per model, not per collection" — RAGE resolves it by
 # its key from the node's store alone (app/rage/reference.py). A collection's own copy names no

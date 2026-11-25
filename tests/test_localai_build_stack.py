@@ -92,16 +92,21 @@ def test_an_aot_build_records_the_ocloc_and_igc_its_driver_used():
     assert '/aot-proof.sh "$SYCL_DEVICE_ARCH"' in build
 
 
-def test_p7_is_upstreams_dmmv_cleanup_and_in_the_series():
+def test_p7_upstreams_dmmv_cleanup_left_the_series_with_the_base_that_carries_it():
+    # 2026-11-07: upstream's dmmv cleanup (llama.cpp 5e18eb02) carried ahead of the pin as P7;
+    # 2026-11-21 (the operator's A): the series moved to LocalAI v5.0.1, whose llama.cpp
+    # 78e0529 carries it, so P7 is retired — a patch leaves the series when the base passes it
     patches = HERE.parent / "patches"
-    series = (patches / "series").read_text(encoding="utf-8").split()
-    assert "0007-llama-cpp-sycl-dmmv-cleanup.patch" in series
-    p7 = (patches / "0007-llama-cpp-sycl-dmmv-cleanup.patch").read_text(encoding="utf-8")
-    # it adds the llama.cpp patch beside the others, and that patch is upstream's commit, dmmv.cpp only
-    assert "backend/cpp/llama-cpp/patches/0009-sycl-dmmv-cleanup.patch" in p7
-    assert "5e18eb021b021a133cfa4d9ac84dab644bc24318" in p7
-    inner = [l for l in p7.splitlines() if l.startswith("+diff --git ")]
-    assert inner == ["+diff --git a/ggml/src/ggml-sycl/dmmv.cpp b/ggml/src/ggml-sycl/dmmv.cpp"]
+    series = (patches / "series").read_text(encoding="utf-8")
+    assert "base dd5780aa904d132c784867d37fc713df8d984c8a" in series.split("\n")
+    assert "0007-llama-cpp-sycl-dmmv-cleanup.patch" not in series
+    assert not (patches / "0007-llama-cpp-sycl-dmmv-cleanup.patch").exists()
+    # 2026-11-22: the number is taken again by the nemotron reranker (was staged P10), nothing dmmv
+    assert not any("dmmv" in p.name for p in patches.glob("*.patch"))
+    # the retirement is on record where the action items live
+    actions = (HERE.parents[2] / "docs" / "notes" / "localai-bugs.md").read_text(encoding="utf-8")
+    assert "## Patches retired into the base" in actions
+    assert "### P7. " in actions.split("## Patches retired into the base", 1)[1]
 
 
 def test_a_prebuilt_stack_keeps_the_builders_loader_and_says_which_ships():

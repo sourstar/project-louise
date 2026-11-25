@@ -1,0 +1,27 @@
+# A CANDIDATE ENGINE: the live series and the three staged engine fixes
+# (operator, 2026-11-24, relayed by München from the architecture session:
+# "Do everything, also 721, everything, run unattended" — an engine build with
+# the pool's refusal and the second signal's exit). Built on the node with
+#   SERIES_FILE=deploy/localai/patches/staged/engine-fixes.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>
+# (and the live engine's INTEL_STACK), installed beside the live engine,
+# gated, then swapped. A new engine is a new run of every model on it.
+#   0012  GGML_SYCL_REORDER_EXPERTS, default 1 = today's behaviour: it rides so
+#         that the expert-layout comparison on the 35B needs no second build
+#   0013  a refused device-memory commit fails the request, not the backend
+#         (localai-bugs.md B18/P14; the condition of `make_room = "page"`)
+#   0014  a second termination signal leaves at once (B19/P15)
+# When their card checks pass, the three move up into `series` and this file
+# goes (staged/README.md).
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch

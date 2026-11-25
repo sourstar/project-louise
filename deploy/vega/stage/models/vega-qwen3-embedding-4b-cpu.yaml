@@ -18,6 +18,7 @@
     "seed": 0
   },
   "options": [
+    "fit:off",
     "parallel:1",
     "pooling:last",
     "ubatch:8192"

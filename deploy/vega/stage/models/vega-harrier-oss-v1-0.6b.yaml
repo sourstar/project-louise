@@ -12,6 +12,7 @@
   "mmap": true,
   "name": "vega-harrier-oss-v1-0.6b",
   "options": [
+    "fit:off",
     "parallel:1",
     "pooling:last",
     "ubatch:8192"

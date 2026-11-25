@@ -40,7 +40,7 @@ import httpx
 from . import (backend, catalog, chunking, collections as collections_mod, config, cpu_limit, db,
                discovery, embed_select, layers as layers_mod, parallel, embeddings,
                encoder_timeouts, entities,
-               fts, issues as issues_mod, lookahead, model_load, model_pins, origin_missing,
+               fts, issues as issues_mod, lookahead, memory_yield, model_load, model_pins, origin_missing,
                resident,
                node_state,
                plugin_io, refs, sched, sizing, slice_scope, spaces, stats, text_index)
@@ -4158,6 +4158,17 @@ def _scan_only(con, collection, reason: str, stop=None) -> None:
         db.log_event(con, "info", "discover",
                      "corpus scan stopped: the node's mode runs no parsing now; "
                      "it goes on from here when everything runs again")
+    if (held.fired is stop and isinstance(stop, _AnyStop) and stop.fired is not None
+            and stop.fired is not _stop and not _stop.is_set()):
+        # THE COLLECTION'S OWN STOP cut it short — `node pause <collection>`
+        # (07 §7.3) retires its threads at their unit: the scan is owed to its
+        # RESUME. Nothing asked for it before (2026-11-25): the log said
+        # "resumes next scan", and the next scan was the interval's, hours
+        # away. A stopping node owes nothing: the next start scans.
+        _owe_scan(collection.name, OWED_BY_PAUSE)
+        db.log_event(con, "info", "discover",
+                     "corpus scan stopped: the collection is paused; it is asked for "
+                     "again when the collection is resumed")
     if stats.get("added") or stats.get("changed"):
         db.log_event(con, "info", "discover",
                      f"picked up {stats.get('added', 0)} new, "
@@ -4175,6 +4186,43 @@ _profile_nagged: dict[str, float] = {}
 #: (collection, what) -> when it was last said: a waiting thread says why
 #: once an hour, not every idle beat
 _said: dict[tuple[str, str], float] = {}
+
+
+#: how often a stage that waits says what it waits for
+WAIT_SAID_EVERY_S = 300.0
+
+
+def _wait_for_slice_scope(con, collection) -> bool:
+    """THE STAGES WAIT BEHIND THE SLICE SCOPE, AND SAY SO (2026-11-25:
+    EUR-Lex5.next stood with "0 units in 7 turns", one line said an hour
+    before, and no scan coming). Every WAIT_SAID_EVERY_S: where the pass is
+    (row N of M), and the scan it needs — running, asked for, or ASKED FOR
+    NOW. Every wait has its request: the pass runs at the end of a scan, so
+    a wait with no scan running and none queued asks for one, as the embed
+    selection's wait does. Returns whether a scan was asked for."""
+    name = collection.name
+    # ONCE A PERIOD, the line and the request together: this runs at every
+    # idle pass of the thread, and a scan that cannot run now (the licence,
+    # the mode) must not be started again every few seconds. Between two
+    # periods the wait costs one dictionary lookup.
+    if time.time() - _said.get((name, "slice-scope"), 0.0) <= WAIT_SAID_EVERY_S:
+        return False
+    running = scan_running(name)
+    with _discover_req_lock:
+        queued = name in _discover_requests
+    asked = False
+    if not running and not queued:
+        _request_discovery(name, "slice scope", acquire=False)
+        asked = True
+    where = slice_scope.waits(con, collection)
+    _say_once(con, name, "slice-scope",
+              f"waiting for the slice scope: {where} — it is brought up to date at the end of a "
+              f"scan, and " + ("a scan is running" if running else
+                               "a scan is asked for" if queued else
+                               "none was running or asked for: one is asked for now")
+              + "; nothing is parsed, indexed or embedded until then (app/slice_scope.py)",
+              every_s=WAIT_SAID_EVERY_S)
+    return asked
 
 
 def _say_once(con, name: str, what: str, message: str, every_s: float = 3600.0) -> None:
@@ -5214,11 +5262,18 @@ def _cpu_paused(con, collection) -> bool:
 #: while the mode ran no parsing: scanned when everything runs again
 _scan_owed: set[str] = set()
 _scan_owed_lock = threading.Lock()
+#: why each is owed, where it is not the mode's doing: the reason its scan
+#: is asked with (`_owed_why`)
+_scan_owed_why: dict[str, str] = {}
+OWED_BY_MODE = "landed while the node parsed nothing"
+OWED_BY_PAUSE = "resume: its pause cut the last scan short"
 
 
-def _owe_scan(name: str) -> None:
+def _owe_scan(name: str, why: str | None = None) -> None:
     with _scan_owed_lock:
         _scan_owed.add(name)
+        if why:
+            _scan_owed_why[name] = why
 
 
 def _take_owed_scans() -> set[str]:
@@ -5226,6 +5281,43 @@ def _take_owed_scans() -> set[str]:
         owed = set(_scan_owed)
         _scan_owed.clear()
     return owed
+
+
+def _owed_why(name: str) -> str:
+    """The reason an owed scan is asked with, taken once."""
+    with _scan_owed_lock:
+        return _scan_owed_why.pop(name, OWED_BY_MODE)
+
+
+def _request_owed_scans(active, held_names: set[str], pipeline: bool, cons, last_discover) -> list[str]:
+    """The scans owed, asked for where their collection runs this round —
+    and KEPT OWED where it does not: a collection paused on its own (`node
+    pause <collection>`) is not in `active`, and its scan is its resume's
+    (2026-11-25: EUR-Lex5.next's scan was cut short by its pause, its resume
+    asked for none, and the stages stood behind the slice scope for thirty
+    minutes until the worker was restarted). One no longer held owes
+    nothing. Returns the names asked for."""
+    owed = _take_owed_scans()
+    if not owed:
+        return []                                   # the idle round costs nothing
+    asked: list[str] = []
+    for collection in active:
+        if collection.name not in owed:
+            continue
+        why = _owed_why(collection.name)
+        if pipeline:
+            _request_discovery(collection.name, why, acquire=False)
+        else:
+            _scan_only(cons[collection.name], collection, why)
+            last_discover[collection.name] = time.time()
+        asked.append(collection.name)
+    for name in owed - set(asked):
+        if name in held_names:
+            _owe_scan(name)                          # its reason stays where it is
+        else:
+            with _scan_owed_lock:
+                _scan_owed_why.pop(name, None)
+    return asked
 
 # Discovery requests, drained by the owning collection's pipeline thread.
 #
@@ -5491,6 +5583,15 @@ def _pipeline_worker(collection, gone: threading.Event) -> None:
             if _paused.is_set():
                 time.sleep(2)
                 continue
+            # THE COLLECTION YIELDS TO THE WORKER'S MEMORY (app/memory_yield.py;
+            # the rule an operator's monitor held until 2026-11-25): nothing
+            # new of it starts while the worker is over its line — its parts
+            # in flight finish — and its own log says why, with the numbers
+            yielding = memory_yield.said(collection.name)
+            if yielding is not None:
+                _say_once(con, collection.name, "memory-yield", yielding, every_s=WAIT_SAID_EVERY_S)
+                time.sleep(config.WORKER_IDLE_SLEEP)
+                continue
             # Tier-2 is DESIRED STATE (invariant 10) and this thread outlives
             # every edit to it, so the object is re-read each round rather
             # than held from thread start — see `_live_collection`.
@@ -5515,9 +5616,7 @@ def _pipeline_worker(collection, gone: threading.Event) -> None:
                 if not slice_scope.ready(con, collection):
                     # the slices held are not applied to in_scope yet (the
                     # scan thread does it): nothing outside them is processed
-                    _say_once(con, collection.name, "slice-scope",
-                              "waiting for the slice scope: only the slices the "
-                              "collection file holds are processed (app/slice_scope.py)")
+                    _wait_for_slice_scope(con, collection)
                     time.sleep(config.WORKER_IDLE_SLEEP)
                     continue
                 if not embed_select.ready(con, collection):
@@ -6379,6 +6478,97 @@ def _say_mode(state: str) -> None:
                           f"(read from {node_state.path()})")
 
 
+#: (the node's mode of use, its budget) as the worker last acted on them
+_node_mode_seen: list = [None, None]
+#: how long a switch waits for an answer in flight before it unloads the chat
+#: model that answer is using
+MODE_ANSWER_WAIT_S = 120.0
+
+
+def _rate_said(bps: int | None) -> str:
+    return "unlimited" if bps is None else f"{bps / 1_000_000:.1f} MB/s"
+
+
+def _apply_node_mode(node_con, *, manager=None, start=None) -> str:
+    """The node's MODE OF USE (embed or chat, app/node_mode.py; operator,
+    2026-11-25), acted on once a round: its network budget set on the
+    transfer manager (from platform.toml's `[modes]`, re-read when the file
+    changed, so the page's edit needs no restart), ONE LINE when the mode or
+    its budget changes and at the first read, and — at a SWITCH, never at
+    a first read that finds the mode it last acted on — the chat model the
+    node no longer uses unloaded and the one it does loaded, behind
+    (`_mode_models`): a round never waits for a model. Returns the mode."""
+    from . import node_mode, platform_config
+    mode = node_mode.apply_budget(manager or get_manager(), node_con)
+    in_force = node_mode.budget(mode, platform_config.seen())
+    before, budget_before = _node_mode_seen
+    if before == mode and budget_before == in_force:
+        return mode
+    _node_mode_seen[:] = [mode, in_force]
+    if before is None:
+        # THE FIRST READ OF THIS PROCESS: a switch made while the worker was
+        # down (a cron job's, during a deploy) is still a switch — the store
+        # remembers the mode whose chat model was last made the node's
+        before = node_mode.applied(node_con)
+        if before is None:
+            node_mode.set_applied(node_con, mode)
+        said = "read" if before in (None, mode) else f"{before} -> {mode}, switched while the worker was down"
+    else:
+        said = "budget changed" if before == mode else f"{before} -> {mode}"
+    _node_line("control")(
+        f"node in {mode} mode ({said}): chat model {config.chat_model_for(mode)}; network budget "
+        f"down {_rate_said(in_force['down'])}{'' if in_force['down_own'] else ' ([budget])'}, "
+        f"up {_rate_said(in_force['up'])}{'' if in_force['up_own'] else ' ([budget])'}")
+    if before is not None and before != mode:
+        node_mode.forget()          # this process's own readers follow at once
+        node_mode.set_applied(node_con, mode)
+        (start or _start_mode_models)(before, mode)
+    return mode
+
+
+def _start_mode_models(before: str, mode: str) -> None:
+    threading.Thread(target=_mode_models, args=(before, mode), daemon=True,
+                     name="mode-models").start()
+
+
+def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
+                 question=None, sleep=None) -> dict:
+    """A switch's models, off the round's thread: the chat model of the mode
+    left is unloaded (LocalAI's `/backend/shutdown`, `model_load.unload` —
+    its memory is what the switch is for), after any answer in flight has
+    ended or `wait_s` has passed, and the chat model of the mode entered is
+    loaded (`llm.warm`, which makes its room from the models used least
+    recently). Where both modes name one model nothing is unloaded. Never
+    raises: a model that does not load is said, and loads at its first
+    question as it always did."""
+    from . import llm
+    log = _node_line("models")
+    old, new = config.chat_model_for(before), config.chat_model_for(mode)
+    out = {"old": old, "new": new, "unloaded": False, "loaded": False}
+    if old == new:
+        log(f"{mode} mode: both modes name {new}: nothing unloaded "
+            f"(set [models] chat_large and chat_small on the System page)")
+        return out
+    question = question or resident._question_now
+    sleep = sleep or _stop.wait
+    until = time.monotonic() + wait_s
+    while question() and time.monotonic() < until and not _stop.is_set():
+        sleep(1.0)
+    try:
+        out["unloaded"] = model_load.unload(config.CHAT_URL, old)
+    except Exception as e:   # noqa: BLE001 — the runner keeps it; the load below makes its own room
+        log(f"{mode} mode: {old} was not unloaded ({type(e).__name__}: {e})")
+    try:
+        llm.warm()
+        out["loaded"] = True
+    except Exception as e:   # noqa: BLE001 — it loads at the first question
+        log(f"{mode} mode: {new} did not load now ({type(e).__name__}: {str(e)[:200]}); "
+            f"it loads at the first question")
+    log(f"{mode} mode: {old} {'unloaded' if out['unloaded'] else 'was not loaded'}; "
+        f"{new} {'loaded' if out['loaded'] else 'not loaded'}")
+    return out
+
+
 _profile_watch: list = []
 
 
@@ -6755,6 +6945,14 @@ def _resident_keeper() -> None:
                     except Exception:   # noqa: BLE001
                         cons.pop(stale, None)
                 resident.beat(_served_now(collections), embed_mode=embed_mode, stop=_stop.is_set)
+            except Exception:   # noqa: BLE001 — never the thread; the next beat
+                pass
+            try:
+                # a voice with no encoding under this engine and this clip is
+                # pinged once, off this thread (app/voice_ping.py)
+                from . import voice_ping
+                voice_ping.beat(preloads=resident.preloads()[0], question=resident._question_now,
+                                stop=_stop.is_set, say=model_pins.node_event)
             except Exception:   # noqa: BLE001 — never the thread; the next beat
                 pass
             if _stop.wait(SETTLE_BEAT_S):
@@ -7253,6 +7451,9 @@ def run_forever():
             # applies it. Re-read each round so it takes effect within one
             # document and expires on its own.
             get_manager().set_override(node_state.bandwidth_override(node_con))
+            # ...and the budget of the node's mode of use (embed or chat),
+            # with its models at a switch (app/node_mode.py)
+            _apply_node_mode(node_con)
             # ...and the same channel carries the measurement back the other
             # way: acquisition and seeding move their bytes HERE, so without
             # this the Network page's graph is a flat zero beside a saturated
@@ -7289,19 +7490,10 @@ def run_forever():
             # loop skips embed/genesis/bundles below
             if node_state.runs(state, node_state.PARSE):
                 _acquire_only.clear()
-                # what landed, or was cut short, while nothing was parsed
-                owed = _take_owed_scans()
-                for collection in active:
-                    if collection.name not in owed:
-                        continue
-                    if pipeline:
-                        _request_discovery(collection.name,
-                                           "landed while the node parsed nothing",
-                                           acquire=False)
-                    else:
-                        _scan_only(cons[collection.name], collection,
-                                   "landed while the node parsed nothing")
-                        last_discover[collection.name] = time.time()
+                # what landed, or was cut short, while nothing was parsed —
+                # or while the collection itself was paused
+                _request_owed_scans(active, {c.name for c in all_collections}, pipeline,
+                                    cons, last_discover)
             else:
                 _acquire_only.set()
             if pipeline:
@@ -7461,6 +7653,9 @@ def _start_oom_watch() -> None:
     from . import oom_hold
     oom_hold.on_kill(_on_oom_kill)          # a pool that sees a child die asks at once
     threading.Thread(target=oom_hold.watch, args=(_stop, _on_oom_kill), name="oom-watch", daemon=True).start()
+    # ...and the watcher that makes a collection yield BEFORE the kernel acts
+    threading.Thread(target=memory_yield.watch, args=(_stop, _node_line("memory")),
+                     name="memory-yield", daemon=True).start()
 
 
 

@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 24 Nov 2026 13:07:34 +0000
+Subject: [PATCH] feat(llama-cpp): GGML_SYCL_REORDER_EXPERTS, to compare a MoE
+ model's expert layouts
+
+Carried as a llama.cpp patch beside the others
+(patches/0013-sycl-reorder-experts-switch.patch). ggml-sycl rewrites the
+expert tensors of a mixture-of-experts model into its reorder layout at
+first use. With GGML_SYCL_REORDER_EXPERTS=0 they keep the layout they were
+loaded in; the dense weights are reordered as before, and the default is
+unchanged.
+
+STAGED, for one comparison: a run on an Intel Arc Pro B70 with
+Qwen3.6-35B-A3B whose experts had stayed in the plain layout started long
+prompts about a quarter sooner at the same decode speed. Whether that is
+the layout is what the switch is for
+(docs/notes/backend-qualification-2026-11-21.md, the Louise repository).
+Not compiled where it was written.
+
+Assisted-by: Claude Code
+---
+ .../0013-sycl-reorder-experts-switch.patch    | 71 +++++++++++++++++++
+ 1 file changed, 71 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0013-sycl-reorder-experts-switch.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0013-sycl-reorder-experts-switch.patch b/backend/cpp/llama-cpp/patches/0013-sycl-reorder-experts-switch.patch
+new file mode 100644
+index 0000000..c52c3df
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0013-sycl-reorder-experts-switch.patch
+@@ -0,0 +1,71 @@
++sycl: GGML_SYCL_REORDER_EXPERTS=0 leaves expert tensors in the layout they were loaded in
++
++At first use ggml-sycl rewrites each expert tensor of a mixture-of-experts
++model into the reorder (SoA) layout (opt_for_reorder_id -> reorder_qw), as
++it does the dense weights. The kernels take either layout.
++
++One run on an Intel Arc Pro B70 (Qwen3.6-35B-A3B, UD-Q4_K_M, the experts
++left in the plain layout as a side effect of another experiment) started a
++2,048-token prompt in 1.80 s where the reordered model takes 2.48-2.50 s,
++and a 140-token one in 0.23-0.24 s against 0.28, at the same decode speed
++(100.8-101.1 tok/s against 100.4). One run, on memory allocated another
++way: not yet a measurement of this switch.
++
++GGML_SYCL_REORDER_EXPERTS=0 skips the expert tensors' reorder and nothing
++else, so the two layouts can be compared on the same model as it normally
++runs. The default, 1, is today's behaviour.
++
++Not compiled where it was written (no SYCL compiler there).
++---
++diff --git a/docs/backend/SYCL.md b/docs/backend/SYCL.md
++index 8649fca..1045db7 100644
++--- a/docs/backend/SYCL.md
+++++ b/docs/backend/SYCL.md
++@@ -840,6 +840,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
++ | GGML_SYCL_SPARSE_FA_MARGIN | [0,..] default:256 | Set the margin value for Sparse Flash-attention.|
++ | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
++ | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
+++| GGML_SYCL_REORDER_EXPERTS | 1 (default) or 0 | With 0, the expert tensors of a mixture-of-experts model (`mul_mat_id`) are not rewritten into the reorder layout at first use; the dense weights still are. To measure: on one Arc Pro B70 run of a 35B MoE at Q4_K_M the plain layout started a 2,048-token prompt sooner at the same decode speed. |
++ | GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
++ | GGML_SYCL_BMG_VRAM_CHECK | 1 (default) or 0 | Workaround for BMG (Arc B-series) GPUs, where the Level Zero driver accepts device allocations beyond VRAM and moves the overflow to system RAM, which can exhaust host memory when a model does not fit (e.g. `-ngl 999`, see https://github.com/intel/compute-runtime/issues/1047). When enabled, a model or split buffer that does not fit in the device's free memory is refused and the model load fails with an error. Set to 0 to disable. |
++ 
++diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
++index d3797f8..4f961b7 100644
++--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
++@@ -147,6 +147,7 @@ int g_ggml_sycl_use_level_zero_api = 0;
++ int g_ggml_sycl_enable_flash_attention = 1;
++ int g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
++ int g_ggml_sycl_usm_system = 0;
+++int g_ggml_sycl_reorder_experts = 1;
++ int g_ggml_sycl_bmg_vram_check = 1;
++ int g_ggml_sycl_enable_host_pinned_mem = 1;
++ int g_ggml_sycl_host_pinned_mem_2g = 0;
++@@ -478,6 +479,7 @@ static void ggml_check_sycl() try {
++ #endif
++ 
++         g_ggml_sycl_usm_system = ggml_sycl_get_env("GGML_SYCL_USM_SYSTEM", 0);
+++        g_ggml_sycl_reorder_experts = ggml_sycl_get_env("GGML_SYCL_REORDER_EXPERTS", 1);
++         g_ggml_sycl_bmg_vram_check = ggml_sycl_get_env("GGML_SYCL_BMG_VRAM_CHECK", 1);
++         g_ggml_sycl_enable_host_pinned_mem =
++             ggml_sycl_get_env("GGML_SYCL_ENABLE_HOST_PINNED_MEM", 1);
++@@ -617,6 +619,7 @@ static void ggml_check_sycl() try {
++ #endif
++ 
++         GGML_LOG_INFO("  GGML_SYCL_USM_SYSTEM: %d\n", g_ggml_sycl_usm_system);
+++        GGML_LOG_INFO("  GGML_SYCL_REORDER_EXPERTS: %d\n", g_ggml_sycl_reorder_experts);
++         GGML_LOG_INFO("  GGML_SYCL_BMG_VRAM_CHECK: %d\n", g_ggml_sycl_bmg_vram_check);
++         GGML_LOG_INFO("  GGML_SYCL_ENABLE_HOST_PINNED_MEM: %d\n", g_ggml_sycl_enable_host_pinned_mem);
++         GGML_LOG_INFO("  GGML_SYCL_HOST_PINNED_MEM_2G: %d\n", g_ggml_sycl_host_pinned_mem_2g);
++@@ -5090,6 +5093,11 @@ static void opt_for_reorder_id(ggml_backend_sycl_context * ctx, const ggml_tenso
++     if (!g_ggml_sycl_enable_optimize || !ctx->opt_feature.reorder) {
++         return;
++     }
+++    // GGML_SYCL_REORDER_EXPERTS=0: the expert tensors of a mixture-of-experts model keep the layout they were
+++    // loaded in (the kernels take either); the dense weights are reordered as before
+++    if (!g_ggml_sycl_reorder_experts) {
+++        return;
+++    }
++     if (src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_Q3_K && src0->type != GGML_TYPE_Q4_K &&
++         src0->type != GGML_TYPE_Q5_K && src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_MXFP4) {
++         return;
+-- 
+2.43.0
+

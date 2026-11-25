@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 24 Nov 2026 11:56:02 +0000
+Subject: [PATCH] fix(config): tts.voice_cloning is honoured for a backend the
+ capability table does not know
+
+VoiceCloningForModel resolves the model's backend in BackendCapabilities
+(the exact name, or a gallery hardware prefix and channel suffix stripped)
+and returned nil when nothing was found - before it read the model's own
+tts.voice_cloning, the field documented as the operator's explicit opt-in.
+A backend installed under a name of its own (an operator's build of
+llama-cpp, named by what it was built from) therefore answered every
+request that names a saved voice profile with 400 "selected model does not
+support reference-audio voice cloning", and no key of the model file could
+change it. The audio-cpp entry was added for the same symptom; a backend
+nobody registers has no such way.
+
+For a backend the table does not know, an explicit tts.voice_cloning: true
+now returns the reference contract the cloning backends share. Nothing
+else moves: without the field the answer stays no, an explicit false stays
+no, a KNOWN backend that cannot clone is not opened by it, and a model
+that names no backend is not either.
+
+Tested: core/config, six cases beside the existing ones.
+
+Assisted-by: Claude Code
+---
+ core/config/backend_capabilities.go      | 17 +++++++-
+ core/config/backend_capabilities_test.go | 54 ++++++++++++++++++++++++
+ 2 files changed, 70 insertions(+), 1 deletion(-)
+
+diff --git a/core/config/backend_capabilities.go b/core/config/backend_capabilities.go
+index 2aa2ae9..6d86664 100644
+--- a/core/config/backend_capabilities.go
++++ b/core/config/backend_capabilities.go
+@@ -1100,12 +1100,27 @@ func init() {
+ // deliberately insufficient. Operators with custom filenames can opt in or
+ // out explicitly with tts.voice_cloning; the model option spelling remains a
+ // compatibility fallback for configurations created before the typed field.
++//
++// A backend the table does not know at all - an operator's own build,
++// installed under a name of its own - has no contract to narrow, and until
++// now no way in: the lookup failed before tts.voice_cloning was read, so a
++// saved voice profile was refused whatever the model file said. For such a
++// backend the model's explicit tts.voice_cloning: true is the only statement
++// there is, and it is honoured with the reference contract the cloning
++// backends share. Without it the answer stays no, and a KNOWN backend that
++// cannot clone is not opened by it.
+ func VoiceCloningForModel(cfg *ModelConfig) *VoiceCloningCapability {
+ 	if cfg == nil {
+ 		return nil
+ 	}
+ 	capability, backend := resolveBackendCapability(cfg.Backend)
+-	if capability == nil || capability.VoiceCloning == nil {
++	if capability == nil {
++		if cfg.Backend != "" && cfg.VoiceCloning != nil && *cfg.VoiceCloning {
++			return referenceVoiceCloning()
++		}
++		return nil
++	}
++	if capability.VoiceCloning == nil {
+ 		return nil
+ 	}
+ 	if cfg.VoiceCloning != nil {
+diff --git a/core/config/backend_capabilities_test.go b/core/config/backend_capabilities_test.go
+index b72e280..bc8e5ce 100644
+--- a/core/config/backend_capabilities_test.go
++++ b/core/config/backend_capabilities_test.go
+@@ -389,6 +389,60 @@ var _ = Describe("llama-cpp TTS capabilities", func() {
+ 		cfg.TTSConfig.VoiceCloning = &disabled
+ 		Expect(VoiceCloningForModel(&cfg)).To(BeNil())
+ 	})
++
++	// An operator's own build of a backend is installed under a name of its
++	// own - here the digest of what it was built from - which no table entry
++	// and no stripped gallery variant resolves. The lookup used to end the
++	// question there: a saved voice profile was answered "selected model does
++	// not support reference-audio voice cloning" and tts.voice_cloning: true
++	// in the model file changed nothing, because it was never read.
++	Describe("a backend the table does not know", func() {
++		const custom = "acme-sycl-f16-llama-cpp-d6f9b5247671-stack-7c301a7ba437"
++		enabled, disabled := true, false
++
++		It("resolves to nothing, which is why the model's word is needed", func() {
++			Expect(GetBackendCapability(custom)).To(BeNil())
++		})
++
++		It("is refused without the model's word, as before", func() {
++			cfg := ttsModel(custom)
++			Expect(VoiceCloningForModel(&cfg)).To(BeNil())
++		})
++
++		It("is given the reference contract on an explicit tts.voice_cloning: true", func() {
++			cfg := ttsModel(custom)
++			cfg.TTSConfig.VoiceCloning = &enabled
++			cloning := VoiceCloningForModel(&cfg)
++			Expect(cloning).NotTo(BeNil())
++			Expect(cloning.ReferenceTranscriptRequired).To(BeTrue())
++			Expect(cloning.AcceptedAudioFormats).To(ContainElement("audio/wav"))
++		})
++
++		It("stays refused on an explicit false", func() {
++			cfg := ttsModel(custom)
++			cfg.TTSConfig.VoiceCloning = &disabled
++			Expect(VoiceCloningForModel(&cfg)).To(BeNil())
++		})
++
++		It("gives every caller a contract of its own to modify", func() {
++			cfg := ttsModel(custom)
++			cfg.TTSConfig.VoiceCloning = &enabled
++			first := VoiceCloningForModel(&cfg)
++			first.AcceptedAudioFormats[0] = "audio/changed"
++			Expect(VoiceCloningForModel(&cfg).AcceptedAudioFormats).To(ContainElement("audio/wav"))
++		})
++
++		It("does not open a known backend that cannot clone, nor a model with no backend named", func() {
++			known := ModelConfig{Name: "a-piper-voice", Backend: "piper"}
++			known.TTSConfig.VoiceCloning = &enabled
++			Expect(GetBackendCapability("piper")).NotTo(BeNil())
++			Expect(VoiceCloningForModel(&known)).To(BeNil())
++
++			unnamed := ModelConfig{Name: "auto-detected"}
++			unnamed.TTSConfig.VoiceCloning = &enabled
++			Expect(VoiceCloningForModel(&unnamed)).To(BeNil())
++		})
++	})
+ })
+ 
+ var _ = Describe("IsValidUsecaseForBackend", func() {
+-- 
+2.43.0
+

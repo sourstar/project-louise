@@ -273,6 +273,32 @@ def language(text: str) -> str | None:
     return lang
 
 
+def primary(tag: Any) -> str | None:
+    """A language tag as the speech engine reads one: its PRIMARY SUBTAG, lower
+    case ("en-GB", "en_US" -> "en"; "it-IT" -> "it"); None for none. The engine
+    knows languages, not countries: a tag with a region is no language to it
+    (it resolves to none), and a cloned voice then speaks in its recording's
+    (München, 2026-11-25, read in the engine's own language map)."""
+    return str(tag or "").strip().replace("_", "-").split("-")[0].lower() or None
+
+
+def spoken_language(text: str, context: str = "", asked: Any = None) -> str | None:
+    """THE LANGUAGE A SENTENCE IS SPOKEN IN (operator, 2026-11-25: "the
+    language/country tag must be aligned to the language to speak, otherwise
+    the voice has always a thick italian accent"). In this order:
+      1. the sentence's OWN language, where it is clear (`language`);
+      2. the language of the answer it is part of (`context`, which the page
+         sends when it shows the answer in its original language);
+      3. the tag the request carries — the page's answer language, a
+         client's own — as its primary subtag.
+    Until that day the request's tag came first: the Ask page sends the
+    language the answer was ASKED in, and an English answer on a page set to
+    Italian went to the model tagged Italian — English words in an Italian
+    mouth. The tag is now what is left for a sentence too short to tell
+    ("Dante.", a date) with no answer around it. None: nothing says."""
+    return language(text) or (language(context) if context else None) or primary(asked)
+
+
 def voice_for(asked: str | None, profiles: list[dict]) -> str | None:
     """THE ONE VOICE, whatever the language (operator, 2026-11-07): the
     voice asked for; none asked, the first profile recorded; no profile,
@@ -316,6 +342,24 @@ def profiles(url: str) -> list[dict]:
     with _lock:
         _profiles = (now, got)
     return got
+
+
+#: the bound on one voice ping: a clip's encoding and a second of synthesis
+PING_TIMEOUT_S = 60.0
+
+
+def ping(url: str, model: str, voice: str, timeout: float = PING_TIMEOUT_S) -> bool:
+    """One short synthesis IN THE VOICE (app/voice_ping.py): the engine
+    encodes the profile's clip where it holds no encoding of it it can read,
+    and writes it beside the clip; where it holds one, it reads it. True for
+    a 200: the next sentence in that voice pays no encoding. The answer's
+    audio is not kept. Never raises."""
+    try:
+        r = httpc.post(f"{url}/v1/audio/speech", json={"model": model, "input": "OK", "voice": voice},
+                       timeout=timeout)
+    except Exception:   # noqa: BLE001 — not pinged: asked again later
+        return False
+    return r.status_code == 200
 
 
 _timers: dict[str, threading.Timer] = {}
@@ -555,21 +599,25 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     out["input"] = text
     if model:
         out["model"] = model
-    lang = language(text) or (language(context) if context else None)
+    # the language the sentence is SPOKEN in, never a tag taken on trust
+    # (`spoken_language`): what is sent is a language the engine knows
+    lang = spoken_language(text, context, body.get("language"))
+    if lang:
+        out["language"] = lang
+    else:
+        out.pop("language", None)
     held = profiles(url)
     # the reader's voice — the request's (the Ask page's choice, a client's
     # own), else the one the asker's account keeps (app/users.py) — unless it
     # names a profile the server no longer holds — a browser remembering a
     # voice since removed (app/voice.py `voices`): then the node's, never an error
-    if lang and "language" not in out:
-        out["language"] = lang
     if admin:
         asked = next((v for v in (body.get("voice") or None, account_voice or None)
                       if v and held_profile(v, held)), None)
         voice = voice_for(asked or node.tts_voice or None, held)
     else:
-        spoken = str(out.get("language") or "").replace("_", "-").split("-")[0].lower() or None
-        voice = synthetic_for(spoken, node_voice.synthetic(node), held)
+        # the voice of that same language: voice and tag never disagree
+        voice = synthetic_for(lang, node_voice.synthetic(node), held)
         if voice is None:
             return 409, NO_SYNTHETIC, "application/json", []
     if voice:

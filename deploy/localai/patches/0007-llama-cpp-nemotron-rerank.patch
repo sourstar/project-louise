@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
-Date: Tue, 10 Nov 2026 22:30:00 +0000
+Date: Sun, 22 Nov 2026 06:24:22 +0000
 Subject: [PATCH] feat(llama-cpp): rank with nvidia/llama-nemotron-rerank-1b-v2
 
 Carried as a llama.cpp patch beside the others
@@ -19,6 +19,10 @@ STAGED for a separate backend used only by the reranker benchmark's arm A3
 tomorrow I want to see its benchmarks too"); it enters the live series only
 if that arm earns it, so no live engine changes for it.
 
+Carried in the series from 2026-11-22 (was staged, live on its own backend since 2026-11-11):
+rebased onto LocalAI v5.0.1 (llama.cpp 78e0529), the llama.cpp patch's context
+lines refreshed, its code unchanged, in one engine with the others.
+
 Assisted-by: Claude Code
 ---
  .../patches/0010-llama-nemotron-rerank.patch  | 190 ++++++++++++++++++
@@ -27,7 +31,7 @@ Assisted-by: Claude Code
 
 diff --git a/backend/cpp/llama-cpp/patches/0010-llama-nemotron-rerank.patch b/backend/cpp/llama-cpp/patches/0010-llama-nemotron-rerank.patch
 new file mode 100644
-index 0000000..1925919
+index 0000000..9033b22
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0010-llama-nemotron-rerank.patch
 @@ -0,0 +1,190 @@
@@ -49,10 +53,10 @@ index 0000000..1925919
 +  model's own tokenizer does.
 +
 +diff --git a/conversion/__init__.py b/conversion/__init__.py
-+index 3976e03..dcfff1a 100644
++index 634cafa..5e5fa97 100644
 +--- a/conversion/__init__.py
 ++++ b/conversion/__init__.py
-+@@ -180,6 +180,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
++@@ -190,6 +190,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
 +     "Llama4ForCausalLM": "llama",
 +     "Llama4ForConditionalGeneration": "llama",
 +     "LlamaBidirectionalModel": "llama",
@@ -157,10 +161,10 @@ index 0000000..1925919
 + @ModelBase.register("SmolLM3ForCausalLM")
 + @ModelBase.example("HuggingFaceTB/SmolLM3-3B")
 +diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
-+index 1d67dc8..0272620 100644
++index e9e1866..c2ecc31 100644
 +--- a/gguf-py/gguf/constants.py
 ++++ b/gguf-py/gguf/constants.py
-+@@ -6096,6 +6096,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
++@@ -6652,6 +6652,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
 +         MODEL_TENSOR.FFN_GATE_EXP,
 +         MODEL_TENSOR.FFN_DOWN_EXP,
 +         MODEL_TENSOR.FFN_UP_EXP,
@@ -169,7 +173,7 @@ index 0000000..1925919
 +     MODEL_ARCH.MAINCODER: [
 +         MODEL_TENSOR.TOKEN_EMBD,
 +diff --git a/src/models/llama-embed.cpp b/src/models/llama-embed.cpp
-+index 0699e74..3a4d40d 100644
++index 691eb89..ab1ce82 100644
 +--- a/src/models/llama-embed.cpp
 ++++ b/src/models/llama-embed.cpp
 +@@ -1,5 +1,16 @@
@@ -187,13 +191,13 @@ index 0000000..1925919
 ++}
 ++
 + std::unique_ptr<llm_graph_context> llama_model_llama_embed::build_arch_graph(const llm_graph_params & params) const {
-+     return std::make_unique<graph<true>>(*this, params);
++     return std::make_unique<graph<true>>(params);
 + }
 +diff --git a/src/models/models.h b/src/models/models.h
-+index 9a8602b..4a6a7d7 100644
++index 8d74c50..ca8c230 100644
 +--- a/src/models/models.h
 ++++ b/src/models/models.h
-+@@ -199,7 +199,9 @@ struct llama_model_llama4 : public llama_model_base {
++@@ -158,7 +158,9 @@ struct llama_model_llama4 : public llama_model_base {
 + 
 + struct llama_model_llama_embed : public llama_model_llama {
 +     llama_model_llama_embed(const struct llama_model_params & params) : llama_model_llama(params) {}
@@ -205,10 +209,10 @@ index 0000000..1925919
 +     template <bool embed>
 +     using graph = llama_model_llama::graph<embed>;
 +diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
-+index 311eb4f..9490021 100644
++index eb5781e..0c907a4 100644
 +--- a/tools/server/server-common.cpp
 ++++ b/tools/server/server-common.cpp
-+@@ -2002,6 +2002,12 @@ server_tokens format_prompt_rerank(
++@@ -2151,6 +2151,12 @@ server_tokens format_prompt_rerank(
 +         std::string prompt = format_rerank_template(rerank_prompt, q, d);
 + 
 +         if (query_files.empty() && doc_files.empty()) {
@@ -221,6 +225,3 @@ index 0000000..1925919
 +             server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
 +             result.push_back(tokens);
 +         } else {
--- 
-2.43.0
-

@@ -23,13 +23,26 @@ def _name(series: str | Path, cwd: Path) -> subprocess.CompletedProcess:
 
 
 def test_a_relative_and_an_absolute_series_file_name_the_same_engine(tmp_path):
-    staged = PATCHES / "staged" / "context-on-demand.series"
-    absolute = _name(staged, tmp_path)
-    relative = _name(os.path.relpath(staged, ROOT), ROOT)
+    """The candidate is made here, as staged/README.md says one is made: a
+    local copy of `series` with a staged patch appended. Until 2026-11-22
+    this test read staged/context-on-demand.series, which left the tree
+    when its patches joined the series (41fb62a) — and the test went red
+    unnoticed, the commit having run the tests it knew it touched."""
+    import hashlib
+    extra = "staged/0009-llama-cpp-omnivoice.patch"
+    series = (PATCHES / "series").read_text(encoding="utf-8")
+    candidate = tmp_path / "candidate.series"
+    candidate.write_text(series + extra + "\n", encoding="utf-8")
+    absolute = _name(candidate, tmp_path)
+    relative = _name(os.path.relpath(candidate, ROOT), ROOT)
     assert absolute.returncode == 0 and relative.returncode == 0, (absolute.stderr, relative.stderr)
     assert absolute.stdout == relative.stdout and len(absolute.stdout.strip()) == 12
-    # and not the patches-only name the relative path gave before
-    assert absolute.stdout.strip() != "c4e6133a6e85"
+    # and not the patches-only name the relative path gave before (c4e6133a6e85 then)
+    names = [line.strip() for line in series.splitlines()
+             if line.strip() and not line.startswith(("#", "base "))] + [extra]
+    patches_alone = hashlib.sha256(b"".join((PATCHES / n).read_bytes() for n in names)).hexdigest()[:12]
+    assert absolute.stdout.strip() != patches_alone
+    assert absolute.stdout != _name(PATCHES / "series", tmp_path).stdout, "a patch more is another engine"
 
 
 def test_the_name_covers_the_base(tmp_path):

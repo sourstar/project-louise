@@ -102,3 +102,32 @@ def test_an_unrefused_unit_is_dated_without_reading_its_tree(tmp_path, monkeypat
     monkeypatch.setattr(src, "_tree_listing", lambda *a: (_ for _ in ()).throw(AssertionError("tree read")))
     assert _day(unit) == OJ_DAY
     assert rdf.TREE_FILE in os.listdir(unit)
+
+
+def test_a_unit_without_formex_reads_its_tree_once(tmp_path, monkeypatch):
+    """München's ten dumps of the 2026-11-25 scan: three in the tree's JSON.
+    A unit holding no wrapper and no package (an XHTML, HTML or PDF act)
+    asked its tree for a listing that cannot change its refusal, then read it
+    again for its work day."""
+    coll = _coll(tmp_path)
+    unit = coll.corpus_dir / src.unit_rel("it", CELEX)
+    unit.mkdir(parents=True)
+    (unit / rdf.TREE_FILE).write_bytes((FORMEX[2] / rdf.TREE_FILE).read_bytes())
+    (unit / "L_1972160IT.01000101.doc.html").write_bytes(b"<html><body><p>Articolo 1</p></body></html>")
+    reads = []
+    real = rdf.loads
+    monkeypatch.setattr(rdf, "loads", lambda b: reads.append(1) or real(b))
+    assert _day(unit) == WORK_DAY
+    assert len(reads) == 1, reads
+
+
+def test_a_refused_wrapper_reads_its_tree_once_for_listing_and_day(tmp_path, monkeypatch):
+    coll = _coll(tmp_path)
+    unit = _unit(coll, label="31972R9999")
+    w = unit / WRAPPER                                             # the tree no longer lists this file
+    w.rename(unit / "L_1972160IT.01000199.doc.xml")
+    reads = []
+    real = rdf.loads
+    monkeypatch.setattr(rdf, "loads", lambda b: reads.append(1) or real(b))
+    assert _day(unit) == WORK_DAY
+    assert len(reads) == 1, reads

@@ -90,6 +90,49 @@ def test_run_records_the_step_forwards_sigterm_and_exits_with_its_code(open_chec
     assert ws.read()["last_beat"] == ws.read()["saved_at"], "run does not beat"
 
 
+def test_run_records_the_command_line_the_exec_gave_not_the_empty_one_before_it(open_checkpoint, tmp_path,
+                                                                                    monkeypatch):
+    """2026-11-25: the test above failed once in about twenty runs, on main, with
+    `e["cmdline"] == []`. Popen returns when the child's exec has closed the
+    error pipe, a moment before the kernel has set the new image's arguments,
+    and /proc/<pid>/cmdline reads empty in between. An entry recorded with
+    that reads `reused` ever after and is never stopped by a restore. The
+    moment is played here: the first looks at the child see no command line."""
+    ready = tmp_path / "ready"
+    real, looks = dev_processes.facts, []
+
+    def facts(pid):
+        got = real(pid)
+        if got is not None and pid != os.getpid() and len(looks) < 3:
+            looks.append(pid)
+            return got[0], got[1], [], got[3]            # mid-exec: no arguments yet
+        return got
+    monkeypatch.setattr(dev_processes, "facts", facts)
+    seen: dict = {}
+
+    def the_watchdog_looks_then_signals():
+        _until(lambda: ready.exists() and (ws.read().get("dev_processes") or []))
+        (e,) = ws.read()["dev_processes"]
+        seen["entry"], seen["state"] = e, dev_processes.state(e)
+        os.kill(os.getpid(), signal.SIGTERM)
+    t = threading.Thread(target=the_watchdog_looks_then_signals)
+    t.start()
+    assert ws.run([sys.executable, "-c", STEP, str(ready)], note="the gate") == 130
+    t.join()
+    assert len(looks) == 3, "the case: the command line was not there at the first looks"
+    assert seen["entry"]["cmdline"] == [sys.executable, "-c", STEP, str(ready)]
+    assert seen["state"] == "running", "the step is the one recorded: a restore would stop it"
+
+
+def test_a_child_with_no_command_line_at_all_is_recorded_as_read_and_not_waited_for(monkeypatch):
+    monkeypatch.setattr(ws, "EXEC_SETTLE_S", 0.05)
+    monkeypatch.setattr(dev_processes, "entry",
+                        lambda pid, **k: {"pid": pid, "start": 7, "cmdline": [], "pgid": pid, "ns": "", **k})
+    t = time.monotonic()
+    assert ws._entry_after_exec(4242, "n")["cmdline"] == []
+    assert time.monotonic() - t < 1.0
+
+
 def test_run_from_the_command_line(isolated_config, tmp_path, capsys):
     made = tmp_path / "made"
     argv = ["node", "checkpoint", "run", "--note", "x", "--", "sh", "-c", f"touch {made}; exit 7"]

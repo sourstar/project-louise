@@ -1,0 +1,181 @@
+diff --git a/src/backend.h b/src/backend.h
+index 2b7dcc0..7c6c03f 100644
+--- a/src/backend.h
++++ b/src/backend.h
+@@ -27,6 +27,13 @@ struct BackendPair {
+ // Used for GGML CPU thread count: GEMM shares SIMD units across hyperthreads,
+ // so one thread per physical core is optimal.
+ static int backend_cpu_n_threads(void) {
++    // LOCAL TEST HOOK (not upstream): OV_THREADS=<n> sets the count, to time this program at a given one
++    if (const char * env = getenv("OV_THREADS")) {
++        int forced = atoi(env);
++        if (forced > 0) {
++            return forced;
++        }
++    }
+     int n = (int) std::thread::hardware_concurrency() / 2;
+     return n > 0 ? n : 1;
+ }
+diff --git a/src/maskgit-tts.h b/src/maskgit-tts.h
+index 2fbbe5a..7d65da3 100644
+--- a/src/maskgit-tts.h
++++ b/src/maskgit-tts.h
+@@ -18,6 +18,8 @@
+ #include <cmath>
+ #include <cstdint>
+ #include <cstdio>
++#include <cstdlib>
++#include <string>
+ #include <vector>
+ 
+ struct MaskgitConfig {
+@@ -127,6 +129,39 @@ static void maskgit_gumbel_inplace(float * x, int n, float temperature, int64_t
+     ctr_lo += 1;
+ }
+ 
++// LOCAL TEST HOOKS (not upstream), for the gate of the llama.cpp port:
++//   OV_FORCE_TOKENS=<file [K,T]> OV_FORCE_OUT=<dir>: one forward on these codes, the logits dumped, then stop
++//   OV_REPLAY_LOGITS=<dir> OV_REPLAY_OUT=<dir>: each step scores the logits of <dir>/step-NN-logits-{cond,uncond}.bin
++//   instead of this program's own, and dumps the codes after the step
++static bool hook_load(const std::string & path, std::vector<float> & out, size_t n_expect) {
++    FILE * f = fopen(path.c_str(), "rb");
++    if (!f) {
++        fprintf(stderr, "[Hook] cannot read %s\n", path.c_str());
++        return false;
++    }
++    int32_t nd = 0;
++    if (fread(&nd, 4, 1, f) != 1 || nd < 1 || nd > 4) {
++        fclose(f);
++        return false;
++    }
++    int32_t shape[4];
++    size_t  n = 1;
++    if (fread(shape, 4, nd, f) != (size_t) nd) {
++        fclose(f);
++        return false;
++    }
++    for (int i = 0; i < nd; i++) {
++        n *= (size_t) shape[i];
++    }
++    out.resize(n);
++    bool ok = fread(out.data(), 4, n, f) == n && n == n_expect;
++    fclose(f);
++    if (!ok) {
++        fprintf(stderr, "[Hook] %s: %zu values, expected %zu\n", path.c_str(), n, n_expect);
++    }
++    return ok;
++}
++
+ // Run the iterative decoder. Returns flat audio_tokens of size K * T (k slow,
+ // t fast). The prompt input_ids buffer is mutated in place during decoding.
+ // ctr_lo_inout, when non-NULL, threads the Philox counter across successive
+@@ -175,6 +210,22 @@ static std::vector<int32_t> maskgit_generate(PipelineTTS *         pt,
+     pipeline_tts_llm_batched_ctx_init(&batched_ctx, prompt->audio_mask.data(), prompt->attention_mask.data(), B_prime,
+                                       S);
+ 
++    const char * hook_force  = getenv("OV_FORCE_TOKENS");
++    const char * hook_replay = getenv("OV_REPLAY_LOGITS");
++    if (hook_force) {
++        std::vector<float> forced;
++        if (!hook_load(hook_force, forced, (size_t) K * (size_t) T)) {
++            return {};
++        }
++        for (int k = 0; k < K; k++) {
++            for (int t = 0; t < T; t++) {
++                int32_t v = (int32_t) forced[(size_t) k * T + t];
++                tokens[(size_t) k * T + t] = v;
++                prompt->input_ids[((size_t) 0 * K + k) * S + (size_t) (audio_start_cond + t)] = v;
++                prompt->input_ids[((size_t) 1 * K + k) * S + (size_t) t]                      = v;
++            }
++        }
++    }
+     for (int step = 0; step < cfg.num_step; step++) {
+         int k_demask = sched[step];
+         if (k_demask <= 0) {
+@@ -183,8 +234,12 @@ static std::vector<int32_t> maskgit_generate(PipelineTTS *         pt,
+ 
+         const char *                                hidden_dump = (step == 0 && dump_dir) ? dump_dir : nullptr;
+         const std::chrono::steady_clock::time_point fwd_t0      = std::chrono::steady_clock::now();
+-        std::vector<float>                          logits_full =
+-            pipeline_tts_llm_forward_batched(pt, prompt->input_ids.data(), &batched_ctx, K, T, hidden_dump);
++        std::vector<float>                          logits_full;
++        if (!hook_replay) {
++            logits_full = pipeline_tts_llm_forward_batched(pt, prompt->input_ids.data(), &batched_ctx, K, T, hidden_dump);
++        } else {
++            logits_full.assign(hidden_dump ? (size_t) B_prime * V * K * S : (size_t) 2 * V * K * T, 0.0f);
++        }
+         const std::chrono::steady_clock::time_point fwd_t1 = std::chrono::steady_clock::now();
+         fwd_total_ms += std::chrono::duration<double, std::milli>(fwd_t1 - fwd_t0).count();
+ 
+@@ -220,6 +275,25 @@ static std::vector<int32_t> maskgit_generate(PipelineTTS *         pt,
+             }
+         }
+ 
++        if (hook_force) {
++            DebugDumper dbg;
++            debug_init(&dbg, getenv("OV_FORCE_OUT"));
++            debug_dump_3d(&dbg, "forced-logits-cond", c_log.data(), K, T, V);
++            debug_dump_3d(&dbg, "forced-logits-uncond", u_log.data(), K, T, V);
++            pipeline_tts_llm_batched_ctx_free(pt, &batched_ctx);
++            return {};
++        }
++        if (hook_replay) {
++            char name[64];
++            snprintf(name, sizeof(name), "/step-%02d-logits-cond.bin", step);
++            bool ok = hook_load(std::string(hook_replay) + name, c_log, c_log.size());
++            snprintf(name, sizeof(name), "/step-%02d-logits-uncond.bin", step);
++            ok = ok && hook_load(std::string(hook_replay) + name, u_log, u_log.size());
++            if (!ok) {
++                pipeline_tts_llm_batched_ctx_free(pt, &batched_ctx);
++                return {};
++            }
++        }
+         // Dump LM logits at step 0 only, layout [K, T, V] for both cond and
+         // uncond rows. The Python side mirrors this layout via a hook on
+         // _predict_tokens_with_scoring.
+@@ -352,6 +426,14 @@ static std::vector<int32_t> maskgit_generate(PipelineTTS *         pt,
+             prompt->input_ids[((size_t) 1 * K + k) * S + (size_t) t]                      = v;
+         }
+ 
++        if (hook_replay && getenv("OV_REPLAY_OUT")) {
++            DebugDumper dbg;
++            debug_init(&dbg, getenv("OV_REPLAY_OUT"));
++            char name[64];
++            snprintf(name, sizeof(name), "step-%02d-codes-after", step);
++            int kt_shape[2] = { K, T };
++            debug_dump_i32_as_f32(&dbg, name, tokens.data(), kt_shape, 2);
++        }
+         fprintf(stderr, "[MaskGIT-Step] %d/%d demask=%d remaining=%d\n", step + 1, cfg.num_step, k_demask,
+                 (int) std::count(tokens.begin(), tokens.end(), mask_id));
+     }
+diff --git a/src/pipeline-tts.cpp b/src/pipeline-tts.cpp
+index 24871ac..8cac85a 100644
+--- a/src/pipeline-tts.cpp
++++ b/src/pipeline-tts.cpp
+@@ -143,7 +143,10 @@ std::vector<float> pipeline_tts_llm_forward(PipelineTTS *   pt,
+         attn_f16.resize((size_t) S * (size_t) S);
+         for (int sq = 0; sq < S; sq++) {
+             for (int skv = 0; skv < S; skv++) {
+-                float v = (attention_mask[(size_t) sq * (size_t) S + (size_t) skv] != 0) ? 1.0f : 0.0f;
++                // LOCAL TEST SWITCH (not upstream): OV_HARD_MASK=1 blocks instead of biasing
++                const bool hard = getenv("OV_HARD_MASK") != NULL;
++                const bool on   = attention_mask[(size_t) sq * (size_t) S + (size_t) skv] != 0;
++                float v = hard ? (on ? 0.0f : -INFINITY) : (on ? 1.0f : 0.0f);
+                 attn_f16[(size_t) sq * (size_t) S + (size_t) skv] = ggml_fp32_to_fp16(v);
+             }
+         }
+@@ -349,8 +352,12 @@ void pipeline_tts_llm_batched_ctx_init(MaskgitBatchedCtx * ctx,
+     // instead of calling ggml_fp32_to_fp16 in the inner loop, which dominates
+     // the CPU pre-compute on large S.
+     if (ctx->has_attn_mask) {
+-        const uint16_t f16_one  = ggml_fp32_to_fp16(1.0f);
+-        const uint16_t f16_zero = ggml_fp32_to_fp16(0.0f);
++        // LOCAL TEST SWITCH (not upstream): OV_HARD_MASK=1 blocks instead of biasing
++        const bool     hard     = getenv("OV_HARD_MASK") != NULL;
++        // OV_HARD_MASK=shift: blocked positions, the allowed ones keep the +1 (same result in exact arithmetic)
++        const bool     shift    = hard && strcmp(getenv("OV_HARD_MASK"), "shift") == 0;
++        const uint16_t f16_one  = ggml_fp32_to_fp16(hard && !shift ? 0.0f : 1.0f);
++        const uint16_t f16_zero = ggml_fp32_to_fp16(hard ? -INFINITY : 0.0f);
+         const size_t   n        = (size_t) B_prime * (size_t) S * (size_t) S;
+         ctx->attn_f16.resize(n);
+         for (size_t i = 0; i < n; i++) {

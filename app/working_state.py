@@ -238,7 +238,11 @@ def current() -> dict[str, Any]:
     from . import collection_file, collections as collections_mod, db
 
     def facts(c) -> dict[str, Any]:
+        from . import node_mode
         return {"mode": db.worker_state(c),
+                # embed or chat (app/node_mode.py), recorded since 2026-11-25:
+                # a record made before has none, and a restore then leaves it
+                "use": node_mode.current(c),
                 "paused": {n: node_state.pause_of(n, c) for n in sorted(node_state.paused_collections(c))},
                 "frozen": {n: node_state.frozen_since(n, c) for n in sorted(node_state.frozen_collections(c))}}
     got = node_state.peek(facts, {"mode": "paused", "paused": {}, "frozen": {}}, error=None)
@@ -277,7 +281,14 @@ def plan(saved: dict[str, Any], now: dict[str, Any]) -> dict[str, list]:
     skipped: list[dict[str, Any]] = []
     untouched: list[dict[str, Any]] = []
     notes: list[dict[str, Any]] = []
-    if saved["mode"] != now["mode"]:
+    # THE MODE OF USE FIRST (embed or chat): switching it sets the run mode,
+    # so the run mode recorded is written after it, whatever it reads now —
+    # a restore never leaves chat mode running everything
+    use_then, use_now = saved.get("use"), now.get("use")
+    switched = bool(use_then) and bool(use_now) and use_then != use_now
+    if switched:
+        changes.append({"what": "use", "from": use_now, "to": use_then})
+    if switched or saved["mode"] != now["mode"]:
         changes.append({"what": "mode", "from": now["mode"], "to": saved["mode"]})
     held_then, held_now = saved["held"], now["held"]
     paused_then, paused_now = set(saved["paused"]), set(now["paused"])
@@ -331,6 +342,8 @@ def said(change: dict[str, Any]) -> str:
     """One change, in words."""
     if change["what"] == "mode":
         return f"mode {change['from']} -> {change['to']}"
+    if change["what"] == "use":
+        return f"{change['from']} mode -> {change['to']} mode"
     if change["what"] == "pause":
         word = {True: "paused", False: "not paused"}
         return f"{change['collection']}: {word[change['from']]} -> {word[change['to']]}"
@@ -423,6 +436,28 @@ def _add_process(rec: dict[str, Any], e: dict[str, Any]) -> None:
         procs.append(e)
 
 
+#: how long `run` reads a new child's command line again while it is empty
+EXEC_SETTLE_S = 2.0
+
+
+def _entry_after_exec(pid: int, note: str) -> dict[str, Any]:
+    """`dev_processes.entry` of a child just started, read once its COMMAND
+    LINE is there. Popen returns when the child's exec has closed the error
+    pipe — a moment before the kernel has set the new image's arguments, and
+    /proc/<pid>/cmdline then reads EMPTY (2026-11-25: 1 start in about 20,
+    found as a test that failed once in a while). An entry recorded so reads
+    `reused` at every later look (`dev_processes.state` compares the command
+    line), and a restore would never stop that step: the one thing the
+    watchdog is for. Read again, a few milliseconds apart, until it is there;
+    past EXEC_SETTLE_S the entry is recorded as read."""
+    until = time.monotonic() + EXEC_SETTLE_S
+    while True:
+        e = dev_processes.entry(pid, note=note, by="run")
+        if e["cmdline"] or time.monotonic() >= until:
+            return e
+        time.sleep(0.005)
+
+
 def run(argv: Sequence[str], *, note: str = "") -> int:
     """`node checkpoint run -- <command…>`: the command started as a child
     in its own session and recorded in the open checkpoint (pid, command
@@ -461,7 +496,7 @@ def run(argv: Sequence[str], *, note: str = "") -> int:
                 raise Refused(f"{argv[0]}: cannot be started: {ex}") from None
             p = child[0]
             try:
-                e = dev_processes.entry(p.pid, note=note, by="run")
+                e = _entry_after_exec(p.pid, note)
             except dev_processes.NotAStep:
                 # ended before it was read: recorded from what was run, and gone
                 e = {"pid": p.pid, "start": None, "cmdline": argv, "pgid": p.pid,
@@ -518,6 +553,10 @@ def _execute(change: dict[str, Any], by: str) -> dict[str, Any]:
     from . import effective_config
     if change["what"] == "mode":
         node_state.set_worker_state(change["to"], by=by)
+        return {}
+    if change["what"] == "use":
+        from . import node_mode
+        node_mode.switch(change["to"], by=by)
         return {}
     if change["what"] == "pause":
         node_state.set_paused(change["collection"], change["to"], by=by)

@@ -1,0 +1,47 @@
+# louise-tts-omnivoice — OmniVoice on the node's ONE llama.cpp engine (the port: staged 0009,
+# 0010 and 0020 of deploy/localai/patches, live in the engine since 2026-11-25), a text model
+# and an audio model (`mmproj`), the two files tools/omnivoice_repack.py cuts from the release
+# (639,153,792 and 311,285,504 bytes). docs/notes/omnivoice-on-our-backend.md §13.
+# THE NODE'S FILE AS IT RAN the card rows of 2026-11-25 (München, engine d531d5d804f1, server
+# v5.0.1 with P13 and P19): the same values, key for key. LocalAI keeps that file with its keys
+# sorted, in YAML; this is the same content as JSON, which is YAML.
+# - `tts.voice_cloning`: P13 — a saved voice profile may be given to a model on a backend
+#   LocalAI's table does not know (ours, named by its engine's id).
+# - `context_size` 512: this context reads one token. The port makes its OWN context for the
+#   backbone at each request, from the engine's defaults.
+# - NO `flash_attention` LINE, on purpose (tests/vega/test_engine_settings.py EXCEPTIONS;
+#   approved-encoders.md "The speech port's own context"): unset, LocalAI sends "auto", and the
+#   port's own context never reads this file's value — a line here would reach the one-token
+#   context alone. Every row was taken with it unset.
+# - `verbosity:4`: the port's one line per request ("omnivoice: N chunk(s), 32 steps: voice clip
+#   … s, backbone … s, …; the voice clip's rows encoded | read from its kept encoding | kept")
+#   is an info line of the library, printed from 4 up. It is how a voice's first use is read.
+# - the weights sit where the qualification put them (`qual-omnivoice-port/`): the same bytes;
+#   a move is the node's, at a pass.
+# - not behind VeGa's wrapper: it is no encoder, and a speech model is not gated.
+# The steps per sentence are the node's (`[speech] tts_steps`, passed as `params.flow_steps`),
+# and a recorded voice's encoding is kept beside its profile's clip by the backend itself.
+{
+  "name": "louise-tts-omnivoice",
+  "backend": "louise-sycl-f16-llama-cpp-d531d5d804f1-stack-7c301a7ba437",
+  "context_size": 512,
+  "env": {
+    "GGML_SYCL_ENABLE_DNN": "0",
+    "GGML_SYCL_FA_ONEDNN": "0",
+    "NEO_CACHE_DIR": "/data/louise-cache/neo-cache"
+  },
+  "gpu_layers": 999,
+  "known_usecases": ["tts"],
+  "mmproj": "qual-omnivoice-port/omnivoice-Q8_0-mmproj.gguf",
+  "options": [
+    "fit:off",
+    "parallel:1",
+    "verbosity:4"
+  ],
+  "parameters": {
+    "model": "qual-omnivoice-port/omnivoice-Q8_0-lm.gguf"
+  },
+  "tts": {
+    "voice_cloning": true
+  }
+}

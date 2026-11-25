@@ -667,6 +667,178 @@ probable or open.
   `DRM_IOCTL_XE_DEVICE_QUERY` (needs `CAP_PERFMON`; the GPU probe has it).
   Each process also pays a SYCL / Level Zero heap floor of ~270 MiB.
   STATUS 2026-09-20 afternoon.
+- **What the spill costs** (the link and the RAM READ on the node
+  2026-11-19, node-runbook.md §1: PCIe 5.0 x16 on the card's upstream
+  bridge, 64 GB/s raw per direction; 2 × 32 GB DDR5 dual channel RUNNING
+  AT 5200 MT/s, 83 GB/s theoretical, ~70 practical — the EXPO-6400 profile
+  the BIOS shows is not in effect; the costs below are ESTIMATED from
+  them, not measured — "keep the numbers in mind for future development").
+  The driver swaps whole buffer objects, so a model switch under overcommit
+  moves the incoming model in and the outgoing one out at once, both streams
+  through the same DRAM, which is the limit at 5200: **~35 GB/s effective**
+  (~45 if the RAM ran at 6400). The 35B as measured (21,642 MiB = 22.7 GB):
+  ~45 GB moved, **~1.3 s**; MADLAD (4,850 MiB): ~0.3 s; a Q8 Krea 2 DiT
+  (12.7 GiB): ~0.8 s; a 1–2 GB encoder or reranker: <0.1 s — against
+  28.6 s for the 35B's load to its first token (measured), 13.4 s for the
+  old chat (7.4 GB) and 8.5 s for MADLAD cold through LocalAI's
+  unload-and-reload (ask-card-workflow.md). **CORRECTED 2026-11-23 by two
+  measurements (backend-qualification-2026-11-21.md, phase 4): the host's
+  DRAM copy reads 38 GB/s, not the ~70 modelled, and uploads to the card
+  run at 16.2 GiB/s by llama.cpp's own fit, not ~35–45 GB/s. A 35B switch
+  is therefore ~1.3 s for the inbound copy ALONE and up to ~2.7 s with the
+  outbound one; MADLAD ~0.3–0.6 s. Still far below the 28.6 s reload, still
+  an estimate of the swap itself. And the new engine refuses the spill by
+  default (`GGML_SYCL_BMG_VRAM_CHECK`).** Once its buffers are back on
+  the card a model runs at the card's 608 GB/s; nothing is lost but the
+  switch. THE CLIFF: when the active model's working set — weights, its KV
+  cache and compute buffers, plus whatever another process's running job
+  holds — does not fit beside what cannot leave, the driver migrates on
+  every submission and decode reads weights at PCIe speed, ~12× slower than
+  from VRAM, the migration's own cost on top; the 35B at Q4 with a 32k
+  context stands near 25 GB, ~7 GB from it, and torch's caching allocator
+  (image generation) is the usual way across. Host RAM holds the spill:
+  40–50 GB "on the card" is 8–18 GB in host memory, out of the ~20 GB the
+  41.6 GB resident peak leaves on this 63.4 GB host, and the kernel kills
+  model servers when it runs short (M16; gazzetta-plugin.md §7.4a: 21.4 GiB
+  on the card, 22.8 GiB in host RAM, three servers killed, an engine reset in
+  the same second). Nothing reports it: `/system` and the card's used count
+  both read "fits". What this fixes for design: a swap-at-switch scheme costs
+  under a second per chat switch and is ~15× cheaper than reloading; a
+  scheme whose working set crosses the card is not viable; and the spill is
+  tried, if at all, once, measured with `GGML_SYCL_MEMTRACE=1` beside the
+  fdinfo counts (app/gpu_memory.py), before anything depends on it. The
+  weights of the Ask set fit without it through this patch (§1.5) — with
+  TODAY's chat; not with the 35B (two bullets down).
+  **MEASURED 2026-11-24 (backend-qualification-2026-11-21.md, phase 5, S5):** with the engine's 2 GiB buffers
+  (`GGML_SYCL_HOST_PINNED_MEM_2G=1`, no cost alone on the card) the 35B gives back only what a small model needs
+  (4.2 GiB of its 21.7) and pays +1.25 to +1.76 s to its first token when it returns, the small models +0.2 to
+  +0.4 s; the next call of each is warm. Coming back runs at 2.4–3.4 GiB/s — five times slower than an upload
+  (16.2 GiB/s): the estimates above were too low by that factor for the step back.
+- **The other way to hold more model than the card, and what the latest
+  llama.cpp offers — checked 2026-11-21** (operator: "check latest
+  llama.cpp"; master b12600 of 2026-11-20 read against OUR PIN `ddf48f8`,
+  the node's build). Besides the driver's spill (above) there is
+  llama.cpp's own partial offload, `-ngl N`: the layers beyond N keep their
+  weights in host RAM and the scheduler, through the backend's
+  `offload_op` hook (ggml-sycl has it like CUDA), copies those weights to
+  the card per op for a batch of ≥ 32 tokens and computes there, on the
+  CPU below — weight streaming per batch at link speed, serial on one GPU
+  (no double-buffering with a single device). The threshold is an env at
+  our pin, `GGML_OP_OFFLOAD_MIN_BATCH` (default 32): set to 1 every op
+  takes the card's path, set high none does, so the path no longer depends
+  on the batch size — the invariant-12 objection to this way (the gate's
+  short texts on the CPU, the batches on the GPU) is answered by setting
+  it, and the run is then measured like any other. CORRECTED the same day
+  (llama-cpp-update-2026-11-21.md): the router, `--fit`, `--cpu-moe` and
+  the env are at our pin (2026-10-31); the MoE cache's completion
+  (ClassLRU, `--moe-cache-cpu-share`, 11-06…08), the SYCL device-side MoE
+  scheduler (#30156, 11-10) and the BMG VRAM check (#31285, 11-07) are
+  AFTER it and come with the update; the 2026-11-20 builds add nothing on
+  SYCL, offload or the server beyond a fix for the MoE cache beside a
+  quantized KV cache (#32636, b12569).
+  - **The MoE cache** (`--cpu-moe` / `--n-cpu-moe N` + `--moe-cache-mib N`
+    + `--moe-cache-cpu-share F`; `docs/moe-cache.md`; PRs #30966, #31233,
+    merged 2026-11-06/07): the experts stay in host RAM, the most used ones
+    are kept in a cache of N MiB on the card; a hit runs on the card, a
+    miss is uploaded into the cache or, for a share F once the cache is
+    full, computed on the CPU from the host copy. Built for small batches
+    (decode); "large batches still upload the experts they use". THE
+    35B'S CASE EXACTLY: its 256 × 40 experts are ≈ 18.4 GB of the 22.1 GB
+    file (3 × 2048 × 512 params each, ≈ 1.8 MB at Q4; 320 touched per
+    token ≈ 575 MB), the rest ≈ 3.7 GB. On the card: ≈ 3.4 GiB + the
+    1.2 GiB context + the cache + the 0.26 floor — **≈ 9 GiB with a
+    4 GiB cache, ≈ 13 with 8**, against 21.6 GiB resident (E). The speed
+    is the hit rate's: reported on CUDA/ROCm cards 1.5–2× over `-cmoe`
+    alone (a 2080 Ti 42 → 64.5 tok/s at 6.8 GB cache, share 0.95; a 3070
+    35 → 53 at 3.1 GB, share 0.5), hit rates 60–93 % by cache size on a
+    much larger model; a tuning script, `scripts/moe-cache-tune.py`.
+    **SYCL is named nowhere**, neither supported nor excluded: to measure
+    on the B70 before anything is said. Host RAM holds the experts
+    (18.4 GB, mmap'd by default and then NOT pinned — uploads slower; pinned
+    with `-lm none|mlock|dio`): the host had 22 GB available on 11-18, so
+    it is tight. Not combined with `--fit` (aborts on
+    `tensor_buft_overrides already set`).
+  - **llama-server's router mode** (`--models-dir`, `--models-max`,
+    `--models-memory-margin N`, `--models-autoload`, per-model presets):
+    one llama-server loads and unloads models on demand, LRU, and with the
+    margin set it MEASURES each model's `min` and `max` device memory in a
+    short-lived child and unloads idle models until the new one fits — a
+    model serving requests is never unloaded; host memory is assumed
+    unlimited. The standardized form of LocalAI's reclaimer plus
+    app/resident.py's budget, for llama.cpp models only (not torch,
+    OpenVINO, omnivoice, parakeet). Written down, not adopted: LocalAI
+    stays the sole owner of the card (node-runbook.md §2).
+  - **`--fit`** (`[on|off]`, default ON in llama-server; `--fit-target
+    MiB`, `--fit-ctx N`, `--fit-print`): an instance adjusts its UNSET
+    arguments — the context first — to the device memory free at load. Our
+    YAMLs pin `context_size`, so it does not grow ours; a model started
+    without `-c` takes the largest context that fits, which is how a
+    newcomer fills a card.
+  - `--sleep-idle-seconds` (§3): unchanged, the whole model.
+- **The set the operator wants, costed (2026-11-17)** — today's models, the
+  35B MoE (`louise-chat-qwen3.6-35b-a3b`, Qwen3.6-35B-A3B UD-Q4_K_M) in
+  place of qwen3-8b, and Krea 2 image generation; STT stays on the iGPU
+  (operator: "500 MB are anyway reserved for igpu and they would be wasted
+  otherwise"; stt-on-igpu.md: 516 MB carve-out + 1.3 GB GTT, 0 on the B70)
+  and VAD on the CPU. In GiB against the card's 31.9 (32,656 MiB); the
+  measured rows from this section's figures (the all-resident 30,267 MiB,
+  less qwen3-4b's 1,380 MiB ubatch cut, the 8,585 MiB of context), the
+  rest from file sizes, ESTIMATED:
+  - the 35B: file 22,134,528,992 B = 20.6 GiB; context at 16k ≈ 1.2 GiB
+    (KV ≈ 0.3: 10 full-attention layers of 40, 2 KV heads × 256, f16;
+    logits and compute at ubatch 512 ≈ 0.8, the 248k vocabulary) + the
+    0.26 floor ≈ **22.1 GiB loaded**, two thirds of the card (the YAML's
+    "~20 GB" is the file in GiB). Smaller files of the same repo:
+    UD-IQ4_XS 16.5 GiB, UD-Q3_K_XL 15.7 GiB. **MEASURED (München,
+    2026-11-18, from `/root/measure/q36.log` of 2026-11-03 and
+    `batch35.txt` of 11-08): 21,642 MiB at one stream, ctx 16,384
+    (23,415 at eight); load + first token 28.6 s; prefill 606.5 tok/s;
+    decode 92.2 tok/s alone, 58–68 per stream in the summary batch.** The
+    whole set with München's per-model sizes at rest — 32,367 MiB today,
+    the card's size — is in model-set-summary.md.
+  - Krea 2 (`krea/Krea-2-Raw`; Turbo is a finetune of the same shape):
+    transformer 26.3 GB bf16 (≈ 13 B), text encoder 8.9 GB bf16 (≈ 4.4 B,
+    an LLM), VAE 0.5 GB — **33 GiB as shipped: does not fit the card
+    alone**. SUPPORTED by stable-diffusion.cpp since 2026-06-25, at the
+    commit the node's LocalAI v4.12.1 pins (0518b343; checked upstream
+    2026-11-17 on the operator's word, "the model is already available":
+    the backend reads `llm_path` and hands it to the engine; no gallery
+    entry at v4.12.1 or master — a hand-written YAML, as flux's).
+    Components (image-generation-krea.md, amended): the DiT as GGUF —
+    Turbo Q8_0 12.7 GiB / Q4_K_M 6.7 / Q3_K_M 5.1 (Raw the same ± 0.1);
+    the text encoder Qwen3-VL-4B-Instruct GGUF Q8_0 4.0 / Q4_K_M 2.3, or
+    on the CPU (`keep_clip_on_cpu`, to confirm it covers the LLM at the
+    pin); the Wan 2.1 VAE 0.24; + the 0.3 process floor. Working memory
+    while an image is made (~0.6–1 GiB at this size) is freed between
+    images (image-generation-krea.md §2).
+
+  | set | contexts held (today) | SHARED context, 3.2 GiB (the operator's assumption; shared-context.md §2's peak 3,262 MiB) | weights only |
+  |---|---|---|---|
+  | today's set, qwen3-8b chat (MEASURED) | 28.2 | ≈ 23 | 19.8 (weights + floors) |
+  | the same with the 35B UD-Q4_K_M for qwen3-8b | ≈ 43.6 | ≈ 38 | ≈ 34.5 |
+  | … with UD-Q3_K_XL instead | ≈ 38.7 | ≈ 33 | ≈ 29.6 |
+  | 35B Q4, MADLAD dropped — the 35B translates (classical-translation.md: Qwen3-30B-A3B chrF 52.2, MADLAD 35.8) | — | ≈ 32.5 | ≈ 29.3 |
+  | 35B Q3, MADLAD dropped | — | ≈ 27.6 | ≈ 24.4 |
+  | + Krea 2 Turbo, Q4_K_M DiT, text encoder on the CPU | + 7.3 | + 7.3 | + 7.3 |
+  | + Krea 2 Turbo, Q4_K_M DiT and Q4_K_M text encoder on the card | + 9.6 | + 9.6 | + 9.6 |
+  | + Krea 2 Turbo, Q8_0 DiT and Q8_0 text encoder on the card | + 17.2 | + 17.2 | + 17.2 |
+
+  Today's non-chat weights are 13.6 GiB by the at-rest reading (11-07) and
+  14.8 by the mid-question one (11-09, compute buffers grown); the rows use
+  14. So: nothing of this is resident on a 31.9 GiB card as the set stands.
+  With the shared context the 35B at Q4 beside today's models overshoots by
+  ≈ 6 GiB, at Q3 by ≈ 1.3; the ONE resident fit is the 35B at Q3 with
+  MADLAD gone, ≈ 27.6 GiB, 2.7 under the reclaimer's line (0.95 ≈ 30.3);
+  Q4 with MADLAD gone lands at ≈ 32.5 — over within the estimate's error,
+  and 2 GiB past the reclaimer in any case. Krea 2 is resident in no row;
+  Krea 2 beside the 35B is a
+  switch, whatever is done: the driver's spill (previous bullet, ~0.8–0.9 s
+  per 35B switch, ~0.3 s for a Q4 Krea 2 transformer) or LocalAI's
+  unload-and-reload (10 s and more). What the choice costs, per row:
+  spill — fast, invisible, host RAM (8–30 GiB of spill against ~20 GiB of
+  headroom: the Q8 rows do not fit the HOST either); reload — bounded,
+  visible, slow; a Q3 35B — fits weights-only, pays in answer quality, is a
+  new engine run through the gate like any other.
 - **The context share per model**, 2026-11-12 (`size_vram` − the weights
   file; the backends' load lines are not kept at LocalAI's info level):
   qwen3-4b 3,262 MiB (≈ 1.1 GiB KV, ≈ 2.1 GB compute buffers at ubatch
