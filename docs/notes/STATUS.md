@@ -562,9 +562,9 @@ measured (published figures disagree).
   worst 1.000000 (both nemotron fingerprints sha256:9863c1d7…, as before); twenty
   unloads of qwen3-embedding-4b through the wrapper, 20 × exit 0, none of a second or more. ONE swap carried the paging default
   (0021), the language tag (0022), the stream fix (0025), its test switch (0026) and the canary fix (0028). `792f050e318e` and
-  `d658549772ca` were built and never gated. THE KEEPER'S PAGING DEFAULT follows it as one commit (5cb53eb, for the architecture
-  session to merge); its conditions on the node stand (room-on-the-card.md §3: the host's floor in the busy hours, the 30-minute
-  soak). THE PASS ENDED 15:52:00Z, the node paused 5,573 s. ACCEPTANCE (München): MADLAD T4 379/379 identical to the rebuilt-engine
+  `d658549772ca` were built and never gated. THE KEEPER'S RULE IS NOT A NODE-WIDE DEFAULT: the operator decided the same evening
+  that paging is QUERY MODE'S ONLY (above: "A"; main 13e3e4b, e4b04b7), so the node-wide `make_room = "page"` default this branch
+  had re-applied when the engine went live (5cb53eb) was not taken and is reverted on the branch. THE PASS ENDED 15:52:00Z, the node paused 5,573 s. ACCEPTANCE (München): MADLAD T4 379/379 identical to the rebuilt-engine
   run of 11-22; the reranker's 20 lists equal to phase 0's, max |delta| 0.0, 2,447 ms a list (2,441); the 9B p128 ttft 0.114 s,
   77.7 tok/s, p2048 0.612 s, 75.7 tok/s (phase 0: 0.121 / 77.5, 0.624 / 75.5); an OCR smoke answered; no xe or OOM line in the kernel
   log. THE ROWS ON COPIES: **0028 holds** (a copy of bge-m3, two graphs refused at a context's creation: HTTP 500 "the context cannot

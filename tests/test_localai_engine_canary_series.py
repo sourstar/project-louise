@@ -59,9 +59,12 @@ def test_the_readme_and_the_status_say_what_is_live_and_what_a_rollback_puts_bac
     status = (ROOT / "docs" / "notes" / "STATUS.md").read_text(encoding="utf-8")
     assert f"LIVE since 2026-11-25 15:18:30Z: engine `{LIVE}`" in status
     assert "every fingerprint identical to before" in status and "20 × exit 0" in status
-    # what follows the engine, and what does not come with it
-    assert "THE KEEPER'S PAGING DEFAULT follows it as one commit" in status
-    assert "its conditions on the node stand" in status
+    # the keeper's side is the mode's, not a node-wide default: the operator's decision of the same evening
+    assert "THE KEEPER'S RULE IS NOT A NODE-WIDE DEFAULT" in status and "QUERY MODE'S ONLY" in status
+    assert "was not taken and is reverted on the branch" in status
+    assert "The keeper pages in QUERY MODE only" in readme
+    from app import platform_config
+    assert platform_config.ModelsConfig().make_room == "unload", "the file's rule is still unload unless the file says page"
 
 
 def test_the_staged_speech_model_names_the_live_engine():

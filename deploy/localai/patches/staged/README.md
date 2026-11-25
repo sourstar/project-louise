@@ -31,7 +31,7 @@ the test switch for it (0026) and a canary refused for memory not being a canary
 the same pass): 0028 HOLDS (two graphs refused at a context's creation: "the context cannot be created now", nothing discarded, no
 canary failure counted); 0025 HOLDS through LocalAI's SSE (a cut answer ends with an error object, no `finish_reason`); 0022 HOLDS
 (`en-GB` gives the bytes of `en`, no language those of the profile's own `it-IT`, read as `it`). The acceptance checks
-passed (MADLAD 379/379, the reranker 20/20, the 9B within phase 0's). The keeper's paging default follows it (5cb53eb).
+passed (MADLAD 379/379, the reranker 20/20, the 9B within phase 0's). The keeper pages in QUERY MODE only (the operator's "A", main 13e3e4b); a node-wide default was not taken.
 docs/notes/parking-step-2.md §6a, §6b.
 
     SERIES_FILE=deploy/localai/patches/staged/engine-canary.series \
