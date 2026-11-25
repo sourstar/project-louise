@@ -584,8 +584,11 @@ def set_scope(con, scope: dict):
     return merged
 
 
-def apply_desired_embed_mode(con, collection) -> str | None:
-    """Make the collection's Tier-2 `embed_mode` (its TOML, else the default)
+def apply_desired_embed_mode(con, collection, desired: str | None = None) -> str | None:
+    """Make the collection's Tier-2 `embed_mode` (its TOML, else the default
+    — or embed mode's embedding choice where it is in force, which is
+    desired state too, platform.toml's: `collections.desired_embed_mode`,
+    THE resolution; `desired` is its answer where the caller already has it)
     the effective one. Returns the Tier-3 value it replaced, or None when
     nothing changed.
 
@@ -596,7 +599,8 @@ def apply_desired_embed_mode(con, collection) -> str | None:
     state and Tier 2 decorative. The worker calls this at boot and whenever
     the TOML value changes; the override remains useful between those.
     """
-    desired = collection.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
+    if desired is None:
+        desired = collections_mod.desired_embed_mode(collection)[0]
     scope = get_scope(con)
     current = scope.get("embed_mode")
     if current == desired:
@@ -862,7 +866,11 @@ NODE_CONTROL_KEYS = (WORKER_STATE_KEY, BANDWIDTH_OVERRIDE_KEY)
 
 #: stages whose lines are about the NODE, not about the collection whose
 #: manifest stores them — see `log_event`'s `node` below
-NODE_STAGES = frozenset({"sched", "share", "models"})   # share: the seeder and gossip lines cover every collection and name theirs in the message; models: a cold start (app/model_load.py) is the node's
+#: `chat` (2026-11-25): an answer is written over whichever collections the
+#: question searched, and its lines went out under the DEFAULT manifest's name
+#: — "[EUR-Lex5.next info:chat] answer: 2022 chars …" for a question answered
+#: from gutenberg (München). An answer is the node's, not that collection's.
+NODE_STAGES = frozenset({"sched", "share", "models", "chat"})   # share: the seeder and gossip lines cover every collection and name theirs in the message; models: a cold start (app/model_load.py) is the node's
 
 
 def say_line(line: str) -> None:

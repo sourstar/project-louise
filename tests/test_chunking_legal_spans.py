@@ -255,3 +255,19 @@ def test_a_tokenizer_that_pads_is_encoded_one_text_at_a_time():
     tok.enable_padding(length=64)
     assert not cl._batched(tok)
     assert cl._count_many(tok, ["a b c", "d"]) == [64, 64], "each text as `encode` gives it"
+
+
+@pytest.mark.parametrize("make", TOKENIZERS)
+def test_the_windows_read_only_their_cuts_and_cut_as_listed(make, monkeypatch):
+    """2026-11-25: `_windows` indexes each span's offsets at the cuts only
+    (every budget-th token, counted across spans), not every token's end.
+    The windows are the listed ones for every budget, a token count that is
+    a multiple of the budget, whitespace at the ends, an empty text."""
+    tok = make()
+    rng = random.Random(4820)
+    monkeypatch.setattr(cl, "SPAN_CHARS", 23)
+    texts = [_text(rng, rng.randint(1, 400)) for _ in range(60)] + ["", "   ", " a ", "a"]
+    for text in texts:
+        n = len(tok.encode(text, add_special_tokens=False).ids)
+        for budget in sorted({1, 2, 3, 7, 16, max(1, n), max(1, n // 2), n + 1}):
+            assert cl._windows(tok, text, budget) == cl._windows_listed(tok, text, budget), (text[:40], budget)

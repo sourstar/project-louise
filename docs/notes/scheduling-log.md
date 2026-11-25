@@ -3482,6 +3482,32 @@ read where it runs; and the chunker's share of a large unit's time is to be
 measured ON THE NODE before anything more is built on it (measuring.md: the
 deployed thing, not the bench).
 
+MEASURED THE SAME DAY, and it corrects the reading above (the Legal session's
+cProfile, München running it: fts of fr 32018R0688, 92,328,556 bytes, the
+live tree, its own container of 8 GiB and 4 CPUs, PARSE_PROCESSES=1; files
+prof-threads-{4,1}.out):
+
+| | wall | `encode_batch` | its share | peak |
+|---|---|---|---|---|
+| RAYON_NUM_THREADS=1 | 94 s | 62.7 s (217 calls) | 65 % | 2,686 MiB |
+| RAYON_NUM_THREADS=4 | 72 s | 40.5 s | 55 % | 2,677 MiB |
+
+So on ONE unit, like for like: the four threads buy 1.55x on the tokenizer
+and 1.31x on the unit (94 -> 72 s; the lane ran this very unit in 70 s). The
+threads ARE at work in the lane. The "about 5 %" above came from setting
+three DIFFERENT units against the morning's fifteen: the two of 32019R0439
+cost more a byte than 32018R0688 does. The like-for-like figure for #892 is
+this table: -23 % of a large text unit's time, not 1.7x (the bench timed the
+chunker alone) and not 5 %.
+WHERE THE REST GOES, with four threads (72 s): the tokenizer still 40.5 s;
+the ~33.5 s outside it are the same in both runs — the Formex walk
+(`attributes_of` 4.7 s), `_windows` 19.0 s cumulative of which `_token_ends`
+is 13,717,825 Python steps (16.9 s cumulative, one per token), the citations
+1.8 s, the XML parse about 3 s. Two leads, both the Legal session's file:
+`_windows` needs a token's end only at each window's cut, and walks every
+token to find them; and 217 batches for 1,594 calls says most calls carry
+too few texts for four threads to share.
+
 ## 2026-11-25 — a collection's embedding waits for the keeper's preload after a start
 
 **SCENARIO.** A worker start on the node (the deploy of 1249b1d9, 09:40:28Z),
@@ -3559,3 +3585,30 @@ appears, that line and its numbers are the finding.
 hour with large units pending; the pool's large-lane lines; the cgroup's
 anon and peak with two in flight; documents and rdf a minute over the same
 window. To be deployed AFTER the row above has its AFTER, one change a deploy.
+
+## 2026-11-25 — the slice-scope pass alone, where the stages wait for it
+
+**SCENARIO.** EUR-Lex5.next on the node at 9811ca92, embed mode: the Legal
+session's step 7 (`dev rederive --release`: 632,638 rows reset, 670,333
+released) at the 13:21:42Z drain; the release resets the slice-scope pass to
+row 0. No corpus change.
+
+**BEFORE** (München, the worker's lines). The release ended 13:30:21Z;
+"waiting for the slice scope: the pass is at row 0 of 1,025,283 … nothing is
+parsed, indexed or embedded until then" at 13:35:22Z, with a scan asked for;
+"discovery done {'seen': 932896, 'added': 0, 'changed': 0, 'missing_txt': 0}"
+at 13:48:26Z; "slice scope: 1025283 held, 0 not held; 243884 embedded here,
+781399 not" at 13:48:40Z. EIGHTEEN MINUTES with nothing parsed, of which the
+pass was fourteen seconds (the walk on other days: 22–28 minutes).
+
+**THE CHANGE.** The wait asks for the pass alone (`PASS_ONLY`) where no scan
+is running or asked for.
+
+**EXPECTED.** After a release, or anything else that sets the pass back
+without touching the corpus: "waiting for the slice scope: … its pass ALONE
+is asked for now", "slice scope: the pass alone, over the manifest", and the
+"slice scope: N held …" line within the pass's own seconds — about fourteen
+for a million rows on this node.
+
+**AFTER** — owed: those three lines and their times at the next release on
+the node (or at a slices change in a collection's file).

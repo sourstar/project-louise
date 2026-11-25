@@ -43,7 +43,7 @@ from . import (backend, catalog, chunking, collections as collections_mod, confi
                fts, issues as issues_mod, lookahead, memory_yield, model_load, model_pins, origin_missing,
                resident,
                node_state,
-               plugin_io, refs, sched, sizing, slice_scope, spaces, stats, text_index)
+               plugin_io, refs, sched, sizing, slice_scope, spaces, stage_progress, stats, text_index)
 from .rage import card_record, dispatch
 from .rage import keep as rage_keep
 from .rage.dispatch import Level
@@ -4107,14 +4107,25 @@ def _scan_only(con, collection, reason: str, stop=None) -> None:
     # binds the USE, not the route that reached it.
     if not _license_allows(con, collection, "corpus scan"):
         return
+    pass_only = reason == PASS_ONLY
     # A SCAN IS PARSING, and "download/seeding only" parses nothing
     # (operator, 2026-09-19; app/node_state.py: MODE_RUNS). It is owed, not
     # dropped: what landed meanwhile is scanned when everything runs again.
+    # The pass alone lands nothing and owes nothing: the stages that wait
+    # for it ask again when they run again.
     if _parse_held.is_set():
-        _owe_scan(collection.name)
+        if not pass_only:
+            _owe_scan(collection.name)
         return
     frozen = _frozen_event(collection.name)
-    if _is_frozen(collection.name):
+    if pass_only:
+        # THE PASS ALONE (`PASS_ONLY`): no corpus walk — the origin's folder
+        # has nothing to say about which slices the node holds
+        db.log_event(con, "info", "discover",
+                     "slice scope: the pass alone, over the manifest — no corpus scan is needed for it")
+        held = _AnyStop(stop, _parse_held) if stop is not None else _AnyStop(_parse_held)
+        stats: dict = {}
+    elif _is_frozen(collection.name):
         # FROZEN (07 §7.3 `node freeze`): the origin is not enumerated, so no
         # document is re-opened because its file changed on disk and none is
         # added — a corpus mounted from elsewhere changes without a fetch. The
@@ -4125,7 +4136,7 @@ def _scan_only(con, collection, reason: str, stop=None) -> None:
         # the stop without the freeze
         _say_frozen(con, collection, "scan")
         held = _AnyStop(stop, _parse_held) if stop is not None else _AnyStop(_parse_held)
-        stats: dict = {}
+        stats = {}
     else:
         # a freeze set under a running scan ends it at its next batch, its
         # cursor committed that far: the rest is the unfreeze's
@@ -4196,10 +4207,11 @@ def _wait_for_slice_scope(con, collection) -> bool:
     """THE STAGES WAIT BEHIND THE SLICE SCOPE, AND SAY SO (2026-11-25:
     EUR-Lex5.next stood with "0 units in 7 turns", one line said an hour
     before, and no scan coming). Every WAIT_SAID_EVERY_S: where the pass is
-    (row N of M), and the scan it needs — running, asked for, or ASKED FOR
-    NOW. Every wait has its request: the pass runs at the end of a scan, so
-    a wait with no scan running and none queued asks for one, as the embed
-    selection's wait does. Returns whether a scan was asked for."""
+    (row N of M), and what brings it up to date — a scan running or asked
+    for, which runs the pass at its end, or THE PASS ALONE, asked for now
+    (`PASS_ONLY`: since 2026-11-25 a wait with no scan running and none
+    queued asks for the pass by itself, not for a corpus scan). Every wait
+    has its request. Returns whether the pass was asked for."""
     name = collection.name
     # ONCE A PERIOD, the line and the request together: this runs at every
     # idle pass of the thread, and a scan that cannot run now (the licence,
@@ -4209,17 +4221,21 @@ def _wait_for_slice_scope(con, collection) -> bool:
         return False
     running = scan_running(name)
     with _discover_req_lock:
-        queued = name in _discover_requests
+        queued = _discover_requests.get(name)
     asked = False
-    if not running and not queued:
-        _request_discovery(name, "slice scope", acquire=False)
+    if not running and queued is None:
+        # THE PASS ALONE (`PASS_ONLY`): it reads the manifest, so nothing
+        # waits for a corpus scan that has nothing to find
+        _request_discovery(name, PASS_ONLY, acquire=False)
         asked = True
     where = slice_scope.waits(con, collection)
     _say_once(con, name, "slice-scope",
-              f"waiting for the slice scope: {where} — it is brought up to date at the end of a "
-              f"scan, and " + ("a scan is running" if running else
-                               "a scan is asked for" if queued else
-                               "none was running or asked for: one is asked for now")
+              f"waiting for the slice scope: {where} — "
+              + ("a scan is running, and brings it up to date at its end" if running else
+                 "its pass alone is asked for" if queued is not None and queued[0] == PASS_ONLY else
+                 "a scan is asked for, and brings it up to date at its end" if queued is not None else
+                 "no scan was running or asked for: its pass ALONE is asked for now, over the manifest "
+                 "(no corpus scan is needed for it)")
               + "; nothing is parsed, indexed or embedded until then (app/slice_scope.py)",
               every_s=WAIT_SAID_EVERY_S)
     return asked
@@ -4890,6 +4906,17 @@ def run_not_validated(exc: BaseException) -> bool:
 
 
 def _execute_step(con, collection, stage, row) -> bool:
+    """`_run_step`, NOTED: when the step started, on which document, and
+    whether it ended with something committed — what `app/stage_progress.py`
+    reads to say, by itself, that a stage has made no progress (the lessons
+    of EUR-Lex5.next, G3). Two dictionary writes a step; nothing of what
+    runs when changes."""
+    with stage_progress.step(getattr(collection, "name", str(collection)), stage, row["uid"]) as noted:
+        noted.did = _run_step(con, collection, stage, row)
+        return noted.did
+
+
+def _run_step(con, collection, stage, row) -> bool:
     """One document's stage, transactional, errors recorded on the row —
     shared verbatim by the main loop and the per-collection pipeline
     threads (each caller passes a con its own thread owns).
@@ -4973,7 +5000,14 @@ def _execute_step(con, collection, stage, row) -> bool:
             # deferred again is said once a LARGE_WAIT_S (`_deferral_news`); a
             # kill always
             _deferral.memory = True
-            if isinstance(e, parallel.MemoryKilled) or _deferral_news(collection, stage, row["uid"]):
+            if isinstance(e, parallel.MemoryKilled):
+                # WHAT THIS ROW WAS TO THE KILL, first (the lessons of
+                # EUR-Lex5, row A5): the same words on every row in flight
+                # made bystanders of 256 MiB read as the cause
+                db.log_event(con, "warn", stage,
+                             f"{stage} deferred — {e.role_of(row['uid'])}; {e}; the document is "
+                             f"untouched and will be retried"[:900], row["uid"])
+            elif _deferral_news(collection, stage, row["uid"]):
                 db.log_event(con, "warn", stage,
                              f"{stage} deferred — {e}; the document is untouched and will be "
                              f"retried"[:500], row["uid"])
@@ -5418,9 +5452,21 @@ _last_discover: dict[str, float] = {}
 _pipeline_idle_log: dict[str, float] = {}
 
 
+#: THE SLICE-SCOPE PASS ALONE, asked for as a scan request that walks nothing
+#: (2026-11-25, EUR-Lex5.next: a release reset the pass to row 0 of
+#: 1,025,283, and 627,868 released rows waited EIGHTEEN MINUTES for a corpus
+#: scan with nothing to find — the pass's only producer was a scan's end.
+#: The pass itself took fourteen seconds). The pass reads the manifest, not
+#: the corpus: where the stages wait for it and no scan is running or asked
+#: for, it is asked for by itself, on the scan thread, which is its writer.
+PASS_ONLY = "slice scope: the pass alone"
+
+
 def _request_discovery(name: str, reason: str, *, acquire: bool = True) -> None:
     """First reason wins: a queued 'startup' must not be relabeled by a
-    later 'interval' before the thread has run it.
+    later 'interval' before the thread has run it — but a real scan takes
+    the place of a queued PASS_ONLY (the scan runs the pass at its end, and
+    must not be lost to it), and a PASS_ONLY never takes a real scan's.
 
     `acquire=False` asks for a PLAIN scan. The post-fetch scan must use it:
     its job is to pick up what a fetch just landed, and if it started
@@ -5429,7 +5475,9 @@ def _request_discovery(name: str, reason: str, *, acquire: bool = True) -> None:
     discovery moved onto the pipeline threads (observed live: one cycle
     every ~5 seconds, starving rdf/fts/embed entirely)."""
     with _discover_req_lock:
-        _discover_requests.setdefault(name, (reason, acquire))
+        queued = _discover_requests.get(name)
+        if queued is None or (queued[0] == PASS_ONLY and reason != PASS_ONLY):
+            _discover_requests[name] = (reason, acquire)
 
 
 def _take_discovery_request(name: str) -> tuple[str, bool] | None:
@@ -6023,21 +6071,78 @@ def _sweep_unheld_embedders(collections, con=None) -> list[str]:
     return gone
 
 
-def _apply_tier2_embed_mode(con, collection, reason: str) -> None:
+def _apply_tier2_embed_mode(con, collection, reason: str, *, mode: str | None = None) -> None:
     """On restart, on add, and on a TOML edit the file wins (invariant 10):
     the Library's runtime override is replaced by the TOML's `embed_mode`
     (or the default when the TOML is silent), and the event log says so —
     an operator who flipped a mode from the UI sees why it changed back and
-    where to make it permanent."""
-    replaced = db.apply_desired_embed_mode(con, collection)
+    where to make it permanent. The files are two: where EMBED MODE'S
+    EMBEDDING CHOICE is in force for this collection (platform.toml's
+    `[modes] embed_embedding`, `collections.desired_embed_mode`) the line
+    says that instead. `mode` is the node's mode of use where the caller has
+    just read it (`_apply_embedding_choice`)."""
+    desired, choice = collections_mod.desired_embed_mode(collection, mode=mode)
+    replaced = db.apply_desired_embed_mode(con, collection, desired)
     if replaced is not None:
-        desired = collection.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
+        own = collection.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
+        if desired != own:
+            db.log_event(con, "info", "control",
+                         f"embed mode {replaced!r} -> {desired!r} on {reason}: {choice}")
+            return
         source = (f"collections/{collection.name}.toml" if collection.embed_mode_default
                   else "the default — the TOML sets none")
         db.log_event(con, "info", "control",
                      f"embed mode {replaced!r} -> {desired!r} on {reason}: the "
                      f"file wins ({source}); the Library's override lasts until "
                      f"the next restart or TOML edit")
+
+
+#: embed mode's embedding choice as the worker last applied it to the
+#: collections ("local", "p2p", or None: each collection's own — any other
+#: mode, or no choice made); `_UNREAD` before the first round
+_UNREAD = object()
+_embedding_choice_seen: list = [_UNREAD]
+
+
+def _apply_embedding_choice(mode: str, collections, cons) -> list[str]:
+    """EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you
+    can also choose local/p2p embedding"), acted on once a round beside the
+    mode: where the choice IN FORCE changed — a switch into or out of embed
+    mode, or `[modes] embed_embedding` edited (the page's edit needs no
+    restart) — every collection that embeds a backlog has its desired embed
+    mode applied again, and one line says who follows. The first read of a
+    process writes nothing: the start has just applied every collection
+    (`_apply_tier2_embed_mode`, "restart"), through the same resolution.
+    Costs one comparison a round. Returns the collections it applied."""
+    from . import platform_config
+    try:
+        choice = platform_config.seen().modes.embedding(mode)
+    except Exception:   # noqa: BLE001 — a file that does not load: each collection's own
+        choice = None
+    if choice not in ("local", "p2p"):
+        choice = None
+    before = _embedding_choice_seen[0]
+    if before == choice:
+        return []
+    _embedding_choice_seen[0] = choice
+    if before is _UNREAD:
+        return []
+    said = dict(platform_config.EMBEDDING_LABELS).get(choice or "collection")
+    reason = (f"embed mode's embedding choice ({said})" if choice
+              else "embed mode's embedding choice no longer in force")
+    applied = []
+    for c in collections:
+        own = c.embed_mode_default or collections_mod.DEFAULT_EMBED_MODE
+        if own not in collections_mod.BACKFILL_MODES or c.name not in cons:
+            continue
+        _apply_tier2_embed_mode(cons[c.name], c, reason, mode=mode)
+        applied.append(c.name)
+    _node_line("control")(
+        f"{reason}: {len(applied)} collection(s) that embed a backlog "
+        f"{'follow it' if choice else 'are back at their own file'}"
+        f"{': ' + ', '.join(applied) if applied else ''} "
+        f"(off and on-demand collections keep their own word; p2p needs the collection shared)")
+    return applied
 
 
 def _sync_collections(all_collections, cons, last_discover, pipeline: bool = False):
@@ -6103,7 +6208,13 @@ def _sync_collections(all_collections, cons, last_discover, pipeline: bool = Fal
         prev = previous_by_name.get(kept.name)
         if prev is None or kept.name not in cons or kept.name in replaced:
             continue
-        if prev.embed_mode_default != kept.embed_mode_default:
+        # ...or its `share` turned, where that changes what embed mode's
+        # embedding choice makes of it (p2p needs the collection shared:
+        # `collections.desired_embed_mode`) — asked only when `share` moved
+        shared_moved = getattr(prev, "share", False) != getattr(kept, "share", False)
+        if prev.embed_mode_default != kept.embed_mode_default or (
+                shared_moved and collections_mod.desired_embed_mode(prev)[0]
+                != collections_mod.desired_embed_mode(kept)[0]):
             _apply_tier2_embed_mode(cons[kept.name], kept, "TOML edit")
             # switched to off: its encoders leave the preload set, still
             # loaded (nothing is unloaded for being idle, 2026-11-08)
@@ -7492,7 +7603,7 @@ def run_forever():
             get_manager().set_override(node_state.bandwidth_override(node_con))
             # ...and the budget of the node's mode of use (embed or chat),
             # with its models at a switch (app/node_mode.py)
-            _apply_node_mode(node_con)
+            _apply_embedding_choice(_apply_node_mode(node_con), all_collections, cons)
             # ...and the same channel carries the measurement back the other
             # way: acquisition and seeding move their bytes HERE, so without
             # this the Network page's graph is a flat zero beside a saturated
@@ -7684,6 +7795,9 @@ def _on_oom_kill(before: int, after: int) -> None:
     stops at its units like a SIGTERM and its guard keeps it down."""
     from . import oom_hold, parallel
     rec = oom_hold.hold("cgroup", {"oom_kill": [before, after], "memory_peak": oom_hold.memory_peak(),
+                                   # WHICH process, and what it held (the lessons' A5):
+                                   # read by `oom_hold.killed` before this handler ran
+                                   "killed": oom_hold.victim_seen(),
                                    "in_flight": parallel.in_flight(), "reserved": parallel.reserved(),
                                    "processes_before": oom_hold.last_sample(),
                                    "processes_now": oom_hold.processes()})
@@ -7704,6 +7818,10 @@ def _start_oom_watch() -> None:
     from . import pool_progress
     threading.Thread(target=pool_progress.watch, args=(_stop, _node_line("pool")),
                      name="pool-progress", daemon=True).start()
+    # ...AND A STAGE THAT MAKES NO PROGRESS SAYS SO (app/stage_progress.py): one
+    # step that has not ended, or steps tried and none committing, for 30 min
+    threading.Thread(target=stage_progress.watch, args=(_stop, _node_line("progress")),
+                     name="stage-progress", daemon=True).start()
 
 
 

@@ -241,10 +241,22 @@ NETWORK_LABELS = (("download-seed", "download and seed"), ("seed", "seed only"),
 #: `chat_run`, the morning's key (query mode's run mode), read as query
 #: mode's network choice: the three it could be are the three networks
 CHAT_RUN_AS_NETWORK = {"acquire-only": "download-seed", "seed-only": "seed", "paused": "none"}
-#: `[modes]`'s keys: each mode's network choice and network budget. Query
-#: mode's budget keys keep the morning's name (`chat_*`)
-MODES_KEYS = ("embed_network", "query_network", "chat_run",
-              "embed_down_max", "embed_up_max", "chat_down_max", "chat_up_max")
+#: EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you can
+#: also choose local/p2p embedding"; "Network and embedding mode remain
+#: personal choices"): who embeds the backlog of the collections that embed
+#: one — each as its own file says (the first, what a file that names none
+#: gets: nothing changes), every part here (`embed = "all"`, "all local"), or
+#: the parts rendezvous gives this node, published as it goes (`embed =
+#: "p2p"`, "all p2p"). In force in embed mode only, over the collections
+#: whose file says all or p2p (`collections.desired_embed_mode`)
+EMBEDDINGS = ("collection", "local", "p2p")
+EMBEDDING_LABELS = (("collection", "each collection's own"), ("local", "all local"), ("p2p", "all p2p"))
+#: `[modes]`'s rate keys: each mode's network budget. Query mode's keep the
+#: morning's name (`chat_*`)
+MODES_RATE_KEYS = ("embed_down_max", "embed_up_max", "chat_down_max", "chat_up_max")
+#: `[modes]`'s keys: each mode's network choice, embed mode's embedding
+#: choice, and the budgets
+MODES_KEYS = ("embed_network", "query_network", "chat_run", "embed_embedding") + MODES_RATE_KEYS
 
 
 @dataclass(frozen=True)
@@ -261,6 +273,7 @@ class ModesConfig:
     API, and it survives a restart (invariant 10's exception)."""
     embed_network: str = NETWORKS[0]
     query_network: str = NETWORKS[0]
+    embed_embedding: str = EMBEDDINGS[0]
     embed_down_max_bps: int | None = None
     embed_up_max_bps: int | None = None
     chat_down_max_bps: int | None = None
@@ -283,6 +296,12 @@ class ModesConfig:
         if mode == "embed":
             return self.embed_network
         return None
+
+    def embedding(self, mode: str) -> str | None:
+        """Embed mode's embedding choice (`EMBEDDINGS`); None in a mode that
+        has none — query embeds nothing, custom leaves every collection its
+        own file's word, as before there were modes."""
+        return self.embed_embedding if mode == "embed" else None
 
     def written(self, key: str) -> str:
         return dict(self.text).get(key, "")
@@ -945,8 +964,13 @@ def _modes(raw: Any) -> ModesConfig:
                 f"[modes] chat_run (the first name of query_network) is one of "
                 f"{', '.join(CHAT_RUNS)}, got {run!r} (07 §7.8)")
         networks["query_network"] = CHAT_RUN_AS_NETWORK[run]
+    embedding = raw.get("embed_embedding", EMBEDDINGS[0])
+    if embedding not in EMBEDDINGS:
+        raise schedule_mod.ScheduleError(
+            f"[modes] embed_embedding is embed mode's embedding choice, one of "
+            f"{', '.join(EMBEDDINGS)}, got {embedding!r} (07 §7.8)")
     rates: dict[str, int | None] = {}
-    for key in MODES_KEYS[3:]:
+    for key in MODES_RATE_KEYS:
         value = raw.get(key)
         if value is not None and (isinstance(value, bool) or not isinstance(value, (str, int, float))):
             raise schedule_mod.ScheduleError(
@@ -957,6 +981,7 @@ def _modes(raw: Any) -> ModesConfig:
             raise schedule_mod.ScheduleError(f"[modes] {key}: {e}") from None
     return ModesConfig(
         embed_network=networks["embed_network"], query_network=networks["query_network"],
+        embed_embedding=embedding,
         embed_down_max_bps=rates["embed_down_max"], embed_up_max_bps=rates["embed_up_max"],
         chat_down_max_bps=rates["chat_down_max"], chat_up_max_bps=rates["chat_up_max"],
         text=tuple((k, str(raw[k]).strip()) for k in MODES_KEYS if raw.get(k) is not None))

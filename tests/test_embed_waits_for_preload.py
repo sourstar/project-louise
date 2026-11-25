@@ -21,7 +21,7 @@ def keeper(monkeypatch):
     """A keeper whose mode preloads, with no beat yet and nothing loading."""
     resident.reset()
     monkeypatch.setattr(resident, "preloads", lambda state=None: (True, "running"))
-    monkeypatch.setattr(resident, "_settling", lambda now=None: False)
+    monkeypatch.setattr(resident, "_resumed_at", lambda: None)
     yield
     resident.reset()
 
@@ -55,11 +55,37 @@ def test_nothing_is_held_past_the_window_and_a_later_reload_holds_nothing(keeper
 
 
 def test_a_resume_from_a_mode_that_preloads_nothing_is_a_start_too(keeper, monkeypatch):
+    import time
     resident._note_first_beat()
+    resumed = time.time() - 30                      # the node resumed thirty seconds ago
+    monkeypatch.setattr(resident, "_resumed_at", lambda: resumed)
+    monkeypatch.setattr(resident, "_last_beat_wall", resumed + 5)      # the keeper has beaten since
     _loading(monkeypatch, True)
-    monkeypatch.setattr(resident, "_settling", lambda now=None: True)
     why = resident.holds_embedding(started=1000.0, now=90000.0)
     assert why == "the keeper is still loading the models of Ask after the node's resume"
+    _loading(monkeypatch, False)
+    assert resident.holds_embedding(started=1000.0, now=90000.0) is None
+
+
+def test_after_a_resume_embedding_waits_for_the_keepers_next_beat_and_not_for_ever(keeper, monkeypatch):
+    """The gap of a start, at a resume (an engine swap pauses the node and
+    empties the card): the run mode is written, the embed producers see it
+    within two seconds, and the keeper starts its loads only at its next
+    beat. Until it has beaten once SINCE the resume, embedding waits."""
+    import time
+    resident._note_first_beat()                     # it beat long ago, before the pause
+    resumed = time.time() - 3
+    monkeypatch.setattr(resident, "_resumed_at", lambda: resumed)
+    monkeypatch.setattr(resident, "_last_beat_wall", resumed - 6000)
+    _loading(monkeypatch, False)                    # no load has started yet: the gap
+    why = resident.holds_embedding(started=1000.0, now=90000.0)
+    assert why and "has not made a beat since the node's resume (3 s ago)" in why, why
+    resident._note_first_beat()                     # the beat after the resume
+    assert resident.holds_embedding(started=1000.0, now=90000.0) is None, "beaten, and nothing to load"
+    # a keeper that never beats again holds nobody past its bound
+    monkeypatch.setattr(resident, "_last_beat_wall", resumed - 6000)
+    monkeypatch.setattr(resident, "_resumed_at", lambda: time.time() - resident.FIRST_BEAT_WAIT_S - 1)
+    assert resident.holds_embedding(started=1000.0, now=90000.0) is None
 
 
 def test_a_mode_that_preloads_nothing_holds_nothing(keeper, monkeypatch):
@@ -127,3 +153,16 @@ def test_a_copy_whose_run_is_untested_is_not_gated_beside_the_loads_either(isola
     why[0] = None
     worker._settle_the_run(con, collection)
     assert asked == [1]
+
+
+def test_the_resume_is_read_from_the_run_modes_own_history(isolated_config):
+    """No fixture of this file here: the real `_resumed_at`, on the test's own
+    node store."""
+    from app import node_state
+    resident.reset()
+    node_state.set_worker_state("paused", by="an engine swap")
+    node_state.set_worker_state("running", by="the swap is done")
+    assert resident._resumed_at() is not None
+    node_state.set_worker_state("acquire-only", by="t")
+    assert resident._resumed_at() is None, "running to acquire-only: both preload, nothing resumed"
+    resident.reset()
