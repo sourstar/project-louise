@@ -95,13 +95,23 @@ def test_a_warm_that_left_its_model_unloaded_is_no_load_to_be_evicted_from(isola
             assert t.warmed_at is None and t.next_try > resident._now(), "not a load: asked again in two minutes"
         assert resident._due(r, resident._now() + resident.RETRY_UNLOADED_S + 1) is True
         assert penalized == [] and not [x for x in said if "off the card again" in x]
-        state["loaded"] = None                      # the runner cannot say: taken as loaded, as before
-        resident._warm_all([r], lambda: False)
-        state["loaded"] = False
+        # a load that KEEPS failing is asked less and less often: each try makes its room first
+        waits = []
+        for _ in range(8):
+            with resident._lock:
+                resident._track[r.key].next_try = 0.0
+            resident._warm_all([r], lambda: False)
+            with resident._lock:
+                waits.append(round(resident._track[r.key].next_try - resident._now()))
+        assert waits == [240, 480, 960, 1920, 3840, 7200, 7200, 7200], "doubled, up to the back-off's cap"
+        # ...and a load that takes: not loaded before the warm, loaded after it
+        answers = iter([False, True])
+        monkeypatch.setattr(resident, "_loaded", lambda r_: next(answers))
         with resident._lock:
-            resident._track[r.key].warmed_at = None
             resident._track[r.key].next_try = 0.0
         resident._warm_all([r], lambda: False)
+        with resident._lock:
+            assert resident._track[r.key].fails == 0 and resident._track[r.key].warmed_at is not None
     finally:
         resident.reset()
         from app import model_pins

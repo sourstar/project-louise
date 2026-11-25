@@ -54,6 +54,15 @@ measured (published figures disagree).
   8. A `forget` of a text index waited for the opens it could see; one that began while it waited stored
      its handle afterwards. NOW: a count of forgets per collection, read at the open's start and at its
      end — a handle from before a forget is never kept.
+  THE SAME READER THEN READ THE FIXES: seven closed, the fifth partly, and FOUR NEW things in the fixes
+  themselves, two reproduced — each fixed before the merge: the hour's limit of (1) outlived a spell in
+  query mode, so a second query → embed switch within the hour would have left the same models in host
+  memory (a paging rule now ends the hour); a paged-out model reads a MiB or less, not zero (the node:
+  tts-omnivoice 1.1 MiB, dar-legal-it 0.5), so "nothing on the card" is under 2 % of its largest; the stop
+  of the models just parked in (2) did not ask their pins again nor whether they had come back (read again
+  first: one asked for since is neither stopped nor counted); and a load that keeps failing was asked every
+  two minutes for ever, its victims stopped and reloaded each time (doubled up to the back-off's cap). The
+  hold of (5) after a write that got no answer is ten minutes, not an hour.
   Nothing found in the own-unloads record, the question's unloads, the warm-up, the rerank's parts, the
   "no room now" answer, the stage script, the lock order, or the secrets. THE LESSON, mine: two of the
   three reproduced defects were thresholds I reasoned about and never ran against the node's own numbers,

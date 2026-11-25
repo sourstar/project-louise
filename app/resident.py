@@ -416,6 +416,7 @@ class _Track:
     strikes: int = 0                    # repeat evictions in a row
     next_try: float = 0.0               # not loaded again before this `_now()`
     waiting: bool = False               # "stays unloaded" said, until it fits
+    fails: int = 0                      # warms in a row that left it unloaded (`_warm_all`)
 
 
 _lock = threading.Lock()
@@ -2099,10 +2100,16 @@ def _warm_all(items: list[Resident], stop: Callable[[], bool]) -> None:
         with _lock:
             t = _track.setdefault(r.key, _Track())
             if loaded is False:
+                # ...asked again after RETRY_UNLOADED_S, DOUBLED at each repeat
+                # up to BACKOFF_CAP_S: every try makes its room first, and a
+                # load that keeps failing must not stop and reload its
+                # victims every two minutes
                 t.warmed_at = None
-                t.next_try = _now() + RETRY_UNLOADED_S
+                t.fails += 1
+                t.next_try = _now() + min(RETRY_UNLOADED_S * 2 ** (t.fails - 1), BACKOFF_CAP_S)
             else:
                 t.warmed_at = _now()
+                t.fails = 0
 
 
 def _make_room_shown(want: list[Resident]) -> dict[str, Any]:

@@ -69,8 +69,12 @@ class NotAnswered(NotTaken):
     and a server patch for it rides the park server build."""
 
 
-#: how long a server whose settings write did not answer is left alone
-SETTINGS_HOLD_S = 3600.0
+#: how long a server whose settings write did not answer is left alone. Ten
+#: minutes: in the server's fault it bounds the requests left hanging at six
+#: an hour; where the answer was only slow, the switch a change of mode asked
+#: for is at most ten minutes late (the review of 2026-11-25: an hour held
+#: the reclaimer wrong for an hour after one slow answer)
+SETTINGS_HOLD_S = 600.0
 
 
 def wanted(rule: str) -> bool:

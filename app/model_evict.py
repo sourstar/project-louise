@@ -488,17 +488,34 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
     # stopped and the load still had no room — paid for nothing (the review
     # of 2026-11-25, reproduced: 360 MiB free, a 900 MiB model parked, a
     # 1,000 MiB one stopped, "1,935 of 2,200 MiB made")
-    for v, moved in list(away_now):
-        if free + freed >= need:
-            break
-        left = max(0, v.size - moved)
+    if away_now and free + freed < need:
+        # READ AGAIN FIRST: the stops above took seconds, and a model parked
+        # at their start may have been asked for since — pinned by an embed
+        # batch and back on the card. Such a one is neither stopped nor
+        # counted: the room its park gave is taken again
         try:
-            if left and model_load.unload(server, v.model):
+            model_load.loaded_models(server, 0.0)
+            still, pins_now = model_load.parked(server), model_pins.recorded()
+        except Exception:   # noqa: BLE001 — unread: none of them is stopped
+            still, pins_now = {}, None
+        for v, moved in list(away_now):
+            if v.model not in still:
                 away_now.remove((v, moved))
-                gone.append(v)
-                freed += left
-        except Exception:   # noqa: BLE001 — it stays parked
-            continue
+                freed -= moved
+        for v, moved in list(away_now):
+            if free + freed >= need:
+                break
+            left = max(0, v.size - moved)
+            try:
+                if (not left or pins_now is None or (server, v.model) in pins_now
+                        or model_pins.read_pinned(server, v.model)):
+                    continue
+                if model_load.unload(server, v.model):
+                    away_now.remove((v, moved))
+                    gone.append(v)
+                    freed += left
+            except Exception:   # noqa: BLE001 — it stays parked
+                continue
     said = f"{need // MIB:,} MiB needed, {max(0, free) // MIB:,} MiB were free under the {t:.2f} line"
     if away_now:
         _say("info", f"card: parked {', '.join(f'{v.model} ({_ago(now, v.last_used)}, {moved // MIB:,} MiB to host memory)' for v, moved in away_now)} "
@@ -553,6 +570,9 @@ def give_back(server: str, v: Loaded) -> tuple[str, int]:
 HOST_IDLE_S = 60.0
 #: a model reads IN HOST MEMORY under this share of what it holds AT REST
 HOST_SHARE = 0.5
+#: ...or under this share of the LARGEST it was seen holding: nothing of it
+#: is on the card (2 %: tts-omnivoice read 1.1 MiB of 2,867, 0.04 %)
+NOTHING_SHARE = 0.02
 #: a model `host_leftovers` stopped is not stopped by it again for this long:
 #: loaded back and paged out again, the card is too full for the set, and
 #: that is the budget's to say — never a stop and a load at every beat
@@ -580,8 +600,9 @@ def host_leftovers(servers: Iterable[str], in_set: Iterable[tuple[str, str]]) ->
       - Louise knows — of the keeper's set (`in_set`) or with a use row:
         never a model somebody loaded by hand,
       - is IN HOST MEMORY: it reads NOTHING on the card where it was seen
-        holding some, or under HOST_SHARE of what it holds AT REST where this
-        node knows that (`resident.rest_known`). NEVER judged against the
+        holding some (under NOTHING_SHARE of its largest: a paged-out model
+        reads a MiB or less, not zero), or under HOST_SHARE of what it holds
+        AT REST where this node knows that (`resident.rest_known`). NEVER judged against the
         LARGEST it was seen holding: a model that makes its context on demand
         rests far under it by design — vega-dar-legal-it about 1.8 GiB at rest
         against 8,453 MiB at its largest, 0.21 — and the first cut of this
@@ -614,6 +635,9 @@ def host_leftovers(servers: Iterable[str], in_set: Iterable[tuple[str, str]]) ->
     from app import gate_twin, model_load, model_pins, model_use, resident
     try:
         if rule()[0] == "page":
+            # back under a paging rule the hour's limit ends: what is paged out
+            # there and found again at the next switch is stopped again
+            _left_at.clear()
             return []
         in_set = {tuple(k) for k in in_set}
         pins = model_pins.recorded()
@@ -641,7 +665,12 @@ def host_leftovers(servers: Iterable[str], in_set: Iterable[tuple[str, str]]) ->
                     continue                     # holds no VRAM, or never seen holding any
                 here = int(size or 0)
                 rest = resident.rest_known(s, m, mem)
-                if here and (not rest or here >= HOST_SHARE * rest):
+                # NOTHING on the card is next to nothing, not zero: the node's
+                # paged-out models read 0.4-1.1 MiB (app/resident.py
+                # `_overcommitted`); the lowest share a whole model was seen
+                # at is 0.21 (an on-demand one at rest)
+                nothing = here < NOTHING_SHARE * largest
+                if not nothing and (not rest or here >= HOST_SHARE * rest):
                     continue                     # on the card, or nobody knows what it rests at
                 try:
                     if model_pins.read_pinned(s, m):
