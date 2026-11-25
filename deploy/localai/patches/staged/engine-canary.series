@@ -1,0 +1,47 @@
+# A CANDIDATE: A CANARY REFUSED FOR MEMORY IS NOT A CANARY THAT FAILED (the
+# node, 2026-11-25 09:40:55Z, live d531d5d804f1: one context of an embedding
+# model discarded as "context canary failed" in the second the card filled at
+# a worker's start; Louise set the run's statements aside and gated the
+# collection again, forty minutes - docs/notes/parking-step-2.md 6b).
+# engine-stream.series (792f050e318e), line for line, then:
+#   0028  a context canary whose graph the device refuses for memory. At a
+#         request it is a context that cannot be created ("the context cannot
+#         be created now ... try again later", counted nowhere as a canary
+#         that failed); at the load it fails the load, where the model was
+#         served UNCHECKED. A canary that was computed and differs is what it
+#         was. No new error type: that stays 0023's.
+#   SERIES_FILE=deploy/localai/patches/staged/engine-canary.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
+# ONE BUILD, ONE GATING for the paging default (0021), the language tag (0022),
+# the stream (0025) and this: it stands in 792f050e318e's place if that one is
+# not gated yet. engine-park.series does NOT list 0028 and must not: 0023
+# carries the same fix in its own form, on the same lines.
+# Its row, on a COPY of an encoder with context on demand whose env has
+# GGML_SYCL_GRAPH_REFUSE=2 and GGML_SYCL_GRAPH_REFUSE_ARM=<file> (0026): once
+# its context is gone, create the file and send one request - refused with
+# "the context cannot be created now", no context counted as discarded - then
+# remove the file: the next request is served.
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0009-llama-cpp-omnivoice.patch
+staged/0010-llama-cpp-tts-voice-modes.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch
+staged/0016-llama-cpp-sycl-pool-refuse-switch.patch
+staged/0017-llama-cpp-moe-record.patch
+staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch
+staged/0020-llama-cpp-omnivoice-nothing-kept-between-requests.patch
+staged/0021-llama-cpp-sycl-paging-is-the-default.patch
+staged/0022-llama-cpp-omnivoice-language-tag.patch
+staged/0025-llama-cpp-stream-fails-after-its-first-chunk.patch
+staged/0026-llama-cpp-sycl-graph-refuse-switch.patch
+staged/0028-llama-cpp-context-canary-refused-for-memory.patch

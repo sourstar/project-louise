@@ -1,0 +1,282 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 10:40:44 +0000
+Subject: [PATCH] fix(llama-cpp): a context canary the device refuses for
+ memory is not a canary that failed
+
+A model served with context on demand and the context canary - every
+encoder here - creates a context for a request and computes the canary on
+it before anything else. On a device that is full at that moment the
+canary's graph is refused for memory. That refusal was answered "context
+canary failed", counted as one and logged as a context that does not
+reproduce the load's: a determinism failure that never happened. A caller
+that acts on a canary failure - it stops trusting the run, and checks the
+engine again from scratch - did so for a device that was full for a second.
+At the load the same refusal left the model served with its contexts
+unchecked for the life of the process.
+
+The llama.cpp patch (0023) tells the two apart: llama_process returns
+LLAMA_PROCESS_NO_MEMORY (-4) where the backend could not allocate memory
+for the graph; the canary says so; at a request it is a context that
+cannot be created ("the context cannot be created now ... try again
+later", counted nowhere as a canary that failed), and at the load it fails
+the load. A canary that was computed and differs is what it was.
+
+Nothing changes for a request that is not refused, nor in what the backend
+answers a request whose own computation fails.
+
+Seen on the node, 2026-11-25: one context of an embedding model discarded
+as a canary failure in the second the device filled at a start (thirteen
+models preloading), one in 493 creations of that model and none since. The
+engine's lines of that second were not kept, so that event is not proven
+to be this; what a full device does is measured: on a CPU build with a
+stand-in device that refuses graphs, before - 503 "context canary failed",
+the counter at 1, and at the load the model served unchecked; after - 503
+"the context cannot be created now", the counter at 0, the next request
+served with the same vectors bit for bit, the load refused.
+
+Assisted-by: Claude Code
+---
+ ...23-context-canary-refused-for-memory.patch | 230 ++++++++++++++++++
+ 1 file changed, 230 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0023-context-canary-refused-for-memory.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0023-context-canary-refused-for-memory.patch b/backend/cpp/llama-cpp/patches/0023-context-canary-refused-for-memory.patch
+new file mode 100644
+index 0000000..4c65bc3
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0023-context-canary-refused-for-memory.patch
+@@ -0,0 +1,230 @@
++server: a context canary the device refuses for memory is not a canary that failed
++
++With --context-on-demand and the canary on, a context created for a request
++computes the canary before anything else runs on it. On a device that is
++full at that moment the canary's graph is refused (GGML_STATUS_ALLOC_FAILED:
++a refused commit fails its graph, 0014 and 0018). canary_check answered
++MISMATCH for every canary it could not compute, so that refusal was
++answered "context canary failed", counted in context_canary_failures_total
++and logged as a context that "does not reproduce the canary of the load": a
++determinism failure that never happened. A caller that takes the engine at
++its word - it has no other - stops trusting the run.
++
++At the LOAD the same refusal took the other wrong turn: canary_record
++answered NONE, the model was served with "the contexts created on demand
++are not checked", and stayed unchecked for the life of the process.
++
++- llama_process / llama_encode / llama_decode return LLAMA_PROCESS_NO_MEMORY
++  (-4) for GGML_STATUS_ALLOC_FAILED. It was -2, the value of every other
++  failure before a graph is computed (the host's output buffer, the memory
++  module's): a caller could not tell a device full at that moment from
++  them. It is still < -1: a caller that only tests for a fatal error sees
++  no difference, and the server's own answer to a request ("Compute
++  error.") is unchanged.
++- the canary says COMMON_CANARY_NO_MEMORY when that is why it was not
++  computed.
++- at a request it is a context that cannot be created: the context is
++  discarded, the request is answered as that is ("the context cannot be
++  created now, the memory it needs may be in use: try again later", 503),
++  and nothing is counted as a canary that failed.
++- at the load it fails the load, which is tried again, rather than serve
++  contexts nothing checks.
++
++A canary that was computed and differs is what it was: "context canary
++failed", counted. A canary that could not be computed for any other reason
++is still a mismatch.
++
++Measured on a CPU build with a stand-in device that refuses graphs (a dev
++patch in no engine): before, the refusal of a context's warmup and canary
++was answered 503 "context canary failed" with the counter at 1, and a
++refusal at the load left the model served unchecked; after, 503 "the
++context cannot be created now", the counter at 0, the next request served
++with the same vectors bit for bit, and the load refused. The server's own
++context-on-demand tests pass (21).
++---
++diff --git a/common/common.cpp b/common/common.cpp
++index e6c5181..fa081a2 100644
++--- a/common/common.cpp
+++++ b/common/common.cpp
++@@ -1467,8 +1467,10 @@ static const char * const COMMON_CANARY_TEXT       = "The quick brown fox jumps
++ static const size_t       COMMON_CANARY_MAX_TOKENS = 64;
++ 
++ // run the canary input on the context, the way the warmup run goes, and copy its output
++-// returns false if it cannot be computed
++-static bool common_context_canary_run(common_init_result & res, const common_params & params, std::vector<float> & out) {
+++// returns false if it cannot be computed; no_memory: because the device had no memory for a graph of it
+++static bool common_context_canary_run(common_init_result & res, const common_params & params, std::vector<float> & out, bool & no_memory) {
+++    no_memory = false;
+++
++     llama_model   * model = res.model();
++     llama_context * lctx  = res.context();
++ 
++@@ -1494,7 +1496,9 @@ static bool common_context_canary_run(common_init_result & res, const common_par
++     if (llama_model_has_encoder(model)) {
++         common_batch batch = common_batch_get_one(lctx, tokens);
++         all_outputs(batch);
++-        ok = llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get()) == 0;
+++        const int32_t ret = llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get());
+++        ok        = ret == 0;
+++        no_memory = ret == LLAMA_PROCESS_NO_MEMORY;
++         if (llama_model_has_decoder(model)) {
++             llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
++             if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
++@@ -1508,7 +1512,9 @@ static bool common_context_canary_run(common_init_result & res, const common_par
++         all_outputs(batch);
++         std::vector<float> zeros;
++         common_batch_set_zero_state(batch, model, zeros);
++-        ok = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
+++        const int32_t ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+++        ok        = ret == 0;
+++        no_memory = ret == LLAMA_PROCESS_NO_MEMORY;
++     }
++ 
++     if (ok) {
++@@ -1565,7 +1571,12 @@ common_canary_status common_init_result::canary_record(const common_params & par
++ 
++     std::vector<float> first;
++     std::vector<float> second;
++-    if (!common_context_canary_run(*this, params, first) || !common_context_canary_run(*this, params, second)) {
+++    bool no_memory = false;
+++    if (!common_context_canary_run(*this, params, first, no_memory) || !common_context_canary_run(*this, params, second, no_memory)) {
+++        if (no_memory) {
+++            COM_WRN("%s", "context canary: the device had no memory for its graph, it is not recorded\n");
+++            return COMMON_CANARY_NO_MEMORY;
+++        }
++         return COMMON_CANARY_NONE;
++     }
++     if (!common_context_canary_same(first, second)) {
++@@ -1588,7 +1599,12 @@ common_canary_status common_init_result::canary_check(const common_params & para
++     }
++ 
++     std::vector<float> now;
++-    if (!common_context_canary_run(*this, params, now)) {
+++    bool no_memory = false;
+++    if (!common_context_canary_run(*this, params, now, no_memory)) {
+++        if (no_memory) {
+++            COM_WRN("%s", "context canary: the device had no memory for its graph on this context\n");
+++            return COMMON_CANARY_NO_MEMORY;
+++        }
++         COM_WRN("%s", "context canary: its output could not be computed on this context\n");
++         return COMMON_CANARY_MISMATCH;
++     }
++diff --git a/common/common.h b/common/common.h
++index f3da483..0f97b98 100644
++--- a/common/common.h
+++++ b/common/common.h
++@@ -1028,6 +1028,9 @@ enum common_canary_status {
++     COMMON_CANARY_OK,       // recorded, or reproduced
++     COMMON_CANARY_NONE,     // the output cannot be computed for this model: nothing is recorded, nothing is checked
++     COMMON_CANARY_MISMATCH, // the same input did not give the same values
+++    // the device had no memory for the canary's graph (LLAMA_PROCESS_NO_MEMORY): nothing is known of the context's output,
+++    // and nothing is wrong with it - a refusal of the moment, which a context created later may not meet
+++    COMMON_CANARY_NO_MEMORY,
++ };
++ 
++ // note: defines the model, context, samplers, ets. lifetimes
++diff --git a/include/llama.h b/include/llama.h
++index e4ccb13..ac3488e 100644
++--- a/include/llama.h
+++++ b/include/llama.h
++@@ -652,6 +652,12 @@ extern "C" {
++     // Returns the total size of all the tensors in the model in bytes
++     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
++ 
+++    // llama_process / llama_encode / llama_decode: the backend could not allocate memory for the graph - its
+++    // buffers at allocation, or the device's own refusal while it computed (GGML_STATUS_ALLOC_FAILED). It had the
+++    // value -2 of every other failure before a graph is computed (the output buffer of the host, the memory
+++    // module's own): a caller could not tell a device full at that moment from them.
+++    #define LLAMA_PROCESS_NO_MEMORY (-4)
+++
++     // Parking: the weights leave the device and stay in host memory, the model and everything that refers to its
++     // tensors stay valid; unparking copies them back. A model may be parked only while NO context of it exists, and
++     // a context can be created again only after it is unparked.
++@@ -1014,6 +1020,8 @@ extern "C" {
++     //    2 - aborted     (processed ubatches will remain in the context's memory)
++     //   -1 - invalid input batch
++     // < -1 - fatal error (processed ubatches will remain in the context's memory)
+++    //   -4 - among them: the backend could not allocate memory for the graph (LLAMA_PROCESS_NO_MEMORY). The
+++    //        device was full at that moment; nothing is wrong with the batch, and the same call may succeed later
++     DEPRECATED(LLAMA_API int32_t llama_decode(
++             struct llama_context * ctx,
++               struct llama_batch   batch),
++diff --git a/src/llama-context.cpp b/src/llama-context.cpp
++index 8626e12..ff59ae6 100644
++--- a/src/llama-context.cpp
+++++ b/src/llama-context.cpp
++@@ -1985,7 +1985,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
++     if (!res) {
++         switch (status) {
++             case GGML_STATUS_ABORTED:      return  2;
++-            case GGML_STATUS_ALLOC_FAILED: return -2;
+++            case GGML_STATUS_ALLOC_FAILED: return LLAMA_PROCESS_NO_MEMORY;
++             case GGML_STATUS_FAILED:       return -3;
++             case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
++         }
++@@ -2404,7 +2404,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
++ 
++             switch (status) {
++                 case GGML_STATUS_ABORTED:      return  2;
++-                case GGML_STATUS_ALLOC_FAILED: return -2;
+++                case GGML_STATUS_ALLOC_FAILED: return LLAMA_PROCESS_NO_MEMORY;
++                 case GGML_STATUS_FAILED:       return -3;
++                 case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
++             }
++diff --git a/tools/server/README.md b/tools/server/README.md
++index b054b6f..96105f3 100644
++--- a/tools/server/README.md
+++++ b/tools/server/README.md
++@@ -2632,7 +2632,7 @@ Notes:
++ - The context is created with the parameters of the first load: the same size, batch sizes and device placement, without fitting them again to the memory that is free at that moment.
++ - Not supported yet together with speculative decoding or a multimodal projector: the server refuses to start.
++ 
++-**The context canary.** A context created on demand is new memory and a new first pass. Unless `--no-context-canary` is given, the server records at the load the output its context gives for a fixed short input - the pooled embedding with `--embedding`, the logits of the last token otherwise - computed twice, and it refuses to start if the two differ. Every context created afterwards computes the same input before any request runs on it: one that does not give the same values, bit for bit, is discarded, and the request it was created for is answered with error `503` (`unavailable_error`, its message starting with `context canary failed`) and can be retried. It costs one small pass per creation. After `POST /lora-adapters` the next context created records it again. Switch it off for a model whose backend does not reproduce its own output bit for bit.
+++**The context canary.** A context created on demand is new memory and a new first pass. Unless `--no-context-canary` is given, the server records at the load the output its context gives for a fixed short input - the pooled embedding with `--embedding`, the logits of the last token otherwise - computed twice, and it refuses to start if the two differ. Every context created afterwards computes the same input before any request runs on it: one that does not give the same values, bit for bit, is discarded, and the request it was created for is answered with error `503` (`unavailable_error`, its message starting with `context canary failed`) and can be retried. A canary the device had no memory to compute is not one that failed: nothing is known of that context, and it is the refusal of a context that cannot be created (`503`, `the context cannot be created now ...`), counted in no canary metric; at the load it fails the load, rather than serve contexts that are not checked. It costs one small pass per creation. After `POST /lora-adapters` the next context created records it again. Switch it off for a model whose backend does not reproduce its own output bit for bit.
++ 
++ `GET /metrics` reports `llamacpp:context_loaded` (1 while the context exists), `llamacpp:context_creations_total`, `llamacpp:context_creation_seconds_total` (the canary's pass included), `llamacpp:context_canary` (1 while the contexts created are checked) and `llamacpp:context_canary_failures_total`.
++ 
++diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
++index ce8e3fc..6d509f1 100644
++--- a/tools/server/server-context.cpp
+++++ b/tools/server/server-context.cpp
++@@ -1329,12 +1329,24 @@ private:
++         if (metrics.ctx_canary) {
++             // before any task runs on it: a context that does not reproduce the canary of the load is not used
++             bool same;
+++            common_canary_status canary;
++             if (ctx_canary_stale) {
++                 // the lora adapters were set since the canary was recorded: this context records it again
++-                same = llama_init->canary_record(params_base) == COMMON_CANARY_OK;
++-                ctx_canary_stale = !same;
+++                canary = llama_init->canary_record(params_base);
+++                ctx_canary_stale = canary != COMMON_CANARY_OK;
++             } else {
++-                same = llama_init->canary_check(params_base) == COMMON_CANARY_OK;
+++                canary = llama_init->canary_check(params_base);
+++            }
+++            same = canary == COMMON_CANARY_OK;
+++            if (canary == COMMON_CANARY_NO_MEMORY) {
+++                // the canary was not computed: the device refused its graph. Nothing says this context computes wrong -
+++                // it is the refusal of a context that cannot be created, and is not counted as a canary that failed
+++                llama_init->free_context();
+++                SRV_WRN("%s", "the device had no memory for the canary of the context created, it is discarded\n");
+++                if (was_parked) {
+++                    weights_park(); // a request that is refused leaves the device as it found it
+++                }
+++                return CONTEXT_NOT_CREATED;
++             }
++             if (ctx_canary_fail > 0) {
++                 ctx_canary_fail--;
++@@ -1659,6 +1671,11 @@ private:
++                     SRV_ERR("%s", "the model does not give the same output twice for the same input: the context canary cannot "
++                                   "be recorded. start with --no-context-canary to serve it without the check\n");
++                     return false;
+++                case COMMON_CANARY_NO_MEMORY:
+++                    // not served unchecked for the life of the process because of one refusal: the load fails, and is tried again
+++                    SRV_ERR("%s", "the device had no memory for the context canary: the load fails rather than serve "
+++                                  "contexts that are not checked\n");
+++                    return false;
++             }
++         }
++ 
+-- 
+2.43.0
+

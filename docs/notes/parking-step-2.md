@@ -530,6 +530,102 @@ which he tied to EUR-Lex5.next being repaired and drained: repaired and
 indexing since 10:05Z, draining for hours. The keeper's paging default and
 the staged speech model's backend name move when it is LIVE, not before.
 
+## 6b. A canary refused for memory is not a canary that failed: cut out for the next engine (2026-11-25)
+
+**What the node saw (München).** On the live engine `d531d5d804f1`, at
+09:40:55Z, 27 seconds after a worker's start: one context of
+`vega-qwen3-embedding-4b` discarded for not reproducing its canary — the
+resident preload of 13 models had begun at 09:40:36Z, five voice pings were
+running, the card went to 30,206 MiB of ~32 GiB. Louise did what it must
+with the engine's word (invariant 12; operator, 2026-11-11: "Wire the canary
+failure to the gate"): both statements of gutenberg's run set aside, its
+embedding paused, the run gated again from scratch — validated at 10:20:41Z.
+Forty minutes of one collection, no vector written from the discarded
+context. ONE discard in 493 creations of that model, none on bge-m3 (16) or
+nemotron (156), none since. The engine's own lines of that second had
+rolled out of its ring: **that event is not proven to be what follows.**
+
+**What a full card does, from the code and measured.** A context created
+on demand computes two graphs before any request runs on it: llama.cpp's
+warmup — an empty run whose failure llama.cpp IGNORES — and then the
+canary. `canary_check` answered MISMATCH for every canary it could not
+compute, and since staged 0018 a refused pool commit fails its graph
+instead of ending the process. So a canary refused for memory was answered
+`context canary failed`, counted, and logged "does not reproduce the canary
+of the load": a determinism failure that never happened. At the LOAD the
+same refusal answered NONE: the model served with "the contexts created on
+demand are not checked", unchecked for the life of the process. On a CPU
+build of `792f050e318e`'s llama.cpp source with the stand-in device that
+refuses graphs (`tools/measure/canary_refused_test.py`): 503 `context
+canary failed`, `context_canary_failures_total` = 1; at the load, served
+unchecked — the tool's two DEFECT lines.
+
+**The fix, staged 0028** (llama.cpp only; cut out of 0023's second cut,
+§6 "The canary took a room refusal for a wrong context"):
+
+| | it was | it is |
+|---|---|---|
+| `llama_process` for a graph the backend had no memory for | -2, like every other failure before a graph is computed | `LLAMA_PROCESS_NO_MEMORY` (-4). Still < -1: the server's own answer to a request ("Compute error.") is unchanged |
+| the canary of a context created for a request | MISMATCH: `context canary failed`, counted | the context is discarded and it is a context that cannot be created: 503 `the context cannot be created now … try again later`, counted in no canary metric |
+| the canary at the load | NONE: served unchecked | the load fails, and is tried again |
+| a canary that was computed and differs, or that could not be computed for any other reason | `context canary failed`, counted | the same |
+
+Through LocalAI every engine error is a 5xx carrying the engine's message.
+`app/embeddings.py` tells a canary failure by the words `context canary
+failed` and takes every other 5xx for a busy endpoint: the batch deferred,
+its documents untouched, nothing set aside, nothing gated again. No line of
+Louise moves, and no new error type is in this patch (that stays 0023's).
+
+**THE WORDS THAT TELL THE TWO APART**, in a backend's own lines, in the
+second around a discard — for the next time, on any engine before this one
+(München keeps each model's ring around every worker start). Both end with
+`the context created does not reproduce the canary of the load, it is
+discarded (N so far)`. Before it:
+
+| a refusal for memory | a real mismatch (invariant 12's case) |
+|---|---|
+| `…: the device refused N MiB for the pool (M MiB committed): …` | none of the lines on the left |
+| `…: the graph is abandoned` | |
+| `graph_compute: ggml_backend_sched_graph_compute_async failed with error -2` (once per refused graph: the warmup's, the canary's) | |
+| `context canary: its output could not be computed on this context` | `context canary: N of M values differ (sizes A and B), the largest difference is G` |
+
+"its output could not be computed" WITHOUT `failed with error -2` would be
+a third thing — a compute that failed for another reason (`error -1`).
+
+**The candidate: `engine-canary.series` → `619655e5833b`** —
+`engine-stream.series` (`792f050e318e`) line for line, then 0028.
+`792f050e318e` is built and installed beside the live engine, not gated.
+
+| | pros | cons |
+|---|---|---|
+| build `619655e5833b` beside, and swap IT when EUR-Lex5.next is drained (recommended) | one swap and one gating carry the paging default, the language tag, the stream fix AND this; a full card at a worker's start no longer costs a collection its statements and forty minutes; an encoder loaded on a full card is never served unchecked | one more build on the node (sixteen minutes, during a drain that takes hours); `792f050e318e`'s build is not used, like `d658549772ca`'s |
+| swap `792f050e318e` as built, `619655e5833b` at a later swap | no further build before the swap | two swaps and two gatings; between them every worker start on a full card can set a collection's statements aside again, and a chat answer is right while an encoder can still be served unchecked |
+| neither: stay on `d531d5d804f1` (the status quo) | nothing moves | the stream defect (a chat answer cut short, delivered as complete), the language tag and this all stay |
+
+If the operator says nothing: nothing is swapped — the node stays on
+`d531d5d804f1`, both later engines wait, and the swap needs his own yes to
+München as before. Building `619655e5833b` beside changes nothing that
+runs.
+
+`ed93e3c1b2e2` (`engine-park.series`) is NOT renamed and does not list
+0028: staged 0023 carries the same fix in its own form, on the same lines,
+with the answer's type its own (`no_room_on_device`). A test holds the two
+patches to the same lines, so one cannot move without the other.
+
+MEASURED, on a CPU build of the candidate's source with the stand-in
+(bge-small-en-v1.5 F16): before, DEFECT twice (6 of 8 checks); after, 12 of
+12 — the refusal of a context's warmup and canary answered 503 "the context
+cannot be created now", the counter at 0, the next request served with the
+control's vectors bit for bit in the same process, a canary that does not
+reproduce still answered and counted as one, the load refused, the same
+load with room serving. `refuse_cpu_test.py` 13 of 13; llama.cpp's own
+context-on-demand tests, 21. **NOT measured: a card.** München's row, on a
+COPY of an encoder with context on demand whose env sets
+`GGML_SYCL_GRAPH_REFUSE=2` and `GGML_SYCL_GRAPH_REFUSE_ARM=<file>` (staged
+0026): once its context is gone, create the file and send one request — it
+must be refused with "the context cannot be created now" and no context
+counted as discarded; remove the file — the next request is served.
+
 ## 7. The server part, commit by commit
 
 Each is a patch of LocalAI's SERVER, in no engine series, written on the

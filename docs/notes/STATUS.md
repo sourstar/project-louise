@@ -120,6 +120,14 @@ measured (published figures disagree).
 
 ### 2026-11-24
 
+- **A FALSE CANARY FAILURE ON THE LIVE ENGINE, AND THE ENGINE THAT ENDS IT: `619655e5833b` (2026-11-25):** 09:40:55Z, a worker's
+  start filling the card: one context of `vega-qwen3-embedding-4b` discarded as "context canary failed"; gutenberg's statements
+  set aside, forty minutes of re-gating. From the code and MEASURED on a CPU build with a stand-in device: a canary whose graph is
+  REFUSED FOR MEMORY was answered as a canary that failed, and at the load left the model served unchecked (localai-bugs.md B23;
+  the event itself is not proven to be this — the engine's lines were gone). The fix existed inside the parking patch only; it is
+  cut out as staged 0028, `engine-canary.series` = `792f050e318e` + it. Recommended: build it beside and swap IT when
+  EUR-Lex5.next is drained, in `792f050e318e`'s place ([parking-step-2.md](parking-step-2.md) §6b, with the words that tell a
+  refusal from a real mismatch in a backend's log). Not measured on a card.
 - **`792f050e318e` IS BUILT, NOT LIVE (München, 2026-11-25 09:58:24Z):** installed beside `d531d5d804f1`, which stays live. Its swap
   and every gate wait for the operator's own yes to München, after EUR-Lex5.next is drained (repaired, indexing since 10:05Z).
 - **THE NEXT ENGINE TO BUILD IS `792f050e318e` (`engine-stream.series`, 2026-11-25):** the paging default (0021), the language tag (0022) and A STREAM THAT FAILS AFTER ITS FIRST CHUNK FAILS (0025; localai-bugs.md B21 — a chat answer cut short was delivered as complete, on every engine so far; measured on a CPU build: OK after 4 of 50 chunks before, INTERNAL after 3 of 50 after), with the test switch that lets a card show it (0026). The operator has not yet said which candidate is built; this one stands in the two before it. parking-step-2.md §6a.
