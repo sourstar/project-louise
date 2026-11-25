@@ -415,6 +415,18 @@ def eli_work_of(path: str | None) -> str | None:
     return None
 
 
+#: where a PDF's header may sit: ISO 32000-1 asks for it at byte 0, and its
+#: readers (Acrobat's implementation note, PDFium) take it anywhere in the
+#: first 1024 bytes — files with a BOM or a few stray bytes before `%PDF-`
+#: exist, and one read by its first five bytes alone would be held unread
+PDF_HEADER_WINDOW = 1024
+
+
+def _is_pdf(data: bytes) -> bool:
+    """Is this file a PDF by its CONTENT — the header a PDF reader looks for?"""
+    return b"%PDF-" in data[:PDF_HEADER_WINDOW]
+
+
 def _content_kind(data: bytes) -> str:
     """What a file's first bytes say it is, in words, for an issue."""
     if data[:4] in (b"II*\x00", b"MM\x00*"):
@@ -1015,7 +1027,7 @@ class EurlexSource:
                 # and three TIFF page images, all four declared application/pdf
                 # by the origin; PDFium was given a TIFF and the unit refused).
                 # An item that is not a PDF is held in the unit, not read as one
-                names = [n for n in listed_names if files[n][:5] == b"%PDF-"]
+                names = [n for n in listed_names if _is_pdf(files[n])]
                 others = [n for n in listed_names if n not in names]
                 if others:
                     found.append(Issue("item-not-its-form", "; ".join(

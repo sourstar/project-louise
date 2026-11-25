@@ -278,3 +278,14 @@ def test_a_pdf_manifestation_holding_only_images_is_a_record_without_text(rendit
     doc = _doc(renditions, "32004D0411")
     assert doc.sections == [] and doc.extra["form"] == "pdf"
     assert any(i.code == "item-not-its-form" for i in doc.issues)
+
+
+def test_a_pdf_whose_header_is_not_at_byte_zero_is_still_a_pdf():
+    """ISO 32000-1's header, as PDF readers take it: anywhere in the first
+    1024 bytes. A file with a BOM or stray bytes before `%PDF-` must not be
+    held unread as "not a PDF" — its text would be missing from the record."""
+    assert src._is_pdf(b"%PDF-1.4\n...")
+    assert src._is_pdf(b"\xef\xbb\xbf%PDF-1.7\n..."), "a BOM before the header"
+    assert src._is_pdf(b"\n" * 1000 + b"%PDF-1.4"), "within the window"
+    assert not src._is_pdf(b"II*\x00" + b"\x00" * 2000), "a TIFF"
+    assert not src._is_pdf(b"\x00" * 1024 + b"%PDF-1.4"), "past the window: not a PDF's header"
