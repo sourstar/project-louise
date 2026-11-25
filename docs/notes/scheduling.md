@@ -566,6 +566,29 @@ rows not yet embedded, or the embedded ones (`lookahead.Chain.kind`,
 seconds waited in each kind. The rule: when an optimisation applies to SOME
 rows, write down which, and make its own log line a number someone reads.
 
+**23. A wait with no request behind it.** EUR-Lex5.next, 2026-11-25. `node
+pause <collection>` cut its scan short at 22 minutes; the log said
+"discovery interrupted … resumes next scan". At the resume a pipeline thread
+started and nothing asked for a scan: the requests were the start's, the
+interval's (360 min), a fetch's end, a config change — never a collection's
+own resume. The interrupted scan had inserted rows, so the slice pass stood
+at row 970,426 of 980,178 and `slice_scope.ready` said no: the stages
+selected nothing ("0 units in 7 turns") behind one line said an hour before,
+for thirty minutes, until the worker was restarted. The next request would
+have been the interval's, about five hours later. The embed selection's
+wait, ten lines below it in the same loop, had asked for its scan since
+11-02; the slice scope's never had.
+→ A scan cut short by its collection's own stop is OWED to its resume
+(`_owe_scan(…, OWED_BY_PAUSE)`, kept owed round after round while the
+collection is not run, `_request_owed_scans`). And the wait itself asks:
+every `WAIT_SAID_EVERY_S` (300 s) it says where the pass is — "row N of M" —
+and whether a scan is running, asked for, or asked for now
+(`_wait_for_slice_scope`); the line and the request share the period, so a
+scan that cannot run is not started again at every idle pass. The rule:
+EVERY WAIT HAS ITS REQUEST AND ITS NUMBER. A thread that waits for something
+another thread produces checks that the producer is running or asked for,
+asks if not, and says how far it is — or it waits for a restart.
+
 ## 6. Before you change the scheduler — the checklist
 
 1. **Read the worker log as a time series first.** It is the first
@@ -604,6 +627,11 @@ rows, write down which, and make its own log line a number someone reads.
    corpus are not comparable, and `docs/s` will happily show a win that is
    only a different set of articles. When `docs/s` and `ms/doc` disagree,
    believe `ms/doc`.
+10. **Exercise the path for EACH KIND of collection and each way it can be
+    entered** (pitfalls 22 and 23, 2026-11-25): embedded, carried (embedded
+    before its text is indexed), embed off; started, resumed after its own
+    pause, resumed after the node's, frozen and unfrozen. Both were paths
+    the common collection never took, and both passed every test there was.
 
 ## 7. How to measure
 
