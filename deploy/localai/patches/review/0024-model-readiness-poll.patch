@@ -1,0 +1,225 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 08:09:47 +0000
+Subject: [PATCH] fix(model): a started backend is asked whether it is ready
+ every 50 ms, not every 2 s
+
+After LocalAI starts a backend process it waits for its gRPC service: one
+health check, then a sleep of the configured delay (2 s by default), up to
+the configured attempts (20). A backend ready 100 ms after its start was
+therefore seen two seconds later - on every cold load of every model, and
+it is most of what a small model's load costs.
+
+The wait is still bounded by what the configuration gives it, attempts x
+delay spent sleeping, exactly as before; a model's own `grpc.attempts` and
+`grpc.attempts_sleep_time` mean what they meant. Within it the backend is
+asked every 50 ms, so a ready one is seen at once, and it is asked once
+more after the last sleep, where the old loop slept after its last check.
+With no delay configured the checks follow each other as before.
+
+waitForBackendReady is the loop, apart from the process and the client,
+with its tests: ready at the first check (no sleep), ready after 150 ms
+(seen at 150 ms), never ready (40 s slept, no more and no less), a model's
+own attempts and delay, a delay under the interval, no delay, no attempts.
+
+Assisted-by: Claude Code
+---
+ pkg/model/initializers.go                |  67 ++++++++++++---
+ pkg/model/initializers_readiness_test.go | 100 +++++++++++++++++++++++
+ 2 files changed, 155 insertions(+), 12 deletions(-)
+ create mode 100644 pkg/model/initializers_readiness_test.go
+
+diff --git a/pkg/model/initializers.go b/pkg/model/initializers.go
+index 467b89e..934e4b7 100644
+--- a/pkg/model/initializers.go
++++ b/pkg/model/initializers.go
+@@ -72,6 +72,54 @@ const (
+ 
+ // starts the grpcModelProcess for the backend, and returns a grpc client
+ // It also loads the model
++// readinessPollInterval is how often a backend that was just started is
++// asked whether it is ready.
++//
++// The wait used to ask once, sleep the configured delay (2 s by default) and
++// ask again: a backend ready 100 ms after its start was seen two seconds
++// later, on every cold load. The configured attempts and delay still bound
++// the wait - attempts x delay spent sleeping, as before - but within it the
++// backend is asked every 50 ms, so a ready one is seen at once.
++const readinessPollInterval = 50 * time.Millisecond
++
++// waitForBackendReady asks check until it says the backend is alive, or
++// until attempts x delay has been spent sleeping between two checks. It
++// returns whether the backend is ready and, when it is not, the error of
++// the last check. A delay shorter than the poll interval is slept as it is,
++// and with no delay the checks follow each other as before: the wait is
++// never made longer than it was.
++func waitForBackendReady(check func() (bool, error), attempts int, delay time.Duration, sleep func(time.Duration)) (bool, error) {
++	if attempts <= 0 {
++		return false, nil
++	}
++	if delay <= 0 {
++		// no delay configured: the same number of checks, back to back, as before
++		var err error
++		for range attempts {
++			var alive bool
++			if alive, err = check(); alive {
++				return true, nil
++			}
++		}
++		return false, err
++	}
++	interval := min(readinessPollInterval, delay)
++	budget := time.Duration(attempts) * delay
++	var slept time.Duration
++	for {
++		alive, err := check()
++		if alive {
++			return true, nil
++		}
++		if slept >= budget {
++			return false, err
++		}
++		step := min(interval, budget-slept)
++		sleep(step)
++		slept += step
++	}
++}
++
+ func (ml *ModelLoader) grpcModel(backend string, o *Options) func(string, string, string) (*Model, error) {
+ 	return func(modelID, modelName, modelFile string) (*Model, error) {
+ 		xlog.Debug("Loading Model with gRPC", "modelID", modelID, "file", modelFile, "backend", backend)
+@@ -188,18 +236,13 @@ func (ml *ModelLoader) spawnGRPCModel(backend, uri string, o *Options, modelID,
+ 	xlog.Debug("Wait for the service to start up")
+ 
+ 	// Wait for the service to start up
+-	ready := false
+-	for i := range o.grpcAttempts {
+-		alive, err := client.GRPC(o.parallelRequests, ml.wd).HealthCheck(context.Background())
+-		if alive {
+-			xlog.Debug("GRPC Service Ready")
+-			ready = true
+-			break
+-		}
+-		if err != nil && i == o.grpcAttempts-1 {
+-			xlog.Error("failed starting/connecting to the gRPC service", "error", err)
+-		}
+-		time.Sleep(time.Duration(o.grpcAttemptsDelay) * time.Second)
++	ready, err := waitForBackendReady(func() (bool, error) {
++		return client.GRPC(o.parallelRequests, ml.wd).HealthCheck(context.Background())
++	}, o.grpcAttempts, time.Duration(o.grpcAttemptsDelay)*time.Second, time.Sleep)
++	if ready {
++		xlog.Debug("GRPC Service Ready")
++	} else if err != nil {
++		xlog.Error("failed starting/connecting to the gRPC service", "error", err)
+ 	}
+ 
+ 	if !ready {
+diff --git a/pkg/model/initializers_readiness_test.go b/pkg/model/initializers_readiness_test.go
+new file mode 100644
+index 0000000..9690470
+--- /dev/null
++++ b/pkg/model/initializers_readiness_test.go
+@@ -0,0 +1,100 @@
++package model
++
++import (
++	"errors"
++	"time"
++
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++)
++
++// A backend that was just started is asked whether it is ready every 50 ms,
++// inside the wait the configured attempts and delay always gave it.
++var _ = Describe("waitForBackendReady", func() {
++	var (
++		checks int
++		slept  []time.Duration
++		sleep  = func(d time.Duration) { slept = append(slept, d) }
++		total  = func() (sum time.Duration) {
++			for _, d := range slept {
++				sum += d
++			}
++			return sum
++		}
++		readyAt = func(n int) func() (bool, error) {
++			return func() (bool, error) {
++				checks++
++				if checks >= n {
++					return true, nil
++				}
++				return false, errors.New("connection refused")
++			}
++		}
++		never = func() (bool, error) {
++			checks++
++			return false, errors.New("connection refused")
++		}
++	)
++
++	BeforeEach(func() {
++		checks = 0
++		slept = nil
++	})
++
++	It("does not sleep at all for a backend that is ready at the first check", func() {
++		ready, err := waitForBackendReady(readyAt(1), 20, 2*time.Second, sleep)
++		Expect(ready).To(BeTrue())
++		Expect(err).ToNot(HaveOccurred())
++		Expect(checks).To(Equal(1))
++		Expect(slept).To(BeEmpty())
++	})
++
++	It("sees a backend ready after 150 ms at 150 ms, where it was seen after two seconds", func() {
++		ready, err := waitForBackendReady(readyAt(4), 20, 2*time.Second, sleep)
++		Expect(ready).To(BeTrue())
++		Expect(err).ToNot(HaveOccurred())
++		Expect(slept).To(Equal([]time.Duration{50 * time.Millisecond, 50 * time.Millisecond, 50 * time.Millisecond}))
++	})
++
++	It("waits no longer and no less than attempts x delay for a backend that never answers", func() {
++		ready, err := waitForBackendReady(never, 20, 2*time.Second, sleep)
++		Expect(ready).To(BeFalse())
++		Expect(err).To(MatchError("connection refused"))
++		Expect(total()).To(Equal(40 * time.Second))
++		// asked after every sleep, the last one included
++		Expect(checks).To(Equal(len(slept) + 1))
++		Expect(len(slept)).To(Equal(800))
++	})
++
++	It("honours a model's own attempts and delay", func() {
++		ready, _ := waitForBackendReady(never, 3, 5*time.Second, sleep)
++		Expect(ready).To(BeFalse())
++		Expect(total()).To(Equal(15 * time.Second))
++	})
++
++	It("sleeps a delay shorter than the interval as it is", func() {
++		ready, _ := waitForBackendReady(never, 3, 10*time.Millisecond, sleep)
++		Expect(ready).To(BeFalse())
++		Expect(slept).To(Equal([]time.Duration{10 * time.Millisecond, 10 * time.Millisecond, 10 * time.Millisecond}))
++	})
++
++	It("with no delay, asks as many times as before and never sleeps", func() {
++		ready, err := waitForBackendReady(never, 4, 0, sleep)
++		Expect(ready).To(BeFalse())
++		Expect(err).To(MatchError("connection refused"))
++		Expect(checks).To(Equal(4))
++		Expect(slept).To(BeEmpty())
++
++		checks = 0
++		ready, _ = waitForBackendReady(readyAt(3), 4, 0, sleep)
++		Expect(ready).To(BeTrue())
++		Expect(checks).To(Equal(3))
++	})
++
++	It("asks nothing when no attempt is allowed", func() {
++		ready, err := waitForBackendReady(never, 0, 2*time.Second, sleep)
++		Expect(ready).To(BeFalse())
++		Expect(err).ToNot(HaveOccurred())
++		Expect(checks).To(Equal(0))
++	})
++})
+-- 
+2.43.0
+

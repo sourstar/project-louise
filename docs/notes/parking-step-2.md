@@ -333,3 +333,33 @@ rows of §3.1 — München's, each through the backend's own address:
     # two cycles REFUSED (RESOURCE_EXHAUSTED, still parked), the rest served
 
 and the gate's clause (§3.3): the sixteen fingerprints after N cycles.
+
+## 7. The server part, commit by commit — FOR REVIEW
+
+Each is a patch of LocalAI's SERVER, in no engine series, written on the
+node's server tree (v5.0.1 + P1 + P13 + P19 = `v5.0.1-3`), and sent for
+review before it is staged. A server build, no gate: the server is in no run
+id.
+
+**1. The readiness poll** — `review/0024-model-readiness-poll.patch`
+(§3.2; separable, it parks nothing). After LocalAI starts a backend it asks
+whether its gRPC service is ready, sleeps the configured delay — 2 s by
+default — and asks again, up to 20 times. A backend ready after 100 ms is
+seen two seconds later, on every cold load of every model.
+
+| | pros | cons |
+|---|---|---|
+| ask every 50 ms inside the same wait (built) | a ready backend is seen at once; the wait is still attempts × delay spent sleeping, so a model's own `grpc.attempts` and `grpc.attempts_sleep_time` mean what they meant; one more check after the last sleep, where the old loop slept after its last | up to 800 health checks where there were 20, each a refused connection until the process listens — nothing beside a model's load |
+| lower the default delay to 50 ms | one line | changes what every model file's `attempts` is worth: 20 attempts would wait 1 s, and a slow backend would be given up on |
+| status quo | nothing to carry | up to 2 s on every cold load, most of what a small model's load costs |
+
+MEASURED: its seven Go specs (ready at once: no sleep; ready after 150 ms:
+seen at 150 ms; never ready: 40 s slept, no more and no less; a model's own
+numbers; a delay under the interval; no delay; no attempts) and the whole
+`pkg/model` suite on the server tree. NOT measured: a cold load's seconds on
+the node before and after — München's row, the same model, R6's 2 s the
+expectation.
+
+**2. The parked state, the two calls, `/system`, the floor, 503** — being
+written (§3.2, §3.4).
+
