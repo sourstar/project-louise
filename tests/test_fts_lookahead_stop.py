@@ -186,7 +186,7 @@ def test_a_link_let_go_of_gives_the_lane_back_at_once(tmp_path, monkeypatch, iso
     _large(con, rows[1])
     assert _round(con, c, rows[0])
     assert len(_made(lane)) == 1
-    assert not parallel._large_lane.acquire(blocking=False), "the act holds the lane"
+    assert parallel.lanes_free() == parallel.LARGE_LANES - 1, "the act holds a lane"
     t0 = time.monotonic()
     worker.drop_fts_ahead(c)                         # let go of
     deadline = time.monotonic() + 5
@@ -195,9 +195,9 @@ def test_a_link_let_go_of_gives_the_lane_back_at_once(tmp_path, monkeypatch, iso
     assert lane.made[0].cancelled, "its lane part terminated"
     assert time.monotonic() - t0 < 2 * parallel.WAIT_SLICE_S
     deadline = time.monotonic() + 2
-    while time.monotonic() < deadline and not parallel._large_lane.acquire(blocking=False):
+    while time.monotonic() < deadline and parallel.lanes_free() < parallel.LARGE_LANES:
         time.sleep(0.02)
-    parallel._large_lane.release()
+    assert parallel.lanes_free() == parallel.LARGE_LANES, "its lane given back"
 
 
 def test_the_chain_waits_for_a_beating_link_and_lets_a_quiet_one_go():

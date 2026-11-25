@@ -12,9 +12,9 @@ its own pool. The pool already records every part in flight
 (`parallel.in_flight`, kept for a memory kill's hold). This reads it: a part
 that has been in flight for SAY_AFTER_S is said, and again every SAY_EVERY_S
 while it stays — the collection, the stage, how many parts the pool holds for
-it, the oldest's unit and size, how long, and for a large part that it is
-ALONE in the large lane (one large unit at a time in the whole worker,
-parallel.py `_large_lane`) and how long its answer is still waited for.
+it, the oldest's unit and size, how long, and for a large part that it has
+the large lane (a process of its own; `parallel.LARGE_LANES` of them in the
+whole worker) and how long its answer is still waited for.
 When it has answered, one line says how long it took.
 
 Telemetry is published by someone other than the thread doing the work
@@ -90,8 +90,9 @@ def look(*, in_flight: Callable[[], list[dict]] | None = None,
                 f"the oldest for {_span(age)} — {uid}"
                 + (f" and {rows - 1} more" if rows > 1 else "") + f", {_size(weight)}")
         if oldest.get("large"):
-            line += (" — ALONE in the large lane (one large unit at a time in the whole worker; the others "
-                     "of its batch are deferred to a later round)")
+            line += (f" — in the large lane, a process of its own (at most {parallel.LARGE_LANES} large units "
+                     f"at a time in the whole worker; a batch puts at most that many, the others are asked "
+                     f"again next round)")
             until = oldest.get("until")
             if until is not None:
                 left = until - t

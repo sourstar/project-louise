@@ -628,6 +628,32 @@ the same scarce thing in the same minute, one of them waits by design and
 says so. (Whether that canary was a graph REFUSED FOR MEMORY answered as a
 failure is the engine's question; the order is right either way.)
 
+**26. A batch that queued its own large units, on a lane of one.** 2026-11-25.
+EUR-Lex5.next's fts met the 23 languages of 32018R0688, 90–136 MB each. A
+large unit takes the large lane, and the lane was ONE in the whole worker;
+within a batch a large part that found the lane taken made the batch drain
+and ask again — so one fts batch ran nine of them one after the other
+("indexed 9 documents / 22637 chunks in one commit (1513.5s: parse 1503.0 …);
+91 more parsed, carried to the next batch"), the look-ahead six more in the
+same minutes, while ten children idled ("1.9 of 11 slots in flight (17%)"),
+91 light documents sat parsed and uncommitted, and the collection's rdf —
+134,618 pending — waited behind its one pipeline thread. Over the next
+quarter of an hour the collection averaged ~100 documents and ~118 rdf a
+minute, in bursts of thousands between waits of many minutes; an operator's
+monitor took one such wait for a stall and paused healthy work.
+→ `LARGE_LANES = 2`: the lane was never what held the memory — every large
+part still passes `_room` (its peak free in the cgroup now) and `_reserve`
+(its estimate beside every estimate in flight, under ADMIT_FRACTION,
+measured) — and on the node's numbers (a unit peaks at ~2.8 GiB, the cgroup
+at 16.8 of 24.6 GiB with one in flight) that guard admits a second and
+refuses a third. And A BATCH PUTS AT MOST A LANE'S WORTH OF LARGE UNITS: the
+others are deferred to the next round at once, whatever the lane's state at
+that instant, so the batch commits after two and the collection's other
+stages get their turn between rounds. The rule: A BATCH IS SIZED BY ITS
+SLOWEST MEMBERS, NOT BY ITS COUNT — a selection that can gather several
+units of minutes each must cap them, or one commit holds a collection for as
+long as all of them take.
+
 ## 6. Before you change the scheduler — the checklist
 
 1. **Read the worker log as a time series first.** It is the first
