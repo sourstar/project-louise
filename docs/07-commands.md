@@ -1699,6 +1699,22 @@ sentence until 120 s after the end of the last; a request naming no model
 or voice gets `[speech] tts_model` and `tts_voice` (§7.8), and one naming a
 voice profile the model server no longer holds gets `tts_voice` too (the
 reader's voice, *added 2026-11-11*); 400 for a text that is only citations.
+A VOICE'S ENCODING IS MADE BEFORE A READER WAITS FOR IT (*added 2026-11-25*,
+operator: "The only voice ping purpose is to do the re-encode for voices
+without it cached to avoid the extra delay upon the first usage";
+`app/voice_ping.py`): the speech engine keeps a clip's encoding beside the
+clip, bound to the clip and to the engine's build, and a voice with none
+pays it in its first sentence (0.8 to 3.2 s on the node). Beside the
+keeper's beat the worker sends one short synthesis in the voice — `{model,
+input: "OK", voice}` — to each voice the node is set to use (`tts_voice`,
+each of `synthetic_voices`, each account's kept voice) that it has not
+pinged under the engine the speech model is loaded on (its `backend` in the
+model server's `GET /system`) with the clip the profile lists (its size, its
+length, `updated_at`): a profile new to the node, a clip replaced in place,
+every set voice once after the engine changed — and no other. Not a warm,
+and not sent because a voice was selected; only while the speech model is
+loaded and the node's mode preloads, never under a question. What each
+voice was last pinged under is `voice_pings` in `state/node.sqlite`.
 `GET /ask/voices` → `{voices: [{name, voice, language}], default, account}`:
 the model server's recorded voice profiles, oldest first, the one the node
 speaks in, and `{name, voice}` for a reader with an account (§7.4 users);

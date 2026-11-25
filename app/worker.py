@@ -6848,6 +6848,14 @@ def _resident_keeper() -> None:
                 resident.beat(_served_now(collections), embed_mode=embed_mode, stop=_stop.is_set)
             except Exception:   # noqa: BLE001 — never the thread; the next beat
                 pass
+            try:
+                # a voice with no encoding under this engine and this clip is
+                # pinged once, off this thread (app/voice_ping.py)
+                from . import voice_ping
+                voice_ping.beat(preloads=resident.preloads()[0], question=resident._question_now,
+                                stop=_stop.is_set, say=model_pins.node_event)
+            except Exception:   # noqa: BLE001 — never the thread; the next beat
+                pass
             if _stop.wait(SETTLE_BEAT_S):
                 break
     finally:
