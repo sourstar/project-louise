@@ -409,16 +409,21 @@ def test_a_restore_goes_back_to_the_mode_of_use_first_and_then_to_the_run_mode(n
     and froze is switched back, and the run mode recorded is written AFTER the
     switch — which sets its own — so chat mode is never left running everything."""
     from app import node_mode
+    node_mode.switch("embed", by="the operator")
     node_state.set_worker_state("paused", by="the operator, for a deploy")     # embed mode, paused
     ws.save()
     assert ws.read()["state"]["use"] == "embed"
-    node_mode.switch("chat", by="dev")
+    node_mode.switch("query", by="dev")
     node_state.set_worker_state("paused", by="dev")       # the run mode reads as it was recorded
     got = ws.restore(by="t")
     assert [c["what"] for c in got["changed"]] == ["use", "mode"]
     assert node_mode.current() == "embed" and node_state.worker_state() == "paused", \
         "not the `running` the switch to embed mode sets"
-    assert ws.said({"what": "use", "from": "chat", "to": "embed"}) == "chat mode -> embed mode"
+    assert ws.said({"what": "use", "from": "query", "to": "embed"}) == "query mode -> embed mode"
+    # ...and a node never switched is recorded as what it is, custom
+    node_mode.switch("custom", by="the operator")
+    ws.save()
+    assert ws.read()["state"]["use"] == "custom"
 
 
 def test_a_record_made_before_there_were_two_modes_leaves_the_mode_of_use(node):

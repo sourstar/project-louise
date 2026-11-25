@@ -26,7 +26,7 @@
     {% set refused = node_mode_refuses(mode) %}
     <button class="mode{{ ' selected' if worker_state==mode }}"
             {% if worker_state==mode %}disabled aria-current="true"{% elif refused %}disabled{% endif %}
-            title="{% if refused and worker_state!=mode %}the node is in chat mode: embed mode runs everything — switch on the System page{% else %}{{ mode_says[mode] }}{{ ' — the node is in this mode' if worker_state==mode }}{% endif %}"
+            title="{% if refused and worker_state!=mode %}the node is in query mode: embed mode runs everything, custom mode lets you choose — switch on the System page{% else %}{{ mode_says[mode] }}{{ ' — the node is in this mode' if worker_state==mode }}{% endif %}"
             onclick="setWorkerState('{{ mode }}')">{{ label }}</button>
     {% endfor %}
     {# Grey wherever the mode parses nothing, because it would genuinely do
