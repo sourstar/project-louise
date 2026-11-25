@@ -195,6 +195,19 @@ def ready(con, collection) -> bool:
     return bool(state.get("done")) and int(state.get("cursor", 0)) >= _max_rowid(con)
 
 
+def waits(con, collection) -> str:
+    """Why `ready` says no, in words, for the stage that waits: where the
+    pass stands against the manifest, or that the file's slices changed."""
+    slices, embed = held(collection), embedded(collection)
+    state = _state(con)
+    sig = json.loads(state.get("signature") or "{}")
+    if sig.get("slices") != (list(slices) if slices is not None else None) \
+            or sig.get("embed") != (list(embed) if embed is not None else None):
+        return "the slices the collection's file names are not the ones last applied"
+    return (f"the pass is at row {int(state.get('cursor', 0)):,} of {_max_rowid(con):,}"
+            + ("" if state.get("done") else ", not finished"))
+
+
 def invalidate(con) -> None:
     """In-scope was rewritten by something else (`discovery.apply_scope`
     widens every row): the pass starts again from the first row."""

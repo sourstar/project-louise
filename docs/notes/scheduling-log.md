@@ -3356,3 +3356,70 @@ tools/sched_measure.sh 15` for the count parsed ahead and the parse seconds
 in each kind; fts and rdf stage seconds and documents; ms/doc for both; the
 children's states for 60 s; ten dumps of the pipeline thread. Believe
 ms/doc and the parse seconds, not docs/s: the slice moves.
+
+## 2026-11-25 — a collection's resume asks for the scan its pause cut short; the slice-scope wait says where it is
+
+**SCENARIO.** EUR-Lex5.next (970 k units, one-thread scan of 28–55 minutes),
+node running, three other collections at work. Paused by München's monitor at
+07:29Z, 22 minutes into its startup scan (Legal's rule: a row inserted);
+resumed at 07:36:29Z.
+
+**BEFORE** (München, from the node's log and a thread dump): the scan ended
+07:32:12Z with "discovery interrupted (stop requested) — progress committed,
+resumes next scan {'seen': 742001, 'added': 1881, 'changed': 321, 'withdrawn':
+1249, 'secs': 1683.4, 'interrupted': True}". After the resume: "embed producer
+started", "pipeline thread started", no "corpus scan" line and no scan thread
+among 112; the slice pass at row 970,426 of MAX(rowid) 980,178; the stages
+selected nothing. It stood until a `docker restart` of the worker at
+07:50:35Z (14 minutes; the interval's request would have come about 13:04Z).
+
+**CHANGE.** Scheduling pitfall 23: the scan is owed to the collection's
+resume; the wait behind the slice scope says "row N of M" and asks for a scan
+when none is running or asked for, once every 300 s. A scan says where it is
+once a minute (`DiscoverState.say`, the orchestrator's count, a heartbeat for
+a source that walks in silence). Cost counted here, not on the node: the
+progress count is 96 ns a unit (93 ms over 970,000 units); the wait costs one
+dictionary lookup at an idle pass between two periods.
+
+**EXPECTED.** After `node pause <collection>` during a scan and `node resume
+<collection>`: a "corpus scan (resume: its pause cut the last scan short)"
+line within one round of the resume, and no restart. While the stages wait:
+one "waiting for the slice scope: the pass is at row N of M …" line every
+five minutes.
+
+**AFTER.** Owed: München's reading the first time a collection is paused under
+a scan on this build.
+
+## 2026-11-25 — a collection yields to the worker's memory by itself
+
+**SCENARIO.** The node as on 11-24/25: EUR-Lex5.next's rdf and fts with heavy
+units beside Normattiva, legi_F and NeuRIS at work, one worker cgroup of
+24 GiB. Until now München's monitor held the rule (pause over 21,500 MiB of
+`anon`, resume under 18,000).
+
+**BEFORE** (München's samples, usage / anon in MiB): the highest under the
+rule were 18,959 / 17,303, 17,734 / 17,412 and 17,469 / 16,356, all in the
+night's run of 11-24 (21:41–23:29Z, the stages working); the morning's scan
+and its apply 11,283–13,711 / 9,824–13,340. THE RULE NEVER FIRED: 0 memory
+pauses since it was set (04:35Z). The one real kill of these days (11-23) was
+a records build run by `docker exec` inside the worker's cgroup: memory that
+was not the pool's.
+
+**CHANGE.** Scheduling pitfall 24, `app/memory_yield.py`: a watcher of the
+worker's own cgroup every 10 s; at 87.5 % of the limit (21,504 MiB) the
+collection holding the most of the parse pool in flight yields, the next
+heaviest after 120 s still over; all go on under 73 % (17,940 MiB); a yield
+with nothing of its collection in flight and the memory still over ends after
+600 s, saying the memory is not the pool's.
+
+**EXPECTED.** Nothing, on these readings: the lines are above everything the
+samples show. If it fires: "[node info:memory] memory: <collection> yields —
+the worker holds N MiB anonymous, over 21,504 of 24,576; it has the most in
+the parse pool — …", the collection's own "yielding to the worker's memory …"
+every five minutes, and "… goes on — … under 17,940 …; it yielded for S s".
+
+**AFTER.** Owed, and only an event gives it: the first yield's lines, the
+`anon` curve across it (does it fall, how fast), and how long the collection
+stood. Until then München's monitor stays as a second pair of eyes, its pause
+at the same line.
+

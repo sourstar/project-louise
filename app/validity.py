@@ -708,6 +708,35 @@ def forget(con, uid: str, *, day: int | None = None, chain: bool = True) -> list
     return moved
 
 
+def forget_many(con, uids, *, day: int | None = None) -> list[str]:
+    """`forget` for many versions in the caller's one transaction: every row
+    out first, then each Work they leave or targeted its chain ONCE, the
+    statements of each key read once (`recompute_many`'s cache). The final
+    chains are `forget`'s one after another: a recompute reads only the table,
+    and every Work a later deletion moves is in the set. Fewer marks reset,
+    as no Work is recomputed at a state that a later deletion of the same
+    batch moves again.
+
+    WHY (2026-11-25, München, py-spy of EUR-Lex5.next's scan): discovery
+    retired its re-formed units' rows one `forget` each — thousands, a
+    language's versions of one act each recomputing the same Work, about 900
+    rows a minute after a 17-minute walk."""
+    works: set[str] = set()
+    ends = changes_end(con)
+    for uid in dict.fromkeys(uids):
+        row = con.execute("SELECT work FROM validity WHERE uid=?", (uid,)).fetchone()
+        if row is None:
+            continue
+        touched = _record_closures(con, uid, [])
+        con.execute("DELETE FROM validity WHERE uid=?", (uid,))
+        targets = _record_amendments(con, uid, [])
+        if ends:
+            touched |= targets
+        works.add(str(row[0]))
+        works |= touched
+    return recompute_many(con, works, day=day) if works else []
+
+
 #: the chain's rule (`recompute`): 1, ends from the next version and a
 #: repeal; 2 (2026-11-21, the EUR-Lex5 review's V3/V4), and a held
 #: amendment's day (`first_change`). A manifest below it has every Work's

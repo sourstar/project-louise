@@ -20,6 +20,36 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **A collection yields to the worker's memory by itself (`app/memory_yield.py`; the lessons, row A4).** The
+  rule München's monitor held — pause the heavy collection over 21,500 MiB of the worker cgroup's anonymous
+  memory, resume under 18,000 — is the worker's own: over 87.5 % of its limit the collection holding the most of
+  the parse pool yields (its thread stands down after its unit), the next after two minutes still over, all go on
+  under 73 %; a yield that does not bring the memory down ends after ten minutes and says the memory is not the
+  pool's. NOT MEASURED AS A CURE: the monitor's rule never fired (highest reading 17,412 MiB); the first yield
+  is the first measurement (scheduling-log.md). Still open from the same row group: a stage that makes no
+  progress saying so by itself (the monitor's hang and "done not rising" rules), and a memory kill naming its
+  part and not the bystanders (A5).
+- **THE LESSONS OF EUR-LEX5.NEXT BECOME THE PLATFORM'S (operator: "All the workaround made on the spot must be
+  reflected in RAGE so that the same collection made from scratch can run smoothly"; "Every problem encountered
+  with a collection must become a lesson learned reflected in RAGE"; "a consistency check shall be available
+  also for whom is willing to create a compliant collection").** The inventory is Legal's
+  `eurlex5-lessons-2026-11-25.md`; the platform's rows are built in order. FIRST, the waits (this entry's
+  change, scheduling.md pitfall 23): a scan cut short by `node pause <collection>` is owed to its resume
+  (EUR-Lex5.next stood 14 minutes behind the slice scope, the pass at row 970,426 of 980,178, until the worker
+  was restarted); the stages' wait behind the slice scope says "row N of M" every five minutes and asks for the
+  scan it needs; a scan says where it is once a minute (`DiscoverState.say` for a source that walks before it
+  yields, the orchestrator's count, a heartbeat for a source that says nothing); "do not fetch" is a key of the
+  collection's file (`hold config apply --set acquire_enabled=false`, 07 §7.8). NEXT: the worker's own memory
+  yield and health lines (München's monitor does it today, an agent standing guard), then one unit one live row
+  with the check a collection's author can run, the voice commands, the engine swap as a command.
+- **Counted, for the language rule above (München, the live port on d531d5d804f1, Philippe's voice, seed 7, 32
+  steps, one English sentence):** tag "en-GB" gave the bytes of NO language (sha 2092a8d3e98a both); "it" gave
+  7cf56dcd126e, "en" ee74f805da39. So a country tag was no language to the engine: measured. Which of the three
+  sounds right is the operator's ear.
+- **Main's staged model files are NOT what runs** (München's count against main 6033dfe1: of 43, 14 identical,
+  21 different, 8 not on the node — the three live encoders run context on demand with its canary, qwen3-4b at
+  batch 2048, MADLAD at parallel 4 / ctx 2048, the backends four engine names later). Until main's files are
+  the node's, nobody runs the stage from main. The node's 35 files are on branch `node-model-files-2026-11-25`.
 - **The voice speaks the sentence's own language (operator: "the language/country tag must be aligned to the
   language to speak, otherwise the voice has always a thick italian accent").** Two causes, both in what Louise
   sent (München read them in the code and the engine's language map): the Ask page sends the language the

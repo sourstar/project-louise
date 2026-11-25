@@ -934,7 +934,12 @@ reader needs at the command line:
   `encoder.url`, `encoder.query_url`, `encoder.api`,
   `encoder.embed_model`, `encoder.query_model`, `reranker.url` (empty:
   no `[reranker]`), `reranker.api`, `reranker.rerank_model`,
-  `reranker.window`, and for an annotations collection `method`
+  `reranker.window`, `acquire_enabled` (*added 2026-11-25*: `false`, the
+  node fetches nothing for this collection from its origin — what is there
+  is still scanned, parsed, indexed and embedded; `true`; `default`, the
+  line removed and the collection's kind decides — it was written into a
+  file by hand before, and a from-scratch collection must not need a hand),
+  and for an annotations collection `method`
   (2026-11-12: the method the node re-runs, `wikipedia-versions`; empty:
   none; refused where the method did not make the claims and they are
   not of its kind, since its output becomes the whole claim set —

@@ -131,6 +131,9 @@ def fresh_worker_state():
     # nor when the voices were last looked at, nor a ping that failed (app/voice_ping.py)
     from app import voice_ping
     voice_ping.reset()
+    # nor a collection yielding to the worker's memory (app/memory_yield.py)
+    from app import memory_yield
+    memory_yield.reset()
     # the annotations cascade's memos: its graph, its listings, its decisions
     from app.hold import cascade, cascade_keeper
     cascade.reset()

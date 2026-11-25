@@ -8,6 +8,7 @@ no-change run is just a stat scan — discover() never touches file content.
 import contextlib
 import dataclasses
 import sqlite3
+import threading
 import time
 from typing import Any
 
@@ -97,6 +98,84 @@ def _clear_cursor_if_relocated(con, collection, root) -> bool:
 DISCOVER_BATCH_REFS = 2000
 
 
+#: how often a scan says where it is, at most (operator, 2026-11-25: "Every
+#: problem encountered with a collection must become a lesson learned
+#: reflected in RAGE" — a scan of 970 k units was silent for up to 55 minutes)
+SAY_EVERY_S = 60.0
+
+
+def _span(seconds: float) -> str:
+    return f"{seconds / 60:.0f} min" if seconds >= 90 else f"{seconds:.0f} s"
+
+
+class _Progress:
+    """A SCAN SAYS WHERE IT IS, one line every SAY_EVERY_S at most, in the
+    collection's log. Three speakers, whichever has something to say:
+    - the SOURCE (`DiscoverState.say`): the position of a walk that yields
+      nothing while it runs;
+    - the orchestrator (`refs`): the units taken and written so far;
+    - a HEARTBEAT on a thread of its own, only when neither spoke for a whole
+      period: a source that walks in silence and never calls `say` is still
+      said to be walking. On another thread because telemetry is published
+      by someone other than the thread doing the work (CLAUDE.md): the scan's
+      own thread is inside the source's walk and cannot speak.
+    A scan shorter than one period says nothing. The heartbeat prints the
+    line (a manifest connection is its thread's alone); the two others write
+    the collection's event as every scan line does."""
+
+    def __init__(self, con, every_s: float | None = None) -> None:
+        self.con = con
+        self.every_s = SAY_EVERY_S if every_s is None else every_s
+        self.t0 = self.last = time.monotonic()
+        self.taken = 0
+        self._owner = threading.current_thread()
+        self._end = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _line(self, message: str) -> None:
+        text = f"corpus scan: {message} ({_span(time.monotonic() - self.t0)} in)"
+        if threading.current_thread() is self._owner:
+            db.log_event(self.con, "info", "discover", text)
+        else:
+            who = getattr(self.con, "collection_name", "")
+            print(f"{time.strftime('%H:%M:%S')} [{who + ' ' if who else ''}info:discover] {text}", flush=True)
+
+    def _due(self) -> bool:
+        now = time.monotonic()
+        if now - self.last < self.every_s:
+            return False
+        self.last = now
+        return True
+
+    def source(self, message: Any) -> bool:
+        """`DiscoverState.say`: the source's own word on where it is."""
+        if not self._due():
+            return False
+        self._line(str(message)[:300])
+        return True
+
+    def refs(self, taken: int, counts: dict) -> None:
+        self.taken = taken
+        if taken % 512 == 0 and self._due():
+            self._line(f"{taken:,} units taken so far, {counts['added']:,} new, {counts['changed']:,} changed")
+
+    def _beat(self) -> None:
+        while not self._end.wait(self.every_s) and self._owner.is_alive():
+            if self._due():
+                self._line(f"still walking; {self.taken:,} units taken so far, and the source has "
+                           f"not said where it is (DiscoverState.say)")
+
+    def __enter__(self) -> "_Progress":
+        self._thread = threading.Thread(target=self._beat, name="scan-progress", daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._end.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+
+
 def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
     """Enumerate the corpus and upsert what changed. Streams; commits every
     DISCOVER_BATCH_REFS refs and tells the plugin (DiscoverState.committed,
@@ -170,41 +249,44 @@ def sync_collection(con, collection, *, stop=None, adopt: bool = False) -> dict:
     applied = 0                 # refs durably written so far
     batch: list[DocRef] = []
     batch_uids: set[str] = set()
-    refs = plugin.discover(state)
-    for ref in refs:
-        if stop is not None and stop.is_set():
-            interrupted = True
-            if hasattr(refs, "close"):
-                refs.close()
-            break
-        uid = f"{ref.source_id}:{ref.native_id}"
-        # A batch is decided against the manifest BEFORE its writes, so two
-        # refs for one uid in the same batch (a PubMed revision following
-        # its baseline record, a tombstone after the record it retracts)
-        # would both plan as new. Flushing first keeps last-write-wins by
-        # arrival order exact: the later ref sees the earlier one committed.
-        if batch and (uid in batch_uids or len(batch) >= DISCOVER_BATCH_REFS):
-            if not _apply_batch(con, plugin, batch, counts, stop, wait=True, adopt=adopt,
-                                withdraw=withdraw, collection=collection, superseded=superseded):
-                interrupted = True      # stop arrived while the manifest was contended
-                batch = []
+    with _Progress(con) as progress:
+        state.say = progress.source
+        refs = plugin.discover(state)
+        for ref in refs:
+            if stop is not None and stop.is_set():
+                interrupted = True
+                if hasattr(refs, "close"):
+                    refs.close()
                 break
-            applied += len(batch)
-            _signal_committed(state, applied)
-            batch, batch_uids = [], set()
-        batch.append(ref)
-        batch_uids.add(uid)
-        state.received = applied + len(batch)
-    if batch:
-        # the tail (or the batch a stop request cut short): one attempt if
-        # stopping — a contended manifest must not hold SIGTERM past its
-        # grace; what is not committed is simply re-enumerated next scan
-        if _apply_batch(con, plugin, batch, counts, stop, wait=not interrupted, adopt=adopt,
-                        withdraw=withdraw, collection=collection, superseded=superseded):
-            applied += len(batch)
-            _signal_committed(state, applied)
-        else:
-            interrupted = True          # not committed: the next scan re-enumerates it
+            uid = f"{ref.source_id}:{ref.native_id}"
+            # A batch is decided against the manifest BEFORE its writes, so two
+            # refs for one uid in the same batch (a PubMed revision following
+            # its baseline record, a tombstone after the record it retracts)
+            # would both plan as new. Flushing first keeps last-write-wins by
+            # arrival order exact: the later ref sees the earlier one committed.
+            if batch and (uid in batch_uids or len(batch) >= DISCOVER_BATCH_REFS):
+                if not _apply_batch(con, plugin, batch, counts, stop, wait=True, adopt=adopt,
+                                    withdraw=withdraw, collection=collection, superseded=superseded):
+                    interrupted = True      # stop arrived while the manifest was contended
+                    batch = []
+                    break
+                applied += len(batch)
+                _signal_committed(state, applied)
+                batch, batch_uids = [], set()
+            batch.append(ref)
+            batch_uids.add(uid)
+            state.received = applied + len(batch)
+            progress.refs(state.received, counts)
+        if batch:
+            # the tail (or the batch a stop request cut short): one attempt if
+            # stopping — a contended manifest must not hold SIGTERM past its
+            # grace; what is not committed is simply re-enumerated next scan
+            if _apply_batch(con, plugin, batch, counts, stop, wait=not interrupted, adopt=adopt,
+                            withdraw=withdraw, collection=collection, superseded=superseded):
+                applied += len(batch)
+                _signal_committed(state, applied)
+            else:
+                interrupted = True          # not committed: the next scan re-enumerates it
     if not interrupted and (counts["added"] or counts["changed"]
                             or counts["relocated"] or counts["missing"]):
         # a pure stat pass changed nothing in_scope could depend on; scope
@@ -388,6 +470,13 @@ def _forget_validity(con, uid: str, day: int | None = None) -> None:
     validity.forget(con, uid, day=day)
 
 
+def _forget_validity_many(con, uids: list[str], day: int | None = None) -> None:
+    """The batch's retired documents' validity rows out, each Work's chain
+    recomputed once (`validity.forget_many`), inside the batch's transaction."""
+    from app import validity
+    validity.forget_many(con, uids, day=day)
+
+
 def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                  withdraw, collection, adopt: bool = False, superseded: bool = True) -> bool:
     """Apply one batch of refs to the manifest. Two phases, so the write
@@ -425,6 +514,7 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
     writes: list[tuple[str, tuple]] = []
     order = getattr(plugin, "origin_order", None)
     to_withdraw: list[str] = []
+    forgotten: list[str] = []                # retired here: their validity rows out, once, after the loop
     regroup: dict[str, list[int]] = {}       # group -> documents whose language left it
     # THE ROWS AND THE HASHES FIRST: every document's row read once, and the
     # fetch-and-hash of those whose signature moved done for the whole batch
@@ -555,7 +645,7 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                     continue
                 if held["rdf_done"] or held["fts_done"] or held["embed_done"]:
                     to_withdraw.append(uid_alt)
-                writes.append((_forget_validity, (uid_alt, vday)))
+                forgotten.append(uid_alt)
                 writes.append((
                     "UPDATE documents SET error=?,rdf_done=0,fts_done=0,embed_done=0,summary_done=0,"
                     "updated_at=? WHERE uid=?",
@@ -637,6 +727,11 @@ def _apply_batch(con, plugin, batch: list, counts: dict, stop, *, wait: bool,
                 (ref.locator, txt_name, now, uid)))
             local["relocated"] += 1
 
+    if forgotten:
+        # every retired version out, then each Work's chain once (2026-11-25:
+        # one `forget` a row, the same Work recomputed for each of its
+        # languages, ~900 rows a minute after EUR-Lex5.next's walk)
+        writes.append((_forget_validity_many, (forgotten, vday)))
     if to_withdraw and withdraw is not None:
         # BEFORE the tombstones commit (app/unindexable.py's order): a stop or
         # a crash in between leaves the batch uncommitted, the cursor short of
