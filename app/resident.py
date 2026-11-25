@@ -1804,6 +1804,13 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
         _say_budget(p)
         _reclaimer_follows(r.server for r in want)
         _parked_follow(r.server for r in want)
+        if not _question_now():
+            # LEAVING A PAGING RULE GIVES THE HOST ITS MEMORY BACK (München,
+            # 2026-11-25): the models out of this mode's set that the driver
+            # still holds in host memory are stopped — the eviction's to do
+            # (`model_evict.host_leftovers`; the budget still unloads nothing)
+            from app import model_evict
+            model_evict.host_leftovers((r.server for r in want), by_key)
     else:
         with _lock:
             _out_said = frozenset()

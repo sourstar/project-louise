@@ -516,6 +516,81 @@ def test_the_one_settings_writer_tells_a_switch_from_a_count(node):
     assert localai_reclaimer.set_key(S, "park_host_floor_bytes", True) is True, "True is not 1"
 
 
+# ---- leaving a paging rule gives the host its memory back --------------------------
+
+def _paged_out(r: Runner, *models: str) -> None:
+    """The driver holds these in host memory: each reads 0 MiB on the card."""
+    was = r.on_card
+    r.on_card = lambda m: 0 if m in models else was(m)
+
+
+def test_out_of_the_set_and_in_host_memory_is_unloaded_where_the_rule_does_not_page(node, monkeypatch):
+    """München, 2026-11-25 22:30Z, the first query -> embed switch: MADLAD,
+    both rerankers and the speech model read 0 MiB on the card, 15.9 GiB of
+    them in host memory, nobody's to claim (LocalAI counts the card), while
+    the parse pool took MemAvailable from 21.9 to 3.6 GiB in two minutes."""
+    r = node({"louise-translate-madlad": 6_000, "louise-rerank-medcpt": 800, "louise-tts-omnivoice": 1_700,
+              "vega-qwen3-4b": 2_700, "louise-chat-9b": 5_900, "by-hand": 4_000, "vega-bge-m3": 600})
+    _used(louise_translate_madlad=1, louise_rerank_medcpt=1, louise_tts_omnivoice=2, vega_qwen3_4b=0.1,
+          louise_chat_9b=0.1, vega_bge_m3=3)
+    _known(louise_translate_madlad=6_000, louise_rerank_medcpt=800, louise_tts_omnivoice=1_700,
+           vega_qwen3_4b=2_700, louise_chat_9b=5_900, by_hand=4_000, vega_bge_m3=600)
+    _paged_out(r, "louise-translate-madlad", "louise-rerank-medcpt", "louise-tts-omnivoice", "by-hand",
+               "vega-qwen3-4b")
+    keep = {(S, "vega-qwen3-4b"), (S, "louise-chat-9b")}          # embed mode's set
+    monkeypatch.setattr(model_evict, "rule", lambda: ("page", 12 * GIB, None))
+    model_load.loaded_models(S, 0.0)
+    assert model_evict.host_leftovers([S], keep) == [] and r.asked == [], "query mode: that is where they live"
+
+    monkeypatch.setattr(model_evict, "rule", lambda: ("unload", 12 * GIB, 3 * GIB))
+    gone = model_evict.host_leftovers([S], keep)
+    assert gone == ["louise-rerank-medcpt", "louise-translate-madlad", "louise-tts-omnivoice"]
+    assert _verbs(r, "shutdown") == gone and not _verbs(r, "park")
+    assert "vega-qwen3-4b" in r.models, "in the set: its next batch pages it back"
+    assert "by-hand" in r.models, "a model Louise does not know is never touched"
+    assert "vega-bge-m3" in r.models, "out of the set and ON the card: LocalAI's to claim, as always"
+    said = [t for t in node.said if t.startswith("card: unloaded")]
+    assert len(said) == 1 and "louise-translate-madlad (about 6,000 MiB in host memory)" in said[0]
+    assert "out of this mode's set" in said[0] and "loads again at its first request" in said[0]
+    model_load.loaded_models(S, 0.0)
+    assert model_evict.host_leftovers([S], keep) == [], "said and done once"
+
+
+def test_a_pinned_a_busy_a_parked_and_a_model_that_holds_no_vram_are_left(node, monkeypatch):
+    r = node({"pinned": 2_000, "busy": 2_000, "vega-dar": 2_300, "on-cpu": 0, "elsewhere": 1_000},
+             parks=["vega-dar"], cpu={"busy": 80.0})
+    r.parked["vega-dar"] = 2_000
+    _used(pinned=1, busy=1, vega_dar=1, on_cpu=1, elsewhere=1)
+    _known(pinned=2_000, busy=2_000, vega_dar=2_300, elsewhere=1_000)
+    _paged_out(r, "pinned", "busy", "elsewhere")
+    monkeypatch.setattr(model_evict, "rule", lambda: ("unload", 12 * GIB, 3 * GIB))
+    monkeypatch.setattr(model_pins, "recorded", lambda: {(S, "pinned")})
+    mem = resident._memory_now()
+    mem.elsewhere = {(S, "elsewhere")}
+    monkeypatch.setattr(resident, "_memory_now", lambda: mem)
+    model_load.loaded_models(S, 0.0)
+    assert model_evict.host_leftovers([S], set()) == [] and r.asked == []
+    monkeypatch.setattr(model_pins, "recorded", lambda: None)
+    assert model_evict.host_leftovers([S], set()) == [], "the pin record unread: nothing is stopped on a guess"
+
+
+def test_the_keepers_beat_gives_the_host_back_but_never_while_a_question_holds_the_card(node, monkeypatch):
+    r = node({"louise-translate-madlad": 6_000, "vega-qwen3-4b": 2_700})
+    _used(louise_translate_madlad=1, vega_qwen3_4b=0.1)
+    _known(louise_translate_madlad=6_000, vega_qwen3_4b=2_700)
+    _paged_out(r, "louise-translate-madlad")
+    monkeypatch.setattr(model_evict, "rule", lambda: ("unload", 12 * GIB, 3 * GIB))
+    want = [resident.Resident(S, "vega-qwen3-4b", ("encoder",))]
+    monkeypatch.setattr(resident, "wanted", lambda *a, **k: want)
+    monkeypatch.setattr(resident, "preloads", lambda state=None: (True, ""))
+    monkeypatch.setattr(resident, "_question_now", lambda: True)
+    resident.beat([], embed_mode=lambda c: "all", state="running")
+    assert _verbs(r, "shutdown") == [], "a question's models may be on their way back to the card"
+    monkeypatch.setattr(resident, "_question_now", lambda: False)
+    resident.beat([], embed_mode=lambda c: "all", state="running")
+    assert _verbs(r, "shutdown") == ["louise-translate-madlad"] and "vega-qwen3-4b" in r.models
+
+
 # ---- "the device has no room now" is a deferral ------------------------------------
 
 def _no_room(message="vega-bge-m3: the weights cannot come back to the device now", after="2") -> httpx.Response:

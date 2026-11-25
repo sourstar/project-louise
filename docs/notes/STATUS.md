@@ -20,6 +20,37 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **DEFECT, FOUND AT THE FIRST QUERY → EMBED SWITCH AND FIXED BEFORE ANYTHING ELSE: LEAVING A PAGING RULE
+  LEFT WHAT THE DRIVER HAD PAGED OUT SITTING IN HOST MEMORY (München, 22:29:57Z, on the operator's word for
+  the switch; bcdf0dc).** The switch itself did what it says: "node in embed mode (query -> embed): chat
+  model louise-chat-qwen3.5-9b-q4-p0; network budget down unlimited, up 12.5 MB/s", the 35B stopped, the 9B
+  loaded in 15.2 s, the corpus encoders in 6.2–42.3 s (dar-legal-it 42.3), and the KEEPER ALONE turned the
+  reclaimer ON 32 s later ("the rule in force unloads for room again"; LocalAI: "memoryReclaimer=true
+  memoryThreshold=0.98") — no eviction by LocalAI, no CANARY. BUT: gtt stayed at 15.9 GiB — MADLAD, both
+  rerankers and the speech model, each reading 0 MiB on the card, which embed mode does not use, the
+  keeper's set no longer held ("left loaded until LocalAI needs the space") and LocalAI, counting the CARD
+  at 15.6 of 32 GiB, would never claim — while the parse pool started (worker cgroup 14.6 GiB in two
+  minutes): MemAvailable 21.9 → 7.8 → 5.3 → 4.4 → 3.6 GiB, the ARC squeezed 16.4 → 4.3 GiB. München stopped
+  the four by hand at 22:32:20Z: gtt 15,488 → 1,720 MiB, MemAvailable 15.8 → 30.3 GiB at once. I made query
+  mode page (#908) and never said what leaving it does with what was paged. FIXED
+  (`model_evict.host_leftovers`, called by the keeper's beat; docs/07 §7.8): where the rule in force is not
+  "page", a model OUT of the mode's set, known to Louise (a use row), not pinned, not busy, not parked, not
+  on another card, that reads under its own floor of the most it was seen holding — 0 MiB included, which
+  the over-commitment line skips — is stopped at the keeper's first beat after the switch, all of them in
+  that beat, never while a question holds the card, and said in one line; one that is ON the card stays, as
+  the rule of 11-08 says. Space is claimed here by the host, under the mode that gives the host to the
+  parse pool: the budget still unloads nothing. Until its sha is live München's four shutdowns by hand stay
+  the remedy at each such switch.
+- **The wrapper's package, decided for the parking pass: ONLY vega-louise-llama-cpp is rebuilt (Tensor's
+  (i), mine too).** "Each package is what its gate saw" (invariant 12), not "one wrapper on the node": the
+  change acts only on a LoadModel repeated for a model already held, which only the park engine's return
+  sends, and no OpenVINO, PyTorch or CPU model parks — rebuilding the other three would re-gate their runs
+  for nothing (RULE 1). Cost, written down: two wrapper builds on the node until those three are next
+  rebuilt and gated for their own reasons. Recorded at #882's merge with München's table (each package's
+  wrapper sha256, REVISION and backend); München found no deploy stage or build check that compares an
+  installed package's wrapper with main's file. The server is NOT swapped yet: one spec of LocalAI's own
+  (a log websocket's race, in files no patch touches) fails 14 in 200 on the new tree against 1 in 200 on
+  the live one with every core busy — Tensor runs an interleaved comparison first.
 - **The author's check gains `licence` and `space-pin` (`louise hold check <collection> --build`; the
   compliance check, compliance-check.md §4).** Both are the node's OWN resolutions said to the author
   before the worker meets them, never a second implementation: `licence` is `licensing.state_for` (a

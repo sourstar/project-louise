@@ -2309,6 +2309,13 @@ variable, a file, a log line or a message.
              # of an unloaded card, a query encoder wholly in host memory back in 0.2–0.3 s against 5–24 s for
              # a cold start; and since engine 619655e5833b a context the card cannot hold is refused and asked
              # again, no longer a dead backend. In embed and custom mode this key and `page_over_gib` stand.
+             # LEAVING A PAGING RULE GIVES THE HOST ITS MEMORY BACK (added 2026-11-25, after the first switch from
+             # query to embed mode left 15.9 GiB of idle models in host memory beside the parse pool): where
+             # the rule in force is not "page", a model that is out of the mode's set, known to Louise, not
+             # pinned, not busy, and that the driver holds in host memory (it reads under its floor of what it
+             # was seen holding, 0 MiB included) is unloaded by the keeper's next beat and loads again at its
+             # first request; one that is on the card stays, LocalAI's to claim (app/model_evict.py
+             # `host_leftovers`)
              # LocalAI's memory reclaimer follows the rule IN FORCE, held by the keeper's beat: off where idle
              # models are paged (query mode, or "page" here), on otherwise — a switch of mode moves it, and a
              # deploy that set it from this key alone is corrected at the next beat (app/localai_reclaimer.py)

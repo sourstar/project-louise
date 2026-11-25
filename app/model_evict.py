@@ -528,6 +528,75 @@ def give_back(server: str, v: Loaded) -> tuple[str, int]:
     return (UNLOADED, v.size) if model_load.unload(server, v.model) else (KEPT, 0)
 
 
+def host_leftovers(servers: Iterable[str], keep: Iterable[tuple[str, str]]) -> list[str]:
+    """WHAT THE DRIVER PAGED TO HOST MEMORY UNDER A PAGING RULE DOES NOT STAY
+    THERE UNDER ANOTHER (München, 2026-11-25 22:30Z, the first switch from
+    query to embed mode). In query mode nothing is unloaded while the host has
+    memory, and the driver keeps the idle models there — 15.9 GiB that night:
+    MADLAD, both rerankers and the speech model, each reading 0 MiB on the
+    card. Embed mode does not use them, the keeper's set no longer holds them
+    ("left loaded until LocalAI needs the space"), and LocalAI counts the
+    CARD — 15.6 of 32 GiB — so nobody ever claimed them, while the parse pool
+    started: MemAvailable 21.9 -> 7.8 -> 5.3 -> 4.4 -> 3.6 GiB in two minutes,
+    the file cache squeezed from 16.4 to 4.3 GiB, until München stopped the
+    four by hand (gtt 15,488 -> 1,720 MiB, MemAvailable 15.8 -> 30.3 GiB at
+    once).
+
+    So, WHERE THE RULE IN FORCE IS NOT "page" (`rule`): a model that is
+      - OUT of the mode's set (`keep`: the keeper's wanted models),
+      - one Louise knows (a use row: never a model somebody loaded by hand),
+      - IN HOST MEMORY: it reads under its own floor of the most it was seen
+        holding on the card — 0 MiB included — and is neither parked (its own
+        rule, `host_claims`) nor on another card nor one that holds no VRAM,
+      - not pinned by a gate or a pass, and not busy,
+    is stopped — all of them at one call, the keeper's first beat after the
+    switch — and loads again at its first request. One that is ON the card
+    stays, as it always did: the card's room is LocalAI's to claim ("nothing
+    is evicted only because it's idle, only if space is claimed", operator,
+    2026-11-08 — here the space is the host's, and the mode that gives the
+    host to the parse pool has claimed it). Returns the models stopped.
+    Never raises."""
+    from app import gate_twin, model_load, model_pins, model_use, resident
+    try:
+        if rule()[0] == "page":
+            return []
+        keep = {tuple(k) for k in keep}
+        pins = model_pins.recorded()
+        if pins is None:
+            return []                            # the pin record cannot be read: nothing is stopped on a guess
+        use = model_use.last_used()
+        mem = resident._memory_now()
+        gone: list[tuple[str, int]] = []
+        for s in sorted({model_load.server_of(x) for x in servers}):
+            held = model_load.held_sizes(s)       # the beat's own reading
+            if held is None:
+                continue
+            cpu, away = model_load.held_cpu(s), model_load.parked(s)
+            for m, (_pid, size) in sorted(held.items()):
+                key = (s, m)
+                if (key in keep or key in pins or key not in use or key in mem.elsewhere or m in away
+                        or gate_twin.is_twin(m) or cpu.get(m, 0.0) > BUSY_CPU_PERCENT):
+                    continue
+                largest = max(mem.sizes.get(key) or 0, model_load.size_vram(s, m) or 0)
+                if not largest or int(size or 0) >= resident._rest_floor(s, m) * largest:
+                    continue                     # holds no VRAM, never seen, or on the card
+                try:
+                    if model_pins.read_pinned(s, m):
+                        continue                 # a pin Louise's record does not hold: the operator's
+                    if model_load.unload(s, m):
+                        gone.append((m, largest - int(size or 0)))
+                except Exception:   # noqa: BLE001 — left where it is; the next beat asks again
+                    continue
+        if gone:
+            _say("info", f"card: unloaded {', '.join(f'{m} (about {out // MIB:,} MiB in host memory)' for m, out in gone)} "
+                         f"— out of this mode's set, and the driver held them in host memory since the rule was "
+                         f"\"page\" (query mode); under the rule in force the host's memory is the parse pool's, "
+                         f"and the card's count would never have claimed them. Each loads again at its first request")
+        return [m for m, _ in gone]
+    except Exception:   # noqa: BLE001 — nothing stopped: the next beat asks again
+        return []
+
+
 def host_claims(servers: Iterable[str]) -> list[str]:
     """THE HOST CLAIMS ITS MEMORY BACK FROM A PARKED MODEL. LocalAI checks
     the host's floor only at the moment it parks, and never stops a parked
