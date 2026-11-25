@@ -135,6 +135,19 @@ def _loaded(server: str, model: str) -> bool | None:
     return None if ids is None else model in ids
 
 
+def _give_back(server: str, model: str) -> bool:
+    """One corpus encoder gives the card back to the question: PARKED where
+    LocalAI says it parks (its weights to host memory, back in the time of a
+    copy when embedding resumes — docs/notes/parking-step-2.md), stopped
+    otherwise, as before (`model_evict.give_back`). True when its room is
+    free; a busy one is asked again by the caller."""
+    from app import model_evict
+    held = model_load.held_sizes(server) or {}
+    v = model_evict.Loaded(model, int(held.get(model, (None, 0))[1] or 0), None,
+                           parks=model in model_load.parks(server), parked=model in model_load.parked(server))
+    return model_evict.give_back(server, v)[0] != model_evict.KEPT
+
+
 def free_card(want: Iterable[Any], *, question: Callable[[], bool] = _question_now,
               sleep: Callable[[float], None] = time.sleep) -> list[str]:
     """Unload the corpus encoders of `want` that are on the card and not
@@ -146,6 +159,8 @@ def free_card(want: Iterable[Any], *, question: Callable[[], bool] = _question_n
         try:
             if _loaded(r.server, r.model) is not True:
                 continue
+            if r.model in model_load.parked(r.server):
+                continue                 # parked: its weights are off the card already
             if model_pins.read_pinned(r.server, r.model):
                 _say("info", f"question: {r.model} stays on the card — pinned by a gate or a pass")
                 continue
@@ -169,7 +184,7 @@ def free_card(want: Iterable[Any], *, question: Callable[[], bool] = _question_n
             if not question():
                 return done
             try:
-                if model_load.unload(r.server, r.model) or _loaded(r.server, r.model) is False:
+                if _give_back(r.server, r.model) or _loaded(r.server, r.model) is False:
                     done.append(r.model)
                 else:
                     left.append(r)
