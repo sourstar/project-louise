@@ -610,6 +610,13 @@ current backend, one sentence, a BUSY node (a ratio, not a figure): the
 clip, 673 frames, 25.1 and 20.4 s. The unloaded retake on both backends
 decides; three choices are with the operator (11 s, the original, a cut of
 15–18 s).
+THE RETAKE, unloaded (München, 2026-11-25, in the engine pass's pause): on
+the PORT a sentence takes 2.24 s with the 11 s clip and 2.70 s with the
+original 27.75 s clip; on today's backend 3.60 and 8.65 s. So on the port
+the original clip costs under half a second a sentence, where today's
+backend more than doubles. The port at rest holds 1,864 MiB of the card
+(both clips, four synthetic voices). The kept encoding was read by a new
+process and went with its profile when the profile was deleted (HTTP 204).
 
 **The experts' record** (operator: "the MoE preloading in VRAM based on the
 recent experts used"; Tensor's 0017, off without its env). Per layer and
@@ -631,5 +638,14 @@ re-cut (b190673dbdbf at 012e00e). What a full fill adds to a load, against
 what it saves at the first tokens, is the fourth figure of its measurement
 and decides the switch.
 
-**§6's step 3a is built** (`question_card.load_ahead`, #865); its AFTER is
-München's.
+**Step (a) is done** (München, 2026-11-25 00:55Z): b190673dbdbf live, the
+five llama.cpp gates exact with the fingerprints they had (wikipedia,
+gutenberg, pubmed query, NeuRIS, wikidata), twenty unloads clean, MADLAD
+18 of 18 and the reranker's 20 lists identical to the morning's, nothing
+rolled back. Every new switch is off by the fingerprints.
+
+**§6's step 3a is built** (`question_card.load_ahead`, #865) and read once,
+cold, on an emptied card (ask-card-workflow.md, "Measured on 8337d36a"):
+the query encoders and the answer's chat are no longer loads inside their
+stages; the first stage's own two models are, and only keeping or parking
+them changes that.
