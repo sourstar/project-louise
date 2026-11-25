@@ -20,6 +20,31 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **"DO PARKING." (operator, to München, 2026-11-25 20:46Z) — the order of it, and what is mine.** Tensor's
+  pass: the server first (v5.0.1 + 0001 + 0011 + 0019 + 0024 + 0027 — inert until a floor is set AND a
+  model's file says `park: true`), then the engine ed93e3c1b2e2 with every llama.cpp gate again, then rows on
+  copies; no real model parks in that pass. MINE: (i) the wrapper's part (#882, held: it moves every vega run
+  when the packages are rebuilt) rides that engine's gating — branch wrapper-same-load brought up to main,
+  a6594cdb, 219 wrapper tests, handed to Tensor for the vega package; marked ready and merged when the gated
+  package is what the node runs; (ii) the keeper's half — parked models read from `/system`, the evictor's
+  `/backend/park`, the host floor written through `/api/settings`, 503 `no_room_on_device` a deferral in
+  every client — is what turns parking on in production: started, built against the server's exact JSON
+  (asked of Tensor); (iii) nothing to change in the clients' rule (a 5xx that is not the canary's words is
+  busy), a test per client to say so. Tensor reverted a node-wide `make_room = "page"` default of theirs
+  (071737e) that contradicted the operator's "A": it never reached main.
+- **bcdf0dc (main 9c7d04dc) LIVE 20:43Z, query mode (München) — and the reclaimer's switch given ONE
+  authority.** "resident: LocalAI's memory reclaimer turned OFF at … " at 20:43:16Z, `memory_reclaimer_
+  enabled` false; the OVER-COMMITTED line at info ("8 model(s) read short on the card …, 48,391 MiB at rest
+  against the card's 32,656 MiB"); card 29,301 MiB, gtt 16,903 MiB, no eviction. THE LINE CAME TWICE, truly:
+  the deploy's stage script put the reclaimer ON again at 20:43:52Z — the file says "unload" and the script
+  cannot know the mode — and the next beat turned it off at 20:44:17Z: twenty-five seconds, at every deploy,
+  of a reclaimer that evicts over a card that reads full (one model went that way at 15:57Z). FIXED:
+  `deploy/vega/stage/localai_settings.py` sets `memory_reclaimer_enabled` only where LocalAI has none (a
+  fresh install); once it says on or off it is the keeper's word, neither written nor counted as drift, and
+  shown as such. The threshold stays the script's. No voice line yet. The September snapshot released by
+  the operator (869G); the node to be shut down for the ssd3 port swap — the warm-file passes run after the
+  boot, where the first is the cold row.
+
 - **THE OPERATOR ON PAGING, 2026-11-25 evening, the rest of it: "and C when it is ready"; asked why not in
   every mode, "A. And cache the model to reload it from disk warm".** So: parking (C) is wanted as the
   controlled form of query mode's paging, when its engine is ready — not instead of it. Paging stays QUERY

@@ -252,12 +252,25 @@ def test_localais_reclaimer_follows_the_nodes_file(tmp_path):
     assert settings.make_room_of(str(f)) == "unload"
     f.write_text('[models]\nmake_room = "page"\n', encoding="utf-8")
     assert settings.make_room_of(str(f)) == "page"
-    want = settings.desired_for(live, "page")
+    # A FRESH LocalAI (it says nothing of its reclaimer yet): the file decides
+    fresh = {k: v for k, v in live.items() if k != "memory_reclaimer_enabled"}
+    want = settings.desired_for(fresh, "page")
     assert want["memory_reclaimer_enabled"] is False, "a card paging idle models reads full at every tick"
     assert want["memory_reclaimer_threshold"] == settings.DESIRED["memory_reclaimer_threshold"], \
         "the keeper reads the line with the reclaimer off"
-    assert settings.drift(live, want) == {"memory_reclaimer_enabled": True}, "the deploy would turn it off"
-    assert settings.merged(live, want)["memory_reclaimer_enabled"] is False
+    assert settings.merged(fresh, want)["memory_reclaimer_enabled"] is False
+    assert settings.desired_for(fresh, "unload")["memory_reclaimer_enabled"] is True
+    # ONCE IT SAYS ON OR OFF, THE SWITCH IS THE KEEPER'S (2026-11-25, the deploy of bcdf0dc: the keeper
+    # turned it off in query mode, this script put it on from the file's "unload", the next beat off again)
+    for held in (True, False):
+        now = {**fresh, "memory_reclaimer_enabled": held}
+        for rule in ("unload", "page"):
+            want = settings.desired_for(now, rule)
+            assert "memory_reclaimer_enabled" not in want, "neither written"
+            assert settings.drift(now, want) == {}, "nor counted as drift"
+            assert settings.merged(now, want)["memory_reclaimer_enabled"] is held, "left as the keeper set it"
+    said = settings._said({**fresh, "memory_reclaimer_enabled": False})
+    assert said["memory_reclaimer_enabled"] is False and "keeper" in said["the_reclaimers_switch_is"]
     f.write_text('[models]\nmake_room = "swap"\n', encoding="utf-8")
     with pytest.raises(SystemExit, match="make_room"):
         settings.make_room_of(str(f))
