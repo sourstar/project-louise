@@ -44,14 +44,25 @@ A parked model:
   load. /backend/load does the same, for a caller that knows what comes
   next;
 - if the device has no room for it then, the request is refused and the
-  model stays parked.
+  model stays parked: a deferral, the next request asks again;
+- if the return FAILS for any other reason - the backend says so, holds
+  the model under other options, is gone, or has not answered in 60 s -
+  its process is stopped. The same LoadModel to the same process would
+  fail the same way for ever, and nothing else stops a parked model. The
+  request that met the failure goes on to an ordinary load, from the file;
+- a return that has been sent is followed to its end whatever its caller
+  does: a request that leaves during the copy must not leave the weights
+  on the device under a record that says "parked".
 
 For a caller that manages the device itself:
-- POST /backend/park {"model"} parks a loaded model. It never waits and
-  never stops anything; when the model is not parked the answer says why
-  and the caller decides: 409 model_busy (take another), 412 cannot_park /
-  parking_off / host_memory_floor (stop it instead, if room is still
-  wanted), 404 not loaded;
+- POST /backend/park {"model"} parks a loaded model. It waits for nothing
+  but the park itself and never stops anything; when the model is not
+  parked the answer says why and the caller decides: 409 model_busy (take
+  another) - a request is running, or a load, a return or a stop of the
+  same model holds its lifecycle lock, which is tried and never waited
+  for; 412 cannot_park / parking_off / host_memory_floor (stop it instead,
+  if room is still wanted); 404 not loaded. The watchdog's own evictions
+  do not queue behind that lock either, for a model that parks;
 - GET /system says, for a model that parks, "parks": true and "state":
   "loaded" or "parked", and for a parked one "parked": {"size_host",
   "size_vram_needed", "since"}. size_vram keeps its meaning: what the
@@ -67,9 +78,11 @@ ResourceExhausted is also a stream that is busy and a message over the
 size limit, which stay what they were. The embeddings route no longer
 rewrites such a refusal as "conversation too long".
 
-Tests: the loader against a scripted backend (25 specs: what parks, what
-does not and why, the host read at each park, the return with the options
-of the load, a refused return, a failed one, the stop that sends no Free);
+Tests: the loader against a scripted backend (32 specs: what parks, what
+does not and why, the lock that is tried and not waited for, the host read
+at each park, the return with the options of the load, a refused return,
+each way a return fails and the stop that follows, a return whose caller
+leaves, the stop that sends no Free);
 the watchdog (parks before it stops, never stops for busy); the endpoint,
 /system and the 503 mapping. A model that does not park: every existing
 spec of pkg/model, core/config, core/backend and core/schema passes.
@@ -84,26 +97,27 @@ Assisted-by: Claude Code
  core/config/runtime_settings.go               |   4 +
  core/config/runtime_settings_registry.go      |   6 +
  core/http/app.go                              |  32 +-
- .../http/endpoints/localai/backend_monitor.go |  61 ++++
- .../endpoints/localai/backend_park_test.go    | 144 ++++++++
+ .../http/endpoints/localai/backend_monitor.go |  63 +++
+ .../endpoints/localai/backend_park_test.go    | 144 ++++++
  core/http/endpoints/localai/system.go         |  10 +
  .../endpoints/localai/system_info_test.go     |  54 +++
  core/http/endpoints/openai/chat.go            |  14 +-
  core/http/no_room_handler_test.go             |  56 +++
  core/http/routes/localai.go                   |   6 +
  core/schema/localai.go                        |  31 ++
- core/services/monitoring/backend_monitor.go   |   6 +
+ core/services/monitoring/backend_monitor.go   |   8 +
  pkg/grpc/client.go                            |  16 +-
- pkg/model/initializers.go                     |  14 +
+ pkg/model/initializers.go                     |  21 +-
  pkg/model/loader.go                           |  14 +-
  pkg/model/loader_options.go                   |   9 +
- pkg/model/model.go                            |  69 ++++
- pkg/model/park.go                             | 318 ++++++++++++++++++
- pkg/model/park_internal_test.go               | 304 +++++++++++++++++
+ pkg/model/model.go                            |  69 +++
+ pkg/model/operation_locks.go                  |  29 ++
+ pkg/model/park.go                             | 381 ++++++++++++++++
+ pkg/model/park_internal_test.go               | 431 ++++++++++++++++++
  pkg/model/process.go                          |   6 +-
  pkg/model/watchdog.go                         |  15 +
- pkg/model/watchdog_park_internal_test.go      |  74 ++++
- 27 files changed, 1277 insertions(+), 13 deletions(-)
+ pkg/model/watchdog_park_internal_test.go      |  74 +++
+ 28 files changed, 1506 insertions(+), 14 deletions(-)
  create mode 100644 core/http/endpoints/localai/backend_park_test.go
  create mode 100644 core/http/no_room_handler_test.go
  create mode 100644 pkg/model/park.go
@@ -297,10 +311,10 @@ index 37f63e8..1fce9a3 100644
  		}
  	}
 diff --git a/core/http/endpoints/localai/backend_monitor.go b/core/http/endpoints/localai/backend_monitor.go
-index c60e92a..ec89fb8 100644
+index c60e92a..a4012c8 100644
 --- a/core/http/endpoints/localai/backend_monitor.go
 +++ b/core/http/endpoints/localai/backend_monitor.go
-@@ -76,3 +76,64 @@ func BackendShutdownEndpoint(bm *monitoring.BackendMonitorService) echo.HandlerF
+@@ -76,3 +76,66 @@ func BackendShutdownEndpoint(bm *monitoring.BackendMonitorService) echo.HandlerF
  		return c.JSON(http.StatusOK, map[string]string{"message": "model stopped"})
  	}
  }
@@ -316,8 +330,10 @@ index c60e92a..ec89fb8 100644
 +
 +// BackendParkEndpoint parks a loaded model: its weights leave the device and
 +// stay in host memory, its backend process stays. /backend/load, or any
-+// request, brings it back. It never waits for a busy model and never stops
-+// one: when the model is not parked the answer says why, and the caller
++// request, brings it back. It waits for nothing but the park itself - not
++// for a busy model, and not behind a load, a return or a stop of the same
++// model that is running: each is 409 model_busy, at once. It never stops a
++// model: when the model is not parked the answer says why, and the caller
 +// decides - another model, or /backend/shutdown.
 +// @Summary Backend park
 +// @Tags monitoring
@@ -772,16 +788,18 @@ index 85a2043..b43b17a 100644
  
  // SysInfoProcess is a point-in-time reading of one backend process.
 diff --git a/core/services/monitoring/backend_monitor.go b/core/services/monitoring/backend_monitor.go
-index b66c221..074181f 100644
+index b66c221..8f1bdd0 100644
 --- a/core/services/monitoring/backend_monitor.go
 +++ b/core/services/monitoring/backend_monitor.go
-@@ -113,3 +113,9 @@ func (bms BackendMonitorService) CheckAndSample(modelName string) (*proto.Status
+@@ -113,3 +113,11 @@ func (bms BackendMonitorService) CheckAndSample(modelName string) (*proto.Status
  func (bms BackendMonitorService) ShutdownModel(modelName string) error {
  	return bms.modelLoader.ShutdownModel(modelName)
  }
 +
 +// ParkModel parks a loaded model: its weights leave the device and its
-+// process stays. It never waits for a busy model and never stops one.
++// process stays. It waits for nothing but the park itself - a busy model
++// and a held lifecycle lock are both ErrModelBusy at once - and never stops
++// a model.
 +func (bms BackendMonitorService) ParkModel(ctx context.Context, modelName string) (model.ParkedState, error) {
 +	return bms.modelLoader.ParkModel(ctx, modelName)
 +}
@@ -824,7 +842,7 @@ index fa4f63d..63bf901 100644
  
  func (c *Client) ModelMetadata(ctx context.Context, in *pb.ModelOptions, opts ...grpc.CallOption) (*pb.ModelMetadataResponse, error) {
 diff --git a/pkg/model/initializers.go b/pkg/model/initializers.go
-index 934e4b7..d28e980 100644
+index 934e4b7..99cbffc 100644
 --- a/pkg/model/initializers.go
 +++ b/pkg/model/initializers.go
 @@ -275,6 +275,9 @@ func (ml *ModelLoader) spawnGRPCModel(backend, uri string, o *Options, modelID,
@@ -837,24 +855,31 @@ index 934e4b7..d28e980 100644
  	if ml.wd != nil && o.modelSizeBytes > 0 {
  		ml.wd.RegisterModelSize(modelID, o.modelSizeBytes)
  	}
-@@ -548,6 +551,17 @@ func (ml *ModelLoader) Load(opts ...Option) (grpc.Backend, error) {
+@@ -546,7 +549,23 @@ func (ml *ModelLoader) Load(opts ...Option) (grpc.Backend, error) {
+ 
+ 	// Return earlier if we have a model already loaded
  	// (avoid looping through all the backends)
- 	if m := ml.CheckIsLoaded(o.modelID); m != nil {
- 		xlog.Debug("Model already loaded", "model", o.modelID)
-+		if m.ParkedState().Parked {
-+			// A parked model coming back is a load for the limits: the
-+			// models it may not share the device with are evicted first, as
-+			// for a load. Then its weights return; if the device has no room
-+			// the request is refused as a deferral and the model stays parked.
-+			ml.enforceGroupExclusivity(o.modelID)
-+			ml.enforceLRULimit()
-+			if err := ml.unpark(o.context, m); err != nil {
-+				return nil, err
-+			}
+-	if m := ml.CheckIsLoaded(o.modelID); m != nil {
++	m := ml.CheckIsLoaded(o.modelID)
++	if m != nil && m.ParkedState().Parked {
++		// A parked model coming back is a load for the limits: the models it
++		// may not share the device with are evicted first, as for a load.
++		// Then its weights return. If the device has no room the request is
++		// refused as a deferral and the model stays parked. If the return
++		// FAILED its process was stopped: the model is not loaded any more,
++		// and this request is served by an ordinary load, below.
++		ml.enforceGroupExclusivity(o.modelID)
++		ml.enforceLRULimit()
++		if err := ml.unpark(o.context, m); errors.Is(err, ErrParkedReturnFailed) || errors.Is(err, errParkedModelGone) {
++			m = nil
++		} else if err != nil {
++			return nil, err
 +		}
++	}
++	if m != nil {
+ 		xlog.Debug("Model already loaded", "model", o.modelID)
  		// Update last used time for LRU tracking
  		ml.updateModelLastUsed(m)
- 		client := m.GRPC(o.parallelRequests, ml.wd)
 diff --git a/pkg/model/loader.go b/pkg/model/loader.go
 index eab41ed..e7eeb13 100644
 --- a/pkg/model/loader.go
@@ -994,12 +1019,52 @@ index 991dba2..d45f4d9 100644
  // IsRecentlyHealthy returns true if the model passed a health check within the TTL.
  func (m *Model) IsRecentlyHealthy() bool {
  	m.Lock()
+diff --git a/pkg/model/operation_locks.go b/pkg/model/operation_locks.go
+index ce64312..608e1a9 100644
+--- a/pkg/model/operation_locks.go
++++ b/pkg/model/operation_locks.go
+@@ -61,6 +61,35 @@ func (l *modelOperationLocks) acquireContext(ctx context.Context, modelID string
+ 	}, nil
+ }
+ 
++// tryAcquire takes the model's lifecycle lock only if it is free at this
++// moment - nobody holds it and nobody waits for it - and never blocks. A
++// caller that must not queue behind a load, a return or a stop uses it and
++// reads "not free" as "busy".
++func (l *modelOperationLocks) tryAcquire(modelID string, exclusive bool) (func(), bool) {
++	l.mu.Lock()
++	entry := l.entries[modelID]
++	if entry == nil {
++		entry = &modelOperationLock{sem: semaphore.NewWeighted(math.MaxInt64)}
++		l.entries[modelID] = entry
++	}
++	entry.refs++
++	l.mu.Unlock()
++
++	weight := int64(1)
++	if exclusive {
++		weight = math.MaxInt64
++	}
++	if !entry.sem.TryAcquire(weight) {
++		l.releaseReference(modelID, entry)
++		return nil, false
++	}
++
++	return func() {
++		entry.sem.Release(weight)
++		l.releaseReference(modelID, entry)
++	}, true
++}
++
+ func (l *modelOperationLocks) releaseReference(modelID string, entry *modelOperationLock) {
+ 	l.mu.Lock()
+ 	entry.refs--
 diff --git a/pkg/model/park.go b/pkg/model/park.go
 new file mode 100644
-index 0000000..8708a5f
+index 0000000..e259587
 --- /dev/null
 +++ b/pkg/model/park.go
-@@ -0,0 +1,318 @@
+@@ -0,0 +1,381 @@
 +package model
 +
 +import (
@@ -1045,6 +1110,14 @@ index 0000000..8708a5f
 +	// ErrParkHostFloor: parking this model now would leave the host under
 +	// its memory floor.
 +	ErrParkHostFloor = errors.New("parking would leave the host under its memory floor")
++	// ErrParkedReturnFailed: a parked model's weights did not come back to
++	// the device, for another reason than room, and its process was stopped.
++	// The model is not loaded any more: the next load of it is an ordinary
++	// one, from its file.
++	ErrParkedReturnFailed = errors.New("a parked model's return failed and its process was stopped")
++	// errParkedModelGone: the parked model a request waited for was stopped
++	// meanwhile. Nothing failed; the request is served by an ordinary load.
++	errParkedModelGone = errors.New("the parked model was stopped meanwhile")
 +)
 +
 +const (
@@ -1062,8 +1135,12 @@ index 0000000..8708a5f
 +
 +	parkStatusTimeout = 5 * time.Second
 +	parkTimeout       = 60 * time.Second
-+	unparkTimeout     = 60 * time.Second
 +)
++
++// unparkTimeout is how long a return may take: the copy of the weights back
++// to the device, measured in milliseconds to seconds. A return that has not
++// answered by then is a backend that hangs, and is stopped.
++var unparkTimeout = 60 * time.Second
 +
 +// NoRoomOnDeviceError is a request, or a model's return, that the device
 +// had no room for at that moment. The HTTP layer answers it 503 with a
@@ -1125,18 +1202,20 @@ index 0000000..8708a5f
 +}
 +
 +// ParkModel parks a loaded model: its weights leave the device, its process
-+// stays. It never waits for a busy model and never stops one: every reason
-+// it does not park is an error the caller acts on - ErrModelBusy (take
-+// another), ErrModelCannotPark, ErrParkingOff, ErrParkHostFloor (stop it
-+// instead, if room is still wanted). A model that is already parked is left
-+// as it is.
++// stays. It waits for nothing but the park itself - not for a busy model,
++// and not for the model's lifecycle lock: a load, a return or a stop of it
++// that is running is ErrModelBusy at once, like a request. It never stops a
++// model: every reason it does not park is an error the caller acts on -
++// ErrModelBusy (take another), ErrModelCannotPark, ErrParkingOff,
++// ErrParkHostFloor (stop it instead, if room is still wanted). A model that
++// is already parked is left as it is.
 +func (ml *ModelLoader) ParkModel(ctx context.Context, modelName string) (ParkedState, error) {
 +	if ctx == nil {
 +		ctx = context.Background()
 +	}
-+	release, err := ml.operations.acquireContext(ctx, modelName, true)
-+	if err != nil {
-+		return ParkedState{}, fmt.Errorf("waiting to park model %q: %w", modelName, err)
++	release, free := ml.operations.tryAcquire(modelName, true)
++	if !free {
++		return ParkedState{}, fmt.Errorf("%w: a load, a return or a stop of it is running", ErrModelBusy)
 +	}
 +	defer release()
 +	return ml.park(ctx, modelName, "")
@@ -1144,16 +1223,31 @@ index 0000000..8708a5f
 +
 +// ParkModelAtAddress is ParkModel for an eviction the watchdog chose: the
 +// address it selected must still be the model's. It reports whether the
-+// model is now parked.
++// model is now parked. A model that does not park, and every model while
++// parking is off, is answered before the lifecycle lock is looked at: its
++// eviction is the stop it always was, waits included.
 +func (ml *ModelLoader) ParkModelAtAddress(modelName, address string) (bool, error) {
++	ml.mu.Lock()
++	store := ml.store
++	floorOf := ml.parkHostFloor
++	ml.mu.Unlock()
++	if m, ok := store.Get(modelName); !ok || m.address != address {
++		return false, ErrModelNotFound
++	} else if !m.Parks() {
++		return false, ErrModelCannotPark
++	}
++	if floorOf == nil || floorOf() == 0 {
++		return false, ErrParkingOff
++	}
++
 +	ctx, cancel := context.WithTimeout(context.Background(), parkTimeout+parkStatusTimeout)
 +	defer cancel()
-+	release, err := ml.operations.acquireContext(ctx, modelName, true)
-+	if err != nil {
-+		return false, fmt.Errorf("waiting to park model %q: %w", modelName, err)
++	release, free := ml.operations.tryAcquire(modelName, true)
++	if !free {
++		return false, fmt.Errorf("%w: a load, a return or a stop of it is running", ErrModelBusy)
 +	}
 +	defer release()
-+	_, err = ml.park(ctx, modelName, address)
++	_, err := ml.park(ctx, modelName, address)
 +	return err == nil, err
 +}
 +
@@ -1264,8 +1358,21 @@ index 0000000..8708a5f
 +
 +// unpark brings a parked model's weights back to the device, with a
 +// LoadModel that carries the options of its load. A model that is not
-+// parked is left alone. If the device has no room the model stays parked
-+// and the error is a *NoRoomOnDeviceError.
++// parked is left alone. It ends one of three ways, and in none of them is
++// the model left in a state that fails again:
++//   - the weights are back;
++//   - the device has no room NOW: the model stays parked and the error is a
++//     *NoRoomOnDeviceError - a deferral, the next request asks again;
++//   - anything else - the backend failed the return, holds the model under
++//     other options, is gone, or has not answered within unparkTimeout: the
++//     process is stopped and the error is ErrParkedReturnFailed. The same
++//     LoadModel to the same process would fail the same way for ever, and
++//     nothing else stops a parked model; stopped, its next load is an
++//     ordinary one, from its file.
++//
++// Once the LoadModel is sent it is followed to its end whatever the caller
++// does: a request that goes away in the middle of the copy must not leave
++// the weights on the device under a record that says "parked".
 +func (ml *ModelLoader) unpark(ctx context.Context, m *Model) error {
 +	if !m.ParkedState().Parked {
 +		return nil
@@ -1284,23 +1391,44 @@ index 0000000..8708a5f
 +
 +	ml.mu.Lock()
 +	wd := ml.wd
++	store := ml.store
 +	ml.mu.Unlock()
++	if held, ok := store.Get(m.ID); !ok || held != m {
++		// stopped, or stopped and loaded again, while this request waited:
++		// what the store holds now is not this parked process
++		return errParkedModelGone
++	}
++
++	failed := func(cause error) error {
++		xlog.Error("A parked model's return failed; its process is stopped and its next load is from its file",
++			"model", m.ID, "error", cause)
++		stopCtx, cancel := context.WithTimeout(context.Background(), forcedShutdownTimeout)
++		defer cancel()
++		if stopErr := ml.deleteProcess(stopCtx, m.ID, true); stopErr != nil && !errors.Is(stopErr, ErrModelNotFound) {
++			if held, ok := store.Get(m.ID); ok && held == m {
++				// the process could not be stopped: the model is still what
++				// it was, and the next request tries both again
++				return fmt.Errorf("bringing model %q back to the device: %w (and its process could not be stopped: %v)", m.ID, cause, stopErr)
++			}
++		}
++		return fmt.Errorf("%w: model %q: %w", ErrParkedReturnFailed, m.ID, cause)
++	}
 +
 +	opts := m.LoadOptions()
 +	if opts == nil {
-+		return fmt.Errorf("model %q is parked and the options of its load are not held", m.ID)
++		return failed(errors.New("the options of its load are not held"))
 +	}
-+	loadCtx, cancel := context.WithTimeout(ctx, unparkTimeout)
++	loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unparkTimeout)
 +	res, err := m.GRPC(false, wd).LoadModel(loadCtx, opts)
 +	cancel()
 +	if err != nil {
 +		if message, noRoom := NoRoomOnDevice(err); noRoom {
 +			return &NoRoomOnDeviceError{Model: m.ID, Message: message}
 +		}
-+		return fmt.Errorf("bringing model %q back to the device: %w", m.ID, err)
++		return failed(err)
 +	}
 +	if !res.GetSuccess() {
-+		return fmt.Errorf("bringing model %q back to the device: %s", m.ID, res.GetMessage())
++		return failed(errors.New(res.GetMessage()))
 +	}
 +
 +	m.markUnparked()
@@ -1320,10 +1448,10 @@ index 0000000..8708a5f
 +}
 diff --git a/pkg/model/park_internal_test.go b/pkg/model/park_internal_test.go
 new file mode 100644
-index 0000000..a0f2a56
+index 0000000..7ab5be0
 --- /dev/null
 +++ b/pkg/model/park_internal_test.go
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,431 @@
 +package model
 +
 +import (
@@ -1355,6 +1483,12 @@ index 0000000..a0f2a56
 +	loadResult *pb.Result
 +	loadErr    error
 +
++	// the return's LoadModel: what runs when it arrives, whether it then
++	// waits for its context to end, and what its context said on arrival
++	onLoad     func()
++	loadHangs  bool
++	loadCtxErr error
++
 +	statuses, parks, plainFrees, loads int
 +	loadedWith                         *pb.ModelOptions
 +}
@@ -1384,9 +1518,17 @@ index 0000000..a0f2a56
 +	b.plainFrees++
 +	return nil
 +}
-+func (b *parkBackend) LoadModel(_ context.Context, in *pb.ModelOptions, _ ...ggrpc.CallOption) (*pb.Result, error) {
++func (b *parkBackend) LoadModel(ctx context.Context, in *pb.ModelOptions, _ ...ggrpc.CallOption) (*pb.Result, error) {
 +	b.loads++
 +	b.loadedWith = in
++	if b.onLoad != nil {
++		b.onLoad()
++	}
++	b.loadCtxErr = ctx.Err()
++	if b.loadHangs {
++		<-ctx.Done()
++		return nil, status.FromContextError(ctx.Err()).Err()
++	}
 +	return b.loadResult, b.loadErr
 +}
 +
@@ -1473,6 +1615,58 @@ index 0000000..a0f2a56
 +			Expect(still).To(BeTrue())
 +		})
 +
++		It("does not wait for the model's lifecycle lock either: a load, a return or a stop of it that is running is busy, at once", func() {
++			for _, exclusive := range []bool{false, true} { // what a load holds, and what a return or a stop holds
++				release := ml.operations.acquire("m", exclusive)
++				started := time.Now()
++				_, err := ml.ParkModel(context.Background(), "m")
++				Expect(err).To(MatchError(ErrModelBusy))
++				Expect(time.Since(started)).To(BeNumerically("<", time.Second))
++				release()
++			}
++			Expect(backend.parks + backend.statuses).To(BeZero())
++			_, still := ml.store.Get("m")
++			Expect(still).To(BeTrue())
++
++			state, err := ml.ParkModel(context.Background(), "m")
++			Expect(err).NotTo(HaveOccurred())
++			Expect(state.Parked).To(BeTrue(), "the lock is free again: nothing of the refusals was left behind")
++		})
++
++		It("parks for the watchdog the address it chose, and does not queue behind the lock either", func() {
++			parked, err := ml.ParkModelAtAddress("m", "another address")
++			Expect(parked).To(BeFalse())
++			Expect(err).To(MatchError(ErrModelNotFound))
++
++			release := ml.operations.acquire("m", true)
++			started := time.Now()
++			parked, err = ml.ParkModelAtAddress("m", "addr")
++			Expect(parked).To(BeFalse())
++			Expect(err).To(MatchError(ErrModelBusy))
++			Expect(time.Since(started)).To(BeNumerically("<", time.Second))
++			release()
++
++			parked, err = ml.ParkModelAtAddress("m", "addr")
++			Expect(err).NotTo(HaveOccurred())
++			Expect(parked).To(BeTrue())
++		})
++
++		It("answers the watchdog for a model that does not park, and while parking is off, before the lock is looked at: that eviction is the stop it always was", func() {
++			release := ml.operations.acquire("m", true)
++			defer release()
++
++			m.SetParks(false)
++			_, err := ml.ParkModelAtAddress("m", "addr")
++			Expect(err).To(MatchError(ErrModelCannotPark))
++			Expect(errors.Is(err, ErrModelBusy)).To(BeFalse(), "busy would keep a model the watchdog used to wait for and stop")
++
++			m.SetParks(true)
++			ml.SetParkHostFloorSource(func() uint64 { return 0 })
++			_, err = ml.ParkModelAtAddress("m", "addr")
++			Expect(err).To(MatchError(ErrParkingOff))
++			Expect(errors.Is(err, ErrModelBusy)).To(BeFalse())
++		})
++
 +		It("reads the host before EACH park: the weights must fit above the floor at that moment", func() {
 +			host = floor + 6*gib - 1
 +			_, err := ml.ParkModel(context.Background(), "m")
@@ -1557,20 +1751,81 @@ index 0000000..a0f2a56
 +			Expect(m.ParkedState().Parked).To(BeFalse())
 +		})
 +
-+		It("does not take a return that FAILED for a refusal: it is a fault, and the model stays parked", func() {
-+			backend.loadResult, backend.loadErr = nil, status.Error(codes.Internal, "the weights could not be brought back to the device: a failure, not a refusal")
-+			_, err := ml.Load(WithContext(context.Background()), WithModelID("m"))
-+			Expect(err).To(HaveOccurred())
-+			_, noRoom := NoRoomOnDevice(err)
-+			Expect(noRoom).To(BeFalse())
-+			Expect(m.ParkedState().Parked).To(BeTrue())
++		// A return that fails for another reason than room would fail the same
++		// way at the next request, to the same process, for ever - and nothing
++		// else stops a parked model. So its process is stopped.
++		DescribeTable("stops the process of a model whose return FAILED, whatever the failure",
++			func(result *pb.Result, loadErr error) {
++				backend.loadResult, backend.loadErr = result, loadErr
++				err := ml.unpark(context.Background(), m)
++				Expect(err).To(MatchError(ErrParkedReturnFailed))
++				_, noRoom := NoRoomOnDevice(err)
++				Expect(noRoom).To(BeFalse(), "a fault is not a deferral")
++				_, still := ml.store.Get("m")
++				Expect(still).To(BeFalse(), "the model is not loaded any more")
++				Expect(backend.loads).To(Equal(1))
++				Expect(backend.plainFrees+backend.parks).To(Equal(1), "stopped without another Free: the one park of the setup")
++			},
++			Entry("the backend says the return failed", nil,
++				status.Error(codes.Internal, "the weights could not be brought back to the device: a failure, not a refusal")),
++			Entry("the backend holds the model under other options", nil,
++				status.Error(codes.FailedPrecondition, "this process holds model \"m\" under other options than these: ContextSize")),
++			Entry("the backend is gone", nil, status.Error(codes.Unavailable, "connection refused")),
++			Entry("the backend answers without success", &pb.Result{Success: false, Message: "could not load model"}, nil),
++			Entry("a resource is exhausted that is not the device's room", nil,
++				status.Error(codes.ResourceExhausted, "grpc: received message larger than max")),
++		)
++
++		It("stops a return that has not answered in its time: a backend that hangs", func() {
++			was := unparkTimeout
++			unparkTimeout = 50 * time.Millisecond
++			DeferCleanup(func() { unparkTimeout = was })
++			backend.loadHangs = true
++			Expect(ml.unpark(context.Background(), m)).To(MatchError(ErrParkedReturnFailed))
++			_, still := ml.store.Get("m")
++			Expect(still).To(BeFalse())
 +		})
 +
-+		It("does not take a backend that holds the model under other options for a return", func() {
-+			backend.loadResult, backend.loadErr = nil, status.Error(codes.FailedPrecondition, "this process holds model \"m\" under other options than these")
++		It("serves the request whose return failed by an ordinary load, and sends nothing more to the stopped process", func() {
++			backend.loadResult, backend.loadErr = nil, status.Error(codes.Internal, "the weights could not be brought back to the device: a failure, not a refusal")
 +			_, err := ml.Load(WithContext(context.Background()), WithModelID("m"))
++			// no backend is installed here, so the ordinary load says so: what
++			// matters is that the request went there, and not back to the caller
++			// with the fault of a process that is gone
 +			Expect(err).To(HaveOccurred())
-+			Expect(m.ParkedState().Parked).To(BeTrue())
++			Expect(errors.Is(err, ErrParkedReturnFailed)).To(BeFalse())
++			Expect(err.Error()).NotTo(ContainSubstring("a failure, not a refusal"))
++			_, still := ml.store.Get("m")
++			Expect(still).To(BeFalse())
++
++			_, _ = ml.Load(WithContext(context.Background()), WithModelID("m"))
++			Expect(backend.loads).To(Equal(1), "the next request is a load from the file, not the same LoadModel again")
++		})
++
++		It("follows a return it has sent to its end, whatever the caller does: a request that leaves must not leave the record wrong", func() {
++			ctx, leave := context.WithCancel(context.Background())
++			backend.onLoad = leave // the caller goes away while the weights are being copied
++			err := ml.unpark(ctx, m)
++			Expect(err).NotTo(HaveOccurred())
++			Expect(ctx.Err()).To(HaveOccurred())
++			Expect(backend.loadCtxErr).NotTo(HaveOccurred(), "the return's own call was not cancelled with its caller")
++			Expect(m.ParkedState().Parked).To(BeFalse(), "the weights are on the device and the record says so")
++			_, still := ml.store.Get("m")
++			Expect(still).To(BeTrue())
++		})
++
++		It("sends nothing to a parked model that was stopped while the request waited for it", func() {
++			ml.store.Delete("m")
++			Expect(ml.unpark(context.Background(), m)).To(MatchError(errParkedModelGone))
++			Expect(backend.loads).To(BeZero())
++		})
++
++		It("stops a parked model whose load options are not held: there is nothing to bring it back with", func() {
++			m.SetLoadOptions(nil)
++			Expect(ml.unpark(context.Background(), m)).To(MatchError(ErrParkedReturnFailed))
++			Expect(backend.loads).To(BeZero())
++			_, still := ml.store.Get("m")
++			Expect(still).To(BeFalse())
 +		})
 +	})
 +
