@@ -238,7 +238,11 @@ def current() -> dict[str, Any]:
     from . import collection_file, collections as collections_mod, db
 
     def facts(c) -> dict[str, Any]:
+        from . import node_mode
         return {"mode": db.worker_state(c),
+                # embed or chat (app/node_mode.py), recorded since 2026-11-25:
+                # a record made before has none, and a restore then leaves it
+                "use": node_mode.current(c),
                 "paused": {n: node_state.pause_of(n, c) for n in sorted(node_state.paused_collections(c))},
                 "frozen": {n: node_state.frozen_since(n, c) for n in sorted(node_state.frozen_collections(c))}}
     got = node_state.peek(facts, {"mode": "paused", "paused": {}, "frozen": {}}, error=None)
@@ -277,7 +281,14 @@ def plan(saved: dict[str, Any], now: dict[str, Any]) -> dict[str, list]:
     skipped: list[dict[str, Any]] = []
     untouched: list[dict[str, Any]] = []
     notes: list[dict[str, Any]] = []
-    if saved["mode"] != now["mode"]:
+    # THE MODE OF USE FIRST (embed or chat): switching it sets the run mode,
+    # so the run mode recorded is written after it, whatever it reads now —
+    # a restore never leaves chat mode running everything
+    use_then, use_now = saved.get("use"), now.get("use")
+    switched = bool(use_then) and bool(use_now) and use_then != use_now
+    if switched:
+        changes.append({"what": "use", "from": use_now, "to": use_then})
+    if switched or saved["mode"] != now["mode"]:
         changes.append({"what": "mode", "from": now["mode"], "to": saved["mode"]})
     held_then, held_now = saved["held"], now["held"]
     paused_then, paused_now = set(saved["paused"]), set(now["paused"])
@@ -331,6 +342,8 @@ def said(change: dict[str, Any]) -> str:
     """One change, in words."""
     if change["what"] == "mode":
         return f"mode {change['from']} -> {change['to']}"
+    if change["what"] == "use":
+        return f"{change['from']} mode -> {change['to']} mode"
     if change["what"] == "pause":
         word = {True: "paused", False: "not paused"}
         return f"{change['collection']}: {word[change['from']]} -> {word[change['to']]}"
@@ -518,6 +531,10 @@ def _execute(change: dict[str, Any], by: str) -> dict[str, Any]:
     from . import effective_config
     if change["what"] == "mode":
         node_state.set_worker_state(change["to"], by=by)
+        return {}
+    if change["what"] == "use":
+        from . import node_mode
+        node_mode.switch(change["to"], by=by)
         return {}
     if change["what"] == "pause":
         node_state.set_paused(change["collection"], change["to"], by=by)

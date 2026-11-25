@@ -26,6 +26,43 @@
   })();
 </script>
 
+{# THE NODE'S MODE OF USE (operator, 2026-11-25: "embed mode, intended for
+   heavy embedding ... in which the smaller chat model is used"; "chat mode in
+   which the 35B model is used"; "In system tab shall be selectable for chat
+   mode a run mode among download/seeding, seeding or pause"; "For both modes
+   a network budged shall be settable"): the two buttons switch (as `louise
+   node mode` and POST /api/mode do), the form writes platform.toml's [modes]
+   (app/node_mode.py) #}
+<div class="panel"><details class="sect" id="sys-mode" open>
+  <summary><h2>Mode</h2> <span class="note">the node is in <b>{{ node_mode_labels[node_modes.mode] }}</b></span></summary>
+  {% if mode_error %}<div class="note"><span class="badge err">not saved</span> {{ mode_error }}</div>{% endif %}
+  {% if mode_saved %}<div class="note"><span class="badge">saved</span> the worker takes it at its next round</div>{% endif %}
+  <form method="post" action="/admin/system/mode" class="actions">
+    {% for r in node_modes.rows %}
+    <button class="mode{{ ' selected' if node_modes.mode==r.mode }}" name="mode" value="{{ r.mode }}"
+            {% if node_modes.mode==r.mode %}disabled aria-current="true"{% endif %}
+            title="{{ r.says }}{{ ' — the node is in this mode' if node_modes.mode==r.mode }}">{{ r.label }}</button>
+    {% endfor %}
+  </form>
+  <form method="post" action="/admin/system/modes">
+  <table><tr><th>mode</th><th>chat model</th><th>switches the run mode to</th><th>network budget, down</th><th>network budget, up</th></tr>
+    {% for r in node_modes.rows %}
+    <tr data-node-mode="{{ r.mode }}"><td>{{ r.label }}{% if node_modes.mode==r.mode %} <span class="badge">now</span>{% endif %}
+        <div class="note">{{ r.says }}</div></td>
+      <td>{{ r.chat_model }}</td>
+      <td>{% if r.mode == 'chat' %}<select name="chat_run">
+            {% for s, label in node_modes.chat_runs %}<option value="{{ s }}"{{ ' selected' if node_modes.chat_run==s }}>{{ label }}</option>{% endfor %}
+          </select>{% else %}{{ dict(mode_labels)[r.run] }}{% endif %}</td>
+      <td><input name="{{ r.mode }}_down_max" value="{{ r.down }}" placeholder="{{ node_modes.budget.down }} ([budget]'s)" style="width:15em">
+        {% if r.down %}<div class="note">{{ r.down_in_force }}</div>{% endif %}</td>
+      <td><input name="{{ r.mode }}_up_max" value="{{ r.up }}" placeholder="{{ node_modes.budget.up }} ([budget]'s)" style="width:15em">
+        {% if r.up %}<div class="note">{{ r.up_in_force }}</div>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  <button type="submit">save</button> <span class="note">a budget is a rate as [budget]'s: <code>50MB</code>, <code>400Mbit</code>; empty, [budget]'s own. Written into platform.toml [modes]; the two chat models are set under Models, below. A cron job switches with <code>POST /api/mode {"mode": "embed"}</code> or <code>louise node mode chat</code>.</span>
+  </form>
+</details></div>
+
 {# THE NODE'S OWN MODELS (operator, 2026-11-15: "In system I don't see any
    settings for chat, vad, stt, tts and translator, add them"; "I want them to
    be editable from the page for quick testing"): each use's model, edited in
@@ -44,8 +81,9 @@
     {% for m in node_models %}
     <tr data-model-use="{{ m.use }}"><td>{{ m.use }}</td>
       <td><input name="{{ m.field }}" value="{{ m.value }}" style="width:100%;min-width:16em"{% if m.field != 'reading' %} list="server-models"{% endif %}
-        placeholder="{% if m.default %}{{ m.default }} (the environment's){% elif m.field == 'reading' %}la = index-translate-9b, grc = …{% else %}not set: not offered{% endif %}">
-        {% if m.default is not none and m.overridden %}<div class="note">over the environment's {{ m.default }}; empty goes back to it</div>{% endif %}</td>
+        placeholder="{% if m.default %}{{ m.default }} ({{ m.default_from }}'s){% elif m.field == 'reading' %}la = index-translate-9b, grc = …{% else %}not set: not offered{% endif %}">
+        {% if m.default is not none and m.overridden %}<div class="note">over {{ m.default_from }}'s {{ m.default }}; empty goes back to it</div>{% endif %}
+        {% if m.in_force %}<div class="note"><span class="badge">in force</span> the node is in {{ node_mode_labels[node_modes.mode] }}</div>{% endif %}</td>
       <td>{{ m.server or '—' }}</td><td>{{ m.set_in }}</td></tr>
     {% endfor %}
   </table>

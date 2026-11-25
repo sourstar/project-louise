@@ -4064,11 +4064,32 @@ def cmd_node_resume(a) -> int:
                                       by=f"louise node resume {a.collection} ({node_state.invoker()})")
         _print({"paused": sorted(names)})
         return 0
-    node_state.set_worker_state("running", by="louise node resume")
+    # back to what the node's MODE runs (app/node_mode.py): everything in
+    # embed mode, chat mode's own run mode in chat mode — where running
+    # everything would start the embedders under the large chat model
+    from app import node_mode
+    mode = node_mode.current()
+    state = node_mode.run_of(mode)
+    node_state.set_worker_state(state, by=f"louise node resume ({mode} mode)")
     # the store written, said: the worker obeys the one it reads (its log
     # names it: "node mode … (read from …)"), and a command run with another
     # LOUISE_ROOT writes another (2026-10-23)
-    _print({"node": "running", "store": str(node_state.path())})
+    _print({"node": state, "store": str(node_state.path())}
+           | ({"mode": mode} if mode != node_mode.DEFAULT else {}))
+    return 0
+
+
+def cmd_node_mode(a) -> int:
+    """`node mode [embed|chat]` (07 §7.3): the node's mode of use, read or
+    switched. A switch sets the chat model, the run mode and the network
+    budget of the mode together (app/node_mode.py) and survives a restart."""
+    from app import node_mode, node_state
+    if a.mode:
+        got = node_mode.switch(a.mode, by=f"louise node mode {a.mode} ({node_state.invoker()})")
+        _print({**node_mode.shown(), "before": got["before"], "run_before": got["run_before"],
+                "store": str(node_state.path())})
+        return 0
+    _print({**node_mode.shown(), "store": str(node_state.path())})
     return 0
 
 
@@ -7725,9 +7746,15 @@ def build_parser() -> argparse.ArgumentParser:
     rel.add_argument("--cause", default=None, help="what it was processing and its measured peak, in words")
     rel.add_argument("--diagnostic", default=None, help="what was added that will name it the next time")
     p.set_defaults(fn=cmd_node_release_oom)
-    p = nverbs.add_parser("resume", help="the node, or one collection")
+    p = nverbs.add_parser("resume", help="the node — back to what its mode runs — or one collection")
     p.add_argument("collection", nargs="?", default=None)
     p.set_defaults(fn=cmd_node_resume)
+    p = nverbs.add_parser("mode", help="the node's mode of use, read or switched: embed (heavy embedding: "
+                                      "the small chat model, everything runs) or chat (the large chat "
+                                      "model; download/seeding, seeding or pause); each with its own "
+                                      "network budget; across restarts")
+    p.add_argument("mode", nargs="?", default=None, choices=("embed", "chat"))
+    p.set_defaults(fn=cmd_node_mode)
     p = nverbs.add_parser("freeze", help="ONE collection keeps the version it holds: nothing fetched, "
                                         "scanned or taken in from peers; parsed, indexed, embedded here "
                                         "and searched as it is; shared, only its parts still current "
