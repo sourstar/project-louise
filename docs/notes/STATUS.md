@@ -120,6 +120,8 @@ measured (published figures disagree).
 
 ### 2026-11-24
 
+- **`792f050e318e` IS BUILT, NOT LIVE (München, 2026-11-25 09:58:24Z):** installed beside `d531d5d804f1`, which stays live. Its swap
+  and every gate wait for the operator's own yes to München, after EUR-Lex5.next is drained (repaired, indexing since 10:05Z).
 - **THE NEXT ENGINE TO BUILD IS `792f050e318e` (`engine-stream.series`, 2026-11-25):** the paging default (0021), the language tag (0022) and A STREAM THAT FAILS AFTER ITS FIRST CHUNK FAILS (0025; localai-bugs.md B21 — a chat answer cut short was delivered as complete, on every engine so far; measured on a CPU build: OK after 4 of 50 chunks before, INTERNAL after 3 of 50 after), with the test switch that lets a card show it (0026). The operator has not yet said which candidate is built; this one stands in the two before it. parking-step-2.md §6a.
 - **PARKING, STEP 2 — THE ENGINE PART IS STAGED (2026-11-25):** `engine-park.series` → `ed93e3c1b2e2`, staged 0023, its second cut accepted by the architecture session after an independent reading of the first found real defects (a failed return answered as "no room", a refused request re-parking, "already loaded" by name only — §6, finding by finding). MEASURED on CPU builds with a stand-in device only: 49/49 over gRPC, 56/56 and 19/19 over llama.cpp's server. NOT measured: anything on a card; no device has been SEEN to refuse a commit. The readiness poll (staged 0024, server) is accepted and goes on the node with the server part.
 - **PARKING, STEP 2 — THE SERVER PART IS UNDER REVIEW, THIRD CUT (2026-11-25):** `review/0027-model-park.patch`. The architecture

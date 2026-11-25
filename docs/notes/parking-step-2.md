@@ -521,6 +521,15 @@ through the backend's own address:
 behaviour. Through LocalAI's HTTP the same failure must end the SSE stream
 with an error, not with a normal `[DONE]` after a short answer.
 
+**BUILT, not live (München, 2026-11-25).** The name checked, the build
+ended 0, installed BESIDE the live engine at 09:58:24Z as
+`louise-sycl-f16-llama-cpp-792f050e318e-stack-7c301a7ba437`.
+`d531d5d804f1` stays live; `d658549772ca` stays installed and was never
+gated. Its swap and every gate wait for the operator's own yes to München,
+which he tied to EUR-Lex5.next being repaired and drained: repaired and
+indexing since 10:05Z, draining for hours. The keeper's paging default and
+the staged speech model's backend name move when it is LIVE, not before.
+
 ## 7. The server part, commit by commit
 
 Each is a patch of LocalAI's SERVER, in no engine series, written on the
