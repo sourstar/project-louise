@@ -384,7 +384,11 @@ louise node
                                                                        the run mode stays the operator's (any of the four) and the chat model is `[models] chat`. Embed and
                                                                        query mode each have their own NETWORK CHOICE (download and seed, seed only, none) and network
                                                                        budget (§7.8 `[modes]`), which a switch brings with it. A switch to the mode the node is in changes
-                                                                       nothing. `chat`, the first word for query mode, is still taken. It survives a restart (§7.8). The
+                                                                       nothing. `chat`, the first word for query mode, is still taken. A RESCAN asked for on the Library
+                                                                       is offered in every mode (operator: "The rescan all collections remains usable from any
+                                                                       profile"): in query mode, whose run mode parses nothing, the scan runs all the same and records
+                                                                       what is new or changed, parsed and indexed once the node is in embed mode; in custom mode it
+                                                                       follows the run mode, as before. It survives a restart (§7.8). The
                                                                        System page's Mode panel and `POST /api/mode {"mode": …}` (§7.4, for a cron job) do the same
   freeze <collection>                                                  a runtime override: the collection keeps the version it holds — nothing fetched from its origin, its origin not scanned, nothing
                                                                        taken in from peers; parsed, indexed, embedded here, searched and checked as it is; shared, only its parts
