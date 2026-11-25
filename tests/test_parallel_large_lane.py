@@ -115,10 +115,16 @@ def test_at_most_one_large_part_is_in_flight_and_the_results_keep_their_order(fa
     monkeypatch.setattr(parallel, "pool", lambda: pool)
     rows = _rows([1, BIG, BIG, 1, 1, BIG, 1, 1])
     got = parallel.compute("chunks", _coll(), rows)
-    assert got == [(True, r["uid"]) for r in rows]
-    assert pool.max_large == 1, "the 24 languages of one act are never parsed together"
-    assert parallel._large_lane.acquire(blocking=False), "the lane is given back"
-    parallel._large_lane.release()
+    # the batch's own share of the lane (LARGE_LANES since 2026-11-25): its
+    # first two large units are parsed, the third is asked again next round
+    assert [g for i, g in enumerate(got) if i != 5] == [(True, r["uid"]) for i, r in enumerate(rows) if i != 5]
+    assert got[5][0] is False and got[5][1]["type"] == "MemoryWait", got[5]
+    assert "at most 2 a batch" in got[5][1]["msg"] and "asked again next round" in got[5][1]["msg"]
+    assert pool.max_large <= parallel.LARGE_LANES, "the 24 languages of one act are never parsed together"
+    for _ in range(parallel.LARGE_LANES):
+        assert parallel._large_lane.acquire(blocking=False), "every lane is given back"
+    for _ in range(parallel.LARGE_LANES):
+        parallel._large_lane.release()
 
 
 def test_a_large_part_extends_its_batch_deadline_by_its_bytes(fake_compute, monkeypatch):
@@ -189,12 +195,9 @@ def test_a_row_deferred_before_is_asked_never_waited_for(fake_compute, monkeypat
         return got
     monkeypatch.setattr(parallel, "_take_lane", take)
     rows = _rows([BIG, 1, 1])
-    assert parallel._large_lane.acquire(blocking=False), "another batch's large parse holds the lane"
-    try:
+    with parallel.all_lanes_held():                  # other batches' large parses hold every lane
         first = parallel.compute("chunks", _coll(), rows)
         second = parallel.compute("chunks", _coll(), rows)
-    finally:
-        parallel._large_lane.release()
     for got in (first, second):
         assert got[0][0] is False and got[0][1]["type"] == "MemoryWait" and got[1:] == [(True, "e:1"), (True, "e:2")]
     assert asked[0][0] is True and asked[0][1] >= 0.3, "a fresh row waits once, bounded, as before"
@@ -579,3 +582,67 @@ def test_a_remembered_need_is_the_next_admissions(fake_compute, monkeypatch):
     parallel._remember(_coll(), row[0], 17 * GB)            # past 2/3 of 24 GiB
     (_ok, v), = parallel.compute("fts", _coll(), row)
     assert v["type"] == "TooLarge" and "twice the room its parse passed before" in v["msg"]
+
+
+# ---- two lanes, and a batch's share of them (2026-11-25) --------------------
+#
+# EUR-Lex5.next on the node: fifteen units of 90-136 MB took 1,513 s on the
+# ONE lane while ten children idled, nine of them in one fts batch whose
+# commit — and the collection's rdf behind it — waited for all nine.
+
+def test_two_large_parts_run_together_where_there_is_room(fake_compute, monkeypatch):
+    """Both lanes taken at once: the second large part does not wait for the
+    first to answer."""
+    monkeypatch.setattr(config, "PARSE_PROCESSES", 12)
+    monkeypatch.setattr(parallel, "lane_threads", lambda: 1)
+    live: list[int] = []
+    peak_live: list[int] = []
+
+    class Pool(_Pool):
+        def submit(self, fn, kind, collection, part):
+            f = super().submit(fn, kind, collection, part)
+            if parallel._large(K, part) > 0:
+                live.append(1)
+                peak_live.append(len(live))
+            return f
+    pool = Pool()
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    rows = _rows([BIG, BIG, 1])
+    got = parallel.compute("chunks", _coll(), rows)
+    assert got == [(True, r["uid"]) for r in rows]
+    assert pool.max_large == 2, "the second lane was never used"
+
+
+def test_the_second_lane_is_refused_where_the_memory_has_no_room_for_two(fake_compute, monkeypatch):
+    """The lane is not what holds the memory: the reservation is. A node
+    whose memory holds one estimate runs one, as before."""
+    monkeypatch.setattr(config, "PARSE_PROCESSES", 12)
+    monkeypatch.setattr(parallel, "lane_threads", lambda: 1)
+    need = parallel.peak_of(K, {"uid": "x", "size": BIG})
+    monkeypatch.setattr(parallel, "pool_memory", lambda: int(need * 1.5))      # room for one estimate, not two
+    pool = _Pool()
+    monkeypatch.setattr(parallel, "pool", lambda: pool)
+    rows = _rows([BIG, BIG])
+    got = parallel.compute("chunks", _coll(), rows)
+    assert got == [(True, r["uid"]) for r in rows], "the second waited for the first, then ran"
+    assert pool.max_large == 1
+
+
+def test_a_batch_puts_a_lanes_worth_of_large_units_and_defers_the_rest_whatever_the_timing(fake_compute, monkeypatch):
+    """Nine large units in one batch: two are parsed, seven are asked again
+    next round — so the batch commits after two, not after nine. The same
+    split whether the lanes happen to be free when each is reached or not."""
+    for processes in (2, 12):                       # a cap that serialises the batch, and one that does not
+        monkeypatch.setattr(config, "PARSE_PROCESSES", processes)
+        parallel.forget_deferred() if hasattr(parallel, "forget_deferred") else None
+        pool = _Pool()
+        monkeypatch.setattr(parallel, "pool", lambda: pool)
+        rows = _rows([BIG] * 9 + [1, 1])
+        got = parallel.compute("chunks", _coll(), rows)
+        done = [i for i, g in enumerate(got) if g[0]]
+        waits = [i for i, g in enumerate(got) if not g[0]]
+        assert done == [0, 1, 9, 10], (processes, done)
+        assert waits == [2, 3, 4, 5, 6, 7, 8] and all(got[i][1]["type"] == "MemoryWait" for i in waits)
+        # asked again: the next round takes the next two, never waits for them
+        again = parallel.compute("chunks", _coll(), [rows[i] for i in waits])
+        assert [g[0] for g in again] == [True, True, False, False, False, False, False], (processes, again)

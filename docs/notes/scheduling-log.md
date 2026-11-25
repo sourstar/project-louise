@@ -3500,3 +3500,35 @@ seconds in, and the loads that followed are what the AFTER must time.
 and the seconds between them; no CANARY line and no "GateDeferred … needs
 N MiB free" in the start's first ten minutes; gutenberg's first embed line
 after the wait.
+
+## 2026-11-25 — two large lanes; a batch puts at most a lane's worth of large units
+
+**SCENARIO.** As the row above (EUR-Lex5.next's large units, the pool
+otherwise nearly idle), with 452 rows of 50 MB and more still pending — 84.0 GB
+(rdf 406 / 80.2 GB, fts 46 / 3.8 GB) — at 10:33Z.
+
+**BEFORE** (the node at 1249b1d9; the row above has the lines whole). One lane:
+fifteen units of 32018R0688 (1,494,357,545 bytes) in 1,513 s, i.e. ~101 s a
+unit one after the other; ONE fts batch held nine of them and committed after
+1,513.5 s; rdf between two such commits: one transaction of 1,000 documents;
+10:08–10:25Z averaged ~100 documents and ~118 rdf a minute. Memory: a lane
+child's VmHWM 2,834,164 kB; the worker cgroup anon 12,875 MiB, peak 16,818 of
+24,576 MiB.
+
+**THE CHANGE.** `LARGE_LANES = 2` (the existing `_room` and `_reserve` decide
+whether the second is admitted), and a batch puts at most two large units in
+the lane — the others deferred to the next round at once.
+
+**EXPECTED, to be held against the AFTER.** Two units in flight where the
+memory allows (the pool's lines: two "ALONE in the large lane" parts at a
+time — the word "ALONE" then reads wrongly and is the next line to fix); an
+fts batch with large units committing after ~2 of them (~100–200 s, less
+with the tokenizer's threads of the row above) instead of nine; an rdf
+transaction between two such batches. The cgroup's peak with two in flight
+must stay under the yield's line (21,504 MiB anon): if `memory: … yields`
+appears, that line and its numbers are the finding.
+
+**AFTER** — owed: the fts batch lines and the rdf lines of a quarter of an
+hour with large units pending; the pool's large-lane lines; the cgroup's
+anon and peak with two in flight; documents and rdf a minute over the same
+window. To be deployed AFTER the row above has its AFTER, one change a deploy.

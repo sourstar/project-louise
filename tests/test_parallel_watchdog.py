@@ -391,14 +391,11 @@ def test_a_stop_set_before_a_batch_computes_nothing(here):
 def test_the_waits_for_the_lane_and_for_room_end_with_the_stop(here, monkeypatch):
     stop = threading.Event()
     threading.Timer(0.2, stop.set).start()
-    assert parallel._large_lane.acquire(blocking=False)              # another batch holds the lane
-    try:
+    with parallel.all_lanes_held():                                  # other batches hold every lane
         t0 = time.monotonic()
         with parallel.controlled(stop=stop):
             assert parallel._take_lane(1, wait=True, until=time.monotonic() + 60) is False
         assert time.monotonic() - t0 < 2
-    finally:
-        parallel._large_lane.release()
     monkeypatch.setattr(parallel, "pool_memory", lambda: 10)
     monkeypatch.setattr(parallel, "_reserved", 10)                   # another batch holds the budget
     stop = threading.Event()

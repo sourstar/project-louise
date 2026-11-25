@@ -20,6 +20,25 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **TWO LARGE LANES, and a batch puts at most a lane's worth of large units (`parallel.LARGE_LANES`,
+  `compute`; scheduling.md pitfall 26).** The second half of the reading of EUR-Lex5.next's large units: the
+  lane of one made fifteen 100 MB units take 1,513 s while ten children idled, and one fts batch gathered
+  nine of them and committed only after all nine, the collection's rdf behind it. The lane is now two — the
+  memory is held by the existing guards (`_room`, `_reserve`), which on the node's numbers admit a second
+  and refuse a third — and a batch takes two and defers the rest to the next round, so it commits after two.
+  NOT YET DEPLOYED: it goes out after the tokenizer-threads change has its AFTER, one change a deploy. KNOWN
+  AND NOT TOUCHED: a unit whose estimate passes the worker's whole limit is `TooLarge`, an error a person
+  sees — 26 bytes a byte of text puts that line near 630 MB of text, and EUR-Lex5.next has one unit of
+  911,527,513 bytes pending. Whether its TEXT is that large, and what to do if it is, is the Legal session's
+  question (asked).
+- **THE NEXT ENGINE CANDIDATE IS `619655e5833b`, not `792f050e318e`** (operator, 2026-11-25: "Build
+  619655e5833b now, swap it after the drain, if it still applies"; Tensor's `staged/engine-canary.series`).
+  It is `engine-stream.series` line for line — the paging default (0021), the language tag (0022), a stream
+  that fails after its first chunk FAILS (0025), the test switch (0026) — plus 0028: a context canary
+  REFUSED FOR MEMORY at a request is HTTP 503 "the context cannot be created now …: try again later" (no
+  "context canary failed" words, so Louise reads a busy endpoint, a deferral, and counts no canary failure),
+  and at the load it fails the load instead of serving unchecked. Measured on a CPU build, 12 of 12; the
+  card row is München's at the swap. `792f050e318e` is built and will not be swapped.
 - **A collection's embedding waits for the keeper's preload after a start (`resident.holds_embedding`,
   `worker._preload_holds`; scheduling.md pitfall 25).** The cause of the morning's forty minutes (the entry on
   the canary count, below): the worker's embed producer started three seconds after the worker and the keeper
