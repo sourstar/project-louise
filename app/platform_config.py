@@ -207,9 +207,31 @@ class SpeechConfig:
     #: — synthetic voices, never a recorded person's: "it=<voice>, en=<voice>"
     #: (`synthetic_voices`, app/voice.py `synthetic`)
     synthetic_voices: str | None = None
+    #: the steps of one synthesis ("24"): `params.flow_steps` of every request
+    #: to the text-to-speech model — fewer are faster and coarser. Unset, the
+    #: model's own default (OmniVoice: 32). The node's choice, never a
+    #: reader's (operator, 2026-11-25: "add the steps to the admin settings")
+    tts_steps: str | None = None
 
 
-SPEECH_KEYS = ("stt_model", "vad_model", "tts_model", "tts_voice", "synthetic_voices")
+SPEECH_KEYS = ("stt_model", "vad_model", "tts_model", "tts_voice", "synthetic_voices", "tts_steps")
+#: `[speech] tts_steps`: the range a synthesis is asked for (the model's
+#: default is 32, and 16 and 32 are what was measured; the bounds only refuse a typo)
+TTS_STEPS = (4, 64)
+
+
+def tts_steps(text: str | None) -> int | None:
+    """`[speech] tts_steps` read: the steps of one synthesis, or None where
+    unset. Raises ScheduleError for a value that is not a whole number in
+    TTS_STEPS."""
+    if text is None or not str(text).strip():
+        return None
+    t = str(text).strip()
+    if not t.isdecimal() or not TTS_STEPS[0] <= int(t) <= TTS_STEPS[1]:
+        raise schedule_mod.ScheduleError(
+            f"speech.tts_steps: {t!r} is not a whole number of steps from {TTS_STEPS[0]} to "
+            f"{TTS_STEPS[1]} (the model's own default is 32)")
+    return int(t)
 
 
 def synthetic_voices(text: str | None) -> dict[str, str]:
@@ -807,6 +829,7 @@ def _speech(raw: Any) -> SpeechConfig:
             raise schedule_mod.ScheduleError(
                 f"speech.{k} is a model's (or a voice's) name, a non-empty string, got {v!r}")
     synthetic_voices(raw.get("synthetic_voices"))       # refused at load, not at a reading
+    tts_steps(raw.get("tts_steps"))
     return SpeechConfig(**{k: raw[k].strip() for k in raw})
 
 

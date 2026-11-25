@@ -15,6 +15,7 @@ the Ask page, `louise node speech show` and the System page's GPU panel.
     tts_model = "omnivoice-cpp"      # text to speech: POST /v1/audio/speech
     tts_voice = "localai://voice-profiles/<id>"            # an admin's, when none is chosen
     synthetic_voices = "it=<voice>, en=<voice>"            # everyone else's, by language
+    tts_steps = "24"                 # the steps of one synthesis; unset, the model's own (32)
 
 A RECORDED VOICE IS THE ADMIN'S ONLY (operator, 2026-11-16: "limit the
 cloned voices to the admin account … For the users account allow only
@@ -57,7 +58,9 @@ from app.platform_config import SPEECH_KEYS, SpeechConfig
 
 #: the command line's word for each key (`node speech set --stt …`)
 FLAGS = {"stt_model": "--stt", "vad_model": "--vad", "tts_model": "--tts", "tts_voice": "--voice",
-         "synthetic_voices": "--synthetic"}
+         "synthetic_voices": "--synthetic", "tts_steps": "--steps"}
+#: the keys that name no model: `show` does not look them up on the server
+NOT_MODELS = ("tts_voice", "synthetic_voices", "tts_steps")
 #: `GET /v1/models` of the model server, for `show`: a typo is seen at once
 LIST_TIMEOUT_S = 5.0
 #: what the browser needs before it lets a page open the microphone
@@ -205,7 +208,7 @@ def show() -> dict[str, Any]:
     the server lists each model."""
     s = settings()
     values = {k: getattr(s, k) for k in SPEECH_KEYS}
-    models = sorted({v for k, v in values.items() if v and k not in ("tts_voice", "synthetic_voices")})
+    models = sorted({v for k, v in values.items() if v and k not in NOT_MODELS})
     listed = models_listed(server(), models) if models else {}
     out: dict[str, Any] = {"file": str(platform_config.platform_path()), "server": server(),
                            "speech": values, "offered": offered(), "listed": listed,

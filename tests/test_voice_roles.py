@@ -93,6 +93,32 @@ def test_a_german_sentence_with_few_common_words_is_read_in_the_german_voice(nod
     assert calls[-1]["voice"] == SYNTH_IT, "nothing to tell it by: the first named, as designed"
 
 
+def test_the_steps_of_a_synthesis_are_the_nodes_and_go_in_every_request(node, config_dir):
+    """Operator, 2026-11-25: "add the steps to the admin settings". `[speech]
+    tts_steps` is `params.flow_steps` of the request to the model, for an
+    admin and for every other reader, over whatever the client sent; unset,
+    no such parameter is sent and the model's own default stands."""
+    calls, _, _ = node
+    speech.synthesize({"input": IT}, url="http://ai", admin=False)
+    assert "params" not in calls[-1], "unset: the model's own default, nothing sent"
+    (config_dir / "platform.toml").write_text(TABLE + 'tts_steps = "24"\n', encoding="utf-8")
+    speech.synthesize({"input": IT}, url="http://ai", admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "24"}
+    speech.synthesize({"input": IT, "voice": RECORDED, "params": {"flow_steps": "64", "seed": "7"}}, url="http://ai")
+    assert calls[-1]["params"] == {"flow_steps": "24", "seed": "7"}, "the node's steps, the client's other parameters kept"
+    assert voice.settings().tts_steps == "24" and platform_config.tts_steps("24") == 24
+
+
+def test_steps_that_are_not_a_number_in_range_are_refused_at_load(node, config_dir):
+    for bad in ('"many"', '"3"', '"65"', '"2.5"', '"-8"'):
+        (config_dir / "platform.toml").write_text(f"[speech]\ntts_steps = {bad}\n", encoding="utf-8")
+        with pytest.raises(platform_config.schedule_mod.ScheduleError, match="tts_steps"):
+            platform_config.load()
+    for ok in ('"4"', '"32"', '"64"'):
+        (config_dir / "platform.toml").write_text(f"[speech]\ntts_steps = {ok}\n", encoding="utf-8")
+        assert platform_config.load().speech.tts_steps == ok.strip('"')
+
+
 def test_a_synthetic_voice_no_longer_held_gives_way_and_none_held_reads_nothing(node, config_dir):
     calls, held, _ = node
     held[:] = [h for h in held if h["voice"] != SYNTH_IT]

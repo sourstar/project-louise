@@ -4374,6 +4374,8 @@ MODEL_FIELDS = (
     ("tts_voice", "text to speech: an admin's voice", "platform.toml [speech]"),
     ("synthetic_voices", "text to speech: everyone else's, by language (it=…, en=…)",
      "platform.toml [speech]"),
+    ("tts_steps", "text to speech: the steps of one synthesis (4–64; empty, the model's own 32)",
+     "platform.toml [speech]"),
 )
 
 
