@@ -131,6 +131,24 @@ operator's word there; nothing here does it):
 **What would let the bound rise:** a row on the node with the largest
 on-demand context created on a card committed further over.
 
+**A tensor larger than a 2 GiB buffer — counted, not inferred (München,
+2026-11-25; `tools/measure/gguf_largest_tensor.py`, headers only; 101 GGUF
+files on the node).** With buffers of 2 GiB at most a tensor is never split
+and never refused: the allocator gives one larger than that a buffer of its
+own size, so it loads and that one piece moves whole instead of in pieces.
+- **None of the models Louise runs has one.** The largest tensor of each:
+  bge-m3 F16 488.3 MiB, nemotron-3-embed-1b F16 512.0, Qwen3-Embedding-4B
+  303.7, MedCPT 44.7, MADLAD F16 500.0, the reranker 501.0, the 9B chat
+  795.7, the 35B 515.3 (733 tensors, 21,099 MiB), GLM-OCR 92.4, OmniVoice
+  157.4 and 24.0.
+- **One installed file of 101 does**: NVIDIA-Nemotron-3.5-Bolt-E4B at Q8
+  (a chat candidate, not a live model), `per_layer_token_embd.weight`
+  10752 x 262144 = 2,856.0 MiB. Its Q4 sibling has the same tensor at
+  1,512.0 MiB. The next largest anywhere are all under: 1,483.8, 1,102.8,
+  1,062.5, 1,030.6.
+- So it is where it was expected: a very large token table kept at high
+  precision. A new model's file is counted with the same command.
+
 ## 4. The engine must refuse, not die — a defect of the live engine
 
 *The architecture session, 2026-11-24, on the death München saw: "a defect
