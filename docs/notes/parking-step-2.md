@@ -549,6 +549,51 @@ numbers; a delay under the interval; no delay; no attempts) and the whole
 the node before and after — München's row, the same model, R6's 2 s the
 expectation.
 
-**2. The parked state, the two calls, `/system`, the floor, 503** — being
-written (§3.2, §3.4).
+**2. The parked state, `/backend/park`, `/system`, the floor, 503** —
+`review/0027-model-park.patch`, FOR REVIEW. On the server tree after 0024.
 
+What it does (§3.2, §3.4), in the order a model meets it:
+
+| | |
+|---|---|
+| a model's file says `park: true` | it may be parked; and it is no longer sent `Free` on its way to being STOPPED (§3.4, 1) |
+| the keeper writes the host's floor (`park_host_floor_bytes`, through `/api/settings`; 0 by default) | parking is on. Before EACH park LocalAI asks the backend what it would move (`Status`, `park_size`), reads the host's available memory, and parks only if the weights fit above the floor at that moment; otherwise the model is stopped as before (§3.4, 5) |
+| LocalAI would stop a model for room (the reclaimer, the limit of loaded models, a concurrency group) | it parks one that can park instead. A busy one is never stopped for being busy at that moment: the eviction keeps it and takes another |
+| `POST /backend/park {"model"}` (the keeper's evictor) | parks, never waits, never stops: 200 with `parked{…}`; 409 `model_busy` (take another); 412 `cannot_park` / `parking_off` / `host_memory_floor` (stop it instead, if room is still wanted); 404 not loaded |
+| a request to a parked model, or `POST /backend/load` | the model comes back BEFORE the request goes: the limits are enforced as for a load, then one `LoadModel` with the options of its load. No room: the request is refused and the model stays parked |
+| `GET /system` | for a model that parks: `"parks": true`, `"state": "loaded"` or `"parked"`, and when parked `"parked": {"size_host", "size_vram_needed", "since"}`; `size_vram` keeps its meaning |
+| a backend's refusal of the moment | HTTP 503, `Retry-After: 2`, `{"error": {"code": 503, "type": "no_room_on_device", "message": "<model>: …"}}`, told by gRPC `ResourceExhausted` AND the head `no_room_on_device: ` of its message; in the middle of a chat stream, an error event of that type |
+
+**Where it differs from §3.2 and §3.4 — for the review to accept or refuse:**
+
+| | the note said | built | pros | cons |
+|---|---|---|---|---|
+| the call that brings a model back | a new `POST /backend/prepare` | none: `POST /backend/load`, which exists, IS it — it loads a model that is not loaded and now brings back one that is parked | one endpoint fewer to carry; the existing verb already means "have it ready"; the keeper's load-ahead calls what it calls today | the name does not say "from a park": a reader of the API must know a parked model counts as not ready |
+| `state` and `parks` in `/system` | `state` on every model, absent only on a server without the patch | only on a model that PARKS; a model that does not park is listed as it always was | LocalAI's own spec holds the exact entry of a model, and every other model's output is unchanged for upstream and for every client; the keeper needs them only where `parks` is true | "absent" now means either "an unpatched server" or "this model does not park": the keeper reads `parks`, never the absence of `state` |
+| who brings a parked model back at a request | "goes to its process, which un-parks itself; LocalAI marks it loaded again" | LocalAI sends the `LoadModel` itself, before the request | its record is exact (no request result to watch — LocalAI's client has no place every call passes through); the limits are enforced as for a load; one place answers the typed 503 | one more RPC before the first request after a park; the backend's own return remains for a caller that does not go through LocalAI |
+| a parked model and the watchdog | "stays out of the LRU's count … counts against the card what its process still holds" | not one of the loaded models at all until it is back: not counted, not an eviction candidate, not idle- or busy-checked | simple and exact: the registration is redone when it comes back | LocalAI never stops a PARKED model by itself — not for the host's memory, not for the residue its process keeps on the card (321 MiB for bge-m3). That decision is the keeper's, which sees `size_host` and `size_vram`; the reclaimer cannot reclaim a residue |
+| the floor | "one runtime setting, default unset" | `park_host_floor_bytes`, 0 = nothing is parked, read at each park | no restart of anything; the keeper's change of mode is followed at the next park | it is persisted with the other runtime settings: after a restart of LocalAI the last floor written still stands until the keeper writes again |
+
+**Stated limits — known, not built:** the mid-stream error event is typed
+on the chat route only (completions and realtime keep `server_error`); a
+caller inside LocalAI that formats an error into a string before it
+returns loses the type and answers 500 as before (chat and embeddings pass
+it on; the others are not audited); a model held by a remote worker
+(distributed mode) is not parked from the frontend; the settings page and
+the generated API description do not show the new setting and route.
+
+MEASURED: the loader against a scripted backend, 25 specs — what parks,
+what does not and why, the host read at each park (one byte under the floor
+refuses, the floor itself parks), the return with the options of the load,
+a refused return (deferral, still parked), a FAILED return and a backend
+holding the model under other options (faults, still parked), the stop that
+sends no `Free`; the watchdog — parks before it stops, never stops for
+busy, a forced eviction is not a park; the endpoint, `/system` and the 503
+mapping; and every existing spec of `pkg/model`, `core/config`,
+`core/backend`, `core/schema`. NOT measured: a real backend (it needs the
+park engine), a card; and 47 specs of `core/http/endpoints/localai` and
+those of `core/services/monitoring` that start a Postgres container could
+not run here — no Docker — each failing at that start.
+
+It does NOTHING until two things are true on the park engine: the keeper
+has written the floor, and a model's file says `park: true`.

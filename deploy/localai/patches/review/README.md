@@ -1,0 +1,10 @@
+# Patches sent for review — in no series, built by nobody
+
+A patch here is finished work waiting for a second reading. It is in **no
+`.series` file** and not in `staged/` (docs/notes/parking-step-2.md §4: "Each
+part's patch is sent for review before it is staged"). When the review agrees
+it moves to `staged/` under the same name.
+
+| patch | what | reviewed by | after the review |
+|---|---|---|---|
+| `0027-model-park.patch` | PARKING, STEP 2, THE SERVER PART (docs/notes/parking-step-2.md §7, 2): LocalAI's SERVER (`pkg/model`, `core/…`), a patch of NO engine series, written on the node's server tree after staged 0024. A model whose file says `park: true` is PARKED where it would be stopped for room — the reclaimer, the limit of loaded models, a concurrency group — and brought back by the next request to it; `POST /backend/park` for a caller that manages the device itself; `GET /system` says `parks`, `state` and `parked{size_host, size_vram_needed, since}`; the host's memory is read before EACH park against one runtime setting (`park_host_floor_bytes`, 0 = nothing is parked); a backend's refusal of the moment is HTTP 503 `no_room_on_device` with `Retry-After`, told by code AND message head. MEASURED: 25 loader specs against a scripted backend, the watchdog's, the endpoint's, `/system`'s and the 503's; every existing spec of `pkg/model`, `core/config`, `core/backend`, `core/schema`. NOT measured: a real backend (it needs the park engine, `ed93e3c1b2e2`), a card, and the 47 specs of `core/http/endpoints/localai` and those of `core/services/monitoring` that start a Postgres container — no Docker here | the architecture session (it builds the keeper's half against these shapes) | `staged/0027-…`; a server build with 0024, no gate; it does nothing until the keeper writes the floor AND a model's file says `park: true` on the park engine |

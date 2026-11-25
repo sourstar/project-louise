@@ -88,7 +88,6 @@ def test_one_series_carries_it_after_the_stream_candidate_and_its_engine_s_name_
                           env=dict(os.environ, SERIES_FILE=str(SERIES), NAME_ONLY="1"), cwd=ROOT)
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == NAME
-    assert not (PATCHES / "review").exists(), "nothing is left under review"
     assert "## 6. The engine part, as built" in NOTE and NAME in NOTE
 
 
