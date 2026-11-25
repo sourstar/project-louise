@@ -4585,6 +4585,7 @@ def system_page(request: Request):
         "node_modes": _node_modes(),
         "mode_error": request.query_params.get("mode_error"),
         "mode_saved": request.query_params.get("mode_saved"),
+        "tts_steps_range": platform_config.TTS_STEPS,     # the Models panel's number field for [speech] tts_steps
         # the model server's names, as the inputs' suggestions; [] when it does not answer
         "server_models": _models_at(config.CHAT_URL, timeout=1.5) if config.CHAT_URL else [],
         "models_error": request.query_params.get("models_error"),

@@ -20,6 +20,16 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **The voice speaks the sentence's own language (operator: "the language/country tag must be aligned to the
+  language to speak, otherwise the voice has always a thick italian accent").** Two causes, both in what Louise
+  sent (München read them in the code and the engine's language map): the Ask page sends the language the
+  answer was ASKED in and it was passed on over the sentence's own, so an English answer on a page set to
+  Italian went out tagged Italian; and a tag with a country ("it-IT", "en-GB") is no language to the engine,
+  which then leaves a cloned voice to its recording's. Now `speech.spoken_language`: the sentence's own where it
+  is clear, else the answer's (`context`), else the request's tag — always as a primary subtag; the synthetic
+  voice of a reader who is not an admin is chosen by that same language. NOT measured: an accent is heard, not
+  counted — the check is the operator's ear after the deploy (an English answer with the page on Italian).
+  With it, München's change: the steps of a synthesis are a number field on the System page (4 to 64).
 - **A voice's encoding is made before a reader waits for it (`app/voice_ping.py`; operator, in the Tensor
   session: "The only voice ping purpose is to do the re-encode for voices without it cached to avoid the extra
   delay upon the first usage").** The port keeps a clip's encoding beside the clip, bound to the clip and the
