@@ -134,6 +134,9 @@ def fresh_worker_state():
     # nor a collection yielding to the worker's memory (app/memory_yield.py)
     from app import memory_yield
     memory_yield.reset()
+    # nor what the pool's progress watcher has said (app/pool_progress.py)
+    from app import pool_progress
+    pool_progress.reset()
     # the annotations cascade's memos: its graph, its listings, its decisions
     from app.hold import cascade, cascade_keeper
     cascade.reset()

@@ -1209,12 +1209,18 @@ _in_flight_lock = threading.Lock()
 IN_FLIGHT_ROWS = 20
 
 
-def _enter(key: int, kind: str, collection, part: list[dict], *, peak: int = 0) -> None:
+def _enter(key: int, kind: str, collection, part: list[dict], *, peak: int = 0,
+           large: bool = False, until: float | None = None) -> None:
+    """`large`: the part has the large lane, a process of its own; `until`:
+    the monotonic time its answer is waited for (a large part's own bound).
+    `since` is when it was submitted — what `app/pool_progress.py` reads to
+    say what a batch has been waiting on."""
     with _in_flight_lock:
         _in_flight[key] = {"collection": getattr(collection, "name", None), "kind": kind, "rows": len(part),
                            "bytes": sum(int(r.get("size") or 0) for r in part),
                            "parse_bytes": sum(parse_size_of(r) for r in part), "estimated_peak": peak,
-                           "uids": [[r.get("uid"), r.get("size")] for r in part[:IN_FLIGHT_ROWS]]}
+                           "uids": [[r.get("uid"), r.get("size")] for r in part[:IN_FLIGHT_ROWS]],
+                           "since": time.monotonic(), "large": large, "until": until}
 
 
 def _leave(key: int) -> None:
@@ -2274,7 +2280,7 @@ def compute(kind: str, collection, rows) -> list[tuple[bool, object]]:
                                   + LARGE_SECONDS_PER_BYTE * parse_size_of(part[0]))
                 if idle:
                     progress = time.monotonic()   # the watchdog counts from a part in flight
-                _enter(id(f), kind, collection, part, peak=need)
+                _enter(id(f), kind, collection, part, peak=need, large=bool(peak), until=ext.get(id(f)))
                 futures.append((part, f))
                 nxt += 1
                 mine += 1
