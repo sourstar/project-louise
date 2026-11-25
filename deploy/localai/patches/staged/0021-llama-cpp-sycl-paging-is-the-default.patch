@@ -1,0 +1,124 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 05:50:23 +0000
+Subject: [PATCH] feat(llama-cpp): on SYCL, a model pages by default instead of
+ being refused or unloaded for
+
+Carried as a llama.cpp patch beside the others
+(patches/0020-sycl-paging-is-the-default.patch).
+
+On an Intel card that several models share, a model that does not fit
+need not evict another: the xe driver moves idle models' memory to host
+memory and back at their next use, tenths of a second where a load after
+an unload takes seconds. For that every llama.cpp model on the card needs
+the backend's Battlemage VRAM check off and its buffers cut at 2 GiB -
+two environment switches that defaulted the other way, so every model
+file had to carry them and a model installed without them could not page.
+
+Both now default to paging (GGML_SYCL_BMG_VRAM_CHECK=0,
+GGML_SYCL_HOST_PINNED_MEM_2G=1). A model's own `env` still decides: either
+variable set in a model file wins for that model, so one model can be held
+back without another backend build. A tensor larger than 2 GiB is not
+refused: it gets a buffer of its own size and moves whole.
+
+LocalAI's memory reclaimer does not know a card may hold more than its
+size: with it on, the card reads full at every tick and the least recently
+used model is unloaded. A deployment that pages turns it off and lets its
+own keeper decide how far over the card it goes.
+
+No computation changes. Checked without a device, with the backend's own
+ggml_sycl_get_env: unset gives the new defaults, each variable set gives
+its own value, a value that is no number gives the default.
+
+Assisted-by: Claude Code
+---
+ .../0020-sycl-paging-is-the-default.patch     | 77 +++++++++++++++++++
+ 1 file changed, 77 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0020-sycl-paging-is-the-default.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0020-sycl-paging-is-the-default.patch b/backend/cpp/llama-cpp/patches/0020-sycl-paging-is-the-default.patch
+new file mode 100644
+index 0000000..777d132
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0020-sycl-paging-is-the-default.patch
+@@ -0,0 +1,77 @@
++sycl: paging is the default - the Battlemage VRAM check off, buffers of 2 GiB at most
++
++On a card several models share, a model that does not fit need not push
++another one off: the xe driver moves idle models' memory to host memory and
++back at their next use (Intel Arc Pro B70: 0.2-0.4 s more on a small
++model's next request, 1.3-1.8 s on a 35B, against 7.5-8.7 s for a load
++after an unload; a card committed 3.5 GiB over its size kept every model
++loaded).
++
++That takes two things of EVERY model on the card, and both defaulted the
++other way, so each model's environment had to carry them and a model added
++without them could not page:
++
++- GGML_SYCL_BMG_VRAM_CHECK now defaults to 0. With the check, a load the
++  card cannot hold is refused by the backend before the driver is asked;
++  the check exists because the driver does not refuse, which is exactly
++  what paging uses.
++- GGML_SYCL_HOST_PINNED_MEM_2G now defaults to 1: buffers of 2 GiB at
++  most, so that a model leaves the card in pieces and not whole (a
++  translation model without it lost 5.4 GiB at once).
++
++A model's own environment still decides, as before: GGML_SYCL_BMG_VRAM_CHECK=1
++brings the check back for that model, GGML_SYCL_HOST_PINNED_MEM_2G=0 its
++large buffers. A tensor larger than 2 GiB is not refused either way: the
++allocator starts a new buffer only when ADDING a tensor would pass the
++maximum, so such a tensor gets a buffer of its own, of its own size, and
++that one piece moves whole.
++
++No computation changes: where a buffer ends is not what is computed in it.
++Whoever decides how far a card may be committed over its size, and that
++the host has the memory, is the caller's keeper, not the backend.
++
++Checked without a device: with the backend's own ggml_sycl_get_env, unset
++gives 0 and 1, each variable set in the environment gives its own value,
++and a value that is no number gives the default.
++---
++diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
++index 1aa0170..67cafad 100644
++--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
++@@ -157,9 +157,9 @@ int g_ggml_sycl_enable_flash_attention = 1;
++ int g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
++ int g_ggml_sycl_usm_system = 0;
++ int g_ggml_sycl_reorder_experts = 1;
++-int g_ggml_sycl_bmg_vram_check = 1;
+++int g_ggml_sycl_bmg_vram_check = 0;      // paging is the default: see where it is read
++ int g_ggml_sycl_enable_host_pinned_mem = 1;
++-int g_ggml_sycl_host_pinned_mem_2g = 0;
+++int g_ggml_sycl_host_pinned_mem_2g = 1;  // paging is the default: see where it is read
++ int g_ggml_sycl_upload_staging_slots = 4;
++ int g_ggml_sycl_get_mem_api = MEMORY_API_TYPE_LEVEL_ZERO;
++ int g_ggml_sycl_enable_sparse_fa = 0;
++@@ -492,12 +492,22 @@ static void ggml_check_sycl() try {
++ 
++         g_ggml_sycl_usm_system = ggml_sycl_get_env("GGML_SYCL_USM_SYSTEM", 0);
++         g_ggml_sycl_reorder_experts = ggml_sycl_get_env("GGML_SYCL_REORDER_EXPERTS", 1);
++-        g_ggml_sycl_bmg_vram_check = ggml_sycl_get_env("GGML_SYCL_BMG_VRAM_CHECK", 1);
+++        // PAGING IS THE DEFAULT. On a card that several models share, a model that does not fit is not refused and
+++        // nothing is unloaded for it: the driver moves the idle models' memory to host memory and back at their
+++        // next use (xe, Battlemage: 0.2-0.4 s on a small model's next request against 7.5-8.7 s after an unload).
+++        // That takes two things of every model, and both defaulted the other way:
+++        //  - the engine's own VRAM check off - with it a load the card cannot hold is refused here, before the
+++        //    driver is asked (the check exists because the driver does NOT refuse, which is what paging uses);
+++        //  - buffers of 2 GiB at most, so that a model leaves the card in pieces and not whole.
+++        // A model's own environment still decides: GGML_SYCL_BMG_VRAM_CHECK=1 brings the check back for it, and
+++        // GGML_SYCL_HOST_PINNED_MEM_2G=0 its large buffers. (A tensor larger than 2 GiB is not refused either way:
+++        // the allocator gives it a buffer of its own, of its own size, and that one piece moves whole.)
+++        g_ggml_sycl_bmg_vram_check = ggml_sycl_get_env("GGML_SYCL_BMG_VRAM_CHECK", 0);
++         g_ggml_sycl_enable_host_pinned_mem =
++             ggml_sycl_get_env("GGML_SYCL_ENABLE_HOST_PINNED_MEM", 1);
++ 
++         g_ggml_sycl_host_pinned_mem_2g =
++-            ggml_sycl_get_env("GGML_SYCL_HOST_PINNED_MEM_2G", 0) & g_ggml_sycl_enable_host_pinned_mem;
+++            ggml_sycl_get_env("GGML_SYCL_HOST_PINNED_MEM_2G", 1) & g_ggml_sycl_enable_host_pinned_mem;
++         g_ggml_sycl_upload_staging_slots = std::max(0, ggml_sycl_get_env("GGML_SYCL_UPLOAD_STAGING_SLOTS", 4));
++ 
++         g_ggml_sycl_enable_sparse_fa = ggml_sycl_get_env("GGML_SYCL_SPARSE_FA", 0);
+-- 
+2.43.0
+

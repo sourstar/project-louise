@@ -1,0 +1,37 @@
+# A CANDIDATE: THE SPEECH PORT READS A LANGUAGE TAG (operator, 2026-11-25,
+# relayed by München: "the language/country tag must be aligned to the
+# language to speak, otherwise the voice has always a thick italian accent").
+# d658549772ca's series (engine-page), line for line, then:
+#   0022  OmniVoice: "it-IT", "en_GB", "IT" are the language of their first
+#         subtag, where they were read as NO language, in silence; a language
+#         the model does not name is said in the log; the request's summary
+#         line ends with the language spoken.
+#   SERIES_FILE=deploy/localai/patches/staged/engine-lang.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
+# ANOTHER ENGINE: a build and every gate again. It touches the speech port's
+# request path only (tools/mtmd/mtmd-helper-gen.cpp, one new header): no
+# encoder computes anything else under it, and the gate is what says so.
+# IF d658549772ca IS NOT GATED YET, this one can be gated in its place - one
+# gating for the paging default and the tag (RULE 1) - or it rides the park
+# engine, whose series starts from these lines.
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0009-llama-cpp-omnivoice.patch
+staged/0010-llama-cpp-tts-voice-modes.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch
+staged/0016-llama-cpp-sycl-pool-refuse-switch.patch
+staged/0017-llama-cpp-moe-record.patch
+staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch
+staged/0020-llama-cpp-omnivoice-nothing-kept-between-requests.patch
+staged/0021-llama-cpp-sycl-paging-is-the-default.patch
+staged/0022-llama-cpp-omnivoice-language-tag.patch

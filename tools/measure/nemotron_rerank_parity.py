@@ -5,7 +5,8 @@ back its own scores?
 The reranker benchmark's arm A3 (operator, 2026-11-10: "Patch llama.cpp to
 support nemo reranker, tomorrow I want to see its benchmarks too") runs on a
 llama.cpp port of an architecture upstream has not merged (ggml-org/llama.cpp
-#24083; deploy/localai/patches/staged/0008-llama-cpp-nemotron-rerank.patch).
+#24083; deploy/localai/patches/0007-llama-cpp-nemotron-rerank.patch, P7 in the
+series since 2026-11-22, staged 0008 before).
 Before any of its numbers is read, this check compares, pair by pair:
 
 - the REFERENCE: the model card's own code — `AutoModelForSequenceClassification`

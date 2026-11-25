@@ -102,6 +102,39 @@ wheel" (CLAUDE.md), the case is solved simply and the standard written down:
   first deployment.
 - **The dedicated session's brief**: [idle-context-brief.md](idle-context-brief.md)
   (the code paths, the series, the B70 pitfalls, the memory facts, the plan).
+- **Where the node stands, 2026-11-24 13:05Z** (München, from the live
+  model files and `node resident show`; the operator the same day: "the
+  'shared' context is mandatory improvement"). Built (P8, in the series and
+  in the live engine), measured 2026-11-12 (idle-context-brief.md §10.1),
+  and ON for three models only:
+
+  | model | `context_on_demand` | at rest / largest by the keeper's file, MiB |
+  |---|---|---|
+  | vega-qwen3-embedding-4b | yes, with `context_canary`, no keep in the file | 5,685 / 5,685 |
+  | vega-nemotron-3-embed-1b | yes, the same | none / 4,404 |
+  | vega-bge-m3 | yes, the same | 1,335 / 1,335 |
+  | vega-medcpt-query | no — not in the measured set (a 513-token context) | 258 / 484 |
+  | louise-rerank-nemotron-1b, louise-rerank-bge | no — never measured or gated under it, no keep chosen | 2,465 / 3,348 |
+  | louise-translate-madlad | no — left out by the 11-11 plan | 4,850 / 8,005 |
+  | the chat model (9B today; the 35B) | no — never measured under it | 4,894 / 8,104 |
+  | not llama.cpp: medcpt-article and medcpt-rerank (OpenVINO), dar-legal-it (torch), omnivoice-cpp, the iGPU's speech-to-text | not applicable | dar-legal-it 5,187 / 8,453 |
+
+  Two things follow. **The keeper counts the three on-demand embedders at
+  their full size** (rest = largest), though their contexts are released
+  between requests — bge-m3 measured 621 MiB idle, 1,048 in a burst, 622
+  after (München, 11-23); nemotron-embed 2,512 idle against 4,399 with its
+  context (11-12): 5,554 MiB of the budget counted and not held, by the
+  three readings (room-on-the-card.md §2; the keeper's rule, the
+  architecture session's). And **"every model opted in"
+  still takes, per model**: the option and a keep in its file, the
+  idle / burst / after reading on the card, and for an encoder its gate
+  under the new file (invariant 12; preflight `louise hold embedder
+  cpu-reference --check`): medcpt-query (an encoder: gated), the two
+  rerankers, MADLAD, the chat model. The model with a second model file
+  (the OmniVoice port) is refused the option by the patch's first version;
+  its decoding context is already made per request. The torch backend's
+  equivalent — what dar-legal-it keeps of a corpus pass, 5,187 MiB at rest
+  against 1.8 GB on 11-09 — is its own piece of work.
 - **When the standard would pay:** if the engines move to vLLM/SGLang on a
   CUDA or ROCm card, kvcached is the off-the-shelf answer for the KV share;
   or if kvcached lands for llama.cpp (its roadmap), at least on the card we

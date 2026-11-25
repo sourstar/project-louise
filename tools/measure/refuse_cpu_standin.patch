@@ -1,0 +1,26 @@
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.cpp b/ggml/src/ggml-cpu/ggml-cpu.cpp
+index 2978340..0859c8a 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.cpp
++++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
+@@ -170,6 +170,21 @@ static enum ggml_status ggml_backend_cpu_graph_plan_compute(ggml_backend_t backe
+ static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
+ 
++    // DEV ONLY, NEVER IN A PATCH: a stand-in for a device that refuses memory for a graph, armed by a file
++    {
++        static int refuse = getenv("GGML_CPU_REFUSE_GRAPHS") ? atoi(getenv("GGML_CPU_REFUSE_GRAPHS")) : 0;
++        const char * arm = getenv("GGML_CPU_REFUSE_ARM");
++        if (refuse > 0 && arm != NULL) {
++            FILE * f = fopen(arm, "rb");
++            if (f != NULL) {
++                fclose(f);
++                refuse--;
++                fprintf(stderr, "DEV: the CPU stand-in refuses this graph (%d more)\n", refuse);
++                return GGML_STATUS_ALLOC_FAILED;
++            }
++        }
++    }
++
+     struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads, cpu_ctx->threadpool);
+ 
+     if (cpu_ctx->work_size < cplan.work_size) {

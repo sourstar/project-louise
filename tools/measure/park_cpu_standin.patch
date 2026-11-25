@@ -1,0 +1,88 @@
+diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+index b49b957..ee90495 100644
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -2943,6 +2943,73 @@ static void ggml_backend_cpu_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
+     memset(buffer->context, value, buffer->size);
+ }
+ 
++// DEV ONLY, NOT IN THE PATCH: a stand-in for device memory, to test what sits above the park hook where there is no
++// device. With GGML_CPU_PARK_TEST=1 a CPU buffer "parks": its bytes are copied aside and the buffer is filled with
++// 0xA5 (anything that reads it while parked computes garbage), and unpark copies them back at the same addresses.
++// GGML_CPU_PARK_TEST_REFUSE=N makes the next N unparks refuse, as a device with no room does.
++struct ggml_cpu_park_test {
++    std::unordered_map<ggml_backend_buffer_t, std::vector<uint8_t>> saved;
++    int refuse = getenv("GGML_CPU_PARK_TEST_REFUSE") ? atoi(getenv("GGML_CPU_PARK_TEST_REFUSE")) : 0;
++    // GGML_CPU_PARK_TEST_LOSE=N: the next N unparks say they succeeded and leave the poison (weights that came back wrong)
++    int lose = getenv("GGML_CPU_PARK_TEST_LOSE") ? atoi(getenv("GGML_CPU_PARK_TEST_LOSE")) : 0;
++};
++static ggml_cpu_park_test & ggml_cpu_park_test_state() {
++    static ggml_cpu_park_test s;
++    return s;
++}
++static bool ggml_backend_cpu_buffer_park_test(ggml_backend_buffer_t buffer) {
++    auto & s = ggml_cpu_park_test_state();
++    if (s.saved.count(buffer)) {
++        return true;
++    }
++    uint8_t * base = (uint8_t *) buffer->context;
++    s.saved[buffer].assign(base, base + buffer->size);
++    memset(base, 0xA5, buffer->size);
++    GGML_LOG_INFO("%s: [test] %zu bytes aside, the buffer poisoned\n", __func__, buffer->size);
++    return true;
++}
++static bool ggml_backend_cpu_buffer_unpark_test(ggml_backend_buffer_t buffer) {
++    auto & s = ggml_cpu_park_test_state();
++    auto it = s.saved.find(buffer);
++    if (it == s.saved.end()) {
++        return true;
++    }
++    if (s.refuse > 0) {
++        s.refuse--;
++        GGML_LOG_WARN("%s: [test] GGML_CPU_PARK_TEST_REFUSE: refusing this unpark\n", __func__);
++        return false;
++    }
++    if (s.lose > 0) {
++        s.lose--;
++        s.saved.erase(it);
++        GGML_LOG_WARN("%s: [test] GGML_CPU_PARK_TEST_LOSE: the bytes are NOT put back\n", __func__);
++        return true;
++    }
++    memcpy(buffer->context, it->second.data(), buffer->size);
++    s.saved.erase(it);
++    GGML_LOG_INFO("%s: [test] %zu bytes back\n", __func__, buffer->size);
++    return true;
++}
++
++static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_park_test_i = {
++    /* .free_buffer     = */ ggml_backend_cpu_buffer_free_buffer,
++    /* .get_base        = */ ggml_backend_cpu_buffer_get_base,
++    /* .init_tensor     = */ NULL,
++    /* .memset_tensor   = */ ggml_backend_cpu_buffer_memset_tensor,
++    /* .set_tensor      = */ ggml_backend_cpu_buffer_set_tensor,
++    /* .get_tensor      = */ ggml_backend_cpu_buffer_get_tensor,
++    /* .set_tensor_2d   = */ NULL,
++    /* .get_tensor_2d   = */ NULL,
++    /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
++    /* .clear           = */ ggml_backend_cpu_buffer_clear,
++    /* .reset           = */ NULL,
++    /* .set_tensor_n    = */ NULL,
++    /* .get_tensor_n    = */ NULL,
++    /* .cpy_tensor_n    = */ NULL,
++    /* .park            = */ ggml_backend_cpu_buffer_park_test,
++    /* .unpark          = */ ggml_backend_cpu_buffer_unpark_test,
++};
++
+ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
+     /* .free_buffer     = */ ggml_backend_cpu_buffer_free_buffer,
+     /* .get_base        = */ ggml_backend_cpu_buffer_get_base,
+@@ -2999,6 +3066,9 @@ static ggml_backend_buffer_t ggml_backend_cpu_buffer_type_alloc_buffer(ggml_back
+         return NULL;
+     }
+ 
++    if (getenv("GGML_CPU_PARK_TEST") && ggml_backend_get_alloc_usage_hint() == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
++        return ggml_backend_buffer_init(buft, ggml_backend_cpu_buffer_park_test_i, data, size);
++    }
+     return ggml_backend_buffer_init(buft, ggml_backend_cpu_buffer_i, data, size);
+ }
+ 
