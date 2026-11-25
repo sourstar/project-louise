@@ -110,3 +110,12 @@ def test_the_note_says_what_was_measured_and_what_was_not():
     section = NOTE[NOTE.index("## 14. A language tag is its language"):]
     for said in ("`it-IT`", "MEASURED", "the bytes of `it`", "NOT measured", NAME, "engine-lang.series", "#881"):
         assert said in section, said
+    # the card, 2026-11-25: a tag with a region gives the bytes of its language; the first take, whose seed never
+    # reached the port, is said as what it was; and what the row still does not show
+    card = next(line for line in section.splitlines() if line.startswith("| on the card, through LocalAI, in a recorded voice"))
+    for said in ("MEASURED: IT HOLDS", "`en` → `ee74f805da39`", "`en-GB` → `ee74f805da39`, twice",
+                 "No language → `7cf56dcd126e`", "`it` → `7cf56dcd126e`", "the profile's own `it-IT`, read as `it`",
+                 "on `d531d5d804f1` `en-GB` gave `2092a8d3e98a`, the bytes of NO language",
+                 "A FIRST TAKE OF THIS ROW SHOWED NOTHING OF THE BYTES", "a seed reaches the port through `params` only",
+                 "NOT measured: the encoded-then-kept case in this row", "the operator's ear"):
+        assert said in card, said

@@ -373,7 +373,16 @@ measured (published figures disagree).
   (0021), the language tag (0022), the stream fix (0025), its test switch (0026) and the canary fix (0028). `792f050e318e` and
   `d658549772ca` were built and never gated. THE KEEPER'S PAGING DEFAULT follows it as one commit (5cb53eb, for the architecture
   session to merge); its conditions on the node stand (room-on-the-card.md §3: the host's floor in the busy hours, the 30-minute
-  soak). The step-5 acceptance checks and the rows on copies (0028, 0025 through SSE, 0022) are being taken in the same pass.
+  soak). THE PASS ENDED 15:52:00Z, the node paused 5,573 s. ACCEPTANCE (München): MADLAD T4 379/379 identical to the rebuilt-engine
+  run of 11-22; the reranker's 20 lists equal to phase 0's, max |delta| 0.0, 2,447 ms a list (2,441); the 9B p128 ttft 0.114 s,
+  77.7 tok/s, p2048 0.612 s, 75.7 tok/s (phase 0: 0.121 / 77.5, 0.624 / 75.5); an OCR smoke answered; no xe or OOM line in the kernel
+  log. THE ROWS ON COPIES: **0028 holds** (a copy of bge-m3, two graphs refused at a context's creation: HTTP 500 "the context cannot
+  be created now", no context discarded, no canary failure counted, the same vector before and after — parking-step-2.md §6b);
+  **0025 holds** through LocalAI's SSE (155 chunks whole; 7 chunks, no `finish_reason`, an error object, `[DONE]`; 155 again — §6a);
+  **0022 holds** (Philippe, whose profile says `it-IT`; seed and steps in `params`): `en-GB` gives the bytes of `en`
+  (`ee74f805da39`, twice), no language those of `it` (`7cf56dcd126e`) — on `d531d5d804f1` `en-GB` gave the bytes of no language. A
+  first take compared nothing: its seed was at the top of the body, which LocalAI's speech route does not pass on. The voice ping at
+  the resume: five voices, each with its encoding under the new engine.
 - **A FALSE CANARY FAILURE ON THE LIVE ENGINE, AND THE ENGINE THAT ENDS IT: `619655e5833b` (2026-11-25):** 09:40:55Z, a worker's
   start filling the card: one context of `vega-qwen3-embedding-4b` discarded as "context canary failed"; gutenberg's statements
   set aside, forty minutes of re-gating. From the code and MEASURED on a CPU build with a stand-in device: a canary whose graph is

@@ -521,6 +521,21 @@ through the backend's own address:
 behaviour. Through LocalAI's HTTP the same failure must end the SSE stream
 with an error, not with a normal `[DONE]` after a short answer.
 
+**ON THE CARD: IT HOLDS (München, 2026-11-25, the live engine
+`619655e5833b`), through LocalAI's SSE** — the shape Louise meets; the
+direct-address tool was not run. A copy of the 9B with
+`GGML_SYCL_GRAPH_REFUSE=1` and its arm file:
+
+| stream | data lines | content chunks | how it ended |
+|---|---|---|---|
+| whole | 161 | 155 | `finish_reason` "stop", `[DONE]`, no error |
+| the file created when three content chunks were in | 11 | 7 | NO `finish_reason`; `{"error":{"code":"server_error","message":"rpc error: code = Internal desc = Compute error.","type":"server_error"}}`, then `[DONE]` |
+| the file removed | 161 | 155 | `finish_reason` "stop", `[DONE]` |
+
+The backend's ring: one "this graph is refused for the test", one "failed
+with error -2". An answer cut by a failure now ends as one: before 0025 it
+ended with a `finish_reason` and `[DONE]` after its seven chunks.
+
 **BUILT, not live (München, 2026-11-25).** The name checked, the build
 ended 0, installed BESIDE the live engine at 09:58:24Z as
 `louise-sycl-f16-llama-cpp-792f050e318e-stack-7c301a7ba437`.
@@ -619,9 +634,9 @@ card row.
 engine swap"). München: the byte check identical, the five llama.cpp
 gates exact over three fresh loads with every fingerprint identical to
 before, twenty unloads at exit 0. `d531d5d804f1` stays installed: the
-engine a rollback puts back. The row on a copy is being taken in the same
-pass, with `keep_context_ms:0` on the copy — an on-demand context is not
-released by itself (its keep defaults to -1), so without it the two
+engine a rollback puts back. The row on a copy was taken in the same
+pass (below), with `keep_context_ms:0` on the copy — an on-demand context
+is not released by itself (its keep defaults to -1), so without it the two
 refusals would fall on the request's own graphs.
 
 `ed93e3c1b2e2` (`engine-park.series`) is NOT renamed and does not list
@@ -636,12 +651,25 @@ cannot be created now", the counter at 0, the next request served with the
 control's vectors bit for bit in the same process, a canary that does not
 reproduce still answered and counted as one, the load refused, the same
 load with room serving. `refuse_cpu_test.py` 13 of 13; llama.cpp's own
-context-on-demand tests, 21. **NOT measured: a card.** München's row, on a
-COPY of an encoder with context on demand whose env sets
-`GGML_SYCL_GRAPH_REFUSE=2` and `GGML_SYCL_GRAPH_REFUSE_ARM=<file>` (staged
-0026): once its context is gone, create the file and send one request — it
-must be refused with "the context cannot be created now" and no context
-counted as discarded; remove the file — the next request is served.
+context-on-demand tests, 21.
+
+**ON THE CARD: IT HOLDS (München, 2026-11-25, the live engine
+`619655e5833b`).** A copy of bge-m3 on the engine directly, context on
+demand and its canary on, `keep_context_ms:0`, `GGML_SYCL_GRAPH_REFUSE=2`
+and its arm file (staged 0026):
+
+| request | answer | the backend's ring |
+|---|---|---|
+| 1, 2 | 200, the vector `4ddc4b1be45e` (1024 dims) both times | the first on the load's own context; "context freed" after each; "its canary reproduced" for the second |
+| 3, the arm file there | HTTP 500 in 0.021 s: `rpc error: code = Internal desc = the context cannot be created now, the memory it needs may be in use: try again later` | "this graph is refused for the test" ×2 (the warmup's, the canary's), "failed with error -2" ×2, "the device had no memory for its graph" ×1, "the device had no memory for the canary of the context created, it is discarded" ×1 — and "context canary failed", "does not reproduce the canary of the load", "values differ", "could not be computed": 0 |
+| 4, 5, the file removed | 200, `4ddc4b1be45e` both times | "its canary reproduced" 3 in all, "context freed" 4, one process |
+
+Through LocalAI the answer is HTTP 500, not llama.cpp's own 503: LocalAI
+answers every backend error 500 with the engine's words inside. It is a
+5xx without the words `context canary failed` — the one thing Louise's
+client tests for — so the batch is deferred and nothing is gated again.
+What the row does not show is a card REALLY full at a context's creation:
+the switch refuses the graphs before the device is asked.
 
 ## 7. The server part, commit by commit
 

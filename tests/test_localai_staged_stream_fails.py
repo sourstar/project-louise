@@ -120,6 +120,16 @@ def test_the_tool_does_not_pass_a_run_that_showed_nothing():
     assert not passed and lines[-1].startswith("FAIL: the stream after the failure is not the whole answer")
 
 
+def test_the_note_carries_the_card_s_row_through_localai_s_sse():
+    note = (ROOT / "docs" / "notes" / "parking-step-2.md").read_text(encoding="utf-8")
+    section = note[note.index("## 6a. "):note.index("## 6b. ")]
+    card = section[section.index("**ON THE CARD: IT HOLDS (München, 2026-11-25, the live engine\n`619655e5833b`), through LocalAI's SSE**"):]
+    assert "| whole | 161 | 155 | `finish_reason` \"stop\", `[DONE]`, no error |" in card
+    assert "| 11 | 7 | NO `finish_reason`;" in card and '"type":"server_error"' in card and "then `[DONE]` |" in card
+    assert "| the file removed | 161 | 155 |" in card
+    assert "the\ndirect-address tool was not run" in card, "what was NOT run is said"
+
+
 def test_the_bug_log_says_where_it_is_fixed_and_what_was_measured():
     row = next(line for line in BUGS.splitlines() if line.startswith("| B21 | defect |"))
     for said in ("staged 0025", "engine-stream.series", NAME, "OK after 4 of 50 chunks", "INTERNAL after 3 of 50"):

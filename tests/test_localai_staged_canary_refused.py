@@ -179,14 +179,23 @@ def test_the_bug_log_and_the_note_say_what_was_seen_what_was_measured_and_what_w
     for said in ("09:40:55Z", "1 of 493 creations", "NOT proven to be this", "staged 0028", "engine-canary.series", NAME):
         assert said in row, said
     patch = next(line for line in BUGS.splitlines() if line.startswith("| **P25 (staged)**"))
-    for said in ("LLAMA_PROCESS_NO_MEMORY", "DEFECT twice before, 12 of 12 after", "NOT measured: a card"):
+    for said in ("LLAMA_PROCESS_NO_MEMORY", "DEFECT twice before, 12 of 12 after", "**ON THE CARD: IT HOLDS**",
+                 "NOT measured: a card really full at a context's creation"):
         assert said in patch, said
     section = NOTE[NOTE.index("## 6b. "):NOTE.index("## 7. ")]
     for said in ("THE WORDS THAT TELL THE TWO APART", "failed with error -2",
                  "context canary: its output could not be computed on this context",
-                 "values differ", "| | pros | cons |", NAME, "792f050e318e", "NOT measured: a card",
+                 "values differ", "| | pros | cons |", NAME, "792f050e318e",
                  "the warmup", "If the operator says nothing"):
         assert said in section, said
+    # the card's row, as München counted it - and what it does not show
+    card = section[section.index("**ON THE CARD: IT HOLDS (München, 2026-11-25, the live engine\n`619655e5833b`).**"):]
+    for said in ("`keep_context_ms:0`", "HTTP 500 in 0.021 s", "the context cannot be created now",
+                 '"this graph is refused for the test" ×2', '"failed with error -2" ×2', '"its canary reproduced" 3 in all',
+                 "the first on the load's own context", "5xx without the words `context canary failed`",
+                 "What the row does not show is a card REALLY full"):
+        assert said in card, said
+    assert '"context canary failed", "does not reproduce the canary of the load", "values differ", "could not be computed": 0' in card
     # his word, as it was relayed, and what it leaves untouched until the drain
     assert '"Build\n619655e5833b now, swap it after the drain, if it still applies"' in section
     assert "nothing\nlive moves" in section and "`792f050e318e` will not be swapped" in section
