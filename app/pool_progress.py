@@ -22,10 +22,9 @@ Telemetry is published by someone other than the thread doing the work
 It reads two dictionaries under the pool's lock; it changes nothing — what
 runs when is exactly what it was.
 
-Not built here, and named so it is not forgotten: the monitor's other rule,
-"done not rising" (a collection whose counts have not moved for N minutes
-with work pending and NOTHING in flight), needs the manifests' counts and is
-the next row of the same lesson.
+The monitor's other rule, "done not rising", is app/stage_progress.py: a
+stage whose steps are tried and commit nothing, or whose one step has not
+come back, wherever that step waits (not only on this pool).
 """
 from __future__ import annotations
 

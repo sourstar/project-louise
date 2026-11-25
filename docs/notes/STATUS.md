@@ -20,6 +20,18 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **A stage that makes no progress says so by itself (`app/stage_progress.py`; the lessons, row G3 — the
+  monitor's "hang" and "done not rising").** The worker's step executor notes each step (when it started, on
+  which document, whether it ended with a commit: two dictionary writes a step), and a watcher thread says,
+  after thirty minutes — the Library's own bound for "no progress" — either "fts has been in ONE step for 47
+  min — it started on <uid> and has not come back" or "rdf has made NO PROGRESS for 31 min: 31 step(s) ended
+  without a commit, the last on <uid>"; again every thirty minutes, and one line when the stage commits
+  again. "Did work" is not "made progress": a deferral is a try. A stage nobody tries any more (paused, held
+  by a mode) is not a stall. IT REPORTS AND PAUSES NOTHING — the monitor paused the collection where a rule
+  fired; whether the worker should is the operator's decision, not taken. It does not see a stage with work
+  pending whose steps never start: that is a wait, and each wait says its own line (#885). Not measured on
+  the node: the first stall is the reading (the pool's watcher already says a part in flight after a minute).
+
 - **A memory kill names the process killed and its part; a row in flight beside it says it is a bystander
   (the lessons of EUR-Lex5.next, row A5; `oom_hold.victim`).** The kill's words — "not computed again until the
   cause is known" — were written on every row of the batch in flight, and the two units that carried them were
@@ -33,8 +45,7 @@ measured (published figures disagree).
   only — the pool does not know which part a child holds (a slot per child that the child writes at each
   part would say it; not built: the kills of 11-19 and 11-25 were all large parts, and it is a write on the
   pool's hot path that would need measuring first). Not measured on the node: there has been no kill since
-  the lanes' own processes (#869); the first one is the reading. Still open from the row group: a stage that
-  makes no progress saying so by itself.
+  the lanes' own processes (#869); the first one is the reading.
 
 - **EMBED MODE'S EMBEDDING CHOICE (operator, 2026-11-25: "In embed mode you can also choose local/p2p
   embedding"; "Network and embedding mode remain personal choices") — `[modes] embed_embedding`.** The last
