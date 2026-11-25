@@ -305,6 +305,9 @@ def test_the_shapes_are_the_real_server_s_as_they_were_read_off_it():
                   '"type":"parking_off"', '"type":"model_not_loaded"', '"type":"cannot_park"',
                   '"type":"host_memory_floor"', '"type":"model_busy"', '`park_host_floor_bytes`'):
         assert shape in section, shape
+    # the two answers that move with the park engine, seen on the real server before the node's pass
+    assert "BOTH SEEN HERE FIRST" in section and '"code":"no_room_on_device","message":"Compute error:' in section
+    assert "ended after 4 with NO `finish_reason`" in section
 
 
 def test_what_it_reads_of_an_answer():

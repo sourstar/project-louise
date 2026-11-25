@@ -604,7 +604,11 @@ measured (published figures disagree).
   default")** — one env line in every MoE model's file, here and on the node; no engine change, no gate. THE LINE ALONE CHANGES
   NOTHING for the 35B as it runs, whole on the card at 98.8 tok/s: the mechanism that chooses experts exists only with the experts
   in host memory and a cache on the card, which measured 57–70 tok/s. That move is put to him with its pros and cons and a row
-  that would decide it (E, München's, running); it is not made ([moe-expert-record.md](moe-expert-record.md)).
+  that would decide it (E); it is not made ([moe-expert-record.md](moe-expert-record.md)). **ROW E, MEASURED (München, 21:30–21:38Z,
+  query mode, the card over its line): the whole 35B wins on every figure** — 98–101 tok/s against 71–81 with the experts in host
+  memory, a short prompt started 2.4–2.9 times sooner — and ITS FIRST ANSWER AFTER 3.9 GiB OF IT HAD BEEN PUSHED OUT BY THE DRIVER
+  IS ITS SECOND to the hundredth of a second: paging costs the 35B nothing measurable. The record did not show even in its best
+  case (0.761 s against 0.805 s, one load each). The 35B stays whole.
 - **PARKING, STEP 2 — THE SERVER PART IS STAGED (2026-11-25, its third cut ACCEPTED):** `staged/0027-model-park.patch`. The architecture
   session accepted the first cut with two changes (a return that FAILS stops the process, the request goes on to an ordinary load;
   `/backend/park` tries the lifecycle lock, 409 at once). An independent reading then found sixteen things, fourteen real: a returning

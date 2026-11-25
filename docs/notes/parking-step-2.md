@@ -973,7 +973,17 @@ default (0021) — the two have never run together on a card — and the times.
 3. The two rows whose answers MOVE with this engine and server: the canary
    refused on a copy is now HTTP 503 `no_room_on_device` with
    `Retry-After: 2` (it was 500); the stream's error object is typed
-   `no_room_on_device` (it was `server_error`).
+   `no_room_on_device` (it was `server_error`). BOTH SEEN HERE FIRST, on the
+   real server with the park engine's CPU build and the stand-in that
+   refuses graphs: the one request with the arm file there answered `503`,
+   `Retry-After: 2`, `{"error":{"code":503,"message":"the context cannot be
+   created now, the memory it needs may be in use: try again later",
+   "type":"no_room_on_device"}}`, no canary failure counted, the requests
+   before and after served; and a chat stream of 60 chunks, a graph refused
+   once three were in, ended after 4 with NO `finish_reason`, the object
+   `{"code":"no_room_on_device","message":"Compute error: the device had no
+   memory for this computation, try again later.","type":
+   "no_room_on_device"}` and `[DONE]`, the next stream whole again.
 4. PARKING ON A COPY — bge-m3 on the engine directly, context on demand,
    `park: true`, env `GGML_SYCL_PARKABLE=1` and `GGML_SYCL_PARK_VERIFY=1`,
    the floor at 12 GiB for the rows and back to 0 after:

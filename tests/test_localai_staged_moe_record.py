@@ -167,3 +167,12 @@ def test_the_record_is_on_by_default_for_every_mixture_of_experts_model_and_says
     for said in ('"Which experts of the 35B stay on the\ncard: switch it on by default"', "THE LINE ALONE CHANGES NOTHING",
                  "| | pros | cons |", "57–70 tok/s", "98.8", "If he says nothing", "row E"):
         assert said in note, said
+    # row E, as München counted it: the whole model wins, paging cost it nothing, and the record's best case
+    # showed nothing - each said with what it does not prove
+    row = note[note.index("**ROW E, MEASURED (München, 2026-11-25 21:30–21:38Z"):]
+    for said in ("ITS BEST CASE", "| W, whole | 0.279 s, 100.8 tok/s | 2.48 s, 98.3 tok/s | 21,205 MiB |",
+                 "3.9 GiB of it pushed to host memory: FIRST answer", "0.28 s, 100.6",
+                 "The driver's paging cost the 35B nothing that can be measured",
+                 "The record did not show, in its best case", "Whether the fill RAN in that\n  load is not shown either",
+                 "the 35B stays whole on the card", "that does NOT fit the card whole"):
+        assert said in row, said

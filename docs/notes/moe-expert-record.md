@@ -306,6 +306,46 @@ time to first token, then — after the other large models were loaded and
 used until the copy was pushed out — the first and the second answer of
 each arm. That last pair is what nobody has.
 
+**ROW E, MEASURED (München, 2026-11-25 21:30–21:38Z, query mode, the live
+engine `619655e5833b`, the card over its line: 30,718 MiB of vram at the
+start).** W is the LIVE 35B, whole; C a copy with `cpu_moe:true`,
+`moe_cache_mib:8192` and the record's line. p0chat's two prompts each time.
+The record was built from those same two prompts, three times, and tested
+on them: ITS BEST CASE. The "spell" is the other arm's own use.
+
+| | p128: first token, decode | p2048: first token, decode | on the card |
+|---|---|---|---|
+| W, whole | 0.279 s, 100.8 tok/s | 2.48 s, 98.3 tok/s | 21,205 MiB |
+| C, first load, no record | 0.805 s, 72.7 | 4.271 s, 75.1 | 11,553 MiB (W fell to 17,257, the other models to 3,052; MemAvailable 31,960 → 19,246 MiB) |
+| C, its second and third use | 0.69 and 0.671 s, 80.3 and 81.0 | 4.081 and 4.051 s, 76.1 and 76.3 | |
+| C, loaded again WITH its record | 0.761 s, 71.1 | 4.487 s, 72.0 | as above |
+| **W after the spell, 3.9 GiB of it pushed to host memory: FIRST answer** | **0.28 s, 100.6** | **2.477 s, 97.9** | 17,257 → 21,182 |
+| W, the second answer | 0.278 s, 100.5 | 2.476 s, 97.9 | |
+| C after a spell of W's use: first, second | 0.706 and 0.651 s, 76.1 and 80.8 | 4.003 and 3.992 s, 76.4 and 76.5 | |
+
+- **The whole 35B wins on every figure:** 25–35 % faster to decode (98–101
+  against 71–81 tok/s), a short prompt started 2.4–2.9 times sooner, a long
+  one 1.6–1.8 times.
+- **The number nobody had:** its first answer after 3.9 GiB of it had been
+  pushed out by the driver is its second answer to the hundredth of a
+  second. The driver's paging cost the 35B nothing that can be measured.
+- **The cache arm buys card and pays for it twice:** about 9.7 GiB of card
+  back, about 12 GiB more host memory held, and the speed above.
+- **The record did not show, in its best case:** 0.761 s against 0.805 s on
+  the short prompt, and worse on the long one (4.487 against 4.271 s) — one
+  load each, within what two loads differ by. Whether the fill RAN in that
+  load is not shown either: the copy's file had no `verbosity:4`, and the
+  fill's two lines are the library's info lines ("llama_moe_cache: the
+  record of N tokens of this model is read from …", "llama_moe_cache: N
+  experts put in the cache from the record of N tokens, X MiB uploaded in Y
+  ms"). The record's file WAS written (41,051 bytes), so the cache existed
+  and was recorded. §7's 0.07–0.12 s stands as the only measured gain.
+
+**So the first row of the table stands: the 35B stays whole on the card**,
+the record's line in place and inert. München put it to the operator so.
+The cache arm remains what it was built for — a mixture-of-experts model
+that does NOT fit the card whole.
+
 **With parking** (parking-step-2.md): a parked model's context is gone, and
 with it its cache; in the cache arm a return is the trunk copied back and a
 context whose cache is filled from the record, hot experts first. But
