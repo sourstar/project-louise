@@ -1,0 +1,219 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 07:30:51 +0000
+Subject: [PATCH] fix(llama-cpp): OmniVoice reads a language tag ("it-IT") as
+ its language
+
+Carried as a llama.cpp patch beside the others
+(patches/0021-mtmd-omnivoice-language-tag.patch).
+
+A TTS request names its language by an id of the model ("it") or by its
+English name ("italian"). A language tag is neither: "it-IT", "en-GB",
+"en_US" and "IT" were all read as NO language, in silence, and OmniVoice
+speaks a text with no language in whatever language the reference clip
+sounds like - an English sentence in the accent of an Italian voice.
+LocalAI itself sends tags: a voice profile's own language is the fallback
+when a request names none.
+
+The language is now asked as given, then in lower case, then by the tag's
+first subtag. Ids, names, "" and "none" answer as before. A language the
+model does not name is still no language, and is said once in the
+backend's log. The request's summary line ends with the language spoken.
+
+Checked without a device: a standalone test of 19 cases, and one sentence
+end to end on a CPU build at a fixed seed - "it-IT", "IT" and "italian"
+give the bytes of "it", "en_GB" those of "en", "xx-YY" those of "none".
+
+Assisted-by: Claude Code
+---
+ .../0021-mtmd-omnivoice-language-tag.patch    | 178 ++++++++++++++++++
+ 1 file changed, 178 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0021-mtmd-omnivoice-language-tag.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0021-mtmd-omnivoice-language-tag.patch b/backend/cpp/llama-cpp/patches/0021-mtmd-omnivoice-language-tag.patch
+new file mode 100644
+index 0000000..8cb10c1
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0021-mtmd-omnivoice-language-tag.patch
+@@ -0,0 +1,178 @@
++mtmd: OmniVoice - a language tag is the language of its first subtag
++
++A speech request names its language by an id of the model ("it", "yue") or
++by its English name ("italian"): that is what the model's own table knows
++(vendor/omnivoice/lang-map.h, as the reference's Python). A language TAG is
++neither. "it-IT", "en-GB", "en_US", "zh-Hans-CN", and "IT", were all
++answered "" - no language - silently, and a text with no language is
++spoken in whatever language the reference clip sounds like: an English
++sentence in the accent of an Italian voice. Callers send tags: a browser's
++language, a voice profile's own tag.
++
++The language is now asked as given, then in lower case, then by the tag's
++first subtag (BCP 47). What the table answered before it answers still: an
++id, a name (a name with a hyphen is found before any cut), "" and "none"
++for no language. What the model does not name stays no language, and is
++SAID once in the log instead of passing in silence.
++
++The request's summary line ends with the language it was spoken in
++("; language it", "; language none"), after the fields it had.
++
++Checked: tools/mtmd/tests/test-gen-lang.cpp, standard library only, 19
++cases. And end to end on a CPU build, one sentence at 4 steps and a fixed
++seed: "it-IT", "IT" and "italian" give the bytes of "it"; "en_GB" those of
++"en"; "xx-YY" those of "none", with the line in the log. Before, "it-IT"
++gave the bytes of "none".
++---
++diff --git a/tools/mtmd/mtmd-gen-lang.h b/tools/mtmd/mtmd-gen-lang.h
++new file mode 100644
++index 0000000..6ef3ba8
++--- /dev/null
+++++ b/tools/mtmd/mtmd-gen-lang.h
++@@ -0,0 +1,48 @@
+++#pragma once
+++
+++// The language of an OmniVoice request.
+++//
+++// The model's own table (vendor/omnivoice/lang-map.h, resolve_language) knows a language by its id ("it", "yue") or
+++// by its English name ("italian"), and answers "" - no language - for anything else. A language TAG is neither:
+++// "it-IT", "en_GB", "zh-Hans-CN" and "IT" all came out as no language, and a text with no language is spoken in
+++// whatever language the reference clip sounds like (an English sentence in an Italian voice's accent).
+++// A tag is the language of its first subtag (BCP 47): asked as given first, then in lower case, then by that subtag.
+++//
+++// Include after <omnivoice/lang-map.h> has been included inside namespace ov.
+++
+++#include <string>
+++
+++static inline std::string mtmd_gen_ov_language(const std::string & given) {
+++    std::string id = ov::resolve_language(given);
+++    if (!id.empty() || given.empty()) {
+++        return id;
+++    }
+++    std::string low = given;
+++    for (char & c : low) {
+++        if (c >= 'A' && c <= 'Z') {
+++            c = (char) (c + 32);
+++        }
+++    }
+++    id = ov::resolve_language(low);
+++    if (id.empty()) {
+++        const size_t cut = low.find_first_of("-_");
+++        if (cut != std::string::npos && cut > 0) {
+++            id = ov::resolve_language(low.substr(0, cut));
+++        }
+++    }
+++    return id;
+++}
+++
+++// said once per request that names a language the model does not: "none" and "" are how a caller asks for none
+++static inline bool mtmd_gen_ov_language_unknown(const std::string & given, const std::string & id) {
+++    if (!id.empty() || given.empty()) {
+++        return false;
+++    }
+++    std::string low = given;
+++    for (char & c : low) {
+++        if (c >= 'A' && c <= 'Z') {
+++            c = (char) (c + 32);
+++        }
+++    }
+++    return low != "none";
+++}
++diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
++index a65b777..5a90620 100644
++--- a/tools/mtmd/mtmd-helper-gen.cpp
+++++ b/tools/mtmd/mtmd-helper-gen.cpp
++@@ -48,6 +48,8 @@ namespace ov {
++ #pragma GCC diagnostic pop
++ #endif
++ 
+++#include "mtmd-gen-lang.h"
+++
++ #ifdef MTMD_INTERNAL_HEADER
++ #error "mtmd-helper is a public library outside of mtmd. it must not include internal headers"
++ #endif
++@@ -1504,7 +1506,10 @@ public:
++         n_step   = inp->flow_steps > 0 ? inp->flow_steps : 32;
++         // the reference counts its guidance from 0 (no guidance), cfg_scale counts from 1
++         guidance = inp->cfg_scale > 0.0f ? inp->cfg_scale - 1.0f : 2.0f;
++-        lang     = ov::resolve_language(inp->lang ? inp->lang : "");
+++        lang     = mtmd_gen_ov_language(inp->lang ? inp->lang : "");
+++        if (mtmd_gen_ov_language_unknown(inp->lang ? inp->lang : "", lang)) {
+++            LOG_WRN("mtmd_helper_gen_audio: \"%s\" is not a language the model names, the text is spoken with no language\n", inp->lang);
+++        }
++         text.assign(inp->prompt, inp->prompt_len);
++ 
++         // a description of the voice, as the "tts" template writes it; held to the vocabulary the model was trained on
++@@ -2128,8 +2133,9 @@ private:
++         backbone.reset();
++         n_rows_max = 0;
++         LOG_INF("mtmd_helper_gen_audio: omnivoice: %zu chunk(s), %d steps: voice clip %.2f s, backbone %.2f s, audio heads %.2f s, "
++-                "scoring %.2f s, decoder %.2f s%s%s\n", chunks.size(), t_us.n_steps, t_us.voice / 1e6, t_us.backbone / 1e6,
++-                t_us.heads / 1e6, t_us.scoring / 1e6, t_us.decoder / 1e6, voice_from[0] ? "; the voice clip's rows " : "", voice_from);
+++                "scoring %.2f s, decoder %.2f s%s%s; language %s\n", chunks.size(), t_us.n_steps, t_us.voice / 1e6, t_us.backbone / 1e6,
+++                t_us.heads / 1e6, t_us.scoring / 1e6, t_us.decoder / 1e6, voice_from[0] ? "; the voice clip's rows " : "", voice_from,
+++                lang.empty() ? "none" : lang.c_str());
++         wipe(voice_rows); // the voice was the request's
++         finished = true;
++         return true;
++diff --git a/tools/mtmd/tests/test-gen-lang.cpp b/tools/mtmd/tests/test-gen-lang.cpp
++new file mode 100644
++index 0000000..08b2fce
++--- /dev/null
+++++ b/tools/mtmd/tests/test-gen-lang.cpp
++@@ -0,0 +1,55 @@
+++// The language of an OmniVoice request (mtmd-gen-lang.h): a tag is the language of its first subtag.
+++// Standard library only:
+++//   c++ -std=c++17 -I vendor -I tools/mtmd tools/mtmd/tests/test-gen-lang.cpp -o test-gen-lang && ./test-gen-lang
+++
+++#include <cstdio>
+++#include <string>
+++#include <unordered_map>
+++#include <unordered_set>
+++
+++namespace ov {
+++#include <omnivoice/lang-map.h>
+++} // namespace ov
+++
+++#include "mtmd-gen-lang.h"
+++
+++static int failed = 0;
+++
+++static void expect(const char * given, const char * want, bool unknown = false) {
+++    const std::string got = mtmd_gen_ov_language(given);
+++    const bool said = mtmd_gen_ov_language_unknown(given, got);
+++    const bool ok = got == want && said == unknown;
+++    if (!ok) {
+++        failed++;
+++    }
+++    printf("%s \"%s\" -> \"%s\"%s (expected \"%s\"%s)\n", ok ? "ok:  " : "FAIL:", given, got.c_str(), said ? ", unknown" : "", want,
+++           unknown ? ", unknown" : "");
+++}
+++
+++int main() {
+++    // what the table answered before, unchanged
+++    expect("it", "it");
+++    expect("yue", "yue");
+++    expect("italian", "it");
+++    expect("Italian", "it");
+++    expect("ambo-pasco quechua", "qva"); // a NAME with a hyphen is still a name
+++    expect("", "");
+++    expect("none", "");
+++    expect("None", "");
+++
+++    // the table's own answer for each of these was "": no language
+++    expect("it-IT", "it");
+++    expect("en-GB", "en");
+++    expect("en_US", "en");
+++    expect("pt-BR", "pt");
+++    expect("zh-Hans-CN", "zh");
+++    expect("IT", "it");
+++    expect("EN-gb", "en");
+++
+++    // what the model does not name stays no language, and is said
+++    expect("xx-YY", "", true);
+++    expect("klingon", "", true);
+++    expect("-it", "", true);
+++    expect("none-IT", "", true); // only "none" itself asks for none
+++    return failed == 0 ? 0 : 1;
+++}
+-- 
+2.43.0
+

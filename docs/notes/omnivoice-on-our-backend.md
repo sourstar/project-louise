@@ -976,3 +976,39 @@ No line for the clip's encoding: it is placed by the backend.
 5. the step gate (§10 step 3), the operator's ear on the four synthetic
    voices and Philippe, then `[speech] tts_model` moved to it, today's
    backend left installed until he says.
+
+## 14. A language tag is its language (2026-11-25)
+
+**The operator, relayed by München:** "the language/country tag must be
+aligned to the language to speak, otherwise the voice has always a thick
+italian accent". Two halves. Louise's — what language it sends with a
+sentence — is the architecture session's (#881). The engine's is this:
+
+**The defect.** A request names its language by an id of the model (`it`,
+`yue`) or by its English name (`italian`): that is all the model's own table
+knows (`vendor/omnivoice/lang-map.h`, the reference's `_resolve_language`).
+A TAG is neither. `it-IT`, `en-GB`, `en_US` and `IT` were each answered ""
+— no language — in silence, and OmniVoice speaks a text with no language in
+whatever language the reference clip sounds like. LocalAI itself sends tags:
+a voice profile's own language is its fallback when a request names none, so
+that fallback meant "None" to the model (München, read on the node).
+
+**The fix (staged 0022, inner `0021-mtmd-omnivoice-language-tag.patch`).**
+The language is asked as given, then in lower case, then by the tag's first
+subtag. An id, a name (one with a hyphen is found before any cut), "" and
+`none` answer as before; the reference's table is asked, not edited. A
+language the model does not name stays no language and is SAID once in the
+log; the request's summary line ends `; language it` / `; language none`,
+after the fields it had.
+
+| | |
+|---|---|
+| 19 cases, standalone (`tools/mtmd/tests/test-gen-lang.cpp`) | MEASURED: 19 of 19 |
+| one sentence, 4 steps, seed 7, on a CPU build, llama.cpp's own route | MEASURED: `it-IT`, `IT` and `italian` give the bytes of `it`; `en_GB` those of `en`; `xx-YY` those of `none`, with the line in the log. Before the fix `it-IT` gave the bytes of `none` |
+| on the card, through LocalAI, in a recorded voice | NOT measured: München's row, and the operator's ear on an English sentence in an Italian voice with the profile's tag as the only language |
+
+**The engine.** `engine-lang.series` = `engine-page.series` line for line,
+then 0022: `aa88ab5c356a`. Another engine, a build and every gate; it touches
+the speech port's request path only. If `d658549772ca` is not gated yet it
+can be gated in its place — one gating for both — or it rides the park
+engine, whose series starts from these lines.
