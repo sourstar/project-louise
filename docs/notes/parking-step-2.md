@@ -695,9 +695,12 @@ seen two seconds later, on every cold load of every model.
 MEASURED: its seven Go specs (ready at once: no sleep; ready after 150 ms:
 seen at 150 ms; never ready: 40 s slept, no more and no less; a model's own
 numbers; a delay under the interval; no delay; no attempts) and the whole
-`pkg/model` suite on the server tree. NOT measured: a cold load's seconds on
-the node before and after — München's row, the same model, R6's 2 s the
-expectation.
+`pkg/model` suite on the server tree.
+
+**ON THE NODE: IT HOLDS (München, 2026-11-25 night, server
+`v5.0.1-6-gffb10fdf3`).** Three cold loads of `louise-rerank-medcpt`, the
+first request each: 4.84 / 4.48 / 4.45 s before, 2.98 / 2.83 / 2.67 s
+after — 1.5 to 1.9 s less on a cold load, R6's 2 s the expectation.
 
 **2. The parked state, `/backend/park`, `/system`, the floor, 503** —
 `staged/0027-model-park.patch`, STAGED (2026-11-25). On the server tree after 0024.
@@ -778,8 +781,13 @@ could see this (the third difference). What the keeper can rely on:
 call (`xsysinfo.ProcessVRAM`, read from `/proc` when the route answers — no
 cache), for a parked model as for any other. So a model listed `parked`
 whose process holds its `size_vram_needed` on the card is loaded, and
-`POST /backend/load` on it makes the record say so; that reconciliation is
-the keeper's (the architecture session, 2026-11-25).
+`POST /backend/load` on it makes the record say so. The architecture
+session first took that reconciliation into the keeper and then WITHDREW it
+the same night ("my test for it was unsound, and the record heals at the
+model's next request by your own design. Louise will never call
+/backend/load"): nothing reconciles the record but the model's next request
+through LocalAI — and since §8's amendment a park no longer lands inside a
+request, which was the common way to get there.
 
 **The independent reading, finding by finding** (a fresh agent given the
 commit and the surrounding tree, not this note; 2026-11-25). Fourteen were
@@ -1025,4 +1033,19 @@ the spec alone, alternately on both trees under the same load, 24 failures
 in 300 on the new tree and 20 in 300 on the live one; 1 in 200 on each on a
 quiet machine. The same rate. **The architecture session's condition on
 the server build is met.**
+
+**THE PASS (München, started 2026-11-25 22:46Z, the node paused; as it
+stood at 23:29Z).** THE SERVER IS LIVE: "running: v5.0.1-6-gffb10fdf3", the
+settings check clean, `/system` listing its 105 backends as before and no
+row with `parks` or `state` (the keys are absent on a model that does not
+park), `park_host_floor_bytes` 0, and the seven run ids under the new
+server THE SAME as before. ONE vega package rebuilt, `vega-louise-llama-cpp`
+(the architecture session's decision: the wrapper's change is inert in the
+other three), in front of `ed93e3c1b2e2`, its wrapper carrying
+`ALREADY_LOADED = "Model already loaded"`; the byte check identical. The
+gates so far, each exact over three fresh loads with its fingerprint as
+before: wikipedia (bge-m3) 98 s, gutenberg (qwen3-embedding-4b) 1,983 s,
+pubmed query (medcpt-query) 70 s; NeuRIS and wikidata, the twenty unloads,
+the acceptance checks, the two rows whose answers move and parking's rows
+on copies were still to come.
 
