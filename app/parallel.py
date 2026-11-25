@@ -1980,7 +1980,9 @@ def _isolated(kind: str, collection, parts: list[list[dict]], k: float,
             while len(_gone_alone) > GONE_ALONE_KEPT:
                 _gone_alone.popitem(last=False)
         print(f"{_hms()} [parse pool] {name}: document {row.get('uid')} did not come back from a process of its own "
-              f"within {bound:.0f} s: an error on it", file=sys.stderr, flush=True)
+              f"within {bound:.0f} s: an error on it when its own turn comes (a batch writes no error for a "
+              f"document it only carried; until then this process answers for it without parsing it)",
+              file=sys.stderr, flush=True)
 
     def rest(answer: Callable[[dict], tuple[bool, object]]) -> None:
         for pi, part in enumerate(parts):
