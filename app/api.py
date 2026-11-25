@@ -1187,6 +1187,7 @@ async def audio_speech(request: Request):
     """OpenAI's speech endpoint, relayed to the node's model server without
     the citations, in a voice that speaks the text's language, the model
     kept loaded while sentences come (app/speech.py)."""
+    arrived = time.perf_counter()
     try:
         body = await request.json()
     except ValueError:
@@ -1207,6 +1208,13 @@ async def audio_speech(request: Request):
         lambda: speech.synthesize_timed(body, reading=reading, n=n, last=last, account_voice=mine,
                                         admin=admin))
     from . import transcribe
+    # `node`: everything between the request's arrival and its answer, HERE —
+    # the wait for a thread of the pool, the voices' lookup, the turn, the
+    # model's call. What it holds beyond `turn` and `synth` is a wait nobody
+    # else measures (the Bug session, 2026-11-25: "when the request arrived
+    # versus when synthesis started")
+    if timing:
+        timing = list(timing) + [("node", round((time.perf_counter() - arrived) * 1000.0, 1))]
     headers = {"Server-Timing": transcribe.server_timing(timing)} if timing else {}
     return Response(content=content, status_code=status, media_type=ctype, headers=headers)
 

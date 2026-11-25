@@ -491,7 +491,11 @@ def ask_voices(request: Request):
 #: what a recording's report may say (app/static/voice.js `micInfo`), and its size
 VOICE_REPORT_KEYS = ("label", "ready", "muted", "mutes", "rate", "channels", "ec", "ns", "agc", "ctx_rate",
                      "ctx_state", "frames", "ms", "peak", "heard", "inputs", "stop", "vad", "chars", "ua",
-                     "mode", "ctx_was", "parts", "decode_fails", "mime")
+                     "mode", "ctx_was", "parts", "decode_fails", "mime",
+                     # how long the microphone took to give sound once opened (a car's Bluetooth
+                     # switching profile): the first window, the first sample that is not zero,
+                     # the zeros before it, and whether sound or WAKE_MAX_MS showed it recording
+                     "first_ms", "wake_ms", "zero_ms", "woke")
 VOICE_REPORT_MAX = 4096
 
 
@@ -520,6 +524,112 @@ async def ask_voice_report(request: Request):
     model_pins.node_event("info" if outcome == "heard" else "warn",
                           f"voice: microphone {outcome} ({who}) — "
                           + json.dumps(said, ensure_ascii=False, separators=(",", ":"))[:2000])
+    return Response(status_code=204)
+
+
+VOICE_TIMELINE_MAX = 8192
+#: the sentences of a reading the line names (the page sends as many at most)
+VOICE_TIMELINE_SENTENCES = 12
+
+
+def _ms(v) -> int | None:
+    """A time the page measured, in ms, or None: a number only."""
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v < 86_400_000 else None
+
+
+def _s(ms: int | None) -> str:
+    return "?" if ms is None else f"{ms / 1000:.1f} s"
+
+
+def reading_said(body: dict) -> tuple[str, dict]:
+    """ONE READING IN WORDS AND IN NUMBERS, from the times its page measured
+    (`louiseVoice.timeline()`, ms since Ask): where the wait for the first
+    sound went — the answer's first word, the first sentence's cut (it is cut
+    when the next begins), its synthesis, its arrival, its playing — and the
+    longest silence between two sentences. Numbers only: whatever else a
+    client sends is dropped."""
+    first_word, started = _ms(body.get("first_word")), [_ms(v) for v in (body.get("started") or [])[:4]]
+    rows = []
+    for t in (body.get("sentences") or [])[:VOICE_TIMELINE_SENTENCES]:
+        if isinstance(t, dict):
+            rows.append({k: _ms(t.get(k)) for k in ("chars", "cut", "sent", "got", "synth", "audio", "turn", "node",
+                                                    "cache", "play", "end")})
+    count = _ms(body.get("count"))
+    numbers = {"first_word": first_word, "last_word": _ms(body.get("last_word")),
+               "started": [v for v in started if v is not None], "sentences": rows,
+               "count": count if count is not None else len(rows)}
+    one = rows[0] if rows else {}
+    play, start = one.get("play"), (numbers["started"] or [None])[0]
+    parts = [f"the answer's first word {_s(first_word)} after Ask"]
+    if start is not None:
+        parts.append(f"the reading started at {_s(start)} ({'by itself' if body.get('by_itself') else 'a tap'})")
+    if body.get("blocked"):
+        # the page TRIED to play and the browser refused (NotAllowedError: no
+        # tap close enough before it): its `play` time is the attempt, and
+        # nothing was heard until the reader tapped the speaker
+        parts.append("THE BROWSER DID NOT LET THE PAGE PLAY"
+                     + ("" if play is None else f" (tried at {_s(play)})")
+                     + ": nothing was heard until a tap — the next reading's line says when")
+    elif play is None:
+        parts.append("NO SOUND WAS PLAYED")
+    else:
+        after = None if first_word is None else play - first_word
+        parts.append(f"FIRST SOUND at {_s(play)}" + ("" if after is None else f", {_s(after)} after the first word"))
+        cut, sent, got = one.get("cut"), one.get("sent"), one.get("got")
+        if None not in (cut, sent, got):
+            waited = None if first_word is None else cut - first_word
+            # THE NODE'S SIDE of the wait between asked-for and here: its turn
+            # behind the sentence before, the model's call, and whatever else
+            # the node spent on it; the rest was the way there and back
+            node, turn, synth = one.get("node"), one.get("turn") or 0, one.get("synth")
+            made = ("answered from the node's kept clips" if one.get("cache") else
+                    f"the node made it in {_s(synth)}"
+                    + (f" after {_s(turn)} waiting its turn" if turn >= 100 else ""))
+            if node is not None and synth is not None and not one.get("cache"):
+                other = node - turn - synth
+                if other >= 300:
+                    made += f" and {_s(other)} elsewhere on the node (a thread, a lookup)"
+            if node is not None:
+                away = (got - sent) - node
+                if away >= 300:
+                    made += f"; {_s(away)} between the page and the node"
+            parts.append(
+                f"sentence 1 ({one.get('chars')} chars): "
+                + ("" if waited is None else f"cut {_s(waited)} after the first word, ")
+                + f"asked for {_s(sent - cut)} later, here {_s(got - sent)} after that "
+                + f"({made}, {_s(one.get('audio'))} of sound), "
+                + f"played {_s(play - got)} after it arrived")
+    gaps = [b["play"] - a["end"] for a, b in zip(rows, rows[1:]) if a.get("end") is not None and b.get("play") is not None]
+    if gaps:
+        parts.append(f"the longest silence between two sentences {_s(max(gaps))}")
+    parts.append(f"{numbers['count']} sentence(s)")
+    return "; ".join(parts), numbers
+
+
+@ask_router.post("/ask/voice/timeline")
+async def ask_voice_timeline(request: Request):
+    """The times of one reading aloud, as its page measured them (operator, on
+    a phone, 2026-11-25: "the voice starts very late after the answer
+    begins"): one line in the node's log under `models` saying where the
+    wait for the first sound went, and the numbers behind it. Times only —
+    never a word of the answer; 204."""
+    from . import auth, model_pins
+    raw = await request.body()
+    if len(raw) > VOICE_TIMELINE_MAX:
+        raise HTTPException(413, f"a reading's times are at most {VOICE_TIMELINE_MAX} bytes")
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise HTTPException(400, "the body is not JSON") from None
+    if not isinstance(body, dict):
+        raise HTTPException(400, "the body is not a JSON object")
+    said, numbers = reading_said(body)
+    v = getattr(request.state, "viewer", None)
+    who = auth.account(v) or (v.role if v is not None else "nobody")
+    lang = "".join(c for c in str(body.get("lang") or "") if c.isalnum() or c == "-")[:12] or "as written"
+    ua = " ".join(str(body.get("ua") or "?").split())[:160]
+    model_pins.node_event("info", f"voice: reading ({who}, {lang}) — {said} — "
+                          + json.dumps(numbers, separators=(",", ":"))[:1600] + f" — {ua}")
     return Response(status_code=204)
 
 

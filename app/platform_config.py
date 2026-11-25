@@ -206,6 +206,9 @@ class ModelsConfig:
     #: the B70: 0.2–0.4 s more on a small model's next request, against
     #: 7.5–8.7 s after an unload) — and the unload stays the fallback
     #: (app/model_evict.py). The keeper's own preloads keep "unload" either way.
+    #: IN QUERY MODE the rule is "page" whatever this says, for every load and
+    #: with no bound over the card but the host's floor (operator, 2026-11-25:
+    #: "A for paging"; `model_evict.rule`).
     make_room: str = "unload"
     #: in "page", the host memory that must stay AVAILABLE once the overflow is
     #: paged, in GiB: under it a load unloads as before. A default to be
