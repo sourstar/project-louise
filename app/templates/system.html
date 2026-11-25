@@ -81,8 +81,10 @@
   <table><tr><th>use</th><th>model</th><th>server</th><th>written in</th></tr>
     {% for m in node_models %}
     <tr data-model-use="{{ m.use }}"><td>{{ m.use }}</td>
-      <td><input name="{{ m.field }}" value="{{ m.value }}" style="width:100%;min-width:16em"{% if m.field != 'reading' %} list="server-models"{% endif %}
-        placeholder="{% if m.default %}{{ m.default }} ({{ m.default_from }}'s){% elif m.field == 'reading' %}la = index-translate-9b, grc = …{% else %}not set: not offered{% endif %}">
+      <td>{% if m.field == 'tts_steps' %}{# a number, not a model's name: the admin picks it, 4 to 64 (platform_config.TTS_STEPS) #}<input name="{{ m.field }}" value="{{ m.value }}" type="number" min="{{ tts_steps_range[0] }}" max="{{ tts_steps_range[1] }}" step="1" inputmode="numeric" style="width:8em"
+        placeholder="32"> <span class="note">steps a sentence, {{ tts_steps_range[0] }} to {{ tts_steps_range[1] }}: fewer are faster and coarser; empty, the model's own (32)</span>
+        {% else %}<input name="{{ m.field }}" value="{{ m.value }}" style="width:100%;min-width:16em"{% if m.field != 'reading' %} list="server-models"{% endif %}
+        placeholder="{% if m.default %}{{ m.default }} ({{ m.default_from }}'s){% elif m.field == 'reading' %}la = index-translate-9b, grc = …{% else %}not set: not offered{% endif %}">{% endif %}
         {% if m.default is not none and m.overridden %}<div class="note">over {{ m.default_from }}'s {{ m.default }}; empty goes back to it</div>{% endif %}
         {% if m.in_force %}<div class="note"><span class="badge">in force</span> the node is in {{ node_mode_labels[node_modes.mode] }}</div>{% endif %}</td>
       <td>{{ m.server or '—' }}</td><td>{{ m.set_in }}</td></tr>

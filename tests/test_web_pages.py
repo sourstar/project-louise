@@ -443,6 +443,10 @@ def test_system_page_shows_the_node_models(models_page):
                                    "stt_model": "stt-x", "vad_model": "vad-x", "tts_model": "", "tts_voice": "",
                                    "synthetic_voices": "", "tts_steps": ""}, \
         "the readers' synthetic voices too (2026-11-16), and the steps of a synthesis (2026-11-25)"
+    # the steps are a NUMBER the admin picks, within the range the file accepts (operator, 2026-11-25:
+    # "in the web gui I shall be able to select the number of steps from the admin account")
+    steps = re.search(r'<input name="tts_steps"[^>]*>', html).group(0)
+    assert 'type="number"' in steps and 'min="4"' in steps and 'max="64"' in steps and 'list=' not in steps
     assert '<option value="madlad-f16">' in html, "the server's models as suggestions"
 
 
