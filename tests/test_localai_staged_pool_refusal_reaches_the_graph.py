@@ -126,7 +126,9 @@ int main() {
 
 
 def test_it_is_a_candidate_of_its_own_after_the_live_engine_untouched():
-    assert _lines(SERIES) == _lines(LIVE) + ["staged/" + PATCH.name], "the live engine, line for line, and this one patch"
+    assert _lines(SERIES) == _lines(LIVE) + ["staged/" + PATCH.name,
+                                             "staged/0020-llama-cpp-omnivoice-nothing-kept-between-requests.patch"], \
+        "the live engine, line for line, and the two fixes its card rows led to"
     assert PATCH.name not in LIVE.read_text(encoding="utf-8"), "the live engine's file is its name: nothing is added to it"
     name = _name(SERIES)
     assert len(name) == 12 and name != _name(LIVE)

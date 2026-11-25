@@ -82,7 +82,10 @@ def test_its_own_test_passes_built_as_localai_s_runner_builds_it(tmp_path):
 
 
 def test_the_upstream_list_names_the_defect_its_fix_and_what_our_wrapper_leaves_open():
-    assert "defects found (B1–B19)" in ACTIONS and "| B19 | defect |" in ACTIONS
+    # the list has grown since (B20, 2026-11-25): its head counts every defect, and B19 is one of them
+    head = re.search(r"defects found \(B1–B(\d+)\)", ACTIONS)
+    assert head is not None and int(head.group(1)) >= 19 and "| B19 | defect |" in ACTIONS
+    assert f"| B{head.group(1)} | defect |" in ACTIONS and f"| B{int(head.group(1)) + 1} | defect |" not in ACTIONS
     assert "### B19 and P15 (staged). " in ACTIONS
     row = re.search(r"^\| \*\*P15 \(staged\)\*\* \|.*$", ACTIONS, re.M)
     assert row and PATCH.name in row.group(0) and "to file upstream" in row.group(0)

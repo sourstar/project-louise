@@ -125,9 +125,9 @@ def test_the_record_s_own_test_passes_built_from_the_patch(tmp_path):
 
 
 def test_the_note_says_what_ran_and_what_the_node_measures():
-    assert "the fill itself has\nNOT run" in NOTE
+    assert "BUILT, AND RUN ON THE CARD 2026-11-25" in NOTE and "it is OFF until the operator chooses" in NOTE
     tested = NOTE[NOTE.index("## 3. "):NOTE.index("## 4. ")]
-    assert "| the fill and the seeded eviction | NOT RUN." in tested and "35 checks" in tested
+    assert "| the fill and the seeded eviction | not run HERE — RUN ON THE CARD 2026-11-25, §7." in tested and "35 checks" in tested
     node = NOTE[NOTE.index("## 5. "):]
     for run in ("| A, today |", "| B1, B2, a second context of the same process |", "| C, a new process reading the file |",
                 "| the proof | A, B1, B2, C, D | the answers equal"):
@@ -136,5 +136,11 @@ def test_the_note_says_what_ran_and_what_the_node_measures():
     assert "the record C and D read does not hold the answer they measure" in node
     assert "A, C and D run on the live 35B's own context options" in node
     assert "THE LOAD'S SECONDS against A's" in node, "the fill moved into the load: its cost is read there"
+    # the card's rows: what it is worth is said with what it costs, and the record stays off until it is chosen
+    card = NOTE[NOTE.index("## 7. On the card"):]
+    for said in ("| C, a new process reading the file | 15.77 s | 12.51 s | 8,186 MiB in 172.9 ms | 4,135.30 (2,277): −47 % against A |",
+                 "The answer's text is the same in all seven", "**And it buys almost nothing, for the same reason:**",
+                 "| off (today) |", "nothing is switched on if he says nothing"):
+        assert said in card, said
     assert "staged/" + PATCH.name in (STAGED / "engine-next.series").read_text(encoding="utf-8")
     assert PATCH.name not in (PATCHES / "series").read_text(encoding="utf-8")

@@ -113,7 +113,13 @@ def test_its_engine_is_the_next_live_candidate_where_it_is_off():
     assert "With every switch off it must gate as 9ea95e93a83c does" in head
     assert not (STAGED / "parking-prototype.series").exists(), "no prototype engine of its own"
     readme = (STAGED / "README.md").read_text(encoding="utf-8")
-    assert PATCH.name in readme and "NEVER RUN ON A CARD" in readme
+    assert PATCH.name in readme and "It had NEVER RUN ON A CARD until 2026-11-25" in readme
+    assert "un-park 15.54 ms" in readme and "575 MiB given back" in readme
+    note = (ROOT / "docs" / "notes" / "parking-prototype.md").read_text(encoding="utf-8")
+    card = note[note.index("## 4a. On the card"):note.index("## 5. Open")]
+    for said in ("| R3, parking, timed | 80 | 0 | 0 of 16 | 58.6 ms (63.4) | 39.52 ms (70.53) / 15.54 ms (16.34) | 47.5 ms |",
+                 "holds 321 MiB of the card", "The un-park\nrefusal on a full card was not run", "nothing if the operator says nothing"):
+        assert said in card, said
 
 
 def test_the_pool_s_refusal_can_be_provoked_without_starving_the_card():
@@ -143,11 +149,11 @@ def test_the_pool_s_refusal_can_be_provoked_without_starving_the_card():
 
 
 def test_the_note_says_what_ran_without_a_card_and_what_the_node_measures():
-    assert "nothing\nof it has run on the card yet" in NOTE
+    assert "BUILT, AND RUN ON THE CARD 2026-11-25 (§4a)" in NOTE
     tested = NOTE[NOTE.index("## 3. "):NOTE.index("## 4. ")]
     assert "16 of 16" in tested and "21 of 21" in tested and "Intel's compiler 2025.3.3" in tested
     assert "What that does NOT show: anything about the card." in tested
-    node = NOTE[NOTE.index("## 4. "):NOTE.index("## 5. ")]
+    node = NOTE[NOTE.index("## 4. "):NOTE.index("## 4a. ")]
     for run in ("| R0, the control |", "| R1, parkable and not parking |", "| R2, parking, verified |",
                 "| R3, parking, timed |", "| the floor |", "| a refusal"):
         assert run in node, run

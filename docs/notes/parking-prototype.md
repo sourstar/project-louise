@@ -5,8 +5,9 @@ München from the architecture session: "Do everything, also 721, everything,
 run unattended" — line 2, "Parking step 1, Tensor's prototype (bge-m3
 parked; N park cycles the same bytes; the park, the un-park and the first
 request timed apart; the parked process's floor read)"; and in the cloud
-session: "Run unattended". BUILT AND TESTED WHERE THERE IS NO CARD; nothing
-of it has run on the card yet. Its measurement is §4, München's.*
+session: "Run unattended". BUILT, AND RUN ON THE CARD 2026-11-25 (§4a): the
+same bytes at every cycle, 15.5 ms to come back, 575 MiB given back. The
+measurement was §4, München's; §4a has its rows and what they decide.*
 
 ## 1. What it is
 
@@ -133,6 +134,62 @@ again; a size must be a whole number of the pages chosen for it (the
 engine's 2 MiB granularity, as the pool's commits already are). That is
 what the prototype relies on: copies and kernels find the weights as they
 find any device memory. Read, not run.
+
+## 4a. On the card (München, 2026-11-25, engine b190673dbdbf, the node paused)
+
+Copies of `vega-bge-m3` direct to the engine, the sixteen fingerprint texts,
+context on demand with a keep of 0, the card emptied to 25 MiB before each.
+
+| run | requests | errors | vectors differing from R0 | a request, median (p90) | park / un-park, median (max) | context created |
+|---|---|---|---|---|---|---|
+| R0, the control | 320 | 0 | — | 36.8 ms (38.1) | — | 26.74 ms |
+| R1, parkable and not parking | 320 | 0 | 0 of 16 | 36.9 ms (38.4) | — | 26.88 ms |
+| R2, parking, verified | 80 | 0 | 0 of 16 | 148.8 ms (157.6) | 84.28 ms (128.06) / 59.33 ms (105.92) | 137.44 ms |
+| R3, parking, timed | 80 | 0 | 0 of 16 | 58.6 ms (63.4) | 39.52 ms (70.53) / 15.54 ms (16.34) | 47.5 ms |
+
+The first request of a process (the load) took 6.28 s in R0 and R1 alike.
+R2's log: "read back: the same bytes", the park's checksum "(the first
+park's)" and "its canary reproduced" at every cycle the ring kept (22 of
+each).
+
+**The floor: R3 parked and idle for 10 s holds 321 MiB of the card** (346 by
+the card's counter, 25 empty) — against 896 MiB for bge-m3 with only its
+context freed, and 319 MiB for a process with no weights at all. The
+per-client split was not read (the pid lookup returned nothing).
+
+- **Weights behind mapped memory compute the same and as fast** (R1 against
+  R0: the same bytes, 36.9 against 36.8 ms).
+- **Parked and back, the same bytes** in every cycle, verified on the card
+  itself in R2.
+- **Coming back costs 15.5 ms, not the 0.3–0.9 s the design derived**: a
+  request that finds its model parked takes 58.6 ms against 36.8 ms, 22 ms
+  more, where a model that was unloaded takes 6.28 s. The copy runs at about
+  37 MiB per millisecond.
+- **A parked bge-m3 gives back 575 MiB** and keeps 321, 2 MiB above a process
+  that never had weights.
+
+The pool's refusal, provoked in the same pause, did NOT hold: staged 0013
+is wrong and staged 0018 completes it (room-on-the-card.md §4). The un-park
+refusal on a full card was not run: a card cannot be made to refuse by
+filling it, and the prototype has no switch for that path — it stands on the
+CPU stand-in's 16 of 16 and gets its own switch before step 2 relies on it.
+
+**What this decides.** Step 1 asked whether a parked model can come back
+for the price of a copy. It can, for less. Step 2 is LocalAI knowing a
+parked state (two calls, a RAM budget) so that the keeper parks where it
+unloads today:
+
+| | pros | cons |
+|---|---|---|
+| stop at the prototype (today: unload and reload) | nothing more to build or to gate | every model that leaves the card for room pays its whole load again — 6.3 s for bge-m3, 9.5–11 s for MADLAD |
+| step 2: LocalAI parks instead of unloading (the engine half is this prototype; LocalAI gets a parked state, park and un-park calls, and a budget for the host RAM the parked weights use) | a model's return costs a copy: 15.5 ms measured for 575 MiB, about 0.17 s for 6 GiB at the same rate; the keeper can keep many more models "one copy away" than the card holds; the readiness poll's 2 s goes with the load it belongs to | a new state in LocalAI's loader and two calls on the wire, to carry as patches and to file upstream; host RAM held for every parked model (their weights' size); quantized models, buffers above 1 GiB and the second file of a speech model are not tested yet; a switch for the un-park refusal first |
+
+Recommended: step 2. The number that was the whole question came out forty
+times better than the design's low estimate, and the cost is engineering,
+not risk to an answer (the bytes are verified on the card at every cycle
+when asked). It is a change of LocalAI's wire, so it is designed with the
+architecture session first; nothing changes on the node until that design
+is agreed, and nothing if the operator says nothing.
 
 ## 5. Open
 

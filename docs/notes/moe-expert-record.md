@@ -5,8 +5,11 @@ Operator, relayed by München: "I want … the MoE preloading in VRAM based on
 the recent experts used"; and that morning, after the 35B's rows: "is it
 possible to keep an history of the experts used recently to know what
 already load in VRAM from the beginning and what swap to cache first?".
-BUILT, its own logic tested, compiled for the card; the fill itself has
-NOT run: it needs a card beside the host. §5 is the node's measurement.*
+BUILT, AND RUN ON THE CARD 2026-11-25 (§7): it is right — the answer's text
+is the same with and without it, seven ways, and 47 % fewer MiB are uploaded
+under the tokens — and it buys about a tenth of a second, because an upload
+on this card costs far less than anyone assumed. §7 has the rows and the
+choice; it is OFF until the operator chooses.*
 
 ## 1. What is there already, and what is missing
 
@@ -45,7 +48,7 @@ The architecture session's conditions, each as built:
 | switched by the model's env; off = today's engine | unset: nothing is read, kept or filled |
 | placement must not change an answer | by construction with no share of the misses on the CPU (`moe_cache_cpu_share` 0, the default and the node's): an expert in the cache and one uploaded at a miss are the same bytes through the same kernels. THE PROOF IS THE NODE'S (§5: the same token ids at temperature 0). With a CPU share above 0 the cache's state already decides today which kernels compute a miss, and a cache that starts full applies the share from its first token: documented, not claimed equal |
 | a record that cannot be read is ignored | cut, changed, noise, a NaN, other weights, another build: one log line, the model loads and starts cold (tested: every cut and every changed byte) |
-| THE FILL BELONGS TO THE LOAD | it is in the cache's constructor, which the context's constructor calls: under LocalAI, inside the load and before the warm-up run. ONLY THE LOAD'S OWN CONTEXT: with context on demand, a context created for a question after the keep ran out is filled inside that question, before its first token — there the person pays the fill, and it pays only if the seconds it saves under the tokens exceed its own (§6). The live 35B is not that case: its YAML has no `context_on_demand` (München, 2026-11-24), so the load's context serves every question and the fill is paid once, in the load. Bounded by the cache's size: at the card's 6.2–6.4 GiB/s (München), 8,192 MiB are about 1.3 s; the fill's own log line says its MiB and its ms |
+| THE FILL BELONGS TO THE LOAD | it is in the cache's constructor, which the context's constructor calls: under LocalAI, inside the load and before the warm-up run. ONLY THE LOAD'S OWN CONTEXT: with context on demand, a context created for a question after the keep ran out is filled inside that question, before its first token — there the person pays the fill, and it pays only if the seconds it saves under the tokens exceed its own (§6). The live 35B is not that case: its YAML has no `context_on_demand` (München, 2026-11-24), so the load's context serves every question and the fill is paid once, in the load. Bounded by the cache's size: at the card's 6.2–6.4 GiB/s (München) 8,192 MiB were expected to take about 1.3 s — MEASURED 2026-11-25: 8,186 MiB in 173 ms (§7); the fill's own log line says its MiB and its ms |
 | the file written by temporary name and rename, off the token path; a kill leaves the previous file whole | written in the cache's destructor (the unload's graceful path), never while it computes; `rename` over the old file |
 | the card bytes at rest | UNCHANGED: the cache's buffer is allocated whole and cleared when the cache is created, as before; the record decides what is in it. The keeper's size for the model does not move |
 | counts, no text; on the node only | per layer and expert, a float; never in a SHARD or a statement |
@@ -67,7 +70,7 @@ maintained by use instead of by hand.
 | it compiles | g++ (the CPU build of the whole candidate source) and Intel's compiler 2025.3.3 (`libllama` with the patch) |
 | it applies in the build's order | after the port, the three fixes, parking and its switch: the candidate's engine source |
 | the fill's CHOICES, without a device (`tools/measure/moe_record_replay.py`, §6) | its cold replay equals llama.cpp's own simulator (`scripts/moe-cache-tune.py` `replay()`), and its cold and filled replays equal the ENGINE's own `moe_cache_lru` and `llama_moe_record`, extracted from the candidate's source and driven as the cache drives them: 40 random cases, one and two groups, caches from a tenth of the experts to all of them; one case kept as the test's golden figures |
-| the fill and the seeded eviction | NOT RUN. The cache needs a card beside the host (it refuses to be created without one), and none of the stand-ins tried here could give one: the engine's SYCL device discovery refuses the CPU device, and a software Vulkan device needed a downloaded compiler binary that this session is not permitted to run |
+| the fill and the seeded eviction | not run HERE — RUN ON THE CARD 2026-11-25, §7. Here: the cache needs a card beside the host (it refuses to be created without one), and none of the stand-ins tried here could give one: the engine's SYCL device discovery refuses the CPU device, and a software Vulkan device needed a downloaded compiler binary that this session is not permitted to run |
 
 ## 4. What it should bring, and what would make it not worth having
 
@@ -211,3 +214,63 @@ a layer selected per token) the seeding DID matter: the record's rank cost
 24 % more uploads than a cold cache on another subject, a flat seed none.
 Kept as a warning for a smaller cache or another model; `--cap N` replays
 the seedings in between.
+
+## 7. On the card (München, 2026-11-25, engine b190673dbdbf, the node paused)
+
+Copies of the 35B (`cpu_moe:true`, `moe_cache_mib:8192`, no CPU share,
+`verbosity:4`), the card emptied before each arm. P is the 2,048-token
+prompt of phase 0, temperature 0, seed 0, 160 tokens asked; **the answer is
+42 tokens**, so there is no 64-token figure. The record was built by a
+process answering three OTHER long prompts (19,709 tokens, a 41,051-byte
+file) and copied per arm, as §5 says.
+
+| arm | request to first token | the engine's own load | the fill | MiB uploaded under the tokens (batches of ≤ 8) | hits |
+|---|---|---|---|---|---|
+| A, no record, P to an unloaded copy | 27.12 s — the file's FIRST load after the gates (page cache): not to be read against C | 23.82 s | — | 7,742.65 (4,254 misses) | 71.51 % |
+| B1, a record of other questions, context on demand | 16.00 s | 13.11 s | 4,492 experts, 8,186.38 MiB in 172.8 ms | 4,310.27 (2,372) | 84.13 % |
+| B2, the same process's second context, the record now holding P | 3.215 s | — (context created in 437.79 ms, its canary reproduced) | 8,186.38 MiB in 173.4 ms | 3,908.78 (2,151) | 85.05 % |
+| C, a new process reading the file | 15.77 s | 12.51 s | 8,186 MiB in 172.9 ms | 4,135.30 (2,277): −47 % against A | 84.75 % |
+| D, C with `LLAMA_MOE_RECORD_FILL=0.5` | 15.73 s | 12.41 s | 2,246 experts, 4,093.19 MiB in 92.1 ms | 5,290.71 (2,910): −32 % | 80.51 % |
+| A2, the load-ahead shape, no record | warm "OK" 13.27 s; then P: 2.882 s, 3.51 s for the answer | | | not captured | |
+| C2, the same with the record | warm "OK" 13.21 s; then P: 2.817 s, 3.39 s for the answer | | | not captured | |
+
+The answer's text is the same in all seven (sha256 f9ca4ff7b3c1fe94). Every
+load of the file after its first took 12.3–13.1 s, with or without a fill.
+
+- **It is right.** The same text with no record, in a second context of the
+  process, in a new process reading the file, with half a fill, and in the
+  load-ahead shape. The uploads under the tokens fall by 47 % — the replay
+  of §6 said 40–53 % — and by 32 % with half the cache filled.
+- **It costs almost nothing in the load:** 8,186 MiB in 173 ms, 4,093 MiB in
+  92 ms, about 47 MiB per millisecond — seven times the rate the design
+  assumed. The load's seconds do not show it.
+- **And it buys almost nothing, for the same reason:** an upload is that
+  cheap under a token too. The 3,607 MiB it removes are worth 0.08 s at that
+  rate; measured with the load hidden, 0.065 s to the first token (2.882 →
+  2.817 s) and 0.12 s over the answer (3.51 → 3.39 s). What the first token
+  waits for is the prefill of the prompt. The record's builder bounds the
+  whole prize: the first 64 chunks of a process's FIRST answer took 0.898 s,
+  of its second and third 0.762 and 0.742 s — a cold cache costs 0.14–0.16 s
+  over 64 tokens, and the record takes about half of that back.
+
+By §6's rule: saved 0.07–0.12 s, added 0.17 s (the whole cache) or 0.09 s
+(half). Where the person waits for the load it is a wash; where the load is
+ahead of the question it is a tenth of a second on the first answer after
+each load of the 35B. A half fill has nothing measured in its favour.
+
+| the record | pros | cons |
+|---|---|---|
+| off (today) | nothing to keep on the node, nothing to remember | the first answer after each load of the 35B is about 0.1 s slower when the load was ahead |
+| on, the whole cache: one env line on the 35B, its directory under the node's cache | about 0.1 s on that answer; the answers are the same, shown seven ways; 0.17 s inside a 12.5 s load | a file per model and engine build, and a mechanism kept alive for a tenth of a second; nothing gained where the person waits for the load |
+| on, half the cache | 0.09 s in the load instead of 0.17 | removes 32 % of the uploads instead of 47 %; no second measured in its favour |
+
+Recommended: on, the whole cache, ONCE THE LOAD AHEAD IS LIVE for the chat
+model — then it is a gain with nothing against it but its size, and this
+project deploys measured gains however small. Before that it is a wash and
+stays off. It is the operator's word on the node (München's one line);
+nothing is switched on if he says nothing.
+
+What would change the picture: a model whose cache turns over harder, or a
+link where an upload is dear. The replay tool answers the first from traces;
+the fill's own log line answers the second.
+

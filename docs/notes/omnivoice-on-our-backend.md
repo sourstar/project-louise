@@ -753,7 +753,10 @@ directory: the lease found, a second reference, a profile with the same
 bytes not confused, a copy, another layout, a deleted profile, a link to a
 profile not followed.
 
-**The longer clip: no.** The operator's sentence does not hold for this
+**The longer clip: I wrote "no" here, and the card says yes (2026-11-25,
+below): 2.70 s a sentence against 2.24 s, not the 5–8 s estimated.** What
+follows is the reasoning as written on 2026-11-24; its mechanism is right
+and its estimate was wrong. The operator's sentence does not hold for this
 model, and nothing exact makes it hold. Each of the 32 steps computes the
 whole conditional sequence again — the text, the reference's frames and the
 target's — plus the target alone for the guidance, and the backbone reads
@@ -770,7 +773,7 @@ square.
 | rows per step, about | 820 | 1,430 (1.75×) |
 | attention, about | 1× | 3.4× |
 | today's backend, a busy node (München) | 5.0 / 12.3 s | 25.1 / 20.4 s |
-| the port (E: from its 2.27 s and the two ratios) | 2.27 s (M) | 5–8 s |
+| the port (E: from its 2.27 s and the two ratios) | 2.27 s (M) | 5–8 s — WRONG: 2.70 s measured |
 
 | choice for Philippe's clip | pros | cons |
 |---|---|---|
@@ -781,6 +784,95 @@ square.
 
 The rows that decide are München's, on an unloaded node, per clip and per
 backend, at 32 steps and at 16 on the port; then his ear.
+
+### On the card (München, 2026-11-25, engine b190673dbdbf, the node paused)
+
+One Italian sentence, a test copy of the port beside today's backend, both
+unloaded before their rows.
+
+| a sentence in | the port, 32 steps | the port, 16 steps | today's backend |
+|---|---|---|---|
+| Philippe's 11 s clip | **2.24 s** (backbone 1.80, decoder 0.28); the first of the process 9.03 s, the clip encoded in 1.64 s | 1.30 s | 3.60 s (the first 13.63 s) |
+| his ORIGINAL 27.75 s clip | **2.70 s** (backbone 2.20); the first with it 4.91 s, encoded in 2.20 s | 1.59 s | 8.65 s |
+| no voice | 1.25 s | | |
+
+- **The original clip costs 0.46 s a sentence on the port** (+20 %), 0.29 s
+  at 16 steps — against 5.05 s on today's backend. With the original clip
+  the port is faster than today's backend with the SHORT one (2.70 against
+  3.60 s). My estimate scaled the rows per step and the attention; on this
+  card the backbone's time grows by 22 % for 1.75 times the rows.
+- **The kept encoding works as built.** A new process's first sentence says
+  "read from its kept encoding", voice clip 0.01 s. The same seeded sentence
+  gives the same audio (sha c394ed4688de1081) read from the file, again in
+  the same process, and encoded afresh by a new process after the file was
+  deleted. `reference.wav.encoded` is 0600: 1,019,976 bytes for the 11 s
+  clip, 2,756,680 for the original.
+- **A deleted test profile takes its encoding with it**: HTTP 204, its
+  directory gone; five encodings remain (Philippe's and the four synthetic
+  voices). What was found beside it, in LocalAI's own lease directory, is
+  localai-bugs.md B20 / P19.
+- The port at rest holds 1,864 MiB of the card.
+
+**The operator's first question, answered by these rows: the first sentence
+of a NEW PROCESS still takes 8.74 s, and the clip is not why.** Its encoding
+is read in 0.01 s. About 5.1 s is the model's load before the pipeline runs,
+and 1.5 s the pipeline's first use (backbone 2.79 s against 1.80, decoder
+0.81 against 0.28); the second sentence takes 2.24 s. No change to the
+engine removes a load. What takes both out of a person's wait is Louise's
+load ahead, which already sends a real synthesis ("OK", no voice) through
+the keeper (the architecture session). That exact body answers 200 on the
+port (run here on the CPU build; LocalAI's own route in the next pass).
+Whether a no-voice warm also pays the first use of a CLONED sentence is two
+rows of the next pass: a new process whose first request is the warm and
+then a cloned sentence, and one whose first request is the cloned sentence.
+
+| Philippe's clip | pros | cons |
+|---|---|---|
+| the 11 s clip at 32 steps (as now) | 2.24 s a sentence, the fastest at full quality | the voice he found less close |
+| the ORIGINAL 27.75 s clip at 32 steps | the voice he preferred, at 2.70 s — faster than today's backend with the short clip | 0.46 s more a sentence than the 11 s clip |
+| the original clip at 16 steps (`node speech set --steps 16`) | 1.59 s a sentence | 16 steps is audible on some sentences: for his ear |
+| today's backend, until the port is the live voice | nothing changes | 3.60 s with the short clip, 8.65 s with the original |
+
+Recommended: the original clip at 32 steps, on the port. The ear clips of
+all four are with the operator (München); his ear decides, and Philippe
+stays on the 11 s clip if he says nothing.
+
+**The port is not the live voice on b190673dbdbf, and will not be**
+(the architecture session, 2026-11-25): it becomes the voice on the engine
+that carries the fixes these rows led to — below.
+
+**What the engine keeps of a saved voice between requests: nothing (staged
+0020, 2026-11-25).** The architecture session asked when a living process
+gives a clip's lease back. LocalAI does, at the end of the request. The
+question found something one layer down, in this port: it kept the last
+clip's SAMPLES and its rows in the backend's memory from one request to the
+next, until another clip came or the model was unloaded — a deleted voice
+held, unseen, for as long as the port stayed loaded. The live engine
+b190673dbdbf does this; no voice is served through it.
+- A clip with a file for its encoding — every profile's clip — now leaves
+  nothing in the process between two requests. Its rows are read from the
+  file at each request (0.01 s); the samples are known by their SHA-256 and
+  zeroed once the rows are in hand; the rows are zeroed when the request
+  ends.
+- So the condition holds at three layers once a profile is deleted and the
+  request that was running has ended: its directory is gone, the encoding
+  with it; no lease of a dead process links to its clip (P19); the engine
+  holds neither samples nor rows.
+- A clip WITHOUT such a file — a bare path, not a profile — is still kept
+  between requests: by its digest and its rows, never its samples.
+- The request's line says which it was: "…the voice clip's rows encoded" (a
+  clip's first use), "read from its kept encoding" (every later request in a
+  profile's voice), "kept" (only a clip with no file).
+
+Checked here, four CPU threads, one seeded sentence in a cloned voice: the
+same audio bytes (sha afa8db3d2b59e621) encoded with the file written, read
+from the file by a second process in 0.01 s, encoded again after the file
+was deleted, with no file at all — and from a server process that keeps
+the clip by its digest: its second request says "kept", a different clip in
+between does not disturb the third. The file is the same 651,336 bytes,
+0600. On the card: every sentence in a profile's voice after the first says
+"read from its kept encoding", none "kept"; then steps 3 to 5 of the order
+below, on the candidate engine.
 
 **The speech model on the engine** (for München's test copy; the one engine,
 no package of its own):

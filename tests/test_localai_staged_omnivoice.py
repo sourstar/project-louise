@@ -203,10 +203,16 @@ def test_under_localai_the_encoding_sits_beside_the_profile_s_clip_and_goes_with
 
 def test_the_longer_clip_is_answered_with_its_cost_not_promised_away():
     section = NOTE[NOTE.index("## 13. "):]
-    assert "**The longer clip: no.**" in section
-    assert "| reference frames | 249 | 673 |" in section
+    # the estimate of 2026-11-24 said no; the card said yes, and the note says both
+    assert '**The longer clip: I wrote "no" here, and the card says yes' in section
+    assert "| reference frames | 249 | 673 |" in section and "5–8 s — WRONG: 2.70 s measured" in section
     table = section[section.index("| choice for Philippe's clip | pros | cons |"):]
     assert table.count("\n| ") >= 4, "the status quo and three alternatives, each with its cons"
+    card = section[section.index("### On the card (München, 2026-11-25"):]
+    assert "| his ORIGINAL 27.75 s clip | **2.70 s** (backbone 2.20)" in card and "| Philippe's 11 s clip | **2.24 s**" in card
+    measured = card[card.index("| Philippe's clip | pros | cons |"):]
+    assert measured.count("\n| ") >= 4 and "Philippe\nstays on the 11 s clip if he says nothing" in card
+    assert "the first sentence\nof a NEW PROCESS still takes 8.74 s, and the clip is not why" in card
 
 
 def test_the_reference_s_hooks_are_the_ones_the_gate_tool_names():

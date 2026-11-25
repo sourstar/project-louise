@@ -1,0 +1,283 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 02:20:47 +0000
+Subject: [PATCH] fix(llama-cpp): OmniVoice keeps nothing of a saved voice in
+ memory between requests
+
+Carried as a llama.cpp patch beside the others
+(patches/0019-mtmd-omnivoice-nothing-kept-between-requests.patch), after
+0012-mtmd-omnivoice.patch, whose pipeline it changes.
+
+The pipeline kept the last voice clip in the backend's memory from one
+request to the next - its samples and its encoded rows - until another
+clip came or the model was unloaded. A saved voice profile is a person's
+voice. Deleting the profile removes its clip and, with our backend, the
+file of its encoding beside it; the copy in a backend that stays loaded
+for hours outlived both, where no listing could show it.
+
+For a clip that has a file for its encoding - which is every clip of a
+saved profile (tts_voice_cache.h names it beside the profile's own clip) -
+the rows are now read from that file at every request, about a hundredth
+of a second, and nothing of the clip stays in the process between two
+requests: the samples are known by their SHA-256 and zeroed once the rows
+are in hand, the rows are zeroed when the request ends. A clip without
+such a file (a bare path, not a profile) is still kept between requests,
+by its digest and its rows, never its samples.
+
+The request's log line says which it was: "the voice clip's rows encoded",
+"read from its kept encoding", or "kept" (only a clip with no file).
+
+Checked on four CPU threads: one seeded sentence in a cloned voice gives
+the same audio bytes encoded with the file written, read from the file by
+a second process, encoded again after the file is deleted, with no file at
+all, and from a server process that keeps the clip in memory by its
+digest. On a device: every sentence in a profile's voice after the first
+says "read from its kept encoding", none says "kept".
+
+Assisted-by: Claude Code
+---
+ ...ivoice-nothing-kept-between-requests.patch | 232 ++++++++++++++++++
+ 1 file changed, 232 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0019-mtmd-omnivoice-nothing-kept-between-requests.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0019-mtmd-omnivoice-nothing-kept-between-requests.patch b/backend/cpp/llama-cpp/patches/0019-mtmd-omnivoice-nothing-kept-between-requests.patch
+new file mode 100644
+index 0000000..821f396
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0019-mtmd-omnivoice-nothing-kept-between-requests.patch
+@@ -0,0 +1,232 @@
++mtmd: omnivoice: a clip that has a file for its encoding leaves nothing in memory between requests
++
++The pipeline kept the last voice clip in memory from one request to the
++next - its samples, to know the clip again, and its encoded rows - until
++another clip came or the model was unloaded. A clip is a person's voice,
++and the rows are the voice as much as the samples are. A caller that keeps
++voices and deletes them (a profile store) deletes the clip and the file of
++its encoding; the copy in a process that stays loaded for hours outlived
++both, where nobody could see it.
++
++With speaker_ref_cache - the caller's file for this clip's encoding - the
++rows are now read from that file at EVERY request (a hundredth of a second
++on the model's own hardware), and nothing of the clip stays in the process
++between two requests:
++- the samples are hashed first and known by their SHA-256 from there on;
++  they are zeroed as soon as the rows are in hand;
++- the request's rows are zeroed when the request ends, and at the next
++  request's reset;
++- the bytes read from, or written to, the file are zeroed before they are
++  released.
++So once the caller has deleted the clip and its file, and the request that
++was running has ended, the process holds neither the samples nor the rows.
++
++Without speaker_ref_cache there is no file and no caller that deletes: the
++rows of the last clip are still kept between requests, now beside the
++clip's digest instead of its samples.
++
++The log line of a request says which it was: "the voice clip's rows
++encoded" (a clip's first use), "read from its kept encoding" (every later
++request of a clip with a file), "kept" (a clip without one).
++
++clip_cache_read and clip_cache_write take the digest; the file format and
++its checks are unchanged (OVCLIP2).
++
++Checked on four CPU threads, one seeded sentence in a cloned voice: the
++audio is the same bytes encoded with the file written, read from the file
++by a second process, encoded again after the file is deleted, and with no
++file at all; in one process without a file, the second request says "kept"
++and gives the first one's bytes, another clip in between does not disturb
++it.
++---
++diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
++index 31160b0..a65b777 100644
++--- a/tools/mtmd/mtmd-helper-gen.cpp
+++++ b/tools/mtmd/mtmd-helper-gen.cpp
++@@ -1424,7 +1424,7 @@ public:
++         backbone.reset();
++         n_rows_max = 0;
++         t_us = {};
++-        voice_rows.clear();
+++        wipe(voice_rows);
++         voice_from = "";
++         voice_text.clear();
++         voice_rms  = -1.0f;
++@@ -1453,31 +1453,41 @@ public:
++             const int64_t t_voice = ggml_time_us();
++             const float * pcm = (const float *) mtmd_bitmap_get_data(inp->speaker_ref);
++             std::vector<float> clip(pcm, pcm + mtmd_bitmap_get_n_bytes(inp->speaker_ref) / sizeof(float));
+++            // the clip as it was given is known from here on by its digest alone
+++            const std::array<uint8_t, 32> digest = hash_sha256(clip.data(), clip.size() * sizeof(float));
+++            // a clip with a file for its encoding (speaker_ref_cache) is a voice someone keeps and may delete: its rows
+++            // are read from that file at every request and NOTHING of it stays in this process between two requests
+++            const bool own_file = inp->speaker_ref_cache && inp->speaker_ref_cache[0];
++             voice_from = "encoded";
++-            if (!kept_clip.empty() && kept_clip == clip) {
+++            if (!own_file && kept && kept_digest == digest) {
++                 // the same clip as the last request's (an answer read sentence by sentence): its frames are the same
++                 voice_rows = kept_rows;
++                 voice_rms  = kept_rms;
++                 voice_from = "kept";
++-            } else if (clip_cache_read(inp->speaker_ref_cache, clip, voice_rows, voice_rms)) {
++-                // encoded by an earlier process (speaker_ref_cache): the first sentence after a load pays no encoding
++-                kept_clip  = clip;
++-                kept_rows  = voice_rows;
++-                kept_rms   = voice_rms;
+++            } else if (clip_cache_read(inp->speaker_ref_cache, digest, voice_rows, voice_rms)) {
+++                // encoded before, by this process or an earlier one: no sentence but a clip's first pays the encoding
++                 voice_from = "read from its kept encoding";
++             } else {
++-                kept_clip = clip;
++                 voice_rms = ov::ref_preprocess_audio(clip, info.sample_rate, true);
++                 mtmd::bitmap_ptr prepared(clip.empty() ? nullptr : mtmd_bitmap_init_from_audio(clip.size(), clip.data()));
++                 if (!prepared || !encode_speaker(prepared.get(), voice_rows) || voice_rows.empty()) {
++-                    kept_clip.clear();
+++                    wipe(clip);
++                     LOG_ERR("mtmd_helper_gen_audio: omnivoice: failed to encode the voice clip\n");
++                     return 1;
++                 }
++-                kept_rows = voice_rows;
++-                kept_rms  = voice_rms;
++-                clip_cache_write(inp->speaker_ref_cache, kept_clip, kept_rows, kept_rms); // kept_clip: the clip as it was given
++-            }
+++                clip_cache_write(inp->speaker_ref_cache, digest, voice_rows, voice_rms);
+++            }
+++            wipe(kept_rows);
+++            kept = false;
+++            if (!own_file) {
+++                // no file to keep the encoding in: it is kept here until another clip comes, with the clip's digest
+++                // and never its samples
+++                kept_digest = digest;
+++                kept_rows   = voice_rows;
+++                kept_rms    = voice_rms;
+++                kept        = true;
+++            }
+++            wipe(clip);
++             n_voice = (int) (voice_rows.size() / n_embd);
++             t_us.voice = ggml_time_us() - t_voice;
++             if (inp->speaker_ref_text && inp->speaker_ref_text[0]) {
++@@ -2120,6 +2130,7 @@ private:
++         LOG_INF("mtmd_helper_gen_audio: omnivoice: %zu chunk(s), %d steps: voice clip %.2f s, backbone %.2f s, audio heads %.2f s, "
++                 "scoring %.2f s, decoder %.2f s%s%s\n", chunks.size(), t_us.n_steps, t_us.voice / 1e6, t_us.backbone / 1e6,
++                 t_us.heads / 1e6, t_us.scoring / 1e6, t_us.decoder / 1e6, voice_from[0] ? "; the voice clip's rows " : "", voice_from);
+++        wipe(voice_rows); // the voice was the request's
++         finished = true;
++         return true;
++     }
++@@ -2131,12 +2142,16 @@ private:
++         return dir && dir[0] ? dir : nullptr;
++     }
++ 
++-    // --- a voice clip's encoding kept in a file, so that a process that has just loaded reads it ---
+++    // --- a voice clip's encoding kept in a file, read at every request ---
++     //
++-    // The rows of a clip are kept in memory from one request to the next; a load starts without them, and its first
++-    // sentence in a voice pays the clip's encoding again (about a second on a GPU, two on four cores). With
++-    // inp->speaker_ref_cache, the path of ONE file that belongs to the clip, the rows are written there when the clip
++-    // is first encoded and read from there by any later process.
+++    // Encoding a clip costs about a second on a GPU, two on four cores. With inp->speaker_ref_cache, the path of ONE
+++    // file that belongs to the clip, the rows are written there when the clip is first encoded and read from there by
+++    // every later request, of this process or another (a hundredth of a second). Such a clip leaves nothing in this
+++    // process between two requests: not its samples, which are known by their digest and zeroed once read, and not
+++    // its rows, which are zeroed when the request ends. So when the caller deletes the clip and its file, nothing of
+++    // the voice is left here to outlive them - a process that stays loaded for hours held a deleted voice until then.
+++    // Without the path there is no file and no one to delete it: the rows of the last clip are kept in memory from
+++    // one request to the next, with the clip's digest.
++     //
++     // The file is the caller's to place and to remove: the rows are the voice, as much as the clip is, so the file
++     // should sit where the clip sits and be deleted with it. It holds the encoding, the SHA-256 of the clip's samples
++@@ -2188,8 +2203,8 @@ private:
++     static constexpr char   clip_cache_magic[8] = { 'O', 'V', 'C', 'L', 'I', 'P', '2', '\n' };
++     static constexpr size_t clip_cache_max      = (size_t) 64 << 20; // bytes: no clip's rows are larger
++ 
++-    bool clip_cache_read(const char * path, const std::vector<float> & clip, std::vector<float> & rows, float & rms) {
++-        if (!path || !path[0] || clip.empty()) {
+++    bool clip_cache_read(const char * path, const std::array<uint8_t, 32> & digest, std::vector<float> & rows, float & rms) {
+++        if (!path || !path[0]) {
++             return false;
++         }
++         FILE * f = fopen(path, "rb");
++@@ -2204,7 +2219,6 @@ private:
++         }
++         fclose(f);
++ 
++-        const std::array<uint8_t, 32> digest = hash_sha256(clip.data(), clip.size() * sizeof(float));
++         clip_cache_head head;
++         const size_t fixed = sizeof(clip_cache_magic) + sizeof(head);
++         bool ok = buf.size() > fixed + sizeof(uint64_t) && buf.size() <= clip_cache_max &&
++@@ -2221,24 +2235,29 @@ private:
++                  buf.size() == fixed + (size_t) head.n_rows * n_embd * sizeof(float) + sizeof(uint64_t);
++         }
++         if (!ok) {
+++            char hex[17];
+++            for (int i = 0; i < 8; ++i) {
+++                snprintf(hex + 2 * i, 3, "%02x", digest[i]);
+++            }
++             LOG_WRN("mtmd_helper_gen_audio: omnivoice: the kept encoding is not that of clip %s by these models and this build, "
++-                    "the clip is encoded\n", hash_sha256_hex(clip.data(), clip.size() * sizeof(float)).substr(0, 16).c_str());
+++                    "the clip is encoded\n", hex);
+++            wipe(buf);
++             return false;
++         }
++         rows.resize((size_t) head.n_rows * n_embd);
++         memcpy(rows.data(), buf.data() + fixed, rows.size() * sizeof(float));
++         rms = head.rms;
+++        wipe(buf);
++         return true;
++     }
++ 
++     // written whole beside the final name, readable by its owner alone, then renamed: another process reads the old
++     // file, the new one, or none
++-    void clip_cache_write(const char * path, const std::vector<float> & clip, const std::vector<float> & rows, float rms) {
++-        if (!path || !path[0] || clip.empty() || rows.empty() || rows.size() % n_embd != 0) {
+++    void clip_cache_write(const char * path, const std::array<uint8_t, 32> & digest, const std::vector<float> & rows, float rms) {
+++        if (!path || !path[0] || rows.empty() || rows.size() % n_embd != 0) {
++             return;
++         }
++         clip_cache_head head = {};
++-        const std::array<uint8_t, 32> digest = hash_sha256(clip.data(), clip.size() * sizeof(float));
++         memcpy(head.clip_sha256, digest.data(), digest.size());
++         head.models = clip_cache_models();
++         head.n_embd = (uint32_t) n_embd;
++@@ -2268,9 +2287,14 @@ private:
++         const bool closed  = f && fclose(f) == 0;
++         if (!written || !closed || rename(tmp.c_str(), path) != 0) {
++             remove(tmp.c_str());
++-            LOG_WRN("mtmd_helper_gen_audio: omnivoice: the encoding of clip %s could not be kept, the next load encodes it again\n",
++-                    hash_sha256_hex(clip.data(), clip.size() * sizeof(float)).substr(0, 16).c_str());
+++            char hex[17];
+++            for (int i = 0; i < 8; ++i) {
+++                snprintf(hex + 2 * i, 3, "%02x", digest[i]);
+++            }
+++            LOG_WRN("mtmd_helper_gen_audio: omnivoice: the encoding of clip %s could not be kept, every sentence in it "
+++                    "pays its encoding\n", hex);
++         }
+++        wipe(buf);
++     }
++ 
++     template <typename T>
++@@ -2326,9 +2350,21 @@ private:
++     float voice_rms = -1.0f;
++     int n_voice = 0;
++ 
++-    // the last clip encoded, sample for sample, with its rows and its level: kept across requests
++-    std::vector<float> kept_clip, kept_rows;
+++    // the last clip WITHOUT a file of its own: the digest of its samples, its rows and its level, kept across requests
+++    std::array<uint8_t, 32> kept_digest = {};
+++    std::vector<float> kept_rows;
++     float kept_rms = -1.0f;
+++    bool  kept     = false;
+++
+++    // a buffer that held a voice - samples, rows - is zeroed before it is let go
+++    template <typename T>
+++    static void wipe(std::vector<T> & v) {
+++        volatile unsigned char * p = (volatile unsigned char *) v.data();
+++        for (size_t i = 0, n = v.size() * sizeof(T); i < n; ++i) {
+++            p[i] = 0;
+++        }
+++        v.clear();
+++    }
++     // where this request's voice rows came from, for its log line; the models' hash of the clip cache, 0 = not computed
++     const char * voice_from = "";
++     uint64_t clip_models = 0;
+-- 
+2.43.0
+
