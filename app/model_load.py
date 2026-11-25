@@ -706,7 +706,20 @@ def unload(url: str, model: str | None) -> bool:
         return False
     with _lock:
         _systems.pop(server, None)           # what it holds has changed
+    if r.status_code == 200:
+        _note_own(server, model)
     return r.status_code == 200
+
+
+def _note_own(server: str, model: str) -> None:
+    """Louise stopped or parked this model itself: said where the keeper's
+    process reads it, so the stop is not taken for an eviction of the
+    reclaimer's (app/own_unloads.py). Never raises."""
+    try:
+        from app import own_unloads
+        own_unloads.note(server, model)
+    except Exception:   # noqa: BLE001
+        pass
 
 
 #: what `park` answers with
@@ -752,6 +765,7 @@ def park(url: str, model: str | None) -> tuple[str, int]:
     with _lock:
         _systems.pop(server, None)           # what it holds may have changed
     if status == 200:
+        _note_own(server, model)
         got = body.get("parked") if isinstance(body.get("parked"), dict) else {}
         moved = got.get("size_vram_needed")
         return PARKED, moved if isinstance(moved, int) and not isinstance(moved, bool) and moved > 0 else 0

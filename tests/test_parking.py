@@ -595,6 +595,7 @@ def test_the_keepers_beat_gives_the_host_back_and_takes_it_for_no_eviction(node,
     with resident._lock:
         resident._track[(S, "louise-translate-madlad")] = resident._Track()
         resident._track[(S, "louise-translate-madlad")].warmed_at = resident._now() - 30.0   # warmed half a minute ago
+    monkeypatch.setattr(resident, "_due", resident._due)          # the real back-off, by the node's own record
     monkeypatch.setattr(resident, "_question_now", lambda: False)
     penalized = []
     monkeypatch.setattr(resident, "_penalize", lambda r_, stayed: penalized.append(r_.model))
