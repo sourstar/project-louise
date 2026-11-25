@@ -3459,12 +3459,28 @@ off the node: a 28.5 M-character act on 4 cores, 63.9 s → 37.7 s, the same
 at its end, so the collection's rdf still waits behind a run of large units.
 Those are the next row.
 
-**AFTER** — owed. The same act's remaining languages (it, de, fr, en) and any
-unit of that size: each unit's seconds from the "has left the parse pool
-after N" line (#891), against ~100 s for ~100 MB; the lane child's peak RSS
-against 2.8 GiB (a batch of encodings is alive at a time); and the staged run
-5's count under the real tokenizer, which is the proof that the pieces are
-the same.
+**AFTER** (München, the node at 9811ca92, worker started 12:11:43Z; the first
+three large text units, each timed by the pool's own "has left the parse
+pool after N"): fr 32018R0688, 92,328,556 bytes, 70 s, 1,827 chunks; fr
+32019R0439, 77,865,673 bytes, 85 s; it 32019R0439, 80,733,615 bytes, 86 s —
+241 s for 250,927,844 bytes, 0.960 µs a byte. The staged run 5: "23 passed"
+under the real tokenizer (the same pieces).
+READ AGAINST THE RIGHT BEFORE: the like-for-like figure is the fifteen units
+one after the other, 1,513 s for 1,494,357,545 bytes = 1.012 µs a byte — not
+the 1.715 of the nine-unit commit line, whose 1,503 s held six more units
+parsed ahead. So: about 5 % faster a byte on three units, which three units
+cannot tell from nothing. NOT the 1.7x of the measure off the node, which
+timed the chunker alone on four cores. Either the tokenizer is a small part
+of a large unit's 70-86 s here (the package read, the rdf's text, the rest
+of the parse), or the lane child's four threads are not at work: from the
+host every pool child showed 19 threads at its most and nothing named which
+child was the lane's. Memory: the highest VmHWM of any child 3,159,196 kB
+(2,834,164 kB before): +11 %. No yield, no kill.
+WHAT FOLLOWS: the pool's line now names a large part's pid and its peak
+(the next row's instrument), so the lane child's threads and time can be
+read where it runs; and the chunker's share of a large unit's time is to be
+measured ON THE NODE before anything more is built on it (measuring.md: the
+deployed thing, not the bench).
 
 ## 2026-11-25 — a collection's embedding waits for the keeper's preload after a start
 
