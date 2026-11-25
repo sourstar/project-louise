@@ -115,9 +115,55 @@ def _watch() -> None:
             warm_all("model server back: " + ", ".join(sorted(back)), only=back)
 
 
+def open_text_indexes(why: str = "web start") -> list[tuple[str, int, float]]:
+    """THE TEXT LEG'S INDEXES, OPENED BEFORE THE FIRST QUESTION NEEDS THEM
+    (2026-11-25: the operator's first question after a deploy, "fts 12,600",
+    over gutenberg — a 54 GB text index in 21 language groups on the SATA
+    drive, opened by that question, one group after the other under one lock;
+    later searches of the same process measured 0.4 s at the median,
+    storage-tiering.md §12). Every searched collection's language groups are
+    opened — several at once (`fts.open_all`), the collections one after the
+    other so the drive is not asked for everything at the same moment — each
+    with its searcher made, and its seconds said: that line is the
+    measurement of what a first question paid until now.
+
+    What it does NOT do: read the postings a question's words will need —
+    those stay the drive's to give at the first search that asks for them.
+    A question asked meanwhile opens what it needs itself and waits for
+    nothing here. Returns [(collection, groups opened, seconds)]; never
+    raises."""
+    from app import collections as collections_mod, fts
+    out: list[tuple[str, int, float]] = []
+    try:
+        held = collections_mod.load_all()
+    except Exception as e:   # noqa: BLE001 — no collections read: nothing to open
+        _log(f"text indexes not opened ({why}): {type(e).__name__}: {str(e)[:200]}")
+        return out
+    t0 = time.monotonic()
+    for c in held:
+        try:
+            if collections_mod.is_annotations(c):
+                continue                         # claims: no text leg
+            opened, failed, seconds = fts.open_all(c)
+        except Exception as e:   # noqa: BLE001 — one collection never stops the rest
+            _log(f"{c.name}: text index not opened ({why}): {type(e).__name__}: {str(e)[:200]}")
+            continue
+        if not opened and not failed:
+            continue
+        out.append((c.name, len(opened), seconds))
+        _log(f"{c.name}: text index opened, {len(opened)} language group(s) in {seconds:.1f} s ({why})"
+             + (f" — NOT opened: {'; '.join(f'{g}: {m}' for g, m in sorted(failed.items()))}" if failed else ""))
+    if out:
+        _log(f"text indexes: {sum(n for _, n, _ in out)} group(s) of {len(out)} collection(s) opened in "
+             f"{time.monotonic() - t0:.1f} s ({why}) — a first question no longer opens them")
+    return out
+
+
 def start() -> bool:
     """Start the watcher once per process; False when switched off
-    (`LOUISE_WARMUP=0`, the test suite's) or already started."""
+    (`LOUISE_WARMUP=0`, the test suite's) or already started. The text
+    indexes are opened on a thread of their own: drive work beside the
+    models' loads, neither waiting for the other."""
     global _started
     if os.getenv("LOUISE_WARMUP", "1") == "0":
         return False
@@ -126,4 +172,5 @@ def start() -> bool:
             return False
         _started = True
     threading.Thread(target=_watch, name="warmup", daemon=True).start()
+    threading.Thread(target=open_text_indexes, name="warmup-text", daemon=True).start()
     return True

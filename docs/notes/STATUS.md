@@ -20,6 +20,21 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **THE TEXT INDEXES ARE OPENED AT THE WEB'S START, AND THE OPEN OF ONE HOLDS UP NO OTHER (the slow
+  question, the text leg).** München's fact: his 12.6 s of fts were over gutenberg, whose text index is 54
+  GB in 21 language groups on ssd3's SATA disk. But the same index measured 0.4 s at the median and 1.7 s at
+  p95 UNCACHED three days ago (storage-tiering.md §12, 72 searches) — on a process that had it open. What a
+  first question of a process paid besides is the OPEN: `fts.get_index` opened each group at its first use,
+  and held the module's ONE lock across `tantivy.Index(...)`, so the legs of a first search — run side by
+  side since 2026-11-09 — opened their indexes one after the other, across collections too; and the web
+  starts again at every deploy. Two changes: (1) each index opens under ITS OWN lock (the same index still
+  once; a `forget` waits for an open in flight, as the one lock made it do); (2) the web, at its start and
+  beside the models' warm, opens every searched collection's groups — eight at once, the collections one
+  after the other — and SAYS THE SECONDS: "[web info:warmup] gutenberg: text index opened, 21 language
+  group(s) in N s (web start)". That line is the measurement of what a first question paid; nothing is
+  claimed before it. NOT done by it: the postings a question's words need are still read at the first
+  search that asks for them — if the first question's fts stays in seconds after this, the remedy is the
+  index's place (a faster drive: a storage choice of the operator's, §12's "B but measure"), not code.
 - **A QUESTION SAYS WHAT ITS RERANK WAS MADE OF (the slow question, first step: measure).** The operator's
   first question in query mode: search 44.5 s — "rerank 20,000", fts 12.6 s — and the line could not tell
   five lists of four seconds from one list of twenty, nor the reranker's answers from a load, from the cut of

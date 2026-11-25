@@ -14,6 +14,16 @@ from . import text_index
 
 _lock = threading.Lock()
 _indexes: dict[tuple[str, str], tantivy.Index] = {}
+#: ONE LOCK PER INDEX BEING OPENED (`get_index`). An open reads the index's
+#: segments — their footers, term dictionaries and fast fields — from the
+#: drive: seconds for a large one that is not in the cache (gutenberg's text
+#: index is 54 GB in 21 language groups on a SATA drive). Under the module's
+#: ONE lock, as it was, the open of one group held up the open of every other
+#: group of every collection: the legs of a first search, run side by side,
+#: opened their indexes one after the other
+_opening: dict[tuple[str, str], threading.Lock] = {}
+#: how many indexes `open_all` opens at once: I/O, not CPU
+OPEN_THREADS = 8
 #: the same key -> (the one writer for that index, its lock). See `_writer`.
 _writers: dict = {}
 
@@ -130,6 +140,14 @@ def get_index(group: str, collection=None) -> tantivy.Index:
     with _lock:
         if key in _indexes:
             return _indexes[key]
+        gate = _opening.setdefault(key, threading.Lock())
+    # THE OPEN IS OUTSIDE THE MODULE'S LOCK, under this index's own: two
+    # callers of one index still open it once, and the open of another index
+    # waits for nobody (`_opening`)
+    with gate:
+        with _lock:
+            if key in _indexes:
+                return _indexes[key]             # opened while this caller waited
         path = root / group
         path.mkdir(parents=True, exist_ok=True)
         from app import validity as validity_mod
@@ -142,9 +160,43 @@ def get_index(group: str, collection=None) -> tantivy.Index:
         if pystem_algorithm(group):
             idx.register_tokenizer("stem_tok", _stem_analyzer())
         manual_reader(idx)
-        _indexes[key] = idx
-        _writers.pop(key, None)     # a new Index object: a writer on the old one is stale
+        with _lock:
+            _indexes[key] = idx
+            _writers.pop(key, None)     # a new Index object: a writer on the old one is stale
         return idx
+
+
+def open_all(collection, *, threads: int | None = None) -> tuple[list[str], dict[str, str], float]:
+    """EVERY LANGUAGE GROUP OF A COLLECTION'S TEXT INDEX OPENED NOW, several
+    at once (I/O), each with its searcher made — what the first search of a
+    process otherwise does while a reader waits (app/warmup.py). Returns (the
+    groups opened, {group: why it could not be}, the seconds it took). Opens
+    for reading only: nothing is written but a group's empty directory, which
+    `existing_groups` never lists. Never raises."""
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+    t0 = time.monotonic()
+    try:
+        groups = existing_groups(collection)
+    except Exception as e:   # noqa: BLE001 — a folder that cannot be listed: nothing to open
+        return [], {"": f"{type(e).__name__}: {str(e)[:200]}"}, time.monotonic() - t0
+    failed: dict[str, str] = {}
+
+    def one(group: str) -> str | None:
+        try:
+            idx = get_index(group, collection)
+            idx.reload()
+            idx.searcher()
+            return group
+        except Exception as e:   # noqa: BLE001 — said, and the others still open
+            failed[group] = f"{type(e).__name__}: {str(e)[:200]}"
+            return None
+    if not groups:
+        return [], failed, time.monotonic() - t0
+    with ThreadPoolExecutor(max_workers=max(1, min(threads or OPEN_THREADS, len(groups))),
+                            thread_name_prefix="fts-open") as ex:
+        opened = [g for g in ex.map(one, groups) if g]
+    return opened, failed, time.monotonic() - t0
 
 def _open_failure(path, e: Exception) -> str:
     """Why a text index could not be opened, as what to do about it: search()
@@ -313,6 +365,19 @@ def _writer(key, idx):
         return got
 
 
+def _opens_settled(wanted) -> None:
+    """Wait for the opens in flight of the indexes `wanted(key)` names: a
+    handle dropped by `forget` must not be put back by an open that began
+    before it (under the module's one lock, as it was, the forget waited for
+    that open by construction). Each gate is taken and let go; the module's
+    lock is not held meanwhile."""
+    with _lock:
+        gates = [g for k, g in _opening.items() if wanted(k)]
+    for g in gates:
+        with g:
+            pass
+
+
 def forget(fts_dir) -> int:
     """Drop this process's handles on the indexes under `fts_dir` — for a
     collection that LEFT the node. The caches are keyed on the path, and a
@@ -322,11 +387,13 @@ def forget(fts_dir) -> int:
     holding one keeps its own reference; nothing is closed here. How many
     handles went."""
     base = str(fts_dir)
+    _opens_settled(lambda k: k[0] == base)
     with _lock:
         keys = [k for k in _indexes if k[0] == base] + [k for k in _writers if k[0] == base]
         for k in keys:
             _indexes.pop(k, None)
             _writers.pop(k, None)
+            _opening.pop(k, None)
     return len(set(keys))
 
 
@@ -335,11 +402,13 @@ def forget_missing() -> int:
     shared text index removed with its last member (app/text_index.py),
     whose path a group formed again with the same identity would reuse."""
     from pathlib import Path
+    _opens_settled(lambda k: not Path(k[0]).is_dir())
     with _lock:
         keys = [k for k in list(_indexes) + list(_writers) if not Path(k[0]).is_dir()]
         for k in keys:
             _indexes.pop(k, None)
             _writers.pop(k, None)
+            _opening.pop(k, None)
     return len(set(keys))
 
 
