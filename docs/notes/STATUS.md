@@ -20,6 +20,15 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **A collection's embedding waits for the keeper's preload after a start (`resident.holds_embedding`,
+  `worker._preload_holds`; scheduling.md pitfall 25).** The cause of the morning's forty minutes (the entry on
+  the canary count, below): the worker's embed producer started three seconds after the worker and the keeper
+  began loading thirteen models five seconds later; a context created beside those loads, on a card with
+  1.5 GiB free, failed its canary, and the gate could not load its own copy until the card had room. Now a
+  collection's embedding, its gate and the at-once gate of an untested copy wait while the keeper is still
+  loading after a start or a resume — bounded (two minutes for a keeper that never beats, ten for the
+  window), said when it begins and when it ends; a later single reload holds nothing. AFTER owed at the next
+  worker start (scheduling-log.md).
 - **ONE DISCARDED CONTEXT WAS COUNTED AS TWO CANARY FAILURES, and said fifty times (`run_check.canary_failed`,
   `_send_back`; gutenberg on the node, 09:40:55Z).** 27 s after the worker's start, while the keeper's preload
   of 13 models was loading (1,493 MiB free on the card a second later), the engine discarded ONE context of

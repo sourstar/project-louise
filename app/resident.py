@@ -439,6 +439,8 @@ def reset() -> None:
         _memory, _out_said, _write_failed = None, frozenset(), False
         _orphans_at = None
         _rested.clear()
+    global _first_beat
+    _first_beat = None
 
 
 def switches() -> Switches:
@@ -1429,6 +1431,7 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
     # would undo it. The keeper resumes when the claim ends.
     question = _question_now()
     warming = _start_warm(due, stop) if due and not question else []
+    _note_first_beat()          # after the loads have started: no gap for `holds_embedding`
     return {"set": sorted(by_key), "warming": [r.key for r in warming], "question": question,
             "backing_off": sorted(r.key for r in wanted_now if r.key not in on_time),
             "out_of_budget": sorted(k for k in by_key if k not in fits),
@@ -1463,6 +1466,79 @@ def _say_changes(before: dict, now: dict, sw: Switches, ok: bool, why: str,
             _last_why = why
         if not gone:
             _say("info", f"resident: nothing preloaded — {why}")
+
+
+# ---- a collection's own embedding waits for the preload after a start ------
+#
+# gutenberg on the node, 2026-11-25 09:40:55Z (München): the worker started at
+# 09:40:28, its embed producer at :31, the keeper's first beat began loading
+# thirteen models at :36 — and 24 s after the start one context of the
+# collection's encoder was discarded for not reproducing its canary, on a card
+# with 1,493 MiB free. The run's statements were set aside, embedding paused,
+# and the gate — which could not load its own copy for lack of room either —
+# ran again forty minutes later. Nothing wrong was written; forty minutes of
+# a collection's embedding went to a race the worker made with itself, at
+# EVERY start: a deploy restarts it.
+#
+# So a collection's own embedding (the backlog's, and its gate) does not
+# start while the keeper is still loading after a START: the worker's first
+# START_HOLD_S, or SETTLE_S after the node resumed from a mode that preloads
+# nothing. Bounded twice — a keeper that never beats holds nobody past
+# FIRST_BEAT_WAIT_S, and nothing is held past the window — and never a
+# reader's question, which loads what it needs itself (app/question_card.py).
+# Later single reloads hold nothing: a hold at each would starve embedding
+# under an eviction that repeats.
+
+#: the window after the worker's start in which the preload's loads hold a
+#: collection's own embedding
+START_HOLD_S = 600.0
+#: how long a start waits for the keeper's first beat before it stops waiting
+FIRST_BEAT_WAIT_S = 120.0
+#: when (monotonic) this process's keeper first beat; None before it
+_first_beat: float | None = None
+
+
+def _note_first_beat() -> None:
+    global _first_beat
+    if _first_beat is None:
+        _first_beat = time.monotonic()
+
+
+def warming() -> bool:
+    """Is the keeper loading models behind its beat now?"""
+    with _lock:
+        t = _warm_thread
+    return t is not None and t.is_alive()
+
+
+def holds_embedding(started: float, now: float | None = None) -> str | None:
+    """Why a collection's own embedding waits for the preload now, in
+    words; None when it does not. `started`: when (monotonic) the worker
+    started."""
+    t = time.monotonic() if now is None else now
+    since = t - started
+    recent = since < START_HOLD_S
+    try:
+        resumed = _settling()
+    except Exception:   # noqa: BLE001 — a history that does not read holds nobody
+        resumed = False
+    if not (recent or resumed):
+        return None
+    try:
+        ok, _why = preloads()
+    except Exception:   # noqa: BLE001
+        return None
+    if not ok:
+        return None                       # this mode preloads nothing: nothing to wait for
+    if _first_beat is None:
+        if since < FIRST_BEAT_WAIT_S:
+            return (f"the keeper has not made its first beat yet ({since:.0f} s after the worker's start): "
+                    f"it loads the models of Ask first")
+        return None
+    if warming():
+        return ("the keeper is still loading the models of Ask after "
+                + ("the node's resume" if resumed and not recent else f"the worker's start ({since:.0f} s ago)"))
+    return None
 
 
 def _start_warm(missing: list[Resident], stop: Callable[[], bool]) -> list[Resident]:
