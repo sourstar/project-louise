@@ -20,6 +20,38 @@ measured (published figures disagree).
 
 ### 2026-11-25
 
+- **AN ITALIAN QUESTION WAS ANSWERED IN FRENCH (operator, 2026-11-25: "I made a search with a query in
+  italian and the answer was in french") — the answer's language is now NAMED and said after the sources
+  (`retrieval.build_answer_messages`).** "Parlami della vita di Dante Alighieri" over gutenberg at 14:07Z: five
+  hits, the first a French history of Italian literature, the small chat model (the 9B), Quality, no answer
+  language chosen on the page. With none chosen, the prompt's one instruction was the system prompt's
+  "answer in the user's language", above the sources; the model was left to work out which language that is
+  and followed its first source. The search already knows the question's language (`query_lang`): the prompt
+  now names it — "The question is written in Italian (ISO code 'it'): write your whole answer in that
+  language" — and says it again after the sources and the question ("Write the answer in Italian, not in the
+  language of the sources."), the citation reminder still last. A language chosen on the page wins; where
+  nobody knows the question's language the line says "the language of the question above". REPRODUCED
+  on the node once (München, 14:20Z, the code then live, his question with four of his five hits pinned in
+  his order and no older-language rule in the prompt: 3,653 characters in French, "Dante Alighieri est né à
+  Florence en 1265…"; two earlier re-runs with other hits were Italian) — so the cause is the first source's
+  language with nothing naming the answer's. BEFORE/AFTER owed: ten pinned runs on each side of the deploy
+  (`/root/measure/ask-french/pinned.py`), counted by language. From the same report: the answer's log lines went
+  out under the default collection's name ("[EUR-Lex5.next info:chat]" for a gutenberg answer) — `chat` is
+  a node stage now; and a search replaced by a second press took 9 s to stop (its next checkpoint, inside
+  the rerank) — what the Abort button will also wait for.
+
+- **The slice-scope pass runs ALONE where the stages wait for it (`worker.PASS_ONLY`; scheduling.md pitfall
+  27; the Legal session's finding).** EUR-Lex5.next's release reset the pass to row 0 of 1,025,283 and the
+  stages' wait asked — as the morning's fix had built it — for a scan: 627,868 released rows stood eighteen
+  minutes behind a corpus walk with nothing to find, for a pass of fourteen seconds. The wait now asks for
+  the pass by itself (it reads the manifest, not the corpus); a real scan takes a queued pass's place and is
+  never lost to one. AFTER owed at the next release.
+- **Also from the afternoon:** the legal chunker's `_windows` reads only its cuts' offsets (the Legal
+  session; 8.96 s -> 7.87 s on a 19.6 M-character sentence off the node, the same windows — the rest of
+  that time is the encode, so the "17 s of Python steps" read from the profile was mostly encode inside the
+  walk); the preload hold covers the seconds between a RESUME and the keeper's next beat (an engine swap's
+  resume is the cold start that matters); a rescan is offered in query mode ("The rescan all collections
+  remains usable from any profile"), its dialog saying that what it finds is parsed in embed mode.
 - **THE TOKENIZER THREADS, MEASURED LIKE FOR LIKE: 1.31x ON A LARGE TEXT UNIT (the Legal session's profile,
   the same afternoon; it corrects the entry below).** fts of fr 32018R0688 (92,328,556 bytes) on the live
   tree, one unit, 4 CPUs: 94 s with one tokenizer thread, 72 s with four (the lane ran it in 70 s);

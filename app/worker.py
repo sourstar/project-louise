@@ -4107,14 +4107,25 @@ def _scan_only(con, collection, reason: str, stop=None) -> None:
     # binds the USE, not the route that reached it.
     if not _license_allows(con, collection, "corpus scan"):
         return
+    pass_only = reason == PASS_ONLY
     # A SCAN IS PARSING, and "download/seeding only" parses nothing
     # (operator, 2026-09-19; app/node_state.py: MODE_RUNS). It is owed, not
     # dropped: what landed meanwhile is scanned when everything runs again.
+    # The pass alone lands nothing and owes nothing: the stages that wait
+    # for it ask again when they run again.
     if _parse_held.is_set():
-        _owe_scan(collection.name)
+        if not pass_only:
+            _owe_scan(collection.name)
         return
     frozen = _frozen_event(collection.name)
-    if _is_frozen(collection.name):
+    if pass_only:
+        # THE PASS ALONE (`PASS_ONLY`): no corpus walk — the origin's folder
+        # has nothing to say about which slices the node holds
+        db.log_event(con, "info", "discover",
+                     "slice scope: the pass alone, over the manifest — no corpus scan is needed for it")
+        held = _AnyStop(stop, _parse_held) if stop is not None else _AnyStop(_parse_held)
+        stats: dict = {}
+    elif _is_frozen(collection.name):
         # FROZEN (07 §7.3 `node freeze`): the origin is not enumerated, so no
         # document is re-opened because its file changed on disk and none is
         # added — a corpus mounted from elsewhere changes without a fetch. The
@@ -4125,7 +4136,7 @@ def _scan_only(con, collection, reason: str, stop=None) -> None:
         # the stop without the freeze
         _say_frozen(con, collection, "scan")
         held = _AnyStop(stop, _parse_held) if stop is not None else _AnyStop(_parse_held)
-        stats: dict = {}
+        stats = {}
     else:
         # a freeze set under a running scan ends it at its next batch, its
         # cursor committed that far: the rest is the unfreeze's
@@ -4196,10 +4207,11 @@ def _wait_for_slice_scope(con, collection) -> bool:
     """THE STAGES WAIT BEHIND THE SLICE SCOPE, AND SAY SO (2026-11-25:
     EUR-Lex5.next stood with "0 units in 7 turns", one line said an hour
     before, and no scan coming). Every WAIT_SAID_EVERY_S: where the pass is
-    (row N of M), and the scan it needs — running, asked for, or ASKED FOR
-    NOW. Every wait has its request: the pass runs at the end of a scan, so
-    a wait with no scan running and none queued asks for one, as the embed
-    selection's wait does. Returns whether a scan was asked for."""
+    (row N of M), and what brings it up to date — a scan running or asked
+    for, which runs the pass at its end, or THE PASS ALONE, asked for now
+    (`PASS_ONLY`: since 2026-11-25 a wait with no scan running and none
+    queued asks for the pass by itself, not for a corpus scan). Every wait
+    has its request. Returns whether the pass was asked for."""
     name = collection.name
     # ONCE A PERIOD, the line and the request together: this runs at every
     # idle pass of the thread, and a scan that cannot run now (the licence,
@@ -4209,17 +4221,21 @@ def _wait_for_slice_scope(con, collection) -> bool:
         return False
     running = scan_running(name)
     with _discover_req_lock:
-        queued = name in _discover_requests
+        queued = _discover_requests.get(name)
     asked = False
-    if not running and not queued:
-        _request_discovery(name, "slice scope", acquire=False)
+    if not running and queued is None:
+        # THE PASS ALONE (`PASS_ONLY`): it reads the manifest, so nothing
+        # waits for a corpus scan that has nothing to find
+        _request_discovery(name, PASS_ONLY, acquire=False)
         asked = True
     where = slice_scope.waits(con, collection)
     _say_once(con, name, "slice-scope",
-              f"waiting for the slice scope: {where} — it is brought up to date at the end of a "
-              f"scan, and " + ("a scan is running" if running else
-                               "a scan is asked for" if queued else
-                               "none was running or asked for: one is asked for now")
+              f"waiting for the slice scope: {where} — "
+              + ("a scan is running, and brings it up to date at its end" if running else
+                 "its pass alone is asked for" if queued is not None and queued[0] == PASS_ONLY else
+                 "a scan is asked for, and brings it up to date at its end" if queued is not None else
+                 "no scan was running or asked for: its pass ALONE is asked for now, over the manifest "
+                 "(no corpus scan is needed for it)")
               + "; nothing is parsed, indexed or embedded until then (app/slice_scope.py)",
               every_s=WAIT_SAID_EVERY_S)
     return asked
@@ -5418,9 +5434,21 @@ _last_discover: dict[str, float] = {}
 _pipeline_idle_log: dict[str, float] = {}
 
 
+#: THE SLICE-SCOPE PASS ALONE, asked for as a scan request that walks nothing
+#: (2026-11-25, EUR-Lex5.next: a release reset the pass to row 0 of
+#: 1,025,283, and 627,868 released rows waited EIGHTEEN MINUTES for a corpus
+#: scan with nothing to find — the pass's only producer was a scan's end.
+#: The pass itself took fourteen seconds). The pass reads the manifest, not
+#: the corpus: where the stages wait for it and no scan is running or asked
+#: for, it is asked for by itself, on the scan thread, which is its writer.
+PASS_ONLY = "slice scope: the pass alone"
+
+
 def _request_discovery(name: str, reason: str, *, acquire: bool = True) -> None:
     """First reason wins: a queued 'startup' must not be relabeled by a
-    later 'interval' before the thread has run it.
+    later 'interval' before the thread has run it — but a real scan takes
+    the place of a queued PASS_ONLY (the scan runs the pass at its end, and
+    must not be lost to it), and a PASS_ONLY never takes a real scan's.
 
     `acquire=False` asks for a PLAIN scan. The post-fetch scan must use it:
     its job is to pick up what a fetch just landed, and if it started
@@ -5429,7 +5457,9 @@ def _request_discovery(name: str, reason: str, *, acquire: bool = True) -> None:
     discovery moved onto the pipeline threads (observed live: one cycle
     every ~5 seconds, starving rdf/fts/embed entirely)."""
     with _discover_req_lock:
-        _discover_requests.setdefault(name, (reason, acquire))
+        queued = _discover_requests.get(name)
+        if queued is None or (queued[0] == PASS_ONLY and reason != PASS_ONLY):
+            _discover_requests[name] = (reason, acquire)
 
 
 def _take_discovery_request(name: str) -> tuple[str, bool] | None:

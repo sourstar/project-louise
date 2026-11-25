@@ -193,3 +193,47 @@ def test_a_whole_translation_does_not_raise(monkeypatch):
         {"choices": [{"delta": {"content": "La balena."}, "finish_reason": None}]},
         {"choices": [{"delta": {}, "finish_reason": "stop"}]}))
     assert _translated() == (["La balena."], None)
+
+
+# ---- the answer's language (operator, 2026-11-25) ---------------------------
+#
+# "I made a search with a query in italian and the answer was in french":
+# "Parlami della vita di Dante Alighieri" over gutenberg, the first source a
+# French history of Italian literature, the small chat model, no answer
+# language chosen on the page.
+
+DANTE = {"hits": [{"chunk_id": "gutenberg:31432:0:1", "book_id": 31432, "lang": "fr", "authors": "Ginguené",
+                   "title": "Histoire littéraire d'Italie (1/9)", "text": "Dante naquit à Florence en 1265."},
+                  {"chunk_id": "gutenberg:71218:0:1", "book_id": 71218, "lang": "it", "authors": "Dante",
+                   "title": "La vita nuova", "text": "In quella parte del libro de la mia memoria."}],
+         "facts": [], "catalog": []}
+Q = "Parlami della vita di Dante Alighieri"
+
+
+def test_a_question_with_no_language_chosen_is_answered_in_its_own_language_named(monkeypatch):
+    system, user = (m["content"] for m in retrieval.build_answer_messages(Q, {**DANTE, "query_lang": "it"}))
+    assert "The question is written in Italian (ISO code 'it'): write your whole answer in that language, " \
+           "whatever language the sources are in." in system
+    # ...and again AFTER the sources and the question, where a small model still reads it
+    tail = user[user.index("Question: " + Q):]
+    assert "Write the answer in Italian (ISO code 'it'), not in the language of the sources." in tail
+    assert user.index("Histoire littéraire") < user.index("Write the answer in Italian")
+    assert user.endswith(retrieval.CITE_REMINDER), "the citation reminder stays last (2026-10-13)"
+    assert system.endswith(retrieval.THINK_OFF)
+
+
+def test_a_language_chosen_on_the_page_wins_over_the_questions_own():
+    system, user = (m["content"] for m in retrieval.build_answer_messages(
+        Q, {**DANTE, "query_lang": "it"}, answer_lang="en"))
+    assert "Write your whole answer in English (ISO code 'en'), whatever language the question or the " \
+           "sources are in." in system
+    assert "Write the answer in English (ISO code 'en'), not in the language of the sources." in user
+    assert "Italian" not in system and "Italian" not in user[user.index("Question: "):]
+
+
+def test_where_nobody_knows_the_questions_language_the_prompt_still_says_whose_it_is():
+    system, user = (m["content"] for m in retrieval.build_answer_messages(Q, {**DANTE, "query_lang": None}))
+    assert "answer in the user's language" in system and "ISO code" not in system
+    tail = user[user.index("Question: " + Q):]
+    assert "Write the answer in the language of the question above, not in the language of the sources." in tail
+    assert user.endswith(retrieval.CITE_REMINDER)
