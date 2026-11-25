@@ -193,6 +193,7 @@ import hashlib
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 from app import chunking_legal
 from .. import eli
@@ -447,24 +448,49 @@ def wrapper_head(celex: str, entries: list[os.DirEntry], listed: set[str] | None
         return f.read(_HEAD)
 
 
-def _tree_listing(unit: Path, celex: str, entries: list[os.DirEntry]) -> tuple[set[str], str | None] | None:
+class _Tree:
+    """A unit's tree read and decoded ONCE for its day (2026-11-25, München's
+    ten dumps of EUR-Lex5.next's scan: three of them in the tree's JSON),
+    its failure kept to be raised where the one read raised it."""
+
+    def __init__(self, entries: list[os.DirEntry]) -> None:
+        self.path = next((e.path for e in entries if e.name == rdf_mod.TREE_FILE), None)
+        self._got: Any = None
+        self._error: BaseException | None = None
+        self._read = False
+
+    def get(self):
+        if not self._read:
+            self._read = True
+            try:
+                with open(self.path, "rb") as f:
+                    self._got = rdf_mod.loads(f.read())
+            except Exception as e:   # noqa: BLE001 — kept and raised again, as reading it raised it
+                self._error = e
+        if self._error is not None:
+            raise self._error
+        return self._got
+
+
+def _tree_listing(unit: Path, celex: str, entries: list[os.DirEntry],
+                  tree: "_Tree | None" = None) -> tuple[set[str], str | None] | None:
     """The tree's word on the unit's Formex, as the parse reads it: the items
     the expression's tree lists for its fmx4 manifestation, and the act's own
     date (`EurlexSource.parse`'s `listed` and `note.date_document`). None
     where the tree does not read (the parse says why)."""
     lang = unit.parent.parent.name.partition("=")[2]
-    tree = next((e.path for e in entries if e.name == rdf_mod.TREE_FILE), None)
-    if lang not in LANGUAGES or tree is None:
+    tree = tree or _Tree(entries)
+    if lang not in LANGUAGES or tree.path is None:
         return None
     try:
-        with open(tree, "rb") as f:
-            note = from_tree.notice(rdf_mod.loads(f.read()), lang3(lang), celex)
+        note = from_tree.notice(tree.get(), lang3(lang), celex)
     except (OSError, ValueError, KeyError, from_tree.TreeError):
         return None
     return {it.name for it in note.items.get("fmx4", []) if it.name}, note.date_document
 
 
-def _listed_head(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool) -> bytes | None:
+def _listed_head(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool,
+                 tree: "_Tree | None" = None) -> bytes | None:
     """`wrapper_head` as the PARSE decides it (2026-11-25, 7,871 EUR-Lex5.next
     rows inserted under new ids by the night's scans): discovery asked
     `own_wrapper` without the tree's listing and the act's date, so since the
@@ -478,7 +504,12 @@ def _listed_head(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts:
         return wrapper_head(celex, entries)
     except formex.FormexError:
         pass
-    listing = _tree_listing(unit, celex, entries) if tree_facts else None
+    # a unit holding no wrapper and no package (an XHTML, HTML or PDF act,
+    # half the corpus) is refused whatever the listing says: no tree read
+    # for it here — its day is its tree's, read once below
+    if not tree_facts or not any(formex.is_wrapper(e.name) or formex.is_package(e.name) for e in entries):
+        return None
+    listing = _tree_listing(unit, celex, entries, tree)
     if listing is None:
         return None
     try:
@@ -527,7 +558,8 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
     if m:
         return formex.iso(m["date"])
     # no wrapper, or none this act's as the parse decides it: its work's own day below
-    head = _listed_head(unit, celex, entries, tree_facts)
+    tree = _Tree(entries)
+    head = _listed_head(unit, celex, entries, tree_facts, tree)
     if head is not None:
         got = _PUB_DATE.search(head)
         if got:
@@ -543,11 +575,7 @@ def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bo
         if got:
             return formex.iso(got.group(1).decode())
     if tree_facts:
-        for e in entries:
-            if e.name == rdf_mod.TREE_FILE:
-                with open(e.path, "rb") as f:
-                    return from_tree.work_day(rdf_mod.loads(f.read()), celex)
-        return None
+        return from_tree.work_day(tree.get(), celex) if tree.path is not None else None
     # an act without Formex (rendition.py): the notice's work, read only as
     # far as its date (notice.work_day)
     for e in entries:
