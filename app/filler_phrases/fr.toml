@@ -1,0 +1,20 @@
+# THE PHRASES THAT COVER THE WAIT, in French (docs/notes/hands-free-voice.md
+# §7, Decision 5A; app/fillers.py reads and checks this file).
+#   short: said the instant the question is taken, under a second;
+#   long:  for a long wait, about two seconds — where the "euh" lives.
+# Nothing here claims a result before there is one. A text that sounds wrong
+# in a voice is dropped from here (M5: each text heard once in each voice).
+short = [
+    "Voyons…",
+    "Un instant.",
+    "Je regarde.",
+    "Une seconde.",
+    "Je vérifie.",
+]
+long = [
+    "Euh… voyons ce que je trouve sur le sujet.",
+    "Je cherche encore, un instant.",
+    "Mmm, je parcours les sources.",
+    "Euh… cela prend un peu plus de temps, patience.",
+    "Hmm, je cherche toujours, un moment.",
+]

@@ -1,0 +1,20 @@
+# THE PHRASES THAT COVER THE WAIT, in German (docs/notes/hands-free-voice.md
+# §7, Decision 5A; app/fillers.py reads and checks this file).
+#   short: said the instant the question is taken, under a second;
+#   long:  for a long wait, about two seconds — where the "ähm" lives.
+# Nothing here claims a result before there is one. A text that sounds wrong
+# in a voice is dropped from here (M5: each text heard once in each voice).
+short = [
+    "Mal sehen…",
+    "Einen Moment.",
+    "Ich schaue nach.",
+    "Sekunde bitte.",
+    "Moment bitte.",
+]
+long = [
+    "Ähm… mal sehen, was ich dazu finde.",
+    "Ich suche noch, einen Moment.",
+    "Hmm, ich gehe die Quellen durch.",
+    "Ähm… das dauert etwas länger, Geduld bitte.",
+    "Mmm, ich suche noch, einen Augenblick.",
+]

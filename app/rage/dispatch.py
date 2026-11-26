@@ -168,6 +168,7 @@ def reset() -> None:
     _claim_seen.clear()
     with _board.lock:
         _board.until = 0.0
+        _board.idle_since = float("-inf")
     with _stood_lock:
         _stood.clear()
     _default_level = Level.QUERY
@@ -609,6 +610,9 @@ class _Board:
         #: after it never shortens it (the warms behind a search ran past the
         #: question and wrote 0, erasing its 5 minutes)
         self.until = 0.0
+        #: when the last live call of this process ended (monotonic s;
+        #: -inf: none has run yet) — `quiet_s`
+        self.idle_since = float("-inf")
 
     def enter(self) -> None:
         with self.lock:
@@ -628,6 +632,7 @@ class _Board:
             if linger > 0:
                 self.until = max(self.until, now + linger)
             if self.live == 0:
+                self.idle_since = time.monotonic()
                 _write_claim(self.until if self.until > now else 0.0)
 
     def _refresh(self) -> None:
@@ -641,6 +646,20 @@ class _Board:
 
 
 _board = _Board()
+
+
+def quiet_s() -> float:
+    """HOW LONG THIS PROCESS HAS RUN NO STEP OF A QUESTION: no search, no
+    answer being written, no sentence read aloud, no interactive model call
+    (`question`, `interactive`) — 0.0 while one runs, inf when none has run.
+    NOT THE CLAIM: the claim lingers QUESTION_LINGER_S after a question's
+    last step so the corpus stays aside (`interactive_active`); work made for
+    the NEXT question — the phrases that cover the wait (app/fillers.py) —
+    asks only that none is running now, and has run for a moment. A harness
+    (`as_harness`) enters none, so it is never seen here."""
+    with _board.lock:
+        return 0.0 if _board.live > 0 else max(0.0, time.monotonic() - _board.idle_since)
+
 
 #: how long a question's claim outlasts its last step — the search, the
 #: answer, the results' translation, a sentence read aloud, the page's

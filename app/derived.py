@@ -21,7 +21,8 @@ streams through, a row group a record in the order it was written — under
 `LOUISE_FILES_CACHE_DIR` (config.FILES_CACHE_DIR: ssd3 on the node) when
 the node names one; every other kind — memory-mapped, or read at random by a
 key: label and facts tables, the claim index, the part caches, the speech
-clips — under `LOUISE_CACHE_DIR` (ssd5). The tag does not depend on the
+clips and the phrases that cover the wait (app/fillers.py) — under
+`LOUISE_CACHE_DIR` (ssd5). The tag does not depend on the
 root, so a cache moves between the two as bytes: the same `<kind>/<tag>`
 under the other root.
 """

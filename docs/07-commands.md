@@ -1800,7 +1800,26 @@ speaks in, and `{name, voice}` for a reader with an account (§7.4 users);
 the Ask page's Settings offer them by name where there are two or more,
 the choice kept with the account, else in the browser, and sent as
 `voice`. A request naming no voice is read in the asker's account voice,
-then the node's. `POST /v1/audio/transcriptions` (multipart `file`,
+then the node's. THE PHRASES THAT COVER THE WAIT (*added 2026-11-26*,
+operator: "prepare the phrases in the main 5 languages and per voice. Each
+time you regenerate the used ones"; `app/fillers.py`,
+docs/notes/hands-free-voice.md §7): `GET /ask/voice/fillers?lang=xx`
+(`voice=…`, the page's choice, counts for an admin only) → `{lang, voice,
+ready: [{id, kind, url}]}`, the clips ready in the voice the reader's
+answer is read in, for one of en, de, fr, it, es (any other: none);
+`voice` is an opaque id, null where nothing is offered. Per voice and
+language one `short` clip (under a second) and one `long` (about two), each
+a synthesis of a text of `app/filler_phrases/<lang>.toml`; a pool short of
+one is made in the background — the route answers at once with what is
+ready — one synthesis at a time, once the web has run no step of a
+question for 5 s. `GET /ask/voice/fillers/{id}` → the clip's audio (404:
+gone, made by another speech engine, or in a voice the reader is not read
+to in). `POST /ask/voice/fillers/used` `{ids}` (at most 16) → `{removed}`:
+a clip is played once; each reported goes, and its kind is remade from
+another text, as a new synthesis, never a kept clip. The pools are derived
+data under `LOUISE_CACHE_DIR`, keyed on the voice's profile and recording,
+the language, the model, its steps and the engine; without a fast drive
+none is kept and none offered. `POST /v1/audio/transcriptions` (multipart `file`,
 `model`, `language`, `response_format`, … — OpenAI's shape; at most 25 MB,
 413 above): the node's `stt_model` where none is named, 400 where there is
 neither. Where `[speech] vad_model` is set, a clip that is a WAV of 16-bit

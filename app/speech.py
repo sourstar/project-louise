@@ -561,6 +561,26 @@ def synthetic_for(lang: str | None, voices: dict[str, str], profiles: list[dict]
     return None
 
 
+def reader_voice(lang: str | None, held: list[dict], node: Any, *, asked: Any = None,
+                 account_voice: str | None = None, admin: bool = True) -> tuple[bool, str | None]:
+    """THE VOICE A READER IS READ TO IN, for a sentence spoken in `lang` —
+    the ONE resolution (`synthesize_timed`; the phrases that cover the wait,
+    app/fillers.py). An admin: the voice asked for (the request's — the Ask
+    page's choice, a client's own), else the one the account keeps, unless
+    it names a profile the server no longer holds; else the node's
+    `tts_voice`; else the first profile recorded (`voice_for`). Any other
+    reader: the node's synthetic voice of `lang` (`synthetic_for`), whatever
+    is asked. (True, voice) — None being the model's own; (False, None):
+    nothing is read to this reader (no synthetic voice held)."""
+    from app import voice as node_voice
+    if admin:
+        mine = next((v for v in (asked or None, account_voice or None) if v and held_profile(v, held)), None)
+        return True, voice_for(mine or node.tts_voice or None, held)
+    # the voice of that same language: voice and tag never disagree
+    voice = synthetic_for(lang, node_voice.synthetic(node), held)
+    return voice is not None, voice
+
+
 #: what a recorded voice is told to speak when no language is known: OmniVoice's
 #: auto ("none": the engine reads the language from the text), never the
 #: profile's own tag. LocalAI v4.11.0 (core/http/endpoints/localai/tts.go) uses a
@@ -582,13 +602,17 @@ NO_SYNTHETIC = (b'{"error": {"message": "no synthetic voice is set on this node,
 def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
                      reading: str | None = None, n: int | None = None,
                      last: bool = False, account_voice: str | None = None,
-                     admin: bool = True) -> tuple[int, bytes, str, list]:
+                     admin: bool = True, keep: bool = True) -> tuple[int, bytes, str, list]:
     """`synthesize` and its `Server-Timing` (W3C; 2026-11-08, to measure the
     reading's start and its pauses): `turn` the wait for the reading's
     sentence before (`Turns`), `synth` the model server's call in ms, `audio`
     the clip's length in ms where it is a WAV. `admin` False: the reader is
     not an admin, and hears the synthetic voice of the text's language only
-    (module docstring); every route a reader reaches says which it is."""
+    (module docstring); every route a reader reaches says which it is.
+    `keep` False: a NEW synthesis, never answered from the kept clips nor
+    kept among them — a phrase that covers the wait is made fresh each time
+    it is remade (app/fillers.py), and the kept clip of the same words would
+    be the very clip just played."""
     from app import voice as node_voice
     url = (url or config.CHAT_URL).rstrip("/")
     text = speakable(str(body.get("input") or ""))
@@ -616,16 +640,12 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     # the reader's voice — the request's (the Ask page's choice, a client's
     # own), else the one the asker's account keeps (app/users.py) — unless it
     # names a profile the server no longer holds — a browser remembering a
-    # voice since removed (app/voice.py `voices`): then the node's, never an error
-    if admin:
-        asked = next((v for v in (body.get("voice") or None, account_voice or None)
-                      if v and held_profile(v, held)), None)
-        voice = voice_for(asked or node.tts_voice or None, held)
-    else:
-        # the voice of that same language: voice and tag never disagree
-        voice = synthetic_for(lang, node_voice.synthetic(node), held)
-        if voice is None:
-            return 409, NO_SYNTHETIC, "application/json", []
+    # voice since removed (app/voice.py `voices`): then the node's, never an
+    # error. Any other reader: the synthetic voice of the language (`reader_voice`)
+    read, voice = reader_voice(lang, held, node, asked=body.get("voice"), account_voice=account_voice,
+                               admin=admin)
+    if not read:
+        return 409, NO_SYNTHETIC, "application/json", []
     if voice:
         out["voice"] = voice
         if str(voice).startswith(PROFILE_PREFIX) and not out.get("language"):
@@ -652,14 +672,14 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     # not loaded yet, nothing is read from the drive: whatever is kept could be
     # another engine's; what the model makes is kept under the engine that
     # answered, read once it has.
-    engine = model_load.backend_of(url, model or None)
+    engine = model_load.backend_of(url, model or None) if keep else None
     kept = _clip_get(_clip_key(url, out, engine)) if engine else None
     if kept is not None:
         clip = audio_ms(kept[0])
         return 200, kept[0], kept[1], [("cache", 1.0)] + ([("audio", clip)] if clip is not None else [])
     with _TURNS.turn(reading, n) as waited:
         status, content, ctype, timing = _synthesize_call(url, model, out, last=last)
-    if status == 200 and str(ctype).startswith("audio/"):
+    if keep and status == 200 and str(ctype).startswith("audio/"):
         made_by = engine or model_load.backend_of(url, model or None)
         if made_by:
             _clip_put(_clip_key(url, out, made_by), content, ctype)

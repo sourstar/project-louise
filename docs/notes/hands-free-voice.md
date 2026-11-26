@@ -176,7 +176,10 @@ off, or where no phrase is ready.
 
 How it runs:
 - **THE SET:** a small text file per language, beside the commands' table,
-  of phrase TEXTS in two kinds:
+  of phrase TEXTS in two kinds (*as built:* `app/filler_phrases/<lang>.toml`,
+  five texts a kind, read and checked by `app/fillers.py` `load`: none
+  claims a result, none in both kinds, each read as written and in its
+  file's language; `fillers.texts(lang)` gives them to the echo guard):
   - SHORT, said at once (under 1 s): "Vediamo…", "Let me check",
     "Voyons…", "Mal sehen…", "A ver…";
   - LONG, for a long wait (about 2 s), where the "uhm" lives: "Uhm… sto
@@ -190,25 +193,51 @@ How it runs:
   Italian, Spanish. An answer in any other language gets the tone.
 - **THE POOL, two clips ready per voice and language:** one SHORT and one
   LONG, for every voice profile on the node and its default voice. That is
-  10 clips a voice: 5 languages × 2.
+  10 clips a voice: 5 languages × 2. *As built:* for each voice and language
+  a reader is actually given (the voice resolved as the answer's,
+  app/speech.py `reader_voice`), made when first asked for (below).
   - A clip is played ONCE. Once used it is deleted and never played again.
   - **REGENERATED AFTER EACH ANSWER:** when the answer's reading ends (or
     the answer, where it is not read), the node makes as many fresh clips
-    as the question used, one or two, so the pool is back to two.
+    as the question used, one or two, so the pool is back to two. *As
+    built:* the page's report of the clips it played (`POST
+    /ask/voice/fillers/used`) deletes them and queues their kinds, whenever
+    it comes; the remaking waits for the question to end (below).
     - Each is a NEW synthesis of a text drawn from the set: never the text
       just used, and never the other ready one's. Even a text that comes
       back sounds different.
-    - Made at low priority, when no question holds the card (dispatch's
-      levels), never during a search.
-  - **FIRST MADE** when a voice is created or first chosen, and at boot for
-    any voice whose pool is short. That is 10 clips of 1–2.5 s each,
-    made at 1.5–2× their length: about a minute of synthesis a voice.
-    After a question it is one or two clips, about 2–5 s.
-  - **AN ENGINE SWAP** empties every pool: the kept clips are keyed on the
-    engine (#937). The pools are remade at low priority.
+    - Made at low priority, never during a search. *As built:* one
+      synthesis at a time, through app/speech.py's own path but never its
+      kept clips (`synthesize_timed(keep=False)`: their key holds the
+      words, so a text that comes back would be the old clip), once the web
+      has run no step of a question — a search, an answer being written, a
+      sentence read — for 5 s (`dispatch.quiet_s`); bounded at 10 min, then
+      dropped until the next ask. Not the question's claim
+      (`interactive_active`): it lingers 5 min, and a follow-up asked
+      within them would find the pool short. A synthesis that started just
+      before a question runs to its end (2–5 s): a GPU request is not
+      pre-empted.
+  - **FIRST MADE LAZILY** (*as built*; the note had: when a voice is
+    created or first chosen, and at boot): when the page first asks for a
+    voice and language whose pool is short — the microphone or the speaker
+    first used. The route answers at once with what is ready, possibly
+    nothing, and the pool is made in the background; nothing is made for a
+    voice no reader is given. A full pool is 10 clips of 1–2.5 s each, made
+    at 1.5–2× their length: about a minute of synthesis a voice. After a
+    question it is one or two clips, about 2–5 s.
+  - **AN ENGINE SWAP EMPTIES NOTHING** (*as built*; the note had: empties
+    every pool): a pool is keyed on the engine (#937), so another engine's
+    clips are simply not found, and the new engine's pool is made lazily.
+    While the speech model is not loaded the engine is unknown and nothing
+    is listed; the clip then made loads the model and says which engine
+    answers. A clip fetched by its id once its engine is known to be
+    another is refused, and goes.
   - **WHERE:** derived, re-creatable data. It goes under
     `LOUISE_CACHE_DIR` through app/derived.py (invariant 6), keyed on the
-    voice's physical identity (its profile's file), never on its name.
+    voice's physical identity, never on its name: *as built*, the profile's
+    id with its recording as LocalAI lists it (size, length, `updated_at`:
+    `voice_ping.clip_of`; LocalAI gives no hash of the file). No fast drive
+    named: nothing is kept and nothing offered — the tone.
 - **WHEN, at most two a question** (the pool's size):
   - the SHORT one when the question is taken (hands-free: when
     `/ask/voice/heard` says it was addressed; tap-to-speak: when the
@@ -224,7 +253,13 @@ How it runs:
   from one Louise route (`/ask/voice/fillers?lang=`, the voice resolved as
   the answer's is). It prefetches them when the microphone or the speaker
   is first used and after each answer, and says which it played, so the
-  node knows what to remake.
+  node knows what to remake. *As built* (docs/07-commands.md): `GET
+  /ask/voice/fillers?lang=xx[&voice=…]` → `{lang, voice, ready: [{id, kind,
+  url}]}` (`voice` an opaque id; the page's `voice` counts for an admin
+  only, as `/v1/audio/speech`'s); `GET /ask/voice/fillers/{id}` → the audio;
+  `POST /ask/voice/fillers/used` `{ids}` → `{removed}`. A reader who is not
+  an admin can neither fetch nor report a clip in a voice they are not read
+  to in.
 - **THE ECHO GUARD** (Decision 2A) knows the set's texts, so a phrase heard
   back is never taken for the reader.
 - **A PERSONAL CHOICE:** on by default for spoken questions. Settings ›
