@@ -18,7 +18,319 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-26
+
+- **THE PARKING PASS ENDED 00:19:39Z, COMPLETED (München; the node paused 5,620 s, back in embed mode):
+  the park server and the park engine are LIVE, nothing parks, and #882 is merged (main 7547fcd1).** Server
+  v5.0.1-6-gffb10fdf3 (0024 the readiness poll, the amended 0027, 0029 the watchdog's settings fix) — a
+  server swap gates nothing, the seven run ids the same. Engine ed93e3c1b2e2 with ONE package rebuilt,
+  vega-louise-llama-cpp at 1ac1ecc (wrapper sha256 47bf02eaae7c01e4 = main's file), live since 23:45:20Z:
+  the five llama.cpp gates all exact, three fresh loads each, every fingerprint identical to before
+  (wikipedia 98 s, gutenberg 1,983 s, pubmed query 70 s, NeuRIS about 509 s, wikidata about 502 s); 20
+  unloads through the rebuilt wrapper, none slow. The other three packages keep the wrapper of their own
+  build (10833aab79818132, REVISION 15e84e9): the table is in approved-encoders.md ("The wrapper each
+  package runs"). PARKING ON THE CARD, on a copy of bge-m3 (parking-keeper.md §4): a park 142 ms, a return
+  228 ms, 20 of 20 cycles the same bytes; a park gives back 996 of 1,315 MiB — 76 %, the process keeps 319
+  MiB on the card (what the review's second finding was about, now seen on the card); 1,084 parks asked
+  during one request, every one 409 and the request served; a parked model stopped in 202 ms and loaded
+  afresh in 4.17 s; a refused return 503 with `Retry-After: 2`, still parked, then served. THE SERVER'S
+  OTHER ROWS: a cold load's first request 4.5–4.8 s → 2.7–3.0 s (the readiness poll); a canary refused
+  for memory is HTTP 503 `no_room_on_device` where it was 500; a stream cut mid-way ends with an error
+  event of that type. AT THE RESUME: "embedding waits: the keeper has not made a beat since the node's
+  resume (1 s ago)" for wikipedia and "…the keeper is still loading the models of Ask after the node's
+  resume" for legi_F, Normattiva-DAR and Normattiva — the preload hold of #896 at a resume, on a card the
+  pass had emptied, no CANARY line: THAT ROW WAS OWED and is in. MemAvailable 20.3 GiB at 00:29Z.
+- **THE APP: main f5f1e97c prepared on the node as deploy b1e83cf, not armed — it waits for the operator's
+  word; 759322e7's files are discarded there.** bcdf0dc stays live, in embed mode; at each query → embed
+  switch until the deploy, München's four shutdowns by hand.
+
 ### 2026-11-25
+
+- **AN INDEPENDENT READING OF THE NIGHT'S KEEPER AND EVICTION CODE, BEFORE IT REACHED THE NODE: EIGHT
+  FINDINGS, THREE REPRODUCED BY RUNNING — ALL FIXED; main 759322e7 WAS NEVER DEPLOYED (held with München the
+  minute the report came).** Asked for because I had caught one logic error of my own late (the mode-switch
+  fix's first cut). A fresh agent was given the files and the server's facts, not my conclusions. What it
+  found, and what each is now:
+  1. `host_leftovers` (#916) judged "in host memory" as "under its floor of the LARGEST it was seen
+     holding". A model that makes its context on demand rests far under its largest by design —
+     vega-dar-legal-it about 1.8 GiB at rest against 8,453 MiB, 0.21 with a floor of 0.3 — so in embed mode
+     the keeper would have STOPPED it, whole and on the card, at every idle minute, and where the budget
+     holds it loaded it back and stopped it again (42 s a reload). NOW: it reads nothing on the card, or
+     under half of what it holds AT REST where the node knows that (`resident.rest_known`); unknown with
+     something on the card, it is left alone; a model this stopped is not stopped by it again within the
+     hour; never beside a load of the keeper's own nor in the minutes after a resume.
+  2. `make_room` (#912) counted a model that parks at all it holds before the first victim; a park gives
+     back only the weights. Reproduced: one model parked, one stopped, "1,935 of 2,200 MiB made" — for
+     nothing. NOW: where the parks leave the room short, the models just parked are stopped for what their
+     processes still hold, until it fits: what the check counted is made.
+  3. The "listed parked but on the card" test (#912) misread a truly parked model after one partly paged
+     reading, and the keeper would have un-parked it at every beat. WITHDRAWN: a model listed parked is
+     parked for Louise, Louise never calls `/backend/load`, and the server's record heals at the model's
+     next request by its own design (parking-keeper.md §3; Tensor told).
+  4. A warm that left its model unloaded — a parked model's return the card refused, a load that failed
+     without raising — was marked as a load, and the next beat took a back-off and a penalty for an
+     eviction nobody made. NOW: the runner is read after the warm; not loaded is no load, asked again in
+     two minutes.
+  5. Any timeout but a connect timeout on the settings write was "sent and not answered" and held every
+     settings write to that server for an hour — the reclaimer's switch at a change of mode among them.
+     NOW: a read timeout alone (the request went out whole and no answer came).
+  6. A park that broke its backend (500 `model_stopped`) was not recorded as Louise's own stop. NOW it is.
+  7. `host_claims` took an unreadable pin record for "no pins", asked no pin of LocalAI, and could stop a
+     model parked by hand. NOW: unread stops nothing, the pin is read, and only what Louise knows is taken.
+  8. A `forget` of a text index waited for the opens it could see; one that began while it waited stored
+     its handle afterwards. NOW: a count of forgets per collection, read at the open's start and at its
+     end — a handle from before a forget is never kept.
+  THE SAME READER THEN READ THE FIXES: seven closed, the fifth partly, and FOUR NEW things in the fixes
+  themselves, two reproduced — each fixed before the merge: the hour's limit of (1) outlived a spell in
+  query mode, so a second query → embed switch within the hour would have left the same models in host
+  memory (a paging rule now ends the hour); a paged-out model reads a MiB or less, not zero (the node:
+  tts-omnivoice 1.1 MiB, dar-legal-it 0.5), so "nothing on the card" is under 2 % of its largest; the stop
+  of the models just parked in (2) did not ask their pins again nor whether they had come back (read again
+  first: one asked for since is neither stopped nor counted); and a load that keeps failing was asked every
+  two minutes for ever, its victims stopped and reloaded each time (doubled up to the back-off's cap). The
+  hold of (5) after a write that got no answer is ten minutes, not an hour.
+  Nothing found in the own-unloads record, the question's unloads, the warm-up, the rerank's parts, the
+  "no room now" answer, the stage script, the lock order, or the secrets. THE LESSON, mine: two of the
+  three reproduced defects were thresholds I reasoned about and never ran against the node's own numbers,
+  which were in this file (dar-legal-it's 8,453 against 1.8; bge-m3's 603 of 939). A rule that STOPS a
+  model is tested against the real sizes of the models it will meet, on-demand ones first.
+- **Rows that had arrived and were not yet written here (München, the afternoon's deploys).** 51ae16c
+  (main 2b8c62e1: #900–#904) LIVE, the worker started 16:23:49Z; its staged lists on the node 3,265 passed /
+  2 skipped, 11, 92, 478 / 9 skipped, and list 5 "25 passed" (the pinned tokenizer cases pass there); the
+  start: "node in query mode (read): chat model louise-chat-qwen3.6-35b-a3b; network budget down 6.2 MB/s,
+  up 1.2 MB/s", "preloading 13 model(s) for Ask", no embedding wait, no CANARY, no GateDeferred, no
+  progress line; `louise node mode` shows `embedding` null and `modes.embed.embedding` "collection" (#902
+  as shipped: the file's choice until he sets one). THE ANSWER'S LANGUAGE ON THE 35B, after #901: three
+  pinned runs byte-identical (sha 8b693cff8f28, 1,412 chars), Italian, the prompt's two language lines
+  present — the 35B answered Italian before too; the model that showed the defect is the 9B, whose row is
+  above. The card's counter at 16:31Z: 32,285 MiB, over the 0.98 line (32,002): the reading #907 then
+  explained (models partly in host memory). Housekeeping on the operator's word that day: engines
+  d658549772ca, 792f050e318e and b190673dbdbf removed, voice profile c638f287 deleted; the September
+  snapshot, kept that afternoon under its hold, released and destroyed by him at 20:46Z (869 G). The
+  35B's cold start with #906's bound, seen at the boot: "loaded in 37.4 s (… load bound 300 s)".
+  STILL OWED from those deploys: the preload hold at a resume (no cold start for corpus embedding before
+  "preloading"), the slice pass alone at a release, two lane parts at once with pid, peak and seconds, the
+  first "[node info:progress]" line if one comes, the embedding-choice line when he first sets it, and the
+  seconds from a second press of Ask to "cancelled".
+- **The web's warm follows the node's mode: a paused node warms nothing (München, during the parking pass,
+  22:49Z, and at the p19 swap that morning).** After the model server's restart the web loaded MADLAD (6.1
+  s), the nemotron reranker (5.7 s) and the 9B (11.0 s) by itself, on a PAUSED node, onto a card the pass
+  had emptied for its gates. The warm ("at the web's start, and when a model server comes back") predates
+  the keeper and never asked the mode; the keeper's rule is "paused or seed-only: nothing is preloaded —
+  the GPU is the operator's" (2026-10-23). `warmup.warm_all` now asks the same resolution
+  (`resident.preloads`) and says one line where it holds back; a question still loads what it needs when
+  it is asked, and the keeper preloads the set when the node runs again. The text indexes are still opened
+  at the web's start in every mode: that is the drive, not the card.
+- **The parking pass, first rows (München, started 22:46Z, the node paused): the SERVER is swapped —
+  "v5.0.1-6-gffb10fdf3" — and gates nothing.** Settings check exit 0 (reclaimer true, threshold 0.98,
+  drift {}); `/system`: 105 backends as before, no row with `parks`, none with a `state` — a model that
+  does not park carries NEITHER key, which is how my half reads it (absent = does not park, loaded);
+  `park_host_floor_bytes` 0. THE READINESS POLL (0024), three cold loads of louise-rerank-medcpt, the
+  first request: 4.84 / 4.48 / 4.45 s before, 2.98 / 2.83 / 2.67 s after. The seven run ids under the new
+  server: the same. THE PACKAGE: vega-louise-llama-cpp alone rebuilt in place (REVISION 1ac1ecc, backend
+  louise-sycl-f16-llama-cpp-ed93e3c1b2e2-stack-7c301a7ba437, wrapper sha256 47bf02eaae7c01e4, the saved
+  one 10833aab79818132; `ALREADY_LOADED = "Model already loaded"`), byte check VEGA/1 against VEGA/2
+  identical, gate 1 (wikipedia, bge-m3) PASS exact in 98 s, worst 0.999939, fingerprint as before. Gates
+  2–5, the unloads, rows A and B and parking on a copy follow.
+- **A SECOND DEFECT FROM THE SAME ROWS, OLDER THAN TONIGHT, FIXED IN THE SAME BRANCH: THE KEEPER TOOK
+  LOUISE'S OWN UNLOADS FOR THE RECLAIMER'S EVICTIONS (München, 22:40:18–37Z, embed mode).** A question — the
+  pinned runs of the 9B's AFTER — took the card as a question does ("a person's question holds the card;
+  corpus encoder(s) unloaded in 0.2 s: vega-medcpt-article-ov"; LocalAI stopped vega-dar-legal-it at
+  22:40:19 and vega-qwen3-embedding-4b at 22:40:28), and a beat later the keeper said "vega-dar-legal-it …
+  off the card again 10 min after its load: space is claimed, so it is not loaded again for 10 min" and "the
+  budget shrank by 8,453 MiB … the penalty on the margin is 8,568 MiB", then the same for medcpt-article-ov
+  (8,880 MiB in all, halved every 2 h). The back-off and the penalty are feedback on what the RECLAIMER
+  evicts — it saw the card past its line where a beat's sample did not; an unload Louise chose says nothing
+  of the card's growth. The keeper could not tell them apart: the question runs in the web's process, the
+  keeper in the worker's. It never showed before because the encoders had always been loaded hours earlier
+  (a model that stayed over ten minutes starts the count again); tonight they were ten minutes old, loaded
+  at the switch. FIXED: `model_load.unload` and `park` — the two calls every unload of Louise's goes through
+  — note the model in `state/model-unloads.json` (app/own_unloads.py: the pin record's way, a locked file
+  replaced whole, pruned after an hour), and `_due` asks it before it counts an eviction: Louise's own
+  doing is no strike and no penalty, and the model is due at once. The mode-switch fix below relies on the
+  same record (its first cut cleared the keeper's track by hand; one mechanism now). NOT known yet: who
+  stopped dar-legal-it and qwen3-embedding-4b — the question's own room-making in the web's log, or
+  LocalAI's reclaimer; with the record the keeper's lines say which from now on. Tonight's 8,880 MiB penalty
+  stands in the node's file and halves by itself. ALSO SEEN, not touched: dar-legal-it is counted at 8,453
+  MiB — its largest — because its weights at rest (about 1.8 GiB) were not learnt again since the at-rest
+  sizes were dropped that afternoon (`REST_BASIS` 2), and a model that embeds all day is never seen at
+  rest; that is why it is out of the budget and why the penalty was so large. To look at with a day of
+  embed mode behind it.
+- **The answer's language, AFTER on the model that showed the defect (München, 22:40Z, embed mode,
+  bcdf0dc).** The 9B, temperature 0.3, the same four hits in the same order as the BEFORE of 14:22Z (fr /
+  it / en / en), which answered in FRENCH (3,653 chars). With the language named after the question: three
+  answers byte for byte the same (sha cc8387a26178, 2,417 chars), ITALIAN — "Dante Alighieri nacque a
+  Firenze nel 1265 …". Same model, same hits: French before, Italian after. #901's row is complete.
+- **`resident show` in embed mode (München, 22:41Z): the four Ask models ARE of the set, three in the
+  budget** — budget 17,972 MiB (margin 25, context 5,124, penalty 8,880), 17,939 taken: the 9B, MADLAD
+  (7,221), the TTS (1,672), rerank-nemotron-1b (3,163) in; rerank-medcpt, every embedder and dar-legal-it
+  out. After München's shutdowns by hand the keeper loaded them back itself ("loading
+  louise-translate-madlad — translation (not on the card; needs 7,221 MiB, 16,395 MiB free under the 0.98
+  line)", 16.3 s; TTS 9.2; rerank-nemotron-1b 8.4; rerank-medcpt 10.9): the stop-then-load-back the fix
+  below builds, done once by hand — gtt 15.9 → 1.7 GiB, and at 22:41Z vram0 24,990, gtt 2,936, MemAvailable
+  19,786 MiB.
+- **DEFECT, FOUND AT THE FIRST QUERY → EMBED SWITCH AND FIXED BEFORE ANYTHING ELSE: LEAVING A PAGING RULE
+  LEFT WHAT THE DRIVER HAD PAGED OUT SITTING IN HOST MEMORY (München, 22:29:57Z, on the operator's word for
+  the switch; bcdf0dc).** The switch itself did what it says: "node in embed mode (query -> embed): chat
+  model louise-chat-qwen3.5-9b-q4-p0; network budget down unlimited, up 12.5 MB/s", the 35B stopped, the 9B
+  loaded in 15.2 s, the corpus encoders in 6.2–42.3 s (dar-legal-it 42.3), and the KEEPER ALONE turned the
+  reclaimer ON 32 s later ("the rule in force unloads for room again"; LocalAI: "memoryReclaimer=true
+  memoryThreshold=0.98") — no eviction by LocalAI, no CANARY. BUT: gtt stayed at 15.9 GiB — MADLAD, both
+  rerankers and the speech model, each reading 0 MiB on the card. They are still of embed mode's set (the
+  11-08 rule preloads them in every mode), so the keeper took them as loaded and loaded nothing; no
+  question came, so nothing brought them back to the card; and LocalAI, counting the CARD at 15.6 of 32
+  GiB, would never claim them — while the parse pool started (worker cgroup 14.6 GiB in two minutes):
+  MemAvailable 21.9 → 7.8 → 5.3 → 4.4 → 3.6 GiB, the ARC squeezed 16.4 → 4.3 GiB. München stopped the four
+  by hand at 22:32:20Z: gtt 15,488 → 1,720 MiB, MemAvailable 15.8 → 30.3 GiB at once. I made query mode
+  page (#908) and never said what leaving it does with what was paged. FIXED (`model_evict.host_leftovers`,
+  called by the keeper's beat; docs/07 §7.8): where the rule in force is not "page", a model Louise knows
+  (of the set, or with a use row), IDLE for a minute, not pinned, not busy, not parked, not on another
+  card, that reads under its own floor of the most it was seen holding — 0 MiB included, which the
+  over-commitment line skips — is stopped at the keeper's first beat after the switch, all of them in that
+  beat, never while a question holds the card, said in one line; AND THE KEEPER LOADS BACK ONTO THE CARD
+  THOSE ITS BUDGET HOLDS, by its ordinary loads, with no back-off and no penalty (the stop is the mode's
+  doing, not the reclaimer's). A first cut left alone every model of the set — which would have left
+  exactly these four: read off `wanted()` before the merge. One ON the card stays, as the rule of 11-08
+  says; one in use is brought back by its own requests. Written down, not built: bringing each back with
+  one request instead of a stop and a load (it frees the host only as fast as the card takes each model).
+  Until its sha is live München's four shutdowns by hand stay the remedy at each such switch.
+- **The wrapper's package, decided for the parking pass: ONLY vega-louise-llama-cpp is rebuilt (Tensor's
+  (i), mine too).** "Each package is what its gate saw" (invariant 12), not "one wrapper on the node": the
+  change acts only on a LoadModel repeated for a model already held, which only the park engine's return
+  sends, and no OpenVINO, PyTorch or CPU model parks — rebuilding the other three would re-gate their runs
+  for nothing (RULE 1). Cost, written down: two wrapper builds on the node until those three are next
+  rebuilt and gated for their own reasons. Recorded at #882's merge with München's table (each package's
+  wrapper sha256, REVISION and backend); München found no deploy stage or build check that compares an
+  installed package's wrapper with main's file. The server is NOT swapped yet: one spec of LocalAI's own
+  (a log websocket's race, in files no patch touches) fails 14 in 200 on the new tree against 1 in 200 on
+  the live one with every core busy — Tensor runs an interleaved comparison first.
+- **The author's check gains `licence` and `space-pin` (`louise hold check <collection> --build`; the
+  compliance check, compliance-check.md §4).** Both are the node's OWN resolutions said to the author
+  before the worker meets them, never a second implementation: `licence` is `licensing.state_for` (a
+  yellow- or red-class source with no recorded acknowledgement FAILS — "not discovered, not imported, not
+  exchanged" — and names `hold collection ack`); `space-pin` is the start's own boot check on the check's
+  read-only connection (`spaces.verdict`, `pin_if_missing=False`: nothing is pinned by asking — a status
+  page once re-pinned a half-edited recipe that way): a space the start would refuse FAILS with the start's
+  reason, no space pinned yet is INCONCLUSIVE. Four of the build's checks exist now (units, chunkless,
+  licence, space-pin); `rescan`, `parse-bound`, `origin-hash`, `words` and `bulk-ledger` are still to
+  build, `rescan` only after its six isolations are each a test. Not run on the node's collections yet.
+- **THE TEXT INDEXES ARE OPENED AT THE WEB'S START, AND THE OPEN OF ONE HOLDS UP NO OTHER (the slow
+  question, the text leg).** München's fact: his 12.6 s of fts were over gutenberg, whose text index is 54
+  GB in 21 language groups on ssd3's SATA disk. But the same index measured 0.4 s at the median and 1.7 s at
+  p95 UNCACHED three days ago (storage-tiering.md §12, 72 searches) — on a process that had it open. What a
+  first question of a process paid besides is the OPEN: `fts.get_index` opened each group at its first use,
+  and held the module's ONE lock across `tantivy.Index(...)`, so the legs of a first search — run side by
+  side since 2026-11-09 — opened their indexes one after the other, across collections too; and the web
+  starts again at every deploy. Two changes: (1) each index opens under ITS OWN lock (the same index still
+  once; a `forget` waits for an open in flight, as the one lock made it do); (2) the web, at its start and
+  beside the models' warm, opens every searched collection's groups — eight at once, the collections one
+  after the other — and SAYS THE SECONDS: "[web info:warmup] gutenberg: text index opened, 21 language
+  group(s) in N s (web start)". That line is the measurement of what a first question paid; nothing is
+  claimed before it. NOT done by it: the postings a question's words need are still read at the first
+  search that asks for them — if the first question's fts stays in seconds after this, the remedy is the
+  index's place (a faster drive: a storage choice of the operator's, §12's "B but measure"), not code.
+- **A QUESTION SAYS WHAT ITS RERANK WAS MADE OF (the slow question, first step: measure).** The operator's
+  first question in query mode: search 44.5 s — "rerank 20,000", fts 12.6 s — and the line could not tell
+  five lists of four seconds from one list of twenty, nor the reranker's answers from a load, from the cut of
+  the texts to the model's window, or from the grouping of the works: the one `rerank` number covered all of
+  it, for every list together. Now each list's rerank notes itself (`retrieval._rerank_parts`, a context
+  variable `_rerank_held` fills; nothing of the search changes): records judged, texts and characters sent,
+  calls (one per query variant), and the ms of the answers, the load, the cut and the works — in the result's
+  `timings.rerank_parts` and on the search's own line, slowest list first: "…, rerank 20,000; rerank by
+  list: wikipedia 9,200 (50 records, 100 texts, 412k chars, 2 call(s): answers 4,100, load 4,900, works
+  160); gutenberg 3,900 (…)". The design's cost is already known and is not small: 50 records × 2 chunks,
+  each whole, per list, the lists that share a reranker one after the other (`parallel:1`, bit-exact) — what
+  is NOT known is which part the 20 s were, and tonight every Ask model was in host memory (row E), so a
+  question also pays their page-ins. No depth, no chunk count and no engine setting is touched before his
+  own questions have given these rows; each is a choice with a quality or a reproducibility cost, put to
+  him with the numbers.
+- **"CACHE THE MODEL TO RELOAD IT FROM DISK WARM" — MEASURED, AND IT DOES NOT PAY: THE DRIVE IS NOT WHAT A
+  RELOAD COSTS (München, 21:08Z, after the boot for the ssd3 port swap; Louise stopped, nothing loaded).**
+  `warm_model_files.py --all --json` twice in a row: 105 models, 469.8 GiB in 107.2 s and 108.4 s — 4,490 and
+  4,440 MiB/s; the ARC from 2,235 MiB to its 16,384 cap in the first pass (MemAvailable 55.9 → 41.6 GiB).
+  From the DRIVE, both passes (470 GiB do not fit 16): 4.3–4.8 GiB/s — the 35B's 20.61 GiB in 4.69 s, MADLAD
+  5.48 in 1.20, qwen3-embedding-4b 2.33 in 0.81, nemotron-embed 2.13 in 0.46, bge-m3 1.08 in 0.25; from
+  MEMORY (a file shared with a model read a moment before): 7.3–7.5 GiB/s. So a timer on the embedders'
+  files would save about a tenth of a second each, and a larger cache under 5 s of the 35B's load — which
+  was 37.4 s on the empty card that night and 99.2 s at 15:58Z with twelve models on it: the time is the
+  card and the server. **NO TIMER, NO CHANGE OF THE CACHE'S CAP; what the entry below called "the gain on
+  record" (33.7 s against 6) was never the file's read.** THE TOOL'S VERDICT WAS WRONG AND IS REMOVED: it
+  called anything over 4,000 MiB/s "from memory", which on this node is the drive; it now says bytes,
+  seconds and rate, and its docstring and model-profile.md carry the rows. A quick return is parking's.
+  The node after the boot: ssd3 on ata4 at 6.0 Gbps, 0 ata events, pools healthy, bcdf0dc, engine
+  619655e5833b, query mode; the 35B's cold start 37.4 s "load bound 300 s" (#906's row), omnivoice 7.7,
+  parakeet-igpu 3.7, silero 2.1, medcpt-query 4.7, bge-m3 7.5; the OVER-COMMITTED line at info (MADLAD read
+  short, 32,664 MiB at rest).
+- **Parking, what moved on Tensor's side the same hour, and one guard taken from it.** (a) and (b) of what
+  my half relies on, MEASURED by Tensor on the real server: `GET /api/settings` carries
+  `park_host_floor_bytes` (0 from the start, the written value after a whole-object POST), and one
+  embedding to a parked model brings it back (20 of 20) — `/backend/load` only for the stale record, as
+  built. THE STAGED 0027 IS REPLACED: on a real backend a park landed between two inputs of ONE embeddings
+  request (46 times in 2,048 sentences; answers right, the weights copied out and back each time), so a
+  model whose last request began or ended under a second ago is now busy for a park — 409 `model_busy`,
+  which my evictor already takes as "the next candidate". A HAZARD OF THE SERVER, guarded here: a
+  whole-object `POST /api/settings` NEVER answers where LocalAI's watchdog exists only for a limit of loaded
+  models and no periodic check is on (not the node's settings — München, 21:24Z — and a server patch
+  rides the park build). A write that was sent and not answered is therefore not repeated at each beat:
+  the keeper leaves that server's settings alone for an hour, said once, for the park floor and the
+  reclaimer's switch alike (`localai_reclaimer.NotAnswered`, `resident._settings_held`).
+- **The operator, 21:27Z, to München: "Which experts of the 35B stay on the card: switch it on by default",
+  "Run unattended"; and earlier "Can parking be combined with paging? The idea was also to decide which
+  expert of the 35B is paged or preloaded".** Three levels then, by his design: parking for whole models,
+  paging for what stays, the experts switch to steer what paging takes of the 35B. They combine as §4 C of
+  parking-step-2.md already says (over the card within the host's floor → the driver pages; otherwise room
+  is made → park where the model can, stop where it cannot). Whether the experts switch is a line of the
+  chat model's file or the engine's default is Tensor's to say; mine when it lands: the staged model file
+  and the keeper's remembered size of the 35B kept true.
+- **PARKING, LOUISE'S HALF — BUILT, INERT UNTIL THE PARK SERVER AND A `park: true` FILE (operator: "Do
+  parking."; docs/notes/parking-keeper.md).** Built against the exact answers of Tensor's staged
+  0027-model-park.patch (read from their branch: `/backend/park`'s 200 / 409 `model_busy` / 412 ×3 / 404
+  `model_not_loaded` / 500 `model_stopped`, `/system`'s `parks` / `state` / `parked{}`, the setting
+  `park_host_floor_bytes`, 503 `no_room_on_device` with `Retry-After: 2`). (i) THE EVICTOR PARKS:
+  `model_evict.make_room` — and a question's `free_card` — give a model's room back through
+  `/backend/park` where LocalAI lists it `"parks": true`, stop it otherwise; busy is never stopped, the
+  next candidate is asked; freed is what the answer says moved, never the model's whole size (its residue
+  stays: 321 MiB for bge-m3); a parked model gives way LAST and is then stopped. (ii) A PARKED MODEL IS
+  LISTED AND IS NOT ON THE CARD: nothing is learnt from what is left of it (its largest, its rest and its
+  steady reading are untouched), the budget's margin and the over-commitment count it as read, the keeper
+  takes it as not loaded and brings it back as it loads a model, and `ensure_loaded` makes room for a return
+  as for a load ("parked: X came back from host memory in N s"). (iii) THE KEEPER'S THREE DUTIES each beat
+  (`resident._parked_follow`): the floor — `park_host_floor_bytes` = `[models] page_floor_gib`, written
+  only where a loaded model parks, through the one settings writer (the object's secrets never said); the
+  record — a model listed parked that is on the card is given back to LocalAI by `/backend/load`; the host
+  — under its floor, the parked model used longest ago is stopped, one a beat, never a pinned one
+  (`model_evict.host_claims`: space claimed, the budget still unloads nothing). (iv) "NO ROOM NOW" IS A
+  DEFERRAL: the document path already defers on it (`EndpointBusy`; the three messages checked not to read
+  as an input's refusal), a question's calls keep their fallback and can tell it from a fault
+  (`httpc.no_room`, `ModelRefused.retry_after_s`). 39 tests (tests/test_parking.py), the first of each
+  part: WITHOUT THE PATCH NOTHING CHANGES. NOT measured — nothing parks yet; six rows owed from the node
+  are in the note, §5 (§4 since 2026-11-26 holds what was measured on the card). Spec: docs/07 §7.8 `[models]`, amended 2026-11-25 ("PARKED, WHERE A MODEL CAN").
+  The node is DOWN for the ssd3 port swap (operator, 20:54Z "Shut down now"; München stopped Louise
+  cleanly and sent a last snapshot).
+- **"DO PARKING." (operator, to München, 2026-11-25 20:46Z) — the order of it, and what is mine.** Tensor's
+  pass: the server first (v5.0.1 + 0001 + 0011 + 0019 + 0024 + 0027 — inert until a floor is set AND a
+  model's file says `park: true`), then the engine ed93e3c1b2e2 with every llama.cpp gate again, then rows on
+  copies; no real model parks in that pass. MINE: (i) the wrapper's part (#882, held: it moves every vega run
+  when the packages are rebuilt) rides that engine's gating — branch wrapper-same-load brought up to main,
+  a6594cdb, 219 wrapper tests, handed to Tensor for the vega package; marked ready and merged when the gated
+  package is what the node runs; (ii) the keeper's half — parked models read from `/system`, the evictor's
+  `/backend/park`, the host floor written through `/api/settings`, 503 `no_room_on_device` a deferral in
+  every client — is what turns parking on in production: started, built against the server's exact JSON
+  (asked of Tensor); (iii) nothing to change in the clients' rule (a 5xx that is not the canary's words is
+  busy), a test per client to say so. Tensor reverted a node-wide `make_room = "page"` default of theirs
+  (071737e) that contradicted the operator's "A": it never reached main.
+- **bcdf0dc (main 9c7d04dc) LIVE 20:43Z, query mode (München) — and the reclaimer's switch given ONE
+  authority.** "resident: LocalAI's memory reclaimer turned OFF at … " at 20:43:16Z, `memory_reclaimer_
+  enabled` false; the OVER-COMMITTED line at info ("8 model(s) read short on the card …, 48,391 MiB at rest
+  against the card's 32,656 MiB"); card 29,301 MiB, gtt 16,903 MiB, no eviction. THE LINE CAME TWICE, truly:
+  the deploy's stage script put the reclaimer ON again at 20:43:52Z — the file says "unload" and the script
+  cannot know the mode — and the next beat turned it off at 20:44:17Z: twenty-five seconds, at every deploy,
+  of a reclaimer that evicts over a card that reads full (one model went that way at 15:57Z). FIXED:
+  `deploy/vega/stage/localai_settings.py` sets `memory_reclaimer_enabled` only where LocalAI has none (a
+  fresh install); once it says on or off it is the keeper's word, neither written nor counted as drift, and
+  shown as such. The threshold stays the script's. No voice line yet. The September snapshot released by
+  the operator (869G); the node to be shut down for the ssd3 port swap — the warm-file passes run after the
+  boot, where the first is the cold row.
 
 - **THE OPERATOR ON PAGING, 2026-11-25 evening, the rest of it: "and C when it is ready"; asked why not in
   every mode, "A. And cache the model to reload it from disk warm".** So: parking (C) is wanted as the

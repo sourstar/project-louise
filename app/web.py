@@ -1214,9 +1214,34 @@ def _say_search_timings(body: AskQueryBody, result: dict) -> str:
             f"{len(result.get('hits') or [])} hits): "
             f"languages {t.get('languages', 0):,.0f}"
             + "".join(f", {leg} {t.get(leg, 0):,.0f}{slowest(leg)}" for leg in ("catalog", "fts", "dense"))
-            + f", rerank {t.get('rerank', 0):,.0f}" + _rerank_verdict(result))
+            + f", rerank {t.get('rerank', 0):,.0f}" + _rerank_verdict(result) + _rerank_parts_said(t))
     print(line, flush=True)
     return line
+
+
+def _rerank_parts_said(timings: dict) -> str:
+    """WHAT THE RERANK WAS MADE OF, on the same line (München, 2026-11-25: a
+    question at "rerank 20,000" in query mode, and nothing to tell five
+    lists of four seconds from one list of twenty, the model's answers from
+    the cut of the texts to its window, or the grouping of the works): per
+    list, slowest first, its ms, the records judged, the texts and
+    characters sent in how many calls, and the ms of each part that is not
+    small — the reranker's answers, the load where one was paid, the cut,
+    the works. Lists that share a reranker ran one after the other."""
+    parts = timings.get("rerank_parts")
+    if not isinstance(parts, dict) or not parts:
+        return ""
+    out = []
+    for name, p in sorted(parts.items(), key=lambda kv: -float((kv[1] or {}).get("rerank") or 0)):
+        if not isinstance(p, dict) or not p.get("records"):
+            continue
+        detail = [f"answers {p.get('call_ms', 0):,.0f}"]
+        detail += [f"{label} {p[key]:,.0f}" for key, label in (("warm_ms", "load"), ("fit_ms", "cut"),
+                                                              ("works_ms", "works"))
+                   if float(p.get(key) or 0) >= 50.0]
+        out.append(f"{name} {p.get('rerank', 0):,.0f} ({p.get('records', 0)} records, {p.get('texts', 0)} texts, "
+                   f"{p.get('chars', 0) / 1000:,.0f}k chars, {p.get('calls', 0)} call(s): {', '.join(detail)})")
+    return f"; rerank by list: {'; '.join(out)}" if out else ""
 
 
 def _rerank_verdict(result: dict) -> str:

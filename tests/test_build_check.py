@@ -107,13 +107,75 @@ def test_a_document_in_error_or_out_of_scope_is_not_a_chunkless_document(built):
     assert bc.check_chunkless(con, c.plugin_instance()).result == bc.PASS
 
 
+# ---- the licence and the space: the node's own resolutions, said to the author ------------------
+
+def test_the_licence_check_says_what_the_worker_does_with_the_source(built, monkeypatch):
+    """Invariant 9, by `licensing.state_for` — THE resolution, never a second
+    one: a yellow- or red-class source with no recorded acknowledgement is
+    not used, and the check names the command that records it."""
+    from app import licensing
+    c, con = built
+    ro = con
+    monkeypatch.setattr(licensing, "license_class_for", lambda collection, spec=None: "green")
+    monkeypatch.setattr(licensing, "state_for", lambda collection, spec=None: licensing.NOT_REQUIRED)
+    v = bc.check_licence(ro, None, c)
+    assert v.result == bc.PASS and "green-class" in v.says
+    monkeypatch.setattr(licensing, "license_class_for", lambda collection, spec=None: "yellow")
+    monkeypatch.setattr(licensing, "state_for", lambda collection, spec=None: licensing.ACKNOWLEDGED)
+    assert bc.check_licence(ro, None, c).result == bc.PASS
+    monkeypatch.setattr(licensing, "state_for", lambda collection, spec=None: licensing.MISSING)
+    v = bc.check_licence(ro, None, c)
+    assert v.result == bc.FAIL and "not discovered, not imported, not exchanged" in v.says
+    assert "louise hold collection ack gutenberg" in v.supplies
+    monkeypatch.setattr(licensing, "state_for", lambda collection, spec=None: (_ for _ in ()).throw(KeyError("x")))
+    assert bc.check_licence(ro, None, c).result == bc.INCONCLUSIVE
+
+
+def test_the_space_check_is_the_starts_own_refusal_said_before_a_restart_meets_it(built, monkeypatch):
+    """Invariant 1, by the node's own boot check on a read-only connection:
+    nothing is pinned by asking (a status page once re-pinned a half-edited
+    recipe behind the operator's back, app/spaces.py)."""
+    from app import spaces
+    c, con = built
+    seen = []
+
+    def validate(con_, collection, pin_if_missing=True):
+        seen.append(pin_if_missing)
+        return state["pinned"]
+    state = {"pinned": True}
+    monkeypatch.setattr(spaces, "_validate_one", validate)
+    assert bc.check_space_pin(con, None, c).result == bc.PASS
+    state["pinned"] = False
+    v = bc.check_space_pin(con, None, c)
+    assert v.result == bc.INCONCLUSIVE and "nothing was embedded here" in v.says
+    assert seen == [False, False], "asked read-only: never pinned by a check"
+
+    def refuse(con_, collection, pin_if_missing=True):
+        raise spaces.BootValidationError("vector table dim 1024 != the Codex's 2560")
+    monkeypatch.setattr(spaces, "_validate_one", refuse)
+    v = bc.check_space_pin(con, None, c)
+    assert v.result == bc.FAIL and "would refuse this collection: vector table dim 1024" in v.says
+    assert "never mixed" in v.supplies
+    monkeypatch.setattr(spaces, "_validate_one", lambda *a, **k: (_ for _ in ()).throw(OSError("no table")))
+    assert bc.check_space_pin(con, None, c).result == bc.INCONCLUSIVE
+
+
+def test_the_real_collection_passes_or_is_inconclusive_never_refused(built):
+    """The test collection as scanned: green-class, and no space pinned yet
+    (nothing embedded) — the checks run on the real resolutions end to end."""
+    c, _ = built
+    got = {v.check: v for v in bc.run(c, ["licence", "space-pin"])}
+    assert got["licence"].result == bc.PASS
+    assert got["space-pin"].result in (bc.PASS, bc.INCONCLUSIVE), got["space-pin"].says
+
+
 # ---- the run, and the command ----------------------------------------------------------------
 
 def test_the_checks_read_only_and_say_so_where_nothing_was_built(built, tmp_path):
     c, con = built
     con.commit() if con.in_transaction else None
     before = Path(c.manifest_path).read_bytes()
-    assert [v.check for v in bc.run(c)] == ["units", "chunkless"]
+    assert [v.check for v in bc.run(c)] == ["units", "chunkless", "licence", "space-pin"]
     assert Path(c.manifest_path).read_bytes() == before, "a check writes nothing"
     nowhere = types.SimpleNamespace(manifest_path=tmp_path / "none.db")
     got = bc.run(nowhere)
@@ -129,7 +191,7 @@ def test_one_command_for_a_collections_author(built, capsys):
     assert louise.main(["hold", "check", "gutenberg", "--build"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["collection"] == "gutenberg" and out["failed"] == []
-    assert [v["check"] for v in out["build"]] == ["units", "chunkless"]
+    assert [v["check"] for v in out["build"]] == ["units", "chunkless", "licence", "space-pin"]
     assert all(v["says"] for v in out["build"]), "every verdict in plain words"
     (a,) = _uids(con, 1)
     con.execute("UPDATE documents SET chunks=0 WHERE uid=?", (a,))

@@ -105,12 +105,18 @@ under 30 s, rounded up to 5 s.
    - Earlier first loads from disk were 33.7 s for qwen3-4b and 11.9 s for
      bge-m3.
    - The bounds take the slowest of all of these.
-   - KEPT WARM SINCE 2026-11-25 (operator: "cache the model to reload it from
-     disk warm"): `deploy/vega/warm_model_files.py` reads the embedders'
-     weight files again on a timer, so a model unloaded for room is loaded
-     back from the file cache; each pass says per model whether it came from
-     memory or from the drive. Host-side; installed and measured by the node
-     (STATUS.md, that day).
+   - NOT THE DRIVE'S DOING, MEASURED 2026-11-25 (operator: "cache the model
+     to reload it from disk warm"; `deploy/vega/warm_model_files.py`, München
+     after a boot with nothing loaded): ssd5 reads the weight files COLD at
+     4.3–4.8 GiB/s (470 GiB twice, 4,490 and 4,440 MiB/s) and from memory at
+     7.3–7.5 GiB/s. An embedder's whole file is 0.25–0.8 s of drive; the
+     35B's 20.6 GiB are 4.7 s of a load that took 37.4 s on an empty card
+     and 99.2 s with twelve models on it. So the "cold page cache" of the
+     lines above is not the file's read: for the Python backends it is
+     whatever a first start does besides (imports, compilation caches), and
+     it is not looked into further here. No timer was installed and the
+     file cache's cap stays; a quick return is parking's
+     (parking-keeper.md).
 4. **LocalAGI's 2B model loads in 45–47 s, almost all of it upload**
    (VRAM grows from 2.2 s to 46 s). That is 17 times slower per byte than
    `louise-chat-qwen3-8b`, which uploads 7.4 GB in 2.6 s. Its weights are

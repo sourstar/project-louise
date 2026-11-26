@@ -75,6 +75,19 @@ threshold stays because Louise's keeper reads it for its budget's line.
 `--platform FILE` names the node's platform.toml: THE FILE DECIDES, so that
 a deploy applies and checks the mode the node is in instead of putting the
 other back (the architecture session's review). Without it: "unload".
+
+THE KEEPER HOLDS THE RECLAIMER'S SWITCH, NOT THIS SCRIPT (2026-11-25). The
+file cannot say which MODE the node is in, and in query mode idle models
+are paged whatever the file says (operator, that day: "A for paging";
+app/model_evict.py `rule`). The deploy of bcdf0dc showed what follows: the
+keeper turned the reclaimer off at 20:43:16Z, this script put it ON again
+at 20:43:52Z from the file's "unload", and the next beat turned it off at
+20:44:17Z — 25 s of a reclaimer that evicts over a card that reads full,
+at every deploy (one model went that way at 15:57Z). So `memory_reclaimer_
+enabled` is set here ONLY where LocalAI has none (a fresh install, before
+any keeper ran); where it already says on or off, that is the keeper's word
+(app/localai_reclaimer.py, held at every beat to the rule in force) and it
+is neither written nor counted as drift. The threshold stays this script's.
 """
 from __future__ import annotations
 
@@ -82,6 +95,9 @@ import json
 import sys
 import urllib.request
 from typing import Any
+
+#: the reclaimer's switch: the keeper's once LocalAI has a value for it
+RECLAIMER = "memory_reclaimer_enabled"
 
 DESIRED: dict[str, Any] = {
     "memory_reclaimer_enabled": True,
@@ -132,7 +148,11 @@ def desired_for(current: dict[str, Any], make_room: str | None = None) -> dict[s
     models are paged), less what the add-on owner holds while it runs."""
     want = dict(DESIRED)
     if (make_room or MAKE_ROOM) == "page":
-        want["memory_reclaimer_enabled"] = False
+        want[RECLAIMER] = False
+    # on or off already: the keeper's word, which follows the node's MODE
+    # (the module's docstring) — set here only where LocalAI has none
+    if isinstance(current.get(RECLAIMER), bool):
+        del want[RECLAIMER]
     if not owner_holds(current):
         return want
     return {k: v for k, v in want.items() if k not in OWNER_KEYS}
@@ -155,6 +175,10 @@ def drift(current: dict[str, Any], desired: dict[str, Any] | None = None) -> dic
 
 def _said(current: dict[str, Any]) -> dict[str, Any]:
     out = {k: current.get(k) for k in desired_for(current)}
+    if isinstance(current.get(RECLAIMER), bool):
+        # shown as it is, and whose it is: not set and not checked here
+        out[RECLAIMER] = current[RECLAIMER]
+        out["the_reclaimers_switch_is"] = "the keeper's (it follows the node's mode)"
     if owner_holds(current):
         out["held_by_the_addon_owner"] = list(OWNER_KEYS)
     return out
