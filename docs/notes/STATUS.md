@@ -20,6 +20,11 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **OCR AND A PDF TEXT LAYER THROUGH RAGE — PROPOSED, NOT BUILT** (operator, 2026-11-26: "the RAGE ingestion API
+  to be extended for image OCR and adding of text layer to pdf (if pdf form is preserved in the parsed corpus). This
+  is architecture's call"). The design and the operator's question: [ocr-in-rage.md](ocr-in-rage.md) — recommended,
+  the reading as its own member beside the figures (records untouched), the engine chosen on 100 measured pages,
+  OCRmyPDF for the layer as derived data. EUR-Lex5's case: 4,711 scans in 559 html units, 418 PDFs without text.
 - **AN ANSWER'S LINE SAYS WHERE THE SECONDS BEFORE ITS FIRST WORD WENT (the Bug session, from the
   operator's read-aloud question: "answer: 1017 chars in 9.9 s, first word at 5.2 s", and nothing said
   why).** `llm.chat_stream` counts the chat model's load, the wait at the card's gate, the request to its
