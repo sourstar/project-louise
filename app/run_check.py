@@ -2145,11 +2145,33 @@ def _look(collection, stop: Callable[[], bool] | None,
     except (runs_mod.RunRefused, runs_mod.RunUnvalidated, emb.GateError) as e:
         # a refused RECEIPT refuses one answer, not the run: not settled (the
         # seventh read), as a deferred gate is not
+        _look_state.timed_out = _timed_out(e)
         return False, str(e), run_id, not isinstance(e, (emb.GateDeferred, embeddings.ReceiptRefused))
     except Exception as e:                              # noqa: BLE001
         # the endpoint away: a deferral, retried — less often each time it
         # fails again (`embed_allowed`'s backoff); nothing is flagged
+        _look_state.timed_out = _timed_out(e)
         return False, f"the encoder could not be asked: {type(e).__name__}: {e}", run_id, False
+
+
+#: whether the last look on THIS thread ended on a request that timed out
+#: (`_timed_out`): read by `embed_allowed` right after it, to tell a hung
+#: encoder from one that answered and deferred (the delta read, run: a gate
+#: whose first request timed out after 300 s counted as answered, and the
+#: main loop was held half the time again)
+_look_state = threading.local()
+
+
+def _timed_out(e: BaseException | None) -> bool:
+    """Is a timeout anywhere in `e`'s chain (`__cause__`, `__context__`) — an
+    encoder request that waited its whole bound?"""
+    seen: set[int] = set()
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if isinstance(e, (httpx.TimeoutException, TimeoutError)):
+            return True
+        e = e.__cause__ or e.__context__
+    return False
 
 
 def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
@@ -2196,6 +2218,7 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
         log("query " + told)
         return run_id
     except Exception as e:                              # noqa: BLE001
+        _look_state.timed_out = _timed_out(e)
         log(f"the query encoder's run could not be settled: {type(e).__name__}: {e}")
         return None
 
@@ -2286,6 +2309,22 @@ def _query_settled(kept, heard: str | None, now: float) -> bool:
     return heard is None or kept == heard
 
 
+def _query_kept(collection, kept, heard: str | None, now: float) -> bool:
+    """`_query_settled` — or an unsettled query side about the run heard while
+    the query encoder's backoff (`_slow`) runs: kept as long as the mark, and
+    no longer (the delta read, run: re-stamped from now, it outlived a mark
+    cleared by an answer by its own bound, up to 28 min). Kept, the verdict is
+    fresh and the document side is not probed at every step meanwhile."""
+    if _query_settled(kept, heard, now):
+        return True
+    if not (isinstance(kept, tuple) and len(kept) > 2 and kept[0] == QUERY_UNSETTLED):
+        return False
+    if heard is not None and kept[2] != heard:
+        return False
+    q_key = _flights_query(collection)
+    return q_key is not None and _slow_until(q_key, now, heard) is not None
+
+
 def verdict_outdated(collection) -> bool:
     """Is this process's verdict for `collection` about other runs than the
     ones last heard (any process)? The worker's idle round looks again when
@@ -2306,7 +2345,8 @@ def verdict_outdated(collection) -> bool:
     heard_now = answering(collection)
     doc = heard_now.get("document")
     return (doc is not None and cached[3] != doc) or \
-        not _query_settled(cached[5], heard_now.get("query") if _asymmetric(collection) else None, time.time())
+        not _query_kept(collection, cached[5], heard_now.get("query") if _asymmetric(collection) else None,
+                        time.time())
 
 
 def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) -> bool:
@@ -2344,7 +2384,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
     # to this, and a query run a question heard would have waited the TTL out)
     if cached is not None and cached[2] > now and cached[4] == stamp and (
             now_answering is None or cached[3] == now_answering) \
-            and _query_settled(cached[5], heard_now.get("query") if _asymmetric(collection) else None, now) \
+            and _query_kept(collection, cached[5], heard_now.get("query") if _asymmetric(collection) else None, now) \
             and not _suspect_since(collection, cached) and not _suspect_since(collection, cached, "query"):
         return cached[0]
     with _guard:
@@ -2393,10 +2433,15 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             run_id = cached[3] if cached is not None else None
         else:
             t_look = _look_clock()
+            _look_state.timed_out = False
             allowed, reason, run_id, settled = _look(collection, stop, log)
-            # a look that heard a run did not hang, whatever its gate did after
+            # a look that heard a run did not hang, whatever its gate did after —
+            # unless a request of it timed out (the delta read: a gate whose first
+            # request waited its 300 s held the main loop half the time again)
+            hung = bool(getattr(_look_state, "timed_out", False))
             slow_n, slow_until = _note_look(doc_key, _look_clock() - t_look,
-                                            settled or allowed or run_id is not None, now_answering)
+                                            settled or allowed or (run_id is not None and not hung),
+                                            now_answering)
         # THE RUN A VERDICT IS ABOUT: the one its look heard; where it heard
         # none (the encoder could not be asked), the one heard BEFORE it — so
         # a run heard since, by any process, is looked at at once, and one
@@ -2421,7 +2466,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         q_took = 0.0
         if (isinstance(was_q, tuple) and was_q and was_q[0] == QUERY_UNSETTLED and _asymmetric(collection)
                 and not _suspect_since(collection, cached, "query")
-                and _query_settled(was_q, answering(collection).get("query"), time.time())):
+                and _query_kept(collection, was_q, answering(collection).get("query"), time.time())):
             # ITS OWN BOUND STILL RUNS: not asked again because the DOCUMENT side
             # is looked at (the seventh read, run: a document side failing too
             # took the query probe along every FAIL_TTL_S, and the backoff
@@ -2433,18 +2478,15 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             # keeps the verdict fresh and the document side is not probed at
             # every step meanwhile (the tenth read, run: 30 probes in 30 steps) —
             # or unsettled from now
-            if isinstance(was_q, tuple) and len(was_q) > 2 and was_q[0] == QUERY_UNSETTLED:
-                query_run = (QUERY_UNSETTLED, time.time(), was_q[2], was_q[3] if len(was_q) > 3 else 0)
-            elif was_q is not None:
-                query_run = was_q
-            else:
-                query_run = (QUERY_UNSETTLED, time.time(), heard_now.get("query"), 0)
+            query_run = was_q if was_q is not None else (QUERY_UNSETTLED, time.time(), heard_now.get("query"), 0)
         else:
             t_q = _look_clock()
+            _look_state.timed_out = False
             query_run = _look_at_the_query_side(collection, stop, log, heard_by=query_heard)
             q_took = _look_clock() - t_q
+            q_hung = bool(getattr(_look_state, "timed_out", False))
             if q_key is not None:
-                _note_look(q_key, q_took, query_run is not None or bool(query_heard), q_heard)
+                _note_look(q_key, q_took, query_run is not None or (bool(query_heard) and not q_hung), q_heard)
         if query_run is None and _asymmetric(collection):
             # WHEN it failed — after the look, which may have taken its whole
             # timeout (the fourth read: stamped before it, a probe that timed
@@ -2456,7 +2498,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             # BACKED OFF ONLY WHERE THE LOOK HELD ITS CALLER (the ninth read):
             # a quick failure is asked again at FAIL_TTL_S
             again = (isinstance(was, tuple) and was and was[0] == QUERY_UNSETTLED and was[2] == heard_then
-                     and q_took >= SLOW_LOOK_S and not query_heard)
+                     and q_took >= SLOW_LOOK_S and not (query_heard and not q_hung))
             query_run = (QUERY_UNSETTLED, time.time(), heard_then,
                          ((was[3] if len(was) > 3 else 0) + 1) if again else 0)
         # stamped AFTER looking: a statement the look itself wrote (a gate)

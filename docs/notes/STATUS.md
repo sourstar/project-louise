@@ -63,7 +63,12 @@ measured (published figures disagree).
   look, a valid verdict standing meanwhile, cleared by the first look that settles or comes back quickly,
   and passed over by a run heard since; a quick failure is asked again at 300 s, as on main. A suspect run
   whose re-gate cannot finish is looked at again when its verdict expires, not at every step: a verdict
-  keeps the canary failures its look saw, and only a new one sends it back. And the
+  keeps the canary failures its look saw, and only a new one sends it back. The tenth read and the delta
+  read, run: the mark keeps the run heard when it was set, and a run heard since passes it (a verdict
+  `check_write` dropped for R2 waited for the mark); a look the encoder answered does not set it — unless a
+  request of it timed out (`_timed_out` along the exception chain: a gate whose first request waited its
+  300 s, counted as answered, held the main loop half the time again); and an unsettled query side is kept
+  by the mark itself, as long as it and no longer (`_query_kept`; re-stamped, it outlived the mark). And the
   manual door, `hold embedder check`, is
   shut on a running node — the worker holds every collection's lock — so its hint now says to pause
   the collection first; that is how today's gate was run. I had told München the record was shared
