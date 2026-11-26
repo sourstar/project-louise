@@ -962,7 +962,11 @@ DEFAULT_KINDS = ("records", "vectors")
 #: Keys a Codex file carried before 07 §7.8 spelled the file out. Each is
 #: still read; `collection_file._write_codex_toml` writes one back only where the Codex
 #: and the tree do not give the same answer.
-DEPRECATED_CODEX_KEYS = ("profile", "acquire_enabled", "genesis_archive",
+#: `acquire_enabled` left this list on 2026-11-26: it has been a documented,
+#: settable key of 07 §7.8 since 2026-11-25 ("do not fetch"), and the file
+#: that stated it was still told it "is not a key of 07 §7.8's collection
+#: file" at every load (München)
+DEPRECATED_CODEX_KEYS = ("profile", "genesis_archive",
                          "snapshot", "corpus_dir", "extras")
 #: The keys only 07 §7.8's shape has: a file with any of them is read by
 #: that shape's rules.
