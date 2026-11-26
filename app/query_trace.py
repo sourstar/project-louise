@@ -336,7 +336,8 @@ class Trace:
                 "search_id": self.search_id, "started": _iso(self.t0),
                 "ended": _iso(t1) if t1 is not None else None,
                 "ms": round((t1 - self.t0) * 1000, 1) if t1 is not None else None,
-                "marks": self.marks, **self.data, "samples": self.samples,
+                # in time order: `last_word` is the last delta's time, put in at the end
+                "marks": sorted(self.marks, key=lambda m: m[1]), **self.data, "samples": self.samples,
                 "model_events": _safe(_model_events, self.t0 - 1, t1 if t1 is not None else time.time())}
 
     def join(self, timeout: float | None = None) -> None:
