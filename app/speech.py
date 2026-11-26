@@ -609,10 +609,73 @@ def first_steps(steps: int | None) -> int:
     return max(platform_config.TTS_STEPS[0], (steps if steps is not None else MODEL_STEPS) // 2)
 
 
+#: A QUOTED SPAN IN ANOTHER LANGUAGE IS SPOKEN IN IT (operator, 2026-11-26:
+#: "sometimes I see words in quote marks that are in a different language
+#: and the pronunciation is not in that language"). The engine takes one
+#: language a request; a sentence holding a quotation that clearly reads as
+#: another (`language`, as for any sentence) is made in segments — before,
+#: the quotation, after — each in its own language, and joined with
+#: QUOTE_GAP_MS between them. A quotation too short to tell (one word, a
+#: name) stays in the sentence's language: the text says nothing of it, and
+#: the answer's sources are not looked up for it.
+QUOTE = re.compile(r'(«\s*[^«»]+?\s*»|“[^“”]+?”|„[^„“”]+?[“”]|"[^"]+?")')
+QUOTE_MIN_WORDS = 2
+QUOTE_GAP_MS = 60
+
+
+def quote_segments(text: str, sentence_lang: str | None) -> list[tuple[str, str | None]]:
+    """`text` as [(segment, its language or None: the sentence's)] where a
+    quotation in it reads clearly as another language than `sentence_lang`;
+    [] where none does (the sentence goes whole)."""
+    out: list[tuple[str, str | None]] = []
+    at = 0
+    for m in QUOTE.finditer(text):
+        inner = m.group(0)[1:-1].strip()
+        lang = language(inner) if len(re.findall(r"[^\W\d_]+", inner)) >= QUOTE_MIN_WORDS else None
+        if lang is None or lang == sentence_lang:
+            continue
+        before = text[at:m.start()].strip()
+        if before:
+            out.append((before, None))
+        out.append((m.group(0).strip(), lang))
+        at = m.end()
+    if not out:
+        return []
+    rest = text[at:].strip()
+    if rest:
+        out.append((rest, None))
+    return out
+
+
+def _join_wavs(clips: list[bytes], gap_ms: int) -> bytes | None:
+    """The clips as one WAV with `gap_ms` of silence between them; None where
+    they are not WAVs of the same format."""
+    params, frames = None, []
+    for c in clips:
+        try:
+            with wave.open(io.BytesIO(c)) as w:
+                p = (w.getnchannels(), w.getsampwidth(), w.getframerate())
+                if params is not None and p != params:
+                    return None
+                params = p
+                frames.append(w.readframes(w.getnframes()))
+        except (wave.Error, EOFError):
+            return None
+    if params is None:
+        return None
+    ch, width, rate = params
+    silence = b"\x00" * (int(rate * gap_ms / 1000) * ch * width)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(ch); w.setsampwidth(width); w.setframerate(rate)
+        w.writeframes(silence.join(frames))
+    return buf.getvalue()
+
+
 def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
                      reading: str | None = None, n: int | None = None,
                      last: bool = False, account_voice: str | None = None,
-                     admin: bool = True) -> tuple[int, bytes, str, list]:
+                     admin: bool = True, _steps_n: int | None = None) -> tuple[int, bytes, str, list]:
     """`synthesize` and its `Server-Timing` (W3C; 2026-11-08, to measure the
     reading's start and its pauses): `turn` the wait for the reading's
     sentence before (`Turns`), `synth` the model server's call in ms, `audio`
@@ -631,6 +694,12 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     # never relayed. A sentence too short to tell its language is spoken in
     # the language of the answer it is part of
     context = str(body.get("context") or "")[:CONTEXT_CHARS]
+    if _steps_n is None:
+        around = QUOTE.sub(" ", text)
+        segs = quote_segments(text, spoken_language(around, context, body.get("language")))
+        if segs:
+            return _synthesize_segments(segs, body, url, reading=reading, n=n, last=last,
+                                        account_voice=account_voice, admin=admin)
     out = {k: v for k, v in body.items() if k != "context"}
     out["input"] = text
     if model:
@@ -681,8 +750,11 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     # transition (less perceivable) between 16 and 32 steps, increase the
     # encoding at steps of 4 (16, 20, 24, 28, 32), it will give even more
     # margin"): piece n of a reading at `reading_steps(n, steps)`.
-    if reading is not None and n is not None:
-        ramped = reading_steps(n, steps)
+    # a segment of a quotation (`_synthesize_segments`) at its piece's steps;
+    # -1: a segment outside a reading, at the node's own
+    ramp_n = n if reading is not None else (_steps_n if _steps_n is not None and _steps_n >= 0 else None)
+    if ramp_n is not None:
+        ramped = reading_steps(ramp_n, steps)
         # unset and at the model's own: nothing sent, as for any request
         steps = ramped if (steps is not None or ramped < MODEL_STEPS) else None
     if steps is not None:
@@ -715,6 +787,36 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
         _clip_put(key, content, ctype)
     return status, content, ctype, (([("turn", waited)] if reading is not None else []) + timing
                                     + _steps_timing(steps))
+
+
+def _synthesize_segments(segs: list[tuple[str, str | None]], body: dict[str, Any], url: str, *,
+                         reading: str | None, n: int | None, last: bool, account_voice: str | None,
+                         admin: bool) -> tuple[int, bytes, str, list]:
+    """A sentence holding a quotation in another language (`quote_segments`):
+    each segment made in its own language — at the steps of the reading's
+    piece — in the piece's one turn, and joined. A segment that fails, or
+    clips that cannot be joined, fail the sentence as one would."""
+    piece_n = n if (reading is not None and n is not None) else -1
+    clips, total, steps = [], 0.0, None
+    with _TURNS.turn(reading, n) as waited:
+        for seg, lang in segs:
+            one = {**body, "input": seg}
+            if lang:
+                one["language"] = lang
+            status, content, ctype, timing = synthesize_timed(
+                one, url, last=last, account_voice=account_voice, admin=admin, _steps_n=piece_n)
+            if status != 200:
+                return status, content, ctype, timing
+            clips.append(content)
+            total += sum(v for k, v in timing if k == "synth")
+            steps = next((v for k, v in timing if k == "steps"), steps)
+    joined = _join_wavs(clips, QUOTE_GAP_MS)
+    if joined is None:
+        return 502, b'{"error": {"message": "the quotation\'s clips could not be joined"}}', "application/json", []
+    clip = audio_ms(joined)
+    return 200, joined, "audio/wav", ([("turn", waited)] if reading is not None else []) + [
+        ("synth", round(total, 1)), ("segments", float(len(clips)))] + (
+        [("audio", clip)] if clip is not None else []) + ([("steps", steps)] if steps is not None else [])
 
 
 def _steps_timing(steps: int | None) -> list[tuple[str, float]]:

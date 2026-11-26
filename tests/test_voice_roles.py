@@ -172,6 +172,42 @@ def test_a_clip_kept_before_the_engines_fade_fix_is_never_served(monkeypatch):
     assert speech._clip_key("http://ai", out) != now, "each bump makes new keys"
 
 
+def _wav(ms: int, rate: int = 24000) -> bytes:
+    import io
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+        w.writeframes(b"\x01\x00" * (rate * ms // 1000))
+    return buf.getvalue()
+
+
+def test_a_quotation_in_another_language_is_spoken_in_it(node, monkeypatch):
+    """Operator, 2026-11-26: "words in quote marks that are in a different
+    language and the pronunciation is not in that language". The quotation,
+    where it reads clearly as another language, is its own segment in its
+    language; the rest in the sentence's; one clip, joined."""
+    calls, _, _ = node
+
+    class W:
+        status_code, headers = 200, {"content-type": "audio/wav"}
+        content = _wav(500)
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or W())
+    s = 'Il motto dei moschettieri era "Un pour tous, tous pour un", scritto da Dumas nel romanzo.'
+    status, content, ctype, timing = speech.synthesize_timed({"input": s}, url="http://ai", reading="q1", n=0)
+    sent = calls[-3:]
+    assert status == 200 and [c["language"] for c in sent] == ["it", "fr", "it"]
+    assert sent[1]["input"].startswith('"Un pour tous')
+    assert all(c["params"] == {"flow_steps": "16"} for c in sent), "each at the piece's steps (n=0: 16)"
+    assert ("segments", 3.0) in timing and ("steps", 16.0) in timing
+    assert 1500 <= speech.audio_ms(content) <= 1700, "three clips of 500 ms and two gaps"
+    # one word, or the sentence's own language: the sentence goes whole
+    before = len(calls)
+    speech.synthesize_timed({"input": 'Disse «addio» e partì da casa per sempre.'}, url="http://ai")
+    speech.synthesize_timed({"input": 'Disse «resta con me, amico mio» e partì da casa.'}, url="http://ai")
+    assert len(calls) == before + 2
+
+
 def test_a_kept_clip_takes_its_turn_in_order(node, monkeypatch):
     """A cache hit returns before the model's call; it still TAKES ITS TURN:
     marked done (unmarked, sentence n+1 waited TURN_ARRIVE_S for it), and
