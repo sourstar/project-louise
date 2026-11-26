@@ -1415,5 +1415,28 @@ Three things follow for the gate.
   says what a twin that lost it would show.
 - "No counts" is a 500 from the route, not a 200 with other keys.
 
-**NOT shown:** a card (München's copies were never pinned); the twin behind
-the VeGa wrapper.
+**ON THE CARD, BEHIND THE LIVE WRAPPER (München, 2026-11-26 06:44Z, on the
+operator's word there;** `park_http.py --receipts`, copies of vega-bge-m3's
+file with the two env lines):
+
+| | on the card |
+|---|---|
+| a copy PINNED in its file (`pinned: true`, `park: true`) | cycle 1 parked in 345.4 ms, back by the request in 1,582.1 ms; cycle 2 381.7 / 1,215.2 ms; each "577 MiB to the host, the process holds 319 MiB of the device, 997 MiB given back; vectors identical"; the engine's counts 1 and 1, then 2 and 2; the wrapper's `created` 1 → 2 → 3; the receipts of one run. Cycle 3: 412 `host_memory_floor`, "8765 MiB available, 0 MiB being parked by others, 577 MiB to park, a floor of 8192 MiB" — the host short of its floor at that moment (another build held its memory), the model left loaded |
+| the TWIN (the copy's `config-json`, renamed `…--gate`, imported as app/gate_twin.py does, then pinned by `toggle-pinned`) | `config-json` returns `park` true and the env with both switches, before and after the pin; its file `park: true`, `pinned: true`; cycle 1 parked in 395.8 ms, back in 1,208.8 ms, vectors identical, counts 1 and 1, the same run id and the same load options as the copy. Cycle 2: 412 `host_memory_floor`, "9674 MiB available … a floor of 12288 MiB" |
+| the counts of a model not loaded yet | 500 "backend qual-nx-pin is not currently loaded" |
+
+Both answers hold on the card. Neither row made three cycles in a row: the
+floor, not a fault.
+
+**The floor moved under the row, and that is Louise's keeper, by design.**
+8 GiB had been set by hand; eighteen seconds later the refusal named 12 GiB.
+Since main's a2b5935b the worker holds `park_host_floor_bytes` to the node's
+one host floor (`[models] page_floor_gib`, 12) while a LOADED model says it
+parks — its log: "resident: LocalAI's park floor set to 12,288 MiB … (it was
+8,192) — qual-nx-pin, qual-nx-pin--gate can be parked". Neither the import
+nor the pin touched it. So on this node a floor set by hand lasts until the
+keeper's next beat, and PARKING IS ON, by the keeper, for as long as a model
+that says it parks is loaded: none real does.
+
+**NOT shown:** three cycles in a row for a pinned model or a twin on the
+card; a failed return there.

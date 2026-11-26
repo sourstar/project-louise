@@ -913,6 +913,14 @@ measured (published figures disagree).
   `created` 1 → 44, one a return, no canary failure; a park 135–138 ms, a return with sixteen sentences 377–392 ms; 2,716 parks
   during one request all 409; a refused return 503 twice, then served; a parked model shut down in 1.3 s, its load afresh 10.6 s
   with the same run id. NOT shown: a failed return on a card, any model but bge-m3 F16, the gate's fingerprint texts.
+- **THE GATE'S MODEL IS PINNED, AND PARKS (2026-11-26; parking-step-2.md §12):** `POST /backend/park` parks a pinned model (200;
+  the pin is the watchdog's, which never parks or stops one by itself), and a twin imported from the main model's configuration
+  keeps `park: true` and its env — on the real server here, then on the card behind the live wrapper (München, 06:44Z: a pinned copy
+  two cycles, its twin one, counted, one run; each then refused 412 `host_memory_floor`, the host short of its floor at that
+  moment). A file that says `park: true` on an engine without its switch: 412 `cannot_park`, and no counts (the route answers 500,
+  LocalAI's own defect B26). THE FLOOR IS THE KEEPER'S NOW: while a loaded model says it parks the worker holds LocalAI's floor to
+  `[models] page_floor_gib` (main a2b5935b) — a floor set by hand lasts seconds, and parking is on for such a model without anyone
+  setting it. No real model says it parks.
 - **Live 2026-11-25 15:18:30Z to 23:45:20Z, and the engine a rollback puts back: engine `619655e5833b`** (`engine-canary.series`: `792f050e318e`'s series + 0028; the operator:
   "Deploy and engine swap"). München: byte check VEGA/1 against VEGA/2 all identical (bge-m3, nemotron, qwen3-4b); five gates passed,
   each "exact, 3 fresh load(s)", every fingerprint identical to before — wikipedia (bge-m3) 109 s, gutenberg (qwen3-embedding-4b)

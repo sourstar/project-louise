@@ -75,6 +75,16 @@ the request's own answer the same bytes.
 back, as deploy/vega/stage/localai_settings.py does: a change of the node's
 configuration, made on the operator's word, and put back to 0 after the rows
 unless the keeper has taken it over.
+
+THE KEEPER HAS TAKEN IT OVER on a node that runs Louise's worker (main since
+a2b5935b, app/resident.py): while a LOADED model says it parks, the worker
+holds `park_host_floor_bytes` to the node's one host floor (`[models]
+page_floor_gib`), at its next beat. A floor set here by hand then lasts
+seconds (the node, 2026-11-26: 8 GiB set, 12 GiB eighteen seconds later), and
+is not needed: load the copy and the floor is there. Where no model parks the
+worker writes nothing, so a floor left above 0 by hand stays - put it back.
+A park refused 412 `host_memory_floor` is the host being short of the floor
+at that moment, not a fault of the row: `cycles` stops there and says so.
 """
 from __future__ import annotations
 

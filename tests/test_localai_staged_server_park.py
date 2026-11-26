@@ -388,8 +388,17 @@ def test_a_pinned_model_is_parked_when_told_and_never_by_the_watchdog_itself():
                  "| **does a twin written through `/models/import` from it keep `park: true`?** | **YES**",
                  "that key is the FILE's word, not the engine's", "the park is **412 `cannot_park`**, \"its backend does not park\"",
                  "Pinning does not reserve the card for a PARKED model",
-                 "**NOT shown:** a card (München's copies were never pinned)"):
+                 # on the card behind the live wrapper, and whose the floor is
+                 "| a copy PINNED in its file (`pinned: true`, `park: true`) | cycle 1 parked in 345.4 ms",
+                 "a floor of 8192 MiB", "a floor of 12288 MiB", "Neither row made three cycles in a row: the\nfloor, not a fault.",
+                 "**The floor moved under the row, and that is Louise's keeper, by design.**",
+                 "PARKING IS ON, by the keeper, for as long as a model\nthat says it parks is loaded: none real does.",
+                 "**NOT shown:** three cycles in a row for a pinned model or a twin on the\ncard"):
         assert said in section, said
+    # the refusals' arithmetic: what is available less what would be parked is under the floor
+    assert 8765 - 577 < 8192 and 9674 - 577 < 12288
+    tool = (ROOT / "tools" / "measure" / "park_http.py").read_text(encoding="utf-8")
+    assert "THE KEEPER HAS TAKEN IT OVER on a node that runs Louise's worker" in tool
     # the code that makes it so
     patch = _text()
     assert "func (ml *ModelLoader) ParkModel(ctx context.Context, modelName string) (ParkedState, error)" in patch
