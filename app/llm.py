@@ -405,15 +405,17 @@ def chat_stream(messages: list[dict], temperature: float = 0.3,
                "first_s": (clock["first"] - sent) if "first" in clock else None}
         out.update(said)
         return out
-    headers = dispatch.level_headers()
-    if config.CHAT_API == "openai" and model_load.speaks_localai(model_load.server_of(config.CHAT_URL)):
-        headers = {**headers, "Extra-Usage": "true"}    # LocalAI then gives its prompt's and answer's times
+    extra = ({"Extra-Usage": "true"}    # LocalAI then gives its prompt's and answer's times
+             if config.CHAT_API == "openai" and model_load.speaks_localai(model_load.server_of(config.CHAT_URL))
+             else {})
     with dispatch.call(config.CHAT_URL, level, timeout=config.LLM_TIMEOUT), \
             httpx.Client(timeout=config.LLM_TIMEOUT) as client:
         clock["sent"] = time.monotonic()
-        # the header is read HERE, in the step that makes the request: a
-        # generator's later steps run in another copy of the context
-        with client.stream("POST", url, json=body, headers=headers) as r:
+        # the header is read HERE, in the step that makes the request and
+        # INSIDE its call (the level is the call's): read before it, the answer
+        # went out as the caller's level — "query" (#932, tests/test_louise_level.py);
+        # a generator's later steps run in another copy of the context
+        with client.stream("POST", url, json=body, headers={**dispatch.level_headers(), **extra}) as r:
             refuse_on_error(r)
             model_use.touch(config.CHAT_URL, config.CHAT_MODEL)   # a real answer (app/model_use.py)
             for line in r.iter_lines():
