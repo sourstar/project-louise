@@ -594,6 +594,106 @@
     }
   }
 
+  // THE FIRST SOUND WITHIN A SECOND (operator, 2026-11-26: "Knowing the
+  // processing time at 16 steps (first sentence only), process enough so
+  // that the speech starts within 1 second. The next speech chunk after the
+  // first must start with a proper gap from the previous one (you know
+  // already if the first cut is at a gap between 2 words, a comma, semi comma
+  // or full stop)"; replacing the same day's "first sentence whole"). The
+  // reading goes in PIECES: the first sized so the node makes it in
+  // FIRST_SOUND_MS at the first piece's steps (app/speech.py
+  // `reading_steps`: 16, then 20, 24, 28, 32), each next sized so it is made
+  // while the one before plays; a piece is cut at the best boundary that
+  // fits — a full stop, a ; or :, a comma, else a gap between two words —
+  // and the next starts after that boundary's own pause (GAP_MS), the
+  // silence the model put at the cut trimmed first (`trimWav`). Sentences
+  // that fit go whole, as before.
+  // THE RATES are measured: each clip's Server-Timing (`synth`, `audio`,
+  // `steps`) updates them, kept in this browser (RATES_KEY); until then the
+  // node's own of 2026-11-26 (114 chars at 32 steps: 4.6 s made, 8.1 s of
+  // sound; architecture: ~24 ms a char at 16 steps).
+  const FIRST_SOUND_MS = 1000, NET_MS = 120, MIN_PIECE = 12, RAMP = 4;
+  const GAP_MS = { word: 0, comma: 180, clause: 300 };
+  const RATES_KEY = 'louise-voice-rates';
+  const RATES0 = { per_step_char: 1.5, overhead: 150, audio_char: 71, full: 32 };
+  let rates = { ...RATES0 };
+  try { const k = JSON.parse(localStorage.getItem(RATES_KEY) || 'null'); if (k && typeof k === 'object') rates = { ...rates, ...k }; } catch (e) {}
+  function learn(t) {
+    if (rates.fixed || !t || !(t.chars > 0)) return;
+    if (t.steps > 0 && t.synth > 0 && !t.cache) {
+      const one = Math.max(0.05, (t.synth - rates.overhead) / (t.chars * t.steps));
+      rates.per_step_char = 0.7 * rates.per_step_char + 0.3 * one;
+      rates.full = Math.max(rates.full === RATES0.full ? 0 : rates.full, t.steps, 2 * (t.steps - RAMP * (t.n || 0)));
+    }
+    if (t.audio > 0) rates.audio_char = 0.7 * rates.audio_char + 0.3 * (t.audio / t.chars);
+    try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {}
+  }
+  // the steps the node makes piece n at (app/speech.py `reading_steps`)
+  const stepsOf = n => Math.min(rates.full, Math.floor(rates.full / 2) + RAMP * n);
+  // how many characters piece n may hold: the first made within the first
+  // second, each next within what the one before it plays
+  function budget(n, prevChars) {
+    const per = rates.per_step_char * stepsOf(n);
+    const time = n === 0 ? FIRST_SOUND_MS - NET_MS - rates.overhead
+                         : prevChars * rates.audio_char - rates.overhead;
+    return Math.max(MIN_PIECE * 2, Math.floor(time / per));
+  }
+  // the boundary after s[0..i): its kind, strongest first
+  const RANK = { sentence: 4, clause: 3, comma: 2, word: 1 };
+  function kindAt(s, i) {
+    const c = s[i - 1];
+    if (c === ';' || c === ':') return 'clause';
+    if (c === ',') return 'comma';
+    if (/[.!?…]/.test(c)) return 'clause';     // a stop inside what the segmenter calls one sentence
+    return 'word';
+  }
+  // s cut within `max` characters at its best boundary: [piece, rest, kind, at],
+  // or null where none is final yet. A strong boundary in the last two thirds of
+  // the budget is taken before a weaker later one; only a gap with a word
+  // after it counts (the stream may not have written it yet).
+  function split(s, max) {
+    let best = null;
+    for (let i = MIN_PIECE; i < Math.min(s.length - 1, max + 1); i++) {
+      // a rest too short to be a piece of its own ("[1].") is read with this one
+      if (s[i] !== ' ' || s.slice(i + 1).replace(/\[\d+\]/g, '').trim().length < MIN_PIECE) continue;
+      const kind = kindAt(s, i), key = [i >= max / 3 ? RANK[kind] : 0, i];
+      if (!best || key[0] > best.key[0] || (key[0] === best.key[0] && key[1] > best.key[1])) best = { i, kind, key };
+    }
+    if (!best) return null;
+    return [s.slice(0, best.i).trim(), s.slice(best.i + 1).trim(), best.kind, best.i];
+  }
+  // a WAV of 16-bit PCM with the silence the model left at the cut trimmed
+  // (at its start, its end or both), TRIM_KEEP_MS of it kept; anything else,
+  // or a clip that would be left almost empty, as it came
+  const TRIM_LEVEL = 0.02 * 32768, TRIM_KEEP_MS = 15;
+  function trimWav(buf, start, end) {
+    try {
+      const v = new DataView(buf);
+      if (v.getUint32(0, false) !== 0x52494646 || v.getUint32(8, false) !== 0x57415645) return buf;
+      let at = 12, fmt = null, data = null;
+      while (at + 8 <= buf.byteLength) {
+        const id = v.getUint32(at, false), size = v.getUint32(at + 4, true);
+        if (id === 0x666d7420) fmt = { ch: v.getUint16(at + 10, true), rate: v.getUint32(at + 12, true),
+                                       bits: v.getUint16(at + 22, true), pcm: v.getUint16(at + 8, true) };
+        if (id === 0x64617461) { data = { at: at + 8, size: Math.min(size, buf.byteLength - at - 8) }; break; }
+        at += 8 + size + (size & 1);
+      }
+      if (!fmt || !data || fmt.pcm !== 1 || fmt.bits !== 16) return buf;
+      const frame = 2 * fmt.ch, n = Math.floor(data.size / frame), keep = Math.round(fmt.rate * TRIM_KEEP_MS / 1000);
+      const loud = k => { for (let c = 0; c < fmt.ch; c++) if (Math.abs(v.getInt16(data.at + k * frame + 2 * c, true)) > TRIM_LEVEL) return true; return false; };
+      let a = 0, b = n;
+      if (start) { while (a < n && !loud(a)) a++; a = Math.max(0, a - keep); }
+      if (end) { while (b > a && !loud(b - 1)) b--; b = Math.min(n, b + keep); }
+      if (b - a < fmt.rate * 0.05 || (a === 0 && b === n)) return buf;
+      const out = new Uint8Array(data.at + (b - a) * frame);
+      out.set(new Uint8Array(buf, 0, data.at));
+      out.set(new Uint8Array(buf, data.at + a * frame, (b - a) * frame), data.at);
+      const w = new DataView(out.buffer);
+      w.setUint32(4, out.length - 8, true); w.setUint32(data.at - 4, (b - a) * frame, true);
+      return out.buffer;
+    } catch (e) { return buf; }
+  }
+
   function speakState(on) {
     if (!speak) return;
     speak.classList.toggle('on', on);
@@ -732,9 +832,12 @@
       const d = await resp.json().catch(() => ({}));
       throw new Error((d.error && d.error.message) || d.detail || resp.statusText);
     }
-    const blob = await resp.blob();
+    let blob = await resp.blob();
     it.t.got = now();
     if (!live(r)) return null;
+    it.t.n = it.n; learn(it.t);
+    if (it.trimStart || it.trimEnd)
+      blob = new Blob([trimWav(await blob.arrayBuffer(), it.trimStart, it.trimEnd)], { type: blob.type || 'audio/wav' });
     const u = URL.createObjectURL(blob); r.urls.push(u); return u;
   }
 
@@ -751,14 +854,39 @@
   }
 
   // the reading takes in what the answer box holds now
+  function push(r, text, gap) {
+    const prev = r.items[r.items.length - 1];
+    const it = { text, n: r.items.length, gap, trimEnd: gap !== 'sentence', trimStart: !!prev && prev.gap !== 'sentence',
+                 t: { chars: text.length, cut: now(), gap, budget: r.budget } };
+    times.items.push(it.t);
+    it.p = new Promise((ok, no) => { it.ok = ok; it.no = no; }); it.p.catch(() => {});
+    r.items.push(it);
+  }
   function feed(r) {
     const t = answerText();
     r.ended = !writing; r.text = t;
-    for (const s of cut(r, t, r.ended)) {
-      const it = { text: s, n: r.items.length, t: { chars: s.length, cut: now() } };
-      times.items.push(it.t);
-      it.p = new Promise((ok, no) => { it.ok = ok; it.no = no; }); it.p.catch(() => {});
-      r.items.push(it);
+    for (const s of cut(r, t, r.ended)) r.queue.push(s);
+    // the pieces: whole sentences where they fit their budget, else cut at
+    // the best boundary within it; the open sentence of the stream too, once
+    // there is more of it than the budget holds
+    for (;;) {
+      const prev = r.items[r.items.length - 1];
+      const max = r.budget = budget(r.items.length, prev ? prev.text.length : 0);
+      if (r.queue.length) {
+        const s = r.queue[0];
+        const got = s.length > max ? split(s, max) : null;
+        if (got) { push(r, got[0], got[2]); r.queue[0] = got[1]; }
+        else { push(r, s, 'sentence'); r.queue.shift(); }
+        continue;
+      }
+      // the stream's open sentence: its text after the reading's place
+      if (r.ended || t.indexOf('\n', r.at) >= 0) break;
+      const open = collapse(t.slice(r.at)).slice(r.off);
+      if (open.length <= max) break;            // it may still end within the budget
+      const got = split(open, max);
+      if (!got) break;
+      push(r, got[0], got[2]);
+      r.off += got[3] + 1;                       // the reading's place: past the piece and its space
     }
     pump(r);
     if (r.more) { const f = r.more; r.more = null; f(); }
@@ -778,7 +906,8 @@
 
   function newReading() {
     return { id: Math.random().toString(36).slice(2, 12) || 'r', ctl: new AbortController(), lang: answerLang, text: '', at: 0, off: 0, ended: false,
-             items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false, voice: chosenVoice() };
+             items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false, voice: chosenVoice(),
+             queue: [], budget: null };
   }
   function dropAhead() {
     const r = ahead; if (!r) return;
@@ -815,6 +944,10 @@
         const url = await r.items[i].p;
         if (reading !== r) return;
         if (url) { r.items[i].t.play = now(); await play(r, url); r.items[i].t.end = now(); }
+        if (reading !== r) return;
+        // the pause the boundary it was cut at asks for, before the next piece
+        const gap = GAP_MS[r.items[i].gap];
+        if (gap && i + 1 < r.items.length) await new Promise(ok => setTimeout(ok, gap));
         if (reading !== r) return;
         if (r.blocked) {
           if (speak) speak.hidden = false;
@@ -883,10 +1016,13 @@
                sentences: times.items.map(t => ({ chars: t.chars, cut: rel(t.cut), sent: rel(t.sent),
                  got: rel(t.got), synth: t.synth ?? null, audio: t.audio ?? null,
                  turn: t.turn ?? null, node: t.node ?? null, cache: t.cache ?? null,
-                 play: rel(t.play), end: rel(t.end) })) };
+                 play: rel(t.play), end: rel(t.end), steps: t.steps ?? null, gap: t.gap ?? null,
+                 budget: t.budget ?? null })) };
     },
     // how many ready tones sounded on this page, and the last one's context
     tones: () => toneCount, toneLast: () => toneLast, toneContext: () => toneCtx, deafEnd,
-    sentences, cut, downsample, wavBytes,
+    sentences, cut, downsample, wavBytes, split, budget, trimWav, rates: () => ({ ...rates }),
+    // a test's or an operator's rates, kept as measured ones are
+    setRates(k) { rates = { ...RATES0, ...k }; try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {} },
   };
 })();

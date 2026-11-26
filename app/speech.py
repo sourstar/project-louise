@@ -578,6 +578,18 @@ NO_SYNTHETIC = (b'{"error": {"message": "no synthetic voice is set on this node,
 MODEL_STEPS = 32
 
 
+#: how much each later piece of a reading adds to the first's steps
+STEP_RAMP = 4
+
+
+def reading_steps(n: int, steps: int | None) -> int:
+    """The steps of piece `n` of a reading: the first at half (`first_steps`),
+    each next STEP_RAMP more, up to the node's (or, unset, the model's own) —
+    16, 20, 24, 28, 32 at 32."""
+    full = steps if steps is not None else MODEL_STEPS
+    return min(full, first_steps(steps) + STEP_RAMP * max(0, n))
+
+
 def first_steps(steps: int | None) -> int:
     """The steps of a reading's first sentence: half the node's — or half the
     model's own default where the node sets none — never under the lowest
@@ -652,9 +664,15 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     # one before plays. The half is in the kept clip's key, so a half-step
     # clip is never served for a full one.
     # The operator's words: "the half of the samples" — of the node's steps,
-    # or, unset, of the model's own default (MODEL_STEPS)
-    if reading is not None and n == 0:
-        steps = first_steps(steps)
+    # or, unset, of the model's own default (MODEL_STEPS).
+    # THEN UP BY STEP_RAMP A PIECE (operator, 2026-11-26: "to have a smooth
+    # transition (less perceivable) between 16 and 32 steps, increase the
+    # encoding at steps of 4 (16, 20, 24, 28, 32), it will give even more
+    # margin"): piece n of a reading at `reading_steps(n, steps)`.
+    if reading is not None and n is not None:
+        ramped = reading_steps(n, steps)
+        # unset and at the model's own: nothing sent, as for any request
+        steps = ramped if (steps is not None or ramped < MODEL_STEPS) else None
     if steps is not None:
         out["params"] = {**(out.get("params") if isinstance(out.get("params"), dict) else {}),
                          "flow_steps": str(steps)}
@@ -677,12 +695,21 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
         with _TURNS.turn(reading, n):
             pass
         clip = audio_ms(kept[0])
-        return 200, kept[0], kept[1], [("cache", 1.0)] + ([("audio", clip)] if clip is not None else [])
+        return 200, kept[0], kept[1], ([("cache", 1.0)] + ([("audio", clip)] if clip is not None else [])
+                                       + _steps_timing(steps))
     with _TURNS.turn(reading, n) as waited:
         status, content, ctype, timing = _synthesize_call(url, model, out, last=last)
     if status == 200 and str(ctype).startswith("audio/"):
         _clip_put(key, content, ctype)
-    return status, content, ctype, ([("turn", waited)] if reading is not None else []) + timing
+    return status, content, ctype, (([("turn", waited)] if reading is not None else []) + timing
+                                    + _steps_timing(steps))
+
+
+def _steps_timing(steps: int | None) -> list[tuple[str, float]]:
+    """The steps this clip was made at, in its `Server-Timing` (`steps;dur=N`,
+    a count, not ms): the page sizes the next piece from it (voice.js `rates`)
+    and the reading's line says it. Unset and not sent: the model's own."""
+    return [("steps", float(steps if steps is not None else MODEL_STEPS))]
 
 
 def _synthesize_call(url: str, model: str | None, out: dict, *, last: bool = False) -> tuple[int, bytes, str, list]:

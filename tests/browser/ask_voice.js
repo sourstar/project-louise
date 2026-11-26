@@ -136,6 +136,12 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   };
 
   await page.goto('http://localhost/ask');      // a secure context: the browser opens a microphone here
+  // THE PIECES' BUDGETS (operator, 2026-11-26: the first sound within a
+  // second): a node that makes speech at once, so every sentence fits and is
+  // read whole, as the tests below were written; test 24 sets the node's own rates
+  const FAST = JSON.stringify({ per_step_char: 0.001, overhead: 0, fixed: true });
+  await page.evaluate(k => localStorage.setItem('louise-voice-rates', k), FAST);
+  await page.goto('http://localhost/ask');
   await spy();
 
   // 1. the buttons of the voices the node offers
@@ -500,6 +506,56 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
         { lastWordAt, t18, text: await page.evaluate(() => document.getElementById('answer').textContent),
           lives: await page.evaluate(() => __lives), on: await on() });
   answerJob = 'a1';
+
+  // 24. THE FIRST SOUND WITHIN A SECOND (operator, 2026-11-26), at the node's
+  //     own rates (24 ms a char at 16 steps, 71 ms of sound a char): a long
+  //     first sentence, streamed, goes in pieces — the first within its
+  //     one-second budget, cut at a boundary while the sentence is still being
+  //     written, each next sized to be made while the one before plays — and
+  //     the pause before a piece is its boundary's
+  await page.evaluate(() => louiseVoice.setRates({ per_step_char: 1.5, overhead: 150, audio_char: 71, full: 32, fixed: true }));
+  await reset(); answerJob = 'live';
+  await asked(() => page.evaluate(() => { document.getElementById('q').value = 'Chi scrisse la Commedia?'; ask(); }));
+  const W24 = (LONGFIRST + ' Ognuna conta trentatré canti, più il proemio [4].').match(/\S+\s*/g);
+  await emit('delta', { text: W24[0] });
+  await until(() => !document.getElementById('speak').hidden, 2000);
+  await page.click('#speak');
+  let firstAskedAt = null;
+  for (let i = 1; i < W24.length; i++) {
+    await emit('delta', { text: W24[i] }); await sleep(25);
+    if (firstAskedAt === null && (await page.evaluate(() => __speech.length))) firstAskedAt = i;
+  }
+  await emit('end', { state: 'done', reason: '' });
+  await until(() => __speech.length >= 4, 8000);
+  await until(() => !document.getElementById('speak').classList.contains('on'), 20000);
+  const t24 = await page.evaluate(() => louiseVoice.timeline());
+  const in24 = await page.evaluate(() => __speech.map(b => b.input));
+  const b0 = t24.sentences[0].budget;
+  check(b0 >= 24 && b0 <= 40 && in24[0].length <= b0 && LONGFIRST.startsWith(in24[0]),
+        '24. the first piece fits the one-second budget at 16 steps', { b0, first: in24[0] });
+  check(firstAskedAt !== null && firstAskedAt < W24.length - 8,
+        '24. and is asked for while its sentence is still being written', { firstAskedAt, words: W24.length });
+  check(in24.join(' ').replace(/\s+/g, ' ') === W24.join('').trim().replace(/\s+/g, ' '),
+        '24. the pieces are the text, every word once, in order', in24);
+  const kinds = t24.sentences.map(t => t.gap);
+  check(kinds.includes('comma') && kinds[kinds.length - 1] === 'sentence',
+        '24. each piece says the boundary it was cut at', kinds);
+  const ci = kinds.indexOf('comma'), pause = t24.sentences[ci + 1].play - t24.sentences[ci].end;
+  check(pause >= 170, '24. the piece after a comma starts after a comma\'s pause', { pause, row: t24.sentences[ci] });
+  check(t24.sentences.slice(1, -1).every((t, k) => t.budget >= t24.sentences[k].chars),
+        '24. each next piece holds at least what the one before did (it is made while that one plays)',
+        t24.sentences.map(t => [t.chars, t.budget]));
+  const trimmed = await page.evaluate(() => {
+    // 0.5 s of silence, 0.2 s of sound, 0.5 s of silence at 16 kHz
+    const n = 16000 * 1.2, x = new Float32Array(n); for (let i = 8000; i < 11200; i++) x[i] = 0.5 * Math.sin(i / 3);
+    const w = louiseVoice.wavBytes(x), cut = louiseVoice.trimWav(w, true, true), keep = louiseVoice.trimWav(w, false, true);
+    return [w.byteLength, cut.byteLength, keep.byteLength];
+  });
+  check(trimmed[1] < 44 + 2 * 16000 * 0.25 && trimmed[2] > 44 + 2 * 16000 * 0.69 && trimmed[2] < trimmed[0],
+        '24. the silence the model left at a cut is trimmed, at the side cut', trimmed);
+  await page.evaluate(k => louiseVoice.setRates(JSON.parse(k)), FAST);
+  answerJob = 'a1';
+
 
   // 14. a node that offers no voice: no button, no script
   const scripts = [];

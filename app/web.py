@@ -544,6 +544,10 @@ def _s(ms: int | None) -> str:
     return "?" if ms is None else f"{ms / 1000:.1f} s"
 
 
+#: the boundaries a reading's piece may be cut at (app/static/voice.js `split`)
+VOICE_GAPS = ("sentence", "clause", "comma", "word")
+
+
 def reading_said(body: dict) -> tuple[str, dict]:
     """ONE READING IN WORDS AND IN NUMBERS, from the times its page measured
     (`louiseVoice.timeline()`, ms since Ask): where the wait for the first
@@ -555,8 +559,11 @@ def reading_said(body: dict) -> tuple[str, dict]:
     rows = []
     for t in (body.get("sentences") or [])[:VOICE_TIMELINE_SENTENCES]:
         if isinstance(t, dict):
-            rows.append({k: _ms(t.get(k)) for k in ("chars", "cut", "sent", "got", "synth", "audio", "turn", "node",
-                                                    "cache", "play", "end")})
+            row = {k: _ms(t.get(k)) for k in ("chars", "cut", "sent", "got", "synth", "audio", "turn", "node",
+                                              "cache", "play", "end", "steps", "budget")}
+            # the boundary the piece was cut at (voice.js `split`): a word of a known few, never text
+            row["gap"] = t.get("gap") if t.get("gap") in VOICE_GAPS else None
+            rows.append(row)
     count = _ms(body.get("count"))
     numbers = {"first_word": first_word, "last_word": _ms(body.get("last_word")),
                "started": [v for v in started if v is not None], "sentences": rows,
@@ -597,15 +604,21 @@ def reading_said(body: dict) -> tuple[str, dict]:
                 if away >= 300:
                     made += f"; {_s(away)} between the page and the node"
             parts.append(
-                f"sentence 1 ({one.get('chars')} chars): "
+                f"piece 1 ({one.get('chars')} chars"
+                + (f" of a budget of {one['budget']}" if one.get("budget") is not None else "")
+                + (f", at {one['steps']} steps" if one.get("steps") is not None else "")
+                + (f", cut at a {one['gap']}" if one.get("gap") and one["gap"] != "sentence" else "") + "): "
                 + ("" if waited is None else f"cut {_s(waited)} after the first word, ")
                 + f"asked for {_s(sent - cut)} later, here {_s(got - sent)} after that "
                 + f"({made}, {_s(one.get('audio'))} of sound), "
                 + f"played {_s(play - got)} after it arrived")
     gaps = [b["play"] - a["end"] for a, b in zip(rows, rows[1:]) if a.get("end") is not None and b.get("play") is not None]
     if gaps:
-        parts.append(f"the longest silence between two sentences {_s(max(gaps))}")
-    parts.append(f"{numbers['count']} sentence(s)")
+        parts.append(f"the longest silence between two pieces {_s(max(gaps))}")
+    steps = [r["steps"] for r in rows if r.get("steps") is not None]
+    if steps:
+        parts.append("steps " + ", ".join(str(v) for v in steps))
+    parts.append(f"{numbers['count']} piece(s)")
     return "; ".join(parts), numbers
 
 

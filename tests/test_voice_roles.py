@@ -126,16 +126,27 @@ def test_a_readings_first_sentence_is_made_at_half_the_steps(node, config_dir):
     speech.synthesize_timed({"input": IT}, url="http://ai", reading="r0", n=0, admin=False)
     assert calls[-1]["params"] == {"flow_steps": "16"}, "unset: half the model's own 32"
     speech.synthesize_timed({"input": IT + " Due."}, url="http://ai", reading="r0", n=1, admin=False)
-    assert "params" not in calls[-1], "unset, later sentences: the model's own default, nothing sent"
+    assert calls[-1]["params"] == {"flow_steps": "20"}, "unset: the ramp still climbs to the model's own"
+    speech.synthesize_timed({"input": IT + " Cinque."}, url="http://ai", reading="r0", n=4, admin=False)
+    assert "params" not in calls[-1], "unset and ramped up: the model's own default, nothing sent"
     (config_dir / "platform.toml").write_text(TABLE + 'tts_steps = "24"\n', encoding="utf-8")
     speech.synthesize_timed({"input": IT + " Tre."}, url="http://ai", reading="r2", n=0, admin=False)
     assert calls[-1]["params"] == {"flow_steps": "12"}
     speech.synthesize_timed({"input": IT + " Tre."}, url="http://ai", reading="r2", n=1, admin=False)
-    assert calls[-1]["params"] == {"flow_steps": "24"}, "the same words later in a reading: made again, at full"
+    assert calls[-1]["params"] == {"flow_steps": "16"}, "the same words later in a reading: made again, ramped"
+    speech.synthesize_timed({"input": IT + " Tre."}, url="http://ai", reading="r2", n=9, admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "24"}, "and at full once ramped up"
     speech.synthesize({"input": IT + " Quattro."}, url="http://ai", admin=False)
     assert calls[-1]["params"] == {"flow_steps": "24"}, "outside a reading: full"
     assert speech.first_steps(4) == 4 and speech.first_steps(5) == 4, "never under the lowest accepted"
     assert speech.first_steps(None) == 16
+    # operator, 2026-11-26: "increase the encoding at steps of 4 (16, 20, 24, 28, 32)"
+    assert [speech.reading_steps(n, 32) for n in range(6)] == [16, 20, 24, 28, 32, 32]
+    assert [speech.reading_steps(n, None) for n in range(6)] == [16, 20, 24, 28, 32, 32]
+    assert [speech.reading_steps(n, 24) for n in range(4)] == [12, 16, 20, 24]
+    _, _, _, timing = speech.synthesize_timed({"input": IT + " Sei."}, url="http://ai", reading="r3", n=2,
+                                              admin=False)
+    assert ("steps", 20.0) in timing, "the steps a clip was made at, in its Server-Timing"
 
 
 def test_the_clip_key_tells_half_steps_from_full():

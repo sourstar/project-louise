@@ -966,6 +966,13 @@ measured (published figures disagree).
   (`question_card.set_log` at the web's start); `/system` from model_load's cache, never a read a question's
   fresh one waits behind; a card's process list only when it changed; the answer's `read` count. OWED: the
   GPU probe's `/gpu` scan cost on the node, once (measuring.md), when the branch is in a release.
+- **The voice: the first sound within a second, the steps rising 16→32 by 4 (operator, 2026-11-26, replacing the
+  same day's first sentence read whole).** The page cuts the reading into pieces: the first sized to be made within
+  1 s at 16 steps (~30 characters at ~1.5 ms a char a step + 150 ms), each next to be made while the one before
+  plays; a piece ends at a ; or :, a comma, or a word gap, and the next starts after that boundary's pause (0 /
+  180 / 300 ms), the model's silence at the cut trimmed. The node makes piece n at half the steps plus 4n, up to
+  full (`speech.reading_steps`) and says the steps in `Server-Timing`; the page learns its rates from each clip.
+  MEASURED: nothing on the node yet; the next reading's line says each piece's budget, steps and boundary.
 - **The voice: the first sentence whole and at half the steps; a ping when the microphone is ready (operator,
   2026-11-26).** (1) A reading's sentence 0 is made at half `[speech] tts_steps` (the model's 32 when unset: 16),
   every later one at full (`speech.first_steps`; the steps are in the kept clip's key). (2) The first sentence is

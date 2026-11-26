@@ -1867,14 +1867,23 @@ written. `/v1/audio/speech` answers with
 clip's length, ms), and the page keeps the reading's times
 (`louiseVoice.timeline()`: the answer's first and last word, each start of
 the reading, each sentence cut, sent, received, played and ended, ms from the Ask press).
-THE FIRST SENTENCE IS READ WHOLE, up to its full stop, and made at half the node's steps (*amended
-2026-11-26*, operator: "the first sentence must be provided up to the first full stop"; "process the first
-sentence at the half of the samples ... after the first sentence, we can switch to the full steps"). It
-replaces 2026-11-08's cut of a first sentence over 90 characters at its last clause mark, whose second half
-waited for its own clip: a gap longer than a full stop's. Sentence 0 of a reading (`Louise-Reading: <id>/0`)
-is synthesized at half `[speech] tts_steps` — unset, at half the model's own 32 — and every later one at
-full (unset: the model's own, nothing sent). A kept clip still takes its turn: it waits for the sentence
-before it, and the next one does not wait for it. THE READY TONE (*added
+THE FIRST SOUND WITHIN A SECOND (*amended 2026-11-26*, operator: "Knowing the processing time at 16 steps
+(first sentence only), process enough so that the speech starts within 1 second. The next speech chunk after
+the first must start with a proper gap from the previous one (you know already if the first cut is at a gap
+between 2 words, a comma, semi comma or full stop). Also, to have a smooth transition (less perceivable)
+between 16 and 32 steps, increase the encoding at steps of 4 (16, 20, 24, 28, 32), it will give even more
+margin"; replacing the same day's first sentence read whole, which replaced 2026-11-08's cut at a comma past
+90 characters). A reading goes in PIECES. Piece n of a reading (`Louise-Reading: <id>/<n>`) is synthesized
+at half `[speech] tts_steps` (unset: half the model's own 32) plus 4 a piece, up to full — 16, 20, 24, 28, 32
+— and the clip's `Server-Timing` says its `steps`. The page sizes the first piece so it is made within a
+second at its steps, and each next so it is made while the one before plays, from rates it measures (each
+clip's `synth`, `audio` and `steps`; until then ~1.5 ms a character a step, 71 ms of sound a character); a
+sentence that fits goes whole, a longer one — the stream's open sentence too, as soon as there is more of it
+than the budget — is cut at the best boundary within it: a ; or :, a comma, else a gap between two words.
+The next piece starts after that boundary's pause (a word's none, a comma's 180 ms, a ; or :'s 300 ms; a
+sentence's its own), the silence the model left at the cut trimmed first. A kept clip still takes its turn:
+it waits for the piece before it, and the next one does not wait for it. The reading's line in the node's log
+says each piece's budget, steps and boundary. THE READY TONE (*added
 2026-11-26*, operator: "Send a gentle ping when the microphone is ready (both car and no car) so the user
 knows when to talk without watching the screen"): one soft 160 ms tone at 880 Hz when the microphone turns
 red — only once it gives sound — from the page's own audio context; the microphone's energy check does not
@@ -2405,8 +2414,8 @@ variable, a file, a log line or a message.
              # has none), chooses none, and with none set is not read to (`node speech show` says so)
              # `tts_steps` (added 2026-11-25, operator): the steps of one synthesis, 4 to 64, sent with every
              # request to the text-to-speech model; fewer are faster and coarser; unset, the model's own (32).
-             # A reading's FIRST sentence is made at half of it (amended 2026-11-26, operator; 7.4); unset,
-             # at half the model's own 32, and nothing is sent for the others.
+             # A reading's pieces are made at half of it, then 4 more a piece up to it (16, 20, 24, 28, 32;
+             # amended 2026-11-26, operator; 7.4); unset, from half the model's own 32, nothing sent at 32.
              # The node's choice, never a reader's: `node speech set --steps N`, or the System page's Models panel
 [certifier]  valid_from = "2026-10-07T00:00:00Z"        # this node as a certifier (09 §9.11): from when its own key certifies, and
              # revoked_at = "…"                          # when it was revoked — the anchor document it serves at
