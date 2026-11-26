@@ -156,14 +156,19 @@ def _changed_only(cards, before: dict[str, Any]) -> Any:
     return out
 
 
-def _servers() -> list[str]:
+def _collections() -> list:
+    from app import collections as collections_mod
+    try:
+        return collections_mod.load_all()
+    except Exception:   # noqa: BLE001 — the node's own servers still
+        return []
+
+
+def _servers(cols: list | None = None) -> list[str]:
     """The model servers a question meets: chat, rerank, translation, and
     every collection's encoders and reranker (gpu_models.origins)."""
-    from app import collections as collections_mod, gpu_models, model_load
-    try:
-        cols = collections_mod.load_all()
-    except Exception:   # noqa: BLE001 — the node's own servers still
-        cols = []
+    from app import gpu_models, model_load
+    cols = _collections() if cols is None else cols
     out: list[str] = []
     for u in gpu_models.origins(cols, [config.CHAT_URL, config.RERANK_URL, config.TRANSLATE_URL]):
         s = model_load.server_of(u)
@@ -172,14 +177,14 @@ def _servers() -> list[str]:
     return out
 
 
-def _models() -> dict[str, Any]:
+def _models(servers: list[str] | None = None) -> dict[str, Any]:
     """Per model server: what `/system` last said is loaded, how old that
     reading is (`age_s`; null: never read), and parked. The cache only
     (model_load.cached_models): a fetch would hold the per-server lock a
     question's own fresh read waits behind (0.95 s measured)."""
     from app import model_load
     out: dict[str, Any] = {}
-    for s in _servers():
+    for s in (_servers() if servers is None else servers):
         try:
             got = model_load.cached_models(s)
             loaded, age = got if got is not None else (None, None)
@@ -190,16 +195,18 @@ def _models() -> dict[str, Any]:
     return out
 
 
-def _model_events(since: float, until: float) -> list[list]:
+def _model_events(since: float, until: float, collection: Any = None) -> list[list]:
     """The node's `models` lines from `since` to `until` (seconds), as
     [UTC ISO, level, message]: the events table of the first collection,
     where model_load and model_pins write them (a table bounded at 5,000
     rows, db.log_event)."""
-    from app import collections as collections_mod, db
-    cols = collections_mod.load_all()
-    if not cols:
-        return []
-    with closing(db.connect(cols[0])) as con:
+    from app import db
+    if collection is None:
+        cols = _collections()
+        if not cols:
+            return []
+        collection = cols[0]
+    with closing(db.connect(collection)) as con:
         rows = con.execute("SELECT ts, level, message FROM events WHERE stage = 'models' "
                            "AND ts >= ? AND ts <= ? ORDER BY id",
                            (int(since), int(until) + 1)).fetchall()
@@ -264,6 +271,11 @@ class Trace:
         # writes after the request has returned, when a test's LOUISE_ROOT
         # may already be undone (architecture, 2026-11-26: a test's line in /data)
         self._dir = trace_dir()
+        # the node's collections and model servers, read here for the same
+        # reason: the sampler reads the node after the request has returned
+        cols = _collections()
+        self._servers = _safe(_servers, cols)
+        self._events_of = cols[0] if cols else None
         self._cards: dict[str, Any] = {}
         self._sample_s = SAMPLE_S if sample_s is None else sample_s
         self._cpu = _cpu_times()
@@ -320,7 +332,8 @@ class Trace:
                         "swap_used": (mem.get("SwapTotal", 0) - mem.get("SwapFree", 0)) or 0}
         s["gpus"] = _changed_only(_safe(_gpus), self._cards)
         if with_models:
-            s["models"] = _safe(_models)
+            s["models"] = (_safe(_models, self._servers) if isinstance(self._servers, list)
+                           else {"error": self._servers})
         return s
 
     def _run(self) -> None:
@@ -353,7 +366,8 @@ class Trace:
                 "ms": round((t1 - self.t0) * 1000, 1) if t1 is not None else None,
                 # in time order: `last_word` is the last delta's time, put in at the end
                 "marks": sorted(list(self.marks), key=lambda m: m[1]), **dict(self.data), "samples": self.samples,
-                "model_events": _safe(_model_events, self.t0 - 1, t1 if t1 is not None else time.time())}
+                "model_events": (_safe(_model_events, self.t0 - 1, t1 if t1 is not None else time.time(),
+                                       self._events_of) if self._events_of is not None else [])}
 
     def join(self, timeout: float | None = None) -> None:
         self._thread.join(timeout)

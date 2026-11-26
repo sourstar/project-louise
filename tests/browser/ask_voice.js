@@ -169,6 +169,9 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   // THE READY PING (operator, 2026-11-26): one soft tone when the microphone turns red
   check(await page.evaluate(() => louiseVoice.tones()) === 1 && (await page.evaluate(() => __toneRed)).join() === 'true',
         '2. one ready tone, once the microphone is red', await page.evaluate(() => ({ n: louiseVoice.tones(), red: __toneRed })));
+  await sleep(900);
+  check(await page.evaluate(() => louiseVoice.toneContext() && louiseVoice.toneContext().state) === 'suspended',
+        '2. and its context sleeps once the recording is over', await page.evaluate(() => louiseVoice.toneContext().state));
   check(p1.type === 'audio/wav' && p1.fields.response_format === 'json' && !('model' in p1.fields)
         && !('language' in p1.fields), '2. no model named, and no language while results show in their own', p1.fields);
   // HANDS-FREE (operator, 2026-11-11): asked at once, as Ask asks, and the answer read by itself
@@ -650,6 +653,7 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(await page.evaluate(() => louiseVoice.tones()) === 0, '21. no ready tone for a microphone that gave only silence');
   const t21 = Date.now(); while (!(posted.reports || []).length && Date.now() - t21 < 4000) await sleep(40);
   const r21 = (posted.reports || [])[0] || {};
+  check(r21.tone === null, '21. and the report says no tone of its own (not the last recording\'s)', r21.tone);
   check(r21.outcome === 'silent' && r21.frames > 0 && r21.peak === 0 && r21.heard === false && r21.ms >= 8000,
         '21. reported: silent, with what came', r21);
   check(posted.stt === stt21, '21. silence is not sent to be written down', posted.stt - stt21);

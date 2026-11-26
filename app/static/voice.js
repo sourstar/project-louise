@@ -284,6 +284,7 @@
     unlock();                            // inside the tap: the answer may be read later
     toneUnlock();                        // inside the tap: the ready tone may sound
     toneLast = null;                     // this recording's tone, not the last one's
+    toneUse++;                           // a re-tap: the last recording's release keeps its hands off the context
     busy = true; micState('busy', 'opening the microphone…'); active();
     let stream;
     try {
@@ -400,7 +401,7 @@
   // coupling 0.5 (tests/browser/ask_voice.js 23): 150 ms of margin let a tone
   // heard 300 ms late through as speech.
   const TONE_MARGIN_MS = 400, TONE_TAIL_MS = 280;
-  let toneCtx = null, toneCount = 0, toneLast = null;
+  let toneCtx = null, toneCount = 0, toneLast = null, toneUse = 0;
   function toneUnlock() {
     if (!AC) return;
     try { if (!toneCtx || toneCtx.state === 'closed') toneCtx = new AC(); toneCtx.resume().catch(() => {}); }
@@ -438,7 +439,9 @@
 
   function release(r) {
     // the tone's context sleeps between recordings (the next tap resumes it)
-    setTimeout(() => { if (!rec && toneCtx && toneCtx.state === 'running') toneCtx.suspend().catch(() => {}); },
+    // — unless a new tap came meanwhile, whose microphone may still be opening
+    const use = toneUse;
+    setTimeout(() => { if (use === toneUse && !rec && toneCtx && toneCtx.state === 'running') toneCtx.suspend().catch(() => {}); },
                TONE_MS + 500);
     clearInterval(r.tick); clearTimeout(r.watch); clearTimeout(r.max); clearTimeout(r.waking);
     if (r.mr && r.mr.state !== 'inactive') { try { r.mr.stop(); } catch (e) { /* already */ } }

@@ -1480,9 +1480,12 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
             "choices": [{"index": 0, "delta": {"content": delta},
                          "finish_reason": None}]}) + "\n\n"
 
+    began = [False]                 # sse ran: its own `finally` ends the trace
+
     def sse():
         # the OpenAI framing of `answer_parts`, which the Ask page's relay
         # reads too (app/relay.py): one path from the model to every reader
+        began[0] = True
         parts = answer_parts(body, query, result, t0, prompt=prompt, con=con)
         tail = ""        # the text so far, for a citation pair split across two deltas
         failed = None
@@ -1535,9 +1538,11 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
         # so its `finally` never ends the trace: the response's background
         # task does (Trace.end is once only)
         from starlette.background import BackgroundTask
-        return StreamingResponse(sse(), media_type="text/event-stream",
-                                 background=BackgroundTask(trace.end,
-                                                           error="cancelled: the reader left before the answer"))
+
+        def left_before() -> None:
+            if not began[0]:
+                trace.end(error="cancelled: the reader left before the answer")
+        return StreamingResponse(sse(), media_type="text/event-stream", background=BackgroundTask(left_before))
     return StreamingResponse(sse(), media_type="text/event-stream")
 
 

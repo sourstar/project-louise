@@ -28,9 +28,10 @@ def traced(tmp_path, monkeypatch):
     monkeypatch.setattr(query_trace, "_gpus", lambda: [{"card": "card0", "vram_used": 7 << 30,
                                                         "processes": [{"label": "qwen", "vram": 6 << 30}]}])
     monkeypatch.setattr(query_trace, "_models",
-                        lambda: {"http://ai": {"loaded": ["qwen", "bge-m3"], "parked": ["omnivoice"]}})
+                        lambda *a: {"http://ai": {"loaded": ["qwen", "bge-m3"], "parked": ["omnivoice"]}})
+    monkeypatch.setattr(query_trace, "_collections", lambda: [object()])
     monkeypatch.setattr(query_trace, "_model_events",
-                        lambda since, until: [["2026-11-26T10:00:00.000+00:00", "info", "cold start: qwen loaded"]])
+                        lambda since, until, col=None: [["2026-11-26T10:00:00.000+00:00", "info", "cold start: qwen loaded"]])
     relay.reset()
     yield tmp_path
     relay.reset()
@@ -483,3 +484,65 @@ def test_an_answers_trace_carries_the_servers_own_timings(traced, monkeypatch):
     _wait(lambda: _lines(traced))
     (got,) = _lines(traced)
     assert got["answer_timings"] == t
+
+
+# ---- architecture's third read, 2026-11-26 ----------------------------------
+
+def test_a_users_question_through_the_relay_writes_nothing(traced, monkeypatch):
+    """POST /ask/relay as anyone but an admin: no line (`admin` is the
+    viewer's own verdict, auth.admin, in relay_start)."""
+    from fastapi.testclient import TestClient
+    from app import api
+    monkeypatch.setattr(web, "_ask_result", lambda body: {"hits": [], "timings": {}})
+    c = TestClient(api.app)
+    jid = c.post("/ask/relay", json={"kind": "search", "search": {"query": "whales"}}).json()["id"]
+    job = relay.get(jid, "guest:None")
+    _wait(lambda: job.state == relay.DONE)
+    time.sleep(0.3)
+    assert _lines(traced) == []
+
+
+def test_a_cancelled_search_on_chat_completions_ends_its_trace(traced, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import api, cancel
+
+    async def gone(request, fn, *a, **kw):
+        raise cancel.Cancelled()
+    monkeypatch.setattr(cancel, "while_connected", gone)
+    monkeypatch.setattr(query_trace, "viewer_of", lambda request: ("admin:admin", True))
+    r = TestClient(api.app).post("/v1/chat/completions", json={"messages": [{"role": "user", "content": "whales"}]})
+    assert r.status_code == api.CLIENT_GONE
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    assert got["error"].startswith("cancelled") and got["ended"]
+
+
+def test_a_reader_who_leaves_after_the_first_chunk_is_not_said_to_have_left_before(traced, monkeypatch):
+    import asyncio
+    from app import api
+    chat = _answer_setup(monkeypatch, _stream_of("The ", "whale ", "rose."))
+    t = query_trace.Trace("chat", "c10", "admin:admin", "whales", sample_s=10.0)
+    resp = api._chat_answer(chat, "whales", {"hits": [], "timings": {"total": 0.0}}, time.time(), trace=t)
+    it = resp.body_iterator
+
+    async def first_then_leave():
+        await it.__anext__()
+        await it.aclose()
+        await resp.background()
+    asyncio.run(first_then_leave())
+    t.join(5)
+    (got,) = _lines(traced)
+    assert "before the answer" not in (got.get("error") or "")
+
+
+def test_a_trace_that_cannot_be_written_says_so_on_stderr_never_stdout(tmp_path, monkeypatch, capsys):
+    """S4: in `ask serve` stdout is the JSON-RPC channel."""
+    blocked = tmp_path / "file"
+    blocked.write_text("not a directory")
+    monkeypatch.setattr(query_trace, "trace_dir", lambda: blocked / "traces")
+    monkeypatch.setattr(query_trace, "_gpus", lambda: [])
+    monkeypatch.setattr(query_trace, "_models", lambda *a: {})
+    t = query_trace.Trace("mcp:louise_search", "e1", "cli:ask serve", "q", sample_s=10.0)
+    t.end(); t.join(5)
+    out, err = capsys.readouterr()
+    assert "query trace of e1 not written" in err and "query trace" not in out
