@@ -841,7 +841,7 @@ def _rerank_parts(run) -> tuple[Any, dict]:
     "texts" and "chars" sent, "warm_ms" (0 where the model was loaded),
     "fit_ms" (the texts cut to the model's window by its own tokenizer),
     "call_ms" (the reranker's answers), and "works_ms" where the caller
-    notes it}. Nothing of the search changes."""
+    notes it, with its parts (`_note_works`)}. Nothing of the search changes."""
     note: dict = {}
     token = _rerank_note.set(note)
     t0 = time.monotonic()
@@ -1434,7 +1434,16 @@ def _rerank_lists(per_collection: list, rerank_one) -> list:
     (München, 2026-11-25: a search replaced by a second one went on for 9 s
     inside this — 17.9 s of rerank for its lists — while the second search
     queued behind it on the same reranker, `parallel:1`). One rerank call
-    cannot be interrupted (app/cancel.py); the next one is not started."""
+    cannot be interrupted (app/cancel.py); the next one is not started.
+
+    WHAT A LIST DOES AFTER ITS RERANKER ANSWERED IS NOT THE RERANKER'S TURN.
+    `rerank_one` may return a function — the grouping of the list's works —
+    in the result's place: it runs on a thread of its own while the NEXT list
+    of the same reranker is judged, and its result is the list's. The node,
+    2026-11-26, a first question: six lists one after the other, 39.3 s of
+    rerank, of which wikipedia's works alone 18.8 s with the reranker idle
+    behind them and four lists waiting for it."""
+    from concurrent.futures import Future
     groups: dict[tuple, list[int]] = {}
     for i, (c, _hits) in enumerate(per_collection):
         r = collections_mod.reranker_for(c)
@@ -1442,31 +1451,49 @@ def _rerank_lists(per_collection: list, rerank_one) -> list:
         groups.setdefault(key, []).append(i)
     out: list = [None] * len(per_collection)
 
-    def rerank_in_turn(idx: list[int]) -> list:
-        got = []
-        for i in idx:
-            cancel.checkpoint()         # the caller has gone: the next list's call is not made
-            got.append((i, rerank_one(per_collection[i])))
-        return got
-    with ThreadPoolExecutor(max_workers=max(1, len(groups))) as ex:
+    with ThreadPoolExecutor(max_workers=max(1, len(groups))) as ex, \
+            ThreadPoolExecutor(max_workers=max(1, len(per_collection)), thread_name_prefix="works") as after:
+        def rerank_in_turn(idx: list[int]) -> list:
+            got = []
+            for i in idx:
+                cancel.checkpoint()         # the caller has gone: the next list's call is not made
+                step = rerank_one(per_collection[i])
+                got.append((i, after.submit(cancel.carry(step)) if callable(step) else step))
+            return got
         for part in ex.map(cancel.carry(rerank_in_turn), list(groups.values())):
             for i, got in part:
-                out[i] = got
+                out[i] = got.result() if isinstance(got, Future) else got
     return out
 
 
 def _one_hit_per_work(hits: list[dict], collection, plan: LanguagePlan,
-                      show_in: str | None, annotations=None, limit: int | None = None) -> list[dict]:
+                      show_in: str | None, annotations=None, limit: int | None = None,
+                      timings: dict | None = None) -> list[dict]:
     """05 §5.3 (amended 2026-10-09): each work once, after the reranker and
     before the cut to `k`, shown in the reader's language where one of its
     editions in it was found (app/ask/works.py). Grouping that cannot run
     returns the list as ranked. `annotations`: the annotations collections
     whose work claims group (None = every one held; the Ask page's choice,
-    2026-10-19)."""
+    2026-10-19). `timings`: told what the grouping was made of
+    (`works.one_hit_per_work`)."""
     from .ask import works
     return works.one_hit_per_work(hits, collection,
                                   works.preference(show_in, plan.query_lang),
-                                  annotations=annotations, plan=plan, limit=limit)
+                                  annotations=annotations, plan=plan, limit=limit, timings=timings)
+
+
+def _works_parts(t_works: float, split: dict) -> dict:
+    """The works' whole time and its parts, as a list's rerank note carries
+    them: `works_ms`, and `works_claims_ms`, `works_facts_ms`,
+    `works_passages_ms` with `works_passages_n` (`_rerank_parts`, the
+    search's line)."""
+    return {"works_ms": (time.monotonic() - t_works) * 1000,
+            **{f"works_{k}_ms": float(v) for k, v in split.items() if k != "passages_n"},
+            **({"works_passages_n": int(split["passages_n"])} if split.get("passages_n") else {})}
+
+
+def _note_works(t_works: float, split: dict) -> None:
+    _note_rerank(**_works_parts(t_works, split))
 
 
 def search(con, query: str, k: int = 12, mode: str = "hybrid",
@@ -1511,9 +1538,9 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
                                                  collections_mod.reranker_for(collection),
                                                  _rerank_budget_s(rerank_depth), rerank_depth,
                                                  plan.translations)
-        t_works = time.monotonic()
-        final = _one_hit_per_work(ranked, collection, plan, show_in, annotations, limit=k)[:k]
-        _note_rerank(works_ms=(time.monotonic() - t_works) * 1000)
+        t_works, split = time.monotonic(), {}
+        final = _one_hit_per_work(ranked, collection, plan, show_in, annotations, limit=k, timings=split)[:k]
+        _note_works(t_works, split)
         return final, reranked, rerank_why
     (final, reranked, rerank_why), parts = _rerank_parts(_rerank_and_group)
     timings["rerank"] = round((time.time() - t0) * 1000, 1)
@@ -1728,18 +1755,24 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
         collection, merged = item
         candidates = merged[: max(k * 4, rerank_depth)]
 
-        def run():
-            ranked, ok, why = _reranked(plan.core, candidates,
-                                        collections_mod.reranker_for(collection), budget_s,
-                                        rerank_depth, plan.translations)
+        (ranked, ok, why), parts = _rerank_parts(lambda: _reranked(
+            plan.core, candidates, collections_mod.reranker_for(collection), budget_s,
+            rerank_depth, plan.translations))
+
+        def group_works():
             # each work once, per collection (work claims are about one
-            # collection's records), before the fuse cuts to k
-            t_works = time.monotonic()
-            grouped = _one_hit_per_work(ranked, collection, plan, show_in, annotations, limit=k)
-            _note_rerank(works_ms=(time.monotonic() - t_works) * 1000)
+            # collection's records), before the fuse cuts to k — OFF the
+            # reranker's turn (`_rerank_lists`): the next list of the same
+            # reranker is judged meanwhile
+            t_works, split = time.monotonic(), {}
+            grouped = _one_hit_per_work(ranked, collection, plan, show_in, annotations, limit=k, timings=split)
+            for key, v in _works_parts(t_works, split).items():
+                parts[key] = round(v, 1) if isinstance(v, float) else v
+            # the list's own time: its rerank and its works, as the line has always said it
+            parts["rerank"] = round(parts.get("rerank", 0) + parts["works_ms"], 1)
+            rerank_parts[collection.name] = parts
             return grouped, ok, why
-        got, rerank_parts[collection.name] = _rerank_parts(run)
-        return got
+        return group_works
 
     ranked = _rerank_lists(per_collection, _rerank_one)
     reranked = {c.name: ok for (c, _), (_, ok, _) in zip(per_collection, ranked)}

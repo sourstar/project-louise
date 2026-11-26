@@ -105,6 +105,8 @@ def release(server: str, twin: str) -> None:
     try:
         httpc.post(f"{server.rstrip('/')}/backend/shutdown", json={"model": twin},
                    timeout=CALL_TIMEOUT_S)
+        from . import model_load
+        model_load._note_own(model_load.server_of(server), twin, "a gate's twin, let go")   # app/own_unloads.py
     except Exception:                                   # noqa: BLE001
         pass
 

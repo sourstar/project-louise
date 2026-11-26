@@ -306,6 +306,186 @@ def fresh_contexts(recipe, *, query: bool = False, stated=None, probe_item=PROBE
     return out
 
 
+def _host_floor_gib() -> int | None:
+    """The node's host floor (`[models] page_floor_gib`), or None where the
+    platform file cannot be read. At 0 nothing parks on this node: the keeper
+    sets no floor, LocalAI answers every park `parking_off`, and a model
+    gives its room back by being stopped."""
+    from . import platform_config
+    try:
+        # `seen`: re-read only when the file changed — this is asked on the
+        # embed stage's hot path, once a check (`parks_now`)
+        return int(platform_config.seen().models.page_floor_gib)
+    except Exception:   # noqa: BLE001
+        return None
+
+
+def parks_now(recipe, query: bool = False) -> bool:
+    """Does the side's model PARK on this node now, as far as the node and
+    its runner say: the node keeps a host floor, and the runner's `/system`
+    row says the model's file allows it (`model_load.parks`)? What
+    `runs.check` holds a run's park cycles to — together with the run's own
+    statement, which says whether its ENGINE can (`embedder.can_park`).
+
+    From the last answer, without a request — but for a model a warm has just
+    loaded, whose row this process has not read yet (`model_load.row_read`):
+    the cached answer then lists it and says nothing of it, a check passed on
+    that silence, and the next one refused the same run (the review of
+    2026-11-26). There the runner is asked once, now (`refresh_row`: not
+    again while it stays silent). False where it cannot say: a model that is
+    not loaded parks nothing, and is read again when it is."""
+    from . import model_load
+    url, model = _who(recipe, query)
+    try:
+        if not url or not model:
+            return False
+        server = model_load.server_of(url)
+        model_load.refresh_row(server, model)
+        # the file's word first (a set lookup): on a node where nothing parks
+        # — every node until a model's file says so — a check costs no more
+        return model in model_load.parks(server) and _host_floor_gib() != 0
+    except Exception:   # noqa: BLE001 — unread: nothing more is asked of the run
+        return False
+
+
+#: LocalAI refuses a park within a second of the model's last request (HTTP
+#: 409 `model_busy`, parking-step-2.md §3.1): the gate leaves the model this
+#: long before each park
+PARK_IDLE_S = 1.2
+
+
+class Parker:
+    """The model's park cycles as the gate asks them (`embedder.park_cycles`):
+    whether it parks, the engine's own counts, the park itself.
+
+    WHETHER IT PARKS has three parts, each asked of the one who knows. THE
+    ENGINE: the run's own statement lists the environment it was launched
+    with, and only one started with the park switch can move its weights off
+    the card (`embedder.can_park`) — a run without it never parks, whatever
+    its file says, and nothing more is asked. THE NODE: with no host floor
+    (`[models] page_floor_gib` 0) nothing parks here. THE FILE: LocalAI's
+    `/system`, fresh, once the gate's texts have loaded the model (`"parks":
+    true`: its file says `park: true` and the server carries the patch) —
+    never this node's files, which may not be the files the runner loaded. A
+    runner with no `/system` — not LocalAI — parks nothing.
+
+    THE FLOOR (`prepare`): LocalAI parks nothing while its
+    `park_host_floor_bytes` is 0, and the keeper that holds it to the node's
+    floor beats in the worker — a gate from the command line may run with the
+    worker stopped (RULE 1). So the gate sets the same one value itself
+    (`localai_reclaimer.set_park_floor`, idempotent), from `[models]
+    page_floor_gib`; a node whose floor is 0 parks nothing, and a model that
+    asks to park is not admitted there on cycles that cannot be asked."""
+
+    def __init__(self, recipe, one: runs_mod.Answers | None = None, *, query: bool = False,
+                 stop: Callable[[], bool] | None = None, name: str = "", stated=None,
+                 sleep: Callable[[float], None] = time.sleep):
+        self.url, self.model = _who(recipe, query)
+        self.stated = stated
+        self.stop, self.name, self.sleep = stop, name, sleep
+        self.retry = round_again(stop, name, sleep=sleep)
+        self.one = one
+        #: the runs that answered the pass's texts (`runs.validate` holds them
+        #: to the stated one); None until a text was asked
+        self.runs: set | None = None
+        self._parked_at = 0.0
+
+    def ask(self, text) -> list[float]:
+        """One text alone, through the node's own client, and NOT warmed
+        first: the request itself brings a parked model back
+        (`model_load.returns_on_request`), so the answer held to the bytes is
+        the first one computed on the weights that came back."""
+        from . import model_load
+        # ...and as the engine gave it: a NaN is not asked again (`unhealed`)
+        with model_load.returns_on_request(), embeddings.unhealed():
+            v = self.one([text])[0]
+        # the runs the answers NAMED: behind VeGa a NaN is handed back before
+        # its receipt is read, so that answer names none — and an empty set
+        # here read as "an endpoint that stated none", an inconclusive pass,
+        # where the NaN itself is the verdict (the second read of 2026-11-26)
+        if self.one.runs:
+            self.runs = (self.runs or set()) | set(self.one.runs)
+        return v
+
+    def stopped_by_node(self) -> bool:
+        """Did Louise itself stop or park the model since the gate's last
+        park (app/own_unloads.py, every process's record)? The gate's own
+        park is noted before `park` returns, so only a later note counts."""
+        from . import model_load, own_unloads
+        key = (model_load.server_of(self.url), self.model)
+        return own_unloads.since(key, max(time.time() - self._parked_at, 0.0)) is not None
+
+    def parks(self) -> bool:
+        """Asked of the runner NOW. A runner with no `/system` is not LocalAI
+        and parks nothing. A LocalAI that does not answer, or does not list
+        the model that has just answered the gate's texts, DEFERS the gate: a
+        pass skipped on silence would certify a parking run on no cycle at
+        all (the review of 2026-11-26; `creates_per_request` defers on the
+        same silence)."""
+        from . import model_load
+        if not self.url or not self.model:
+            return False
+        if emb.can_park(getattr(self.stated, "engine", None)) is False or _host_floor_gib() == 0:
+            return False
+        server = model_load.server_of(self.url)
+        ids = model_load.loaded_models(server, 0.0)
+        if model_load.no_system_route(server):
+            return False
+        if ids is None or self.model not in ids:
+            raise emb.GateDeferred(
+                f"{self.name}: the model server "
+                + ("did not answer" if ids is None else f"does not list {self.model} as loaded")
+                + " when the gate asked whether the model parks (`/system`); a run is not admitted on "
+                  "park cycles nobody could ask for, and the gate is tried again")
+        return self.model in model_load.parks(server)
+
+    def counts(self) -> tuple[int, int, int] | None:
+        from . import model_load
+        return model_load.park_counts(self.url, self.model)
+
+    def prepare(self) -> None:
+        from . import localai_reclaimer, model_evict, model_load, platform_config, resident
+        server = model_load.server_of(self.url)
+        try:
+            floor = int(platform_config.load().models.page_floor_gib * model_evict.GIB)
+        except Exception as e:   # noqa: BLE001 — an unread file is not "no floor"
+            raise emb.GateDeferred(
+                f"{self.name}: the node's platform file could not be read ({type(e).__name__}), so the "
+                f"host floor for the gate's park cycles is not known; nothing is certified, and it is "
+                f"tried again") from None
+        if resident._settings_held(server):
+            # LocalAI's settings did not answer the keeper a moment ago: not asked again here
+            raise emb.GateDeferred(
+                f"{self.name}: LocalAI's settings are not being written for now (they did not answer the "
+                f"keeper), so its park floor cannot be confirmed for the gate's park cycles; tried again")
+        if floor <= 0:
+            raise emb.GateError(
+                f"{self.name}: {self.model}'s file says `park: true` and this node keeps no host floor "
+                f"([models] page_floor_gib is 0): nothing parks here, so its park cycles cannot be asked, "
+                f"and a run that asks to park is not admitted without them. Set the floor, or take "
+                f"`park: true` out of the model's file")
+        try:
+            localai_reclaimer.set_park_floor(server, floor)
+        except localai_reclaimer.NotTaken as e:
+            raise emb.GateDeferred(
+                f"{self.name}: LocalAI's park floor could not be set for the gate's park cycles "
+                f"({e}); nothing is certified, and it is tried again") from None
+
+    def idle(self) -> None:
+        _stopping(self.stop, self.name)
+        self.sleep(PARK_IDLE_S)
+
+    def park(self) -> str:
+        from . import model_load
+        how, _moved, kind = model_load.park_asked(self.url, self.model)
+        self._parked_at = time.time()
+        if how == model_load.PARKED:
+            return emb.PARKED
+        if how == model_load.PARK_BUSY:
+            return emb.PARK_BUSY
+        return kind or how
+
+
 #: a round of the fresh-context pass that another request touched is asked
 #: again this many times, this far apart, before the pass is deferred: the
 #: other collections on the model stand aside while its gate runs
@@ -579,6 +759,88 @@ def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docume
     a load of its own, so the collections embedding on the model keep their
     load), else on the shared load with them standing aside — said, never
     silent."""
+    server, model = _who(recipe, role == "query")
+    _park_refused_lately(recipe, role, root, name, codex)
+    try:
+        return _validate_on_twin_or_shared(root, name, codex, recipe, role=role, key=key, now=now,
+                                           stop=stop, on_run=on_run)
+    except emb.ParkRefused as e:
+        _remember_park_refusal(server, model, root, name, role, str(e))
+        # ...and what an earlier gate counted for this run no longer admits
+        # it, here or in a sibling of the space (`runs.refuse_parks`)
+        refused_run = _last_stated.get((server, model, role))
+        if refused_run:
+            try:
+                marked = runs_mod.refuse_parks(root, name, codex, role, refused_run, why=str(e),
+                                               at=now or _now(), signer=signer(key))
+                if marked:
+                    log.warning("%s: run %s… was refused as a run that parks; the park cycles counted "
+                                "for it earlier no longer count (%s)", name, refused_run[:23], ", ".join(marked))
+            except Exception:   # noqa: BLE001 — the refusal itself is what must reach the caller
+                log.exception("%s: the earlier park records of the refused run could not be marked", name)
+        raise
+
+
+#: A RUN REFUSED AS ONE THAT PARKS IS NOT GATED AGAIN AT EVERY LOOK. The
+#: refusal keeps no statement (`embedder.ParkRefused`), so nothing stops the
+#: worker from running the gate again 300 s later — the set's 512 texts on a
+#: twin loaded afresh, with the unloads that make its room — for as long as
+#: the fault lasts (the second read of 2026-11-26). (server, model, role,
+#: collection) -> (until, the run that was refused, the refusal). PER
+#: COLLECTION AND ROLE: a refusal is a collection's — one bit off refuses a
+#: collection that asks for bytes and not one that allows near-exact runs of
+#: the same model (the third read). In this process only: a restart asks once
+#: more. The same run asked within the hour is answered from here; ANOTHER
+#: run of the model (the file changed, the engine fixed), or a model that no
+#: longer parks (`park: true` taken out: the refusal's own way out), is
+#: gated at once.
+PARK_REFUSED_S = 3600.0
+_park_refused: dict[tuple[str, str, str, str], tuple[float, str | None, str]] = {}
+_last_stated: dict[tuple[str, str, str], str] = {}
+
+
+def _place(root, name: str) -> str:
+    """The collection by its PLACE, as the rest of the module keys it (two
+    collections can share a name, CLAUDE.md)."""
+    try:
+        return str(runs_mod.directory(root, name))
+    except Exception:   # noqa: BLE001
+        return str(name)
+
+
+def _remember_park_refusal(server: str, model: str, root, name: str, role: str, why: str) -> None:
+    _park_refused[(server, model, role, _place(root, name))] = (
+        time.monotonic() + PARK_REFUSED_S, _last_stated.get((server, model, role)), why)
+
+
+def _park_refused_lately(recipe, role: str, root, name: str, codex) -> None:
+    """Raise the remembered refusal where the SAME run still answers and the
+    model still parks; one tiny request to the shared load, no twin, no
+    unload."""
+    who = (*_who(recipe, role == "query"), role, _place(root, name))
+    kept = _park_refused.get(who)
+    if kept is None:
+        return
+    until, run_id, why = kept
+    if time.monotonic() >= until or run_id is None or not parks_now(recipe, role == "query"):
+        _park_refused.pop(who, None)
+        return
+    try:
+        now_answering = answering_run(recipe, query=role == "query", probe_item=probe_for(codex, role))
+    except Exception:   # noqa: BLE001 — cannot be asked: the gate itself says so
+        return
+    if now_answering != run_id:
+        _park_refused.pop(who, None)
+        return
+    raise emb.ParkRefused(f"{why} (refused {int((PARK_REFUSED_S - (until - time.monotonic())) // 60)} min "
+                          f"ago for this same run; not gated again within {int(PARK_REFUSED_S // 60)} min "
+                          f"of it — another run of the model, or a restart of the worker, is gated at once)")
+
+
+def _validate_on_twin_or_shared(root: Path, name: str, codex: Codex, recipe, *, role: str = "document",
+                                key=None, now: str | None = None,
+                                stop: Callable[[], bool] | None = None,
+                                on_run: Callable[[Any], None] | None = None) -> dict[str, Any]:
     from . import gate_twin
     server, model = _who(recipe, role == "query")
     # ONE GATE AT A TIME ON A TWIN, taken before anything of it is touched:
@@ -757,6 +1019,10 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
     try:
         stated = stated_run(recipe, query=query, probe_item=probe_for(codex, role))
         _note_run(name, role, stated.run_id)
+        from . import gate_twin
+        _server, _model = _who(recipe, query)
+        _main = _model[:-len(gate_twin.SUFFIX)] if gate_twin.is_twin(_model) else _model
+        _last_stated[(_server, _main, role)] = stated.run_id      # the twin states the main load's run
         _stopping(stop, name)
         if key is None:
             from .bundles import keys as node_keys
@@ -789,11 +1055,14 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
             embed=answers(recipe, **kw),
             embed_one=answers(recipe, how="one", **kw),
             contribute=answers(recipe, how="contribute", **kw),
-            stated=stated, key=key, now=now or _now(), items=items, on_run=on_run,
+            stated=stated, key=key, now=now or _now(), items=items,
+            on_run=_said(name, role, stated.run_id, on_run),
             cpu_reference=None if cpu is None else (cpu.run_id, cpu.vectors),
             reload=_reloader(recipe, query=query, stop=stop, name=name),
             fresh=fresh_contexts(recipe, stated=stated,
                                  probe_item=probe_for(codex, role), **kw),
+            park=Parker(recipe, answers(recipe, how="one", **kw), query=query, stop=stop, name=name,
+                        stated=stated),
             # the Codex's requirement wins over the node's setting: a node may
             # be stricter than its collection, never looser (09 §9.3)
             exactness=(emb.EXACT if runs_mod.requires_exact(codex)
@@ -809,6 +1078,26 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
         raise emb.GateDeferred(
             f"{name}: the encoder was unreachable or failed during the gate: "
             f"{type(e).__name__}: {e}") from e
+
+
+def _said(name: str, role: str, run_id: str, then: Callable[[Any], None] | None):
+    """`runs.validate`'s `on_run`: THE GATE'S OWN WORDS IN THE LOG, where the
+    statement has no key for them — why a run failed (its body carries the
+    sampled cosines, which may all be good: a return that failed, answers
+    that differ after one) and, for a model that parks, the cycles the engine
+    counted with what a park and a return cost (operator, 2026-11-26: the
+    byte check is on, "monitor if it creates overhead")."""
+    def seen(run) -> None:
+        try:
+            if not run.ok:
+                log.warning("%s: the gate FAILED %s run %s…: %s", name, role, run_id[:23], run.why())
+            elif getattr(run, "park_cycles", 0):
+                log.info("%s: %s run %s…: %s", name, role, run_id[:23], run.parks_said())
+        except Exception:   # noqa: BLE001 — a log line never ends a gate
+            pass
+        if then is not None:
+            then(run)
+    return seen
 
 
 def signer(key=None) -> str | None:
@@ -1055,7 +1344,8 @@ def guard(root: Path, name: str, codex: Codex, recipe, answered: set, *,
     who = signer(key)
     try:
         runs_mod.check(root, name, codex, answered, signer=who, role=role,
-                       batched=together, contributes=contributing(recipe) if together else None)
+                       batched=together, contributes=contributing(recipe) if together else None,
+                       parks=parks_now(recipe, role == "query"))
         _foreign(root, name, role, log)
         stale = [r for r in sorted(r for r in answered if r)
                  if not recheck(root, name, codex, recipe, r, role=role, key=key,
@@ -1071,7 +1361,8 @@ def guard(root: Path, name: str, codex: Codex, recipe, answered: set, *,
     body = validate(root, name, codex, recipe, role=role, key=key, stop=stop)
     if log is not None:
         log(f"{name}: {_told(body)}")
-    runs_mod.check(root, name, codex, answered, signer=who, role=role, batched=together, contributes=contributing(recipe) if together else None)
+    runs_mod.check(root, name, codex, answered, signer=who, role=role, batched=together, contributes=contributing(recipe) if together else None,
+                       parks=parks_now(recipe, role == "query"))
 
 
 def checking(root: Path, name: str, codex: Codex, recipe, *, role: str = "document",
@@ -1448,7 +1739,8 @@ def check_write(collection, recipe, answered: set) -> None:
                 f"{collection.name}: a context of the run that answers did not reproduce its "
                 f"canary; nothing is written until the run has been gated again", run_id)
         runs_mod.check(_root(), collection.name, codex, answered, signer=signer(),
-                       role="document", batched=batched(recipe), contributes=contributing(recipe))
+                       role="document", batched=batched(recipe), contributes=contributing(recipe),
+                           parks=parks_now(recipe))
         # A KEPT STATEMENT NOT YET RE-CHECKED IN THIS PROCESS is not relied
         # on: a deferral, and the stage's next `embed_allowed` re-checks it
         # this collection's own statements first — one cached listing; the
@@ -1547,12 +1839,14 @@ def _look(collection, stop: Callable[[], bool] | None,
             _send_back(collection, run_id, "document", log)
         try:
             runs_mod.check(_root(), name, codex, {run_id}, signer=who,
-                           batched=batched(recipe), contributes=contributing(recipe))
+                           batched=batched(recipe), contributes=contributing(recipe),
+                           parks=parks_now(recipe))
             _foreign(_root(), name, "document", log)
             if not recheck(_root(), name, codex, recipe, run_id, stop=stop, log=log):
                 log(_told(validate(_root(), name, codex, recipe, stop=stop)))
                 runs_mod.check(_root(), name, codex, {run_id}, signer=who,
-                               batched=batched(recipe), contributes=contributing(recipe))
+                               batched=batched(recipe), contributes=contributing(recipe),
+                           parks=parks_now(recipe))
         except runs_mod.RunUnvalidated as e:
             if e.failed:
                 if suspect:
@@ -1566,7 +1860,8 @@ def _look(collection, stop: Callable[[], bool] | None,
                 _gated_again(collection)        # pass or fail, its statement is kept
             log(told)
             runs_mod.check(_root(), name, codex, {run_id}, signer=who,
-                           batched=batched(recipe), contributes=contributing(recipe))
+                           batched=batched(recipe), contributes=contributing(recipe),
+                           parks=parks_now(recipe))
         return True, (f"run {run_id[:23]}… is validated for this space"
                       + _canary_note(collection, run_id)), run_id
     except (runs_mod.RunRefused, runs_mod.RunUnvalidated, emb.GateError) as e:
@@ -1593,8 +1888,19 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
         suspect = _suspect(collection, "query")
         if suspect:
             _send_back(collection, run_id, "query", log)
-        if run_id in runs_mod.statements_for_space(_root(), name, codex, "query",
-                                                   signer=signer()):
+        held = runs_mod.statements_for_space(_root(), name, codex, "query", signer=signer()).get(run_id)
+        # A QUERY MODEL THAT PARKS NOW is held to its counted cycles as a
+        # document one is (`runs.check`): no vector of it is written, and a
+        # query embedded on weights that came back wrong searches a
+        # coherent-looking wrong neighbourhood all the same
+        # ONLY A PASSING STATEMENT is sent back for them: a failed one is not
+        # made good by cycles, and gating it at every look would never end
+        # (the second read of 2026-11-26: four looks, four gates)
+        cycles_owed = (held is not None and runs_mod.passing(held, codex)
+                       and emb.can_park(held.get("engine")) is not False and parks_now(recipe, True)
+                       and not runs_mod.parks_counted(_root(), name, codex, "query", run_id, held,
+                                                      signer=signer()))
+        if held is not None and not cycles_owed:
             if recheck(_root(), name, codex, recipe, run_id, role="query", stop=stop,
                        log=log):
                 return

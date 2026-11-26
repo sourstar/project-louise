@@ -444,6 +444,23 @@ def test_issues_list_lists_and_counts(held_gutenberg):
     assert code == 2 and "no issue code" in err
 
 
+def test_hold_check_counts_each_code_by_default(held_gutenberg, monkeypatch):
+    """The operator, 2026-11-26, of the orphan images: "Add this check to the
+    collections' parsing consistency checks." The counts were in `hold
+    collection show` and `hold issues list` only; the consistency check now
+    says them itself, the most frequent first, and they are never a verdict."""
+    from app import louise
+    from app.hold import collection as col
+    _name, codex = col.resolve(held_gutenberg, "gutenberg")
+    line = louise._issues_line(held_gutenberg, "gutenberg", codex)
+    assert line.startswith("  ISSUES        4 recorded by the parses: cutoff-undated 3; rdf-missing 1")
+    assert "`louise hold issues list gutenberg --code <code>`" in line
+    monkeypatch.setattr(louise, "_issues_summary", lambda *a: {"total": 0, "by_code": {}})
+    assert louise._issues_line(held_gutenberg, "gutenberg", None) == "  ISSUES        none recorded by the parses"
+    monkeypatch.setattr(louise, "_issues_summary", lambda *a: (_ for _ in ()).throw(OSError("busy")))
+    assert "not counted (OSError)" in louise._issues_line(held_gutenberg, "gutenberg", None)
+
+
 def test_collection_show_counts_them(held_gutenberg):
     code, out, _ = _louise("hold", "collection", "show", "--root", str(held_gutenberg), "gutenberg")
     assert code == 0

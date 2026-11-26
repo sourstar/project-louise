@@ -955,7 +955,12 @@ reader needs at the command line:
   node fetches nothing for this collection from its origin — what is there
   is still scanned, parsed, indexed and embedded; `true`; `default`, the
   line removed and the collection's kind decides — it was written into a
-  file by hand before, and a from-scratch collection must not need a hand),
+  file by hand before, and a from-scratch collection must not need a hand.
+  *Amended 2026-11-26*: `false` takes effect AT ONCE — a fetch already
+  running, the corpus's or an archive's, ends at its next unit as a pause
+  ends it, what landed kept and nothing marked failed; until then the
+  switch was read only where a fetch starts, and one went on for 4 min 45 s
+  after it),
   and for an annotations collection `method`
   (2026-11-12: the method the node re-runs, `wikipedia-versions`; empty:
   none; refused where the method did not make the claims and they are
@@ -1413,7 +1418,11 @@ reader needs at the command line:
 - **`issues list`.** *Added 2026-10-25 (06 §6.1).* The inconsistencies in
   the origin that the last parse of each document met: `uid`, code and
   detail a line on stdout, the counts per code with each code's meaning
-  on stderr first (both under `issues` with `--json`). `--code` keeps one
+  on stderr first (both under `issues` with `--json`). *Amended
+  2026-11-26* (operator, of the orphan images: "Add this check to the
+  collections' parsing consistency checks"): `hold check` prints the
+  counts per code itself, by default, as its last line — a count, never a
+  verdict: it fails no check, and the `--json` form (09 §9.8) is unchanged. `--code` keeps one
   code's documents, read through its index; `--limit` stops after N. A
   code the collection's plugin does not declare is exit 2, naming the
   codes it does. Read-only, no lock. `hold collection show` prints the

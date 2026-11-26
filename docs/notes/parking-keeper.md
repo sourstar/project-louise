@@ -100,12 +100,76 @@ set to 12 GiB by the tool and back to 0 after. No real model parks.
 So a give-way that today costs its model 4.2 s to come back (bge-m3's own
 fresh load in that pass) costs 0.14 s to make and 0.23 s to undo.
 
+**Behind the LIVE wrapper, on the card, the node embedding beside it**
+(München, 2026-11-26 01:22–01:25Z; copies of vega-bge-m3's file whole plus
+`park: true`, `GGML_SYCL_PARKABLE=1`, `GGML_SYCL_PARK_VERIFY=1`, through
+vega-louise-llama-cpp — wrapper 47bf02ea…, engine ed93e3c1b2e2; inputs
+tagged, each return held to the receipts' run id, to the wrapper's
+`/vega/keeps` and to the engine's counts; another run id than
+vega-bge-m3's, gated by nobody, removed after):
+
+| | measured |
+|---|---|
+| the load | ONE "loaded on Intel(R) Arc(TM) Pro B70 Graphics, run sha256:02112555…" line through all the cycles; no refusal to state the run |
+| a return | "the load in force asked again (the same options, the same process …; the backend: 'Model already loaded'): run … stands" — one a return, never a second "loaded on" |
+| the run id on the receipts | the same before the first park and after each of 43 returns; and the SAME after a stop of the parked model and its load afresh in a new process |
+| the counts, a cycle | the engine: parks +1, unparks +1; the wrapper: `created` +1 (1 → 44 over 43 returns), `calls` + one per sentence asked (not +1), `canary_failed` 0 throughout |
+| a return the card refuses | 503 `no_room_on_device`, `Retry-After: 2`, twice, still parked (319 MiB on the card, 577 on the host); the third request served, the same vectors |
+| a busy model | 2,716 parks asked during one 2,048-sentence request, every one 409 |
+| a parked model stopped | 200 in 1,314 ms through the wrapper; its next request loads afresh in 10.58 s |
+| times, the node at work | a park 135–138 ms; a return with sixteen tagged sentences 377–392 ms (881–1,378 ms in the first three cycles after the load) |
+
+With Tensor's off-node run (25 of 25, parking-step-2.md §11) this is every
+junction: the server, the wrapper, the engine and the card together, on a
+copy. What it is NOT: a gate. The run that parks a real model is gated with
+the park-cycles clause, which holds a cycle to the engine's parks and
+unparks AND the wrapper's `created` — a return that fails is answered 200 by
+a new process under the same run id, and only those counts starting again
+say so.
+
+### 4.1 A pinned copy and the gate's twin, on the card (München, 2026-11-26 06:44:10–06:44:54Z)
+
+On the operator's word ("Yes for pinned parking test on the card"), behind
+the live wrapper, the node working and Legal's dump build running. A copy of
+the live `vega-bge-m3` with `park: true`, the two env lines and `pinned: true`
+KEPT, then its twin written as `gate_twin.ensure` writes it and pinned.
+
+| | the pinned copy | its twin (`…--gate`) |
+|---|---|---|
+| parked by `POST /backend/park` | yes: 345 and 382 ms, 997 MiB given back | yes: 396 ms |
+| back by the request | 1.58 and 1.22 s, vectors identical | 1.21 s, identical |
+| the engine's counts | +1 parked, +1 back each cycle | the same |
+| the run | one run id on all receipts | THE SAME run id, the same sixteen vectors |
+| the config written through `/models/import` | — | keeps `park: true` AND the env; `/system` lists it, the monitor counts |
+| cycles | 2, then 412 `host_memory_floor` | 1, then 412 |
+
+- **The pin is no obstacle** (Tensor's §12 off the node, now on the card).
+- **The keeper's first floor** (§5 row 2, seen): at 06:44:51Z, once, "resident:
+  LocalAI's park floor set to 12,288 MiB … (it was 8,192) — qual-nx-pin,
+  qual-nx-pin--gate can be parked". München had set 8 GiB by hand for the
+  test; the keeper, which holds the floor wherever a loaded model says it
+  parks, put the node's back between two rows. A floor set by hand lasts
+  until the keeper's next beat.
+- **The floor refused the later parks**: 8.7–9.7 GiB available under a 12 GiB
+  floor while the dump build ran. During a heavy build nothing parks on this
+  node — models are stopped instead, as before — and a parking model's gate
+  defers. What parking gives depends on `page_floor_gib`; put to the operator
+  with rows once a real model parks.
+- **The byte check's price is NOT measured yet.** With `GGML_SYCL_PARK_VERIFY=1`
+  a park took 345–396 ms (135–234 without, the night before) and a return
+  1.2–1.6 s (0.23–0.39) — but these returns were sixteen sentences on a card
+  at 28.6–31.3 GiB, those one sentence on a card with room. The clean row is
+  the same copy and request with the line and without, on a quiet card; owed.
+- The monitor answers 500 "not currently loaded" before a model's first load.
+
 ## 5. Rows owed from the node (none exists yet: nothing parks until a model's file says `park: true`)
 
 A model parks when its file says `park: true` AND its `env` carries
 `GGML_SYCL_PARKABLE=1` — a new run, gated once, with the gate's park-cycles
-clause (not built yet: STATUS.md, 2026-11-26). Which models, and whether the
-signed statement says the cycles, is the operator's.
+clause (§6, built 2026-11-26). Which models: bge-m3 first, then the five
+llama.cpp encoders, with the engine's byte check on (operator, 2026-11-26:
+"1. A then B 2. On but monitor if it creates overhead"). Whether the signed
+statement says the cycles was not answered: it does not (§6).
 
 1. `louise node resident show`: `"parks": true` for a model loaded from a
    file with `park: true` (the server's own first row).
@@ -120,3 +184,147 @@ signed statement says the cycles, is the operator's.
    against today's.
 6. The host under its floor with a model parked: "card: X was parked … and
    is stopped", one a beat.
+
+## 6. The gate's park cycles (`embedder.park_cycles`, built 2026-11-26)
+
+A return is an upload of the weights again — a path no gate had seen. So a
+model that parks is parked and asked a fingerprint text, 64 times (four
+rounds of the sixteen, a new order each), and each answer is held to the same
+text's first. "Parks" has three parts, each asked of the one who knows: the
+ENGINE (the run's own statement lists the environment it was launched with;
+without `GGML_SYCL_PARKABLE` at a value other than nothing and zero — as the
+engine itself reads it — it never moves its weights, whatever the file says:
+`embedder.can_park`), the NODE (a host floor above 0) and the FILE
+(LocalAI's `/system` `"parks": true`, read fresh once the gate's 512 texts
+have loaded the model). It runs right after the two single-text passes and
+BEFORE the fresh loads and the 300 contexts: a pass refused, deferred or
+failed there has spent seconds, not the gate's minutes.
+
+**One cycle, counted, never assumed** (`run_check.Parker`):
+
+| step | asked of | must read |
+|---|---|---|
+| the engine's counts | `GET /backend/monitor?model=` `memory.breakdown` | (parks, returns, 0) |
+| 1.2 s without a request | — | LocalAI refuses a park within 1 s of one |
+| the park | `POST /backend/park` | 200 |
+| the counts | as above | (parks + 1, returns, 1) |
+| one text, alone — the request IS the return | the node's own client, not warmed first (`model_load.returns_on_request`) | the same bytes as its first answer |
+| the counts | as above | (parks + 1, returns + 1, 0) |
+
+| what the gate meets | verdict |
+|---|---|
+| a park refused 409 (the model works), counts something else moved, a model found parked, a model the runner no longer holds | not a cycle: one text puts the model back on the card, the cycle is asked again, 10 times 3 s apart, then DEFERRED with the last reason |
+| counts that STARTED AGAIN between the park and the answer | the return failed and a load answered in its place (200, the same vectors, the same run id): REFUSED as a run that parks, and NO statement kept (below) |
+| an answer after a return that is not the text's first: a NaN, other bytes under `exact`, further than 0.99999 under `near` | REFUSED the same way — the pass never makes a failing statement |
+| other bytes within 0.99999, under `near` | admitted; what the returns differ by is in the statement's `load_variation` |
+| the same, where Louise itself stopped the parked model meanwhile (app/own_unloads.py: a question took the card, another gate reloaded the shared load, a twin was let go) | not a cycle: asked again |
+| 500 `model_stopped` (the park broke its backend) | REFUSED, the same way |
+| 412 `cannot_park` | REFUSED (it is not reached for an engine without the switch: that one is asked nothing) |
+| 412 `host_memory_floor`, `parking_off` | deferred |
+| `/system` silent, or not listing the model that has just answered | deferred: silence is never "does not park" |
+| a NaN the client's retry would have hidden | seen: the gate's request is not healed (`embeddings.unhealed`), and behind VeGa a NaN names no run — which adds none, and is the verdict |
+| no counts to read | REFUSED after three reads |
+| the file says `park: true`, the engine was started WITHOUT the switch | asked nothing, held to nothing: `/system` lists `"parks": true` on the file's word, the park is 412 and the monitor 500 (Tensor, parking-step-2.md §12) — the model never parks, the evictor stops it as before, and its statement stands |
+| the node's `page_floor_gib` is 0 | asked nothing: nothing parks on this node |
+| an answer that differs | counted in `load_variation`: fails an `exact` collection's run, admitted within 0.99999 for a `near` one |
+
+**Refused, not failed, and why** (`embedder.ParkRefused`). Nothing is written
+from a run while its model parks before its cycles are counted, so a pass
+that goes wrong has written nothing wrong; and a FAILING statement kept for
+it would replace the run's good one and stop its collection even after
+`park: true` is taken out again (the run id does not change with that line)
+— for a failed return, on a verdict that a stop made by anything else, a
+tool or the kernel, would also produce. So EVERY way the pass can go wrong
+raises, keeps nothing, and says the two ways out; with the line out the
+model does not park, its statement stands and embedding goes on. The first
+cut kept a FAIL for an inexact return and for a NaN: both read again and
+changed before the merge. While the line stays, the refusal is remembered
+for an hour for that same run, PER COLLECTION AND ROLE (in the process: no
+gate, no twin load, no unload in between) — a refusal is a collection's: one
+bit off refuses a collection that asks for bytes and not one that allows
+near-exact runs of the same model. Another run of the model, a restart, or
+the line taken out (the model no longer parks) is gated at once.
+
+**The floor.** LocalAI parks nothing while `park_host_floor_bytes` is 0, and
+the keeper that sets it beats in the worker; a gate from the command line may
+run with the worker stopped. The gate sets the same one value itself
+(`[models] page_floor_gib`, idempotent). A node whose floor is 0 parks
+nothing: a model that asks to park is refused there, with the two ways out.
+
+**The statement is unchanged** (no wire change; the operator's third choice,
+not answered). An inexact return lowers `load_variation`, as a fresh context
+does. What the statement cannot say — that the cycles were asked — the node
+records beside the batching (`gate-parks.json` beside `gate-batching.json`:
+cycles, closest, the median seconds of a park and of a return, AND THE
+DIGEST OF THE STATEMENT BODY OF THE SAME PASS), and `runs.check` holds a
+model that parks NOW to it: a run gated while its model did not park (its
+file gained `park: true`, or the runner its patch, under the same run id) is
+gated again before anything is written from it. The digest is what the
+review of 2026-11-26 added: counted alone, the 64 cycles of a pass that
+FAILED on an inexact return admitted the run on another pass's statement —
+its own older one, or a sibling collection's.
+
+**What a sibling of the space lends** (`runs.parks_for_space`), so that the
+gate stays ONE PER (space, run) when `park: true` lands on a model several
+collections share: the EVIDENCE ABOUT THE RUN and never a verdict — 64
+counted cycles whose every answer was the same bytes, under a passing
+statement of that run the sibling still holds and its record names. The
+borrower keeps its own statement (its sample, its batching, its CPU
+comparison) and writes its own record for it, saying where the cycles were
+counted. Cycles that were not byte-exact are lent only to a collection that
+holds a byte copy of the SAME statement (what a near-exact run's returns
+differ by is in the one statement that measured them); a borrowed record is
+not lent on. AND A REFUSAL WITHDRAWS WHAT WAS COUNTED BEFORE
+(`runs.refuse_parks`, the fourth read): when a later gate refuses the run as
+one that parks, every record of that run and role in the space — counted or
+borrowed — is marked refused and neither counts nor lends, until a gate that
+counts its cycles again writes a fresh one. The newest evidence about the
+run decides. For one round of review the sibling's STATEMENT
+was copied instead: read against the borrower's own, stale, batching record
+it admitted batched writes on a verdict made at one text a request — the
+fault of the 714 books — and a sibling whose batches differed locked a
+healthy collection out. Withdrawn before the merge. The query side is
+held to the same record by the look (`_look_at_the_query_side`): nobody
+writes a query's vector, so `runs.check` never sees it. Putting `park_cycles` in the signed statement instead is
+09 §9.12 version 7 — a wire change, one more gate of every parking run, and
+the only way a PEER can see the cycles were counted.
+
+**Not held to the wrapper's `created`** (STATUS.md said it would be): a model
+that parks is on context on demand, so every request creates a context —
+`created` counts requests, not returns, and is read only for such a run after
+a settling probe. The engine's parks and returns are the count.
+
+**What the byte check costs** (`GGML_SYCL_PARK_VERIFY=1`: the engine reads
+the card's bytes back at every return) is read in three places: the gate's
+report (`hold embedder check`: "parking … a park N s, a return N s at the
+median"), the evictor's line ("card: parked X (… MiB to host memory in N s)")
+and the load record ("parked: X came back from host memory in N s") — against
+0.14–0.23 s and 0.23–0.39 s on the card's copies without the check (§4). The
+gate's own figures are what this node's client met: room made before the
+return and VeGa's receipt are inside them.
+
+**Open, the operator's**: the client asks a null or NaN vector again before
+anyone sees it (`embeddings._embed_batch`, "intermittent SYCL corruption").
+The park cycles now judge the engine's own first answer; the gate's other
+single-text passes — the two orders, the first text after a fresh load —
+still judge what the client's retry returned. Making them all judge the raw
+answer is one line, and would FAIL a run that gives a NaN once in a while
+and is healed today: a change of every encoder's gate, not taken here.
+
+**A pinned model is parked** (asked of Tensor, answered 2026-11-26, off the
+node on the live build's tree e37b86e0…, parking-step-2.md §12): the park
+route does not look at the pin — HTTP 200, the engine counts it — whether the
+file says `pinned: true` or `toggle-pinned` set it. The pin is the
+watchdog's: LocalAI never parks a pinned model BY ITSELF. So the gate, which
+pins its model (the twin, or the shared load) for its whole length, parks it
+all the same. The pin does not hold the card's room for a model that is
+away: a return another load took the room of is 503, the client's deferral,
+and the gate is deferred.
+
+**The gate twin** (`<model>--gate`) is the model's own config-json under
+another name, written through `/models/import`: `park: true` (a config key
+with a json tag) and its `env` go with it, it states the same run, and its
+cycles are that run's (the same §12: the twin's file had `park: true`,
+`/system` listed it, it parked and came back, counts 1 and 1). NOT YET ON
+THE CARD: a pinned copy and a twin behind the wrapper — München runs both on
+copies after the deploy.
