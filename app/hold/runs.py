@@ -199,6 +199,75 @@ def contexts_measured(root: Path, name: str, role: str, run_id: str) -> dict[str
     return got.get(f"{role}:{run_id}")
 
 
+def _parks_file(root: Path, name: str) -> Path:
+    return directory(root, name).parent / "gate-parks.json"
+
+
+def record_parks(root: Path, name: str, role: str, run_id: str, *, cycles: int, closest: float,
+                 park_s: float | None, return_s: float | None, at: str) -> None:
+    """THE PARK CYCLES, COUNTED (`embedder.park_cycles`): how many
+    park-and-return cycles the gate asked `run_id` after, each one the
+    engine's own count, the closest an answer after a return came to the same
+    text's first (1.0: the same bytes), and the median seconds of a park and
+    of a return as the gate met them. LOCAL, as the batching and the contexts
+    are (no wire change): the statement says only how far apart the run's
+    answers came (`load_variation`). Read by `check` — a model that parks NOW
+    is written from only where its run's cycles are on record — and by `hold
+    embedder check`'s report."""
+    p = _parks_file(root, name)
+    try:
+        got = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        got = {}
+    got[f"{role}:{run_id}"] = {"cycles": int(cycles), "closest": float(closest), "at": at,
+                               "park_s": park_s, "return_s": return_s}
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(got, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def parks_measured(root: Path, name: str, role: str, run_id: str) -> dict[str, Any] | None:
+    """The park cycles of `run_id`'s last gate on `role`, or None (it did not
+    park when it was gated)."""
+    try:
+        got = json.loads(_parks_file(root, name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    got = got.get(f"{role}:{run_id}")
+    return got if isinstance(got, dict) else None
+
+
+def _parks_counted(measured: dict[str, Any] | None) -> bool:
+    try:
+        return measured is not None and int(measured.get("cycles", 0)) >= emb.PARK_CYCLES
+    except (TypeError, ValueError):
+        return False
+
+
+def parks_for_space(root: Path, name: str, codex: Codex, role: str, run_id: str, *,
+                    signer: str | None) -> dict[str, Any] | None:
+    """The park cycles `run_id` was gated on, for THIS SPACE: this
+    collection's own record, else that of another collection of the space on
+    this peer that holds a statement for the run — copied into this
+    collection's own, as its statement and its batching are
+    (`batching_for_space`: the gate runs once per (space, run))."""
+    own = parks_measured(root, name, role, run_id)
+    if _parks_counted(own):
+        return own
+    for other in _others(root, name):
+        theirs = parks_measured(root, other, role, run_id)
+        if not _parks_counted(theirs):
+            continue
+        if run_id not in statements(root, other, codex, role, signer=signer):
+            continue                    # a record without the space's statement for the run
+        record_parks(root, name, role, run_id, cycles=int(theirs["cycles"]),
+                     closest=float(theirs.get("closest", 1.0)), park_s=theirs.get("park_s"),
+                     return_s=theirs.get("return_s"), at=str(theirs.get("at", "")))
+        return theirs
+    return own
+
+
 def keep(root: Path, name: str, statement: dict[str, Any]) -> Path:
     """Write a statement, pass or fail, where its run and role put it."""
     body = statement["body"]
@@ -547,7 +616,7 @@ def describe(encoder_url: str, run_id: str, *, get: Callable[..., Any],
 
 def check(root: Path, name: str, codex: Codex, answered: set, *,
           signer: str | None, role: str = "document", batched: bool = True,
-          contributes: dict[str, int] | None = None) -> None:
+          contributes: dict[str, int] | None = None, parks: bool = False) -> None:
     """May vectors from answers naming `answered` be written? Silent when
     they may. `answered` is the set of `Louise-Run` values seen on the
     answers that carried them — or, for an `api = "vega"` encoder, the runs
@@ -558,7 +627,12 @@ def check(root: Path, name: str, codex: Codex, answered: set, *,
     texts a request, or several requests at once — and not strictly one text
     at a time. A run whose gate found it NOT batch-invariant is validated
     for single-text work only (03 §3.3): the fault that silently corrupted
-    714 books was exactly a run that answered differently in a batch."""
+    714 books was exactly a run that answered differently in a batch.
+
+    `parks`: this peer's runner says the model PARKS now (its weights leave
+    the card for host memory and come back, `run_check.parks_now`). Its run
+    is then written from only where the gate counted its park cycles
+    (`parks_for_space`); a run gated while it did not park is gated again."""
     if not applies(codex):
         return
     if not answered or None in answered:
@@ -596,6 +670,17 @@ def check(root: Path, name: str, codex: Codex, answered: set, *,
                 f"(version {body.get('version')}) does not say how many fresh contexts the gate "
                 f"counted; nothing from it is written until the gate has run again (03 §3.3, "
                 f"09 §9.12 version {emb.CONTEXTS_VERSION})", run_id)
+        if parks and not _parks_counted(parks_for_space(root, name, codex, role, run_id, signer=signer)):
+            # A MODEL THAT PARKS NOW, GATED WHILE IT DID NOT (its file gained
+            # `park: true`, or the runner its patch, under the same run): a
+            # return is an upload of the weights again, which that gate never
+            # saw. Not a failure: the gate runs again (`run_check._look`) and
+            # counts its park cycles
+            raise RunUnvalidated(
+                f"{name}: run {run_id[:23]}… parks now (its weights leave the card for host memory "
+                f"and come back) and its gate counted no park cycles; nothing from it is written "
+                f"until the gate has run again and counted {emb.PARK_CYCLES} of them (03 §3.3, "
+                f"docs/notes/parking-keeper.md)", run_id)
         if batched and body.get("batch_invariant") is False:
             raise RunUnvalidated(
                 f"{name}: run {run_id[:23]}… is validated for single-text work only — "
@@ -646,7 +731,7 @@ def validate(root: Path, name: str, codex: Codex, *, role: str, reference,
              now: str, items=None,
              on_run: Callable[[emb.Run], None] | None = None,
              cpu_reference=None, reload=None, exactness: str = emb.EXACT,
-             fresh=None) -> dict[str, Any]:
+             fresh=None, park=None) -> dict[str, Any]:
     """Run the gate against one stated run and KEEP the statement — pass or
     fail: "a failure is kept too, so the run is not retried against the same
     set" (07 §7.3). Returns the statement's body. Embedding is the caller's:
@@ -659,13 +744,13 @@ def validate(root: Path, name: str, codex: Codex, *, role: str, reference,
     run = emb.run_gate(codex, reference=reference, embed=embed, role=role,
                        stated=stated, embed_one=embed_one, contribute=contribute,
                        items=items, cpu_reference=cpu_reference, reload=reload,
-                       exactness=exactness, fresh=fresh)
+                       exactness=exactness, fresh=fresh, park=park)
     # THE PASS IS ABOUT ONE RUN. If the model was relaunched while the 512
     # texts were going through — another flag, another image — some answers
     # came from another run, and the numbers describe neither. 03 §3.3: "An
     # answer that names another makes the check inconclusive": no statement,
     # and it is tried again.
-    for fn in (embed, embed_one, contribute, fresh):
+    for fn in (embed, embed_one, contribute, fresh, park):
         seen = getattr(fn, "runs", None)
         if seen is not None and seen != {stated.run_id}:
             others = sorted(str(r)[:23] for r in seen if r != stated.run_id)
@@ -678,6 +763,9 @@ def validate(root: Path, name: str, codex: Codex, *, role: str, reference,
     if run.contexts:
         record_contexts(root, name, role, stated.run_id, contexts=run.contexts,
                         closest=run.context_variation, at=now)
+    if run.park_cycles and not run.park_failed:
+        record_parks(root, name, role, stated.run_id, cycles=run.park_cycles,
+                     closest=run.park_variation, park_s=run.park_s, return_s=run.return_s, at=now)
     if on_run is not None:
         on_run(run)
     return statement["body"]

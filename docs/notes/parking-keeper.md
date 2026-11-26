@@ -131,8 +131,10 @@ say so.
 
 A model parks when its file says `park: true` AND its `env` carries
 `GGML_SYCL_PARKABLE=1` — a new run, gated once, with the gate's park-cycles
-clause (not built yet: STATUS.md, 2026-11-26). Which models, and whether the
-signed statement says the cycles, is the operator's.
+clause (§6, built 2026-11-26). Which models: bge-m3 first, then the five
+llama.cpp encoders, with the engine's byte check on (operator, 2026-11-26:
+"1. A then B 2. On but monitor if it creates overhead"). Whether the signed
+statement says the cycles was not answered: it does not (§6).
 
 1. `louise node resident show`: `"parks": true` for a model loaded from a
    file with `park: true` (the server's own first row).
@@ -147,3 +149,73 @@ signed statement says the cycles, is the operator's.
    against today's.
 6. The host under its floor with a model parked: "card: X was parked … and
    is stopped", one a beat.
+
+## 6. The gate's park cycles (`embedder.park_cycles`, built 2026-11-26)
+
+A return is an upload of the weights again — a path no gate had seen. So a
+model LocalAI says parks (`/system` `"parks": true`, read fresh once the
+gate's 512 texts have loaded it) is parked and asked a fingerprint text, 64
+times (four rounds of the sixteen, a new order each), and each answer is held
+to the same text's first. It runs right after the two single-text passes and
+BEFORE the fresh loads and the 300 contexts: a pass refused, deferred or
+failed there has spent seconds, not the gate's minutes.
+
+**One cycle, counted, never assumed** (`run_check.Parker`):
+
+| step | asked of | must read |
+|---|---|---|
+| the engine's counts | `GET /backend/monitor?model=` `memory.breakdown` | (parks, returns, 0) |
+| 1.2 s without a request | — | LocalAI refuses a park within 1 s of one |
+| the park | `POST /backend/park` | 200 |
+| the counts | as above | (parks + 1, returns, 1) |
+| one text, alone — the request IS the return | the node's own client, not warmed first (`model_load.returns_on_request`) | the same bytes as its first answer |
+| the counts | as above | (parks + 1, returns + 1, 0) |
+
+| what the gate meets | verdict |
+|---|---|
+| a park refused 409 (the model works), counts something else moved, a model found parked, a model the runner no longer holds | not a cycle: asked again, 10 times 3 s apart, then DEFERRED |
+| counts that STARTED AGAIN between the park and the answer | the return failed and a load answered in its place (200, the same vectors, the same run id): the run FAILS, and the fresh loads and contexts are not spent on it |
+| the same, where Louise itself stopped the parked model meanwhile (app/own_unloads.py: a question took the card) | not a cycle: asked again |
+| 412 `cannot_park` | REFUSED: the file says `park: true` and the engine was not started with `GGML_SYCL_PARKABLE=1` |
+| 412 `host_memory_floor`, `parking_off` | deferred |
+| no counts to read | REFUSED after three reads |
+| an answer that differs | counted in `load_variation`: fails an `exact` collection's run, admitted within 0.99999 for a `near` one |
+
+**The floor.** LocalAI parks nothing while `park_host_floor_bytes` is 0, and
+the keeper that sets it beats in the worker; a gate from the command line may
+run with the worker stopped. The gate sets the same one value itself
+(`[models] page_floor_gib`, idempotent). A node whose floor is 0 parks
+nothing: a model that asks to park is refused there, with the two ways out.
+
+**The statement is unchanged** (no wire change; the operator's third choice,
+not answered). A failed pass makes `load_variation` 0, an inexact one lowers
+it, as the fresh contexts do. What the statement cannot say — that the cycles
+were asked — the node records beside the batching
+(`gate-parks.json` beside `gate-batching.json`: cycles, closest, the median
+seconds of a park and of a return), and `runs.check` holds a model that parks NOW to it: a
+run gated while its model did not park (its file gained `park: true`, or the
+runner its patch, under the same run id) is gated again before anything is
+written from it. Putting `park_cycles` in the signed statement instead is
+09 §9.12 version 7 — a wire change, one more gate of every parking run, and
+the only way a PEER can see the cycles were counted.
+
+**Not held to the wrapper's `created`** (STATUS.md said it would be): a model
+that parks is on context on demand, so every request creates a context —
+`created` counts requests, not returns, and is read only for such a run after
+a settling probe. The engine's parks and returns are the count.
+
+**What the byte check costs** (`GGML_SYCL_PARK_VERIFY=1`: the engine reads
+the card's bytes back at every return) is read in three places: the gate's
+report (`hold embedder check`: "parking … a park N s, a return N s at the
+median"), the evictor's line ("card: parked X (… MiB to host memory in N s)")
+and the load record ("parked: X came back from host memory in N s") — against
+0.14–0.23 s and 0.23–0.39 s on the card's copies without the check (§4).
+
+**Open, asked of Tensor**: whether `/backend/park` parks a model LocalAI
+holds PINNED. The gate pins its model (the twin, or the shared load) for its
+whole length, so a server that refuses a pinned model would defer every such
+gate with the server's own word in the reason.
+
+The gate twin (`<model>--gate`) is the model's own file under another name:
+`park: true` and its `env` go with it, it states the same run, and its cycles
+are that run's.

@@ -199,6 +199,19 @@ NEAR_VARIATION = 0.99999
 #: caught by n clean ones with probability 1 − (1 − p)ⁿ: ten catch p = 5 %
 #: four times in ten; 299 catch p = 1 % ninety-five times in a hundred.
 FRESH_CONTEXTS = 300
+#: A MODEL THAT PARKS (operator, 2026-11-25: "Do parking."; docs/notes/
+#: parking-keeper.md, parking-step-2.md §3.3 and §10): its weights leave the
+#: card for host memory and come back at the next request — an upload of the
+#: weights again, which the gate has never seen. So the gate parks it and
+#: asks a fingerprint text, this many times (`park_cycles`): four rounds of
+#: the sixteen. A fault at rate p a return is caught by n clean ones with
+#: probability 1 − (1 − p)ⁿ: 64 catch p = 5 % ninety-six times in a hundred,
+#: p = 1 % forty-seven. Fewer than the 300 fresh contexts because every
+#: production return is checked again where the model's file asks the engine
+#: to read the card's bytes back (`GGML_SYCL_PARK_VERIFY=1`, the operator's
+#: choice, 2026-11-26: "On but monitor if it creates overhead"), and each
+#: cycle costs a second of idleness the server asks before a park.
+PARK_CYCLES = 64
 
 
 @dataclass(frozen=True)
@@ -251,6 +264,24 @@ class Run:
     # be more exact there than the gate found it).
     contexts: int = 0
     context_variation: float = 1.0
+    # A MODEL THAT PARKS (`PARK_CYCLES`): how many park-and-return cycles the
+    # fingerprint texts were asked after, EACH COUNTED BY THE ENGINE, and the
+    # closest an answer after a return came to the same text's first (1.0:
+    # the same bytes). `park_failed`: why the pass failed outright — a return
+    # that did not bring the weights back. 0 cycles for a model that does not
+    # park. As for the contexts, `load_variation` is never above
+    # `park_variation`, and a failed pass makes it 0: the statement has no
+    # field of its own for this (09 §9.12; whether it gets one is the
+    # operator's, not decided), and a run admitted by its statement must not
+    # be more exact there than the gate found it.
+    park_cycles: int = 0
+    park_variation: float = 1.0
+    park_failed: str = ""
+    #: the median seconds of a park and of the request that brought the
+    #: weights back, as the gate met them (None: no cycle) — what the byte
+    #: check at each return costs is read here against a run without it
+    park_s: float | None = None
+    return_s: float | None = None
     #: the CPU review line this run is held to (`cpu_review_line`); None for
     #: a quantization level not yet measured
     cpu_line: float | None = CPU_REVIEW_LINE
@@ -288,6 +319,8 @@ class Run:
         if self.cpu_worst is not None and (self.cpu_line is None
                                            or self.cpu_worst < self.cpu_line):
             return False
+        if self.park_failed:
+            return False
         if self.exactness == EXACT:
             return self.reproducible is not False and self.load_variation >= 1.0
         return (self.loads >= NEAR_LOADS and self.load_variation >= NEAR_VARIATION
@@ -296,8 +329,15 @@ class Run:
     def why(self) -> str:
         if self.ok:
             return (f"{self.passed}/{len(self.cosines)} reached {self.tolerance}, "
-                    f"median {self.median:.4f}")
+                    f"median {self.median:.4f}"
+                    + ("" if not self.park_cycles else
+                       f"; {self.park_cycles} park cycles, each counted by the engine, the same bytes "
+                       f"after every return" + ("" if self.park_s is None or self.return_s is None else
+                                                f" (a park {self.park_s:.2f} s, a return "
+                                                f"{self.return_s:.2f} s at the median)")))
         parts = []
+        if self.park_failed:
+            parts.append(self.park_failed)
         if self.passed < self.min_pass:
             parts.append(f"only {self.passed} of {len(self.cosines)} reached "
                          f"{self.tolerance} (needs {self.min_pass})")
@@ -312,8 +352,14 @@ class Run:
                 parts.append(f"near-exact: needs a stored CPU reference reached at "
                              f"{CPU_NEAR_LINE} ({'none is stored' if self.cpu_worst is None else f'worst {self.cpu_worst:.6f}'}; "
                              f"`louise hold embedder cpu-reference`)")
-        elif self.load_variation < 1.0 and self.reproducible is not False:
-            if self.contexts and self.context_variation <= self.load_variation:
+        elif self.load_variation < 1.0 and self.reproducible is not False and not self.park_failed:
+            if self.park_cycles and self.park_variation <= self.load_variation:
+                parts.append(f"the run did not give back its own bytes after its weights came back "
+                             f"from host memory: over {self.park_cycles} park cycles the closest an "
+                             f"answer came to the same text's first is {self.park_variation:.7f} "
+                             f"(the model's file says `park: true`, docs/notes/parking-keeper.md), "
+                             f"and its collection asks `exactness = \"exact\"`: bytes or nothing")
+            elif self.contexts and self.context_variation <= self.load_variation:
                 parts.append(f"the run did not give back its own bytes on a context created "
                              f"for the request: over {self.contexts} fresh contexts the closest "
                              f"an answer came to the same text's first is "
@@ -537,6 +583,163 @@ def fresh_contexts(texts: Sequence, embed_fresh, first: Sequence[Sequence[float]
     return made, closest
 
 
+#: `parker.park()`'s answers besides a refusal's own word
+PARKED, PARK_BUSY = "parked", "busy"
+#: a refusal's word (LocalAI's error `type`) that REFUSES the run, and those
+#: that defer the pass at once; any other answer is asked again, bounded
+PARK_NEVER = "cannot_park"
+PARK_LATER = {
+    "host_memory_floor": "the host has no room above its floor to hold this model's weights now",
+    "parking_off": "parking is off at the runner (its host floor reads 0) though the gate set it",
+}
+
+
+def park_cycles(texts: Sequence, ask, first: Sequence[Sequence[float]], seed: bytes, parker,
+                cycles: int = PARK_CYCLES) -> tuple[int, float, str, float | None, float | None]:
+    """(cycles counted, the closest an answer after a return came to the same
+    text's `first` answer — 1.0 when every one is the same byte string, why
+    the pass FAILED or "", the median seconds of a park, of a return).
+    `ask(text)` embeds one text alone, and is itself the request that brings
+    the weights back. (0, 1.0, "", None, None) for a model that does not park
+    (`parker.parks()` False, asked now that the model is loaded): the gate
+    asks nothing.
+
+    ONE CYCLE, COUNTED, NEVER ASSUMED (invariant 12; Tensor's steps,
+    parking-step-2.md §10, each shown on the card and behind the wrapper,
+    2026-11-26). The engine's own counts are read (`parker.counts()`: parks,
+    returns, parked — of weights that left and that came back, never of
+    attempts); the model is left a second without a request and parked; the
+    counts must read one park more, and parked; the next text asked IS the
+    return; the counts must read one return more, and not parked. Then the
+    answer is held to the same text's first, as a fresh context's is.
+
+      - NOT A CYCLE, and it proves nothing either way: a park refused because
+        the model works (`PARK_BUSY`), counts that moved by more or less than
+        the cycle's own, a model the runner no longer holds, a restart that
+        was not a return's — the keeper, a question, another collection
+        parked, woke or stopped the model meanwhile. Asked again
+        (`parker.retry`), and past its bound the pass is DEFERRED, never
+        passed.
+      - A RETURN THE CARD REFUSES for want of room is the asker's to wait
+        out: `ask` raises its own deferral.
+      - COUNTS THAT STARTED AGAIN BETWEEN THE PARK AND THE ANSWER are a
+        return that FAILED and a load that answered in its place: HTTP 200,
+        the same vectors, a new process under the SAME run id with valid
+        receipts — nothing a caller sees says it was not a cycle (Tensor's
+        junction run; its own tool took it for one). That FAILS the run: its
+        weights did not come back. Unless Louise itself stopped the parked
+        model in that moment (`parker.stopped_by_node()`: a question took
+        the card, a load's room) — its own doing, noted where every process
+        reads it, and not a cycle.
+      - A PARK THE RUNNER WILL NEVER MAKE (`cannot_park`: the file says
+        `park: true` and the engine was not started so that its weights can
+        leave the card) REFUSES the run with that word; a host with no room
+        above its floor at this moment defers it.
+      - NO COUNTS TO READ: the clause cannot be checked, and a model that
+        parks is not admitted on cycles nobody counted."""
+    if not parker.parks():
+        return 0, 1.0, "", None, None
+    import random
+    import statistics as stats
+    import time
+    import numpy as np
+    if not texts or len(first) != len(texts):
+        raise GateError(f"the park-cycles pass has {len(texts)} text(s) and {len(first)} first answer(s) "
+                        f"to hold them to")
+    unread = 0
+    while parker.counts() is None:
+        unread += 1
+        if unread > 2 or not parker.retry(unread):
+            raise GateError("this model parks (its file says `park: true`), and the gate can read none of "
+                            "the engine's counts of its parks and returns (LocalAI's /backend/monitor, asked "
+                            f"{unread} time(s)): a park cycle nobody counted is not a cycle, and the run is "
+                            "not admitted on one")
+    parker.prepare()
+    want = [np.asarray(v, dtype="<f4").tobytes() for v in first]
+    rng = random.Random(seed + b"/parks")
+    done, closest = 0, 1.0
+    parks_s: list[float] = []
+    returns_s: list[float] = []
+    order: list[int] = []
+    while done < cycles:
+        if not order:
+            order = list(range(len(texts)))
+            rng.shuffle(order)
+        k = order.pop()
+        tries = 0
+        while True:
+            not_one = ""                     # why this was not a cycle
+            v, park_s, return_s = None, 0.0, 0.0
+            before = parker.counts()
+            if before is None:
+                not_one = "the engine's counts could not be read (the runner did not hold the model)"
+            elif before[2]:
+                ask(texts[k])                # found parked by someone else: brought back, not counted
+                not_one = "the model was found parked before the cycle began"
+            else:
+                parker.idle()
+                t0 = time.monotonic()
+                how = parker.park()
+                park_s = time.monotonic() - t0
+                if how == PARK_NEVER:
+                    raise GateError(
+                        "the park-cycles pass cannot run: the model's file says `park: true` and the runner "
+                        "will not park it (cannot_park) — its engine was not started so that the weights "
+                        "can leave the card: `GGML_SYCL_PARKABLE=1` belongs in the file's `env`")
+                if how in PARK_LATER:
+                    raise GateDeferred(f"the park-cycles pass, cycle {done + 1} of {cycles}: "
+                                       f"{PARK_LATER[how]} — nothing is certified, and it is tried again")
+                if how != PARKED:
+                    not_one = ("the model was busy and was not parked (another request reached it)"
+                               if how == PARK_BUSY else f"the runner did not park the model ({how})")
+                else:
+                    due = (before[0] + 1, before[1], 1)
+                    mid = parker.counts()
+                    if mid != due:
+                        ask(texts[k])        # whatever state it is in, back on the card for the next try
+                        not_one = (f"after the park the engine counts {mid} where {due} was due (parks, "
+                                   f"returns, parked): something else parked, woke or restarted the model")
+                    else:
+                        t0 = time.monotonic()
+                        v = ask(texts[k])
+                        return_s = time.monotonic() - t0
+                        due = (mid[0], mid[1] + 1, 0)
+                        after = parker.counts()
+                        if after is not None and (after[0] < mid[0] or after[1] < mid[1]):
+                            if not parker.stopped_by_node():
+                                return done, 0.0, _park_restarted(done + 1, mid, after), None, None
+                            not_one = ("Louise itself stopped the parked model before it was asked (a "
+                                       "question took the card, or a load its room)")
+                        elif after != due:
+                            not_one = (f"after the return the engine counts {after} where {due} was due: "
+                                       f"something else parked or woke the model")
+            if not not_one:
+                break
+            tries += 1
+            if not parker.retry(tries):
+                raise GateDeferred(
+                    f"the park-cycles pass, cycle {done + 1} of {cycles}: {not_one} ({tries} time(s)) — "
+                    f"not a cycle, and nothing is certified on it; tried again when nothing else uses "
+                    f"the model")
+        arr = np.asarray(v, dtype="<f4")
+        done += 1
+        if not np.all(np.isfinite(arr)):
+            return done, 0.0, "", None, None
+        if arr.tobytes() != want[k]:
+            closest = min(closest, min(cosine(v, first[k]), 1.0 - 1e-12))
+        parks_s.append(park_s)
+        returns_s.append(return_s)
+    return done, closest, "", stats.median(parks_s), stats.median(returns_s)
+
+
+def _park_restarted(cycle: int, mid, after) -> str:
+    return (f"park cycle {cycle}: the answer came, and the engine's counts STARTED AGAIN between the park "
+            f"and the answer ({mid} then {after}: parks, returns, parked) — the weights did not come back "
+            f"from host memory and a load answered in their place (the same run id, valid receipts: "
+            f"nothing else says so). A run that cannot bring its weights back is not admitted to park; "
+            f"without `park: true` in its file it is the run it was")
+
+
 def _round_counts(before, after, asked: int) -> tuple[int | None, int | None]:
     """`(calls, contexts)` a round made, between two readings of the engine's
     count (`fresh_contexts`): an int is its creations — the calls are then
@@ -584,8 +787,13 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
              cpu_reference: tuple[str, Sequence[Sequence[float]]] | None = None,
              reload: Callable[[], None] | None = None,
              exactness: str = EXACT,
-             fresh=None) -> Run:
+             fresh=None, park=None) -> Run:
     """One pass: embed all 512, draw the quorum, compare.
+
+    `park`: the model's parker (app/run_check.py `Parker`), asked whether
+    the model parks once it is loaded; where it does, the sixteen are asked
+    again after PARK_CYCLES park-and-return cycles, each counted by the
+    engine (`park_cycles`).
 
     `cpu_reference`: (the CPU twin's run, its 512 vectors) — the stored CPU
     reference (docs/notes/near-exact-runs.md §2): every answer's cosine to it
@@ -675,6 +883,7 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
     variation = 1.0
     loads = 1
     contexts, across_contexts = 0, 1.0
+    parks, across_parks, park_failed, park_s, return_s = 0, 1.0, "", None, None
     if embed_one is not None:
         from . import fingerprint
         sixteen = [texts[i] for i in fingerprint.indices(texts)]
@@ -688,6 +897,14 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
         # statement, which is what a write is admitted by (`runs.passing`)
         variation = 1.0 if reproducible else min(
             (cosine(a, b) for a, b in zip(single, again)), default=0.0)
+        if park is not None:
+            # A MODEL THAT PARKS, and before the passes that cost minutes: a
+            # pass that is refused or deferred here has spent the set and the
+            # sixteen, not the fresh loads and the 300 contexts behind them
+            parks, across_parks, park_failed, park_s, return_s = park_cycles(
+                sixteen, getattr(park, "ask", None) or (lambda t: embed_one([t])[0]),
+                list(single), seed or b"", park)
+            variation = min(variation, across_parks)
         if contribute is not None:
             # THE LONG TEXTS TOO (2026-11-02, München's gut-diag): gutenberg's
             # batch 16 answered the five longest texts of the set wrong (cosine
@@ -714,6 +931,10 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
                 invariant = apart >= NEAR_VARIATION
                 if invariant:
                     variation = min(variation, apart)
+        if park_failed:
+            # its weights did not come back: the run has failed, and the
+            # minutes of fresh loads and fresh contexts are not spent on it
+            reload = fresh = None
         if reload is not None:
             loads, across = fresh_loads(sixteen + sweep(texts, SWEEP, codex.space.ctx),
                                         embed_one, reload, seed or b"")
@@ -745,6 +966,8 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
         reproducible=reproducible, cpu_run=cpu_run, cpu_cosines=cpu_cos,
         load_variation=variation, loads=loads,
         contexts=contexts, context_variation=across_contexts,
+        park_cycles=parks, park_variation=across_parks, park_failed=park_failed,
+        park_s=park_s, return_s=return_s,
         exactness=NEAR if (exactness == NEAR and variation < 1.0) else EXACT,
         cpu_line=cpu_review_line(stated.engine if stated is not None else None),
         quant=quant_level(stated.engine if stated is not None else None),

@@ -20,6 +20,24 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **THE GATE'S PARK CYCLES ARE BUILT (operator, 2026-11-26: "1. A then B 2. On but monitor if it creates
+  overhead" — bge-m3 first, then the five llama.cpp encoders; the engine's byte check on).** A model
+  LocalAI says parks is parked and asked a fingerprint text 64 times, each cycle held to the ENGINE'S
+  counts of its parks and returns (`GET /backend/monitor`), each answer to the same text's first bytes
+  (`embedder.park_cycles`, `run_check.Parker`; docs/notes/parking-keeper.md §6, 03 §3.3 amended). Counts
+  that start again between the park and the answer — a return that failed, answered 200 by a load under
+  the same run id — FAIL the run; a cycle something else touched is asked again and never counted; cycles
+  that cannot be counted refuse it. THE STATEMENT IS UNCHANGED (the operator's third choice was not
+  answered: no wire change is taken without his word): the cycles are recorded on the node
+  (`gate-parks.json`) and a run gated while its model did not park is gated again before a write. The
+  request itself brings the weights back for the gate (`model_load.returns_on_request`: no warm whose
+  vector nobody reads). What the byte check costs is said by the gate's report, the evictor's line ("…
+  to host memory in N s") and the load record. NOT held to the wrapper's `created`, against what the
+  entry below says: a parking model creates a context for every request, so it counts requests. NEXT: the
+  staged `vega-bge-m3` file (`park: true`, `GGML_SYCL_PARKABLE=1`, `GGML_SYCL_PARK_VERIFY=1`) in a PR of
+  its own, applied by München, one gate (98 s + ~2 min of cycles), then §5's rows. OPEN, asked of Tensor:
+  whether `/backend/park` parks a model LocalAI holds pinned — the gate pins its model throughout.
+
 - **PARKING BEHIND THE LIVE WRAPPER, ON THE CARD, ON A COPY (München, 01:22–01:25Z, the node embedding
   beside it): every junction has now run together — the patched server, main's wrapper (47bf02ea…), the
   park engine and the B70.** One load stated, "the load in force asked again … run … stands" at each

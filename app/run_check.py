@@ -306,6 +306,119 @@ def fresh_contexts(recipe, *, query: bool = False, stated=None, probe_item=PROBE
     return out
 
 
+def parks_now(recipe, query: bool = False) -> bool:
+    """Does this peer's runner say the side's model PARKS — from its last
+    `/system` answer, no request (`model_load.parks`)? What `runs.check`
+    holds a run's park cycles to. False where nothing is known: a model that
+    is not loaded parks nothing, and is read again when it is."""
+    from . import model_load
+    url, model = _who(recipe, query)
+    try:
+        return bool(url and model) and model in model_load.parks(model_load.server_of(url))
+    except Exception:   # noqa: BLE001 — unread: nothing more is asked of the run
+        return False
+
+
+#: LocalAI refuses a park within a second of the model's last request (HTTP
+#: 409 `model_busy`, parking-step-2.md §3.1): the gate leaves the model this
+#: long before each park
+PARK_IDLE_S = 1.2
+
+
+class Parker:
+    """The model's park cycles as the gate asks them (`embedder.park_cycles`):
+    whether it parks, the engine's own counts, the park itself.
+
+    WHETHER IT PARKS is asked of LocalAI's `/system`, fresh, once the gate's
+    texts have loaded the model (`"parks": true`: its file says `park: true`
+    AND the server carries the patch) — never of this node's files, which may
+    not be the files the runner loaded. A server that says nothing of it —
+    another runner, LocalAI before the patch — parks nothing, and the gate
+    asks nothing.
+
+    THE FLOOR (`prepare`): LocalAI parks nothing while its
+    `park_host_floor_bytes` is 0, and the keeper that holds it to the node's
+    floor beats in the worker — a gate from the command line may run with the
+    worker stopped (RULE 1). So the gate sets the same one value itself
+    (`localai_reclaimer.set_park_floor`, idempotent), from `[models]
+    page_floor_gib`; a node whose floor is 0 parks nothing, and a model that
+    asks to park is not admitted there on cycles that cannot be asked."""
+
+    def __init__(self, recipe, one: runs_mod.Answers | None = None, *, query: bool = False,
+                 stop: Callable[[], bool] | None = None, name: str = "",
+                 sleep: Callable[[float], None] = time.sleep):
+        self.url, self.model = _who(recipe, query)
+        self.stop, self.name, self.sleep = stop, name, sleep
+        self.retry = round_again(stop, name, sleep=sleep)
+        self.one = one
+        #: the runs that answered the pass's texts (`runs.validate` holds them
+        #: to the stated one); None until a text was asked
+        self.runs: set | None = None
+        self._parked_at = 0.0
+
+    def ask(self, text) -> list[float]:
+        """One text alone, through the node's own client, and NOT warmed
+        first: the request itself brings a parked model back
+        (`model_load.returns_on_request`), so the answer held to the bytes is
+        the first one computed on the weights that came back."""
+        from . import model_load
+        with model_load.returns_on_request():
+            v = self.one([text])[0]
+        self.runs = (self.runs or set()) | set(self.one.runs)
+        return v
+
+    def stopped_by_node(self) -> bool:
+        """Did Louise itself stop or park the model since the gate's last
+        park (app/own_unloads.py, every process's record)? The gate's own
+        park is noted before `park` returns, so only a later note counts."""
+        from . import model_load, own_unloads
+        key = (model_load.server_of(self.url), self.model)
+        return own_unloads.since(key, max(time.time() - self._parked_at, 0.0)) is not None
+
+    def parks(self) -> bool:
+        from . import model_load
+        if not self.url or not self.model:
+            return False
+        server = model_load.server_of(self.url)
+        if model_load.loaded_models(server, 0.0) is None:
+            return False
+        return self.model in model_load.parks(server)
+
+    def counts(self) -> tuple[int, int, int] | None:
+        from . import model_load
+        return model_load.park_counts(self.url, self.model)
+
+    def prepare(self) -> None:
+        from . import localai_reclaimer, model_evict, model_load
+        floor = int(model_evict.rule()[1])
+        if floor <= 0:
+            raise emb.GateError(
+                f"{self.name}: {self.model}'s file says `park: true` and this node keeps no host floor "
+                f"([models] page_floor_gib is 0): nothing parks here, so its park cycles cannot be asked, "
+                f"and a run that asks to park is not admitted without them. Set the floor, or take "
+                f"`park: true` out of the model's file")
+        try:
+            localai_reclaimer.set_park_floor(model_load.server_of(self.url), floor)
+        except localai_reclaimer.NotTaken as e:
+            raise emb.GateDeferred(
+                f"{self.name}: LocalAI's park floor could not be set for the gate's park cycles "
+                f"({e}); nothing is certified, and it is tried again") from None
+
+    def idle(self) -> None:
+        _stopping(self.stop, self.name)
+        self.sleep(PARK_IDLE_S)
+
+    def park(self) -> str:
+        from . import model_load
+        how, _moved, kind = model_load.park_asked(self.url, self.model)
+        self._parked_at = time.time()
+        if how == model_load.PARKED:
+            return emb.PARKED
+        if how == model_load.PARK_BUSY:
+            return emb.PARK_BUSY
+        return kind or how
+
+
 #: a round of the fresh-context pass that another request touched is asked
 #: again this many times, this far apart, before the pass is deferred: the
 #: other collections on the model stand aside while its gate runs
@@ -789,11 +902,13 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
             embed=answers(recipe, **kw),
             embed_one=answers(recipe, how="one", **kw),
             contribute=answers(recipe, how="contribute", **kw),
-            stated=stated, key=key, now=now or _now(), items=items, on_run=on_run,
+            stated=stated, key=key, now=now or _now(), items=items,
+            on_run=_said(name, role, stated.run_id, on_run),
             cpu_reference=None if cpu is None else (cpu.run_id, cpu.vectors),
             reload=_reloader(recipe, query=query, stop=stop, name=name),
             fresh=fresh_contexts(recipe, stated=stated,
                                  probe_item=probe_for(codex, role), **kw),
+            park=Parker(recipe, answers(recipe, how="one", **kw), query=query, stop=stop, name=name),
             # the Codex's requirement wins over the node's setting: a node may
             # be stricter than its collection, never looser (09 §9.3)
             exactness=(emb.EXACT if runs_mod.requires_exact(codex)
@@ -809,6 +924,29 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
         raise emb.GateDeferred(
             f"{name}: the encoder was unreachable or failed during the gate: "
             f"{type(e).__name__}: {e}") from e
+
+
+def _said(name: str, role: str, run_id: str, then: Callable[[Any], None] | None):
+    """`runs.validate`'s `on_run`: THE GATE'S OWN WORDS IN THE LOG, where the
+    statement has no key for them — why a run failed (its body carries the
+    sampled cosines, which may all be good: a return that failed, answers
+    that differ after one) and, for a model that parks, the cycles the engine
+    counted with what a park and a return cost (operator, 2026-11-26: the
+    byte check is on, "monitor if it creates overhead")."""
+    def seen(run) -> None:
+        try:
+            if not run.ok:
+                log.warning("%s: the gate FAILED %s run %s…: %s", name, role, run_id[:23], run.why())
+            elif getattr(run, "park_cycles", 0):
+                log.info("%s: %s run %s…: %d park cycles, each counted by the engine, the same bytes after "
+                         "every return%s", name, role, run_id[:23], run.park_cycles,
+                         "" if run.park_s is None or run.return_s is None else
+                         f" — a park {run.park_s:.2f} s, a return {run.return_s:.2f} s at the median")
+        except Exception:   # noqa: BLE001 — a log line never ends a gate
+            pass
+        if then is not None:
+            then(run)
+    return seen
 
 
 def signer(key=None) -> str | None:
@@ -1055,7 +1193,8 @@ def guard(root: Path, name: str, codex: Codex, recipe, answered: set, *,
     who = signer(key)
     try:
         runs_mod.check(root, name, codex, answered, signer=who, role=role,
-                       batched=together, contributes=contributing(recipe) if together else None)
+                       batched=together, contributes=contributing(recipe) if together else None,
+                       parks=parks_now(recipe, role == "query"))
         _foreign(root, name, role, log)
         stale = [r for r in sorted(r for r in answered if r)
                  if not recheck(root, name, codex, recipe, r, role=role, key=key,
@@ -1071,7 +1210,8 @@ def guard(root: Path, name: str, codex: Codex, recipe, answered: set, *,
     body = validate(root, name, codex, recipe, role=role, key=key, stop=stop)
     if log is not None:
         log(f"{name}: {_told(body)}")
-    runs_mod.check(root, name, codex, answered, signer=who, role=role, batched=together, contributes=contributing(recipe) if together else None)
+    runs_mod.check(root, name, codex, answered, signer=who, role=role, batched=together, contributes=contributing(recipe) if together else None,
+                       parks=parks_now(recipe, role == "query"))
 
 
 def checking(root: Path, name: str, codex: Codex, recipe, *, role: str = "document",
@@ -1448,7 +1588,8 @@ def check_write(collection, recipe, answered: set) -> None:
                 f"{collection.name}: a context of the run that answers did not reproduce its "
                 f"canary; nothing is written until the run has been gated again", run_id)
         runs_mod.check(_root(), collection.name, codex, answered, signer=signer(),
-                       role="document", batched=batched(recipe), contributes=contributing(recipe))
+                       role="document", batched=batched(recipe), contributes=contributing(recipe),
+                           parks=parks_now(recipe))
         # A KEPT STATEMENT NOT YET RE-CHECKED IN THIS PROCESS is not relied
         # on: a deferral, and the stage's next `embed_allowed` re-checks it
         # this collection's own statements first — one cached listing; the
@@ -1547,12 +1688,14 @@ def _look(collection, stop: Callable[[], bool] | None,
             _send_back(collection, run_id, "document", log)
         try:
             runs_mod.check(_root(), name, codex, {run_id}, signer=who,
-                           batched=batched(recipe), contributes=contributing(recipe))
+                           batched=batched(recipe), contributes=contributing(recipe),
+                           parks=parks_now(recipe))
             _foreign(_root(), name, "document", log)
             if not recheck(_root(), name, codex, recipe, run_id, stop=stop, log=log):
                 log(_told(validate(_root(), name, codex, recipe, stop=stop)))
                 runs_mod.check(_root(), name, codex, {run_id}, signer=who,
-                               batched=batched(recipe), contributes=contributing(recipe))
+                               batched=batched(recipe), contributes=contributing(recipe),
+                           parks=parks_now(recipe))
         except runs_mod.RunUnvalidated as e:
             if e.failed:
                 if suspect:
@@ -1566,7 +1709,8 @@ def _look(collection, stop: Callable[[], bool] | None,
                 _gated_again(collection)        # pass or fail, its statement is kept
             log(told)
             runs_mod.check(_root(), name, codex, {run_id}, signer=who,
-                           batched=batched(recipe), contributes=contributing(recipe))
+                           batched=batched(recipe), contributes=contributing(recipe),
+                           parks=parks_now(recipe))
         return True, (f"run {run_id[:23]}… is validated for this space"
                       + _canary_note(collection, run_id)), run_id
     except (runs_mod.RunRefused, runs_mod.RunUnvalidated, emb.GateError) as e:

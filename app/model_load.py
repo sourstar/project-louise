@@ -37,6 +37,7 @@ that writes it to the event log — never by the thread doing the work
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import math
 import queue
@@ -45,7 +46,8 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from contextlib import contextmanager
+from typing import Callable, Iterator
 from urllib.parse import urlsplit
 
 import httpx
@@ -726,8 +728,19 @@ def park(url: str, model: str | None) -> tuple[str, int]:
 
     Never raises: a runner that cannot be reached is PARK_STOP, and `unload`
     then meets the same runner."""
+    how, moved, _kind = park_asked(url, model)
+    return how, moved
+
+
+def park_asked(url: str, model: str | None) -> tuple[str, int, str]:
+    """`park`, with the runner's own word for a refusal as a third value: the
+    error's `type` (`model_busy`, `cannot_park`, `parking_off`,
+    `host_memory_floor`, `model_not_loaded`, `model_stopped`), "" for a park
+    that was made, "unreachable" where the runner did not answer, else
+    "HTTP <status>". For a caller that must say WHY a model was not parked
+    (the gate's park cycles, app/hold/embedder.py)."""
     if not url or not model:
-        return PARK_STOP, 0
+        return PARK_STOP, 0, "unreachable"
     server = server_of(url)
     try:
         r = httpc.post(f"{server}/backend/park", json={"model": model}, timeout=PARK_TIMEOUT_S)
@@ -737,24 +750,63 @@ def park(url: str, model: str | None) -> tuple[str, int]:
         except Exception:   # noqa: BLE001 — an answer that is not JSON: only its status speaks
             body = None
     except Exception:   # noqa: BLE001
-        return PARK_STOP, 0
+        return PARK_STOP, 0, "unreachable"
     body = body if isinstance(body, dict) else {}
     kind = (body.get("error") or {}).get("type") if isinstance(body.get("error"), dict) else None
+    said = kind if isinstance(kind, str) and kind else f"HTTP {status}"
     with _lock:
         _systems.pop(server, None)           # what it holds may have changed
     if status == 200:
         _note_own(server, model)
         got = body.get("parked") if isinstance(body.get("parked"), dict) else {}
         moved = got.get("size_vram_needed")
-        return PARKED, moved if isinstance(moved, int) and not isinstance(moved, bool) and moved > 0 else 0
+        return PARKED, (moved if isinstance(moved, int) and not isinstance(moved, bool) and moved > 0 else 0), ""
     if status == 409 and kind == "model_busy":
-        return PARK_BUSY, 0
+        return PARK_BUSY, 0, said
     if status == 500 and kind == "model_stopped":
         _note_own(server, model)             # our park broke its backend and LocalAI stopped it: Louise's doing
-        return PARK_GONE, 0
+        return PARK_GONE, 0, said
     if status == 404 and kind == "model_not_loaded":
-        return PARK_GONE, 0                  # gone before the park: not ours
-    return PARK_STOP, 0
+        return PARK_GONE, 0, said            # gone before the park: not ours
+    return PARK_STOP, 0, said
+
+
+#: the engine's own counts are read in a moment, or not at all
+COUNTS_TIMEOUT_S = 10.0
+
+
+def park_counts(url: str, model: str | None) -> tuple[int, int, int] | None:
+    """THE ENGINE'S OWN COUNT OF ITS PARKS AND RETURNS, since its load:
+    (parks, unparks, parked) from `GET <server>/backend/monitor?model=…`
+    (`memory.breakdown`; the park engine's `Status`, served by LocalAI) — "of
+    weights that LEFT and that came BACK, never of attempts" (the engine's
+    patch). A fresh process reads 0, 0, 0: counts that go DOWN are a new
+    process, and that is how a return that failed and was answered by a load
+    is told from a cycle — the answer is 200, the vectors the same, the run id
+    the same (Tensor, parking-step-2.md §10–§11). A read is not a request: it
+    brings nothing back and does not restart the idle second. NEVER built on
+    `memory.total`, the process's virtual size (38.85 GB loaded and 4.73
+    parked for a 0.6 GB model on the node). None where the runner gives no
+    such counts: a model that cannot park, a server before the patch, a model
+    not loaded, a runner that does not answer."""
+    if not url or not model:
+        return None
+    try:
+        r = httpc.get(f"{server_of(url)}/backend/monitor", params={"model": model}, timeout=COUNTS_TIMEOUT_S)
+        if r.status_code != 200:
+            return None
+        got = (r.json().get("memory") or {}).get("breakdown")
+    except Exception:   # noqa: BLE001 — unread
+        return None
+    if not isinstance(got, dict):
+        return None
+    out = []
+    for key in ("parks", "unparks", "parked"):
+        v = got.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        out.append(int(v))
+    return out[0], out[1], out[2]
 
 
 def _note_loaded(server: str, model: str) -> None:
@@ -793,6 +845,26 @@ def load_timeout_s(model: str) -> float:
         return float(platform_config.ModelsConfig().load_timeout_s)
 
 
+#: set inside `returns_on_request`
+_return_on_request: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "model_load_return_on_request", default=False)
+
+
+@contextmanager
+def returns_on_request() -> Iterator[None]:
+    """Inside, a PARKED model is not warmed first (`ensure_loaded`): room is
+    made for it as for its load and the caller's OWN request brings the
+    weights back. For the gate's park cycles (app/hold/embedder.py
+    `park_cycles`): the answer held to the bytes must be the first one
+    computed on the weights that came back, not the one after a warm whose
+    vector nobody read. This thread only."""
+    token = _return_on_request.set(True)
+    try:
+        yield
+    finally:
+        _return_on_request.reset(token)
+
+
 def ensure_loaded(url: str, model: str | None, warm: Callable[[float], object], *,
                   caller: str, max_age_s: float | None = None) -> float | None:
     """Warm `model` on the runner behind `url` if the runner says it is not
@@ -825,6 +897,11 @@ def ensure_loaded(url: str, model: str | None, warm: Callable[[float], object], 
     # the request that follows is refused the same way and deferred
     back = model in ids and model in parked(server)
     if model in ids and not back:
+        return None
+    if back and _return_on_request.get():
+        _make_room(server, model)
+        with _lock:
+            _systems.pop(server, None)       # the request that follows changes what it says
         return None
     key = (server, model)
     with _lock:
