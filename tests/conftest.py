@@ -173,6 +173,20 @@ def no_runner_says_what_it_holds(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_park_is_remembered_from_another_test():
+    """How long a model's last park took is kept per process
+    (`model_evict._park_took`), and is a test's own: tests/hold/
+    test_park_cycles.py's "None before the first park" failed whenever
+    tests/test_parking.py had parked the same model on the same address
+    before it in the run (found 2026-11-26, the day Tensor's ordered suite
+    found two of the same kind)."""
+    from app import model_evict
+    model_evict._park_took.clear()
+    yield
+    model_evict._park_took.clear()
+
+
+@pytest.fixture(autouse=True)
 def no_served_weights_are_remembered():
     """app/encoder_resolve.py caches, per process, the weights each model on
     a server states. A test's fake server must not answer for the next."""
