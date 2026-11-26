@@ -453,9 +453,14 @@ def _write_claim(until: float) -> None:
             return
         with closing(con):
             key = _claim_key()
-            con.execute("INSERT INTO control(key, value) VALUES(?, ?) "
+            # ...AND THE ROW OF BEFORE, in the same statement, for a reader of the
+            # code before (the GPU governor until its container is made again:
+            # deploy stage 8; the seventh read, run — it saw no claim, and held
+            # no clock for chat). Every reader of this code reads it too, as one
+            # more process's row: it says nothing a process's own row does not
+            con.execute("INSERT INTO control(key, value) VALUES(?, ?), (?, ?) "
                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                        (key, repr(until)))
+                        (key, repr(until), CLAIM_KEY, repr(until)))
             now = time.time()
             if not _pruned_at or now - _pruned_at[0] >= CLAIM_ROW_GONE_S:
                 # rows of processes gone, and the one row of before (expired

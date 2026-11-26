@@ -693,7 +693,7 @@ def test_one_processs_end_never_erases_anothers_claim(isolated_config, monkeypat
     dispatch._write_claim(0.0)                               # the worker's warm ends
     dispatch._claim_seen.clear()
     assert dispatch.interactive_active() and worker._live_call(), "the web's call is still seen"
-    assert len(dispatch.claims()) == 2
+    assert len(dispatch.claims()) == 3, "a row a process, and the row of before (the seventh read)"
 
 
 def test_a_real_interactive_call_pauses_the_switch_and_a_linger_does_not(platform, isolated_config, monkeypatch):
@@ -990,7 +990,9 @@ def test_the_claim_rows_are_one_a_process_read_with_the_row_of_before_and_pruned
     dispatch._write_claim(0.0)
     keys = {k for (k,) in con.execute("SELECT key FROM control")}
     assert "interactive_until:99@1" not in keys, "a gone process's row pruned"
-    assert {"interactive_until", "interactiveXuntil:1", "INTERACTIVE_UNTIL:1", "interactive_until:7@5"} <= keys
+    assert {"interactiveXuntil:1", "INTERACTIVE_UNTIL:1", "interactive_until:7@5"} <= keys
+    # (the row of before is written with this process's 0.0 — the code before's
+    # one-row reading — and, an hour past, pruned with it: no row is no claim)
 
     con.execute("UPDATE control SET value=? WHERE key='interactive_until'", (repr(old),))
     con.execute("INSERT INTO control(key, value) VALUES('interactive_until:98@1', ?)", (repr(old),))
@@ -1021,3 +1023,63 @@ def test_a_process_with_no_pid_namespace_has_a_row_of_its_own(monkeypatch):
     monkeypatch.setattr(dispatch.os, "stat", no_ns)
     key = dispatch._claim_key()
     assert key == f"interactive_until:{os.getpid()}@{dispatch._PROCESS_TOKEN}" and not key.endswith("@0")
+
+
+
+def test_a_cold_load_running_in_the_worker_counts_beside_the_room(monkeypatch):
+    """THE SEVENTH READ: switching to embed mode, the producers' encoders load
+    behind their batches (5–24 s) while the switch counts the 9B's room on a
+    card that does not show their bytes yet — both let over the line. A cold
+    load in this process is a call beside the room; the chat model's own is not."""
+    from app import model_load, resident
+    monkeypatch.setattr(worker, "_live_call", lambda: False)
+    monkeypatch.setattr(resident, "warming", lambda: False)
+    monkeypatch.setattr(config, "CHAT_URL", "http://gpu:8080/v1/chat/completions")
+    monkeypatch.setattr(model_load, "loading", lambda: [("http://vega:8090", "vega-bge-m3")])
+    assert worker._busy_for_room() is True
+    monkeypatch.setattr(model_load, "loading",
+                        lambda: [(model_load.server_of(config.CHAT_URL), config.CHAT_MODEL)])
+    assert worker._busy_for_room() is False
+    monkeypatch.setattr(model_load, "loading", lambda: [])
+    assert worker._busy_for_room() is False
+
+
+def test_a_switch_that_sends_no_load_leaves_no_room_marked_as_paged(platform, monkeypatch):
+    from app import model_evict, model_load
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    key = (model_load.server_of(config.CHAT_URL), "chat-35b")
+
+    def paged(server, model, *, horizon, protect=(), **kw):
+        model_evict._paged.add(key)
+        return model_evict.Outcome(True, why="paged")
+    monkeypatch.setattr(model_evict, "make_room_for", paged)
+    clock = _Clock()
+    calls = iter([False])                                  # idle at the top; a call from the re-check on
+    try:
+        got = worker._mode_models("embed", "query", question=lambda: False, sleep=clock.sleep, clock=clock,
+                                  busy=lambda: next(calls, True))
+        assert got["loaded"] is False and ("warm", "chat-35b") not in runner.calls
+        assert key not in model_evict._paged, "the room no load used is forgotten"
+    finally:
+        model_evict._paged.discard(key)
+
+
+def test_the_row_of_before_is_written_for_a_reader_of_the_code_before(isolated_config, monkeypatch):
+    """THE SEVENTH READ, run: the GPU governor runs the code before until its
+    container is made again (deploy stage 8); it reads the one row alone and
+    saw no claim. Both are written in one statement."""
+    import sqlite3
+    from app import node_state
+    from app.rage import dispatch
+    node_state.connect().close()
+    monkeypatch.setattr(dispatch, "_claim_key", lambda: "interactive_until:7@5")
+    until = time.time() + 4.0
+    dispatch._write_claim(until)
+    con = sqlite3.connect(node_state.path())
+    try:
+        rows = dict(con.execute("SELECT key, value FROM control WHERE key LIKE 'interactive%'").fetchall())
+    finally:
+        con.close()
+    assert float(rows["interactive_until"]) == until and float(rows["interactive_until:7@5"]) == until

@@ -6773,8 +6773,20 @@ def _keeper_loading() -> bool:
     return resident.warming()
 
 
+def _cold_loading() -> bool:
+    """A cold load running in this process (`model_load.loading`) — an embed
+    producer's encoder warmed behind its batch, a gate's model — other than the
+    chat model the switch loads itself: its bytes are not on the card's
+    reading yet, and a room counted beside it would let both over the line (the
+    seventh read: the switch to embed mode counted the 9B's room while the
+    producers' encoders were loading)."""
+    from . import model_load
+    chat = (model_load.server_of(config.CHAT_URL), config.CHAT_MODEL)
+    return any(key != chat for key in model_load.loading())
+
+
 def _busy_for_room() -> bool:
-    return _live_call() or _keeper_loading()
+    return _live_call() or _keeper_loading() or _cold_loading()
 
 
 def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
@@ -6936,9 +6948,13 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
         if room.unloaded or room.parked or clock() >= until:
             break
         sleep(MODE_ROOM_POLL_S)
+    gone = None if _stop.is_set() else stale()
+    if _stop.is_set() or gone is not None or waited_busy or (room is not None and room.fits is False):
+        # NO LOAD GOES: a room made by paging on an earlier ask is not left marked
+        # as paged for the first question's load (the seventh read, run)
+        model_evict.room_unused(config.CHAT_URL, new)
     if _stop.is_set():
         return out                        # the worker stops: the model loads at the first question
-    gone = stale()
     if gone is not None:
         return said(gone)
     if waited_busy:

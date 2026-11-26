@@ -380,12 +380,27 @@ def _page(server: str, *, need: int, free: int, total: int, used: int, t: float,
                   f"{why}: room is made by unloading, as before")
         return None
     _paged.update(keys)
-    _say("info", f"card: nothing unloaded for {for_what} — {need // MIB:,} MiB needed, {max(0, free) // MIB:,} "
+    # once a minute: a switch waiting for a call asks this at each poll (the
+    # mode switch's seventh read: seven lines for seven asks, nothing paged yet)
+    _say_once("paged", f"{server}\n{for_what}", "info",
+              f"card: nothing unloaded for {for_what} — {need // MIB:,} MiB needed, {max(0, free) // MIB:,} "
                  f"MiB free under the {t:.2f} line; the driver pages {short // MIB:,} MiB of idle models' memory "
                  f"to the host ({avail // MIB:,} MiB available, floor {floor // MIB:,}) "
                  + ("(query mode: nothing is unloaded while the host has memory — operator, 2026-11-25)"
                     if over_max is None else "(operator, 2026-11-24)"))
     return Outcome(True, need, free, why="paged", paged=short)
+
+
+def room_unused(server: str, model: str) -> None:
+    """A room made for `model` that no load will use (the mode switch gave
+    up): not left marked as paged, or the model's next cold load — the first
+    question's — would be told it went over the line by paging and lose paging
+    for PAGE_AGAIN_S (the mode switch's seventh read, run)."""
+    try:
+        from app import model_load
+        _paged.discard((model_load.server_of(server), model))
+    except Exception:   # noqa: BLE001
+        pass
 
 
 def load_ended(server: str, model: str, loaded: bool) -> None:

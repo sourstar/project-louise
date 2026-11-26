@@ -380,3 +380,25 @@ def test_in_query_mode_a_load_pages_beside_pinned_models_and_a_refusal_is_said_o
     model_evict.make_room(S, need=6_000 * MIB, horizon=NOW, for_what="chat-35b", exclude=("chat-35b",), page=True)
     said = [s for s in query.said if "chat-35b is" in s and "not paged" in s]
     assert len(said) == 2 and "the host's memory cannot be read" in said[1], "another reason: said"
+
+
+
+def test_a_paged_room_asked_again_is_said_once_and_one_no_load_uses_is_forgotten(paging):
+    """THE MODE SWITCH'S SEVENTH READ, run: a switch waiting for a call asks the
+    room at each poll — seven "the driver pages" lines for seven asks, nothing
+    paged yet; and a room the switch then did not use stayed marked as paged,
+    so the first question's load, failing, was told it went over the line by
+    paging and lost paging for an hour."""
+    _full(paging)
+    for _ in range(3):
+        out = model_evict.make_room(S, need=6_000 * MIB, horizon=NOW, for_what="chat-35b",
+                                    exclude=("chat-35b",), page=True)
+        assert out.why == "paged"
+    said = [s for s in paging.said if "nothing unloaded for chat-35b" in s]
+    assert len(said) == 1, said
+    key = (model_load.server_of(S), "chat-35b")
+    assert key in model_evict._paged
+    model_evict.room_unused(S, "chat-35b")
+    assert key not in model_evict._paged
+    model_evict.load_ended(S, "chat-35b", False)
+    assert key not in model_evict._no_page, "a load the room was not made for keeps paging"

@@ -537,6 +537,14 @@ def in_flight(server: str, model: str) -> bool:
         return (server_of(server), model) in _flights
 
 
+def loading() -> list[tuple[str, str]]:
+    """Every (server, model) whose load runs in THIS process now
+    (`ensure_loaded`'s flights): bytes on their way to the card that no
+    reading of it shows yet (the mode switch's seventh read)."""
+    with _lock:
+        return list(_flights)
+
+
 def held_cpu(server: str) -> dict[str, float]:
     """`{model: cpu_percent}` of the backends as the LAST `/system` answer
     gave them — no request: read right after `held_sizes`, it is the same

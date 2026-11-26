@@ -51,7 +51,13 @@ measured (published figures disagree).
   begun at the bound was loaded beside; now a call seen sends the room round again (made again after it),
   and one still running at the bound means no load. The claim rows' prune is a range on the key (LIKE
   matched other keys and used no index), runs at a process's first write and then hourly, and takes the
-  one row of before; a process whose pid namespace cannot be read has a row of its own (a token). A room refused before ANY load is now said, once a minute a reason
+  one row of before; a process whose pid namespace cannot be read has a row of its own (a token). The
+  seventh read: a cold load running in the worker itself (an embed producer's encoder warmed behind its
+  batch, 5–24 s) is a call beside the room too — the switch to embed mode counted the 9B's room on a card
+  that did not yet show those bytes (pre-existing on main, the same kind as the incident); a room made by
+  paging that no load uses is forgotten; the paging line is said once a minute; and the row of before is
+  written beside each process's own, in one statement, for the GPU governor of the code before until deploy
+  stage 8 makes its container again. A room refused before ANY load is now said, once a minute a reason
   ("card: no room could be made for … — … pinned by work in flight"). The query-mode paging rule is
   unchanged: the first read's idea that the driver cannot page pinned models was unmeasured — a pin is
   the reclaimer's word, not the driver's — and refusing to page on it unloaded a question's own query
