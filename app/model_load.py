@@ -259,6 +259,7 @@ def reset() -> None:
         _held.clear()
         _cpu.clear()
         _backends.clear()
+        _configured.clear()
         _rest.clear()
         _anchor.clear()
         _load_seen.clear()
@@ -631,6 +632,53 @@ def backend_of(url: str, model: str | None, max_age_s: float | None = None) -> s
         return None
     with _lock:
         return _backends.get(server, {}).get(model)
+
+
+#: how long a model's configured backend is trusted: a swap is an operator's
+#: deploy, seen within this long
+CONFIG_TTL_S = 30.0
+#: (server, model) -> (monotonic time read, the backend its config names or None)
+_configured: dict[tuple[str, str], tuple[float, str | None]] = {}
+
+
+def configured_backend(url: str, model: str | None, max_age_s: float | None = None) -> str | None:
+    """The BACKEND `model`'s config names at `url`'s runner — `backend` in
+    LocalAI's model-config API (`GET /api/models/config-json/<model>`, as
+    app/model_pins.py reads its pin) — READ WITHOUT LOADING THE MODEL: the
+    backend its next load runs on. A Louise engine is installed under a name
+    of its own (`louise-sycl-f16-llama-cpp-<digest>-…`) and a model is moved
+    to it by its config (backend-qualification-2026-11-21.md, phase 1), so
+    the name is the engine. From an answer at most `max_age_s` old (default
+    CONFIG_TTL_S); None when the runner cannot say (bounded: PROBE_TIMEOUT_S)."""
+    if not model:
+        return None
+    server = server_of(url)
+    limit = CONFIG_TTL_S if max_age_s is None else max_age_s
+    with _lock:
+        got = _configured.get((server, model))
+    if got is not None and time.monotonic() - got[0] < limit:
+        return got[1]
+    backend: str | None = None
+    try:
+        r = httpc.get(f"{server}/api/models/config-json/{model}", timeout=PROBE_TIMEOUT_S)
+        if r.status_code == 200:
+            v = (r.json() or {}).get("backend")
+            backend = v if isinstance(v, str) and v.strip() else None
+    except Exception:   # noqa: BLE001 — unreachable, not LocalAI's: not known
+        backend = None
+    with _lock:
+        _configured[(server, model)] = (time.monotonic(), backend)
+    return backend
+
+
+def engine_of(url: str, model: str | None, max_age_s: float | None = None) -> str | None:
+    """THE ENGINE THAT ANSWERS `model`'s NEXT REQUEST, never loading it to
+    learn it: the backend it is loaded on (`backend_of`), else — not loaded —
+    the one its config names for its next load (`configured_backend`), each
+    from an answer at most `max_age_s` old (their own defaults where None;
+    0: read now, each bounded by PROBE_TIMEOUT_S). None when neither can be
+    read."""
+    return backend_of(url, model, max_age_s) or configured_backend(url, model, max_age_s)
 
 
 def backend_pid(url: str, model: str | None, max_age_s: float = INTERACTIVE_TTL_S) -> int | None:

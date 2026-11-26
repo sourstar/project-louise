@@ -168,6 +168,8 @@ def reset() -> None:
     _claim_seen.clear()
     with _board.lock:
         _board.until = 0.0
+        _board.idle_since = float("-inf")
+        _searches.update(live=0, ended=float("-inf"))
     with _stood_lock:
         _stood.clear()
     _default_level = Level.QUERY
@@ -609,6 +611,9 @@ class _Board:
         #: after it never shortens it (the warms behind a search ran past the
         #: question and wrote 0, erasing its 5 minutes)
         self.until = 0.0
+        #: when the last live call of this process ended (monotonic s;
+        #: -inf: none has run yet) — `quiet_s`
+        self.idle_since = float("-inf")
 
     def enter(self) -> None:
         with self.lock:
@@ -628,6 +633,7 @@ class _Board:
             if linger > 0:
                 self.until = max(self.until, now + linger)
             if self.live == 0:
+                self.idle_since = time.monotonic()
                 _write_claim(self.until if self.until > now else 0.0)
 
     def _refresh(self) -> None:
@@ -641,6 +647,69 @@ class _Board:
 
 
 _board = _Board()
+
+
+#: this process's searches in flight (`searching`), and when the last ended
+_searches = {"live": 0, "ended": float("-inf")}
+
+
+@contextmanager
+def searching():
+    """A PERSON'S SEARCH IN FLIGHT, counted and nothing more: every search
+    goes through app/query_service.py `run_search` — the Ask page's, /api/search,
+    /v1/chat/completions, LocalAGI's, the MCP's — and most hold no question
+    (only the Ask page's relay does), so between their model calls nothing
+    else says one runs. Takes NO claim and declares no level: it changes
+    nothing a search waits for or what stands aside for it (scheduling.md
+    §12); it is read by `quiet_s` alone. A harness's searches count too."""
+    with _board.lock:
+        _searches["live"] += 1
+    try:
+        yield
+    finally:
+        with _board.lock:
+            _searches["live"] -= 1
+            if _searches["live"] == 0:
+                _searches["ended"] = time.monotonic()
+
+
+def quiet_s() -> float:
+    """HOW LONG THIS PROCESS HAS RUN NO STEP OF A QUESTION: no search
+    (`searching`), no answer being written, no sentence read aloud, no
+    interactive model call (`question`, `interactive`) — 0.0 while one runs,
+    inf when none has run. NOT THE CLAIM: the claim lingers
+    QUESTION_LINGER_S after a question's last step so the corpus stays aside
+    (`interactive_active`); work made for the NEXT question — the phrases
+    that cover the wait (app/fillers.py) — asks only that none is running
+    now, and has run for a moment. A harness (`as_harness`) enters no
+    question, so only its searches are seen here."""
+    with _board.lock:
+        if _board.live > 0 or _searches["live"] > 0:
+            return 0.0
+        return max(0.0, time.monotonic() - max(_board.idle_since, _searches["ended"]))
+
+
+def live_anywhere(now: float | None = None) -> bool:
+    """IS AN INTERACTIVE CALL LIVE IN ANY PROCESS OF THE NODE, now: a process's
+    claim row (`claims`) is written INTERACTIVE_CLAIM_TTL_S ahead and
+    refreshed while a call runs, and further ahead — QUESTION_LINGER_S — for
+    a question's linger once it ends; a row at most the TTL ahead (a second's
+    slack for the refresh) is a call running. The last TTL of a linger reads
+    the same: a caller that waits on this waits those seconds more, never
+    less. Read now, never memoised. A STORE THAT EXISTS AND CANNOT BE READ
+    (locked past its one-second wait, broken) is True — on doubt, a call
+    runs; no store at all (no worker made one) is no call."""
+    at = time.time() if now is None else now
+    try:
+        con = _node_con()
+        if con is None:
+            return False
+        with closing(con):
+            rows = _claims_of(con)
+    except Exception:   # noqa: BLE001 — unread: taken as busy, never as free
+        return True
+    return any(at < v <= at + config.INTERACTIVE_CLAIM_TTL_S + 1.0 for v in rows)
+
 
 #: how long a question's claim outlasts its last step — the search, the
 #: answer, the results' translation, a sentence read aloud, the page's
