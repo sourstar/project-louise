@@ -157,8 +157,9 @@ model that parks is parked and asked a fingerprint text, 64 times (four
 rounds of the sixteen, a new order each), and each answer is held to the same
 text's first. "Parks" has three parts, each asked of the one who knows: the
 ENGINE (the run's own statement lists the environment it was launched with;
-without `GGML_SYCL_PARKABLE=1` it never moves its weights, whatever the file
-says — `embedder.can_park`), the NODE (a host floor above 0) and the FILE
+without `GGML_SYCL_PARKABLE` at a value other than nothing and zero — as the
+engine itself reads it — it never moves its weights, whatever the file says:
+`embedder.can_park`), the NODE (a host floor above 0) and the FILE
 (LocalAI's `/system` `"parks": true`, read fresh once the gate's 512 texts
 have loaded the model). It runs right after the two single-text passes and
 BEFORE the fresh loads and the 300 contexts: a pass refused, deferred or
@@ -203,9 +204,11 @@ raises, keeps nothing, and says the two ways out; with the line out the
 model does not park, its statement stands and embedding goes on. The first
 cut kept a FAIL for an inexact return and for a NaN: both read again and
 changed before the merge. While the line stays, the refusal is remembered
-for an hour for that same run (in the process: no gate, no twin load, no
-unload in between); another run of the model, or a restart, is gated at
-once.
+for an hour for that same run, PER COLLECTION AND ROLE (in the process: no
+gate, no twin load, no unload in between) — a refusal is a collection's: one
+bit off refuses a collection that asks for bytes and not one that allows
+near-exact runs of the same model. Another run of the model, a restart, or
+the line taken out (the model no longer parks) is gated at once.
 
 **The floor.** LocalAI parks nothing while `park_host_floor_bytes` is 0, and
 the keeper that sets it beats in the worker; a gate from the command line may
@@ -224,12 +227,22 @@ file gained `park: true`, or the runner its patch, under the same run id) is
 gated again before anything is written from it. The digest is what the
 review of 2026-11-26 added: counted alone, the 64 cycles of a pass that
 FAILED on an inexact return admitted the run on another pass's statement —
-its own older one, or a sibling collection's. A sibling lends its cycles
-only together with the statement they were counted for — and that is how
-the gate stays ONE PER (space, run): a collection on its own older statement
-takes a sibling's passing statement with its cycles, both byte for byte
-(`runs.adopt_parked`), as it takes the one that held the run to its CPU
-reference. The query side is
+its own older one, or a sibling collection's.
+
+**What a sibling of the space lends** (`runs.parks_for_space`), so that the
+gate stays ONE PER (space, run) when `park: true` lands on a model several
+collections share: the EVIDENCE ABOUT THE RUN and never a verdict — 64
+counted cycles whose every answer was the same bytes, under a passing
+statement of that run the sibling still holds and its record names. The
+borrower keeps its own statement (its sample, its batching, its CPU
+comparison) and writes its own record for it, saying where the cycles were
+counted. Cycles that were not byte-exact are not lent (what a near-exact
+run's returns differ by is in the one statement that measured them), nor is
+a borrowed record lent on. For one round of review the sibling's STATEMENT
+was copied instead: read against the borrower's own, stale, batching record
+it admitted batched writes on a verdict made at one text a request — the
+fault of the 714 books — and a sibling whose batches differed locked a
+healthy collection out. Withdrawn before the merge. The query side is
 held to the same record by the look (`_look_at_the_query_side`): nobody
 writes a query's vector, so `runs.check` never sees it. Putting `park_cycles` in the signed statement instead is
 09 §9.12 version 7 — a wire change, one more gate of every parking run, and

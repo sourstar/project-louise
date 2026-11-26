@@ -262,63 +262,57 @@ def _parks_counted(measured: dict[str, Any] | None, body: dict[str, Any]) -> boo
 
 def parks_for_space(root: Path, name: str, codex: Codex, role: str, run_id: str,
                     body: dict[str, Any], *, signer: str | None) -> dict[str, Any] | None:
-    """The park cycles counted for the statement `body` of `run_id`, for THIS
-    SPACE: this collection's own record, else that of another collection of
-    the space on this peer that holds THE SAME STATEMENT — one borrowed, as
-    `statements_for_space` copies it, byte for byte — copied into this
-    collection's own (`batching_for_space`: the gate runs once per (space,
-    run)). A sibling whose statement for the run is another one lends
-    nothing: its cycles are that verdict's."""
+    """The park cycles that count for the statement `body` of `run_id`, for
+    THIS SPACE: this collection's own record where it is this statement's;
+    else a sibling's EXACT cycles.
+
+    WHAT A SIBLING LENDS, AND WHAT IT NEVER DOES. THE GATE RUNS ONCE PER
+    (space, run) for the cycles too — when `park: true` lands on a model, the
+    first collection's gate counts them and the others of the space do not
+    each gate in full. What passes between them is the EVIDENCE ABOUT THE
+    RUN, never a verdict: 64 counted cycles whose every answer was the same
+    bytes (`closest` 1.0), under a PASSING statement of that run the sibling
+    still holds and the record names. That a run's weights come back to the
+    same bytes is a fact of the run on this card, whichever collection asked.
+    This collection's own statement stays the one it is admitted by — its
+    sample, its batching, its CPU comparison untouched — and its own record
+    is written for it, saying where the cycles were counted.
+
+    A sibling's statement is NOT taken (it was, for a day of reviews:
+    `adopt_parked` copied it over this collection's own, and with it a
+    verdict made at one text a request was read against this collection's
+    own, stale, batching record — batched writes admitted on a statement that
+    never measured a batch, the fault of the 714 books; and a sibling whose
+    batches differed locked a healthy collection out for ever). Nor are
+    cycles that were not byte-exact lent: what a near-exact run's returns
+    differ by is in the statement of the pass that measured them, and no
+    other statement says it."""
     own = parks_measured(root, name, role, run_id)
     if _parks_counted(own, body):
         return own
     for other in _others(root, name):
         theirs = parks_measured(root, other, role, run_id)
-        if not _parks_counted(theirs, body):
-            continue
-        held = statements(root, other, codex, role, signer=signer).get(run_id)
-        if held is None or statement_digest(held) != theirs.get("statement"):
-            continue                    # a record without the statement it was counted for
-        _record(_parks_file(root, name), f"{role}:{run_id}", dict(theirs))
-        return theirs
-    return own
-
-
-def adopt_parked(root: Path, name: str, codex: Codex, role: str, run_id: str, *,
-                 signer: str | None) -> dict[str, Any] | None:
-    """A PASSING statement of `run_id` that another collection of the space
-    holds WITH its counted cycles, copied over this collection's own — the
-    statement byte for byte, and its record — and returned; None where no
-    sibling has one. THE GATE RUNS ONCE PER (space, run), for the park cycles
-    too: when `park: true` lands on a model, the first collection's gate
-    counts them and every other collection of the space takes that verdict,
-    as it takes the one that held the run to its CPU reference
-    (`statements_for_space`). Without it each collection, on its own older
-    statement, gated in full (the second read of 2026-11-26)."""
-    for other in _others(root, name):
-        held = statements(root, other, codex, role, signer=signer).get(run_id)
-        if held is None or not passing(held, codex):
-            continue
-        theirs = parks_measured(root, other, role, run_id)
-        if not _parks_counted(theirs, held):
-            continue
-        src, dst = path_for(root, other, run_id, role), path_for(root, name, run_id, role)
         try:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            tmp = dst.with_suffix(f".json.{os.getpid()}.{threading.get_ident()}.tmp")
-            tmp.write_bytes(src.read_bytes())
-            os.replace(tmp, dst)
-        except OSError:
-            continue                    # not kept here: not adopted — the gate runs
-        _record(_parks_file(root, name), f"{role}:{run_id}", dict(theirs))
-        return held
-    return None
+            exact = (theirs is not None and int(theirs.get("cycles", 0)) >= emb.PARK_CYCLES
+                     and float(theirs.get("closest", 0.0)) == 1.0 and not theirs.get("from"))
+        except (TypeError, ValueError):
+            exact = False
+        if not exact:
+            continue
+        held = statements(root, other, codex, role, signer=signer).get(run_id)
+        if held is None or not passing(held, codex) or statement_digest(held) != theirs.get("statement"):
+            continue                    # cycles without the passing statement they were counted under
+        mine = {**theirs, "statement": statement_digest(body),
+                "from": {"collection": other, "statement": theirs.get("statement")}}
+        _record(_parks_file(root, name), f"{role}:{run_id}", mine)
+        return mine
+    return own
 
 
 def parks_counted(root: Path, name: str, codex: Codex, role: str, run_id: str,
                   body: dict[str, Any], *, signer: str | None) -> bool:
     """Were PARK_CYCLES park cycles counted for this statement of the run —
-    here, or by a collection of the space that holds the same statement?"""
+    here, or byte-exact under a sibling's passing statement of it?"""
     return _parks_counted(parks_for_space(root, name, codex, role, run_id, body, signer=signer), body)
 
 
@@ -729,16 +723,11 @@ def check(root: Path, name: str, codex: Codex, answered: set, *,
             # A MODEL THAT PARKS NOW, GATED WHILE IT DID NOT (its file gained
             # `park: true`, or the runner its patch, under the same run): a
             # return is an upload of the weights again, which that gate never
-            # saw. A sibling's verdict that did see it is taken with its
-            # cycles (`adopt_parked`); else, not a failure: the gate runs
-            # again (`run_check._look`) and counts its park cycles. A run
-            # whose stated engine cannot park (`emb.can_park`) never parks,
-            # and is held to nothing
-            adopted = adopt_parked(root, name, codex, role, run_id, signer=signer)
-            if adopted is not None:
-                body = adopted
-        if parks and emb.can_park(body.get("engine")) is not False \
-                and not parks_counted(root, name, codex, role, run_id, body, signer=signer):
+            # saw. Not a failure: the gate runs again (`run_check._look`) and
+            # counts its park cycles — unless a sibling of the space counted
+            # them byte-exact already (`parks_for_space`). A run whose stated
+            # engine cannot park (`emb.can_park`) never parks, and is held to
+            # nothing
             raise RunUnvalidated(
                 f"{name}: run {run_id[:23]}… parks now (its weights leave the card for host memory "
                 f"and come back) and its gate counted no park cycles; nothing from it is written "

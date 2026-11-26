@@ -33,11 +33,16 @@ measured (published figures disagree).
   answered: no wire change is taken without his word): the cycles are recorded on the node
   (`gate-parks.json`), bound to the digest of the statement of the same pass, and a run gated while its
   model did not park is gated again before a write — the query side too. AN INDEPENDENT REVIEW READ IT
-  TWICE BEFORE IT WAS MERGED: eight things in the first cut, two of them false passes (the record admitted
-  a run on another pass's statement; silence from `/system` skipped the pass); five in the fixes (a NaN
-  behind VeGa read as "inconclusive"; a failed query statement gated at every look; every collection of a
-  space gating for itself; a refusal gated again every 300 s; a silent runner asked at every check). All
-  fixed, each a test (tests/hold/test_park_cycles.py, 56). The rule it converged on: THE PASS NEVER MAKES
+  THREE TIMES BEFORE IT WAS MERGED: eight things in the first cut, two of them false passes (the record
+  admitted a run on another pass's statement; silence from `/system` skipped the pass); five in the fixes
+  (a NaN behind VeGa read as "inconclusive"; a failed query statement gated at every look; every
+  collection of a space gating for itself; a refusal gated again every 300 s; a silent runner asked at
+  every check); and in THOSE fixes one more false pass — a sibling's statement copied over a collection's
+  own admitted batched writes on a verdict made at one text a request (the fault of the 714 books).
+  Withdrawn: a sibling lends its byte-exact cycles as evidence about the run, never its statement. All
+  fixed, each a test (tests/hold/test_park_cycles.py, 67). LESSON, the third time it has paid: code that
+  admits or stops a run is read by someone else before it merges, and READ AGAIN after each round of
+  fixes — every round here added a defect of the class it was fixing. The rule it converged on: THE PASS NEVER MAKES
   A FAILING STATEMENT — a run that parks badly is refused as a run that parks and is the run it was once
   `park: true` is out; whether an engine can park at all is read from the run's own statement
   (`GGML_SYCL_PARKABLE=1` in its stated env), so the runner's silence stops nothing that cannot park. ALSO

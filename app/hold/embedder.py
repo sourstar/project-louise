@@ -601,7 +601,20 @@ def can_park(engine: Any) -> bool | None:
     env = engine.get("env") if isinstance(engine, dict) else None
     if not isinstance(env, dict):
         return None
-    return any(str(env.get(k)) == v for k, v in PARK_SWITCH.items())
+
+    def on(value: Any) -> bool:
+        # AS THE ENGINE READS IT: any value but nothing and zero switches it
+        # on ("2", "01", " 1" park as "1" does — the third read of
+        # 2026-11-26). A value that is no number is taken as ON: a run asked
+        # for cycles it cannot count is refused, which errs the safe way
+        text = str(value).strip() if value is not None else ""
+        if not text:
+            return False
+        try:
+            return int(text) != 0
+        except ValueError:
+            return True
+    return any(on(env.get(k)) for k in PARK_SWITCH)
 
 
 #: `parker.park()`'s answers besides a refusal's own word
@@ -800,7 +813,7 @@ def _not_admitted_to_park(what: str, more: str) -> str:
     event is cut at 500 and its control row at 400 (`run_check.embed_allowed`)."""
     return (f"{what}. NOT ADMITTED AS A RUN THAT PARKS, and no statement is kept. Take `park: true` out of "
             f"the model's file and it is the run it was (its statement stands), or fix the engine: the "
-            f"gate is tried again at every look.{more}")
+            f"gate runs again for another run of the model, or within the hour for this one.{more}")
 
 
 def _round_counts(before, after, asked: int) -> tuple[int | None, int | None]:

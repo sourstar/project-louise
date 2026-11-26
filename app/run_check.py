@@ -773,30 +773,35 @@ def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docume
 #: refusal keeps no statement (`embedder.ParkRefused`), so nothing stops the
 #: worker from running the gate again 300 s later — the set's 512 texts on a
 #: twin loaded afresh, with the unloads that make its room — for as long as
-#: the fault lasts (the second read of 2026-11-26). (server, model) -> (until,
-#: the run that was refused, the refusal). In this process only: a restart
-#: asks once more. The same run asked within the hour is answered from here;
-#: ANOTHER run of the model (the file changed, the engine fixed) is gated at
-#: once.
+#: the fault lasts (the second read of 2026-11-26). (server, model, role,
+#: collection) -> (until, the run that was refused, the refusal). PER
+#: COLLECTION AND ROLE: a refusal is a collection's — one bit off refuses a
+#: collection that asks for bytes and not one that allows near-exact runs of
+#: the same model (the third read). In this process only: a restart asks once
+#: more. The same run asked within the hour is answered from here; ANOTHER
+#: run of the model (the file changed, the engine fixed), or a model that no
+#: longer parks (`park: true` taken out: the refusal's own way out), is
+#: gated at once.
 PARK_REFUSED_S = 3600.0
-_park_refused: dict[tuple[str, str], tuple[float, str | None, str]] = {}
+_park_refused: dict[tuple[str, str, str, str], tuple[float, str | None, str]] = {}
 _last_stated: dict[tuple[str, str, str], str] = {}
 
 
 def _remember_park_refusal(server: str, model: str, name: str, role: str, why: str) -> None:
-    _park_refused[(server, model)] = (time.monotonic() + PARK_REFUSED_S,
-                                      _last_stated.get((server, model, role)), why)
+    _park_refused[(server, model, role, name)] = (time.monotonic() + PARK_REFUSED_S,
+                                                  _last_stated.get((server, model, role)), why)
 
 
 def _park_refused_lately(recipe, role: str, name: str, codex) -> None:
-    """Raise the remembered refusal where the SAME run still answers; one
-    tiny request to the shared load, no twin, no unload."""
-    who = _who(recipe, role == "query")
+    """Raise the remembered refusal where the SAME run still answers and the
+    model still parks; one tiny request to the shared load, no twin, no
+    unload."""
+    who = (*_who(recipe, role == "query"), role, name)
     kept = _park_refused.get(who)
     if kept is None:
         return
     until, run_id, why = kept
-    if time.monotonic() >= until or run_id is None:
+    if time.monotonic() >= until or run_id is None or not parks_now(recipe, role == "query"):
         _park_refused.pop(who, None)
         return
     try:
@@ -1873,9 +1878,7 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
         cycles_owed = (held is not None and runs_mod.passing(held, codex)
                        and emb.can_park(held.get("engine")) is not False and parks_now(recipe, True)
                        and not runs_mod.parks_counted(_root(), name, codex, "query", run_id, held,
-                                                      signer=signer())
-                       and runs_mod.adopt_parked(_root(), name, codex, "query", run_id,
-                                                 signer=signer()) is None)
+                                                      signer=signer()))
         if held is not None and not cycles_owed:
             if recheck(_root(), name, codex, recipe, run_id, role="query", stop=stop,
                        log=log):

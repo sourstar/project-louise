@@ -325,12 +325,14 @@ def test_cycles_nobody_counted_are_never_assumed():
 
 # ---- kept, and required ---------------------------------------------------------------
 
-def _validated(tmp_path, name: str, model: Parking, *, park: bool = True, at: str = "2026-11-26T05:00:00Z"):
+def _validated(tmp_path, name: str, model: Parking, *, park: bool = True, at: str = "2026-11-26T05:00:00Z",
+               contribute=None):
     codex = codex_768(version=5)
     ref = reference()
     (tmp_path / name).mkdir(exist_ok=True)
     body = hold_runs.validate(tmp_path, name, codex, role="document", reference=ref, embed=lambda t: ref,
-                              embed_one=model.one, contribute=model.one, stated=_parking_run(codex),
+                              embed_one=model.one, contribute=contribute or model.one,
+                              stated=_parking_run(codex),
                               key=a_key(), now=at, reload=model.reload, park=model if park else None)
     return codex, body
 
@@ -386,6 +388,17 @@ def test_a_run_whose_engine_cannot_park_is_held_to_no_cycles(tmp_path):
     _check(tmp_path, "c", codex, body["run"], parks=True)
 
 
+@pytest.mark.parametrize("value, parks", [("1", True), ("2", True), ("01", True), (" 1", True), (1, True),
+                                          ("0", False), ("", False), (None, False), ("yes", True)])
+def test_the_switch_is_read_as_the_engine_reads_it(value, parks):
+    """Any value but nothing and zero switches the engine's parking on; "2"
+    read as "cannot park" asked such a run nothing and held it to nothing
+    while it parked (the third read). A value that is no number is taken as
+    ON: asked for cycles it cannot count, the run is refused — the safe way."""
+    env = {} if value is None else {"GGML_SYCL_PARKABLE": value}
+    assert emb.can_park({"env": env}) is parks
+
+
 def test_the_record_matches_the_statement_as_it_is_read_back_from_its_file(tmp_path):
     """The digest is taken over the body `validate` signs and compared with
     the body `statements` reads from the kept file: the same bytes, or every
@@ -415,29 +428,77 @@ def test_cycles_counted_for_one_statement_admit_no_other(tmp_path):
         _check(tmp_path, "c", codex, run_id, parks=True)
 
 
-def test_a_siblings_verdict_is_taken_with_its_cycles_and_only_with_them(tmp_path):
-    """ONE GATE PER (space, run), for the park cycles too (the second read of
-    2026-11-26): B, on its own older statement, takes A's passing statement
-    WITH A's counted cycles — statement and record, byte for byte — and is
-    not gated in full when `park: true` lands. A's cycles alone, without the
-    statement they were counted for, admit nothing (the first review, R9)."""
+def _differs_in_a_batch(texts):
+    out = fake_embed(texts)
+    return [_nudged(v, 0.99) for v in out]
+
+
+def test_a_sibling_lends_its_exact_cycles_and_never_its_statement(tmp_path):
+    """ONE GATE PER (space, run), for the park cycles too: B, on its own older
+    statement, is not gated in full when `park: true` lands and A has counted
+    the cycles. What passes is the EVIDENCE ABOUT THE RUN — 64 counted cycles,
+    every answer the same bytes, under a passing statement A still holds —
+    and B's own statement stays the one it is admitted by."""
     codex, b_old = _validated(tmp_path, "b", Parking(), park=False)
     run_id = b_old["run"]
     _codex, a_new = _validated(tmp_path, "a", Parking(), at="2026-11-26T06:00:00Z")
     assert a_new["run"] == run_id
     _check(tmp_path, "b", codex, run_id, parks=True)
-    assert hold_runs.statements(tmp_path, "b", codex, "document", signer=_who())[run_id] == a_new, \
-        "A's statement, over B's own"
-    assert hold_runs.parks_measured(tmp_path, "b", "document", run_id)["statement"] == \
-        hold_runs.statement_digest(a_new)
-    # A is then measured again WITHOUT parking: its record is another statement's, and lends nothing
+    assert hold_runs.statements(tmp_path, "b", codex, "document", signer=_who())[run_id] == b_old, \
+        "B's own statement, untouched"
+    mine = hold_runs.parks_measured(tmp_path, "b", "document", run_id)
+    assert mine["statement"] == hold_runs.statement_digest(b_old), "its record, for its own statement"
+    assert mine["from"] == {"collection": "a", "statement": hold_runs.statement_digest(a_new)}, "and where counted"
+    # A is then measured again WITHOUT parking: its record names a statement it no longer holds
     _codex, e_old = _validated(tmp_path, "e", Parking(), park=False, at="2026-11-26T04:00:00Z")
     _validated(tmp_path, "a", Parking(), park=False, at="2026-11-26T07:00:00Z")
-    (tmp_path / "b").rename(tmp_path / "gone")           # B, which holds the pair, leaves the node
-    __import__("shutil").rmtree(tmp_path / "gone")
+    __import__("shutil").rmtree(tmp_path / "b")                 # B, which borrowed, lends nothing on
     with pytest.raises(hold_runs.RunUnvalidated, match="counted no park cycles"):
         _check(tmp_path, "e", codex, run_id, parks=True)
-    assert hold_runs.statements(tmp_path, "e", codex, "document", signer=_who())[run_id] == e_old, "untouched"
+    assert hold_runs.statements(tmp_path, "e", codex, "document", signer=_who())[run_id] == e_old
+
+
+def test_a_siblings_cycles_never_carry_its_verdict_on_batches(tmp_path):
+    """The third read of 2026-11-26, both reproduced against the first cut,
+    which copied the sibling's STATEMENT: (1) B's own gate found its batches
+    differ; A, gated with its cycles, was copied over it and B's batched
+    writes were admitted on a verdict that never measured B's batch — the
+    fault of the 714 books. (2) A's batches differ and B's do not: B was
+    locked out on A's verdict, for ever."""
+    codex, b_bad = _validated(tmp_path, "b", Parking(), park=False, contribute=_differs_in_a_batch)
+    run_id = b_bad["run"]
+    assert b_bad["batch_invariant"] is False
+    _validated(tmp_path, "a", Parking(), at="2026-11-26T06:00:00Z")
+    with pytest.raises(hold_runs.RunUnvalidated, match="single-text work only") as e:
+        hold_runs.check(tmp_path, "b", codex, {run_id}, signer=_who(), batched=True, parks=True)
+    assert e.value.failed is True
+    assert hold_runs.statements(tmp_path, "b", codex, "document", signer=_who())[run_id] == b_bad
+    # (2) the other way round
+    codex, d_good = _validated(tmp_path, "d", Parking(), park=False, at="2026-11-26T04:30:00Z")
+    _codex, c_bad = _validated(tmp_path, "c", Parking(), at="2026-11-26T06:30:00Z", contribute=_differs_in_a_batch)
+    assert c_bad["batch_invariant"] is False and hold_runs.parks_measured(tmp_path, "c", "document", run_id)
+    hold_runs.check(tmp_path, "d", codex, {run_id}, signer=_who(), batched=True, parks=True)
+    assert hold_runs.statements(tmp_path, "d", codex, "document", signer=_who())[run_id] == d_good
+
+
+def test_cycles_that_were_not_byte_exact_are_not_lent(tmp_path):
+    """What a near-exact run's returns differ by is in the statement of the
+    pass that measured them, and in no other."""
+    codex = codex_768(version=5)
+    ref = reference()
+    (tmp_path / "near").mkdir()
+    model = Parking(bad=7, wrong=lambda v: _nudged(v, 0.999995))
+    near = hold_runs.validate(tmp_path, "near", codex, role="document", reference=ref, embed=lambda t: ref,
+                              embed_one=model.one, contribute=model.one, stated=_parking_run(codex),
+                              key=a_key(), now="2026-11-26T06:00:00Z", reload=model.reload, park=model,
+                              cpu_reference=("sha256:" + "44" * 32, perturbed(ref, indices=(3,), to=0.9995)),
+                              exactness="near")
+    run_id = near["run"]
+    assert hold_runs.passing(near, codex) and hold_runs.parks_measured(tmp_path, "near", "document", run_id)["closest"] < 1
+    _check(tmp_path, "near", codex, run_id, parks=True)
+    _validated(tmp_path, "other", Parking(), park=False, at="2026-11-26T04:00:00Z")
+    with pytest.raises(hold_runs.RunUnvalidated, match="counted no park cycles"):
+        _check(tmp_path, "other", codex, run_id, parks=True)
 
 
 def test_eight_threads_borrowing_at_once_write_one_whole_record(tmp_path):
@@ -463,7 +524,8 @@ def test_eight_threads_borrowing_at_once_write_one_whole_record(tmp_path):
         t.join(10)
     assert errors == []
     assert hold_runs.parks_measured(tmp_path, "b", "document", run_id)["cycles"] == 64
-    assert hold_runs.statements(tmp_path, "b", codex, "document", signer=_who())[run_id] == body
+    assert hold_runs.statements(tmp_path, "b", codex, "document", signer=_who())[run_id] != body, \
+        "its own statement still"
     assert not list((tmp_path / "b").rglob("*.tmp")), "no temporary file left behind"
 
 
@@ -869,7 +931,7 @@ def test_a_query_model_that_parks_now_is_gated_again_for_its_cycles(monkeypatch,
     collection = SimpleNamespace(name="c", codex=codex)
     body = {"run": RUN, "passed": 28, "median": "0.9999", "batch_invariant": True,
             "engine": PARK_ENGINE.to_dict()}
-    state = {"parks": False, "counted": False, "passing": True, "sibling": None}
+    state = {"parks": False, "counted": False, "passing": True}
     rechecked, gated, said = [], [], []
     monkeypatch.setattr(run_check.collections_mod, "recipe_for", lambda c: _recipe())
     monkeypatch.setattr(run_check, "answering_run", lambda recipe, query=False: RUN)
@@ -880,7 +942,6 @@ def test_a_query_model_that_parks_now_is_gated_again_for_its_cycles(monkeypatch,
     monkeypatch.setattr(run_check.runs_mod, "statements_for_space", lambda *a, **k: {RUN: body})
     monkeypatch.setattr(run_check.runs_mod, "passing", lambda b, c: state["passing"])
     monkeypatch.setattr(run_check.runs_mod, "parks_counted", lambda *a, **k: state["counted"])
-    monkeypatch.setattr(run_check.runs_mod, "adopt_parked", lambda *a, **k: state["sibling"])
     monkeypatch.setattr(run_check, "recheck", lambda *a, **k: rechecked.append(k.get("role")) or True)
     monkeypatch.setattr(run_check, "validate", lambda *a, **k: gated.append(k.get("role")) or body)
     monkeypatch.setattr(run_check, "parks_now", lambda recipe, query=False: query and state["parks"])
@@ -891,16 +952,13 @@ def test_a_query_model_that_parks_now_is_gated_again_for_its_cycles(monkeypatch,
     state["parks"] = True
     look()
     assert gated == ["query"] and len(rechecked) == 1, "parks now, no cycles for this statement: the gate"
-    state["sibling"] = body
+    state["counted"] = True
     look()
-    assert gated == ["query"] and len(rechecked) == 2, "a sibling's verdict with its cycles is taken instead"
-    state.update(sibling=None, counted=True)
-    look()
-    assert gated == ["query"] and len(rechecked) == 3, "counted: its statement stands"
+    assert gated == ["query"] and len(rechecked) == 2, "counted (here, or exact under a sibling): it stands"
     state.update(counted=False, passing=False)
     for _ in range(4):
         look()
-    assert gated == ["query"] and len(rechecked) == 7, "a FAILED statement is not gated again for cycles"
+    assert gated == ["query"] and len(rechecked) == 6, "a FAILED statement is not gated again for cycles"
     state["passing"] = True
     body["engine"] = BACKEND.to_dict()               # an engine that cannot park
     look()
@@ -910,27 +968,40 @@ def test_a_query_model_that_parks_now_is_gated_again_for_its_cycles(monkeypatch,
 def test_a_refusal_is_remembered_for_the_same_run_and_another_run_is_gated_at_once(monkeypatch, tmp_path):
     """The refusal keeps no statement, so nothing stopped the worker from
     gating again 300 s later — 512 texts on a twin loaded afresh, with the
-    unloads that make its room — for as long as the fault lasted."""
+    unloads that make its room — for as long as the fault lasted. Remembered
+    PER COLLECTION AND ROLE (one bit off refuses a collection that asks for
+    bytes, not one that allows near-exact runs of the same model), and only
+    while the model still parks: `park: true` taken out is the refusal's own
+    way out (the third read)."""
     codex = SimpleNamespace()
-    inner, answering = [], {"run": RUN}
+    inner, state = [], {"run": RUN, "parks": True}
 
     def gate(root, name, codex_, recipe, **kw):
-        inner.append(answering["run"])
-        run_check._last_stated[(S, M, kw["role"])] = answering["run"]
+        inner.append((name, state["run"]))
+        run_check._last_stated[(S, M, kw["role"])] = state["run"]
         raise emb.ParkRefused("park cycle 3: the weights did not come back")
     monkeypatch.setattr(run_check, "_validate_on_twin_or_shared", gate)
-    monkeypatch.setattr(run_check, "answering_run", lambda recipe, query=False, probe_item=None: answering["run"])
+    monkeypatch.setattr(run_check, "answering_run", lambda recipe, query=False, probe_item=None: state["run"])
     monkeypatch.setattr(run_check, "probe_for", lambda codex_, role="document": "probe")
+    monkeypatch.setattr(run_check, "parks_now", lambda recipe, query=False: state["parks"])
     monkeypatch.setattr(run_check, "_park_refused", {})
-    for _ in range(3):
+
+    def look(name: str = "c"):
         with pytest.raises(emb.ParkRefused, match="the weights did not come back") as e:
-            run_check.validate(tmp_path, "c", codex, _recipe())
-    assert inner == [RUN], "gated once; the next two looks are answered from the refusal"
-    assert "not gated again within 60 min" in str(e.value)
-    answering["run"] = "sha256:" + "cd" * 32                     # the file changed: another run answers
-    with pytest.raises(emb.ParkRefused):
-        run_check.validate(tmp_path, "c", codex, _recipe())
-    assert inner == [RUN, answering["run"]], "another run is gated at once"
+            run_check.validate(tmp_path, name, codex, _recipe())
+        return str(e.value)
+    for _ in range(3):
+        said = look()
+    assert inner == [("c", RUN)], "gated once; the next two looks are answered from the refusal"
+    assert "not gated again within 60 min" in said
+    look("near-collection")
+    assert inner[-1] == ("near-collection", RUN), "another collection of the model has its own gate"
+    state["parks"] = False                                   # `park: true` taken out of the file
+    look()
+    assert inner[-1] == ("c", RUN) and len(inner) == 3, "a model that no longer parks is gated at once"
+    state.update(parks=True, run="sha256:" + "cd" * 32)       # the file changed: another run answers
+    look(); look()
+    assert inner[-1] == ("c", state["run"]) and len(inner) == 4, "another run is gated at once, then remembered"
 
 
 # ---- watched: what a park costs -------------------------------------------------------
