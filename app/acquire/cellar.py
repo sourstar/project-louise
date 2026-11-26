@@ -1447,11 +1447,16 @@ class TreeUnits(CellarUnits):
                 _say_cellar(Path(key).name)(f"the {year} window ({lang}) was not asked again "
                                             f"({type(e).__name__}: {str(e)[:200]}): its units wait")
                 return
-            dates, cover = cellar_listing.coverage({u for u in due if u[1] == lang and window_year(u[0]) == year},
-                                                   after, base_url)
+            mine = {u for u in due if u[1] == lang and window_year(u[0]) == year}
+            dates, cover = cellar_listing.coverage(mine, after, base_url)
             with self._lock:
                 if (year, lang) in cover:
-                    self._dates.setdefault(key, {}).update(dates)       # the dates before the cover
+                    # the window's units REPLACED, not merged: one the fresh
+                    # window lacks is absent, never kept at its old date (review
+                    # of 556d3a15, N2); one new dict, set before the cover
+                    known = {k: v for k, v in (self._dates.get(key) or {}).items() if k not in mine}
+                    known.update(dates)
+                    self._dates[key] = known
                     self._cover.setdefault(key, {})[(year, lang)] = cover[(year, lang)]
 
     def _reform(self, dest: Path, remote: RemoteFile, note) -> bool:
