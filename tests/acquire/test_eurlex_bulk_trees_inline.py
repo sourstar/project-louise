@@ -155,3 +155,51 @@ def test_a_failed_window_is_asked_again_after_its_hold(tmp_path, monkeypatch):
     with pytest.raises(cellar.WindowNotListed):
         units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, f, corpus / f.rel_path)
     assert len(asked) == 2
+
+
+def _rows(celexes, last="2026-11-01T00:00:00Z"):
+    def sparql(client, base, query, *, what="", charge=None):
+        if "COUNT(" in query:
+            return [{"n": {"value": str(len(celexes))}, "max": {"value": last}}]
+        return [{"celex": {"value": c}, "language": {"value": "http://x/ITA"},
+                 "last": {"value": last}, "force": {"value": "true"}} for c in celexes]
+    return sparql
+
+
+# ---- review of 556d3a15, N2: the newest whole window speaks for its units;
+# one it lacks is absent (Cellar's tree), never kept at an older window's date ----
+
+def test_N2_a_unit_absent_from_the_newest_window_is_absent_whatever_an_older_one_said(tmp_path, monkeypatch):
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    gone, kept = "31972R0001", "31972R0002"
+    after = {"it": 1000.0, "de": 1000.0}
+    # prepare's several-language window, then the one-language re-ask of `it`
+    cellar_listing.keep(URL, 1972, ("de", "it"), 4, None,
+                        [[gone, "it", 900, "true"], [kept, "it", 900, "true"],
+                         [gone, "de", 900, "true"], [kept, "de", 900, "true"]], force=True, at=2000.0)
+    cellar_listing.keep(URL, 1972, ("it",), 1, None, [[kept, "it", 950, "true"]], force=True, at=3000.0)
+    wanted = {(gone, "it"), (kept, "it"), (gone, "de"), (kept, "de")}
+    dates, cover = cellar_listing.coverage(wanted, after, URL)
+    assert (gone, "it") not in dates                    # the newest `it` window lacks it
+    assert dates[(kept, "it")] == 950
+    assert dates[(gone, "de")] == 900 and dates[(kept, "de")] == 900   # `de` was not asked again
+    assert cover == {(1972, "it"): 3000.0, (1972, "de"): 2000.0}
+
+
+def test_N2_a_later_date_in_the_newest_window_still_wins(tmp_path, monkeypatch):
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    cellar_listing.keep(URL, 1972, ("it",), 1, None, [[CELEX, "it", 900, "true"]], force=True, at=2000.0)
+    cellar_listing.keep(URL, 1972, ("de", "it"), 1, None, [[CELEX, "it", 5000, "true"]], force=True, at=3000.0)
+    dates, _ = cellar_listing.coverage({(CELEX, "it")}, {"it": 1000.0}, URL)
+    assert dates == {(CELEX, "it"): 5000}
+
+
+def test_N2_a_unit_the_reasked_window_lacks_takes_cellars_tree_not_the_bulks(tmp_path, monkeypatch):
+    units, corpus, celexes = _aged(tmp_path, monkeypatch, n_units=2)
+    listed, gone = celexes[0], celexes[1]
+    monkeypatch.setattr(cellar, "sparql", _rows([listed]))      # Cellar lists one of the two now
+    f = _unit(gone)
+    assert units._bulk_of(corpus, {"celex": gone, "lang": "it"}, f, corpus / f.rel_path) == (None, None)
+    f = _unit(listed)
+    bulk, _ = units._bulk_of(corpus, {"celex": listed, "lang": "it"}, f, corpus / f.rel_path)
+    assert bulk is not None                                    # the listed one still takes the bulk

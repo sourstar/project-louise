@@ -148,9 +148,21 @@ def coverage(wanted: set[tuple[str, str]], after: dict[str, float],
     unit whose manifestation Cellar replaced). Anything else is not counted,
     and its window is listed again. Returns the wanted units' dates from such
     windows, and the (year, language) pairs they cover with the `at` each is
-    known whole as of. Read-only."""
-    dates: dict[tuple[str, str], int] = {}
+    known whole as of. Read-only.
+
+    THE NEWEST WHOLE WINDOW SPEAKS FOR ITS UNITS (review of 556d3a15, N2): a
+    unit's date is read only from the newest window covering its (year,
+    language) — a one-language window asked again, or the several-language
+    one prepare listed. A unit that window lacks is ABSENT (`_bulk_of`:
+    Cellar's tree, never the bulk's on silence), whatever an older window
+    said: one Cellar no longer lists in a FORMS manifestation of that
+    language (`cellar._window`) has a tree that is not the dump's. A change
+    still shows as a later date in the newest window (cellar_listing's
+    note), so nothing a merge of every window saw is lost."""
     cover: dict[tuple[int, str], float] = {}
+    # per file kept: its (year, fresh languages, at) and only the wanted rows
+    # (`wanted` is the units due, not the corpus: memory stays the pass's)
+    seen: list[tuple[int, set[str], float, list[tuple[tuple[str, str], int]]]] = []
     for p in sorted(_base().glob("*/*.json.gz")):
         try:
             data = json.loads(gzip.decompress(p.read_bytes()))
@@ -161,10 +173,21 @@ def coverage(wanted: set[tuple[str, str]], after: dict[str, float],
         if data.get("shape") != SHAPE or p != _path(endpoint, year, langs, force):
             continue
         fresh = {l for l in langs if at > after.get(l, float("inf"))}
+        if not fresh:
+            continue
         for l in fresh:
             cover[(year, l)] = max(at, cover.get((year, l), 0.0))
+        rows = []
         for row in data.get("rows") or []:
             k = (str(row[0]), str(row[1]))
-            if k[1] in fresh and k in wanted and isinstance(row[2], int) and row[2] > dates.get(k, -1):
-                dates[k] = row[2]
+            if k[1] in fresh and k in wanted and isinstance(row[2], int):
+                rows.append((k, row[2]))
+        seen.append((year, fresh, at, rows))
+    dates: dict[tuple[str, str], int] = {}
+    for year, fresh, at, rows in seen:
+        for k, when in rows:
+            # the newest window of this unit's (year, language) alone; two of
+            # the same `at` both count (the later date wins, as before)
+            if at == cover.get((year, k[1])) and when > dates.get(k, -1):
+                dates[k] = when
     return dates, cover
