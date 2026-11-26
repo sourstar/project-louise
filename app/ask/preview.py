@@ -23,11 +23,13 @@ last.
      handed it: its pixels, its sides, what the child would hold for them
      (`TiffHeader.held_bytes`: a model, by kind of image), its tiles, the
      bytes its tags point at, and its coding — a CLOSED LIST, the ones the
-     corpus holds (`COMPRESSIONS`). The directory must be in ascending tag
-     order with no tag twice, as TIFF 6.0 requires: our reader, Pillow's and
-     libtiff's do not agree on WHICH of two entries counts (the review of
-     2026-11-26 decoded a Deflate plate that declared LZW that way), and a
-     file that gives them nothing to disagree about is the only one read.
+     corpus holds (`COMPRESSIONS`). No tag may appear twice: our reader,
+     Pillow's and libtiff's do not agree on WHICH of two entries counts (the
+     review of 2026-11-26 decoded a Deflate plate that declared LZW that
+     way), and a file that gives them nothing to disagree about is the only
+     one read. Ascending order, which TIFF 6.0 also asks, is NOT required:
+     39 honest plates of the corpus break it, and it gives no two readers
+     anything to disagree about (counted, `tools/measure/preview_refusals.py`).
   2. THE CHILD'S OWN LIMITS (app/ask/preview_child.py): a data limit from
      the moment the decoder is handed the file (RLIMIT_DATA, as the parse
      pool's large lane), an alarm, the parent watched so an orphan ends,
@@ -248,11 +250,11 @@ def tiff_header(f: BinaryIO) -> TiffHeader:
     none.
 
     REFUSED, because another reader would read it otherwise than this one:
-    tags not in ascending order or one tag twice (libtiff takes the first of
-    two, Pillow and a naive reader the last — a second `Compression` was a
-    way around the closed list); a tag this reader acts on with a count or a
-    field type the standard does not give it (libtiff then ignores the tag
-    and takes its default)."""
+    one tag twice (libtiff takes the first of two, Pillow and a naive reader
+    the last — a second `Compression` was a way around the closed list); a
+    tag this reader acts on with a count or a field type the standard does
+    not give it (libtiff then ignores the tag and takes its default). Tags
+    out of ascending order are read, as every reader reads them."""
     head = f.read(8)
     if len(head) < 8 or head[:2] not in (b"II", b"MM"):
         raise NotPreviewable("the bytes are not a TIFF (no II/MM byte-order mark)")
@@ -272,13 +274,19 @@ def tiff_header(f: BinaryIO) -> TiffHeader:
         raise NotPreviewable(f"its image directory declares {count} entries")
     entries = f.read(count * 12)
     got: dict[int, list[int]] = {}
-    last, tag_bytes, strips = -1, 0, 0
+    tags: set[int] = set()
+    tag_bytes, strips = 0, 0
     for i in range(count):
         tag, kind, n, raw = struct.unpack(order + "HHI4s", entries[i * 12:(i + 1) * 12])
-        if tag <= last:
-            raise NotPreviewable(f"its image directory is not in ascending tag order (tag {tag} after {last}): "
-                                 f"two readers would not read the same image from it")
-        last = tag
+        # A TAG TWICE, anywhere in the directory: libtiff reads the first of
+        # two entries, Pillow and a reader of its kind the last. Tags merely
+        # OUT OF ORDER are not refused: each reader reads each once, and the
+        # same value (the corpus count of 2026-11-26 found 39 honest plates of
+        # the Official Journal written so: 01972L0245's 2014 version, 32001R1639)
+        if tag in tags:
+            raise NotPreviewable(f"its tag {tag} appears twice in its image directory: two readers would not "
+                                 f"read the same image from it")
+        tags.add(tag)
         width = _TYPE_SIZE.get(kind)
         if width is None:
             raise NotPreviewable(f"its tag {tag} is of a field type ({kind}) TIFF 6.0 does not define")

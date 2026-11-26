@@ -410,12 +410,14 @@ point: an estimate is not a bound (app/ask/preview.py).
    **closed list**: the ones that corpus holds and no other (uncompressed,
    LZW, CCITT Group 3, PackBits, CCITT Group 4). JPEG-in-TIFF, Deflate and
    BigTIFF are refused until a corpus shows them.
-   **A directory two readers would read differently is refused**: tags out
-   of ascending order, a tag twice, a count or a type the standard does not
-   give a tag. libtiff takes the FIRST of two entries, Pillow and our reader
-   the LAST: the first cut of this renderer decoded a Deflate plate that
-   declared LZW in a second `Compression` entry (found by the independent
-   review, 2026-11-26, before anything was merged). The ORDER rule and the
+   **A directory two readers would read differently is refused**: a tag
+   twice, a count or a type the standard does not give a tag. libtiff takes
+   the FIRST of two entries, Pillow and our reader the LAST: the first cut
+   of this renderer decoded a Deflate plate that declared LZW in a second
+   `Compression` entry (found by the independent review, 2026-11-26, before
+   anything was merged). Tags merely out of ascending order are read: the
+   count over the corpus found 39 honest plates so written (two acts, every
+   language), and each reader reads each tag once. The TWICE rule and the
    values rule are general on purpose — every entry, whichever its tag:
    its values lie in the file and all of them together within 16 MiB. The
    COUNT and TYPE rule binds the tags the reader acts on; for any other, an
@@ -437,11 +439,17 @@ point: an estimate is not a bound (app/ask/preview.py).
    (180), read every 50 ms.
 
 **THE RULES AFTER THE COUNT ARE COUNTED TOO.** Every rule above that was
-added after München's header count — the directory's order and types, the
-tag values, the side, the strips, the per-kind model — is run over the
+added after München's header count — the directory's tags and types, the
+tag values, the side, the strips, the per-kind model — was run over the
 same corpus with the renderer's own reader (`tools/measure/
-preview_refusals.py`, no pixel decoded) before this section is in force;
-a rule that refuses an honest plate is the rule's defect.
+preview_refusals.py`, no pixel decoded; München, 2026-11-26, 822 s): of
+295,579 TIFFs, 40 refused — 39 honest plates for tags out of ascending
+order, so that rule was dropped (above), and one member whose directory
+declares no entry, not an image. No memory, side, strip or size rule
+refused anything; the 34,362 packaged TIFFs whose directory lies past
+their first MiB were all read and admitted, the largest held at 719 MiB by
+the model (9,954 × 18,942 RGB, 32019R1390 et). A rule that refuses an
+honest plate is the rule's defect.
 
 **Caps from the corpus**, as this section's were (München's header count
 over its 335,166 images, 2026-11-26, no pixel decoded — 300,775 read, of

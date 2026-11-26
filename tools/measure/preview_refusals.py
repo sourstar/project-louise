@@ -40,7 +40,7 @@ from typing import Any, Iterator
 
 #: a refusal's rule: its words before the first figure or file-specific value
 _RULES = (
-    ("not in ascending tag order", "a tag twice or out of order"),
+    ("appears twice", "a tag twice"),
     ("is of a type or count", "a tag's count or type"),
     ("field type", "a field type TIFF 6.0 does not define"),
     ("point at over", "over 16 MiB of tag values"),

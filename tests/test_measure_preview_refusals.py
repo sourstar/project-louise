@@ -31,7 +31,7 @@ def test_every_tiff_loose_or_in_a_zip_is_judged_by_the_renderers_own_rules(tmp_p
     assert json.loads(capsys.readouterr().out) == got
     assert got["files_seen"] == 6, "the hidden folder is not walked"
     assert (got["tiffs"], got["admitted"], got["refused"], got["unreadable"]) == (5, 2, 3, 1)
-    assert got["by_rule"] == {"over 400 MP declared": 1, "a tag twice or out of order": 1,
+    assert got["by_rule"] == {"over 400 MP declared": 1, "a tag twice": 1,
                               "a coding outside the list": 1}
     where = {e["where"] for ex in got["examples"].values() for e in ex}
     assert str(corpus / "pkg.zip") + "!doc/fig2.tif" in where, "a member is named where it lies"

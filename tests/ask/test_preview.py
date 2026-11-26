@@ -130,9 +130,10 @@ def test_what_is_not_a_readable_classic_tiff_is_refused_with_the_reason(data, wh
     # THE REVIEW'S FIRST FINDING: two Compression entries. libtiff decodes by the
     # FIRST (Deflate), this reader and Pillow's read the LAST (LZW): the closed
     # list of codings was no list
-    ([(256, 4, 1, 16), (257, 4, 1, 16), (259, 3, 1, 8), (259, 3, 1, 5)], "tag 259 after 259"),
-    ([(256, 4, 1, 16), (257, 4, 1, 16), (259, 3, 1, 7), (258, 3, 1, 8)], "tag 258 after 259"),
-    ([(256, 4, 1, 16), (256, 4, 1, 30_000), (257, 4, 1, 16)], "tag 256 after 256"),
+    ([(256, 4, 1, 16), (257, 4, 1, 16), (259, 3, 1, 8), (259, 3, 1, 5)], "tag 259 appears twice"),
+    # twice and apart, out of order around the second
+    ([(256, 4, 1, 16), (259, 3, 1, 7), (257, 4, 1, 16), (258, 3, 1, 8), (259, 3, 1, 5)], "tag 259 appears twice"),
+    ([(256, 4, 1, 16), (256, 4, 1, 30_000), (257, 4, 1, 16)], "tag 256 appears twice"),
     # a count or a type the standard does not give the tag: libtiff ignores it and takes its default
     ([(256, 4, 1, 16), (257, 4, 1, 16), (259, 3, 2, 5)], r"tag 259 is of a type or count \(3, 2\)"),
     ([(256, 3, 2, 16), (257, 4, 1, 16)], r"tag 256 is of a type or count \(3, 2\)"),
@@ -150,6 +151,31 @@ def _with_values(entries_of, n_bytes: int) -> bytes:
     count = len(entries_of(0))
     at = 8 + 2 + 12 * count + 4
     return header_only(entries=entries_of(at)) + b"\0" * n_bytes
+
+
+def _out_of_order(plate: bytes) -> bytes:
+    """`plate` with its first directory's entries written in reverse order,
+    as 39 plates of the Official Journal are (two acts, every language)."""
+    order = "<" if plate[:2] == b"II" else ">"
+    (at,) = struct.unpack(order + "I", plate[4:8])
+    (n,) = struct.unpack(order + "H", plate[at:at + 2])
+    entries = [plate[at + 2 + 12 * i: at + 14 + 12 * i] for i in range(n)]
+    return plate[:at + 2] + b"".join(reversed(entries)) + plate[at + 2 + 12 * n:]
+
+
+def test_tags_out_of_order_are_read_as_every_reader_reads_them(tmp_path):
+    """THE CORPUS COUNT (München, 2026-11-26, the renderer's own reader over
+    295,579 TIFFs): 39 honest plates were refused "not in ascending tag
+    order" — 01972L0245's 2014 version, 32001R1639 in every language. The
+    order gives no two readers anything to disagree about; a tag twice does."""
+    plate = _out_of_order(tiff((600, 800), "1", "group4"))
+    head = preview.tiff_header(io.BytesIO(plate))
+    assert (head.width, head.height, head.compression) == (600, 800, 4)
+    assert preview.refused(head, len(plate)) is None
+    path, dest = _container(tmp_path, {sha(plate): plate}), tmp_path / "out.png"
+    assert _child(path, plate, dest) == 0, "and Pillow, libtiff under it, renders it"
+    with Image.open(dest) as im:
+        assert im.size == (600, 800)
 
 
 def test_what_a_decoder_would_read_before_any_pixel_is_counted():
@@ -294,7 +320,7 @@ def test_the_child_refuses_before_decoding_and_says_why(tmp_path, capsys, monkey
     decoded = []
     monkeypatch.setattr(preview_child, "render", lambda *a, **k: decoded.append(a))
     for plate, why in ((bomb, "400-megapixel cap"), (deflate, "compression 8"),
-                       (twice, "not in ascending tag order"), (tiled, "a tile no image of that size")):
+                       (twice, "tag 259 appears twice"), (tiled, "a tile no image of that size")):
         assert _child(path, plate, tmp_path / "x.png") == preview.REFUSED
         assert why in json.loads(capsys.readouterr().out)["refused"]
     assert decoded == [], "no decoder was handed any of them"
