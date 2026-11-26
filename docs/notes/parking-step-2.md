@@ -1363,8 +1363,7 @@ can be stated". The engine at that load: "parking: this model can park,
 **43 cycles: one run id throughout, `created` 1 → 44 — one a return —,
 `canary_failed` 0, every cycle counted by the engine.** As on the stand-in.
 
-What the wrapper and a working node cost, as München reports them (not
-analysed further here):
+What the wrapper and a working node cost, as München reports them:
 
 | | on the engine directly, the node paused (§9) | directly, the node at work (§10) | behind the wrapper, the node at work |
 |---|---|---|---|
@@ -1372,6 +1371,15 @@ analysed further here):
 | a return with sixteen sentences | 228 ms | 312–341 ms | 377–392 ms; 881–1,378 ms in the three cycles right after the load |
 | a parked model shut down | 202 ms | — | 1,314 ms |
 | the load afresh | 4.17 s | — | 10.58 s |
+
+**The three slow returns right after the load are the sixteen sentences,
+not the return** (München, from the copy's log of those three cycles): the
+weights unparked in 159.67 / 249.19 / 153.06 ms and the context created in
+84.22 / 101.48 / 38.57 ms, its canary reproduced each time — about a quarter
+of a second in cycle 1. The other 1.07 s of its 1,378 ms are the sixteen
+single-sentence requests the tool's "return" includes, 5 to 139 ms each on
+a card shared with the worker's embedding. The log of the forty later
+cycles had rolled: their parts are not known, only their totals.
 
 **NOT shown, still:** a failed return on a card (no switch for it there);
 any model but bge-m3 F16; the gate's sixteen fingerprint texts (the tool's

@@ -104,7 +104,10 @@ def test_the_card_s_row_behind_the_live_wrapper_is_recorded_with_its_counts():
                  "{(409, 'model_busy'): 2716}", "HTTP 200 in 1314 ms", "HTTP 200 in 10.58 s",
                  "**43 cycles: one run id throughout, `created` 1 → 44 — one a return —,",
                  "| a return with sixteen sentences | 228 ms | 312–341 ms | 377–392 ms;",
-                 "**NOT shown, still:** a failed return on a card"):
+                 "**NOT shown, still:** a failed return on a card",
+                 # where the time of the three slow returns went, and what is not known
+                 "weights unparked in 159.67 / 249.19 / 153.06 ms and the context created in\n84.22 / 101.48 / 38.57 ms",
+                 "The log of the forty later\ncycles had rolled: their parts are not known, only their totals."):
         assert said in section, said
     # the figures hang together: three rows of cycles, a context a return, sixteen calls a request
     assert 3 + 20 + 20 == 43 == 44 - 1
