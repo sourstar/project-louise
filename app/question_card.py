@@ -137,14 +137,21 @@ def _loaded(server: str, model: str) -> bool | None:
 
 def _give_back(server: str, model: str) -> bool:
     """One corpus encoder gives the card back to the question: PARKED where
-    LocalAI says it parks (its weights to host memory, back in the time of a
-    copy when embedding resumes — docs/notes/parking-step-2.md), stopped
-    otherwise, as before (`model_evict.give_back`). True when its room is
-    free; a busy one is asked again by the caller."""
+    LocalAI says it parks AND its run is admitted to (`model_evict._may_park`:
+    its weights to host memory, back in the time of a copy when embedding
+    resumes — docs/notes/parking-step-2.md), stopped otherwise, as before
+    (`model_evict.give_back`). True when its room is free; a busy one is
+    asked again by the caller."""
     from app import model_evict
     held = model_load.held_sizes(server) or {}
-    v = model_evict.Loaded(model, int(held.get(model, (None, 0))[1] or 0), None,
-                           parks=model in model_load.parks(server), parked=model in model_load.parked(server))
+    _pid, size = held.get(model, (None, 0))
+    parked = model in model_load.parked(server)
+    says = model in model_load.parks(server)
+    # PARKED ONLY AS A RUN ADMITTED TO PARK, as the evictor parks (the second
+    # review, 2026-11-26: this path parked every corpus encoder that says it parks)
+    admitted = says and not parked and model_evict._may_park(server, model)
+    v = model_evict.Loaded(model, int(size or 0), None, parks=admitted, parked=parked,
+                           unadmitted=says and not parked and not admitted)
     return model_evict.give_back(server, v)[0] != model_evict.KEPT
 
 
