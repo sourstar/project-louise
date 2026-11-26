@@ -413,9 +413,35 @@ def filename(question: str, when: datetime) -> str:
 # ---- the plates ------------------------------------------------------------
 
 def _plate_bytes(collection: str, uid: str, hash_: str) -> tuple[bytes, str]:
-    """A plate's bytes and type, by the figure route's own function."""
-    from app.ask import figures as figures_mod
-    return figures_mod.figure_bytes(collection, uid, hash_)
+    """What the page drew for a plate, and its type: the plate's own bytes
+    by the figure route's own functions — or, for a plate the page shows as
+    this node's PREVIEW (a TIFF: app/ask/preview.py), that PNG, kept or
+    rendered now. `figures.FigureNotServed` where it is not served;
+    `PlateNotDrawn` with the reason where the route would refuse it inline —
+    said BEFORE its bytes are read, so at most the display cap's 16 MiB is
+    ever held for one: EUR-Lex's largest plate is 565 MB and the PDF is laid
+    out in the web's process."""
+    from app.ask import figures as figures_mod, preview as preview_mod
+    path, want, entry, _tree = figures_mod.figure_place(collection, uid, hash_)
+    media = str(entry.get("media_type") or "")
+    if media in preview_mod.PREVIEW_OF:
+        try:
+            return preview_mod.png(collection, uid, hash_), "image/png"
+        except preview_mod.NotPreviewable as e:
+            raise PlateNotDrawn(f"not displayable: {e}") from None
+    size = figures_mod.held_size(path, want)
+    why = figures_mod.entry_not_displayable({"media_type": media, "bytes": size})
+    if why is not None:
+        raise PlateNotDrawn(f"not displayable: {why}")
+    return figures_mod.placed_bytes(path, want), media
+
+
+class PlateNotDrawn(Exception):
+    """A plate the PDF lists and does not draw: the reason, in words."""
+
+
+_SPENT = (f"not drawn: this PDF's {MAX_PLATE_BYTES // (1024 * 1024)} MiB of plates are spent; "
+          "it is on the page")
 
 
 def plate_shown(p: PdfPlate, budget: list[int]) -> dict:
@@ -438,15 +464,15 @@ def plate_shown(p: PdfPlate, budget: list[int]) -> dict:
         data, media = _plate_bytes(p.collection, p.uid, p.hash)
     except figures_mod.FigureNotServed as e:
         return {"kind": "none", "caption": caption, "note": f"not drawn: {e}"}
+    except PlateNotDrawn as e:
+        return {"kind": "none", "caption": caption, "note": str(e)}
     except Exception as e:   # noqa: BLE001 — a plate left out with its reason, never a PDF refused
         return {"kind": "none", "caption": caption, "note": f"not drawn: {type(e).__name__}"}
     why = figures_mod.not_displayable(data, media)
     if why is not None:
         return {"kind": "none", "caption": caption, "note": f"not displayable: {why}"}
     if len(data) > budget[0]:
-        return {"kind": "none", "caption": caption,
-                "note": f"not drawn: this PDF's {MAX_PLATE_BYTES // (1024 * 1024)} MiB of plates are spent; "
-                        "it is on the page"}
+        return {"kind": "none", "caption": caption, "note": _SPENT}
     budget[0] -= len(data)
     return {"kind": "img", "caption": caption,
             "src": f"data:{media};base64,{base64.b64encode(data).decode('ascii')}"}

@@ -30,15 +30,33 @@ So:
   - THE PNG IT MAKES passes 08 §8.7's own display rule (`figures.
     not_displayable`) before it is kept or served, like any plate.
   - A refusal is REMEMBERED beside the cache (`<hash>.no`, with its reason),
-    so a figure that cannot be previewed costs one attempt, not one a view.
+    so a figure that cannot be previewed costs one attempt, not one a view —
+    for good where the reason is the file's, for an hour where it may be the
+    moment's (the child not done within its seconds, or killed by another).
+  - THE CHILD GOES FIRST should the web's memory run out (`oom_score_adj`,
+    as a parse child before the worker): the kernel takes the renderer, the
+    web keeps serving, and that plate is offered as a file.
 
 THE CAPS ARE SET FROM THE CORPUS, as 08 §8.7's were (München's header count
-of EUR-Lex's 335,166 images, 2026-11-26, no pixel decoded): declared pixels
+of EUR-Lex's 335,166 images, 2026-11-26, no pixel decoded — 300,775 read:
+250,220 TIFF and 50,555 JPEG, which the page shows itself; 34,362 packaged
+TIFFs whose directory lies past their first MiB were not): declared pixels
 p50 0.137 MP, p99 27.7 MP, max 324.7 MP (three certificate forms of 15,794 ×
 20,561, 8-bit, uncompressed); decoded size p99 40 MiB, max 539 MiB; the
 largest file 565.7 MB (9,954 × 18,942 RGB). So 400 MP declared, 1 GiB decoded
 and 1 GiB of file: a little over the largest honest one each. Over a cap the
 figure is "not displayable — download", as before.
+
+MEASURED (2026-11-26, synthetic pages of the corpus's shapes, this session's
+machine, the child's start included): a 2,400 × 3,200 fax page 0.30 s and
+88 MiB resident; 9,933 × 14,043 at 1 bit 0.56 s and 352 MiB; the largest
+declared, 15,794 × 20,561 at 8 bits uncompressed, 0.76 s and 406 MiB; the
+largest file, 9,954 × 18,942 RGB uncompressed, 1.71 s and 926 MiB. So ONE
+AT A TIME is a third of a second a plate for the common case, and the
+child's bound (1,792 MiB and the file's own size) is about twice the worst
+honest one. Rendering several small ones at once is the known next step if
+a page of plates is seen to wait: it needs the declared size before the
+child is admitted, which only the child reads today.
 
 STANDARD, WRITTEN DOWN (CLAUDE.md): the decoder is Pillow's (libtiff), the
 library every Python image path uses, declared in requirements.txt from this
@@ -71,10 +89,10 @@ WIDTH, MAX_HEIGHT = 1600, 6400
 MAX_SOURCE_BYTES = 1 << 30
 MAX_SOURCE_PIXELS = 400_000_000
 MAX_DECODED_BYTES = 1 << 30
-#: TIFF `Compression` values a preview is rendered from: those EUR-Lex holds
-#: (uncompressed, CCITT G3 and G4, LZW, PackBits) and CCITT's modified Huffman
-COMPRESSIONS = {1: "uncompressed", 2: "CCITT modified Huffman", 3: "CCITT Group 3", 4: "CCITT Group 4",
-                5: "LZW", 32773: "PackBits"}
+#: TIFF `Compression` values a preview is rendered from: those EUR-Lex's
+#: 250,220 read TIFF headers hold, and no other (uncompressed 117,194; LZW
+#: 76,325; CCITT Group 3 28,062; PackBits 21,851; CCITT Group 4 6,788)
+COMPRESSIONS = {1: "uncompressed", 3: "CCITT Group 3", 4: "CCITT Group 4", 5: "LZW", 32773: "PackBits"}
 #: the child is killed past this many seconds, or past the source's bytes plus
 #: the decoded cap plus this margin of resident memory
 RENDER_TIMEOUT_S = 180.0
@@ -84,6 +102,13 @@ REFUSED = 3
 #: how long a second request waits for the one renderer before it is told
 #: "busy" (not remembered: the next view asks again)
 WAIT_S = 60.0
+#: how long a refusal that may be the MOMENT's is remembered — the child not
+#: done within its seconds on a loaded node, or killed by something else —
+#: before the next view tries again. A refusal that is the FILE's (its
+#: header, its coding, a decoder that fails on it, its memory) is kept.
+RETRY_S = 3600
+#: `_render`'s codes besides the child's own exit code
+TIMED_OUT, OVER_MEMORY = "seconds", "memory"
 _one_at_a_time = threading.Lock()
 
 
@@ -211,14 +236,30 @@ def _files(shard_tree: Path, want: str) -> tuple[Path, Path]:
     return base / f"{want}.w{WIDTH}.png", base / f"{want}.w{WIDTH}.no"
 
 
-def _remember_refusal(no: Path, why: str) -> None:
+def _remember_refusal(no: Path, why: str, for_s: int | None = None) -> None:
+    """Keep why no preview is shown, for good or — `for_s` — until then."""
+    said: dict = {"why": why, "at": int(time.time())}
+    if for_s is not None:
+        said["until"] = said["at"] + for_s
     try:
         no.parent.mkdir(parents=True, exist_ok=True)
         tmp = no.with_name(f".{no.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(json.dumps({"why": why, "at": int(time.time())}), encoding="utf-8")
+        tmp.write_text(json.dumps(said), encoding="utf-8")
         os.replace(tmp, no)
     except OSError:
         pass                                # not remembered: the next view tries again
+
+
+def _remembered(no: Path) -> str | None:
+    """The refusal kept for this figure that still holds, or None."""
+    try:
+        said = json.loads(no.read_text(encoding="utf-8"))
+        why, until = str(said["why"]), said.get("until")
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if isinstance(until, (int, float)) and time.time() >= until:
+        return None
+    return why
 
 
 def _rss_bytes(pid: int) -> int | None:
@@ -232,27 +273,34 @@ def _rss_bytes(pid: int) -> int | None:
     return None
 
 
-def _render(container: Path, want: str, source_bytes: int, dest: Path) -> tuple[int, str]:
-    """Run the child over one figure: (its exit code, what it said). Killed —
-    exit -9 and the reason — past RENDER_TIMEOUT_S or past its memory bound."""
+def _render(container: Path, want: str, source_bytes: int, dest: Path) -> tuple[int | str, str]:
+    """Run the child over one figure: (its exit code, what it said) — or
+    (`TIMED_OUT` | `OVER_MEMORY`, the reason) when THIS process killed it,
+    past RENDER_TIMEOUT_S or past its memory bound."""
     limit = min(source_bytes, MAX_SOURCE_BYTES) + MAX_DECODED_BYTES + RSS_MARGIN_BYTES
     child = subprocess.Popen(
         [sys.executable, "-m", "app.ask.preview_child", str(container), want, str(dest),
          str(WIDTH), str(MAX_HEIGHT)],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=str(Path(__file__).resolve().parents[2]))
-    deadline, killed = time.monotonic() + RENDER_TIMEOUT_S, ""
+    deadline = time.monotonic() + RENDER_TIMEOUT_S
     while child.poll() is None:
         rss = _rss_bytes(child.pid)
+        killed: tuple[str, str] | None = None
         if time.monotonic() > deadline:
-            killed = f"it was not rendered within {RENDER_TIMEOUT_S:.0f} s"
+            killed = (TIMED_OUT, f"it was not rendered within {RENDER_TIMEOUT_S:.0f} s (asked again within "
+                                 f"the hour, it is tried again)")
         elif rss is not None and rss > limit:
-            killed = f"rendering it held over {limit / (1 << 20):,.0f} MiB"
+            killed = (OVER_MEMORY, f"rendering it held over {limit / (1 << 20):,.0f} MiB")
         if killed:
             child.kill()
             child.wait()
-            return -9, killed
+            if child.stdout:
+                child.stdout.close()
+            return killed
         time.sleep(0.05)
     out = (child.stdout.read() if child.stdout else b"").decode("utf-8", "replace")
+    if child.stdout:
+        child.stdout.close()
     return int(child.returncode), out.strip()
 
 
@@ -272,10 +320,9 @@ def png(collection: str, uid: str, hash_: str, *, root: Path | None = None) -> b
         return kept.read_bytes()
     except OSError:
         pass
-    try:
-        raise NotPreviewable(str(json.loads(no.read_text(encoding="utf-8"))["why"]))
-    except (OSError, ValueError, KeyError):
-        pass
+    why = _remembered(no)
+    if why is not None:
+        raise NotPreviewable(why)
     try:
         size = fig.read_index(container)[want].bytes
     except (fig.FigureError, OSError, KeyError):
@@ -292,8 +339,12 @@ def png(collection: str, uid: str, hash_: str, *, root: Path | None = None) -> b
             return kept.read_bytes()            # rendered while this request waited
         except OSError:
             pass
+        why = _remembered(no)                   # refused while this request waited
+        if why is not None:
+            raise NotPreviewable(why)
         kept.parent.mkdir(parents=True, exist_ok=True)
         tmp = kept.with_name(f".{kept.name}.{os.getpid()}.tmp")
+        for_s: int | None = None                # how long the refusal holds: None is for good
         try:
             code, said = _render(container, want, size, tmp)
             if code == 0:
@@ -308,14 +359,25 @@ def png(collection: str, uid: str, hash_: str, *, root: Path | None = None) -> b
                     said = str(json.loads(said)["refused"])
                 except (ValueError, KeyError, TypeError):
                     said = "its header was refused"
-            elif code != -9:
+            elif code == TIMED_OUT:
+                for_s = RETRY_S                 # the node's load, perhaps: not the file's for good
+            elif code == OVER_MEMORY:
+                pass
+            elif isinstance(code, int) and code < 0:
+                # killed, and not by this process: the kernel for memory (the
+                # child puts itself first), a stop of the container
+                said, for_s = (f"the renderer was killed on it (signal {-code}); asked again within the "
+                               f"hour, it is tried again"), RETRY_S
+            else:
                 said = f"the renderer failed on it (exit {code})"
         finally:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-        _remember_refusal(no, said)
+            # the child's own temporary copy too: a child that was killed left it
+            for left in (tmp, tmp.with_name(tmp.name + ".src")):
+                try:
+                    left.unlink()
+                except OSError:
+                    pass
+        _remember_refusal(no, said, for_s)
         raise NotPreviewable(said)
     finally:
         _one_at_a_time.release()

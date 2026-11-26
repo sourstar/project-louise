@@ -60,10 +60,17 @@ measured (published figures disagree).
   for gutenberg collection"; no OCR; "Option A"; "an image whose content is present also in another form
   is still valid and both shall appear in the results").** Carried: the origin's own TIFF and JPEG bytes
   as figures, a part a peer may hold or not; the collection re-created with `record_line` 2 under RULE 1,
-  under the name EUR-Lex5 ("Second option"). Shown (MINE, not built yet): each node renders a PNG preview
-  of about 1,600 px from the TIFF it holds, in a child process, caps read from the header before any
-  pixel, kept as derived data on the fast drive; Pillow becomes a declared dependency (it rides in with
-  another package today). The caps are set from München's header count of the corpus (335,166 images,
+  under the name EUR-Lex5 ("Second option"). Shown (MINE; BUILT the same day, app/ask/preview.py and
+  preview_child.py, 08 §8.7 "A preview" and 07 §7.4 amended): each node renders a PNG preview
+  of at most 1,600 px from the TIFF it holds, in a child process, caps read from the header before any
+  pixel, kept as derived data on the fast drive; Pillow is now DECLARED (WeasyPrint has brought it since
+  11-11, constraints.txt already pinned it: no image change). The Ask page, the reader page and the
+  saved PDF all draw it, the plate itself a download beside it. Measured on synthetic pages of the
+  corpus's shapes: 0.30 s and 88 MiB for a fax page, 1.71 s and 926 MiB for the largest file. TWO
+  THINGS THE CORPUS'S SIZE FORCED BESIDE IT: the figure route read every plate WHOLE before deciding to
+  show it (565 MB into a web budgeted under 1 GB) — it now refuses on the type and the container's
+  length first, and sends a download over 32 MiB in pieces, hashed as it goes; and Pillow reduces
+  16-bit grey by CLIPPING (a ramp came out white) — the child takes the high byte. The caps are set from München's header count of the corpus (335,166 images,
   36,971 units; 300,775 headers read): declared pixels p50 0.137 MP, p99 27.7, max 324.7 (three
   certificate forms, 15,794 × 20,561, 8-bit, uncompressed); 46 over the browser's 64 MP, 5 over 256;
   decoded size p99 40 MiB, max 539 MiB; the largest file 565.7 MB (9,954 × 18,942 RGB). So: at most

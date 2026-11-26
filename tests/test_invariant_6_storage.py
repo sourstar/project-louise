@@ -205,6 +205,8 @@ _DERIVED_WRITERS = {
     "app/plugins/wikidata/pack.py": "the pack and label table, rebuilt from the dump",
     "app/plugins/legi/pack.py": "the per-tarball pack and the scan's facts, rebuilt from the tarballs",
     "app/ask/part_cache.py": "per-part search facts, rebuilt from the part on a miss",
+    "app/ask/preview.py": "a PNG preview of a plate the page cannot show (a TIFF), rendered again from the "
+                          "plate held on a miss",
     "app/speech.py": "synthesized sentences, made again by the speech model on a miss",
     "app/hold/claim_index.py": "a large annotations snapshot's claim index, rebuilt from its held parts",
     "app/acquire/work_trees.py": "eurlex's whole tree per work, fetched again from Cellar on a miss",

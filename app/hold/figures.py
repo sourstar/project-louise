@@ -295,6 +295,15 @@ class _Extent:
     def readable(self) -> bool:
         return True
 
+    def seekable(self) -> bool:
+        return False
+
+    def writable(self) -> bool:
+        return False
+
+    def close(self) -> None:
+        """Nothing: the file is its opener's, and is closed by it."""
+
     @property
     def closed(self) -> bool:
         return self._f.closed
@@ -308,7 +317,8 @@ def stream_figure(path: Path, sha256: str, chunk: int = STREAM_CHUNK) -> Iterato
     call), hashed as it goes. A plate that does not hash to its key, or does
     not have the length its index states, RAISES `FigureError` after its last
     piece: a receiver that was sent pieces sees the transfer fail, never a
-    whole file that is not the plate."""
+    whole file that is not the plate. One that decompresses PAST that length
+    raises at the piece that passes it, and that piece is not handed on."""
     want = bare(sha256)
     entry = read_index(path).get(want)
     if entry is None:
@@ -318,11 +328,22 @@ def stream_figure(path: Path, sha256: str, chunk: int = STREAM_CHUNK) -> Iterato
         with pa.CompressedInputStream(pa.PythonFile(_Extent(f, entry.offset, entry.frame_bytes), mode="r"),
                                       "zstd") as plain:
             while True:
-                piece = plain.read(chunk)
+                try:
+                    piece = plain.read(chunk)
+                except (pa.ArrowException, OSError) as e:
+                    # zstd's own error names no plate (as in `walk`)
+                    raise FigureError(f"{Path(path).name}: figure {want[:12]}… does not decompress "
+                                      f"({str(e)[:120]})") from None
                 if not piece:
                     break
-                sha.update(piece)
                 sent += len(piece)
+                if sent > entry.bytes:
+                    # a frame that decompresses to more than its index states is
+                    # stopped HERE, not at its end: a few bytes of zstd can state
+                    # gigabytes, and the receiver writes what it is handed
+                    raise FigureError(f"{Path(path).name}: figure {want[:12]}… decompresses past the "
+                                      f"{entry.bytes} bytes its index states")
+                sha.update(piece)
                 yield piece
     if sent != entry.bytes or sha.hexdigest() != want:
         raise FigureError(f"{Path(path).name}: figure {want[:12]}… streamed {sent} bytes hashing to "

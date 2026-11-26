@@ -364,13 +364,29 @@ def figure_bytes(collection: str, uid: str, hash_: str, *, root: Path | None = N
     OPAQUE BYTES: nothing here decodes or trusts them beyond their hash.
     Whether they may be SHOWN is `not_displayable`, which the route asks
     before it answers inline (08 §8.7, amended 2026-10-25)."""
-    from app.hold import figures as fig
     path, want, entry, _tree = figure_place(collection, uid, hash_, root=root)
+    return placed_bytes(path, want), str(entry.get("media_type") or "")
+
+
+def held_size(path: Path, want: str) -> int:
+    """How many bytes the plate `want` IS, by the container that holds it —
+    asked before its bytes are read at all (a plate over the display cap is
+    refused inline, one over the streaming threshold is sent in pieces).
+    404 where this node does not hold it."""
+    from app.hold import figures as fig
     try:
-        data = fig.read_figure(path, want)
+        return int(fig.read_index(path)[want].bytes)
+    except (fig.FigureError, OSError, KeyError):
+        raise FigureNotServed(404, f"{want[:12]}… is not held here yet") from None
+
+
+def placed_bytes(path: Path, want: str) -> bytes:
+    """The bytes of a plate `figure_place` located, checked against its hash."""
+    from app.hold import figures as fig
+    try:
+        return fig.read_figure(path, want)
     except (fig.FigureError, OSError):
         raise FigureNotServed(404, f"{want[:12]}… is not held here yet") from None
-    return data, str(entry.get("media_type") or "")
 
 
 def sniff(data: bytes) -> str | None:

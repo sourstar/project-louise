@@ -253,19 +253,24 @@ async def figure(collection: str, uid: str, hash: str, download: bool = False):
             return Response(content=png, media_type="image/png", headers={
                 **nosniff, "X-Louise-Preview": f"a preview rendered by this node from the plate's {media}; "
                                                f"download=1 answers the plate itself"})
-        size = entry.get("bytes")
-        if download and isinstance(size, int) and size > STREAMED_OVER:
-            # in pieces, hashed as it goes: a plate that is not its hash fails the transfer
-            try:
-                await run_in_threadpool(fig.read_index, path)        # held at all? (404 before any byte)
-            except (fig.FigureError, OSError):
-                raise figures_mod.FigureNotServed(404, f"{want[:12]}… is not held here yet") from None
+        # its length by the CONTAINER's word, before any of its bytes: 404 where it is not held
+        size = await run_in_threadpool(figures_mod.held_size, path, want)
+        if download and size > STREAMED_OVER:
+            # in pieces, hashed as it goes and held to that length: a plate that
+            # is not its hash fails the transfer
             name = figures_mod.download_name(hash, media)
             return StreamingResponse(fig.stream_figure(path, want), media_type="application/octet-stream",
                                      headers={**nosniff, "Content-Length": str(size),
                                               "Content-Disposition": f'attachment; filename="{name}"',
                                               "Content-Security-Policy": "sandbox"})
-        data, media = await run_in_threadpool(figures_mod.figure_bytes, collection, uid, hash)
+        if not download:
+            # refused on what the record and the container say, BEFORE its bytes
+            # are read: a plate that will not be shown is not held to find that out
+            why = figures_mod.entry_not_displayable({"media_type": media, "bytes": size})
+            if why is not None:
+                return JSONResponse({"exit": 2, "error": f"not displayable: {why}; ask with download=1 for "
+                                                         f"the file"}, status_code=415, headers=nosniff)
+        data = await run_in_threadpool(figures_mod.placed_bytes, path, want)
     except figures_mod.FigureNotServed as e:
         return JSONResponse({"exit": 2, "error": str(e)}, status_code=e.status)
     except CodexError as e:

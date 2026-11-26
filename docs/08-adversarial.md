@@ -384,6 +384,61 @@ in a figure is not followed. This is 01's "never anything executable",
 which figures bind harder than any other member — and it is why carrying
 an SVG is safe where showing one is not.
 
+**A preview: the one decoder a node runs** (*amended 2026-11-26; operator,
+of EUR-Lex's pictures: "we must show pictures in the results as it is done
+for gutenberg collection", and of the three ways to do it, "Option A"*).
+The Publications Office gives its pictures as TIFF — 335,166 of them in
+EUR-Lex — which is not on the closed list and which no browser renders. So
+a node that holds a TIFF plate may render a PNG PREVIEW of it, at most
+1,600 pixels wide, and show that; the plate's own bytes stay what they
+were, carried and offered as a download beside it. Nothing published,
+hashed or exchanged changes: the preview is derived data (invariant 6),
+made on the node that shows it, never signed, never sent to a peer, made
+again on a miss. The browser still receives only PNG, checked by the
+display rule above like any plate.
+
+This is the first time a node itself decodes a figure, and the sentence
+above — "only a peer that DISPLAYS one decodes it" — now reads: a browser,
+or this renderer. What bounds it (app/ask/preview.py):
+
+- **The header first, by a reader of our own**: the first image directory
+  of a classic TIFF, five tags. Declared pixels, the bytes they decode to
+  and the compression are held to caps BEFORE the decoder is handed the
+  file — as the two caps above are for a browser.
+- **Caps from the corpus**, as this section's were (München's header count
+  over its 335,166 images, 2026-11-26, no pixel decoded — 300,775 read, of
+  which 250,220 TIFF and 50,555 JPEG that the page shows itself; 34,362
+  packaged TIFFs whose directory lies past their first MiB were not:
+  declared pixels p50
+  0.137 MP, p99 27.7 MP, max 324.7 MP; decoded bytes p99 40 MiB, max
+  539 MiB; the largest file 565.7 MB): 400 megapixels declared, 1 GiB
+  decoded, 1 GiB of file. Over a cap the plate is "not displayable —
+  download", as before.
+- **A closed list of codings**, the ones that corpus holds and no other:
+  uncompressed, LZW, CCITT Group 3, PackBits, CCITT Group 4. JPEG-in-TIFF,
+  Deflate and BigTIFF are refused until a corpus shows them.
+- **A child process**, one at a time on a node: the web never holds the
+  plate's bytes and never runs the decoder. The child reads the plate in
+  pieces, hashed as they go; its parent kills it past 180 s or past its
+  memory, and the kernel takes the child before the web should memory run
+  out. Measured on the two largest honest shapes: 0.8 s and 406 MiB for
+  15,794 × 20,561 at 8 bits, 1.7 s and 926 MiB for 9,954 × 18,942 RGB;
+  0.3 s and 88 MiB for a 2,400 × 3,200 fax page (synthetic pages, this
+  session's machine).
+- **A refusal is remembered** with its reason, so a plate that cannot be
+  previewed costs one attempt: for good where the reason is the file's,
+  for an hour where it may be the moment's.
+
+The decoder is Pillow's (libtiff), declared and pinned. A sandbox proper —
+seccomp or landlock around the child, or a decoder compiled to WebAssembly
+— is the stronger isolation and is written down for the day a preview is
+rendered for a publisher that is not an institution's official journal; it
+costs a system dependency in the image.
+
+Extending `PREVIEW_OF` beyond TIFF is an amendment to this section, exactly
+as extending the display list is. SVG is not a candidate: rendering it is
+what runs it.
+
 **What is out of scope, and stated so nobody assumes otherwise.** A plate
 whose hash is right, whose type is right and whose bytes decode, but
 which is not the picture the caption describes, is not detectable here —
