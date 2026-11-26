@@ -127,6 +127,41 @@ unparks AND the wrapper's `created` — a return that fails is answered 200 by
 a new process under the same run id, and only those counts starting again
 say so.
 
+### 4.1 A pinned copy and the gate's twin, on the card (München, 2026-11-26 06:44:10–06:44:54Z)
+
+On the operator's word ("Yes for pinned parking test on the card"), behind
+the live wrapper, the node working and Legal's dump build running. A copy of
+the live `vega-bge-m3` with `park: true`, the two env lines and `pinned: true`
+KEPT, then its twin written as `gate_twin.ensure` writes it and pinned.
+
+| | the pinned copy | its twin (`…--gate`) |
+|---|---|---|
+| parked by `POST /backend/park` | yes: 345 and 382 ms, 997 MiB given back | yes: 396 ms |
+| back by the request | 1.58 and 1.22 s, vectors identical | 1.21 s, identical |
+| the engine's counts | +1 parked, +1 back each cycle | the same |
+| the run | one run id on all receipts | THE SAME run id, the same sixteen vectors |
+| the config written through `/models/import` | — | keeps `park: true` AND the env; `/system` lists it, the monitor counts |
+| cycles | 2, then 412 `host_memory_floor` | 1, then 412 |
+
+- **The pin is no obstacle** (Tensor's §12 off the node, now on the card).
+- **The keeper's first floor** (§5 row 2, seen): at 06:44:51Z, once, "resident:
+  LocalAI's park floor set to 12,288 MiB … (it was 8,192) — qual-nx-pin,
+  qual-nx-pin--gate can be parked". München had set 8 GiB by hand for the
+  test; the keeper, which holds the floor wherever a loaded model says it
+  parks, put the node's back between two rows. A floor set by hand lasts
+  until the keeper's next beat.
+- **The floor refused the later parks**: 8.7–9.7 GiB available under a 12 GiB
+  floor while the dump build ran. During a heavy build nothing parks on this
+  node — models are stopped instead, as before — and a parking model's gate
+  defers. What parking gives depends on `page_floor_gib`; put to the operator
+  with rows once a real model parks.
+- **The byte check's price is NOT measured yet.** With `GGML_SYCL_PARK_VERIFY=1`
+  a park took 345–396 ms (135–234 without, the night before) and a return
+  1.2–1.6 s (0.23–0.39) — but these returns were sixteen sentences on a card
+  at 28.6–31.3 GiB, those one sentence on a card with room. The clean row is
+  the same copy and request with the line and without, on a quiet card; owed.
+- The monitor answers 500 "not currently loaded" before a model's first load.
+
 ## 5. Rows owed from the node (none exists yet: nothing parks until a model's file says `park: true`)
 
 A model parks when its file says `park: true` AND its `env` carries

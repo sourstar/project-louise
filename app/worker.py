@@ -2661,6 +2661,46 @@ _paused_aborts: set[str] = set()
 _acquire_lock = threading.Lock()
 
 
+#: "DO NOT FETCH" TAKES EFFECT AT ONCE (Legal and München, 2026-11-26). Per
+#: collection: set when its file's `acquire_enabled` goes from on to off
+#: (`_apply_acquire_switch`), so a fetch ALREADY RUNNING ends at its next unit
+#: — as a pause and a freeze end it. Until then the switch was read where a
+#: fetch STARTS and nowhere else: EUR-Lex5.next's went on asking Cellar for
+#: 4 min 45 s after the worker had read `acquire_enabled = false` and logged
+#: "config changed", 164 more files, until `node pause` aborted it — while a
+#: newer bulk dump sat unused (CLAUDE.md, the bulk first: a pass that asks
+#: the API while the bulk is unused is a defect). The same omission as
+#: seed-only's ten hours of 2026-09-13 below, one switch further.
+_acquire_off_events: dict[str, threading.Event] = {}
+_acquire_off_lock = threading.Lock()
+
+
+def _acquire_off_event(name: str) -> threading.Event:
+    with _acquire_off_lock:
+        return _acquire_off_events.setdefault(name, threading.Event())
+
+
+def _apply_acquire_switch(con, prev, kept) -> None:
+    """The collection's file turned its acquisition off (or on): published to
+    the fetch in flight. Off: its corpus fetch and its archive fetch end at
+    their unit, the `.part` kept and the offset committed, no error on any
+    document; said once. On: nothing to stop — the discovery the same change
+    asks starts the fetch (`_acquire`, which lifts the event)."""
+    if prev.acquire_enabled and not kept.acquire_enabled:
+        _acquire_off_event(kept.name).set()
+        with _acquire_lock:
+            running = [what for what, threads in (("corpus fetch", _acquire_threads),
+                                                  ("archive fetch", _archive_threads))
+                       if (t := threads.get(kept.name)) is not None and t.is_alive()]
+        db.log_event(con, "info", "acquire",
+                     f"{kept.name}: acquisition turned off (`acquire_enabled = false`): "
+                     + (f"the {' and the '.join(running)} in flight end(s) at the next unit — what landed is "
+                        f"kept, nothing is marked failed" if running else "nothing is being fetched")
+                     + "; what is there is still scanned, parsed, indexed and embedded")
+    elif kept.acquire_enabled and not prev.acquire_enabled:
+        _acquire_off_event(kept.name).clear()
+
+
 def _background_priority() -> None:
     """Acquisition, archive fetches and discovery yield the CPU to the
     encoder feeders like indexing does (docs/notes/scheduling.md §12) —
@@ -2707,7 +2747,9 @@ def _acquire_worker(collection, spec, profile: str, reason: str) -> None:
         # A FREEZE IS PART OF THE STOP too (07 §7.3 `node freeze`): a fetch
         # already running when the collection is frozen ends at its unit, its
         # `.part` kept and the offset committed; the unfreeze asks it again
-        stop = _AnyStop(_stop, _gone_event(collection.name), _paused, _frozen_event(collection.name))
+        # ...AND SO IS ITS FILE TURNING ACQUISITION OFF (`_acquire_off_event`)
+        stop = _AnyStop(_stop, _gone_event(collection.name), _paused, _frozen_event(collection.name),
+                        _acquire_off_event(collection.name))
         result = acquire_engine.run_acquisition(
             con, collection, spec, profile, stop=stop)
         fetched_any = bool(result.get("fetched"))
@@ -2908,10 +2950,20 @@ def _acquire(con, collection, reason: str) -> None:
         with _acquire_lock:
             _paused_aborts.add(collection.name)
         return
+    off = _acquire_off_event(collection.name)
     with _acquire_lock:
         existing = _acquire_threads.get(collection.name)
         if existing is not None and existing.is_alive():
+            if off.is_set():
+                # TURNED OFF AND ON AGAIN while the fetch the "off" stopped is
+                # still unwinding: this call would return silently and the
+                # next fetch would wait for the next discovery, 360 minutes
+                # away. Asked again once that thread is gone, by the re-arm a
+                # pause's stop uses (`_rearm_paused_aborts`)
+                off.clear()
+                _paused_aborts.add(collection.name)
             return
+        off.clear()                 # acquisition is on here (checked above): nothing to stop
         thread = threading.Thread(
             target=_acquire_worker,
             args=(collection, spec, collection.profile or "demo", reason),
@@ -2937,7 +2989,8 @@ def _archive_worker(collection, reason: str) -> None:
         # STARTING one — so a shard already downloading ignored a pause.
         result = bundle_genesis_fetch.run_fetcher(
             con, collection,
-            stop=_AnyStop(_stop, _gone_event(collection.name), _paused, _frozen_event(collection.name)),
+            stop=_AnyStop(_stop, _gone_event(collection.name), _paused, _frozen_event(collection.name),
+                          _acquire_off_event(collection.name)),
             log_state=state)
         if result.get("fetched"):
             db.log_event(con, "info", "genesis",
@@ -6219,6 +6272,8 @@ def _sync_collections(all_collections, cons, last_discover, pipeline: bool = Fal
             # switched to off: its encoders leave the preload set, still
             # loaded (nothing is unloaded for being idle, 2026-11-08)
             _release_embedder(kept, cons[kept.name], "the switch")
+        if prev.acquire_enabled != kept.acquire_enabled:
+            _apply_acquire_switch(cons[kept.name], prev, kept)     # a fetch in flight ends at its unit
         if (prev.acquire_enabled, prev.license_ack, prev.profile,
                 prev.extras, prev.peer_source, prev.snapshot) != \
                 (kept.acquire_enabled, kept.license_ack, kept.profile,

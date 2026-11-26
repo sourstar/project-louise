@@ -20,6 +20,71 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **THE DEPLOY OF a2b5935b (7fe5362, live 05:40:17Z) AND WHAT ITS FIRST QUESTION SAID (München's rows).**
+  *The node reset itself at 05:09:03Z during the deploy's first final run* ("uncorrected error … data
+  fabric sync flood", Ryzen 7600, 2×32 GB non-ECC at 6400 MT/s; no OOM, pools healthy); the deploy was
+  armed again and went through. The operator: "Keep an eye on it, no changes so far. If it happens again
+  we will discuss how to stabilize the memory without lowering the speed" — München reads boot time and
+  reset reason at each check. The pins the dead worker left were restored 15 s after the model server
+  listened, by design.
+  - *Seed stage:* "59 model file(s) behind VeGa, 58 pin their seed"; index-translate-9b pins none (said,
+    nothing refused: no vector depends on it; the operator's to pin).
+  - *Warm-up:* "text indexes: 69 group(s) of 9 collection(s) opened in 1.3 s". Measured apart in its own
+    process: the open of all 69 costs 8 MiB of RssAnon (49 → 57).
+  - *MY HYPOTHESIS ON THE FIRST SEARCH'S FTS IS REFUTED.* The 12.6 s was never the index's open: with
+    every group opened at start the first question still paid "fts 12,125 (wikidata 12,125)". It is the
+    first QUERY of a cold index — wikidata's is 46 GB, and ALL text indexes are on ssd3, the one SATA QVO
+    the worker reads and writes all day (wikipedia 103 G, pubmed 78 G, gutenberg 54 G, wikidata 46 G,
+    EUR-Lex5 23 G, EUR-Lex5.next 20 G, Normattiva-DAR 9.1 G, Normattiva 8.7 G, legi_F 2.9 G). #914's
+    warm-up buys 1.3 s.
+  - *The first question took 108,434 ms in embed mode:* languages 32,757 (MADLAD's load: the mode
+    preloads nothing of a question's models), catalog 4,784 (pubmed), fts 12,125, dense 3,552, rerank
+    39,324 — six lists one after the other: wikipedia 21,071 (answers 1,802, **works 18,792**), gutenberg
+    11,798 (answers 5,515, cut 710, works 771), Normattiva 3,037, wikidata 1,725, Normattiva-DAR 1,677,
+    pubmed 1,147. The reranker answered each list in 0.5–5.5 s; the eighteen seconds are the grouping of
+    wikipedia's works, inside the reranker's turn with four lists waiting behind it.
+  - *BUILT ON THAT, in this PR:* a list's works run OFF the reranker's turn (`_rerank_lists`: the next
+    list is judged meanwhile); the search line says what the works were made of ("works 18,792 [claims …,
+    passages … for N edition(s)]"); `tools/measure/search_memory.py` (the search's model-free legs in a
+    process of their own: seconds, RssAnon after each step and after a trim).
+  - *OPEN, a defect (#66): THE WEB HOLDS 1.13 GB AFTER ONE SEARCH.* memory.stat anon 1,218 MB two minutes
+    after it, 1,129–1,131 MB twenty minutes later with no search since (the idle trim gave back 90 MB);
+    the operator's budget is under 1 GB. Cleared by measurement: the warm-up (8 MiB) and the claim index
+    (web and worker resolve the same dir, with its seek table). Two stale claim-index dirs of 517 MB each
+    on the fast drive (7ac8c95e…/20c9d7c3…, b011b3e6…/2880ec5a…) are the operator's to delete. The tool
+    runs on the node in a quiet stretch; the fix goes where its numbers are.
+  - *Keeper:* penalty 2,782 MiB "the last at 06:12" came from the OLD code at the reset (bcdf0dc knew no
+    own unloads); `"why"` in model-unloads.json was empty — it now says "stopped", "parked", "stopped for
+    a gate's fresh load", "a gate's twin, let go".
+- **EUR-LEX'S PICTURES (operator, to Legal, 2026-11-26: "we must show pictures in the results as it is done
+  for gutenberg collection"; no OCR; "Option A"; "an image whose content is present also in another form
+  is still valid and both shall appear in the results").** Carried: the origin's own TIFF and JPEG bytes
+  as figures, a part a peer may hold or not; the collection re-created with `record_line` 2 under RULE 1,
+  under the name EUR-Lex5 ("Second option"). Shown (MINE, not built yet): each node renders a PNG preview
+  of about 1,600 px from the TIFF it holds, in a child process, caps read from the header before any
+  pixel, kept as derived data on the fast drive; Pillow becomes a declared dependency (it rides in with
+  another package today). The caps are set from München's header count of the corpus (335,166 images,
+  36,971 units; 300,775 headers read): declared pixels p50 0.137 MP, p99 27.7, max 324.7 (three
+  certificate forms, 15,794 × 20,561, 8-bit, uncompressed); 46 over the browser's 64 MP, 5 over 256;
+  decoded size p99 40 MiB, max 539 MiB; the largest file 565.7 MB (9,954 × 18,942 RGB). So: at most
+  400 MP declared, 1 GiB decoded, 1 GiB of file, one preview at a time; over them, "not displayable —
+  download". Compressions met: uncompressed, LZW, CCITT G3 (not G4) and PackBits 1-bit, JPEG.
+- **MERGED FROM LEGAL (#923, main 5126bd21):** an image placed in no text and offered in no other form is
+  the issue `orphan-image` (a signal, never a filter); a dated Data Dump a level down is read and each
+  language takes its newest. `hold check` now prints the issue counts per code as its last line (the
+  operator: "Add this check to the collections' parsing consistency checks").
+
+- **"DO NOT FETCH" NOW STOPS THE FETCH ALREADY RUNNING (a defect; Legal and München, 06:09–06:18Z).**
+  `acquire_enabled = false` was read where a fetch starts and nowhere else: EUR-Lex5.next's background
+  fetch went on asking Cellar 4 min 45 s after the worker logged "config changed", 164 more files, until
+  `node pause` aborted it — with a newer bulk dump unused (the bulk-first rule). The worker now publishes
+  the switch to the fetch in flight (`worker._acquire_off_event`, set by `_apply_acquire_switch` when the
+  file turns it off): the corpus fetch and the archive fetch end at their next unit, as a pause and a
+  freeze end them; turned on again while the stopped fetch unwinds, it is asked again by the pause's own
+  re-arm, not six hours later. And the key, documented and settable since 11-25, was still called "not a
+  key of 07 §7.8" at every load: off the deprecated list. tests/test_acquire_off_stops_fetch.py; 07 §7.8
+  amended. THE SAME OMISSION AS SEED-ONLY'S TEN HOURS (2026-09-13) and the freeze: every switch that says
+  "no downloads" must be an event in the fetch's stop — the test now names all of them.
 - **THE GATE'S PARK CYCLES ARE BUILT (operator, 2026-11-26: "1. A then B 2. On but monitor if it creates
   overhead" — bge-m3 first, then the five llama.cpp encoders; the engine's byte check on).** A model
   LocalAI says parks is parked and asked a fingerprint text 64 times, each cycle held to the ENGINE'S
