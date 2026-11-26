@@ -429,6 +429,22 @@ _claim_seen: dict[str, tuple[float, bool]] = {}
 _claim_lock = threading.Lock()
 
 
+def claim_until() -> float | None:
+    """The node's interactive claim as written — until when it holds (epoch
+    s) — read now, not memoised; None where none is written or it cannot be
+    read. Its VALUE changes while a call runs (the refresher) and when one
+    ends (its linger): a claim that only lingers keeps it."""
+    try:
+        con = _node_con()
+        if con is None:
+            return None
+        with closing(con):
+            row = con.execute("SELECT value FROM control WHERE key=?", (CLAIM_KEY,)).fetchone()
+        return None if row is None else float(row[0])
+    except Exception:   # noqa: BLE001 — unread: no claim
+        return None
+
+
 def interactive_active() -> bool:
     """Is an interactive request live anywhere on the node? Memoised for
     GATE_POLL_S per process: the governor asks this every poll, and the

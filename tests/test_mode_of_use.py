@@ -16,6 +16,7 @@ survives a restart, what each mode means is platform.toml's.
 """
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -586,7 +587,7 @@ def test_a_switch_whose_room_never_comes_sends_no_load_the_card_cannot_hold(plat
     assert got["loaded"] is False and ("warm", "chat-35b") not in runner.calls
     assert len(asked) == int(worker.MODE_ROOM_WAIT_S / worker.MODE_ROOM_POLL_S) + 1, "bounded"
     out = capsys.readouterr().out
-    assert "chat-35b not loaded now — no room on the card after 120 s" in out and "pinned by work in flight" in out
+    assert "chat-35b not loaded now — no room on the card after 240 s" in out and "pinned by work in flight" in out
     assert "it loads when there is room, or at the first question" in out
 
 
@@ -701,3 +702,63 @@ def test_a_parked_chat_model_gets_its_room_asked(platform, monkeypatch):
     monkeypatch.setattr(model_load, "parked", lambda server: {"chat-35b": (1, 2)})
     worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
     assert asked == ["chat-35b"], "parked is not loaded: its return needs its room"
+
+
+
+def test_a_switch_back_during_the_answers_wait_unloads_nothing(platform, monkeypatch, capsys):
+    """THE SECOND READ, run: switched back while the switch waited for an
+    answer, this thread unloaded the chat model the node had gone back to."""
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+
+    def sleep(s):
+        node_mode.switch("embed", by="test")
+    got = worker._mode_models("embed", "query", question=lambda: True, sleep=sleep)
+    assert runner.calls == [] and got["unloaded"] is False and got["loaded"] is False
+    assert "the node switched again (now chat-9b)" in capsys.readouterr().out
+
+
+def test_a_question_that_only_lingers_does_not_stop_the_switch(platform, monkeypatch):
+    """THE SECOND READ, run: the claim outlasts a question by five minutes; read
+    as live, it stopped a cron job's switch a minute after a question, and the
+    next question paid the cold load. A claim rewritten since is a question."""
+    from app.rage import dispatch
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    lingering = time.time() + 240
+    monkeypatch.setattr(dispatch, "claim_until", lambda: lingering)
+    _rooms(monkeypatch, False, True)
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
+    assert got["loaded"] is True, "a lingering claim is no question"
+    runner.calls.clear()
+    node_mode.switch("embed", by="test")
+    node_mode.switch("query", by="test")
+    claims = iter([lingering, lingering + 30])          # rewritten: a call began
+    monkeypatch.setattr(dispatch, "claim_until", lambda: next(claims, lingering + 30))
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
+    assert got["loaded"] is False, "a question that came: it loads its own models"
+
+
+def test_into_a_mode_that_does_not_embed_the_old_modes_idle_pins_go_at_once(platform, monkeypatch):
+    """THE SECOND READ: the pins the switch waited for go PIN_IDLE_S after
+    their last batch and at the next beat — 120 to 180 s — and the wait gave
+    up before. Into query mode, which embeds nothing, they go now (RULE 1)."""
+    from app import model_pins
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    released = []
+    monkeypatch.setattr(model_pins, "release", lambda holder, *a, **k: released.append(holder))
+    with worker._pins_lock:
+        worker._pins["worker embed wikipedia"] = [0, time.time()]         # idle: its batch just ended
+        worker._pins["worker embed pubmed"] = [1, time.time()]            # a batch in flight: kept
+    try:
+        _rooms(monkeypatch, True)
+        worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
+        assert released == ["worker embed wikipedia"]
+    finally:
+        with worker._pins_lock:
+            worker._pins.pop("worker embed wikipedia", None)
+            worker._pins.pop("worker embed pubmed", None)

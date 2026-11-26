@@ -355,27 +355,28 @@ def test_resident_show_says_query_modes_rule(query):
     assert shown["says"].startswith("QUERY MODE (operator, 2026-11-25): no load unloads anything")
 
 
-def test_in_query_mode_no_load_is_paged_over_models_pinned_by_work(query, monkeypatch):
-    """THE READ OF 2026-11-26, run: the driver pages IDLE models only. Six
-    encoders pinned by embed mode's batches, the host above its floor: "paged",
-    and the 35B was sent into the full card — the node's 10:44Z death. A room
-    whose shortfall is more than the idle models hold is made by unloading
-    (which the pins refuse too: no load is let over the line on them)."""
+def test_in_query_mode_a_load_pages_beside_pinned_models_and_a_refusal_is_said_once_a_reason(query, monkeypatch):
+    """A PIN IS THE RECLAIMER'S WORD, NOT THE DRIVER'S (the second read of
+    2026-11-26: the first fix refused to page beside pinned encoders on an
+    unmeasured premise, and unloaded a question's own query encoder where main
+    paged). The operator's rule stands: nothing is unloaded while the host
+    has memory. A refusal is said once a minute for one reason, and another
+    reason is said at once."""
     from app import model_pins
     r = _full(query)
     monkeypatch.setattr(model_pins, "_applies", lambda server, model: True)
     assert model_pins.hold(S, "vega-qwen3-embedding-4b", "worker embed wikipedia") is True
-    for _ in range(3):                                    # a switch asks every few seconds
-        out = model_evict.make_room(S, need=6_000 * MIB, horizon=NOW, for_what="chat-35b",
-                                    exclude=("chat-35b",), page=True)
-        assert out.why != "paged" and out.paged == 0
-    said = [s for s in query.said if "chat-35b is" in s and "not paged" in s]
-    assert len(said) == 1, "said once a minute, not at every ask"
-    assert "only 1,700 MiB of it is idle models' memory the driver may page" in said[0]
-    assert "vega-qwen3-embedding-4b pinned by work in flight or busy" in said[0]
-    # the pin let go: paged, as the mode's rule says
-    model_pins.release("worker embed wikipedia")
-    model_evict.reset()
     out = model_evict.make_room(S, need=6_000 * MIB, horizon=NOW, for_what="chat-35b",
                                 exclude=("chat-35b",), page=True)
     assert out.why == "paged" and r.unloaded == []
+    model_evict.reset()
+    query.host["available"] = 12 * GIB + resident.CONTEXT_RESERVE + 1_000 * MIB   # under its floor
+    for _ in range(3):
+        model_evict.make_room(S, need=6_000 * MIB, horizon=NOW, for_what="chat-35b", exclude=("chat-35b",),
+                              page=True)
+    floor = [s for s in query.said if "chat-35b is" in s and "not paged" in s]
+    assert len(floor) == 1 and "would be under its floor" in floor[0], "once a minute"
+    query.host["available"] = None
+    model_evict.make_room(S, need=6_000 * MIB, horizon=NOW, for_what="chat-35b", exclude=("chat-35b",), page=True)
+    said = [s for s in query.said if "chat-35b is" in s and "not paged" in s]
+    assert len(said) == 2 and "the host's memory cannot be read" in said[1], "another reason: said"

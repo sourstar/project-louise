@@ -6689,9 +6689,12 @@ _node_mode_seen: list = [None, None]
 #: model that answer is using
 MODE_ANSWER_WAIT_S = 120.0
 #: how long a switch waits for the room of the mode's chat model, and how often
-#: it asks again (`_mode_models`): the old mode's embedding ends its batch and
-#: lets its encoders go in seconds
-MODE_ROOM_WAIT_S = 120.0
+#: it asks again (`_mode_models`). Into a mode that does not embed, the old
+#: mode's idle pins go at once and a batch's as it ends; into one that embeds
+#: they go by themselves, PIN_IDLE_S after their last batch and at the next
+#: settle beat (60 s): the wait covers that, plus a batch (the second read of
+#: 2026-11-26: at 120 s it gave up before the pins it waited for went)
+MODE_ROOM_WAIT_S = PIN_IDLE_S + 60.0 + 60.0
 MODE_ROOM_POLL_S = 5.0
 
 
@@ -6753,7 +6756,7 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
     a card that cannot hold it. Where both modes name one model nothing is
     unloaded. Never raises: a model that does not load is said, and loads at
     its first question as it always did."""
-    from . import llm
+    from . import llm, model_evict, node_mode
     log = _node_line("models")
     old, new = config.chat_model_for(before), config.chat_model_for(mode)
     out = {"old": old, "new": new, "unloaded": False, "loaded": False}
@@ -6761,12 +6764,23 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
         log(f"{mode} mode: both modes name {new}: nothing unloaded "
             f"(set [models] chat_large and chat_small on the System page)")
         return out
+    # A SWITCH BACK ends this one wherever it is — in the answer's wait, before
+    # the unload, in the room's (the second read, run: switched back during the
+    # answer's wait, this thread unloaded the chat model the node had gone
+    # back to and said the other loaded)
+    chat_then = config.chat_model_for(node_mode.current())
+
+    def switched() -> str | None:
+        now_chat = config.chat_model_for(node_mode.current())
+        return None if now_chat == chat_then else f"the node switched again (now {now_chat})"
     question = question or resident._question_now
     sleep = sleep or _stop.wait
     until = time.monotonic() + wait_s
-    while question() and time.monotonic() < until and not _stop.is_set():
+    while question() and time.monotonic() < until and not _stop.is_set() and switched() is None:
         sleep(1.0)
-    from . import model_evict, node_mode
+    if switched() is not None:
+        log(f"{mode} mode: nothing unloaded or loaded by the switch — {switched()}")
+        return out
     server = model_load.server_of(config.CHAT_URL)
     try:
         # what it holds NOW (a model at rest holds far under its largest), else its largest
@@ -6806,22 +6820,36 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
     # pins and loads its own models, the chat model first — a room asked beside
     # it could unload what it just loaded; a switch back makes this one stale;
     # a load in flight (the keeper's beat) holds part of the model already
-    meanwhile = question_meanwhile or resident._question_now
-    chat_then = config.chat_model_for(node_mode.current())
+    # A QUESTION THAT COMES NOW, not one that only lingers: the claim outlasts
+    # a question by QUESTION_LINGER_S, and read as live it stopped the switch
+    # a minute after any question — the next one paid the cold load (the
+    # second read, run). A claim rewritten since the wait began is a call
+    claim_then = dispatch.claim_until()
+
+    def a_question_now() -> bool:
+        c = dispatch.claim_until()
+        return c is not None and c > time.time() and c != claim_then
+    meanwhile = question_meanwhile or a_question_now
+    try:
+        embeds = node_state.runs(node_state.peek_worker_state(), node_state.EMBED)
+    except Exception:   # noqa: BLE001 — unread: its pins go by themselves
+        embeds = True
 
     def ours() -> str | None:
         if meanwhile():
             return "a person's question holds the card: it loads its models itself"
-        now_chat = config.chat_model_for(node_mode.current())
-        if now_chat != chat_then:
-            return f"the node switched again (now {now_chat})"
-        return None
+        return switched()
     room, gone = None, None
     until = clock() + room_wait_s
     while not _stop.is_set():
         gone = ours()
         if gone is not None:
             break
+        if not embeds:
+            # INTO A MODE THAT DOES NOT EMBED the old mode's pins hold nothing
+            # back: the idle ones go now, a batch's as it ends (RULE 1) — not
+            # PIN_IDLE_S and a beat later
+            _release_idle_pins(time.time() + PIN_IDLE_S)
         try:
             ids = model_load.loaded_models(server)
             there = ids is not None and new in ids and new not in model_load.parked(server)

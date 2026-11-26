@@ -253,9 +253,10 @@ SAY_AGAIN_S = 60.0
 
 
 def _say_once(what: str, about: str, level: str, text: str) -> None:
-    """`_say`, once a SAY_AGAIN_S for one thing about one model: a switch
-    asks a room every few seconds while it waits, and a refusal said at every
-    ask is twenty-five lines for one fact (the read of 2026-11-26)."""
+    """`_say`, once a SAY_AGAIN_S for one thing about one model FOR ONE
+    REASON (`about` names it): a switch asks a room every few seconds while it
+    waits, and a refusal said at every ask is twenty-five lines for one fact
+    (the read of 2026-11-26); another reason within the minute is said."""
     now = time.monotonic()
     key = (what, about)
     if now - _said_at.get(key, float("-inf")) < SAY_AGAIN_S:
@@ -373,20 +374,8 @@ def _page(server: str, *, need: int, free: int, total: int, used: int, t: float,
            "the host's memory cannot be read" if avail is None else
            f"the host has {avail // MIB:,} MiB available and would be under its floor of {floor // MIB:,} MiB "
            f"plus a context's {reserve // MIB:,}" if avail - short - reserve < floor else None)
-    if why is None:
-        # THE DRIVER PAGES IDLE MODELS ONLY: memory a batch in flight holds (a
-        # pin) or a busy backend uses is not paged, and a load let over the line
-        # on it dies for device memory (the read of 2026-11-26, run: six encoders
-        # pinned by embed mode's batches, the host above its floor — "paged", and
-        # the 35B sent into the full card, the node's 10:44Z death)
-        idle = _pageable(server, loading)
-        if idle is None:
-            why = "the card's models cannot be read"
-        elif idle[0] < short:
-            why = (f"only {idle[0] // MIB:,} MiB of it is idle models' memory the driver may page"
-                   + (f" — {', '.join(idle[1])} pinned by work in flight or busy" if idle[1] else ""))
     if why is not None:
-        _say_once("not paged", f"{server}\n{for_what}", "info",
+        _say_once("not paged", f"{server}\n{for_what}\n{why.split(' ', 3)[:3]}", "info",
                   f"card: {for_what} is {short // MIB:,} MiB over the {t:.2f} line and is not paged — "
                   f"{why}: room is made by unloading, as before")
         return None
@@ -397,29 +386,6 @@ def _page(server: str, *, need: int, free: int, total: int, used: int, t: float,
                  + ("(query mode: nothing is unloaded while the host has memory — operator, 2026-11-25)"
                     if over_max is None else "(operator, 2026-11-24)"))
     return Outcome(True, need, free, why="paged", paged=short)
-
-
-def _pageable(server: str, loading: Iterable[str]) -> tuple[int, list[str]] | None:
-    """(bytes of the IDLE models on `server`'s card the driver may page, the
-    models it may not — pinned by work in flight or busy), from the one
-    `/system` answer `make_room` reads; None where it cannot be read."""
-    from app import model_load, model_pins, resident
-    held = model_load.held_sizes(server, max_age_s=model_load.INTERACTIVE_TTL_S)
-    pins = model_pins.recorded()
-    if held is None or pins is None:
-        return None
-    cpu, away = model_load.held_cpu(server), model_load.parked(server)
-    elsewhere = resident._memory_now().elsewhere
-    skip = set(loading)
-    idle, kept = 0, []
-    for m, (_pid, size) in held.items():
-        if m in skip or m in away or not size or (server, m) in elsewhere:
-            continue
-        if (server, m) in pins or cpu.get(m, 0.0) > BUSY_CPU_PERCENT:
-            kept.append(m)
-            continue
-        idle += int(size)
-    return idle, sorted(kept)
 
 
 def load_ended(server: str, model: str, loaded: bool) -> None:
@@ -848,7 +814,7 @@ def before_load(server: str, model: str) -> Outcome | None:
     75 s later). Never raises."""
     got = room_before_load(server, model)
     if got is not None and got.fits is False:
-        _say_once("no room", f"{server}\n{model}", "info",
+        _say_once("no room", f"{server}\n{model}\n{got.why.split(' — ')[-1][:40]}", "info",
                   f"card: no room could be made for {model} before its load — {got.why}; the load goes "
                   f"as before")
     return got

@@ -31,13 +31,15 @@ measured (published figures disagree).
   full card and died for device memory 75.2 s later ("UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY"), and the
   keeper's reload took 87.5 s more. FIXED (branch mode-switch-room): the switch waits for the driver to
   show the old chat model gone, makes the new one's room FIRST and asks again until it is there (5 s,
-  within 120 s — the old mode's batches let their encoders go in seconds), sends no load whose room was
-  refused (said; the keeper or the first question loads it), and leaves the load to a question that comes
-  meanwhile, to a switch back, to a load already in flight; a partial room is made once. The independent
-  read found the same death on another path, fixed with it: in query mode a load was "paged" over
-  encoders pinned by work — the driver pages IDLE models only, so a shortfall larger than the idle models
-  hold is now made by unloading (which the pins refuse too). A room refused before ANY load is now said,
-  once a minute ("card: no room could be made for … — … pinned by work in flight"). Not yet read: the five `/v1/detokenize` 500s at 10:47:53 (the gutenberg rerank's cut, by
+  within PIN_IDLE_S + a beat + a batch, 240 s); into a mode that does not embed the old mode's idle pins
+  go at once and a batch's as it ends (RULE 1); it sends no load whose room was refused (said; the keeper
+  or the first question loads it), leaves the load to a question that comes meanwhile (a claim REWRITTEN
+  since, not one that only lingers), to a load already in flight, and stops at a switch back wherever it
+  is; a partial room is made once. A room refused before ANY load is now said, once a minute a reason
+  ("card: no room could be made for … — … pinned by work in flight"). The query-mode paging rule is
+  unchanged: the first read's idea that the driver cannot page pinned models was unmeasured — a pin is
+  the reclaimer's word, not the driver's — and refusing to page on it unloaded a question's own query
+  encoder where main paged (the second read, run): withdrawn. Not yet read: the five `/v1/detokenize` 500s at 10:47:53 (the gutenberg rerank's cut, by
   their time; LocalAI logs no body).
 
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
