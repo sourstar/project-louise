@@ -372,11 +372,21 @@ def cmd_annotations_claims(a) -> int:
 
 def cmd_annotations_index(a) -> int:
     """`hold annotations index <collection>`: the claim index on disk of its
-    current snapshot (app/hold/claim_index.py). Idempotent: a built one is
-    left as it is."""
+    current snapshot (app/hold/claim_index.py), its work components with it
+    (`claim_index.add_works_isolated`, in a capped child of its own).
+    Idempotent: a built one is left as it is, and only what it lacks is
+    added. THE WORKER'S KEEPER ADDS THEM ONLY WHERE THE RUN MODE INDEXES
+    (`_maintenance_allowed`): in query mode, which serves questions and so
+    wants them most, this is the hand that adds them (München, 2026-11-26:
+    not written 18 min after the deploy, the node in query mode)."""
     from app.hold import claim_index, collection as col
     root = Path(a.root)
-    _print(claim_index.build(col.shard_dir_of(root, a.collection)))
+    tree = col.shard_dir_of(root, a.collection)
+    got = claim_index.build(tree)
+    place = got.get("place")
+    if place and not got.get("stopped") and not claim_index.has_works(Path(place)):
+        got["works"] = claim_index.add_works_isolated(tree, Path(place))
+    _print(got)
     return 0
 
 
@@ -2911,6 +2921,11 @@ def _is_deferral(e: BaseException) -> bool:
     if isinstance(e, TransferAborted):
         return False                                     # the stop, said as 130 elsewhere
     if isinstance(e, backoff.Deferred):
+        return True
+    from app.acquire.claim import AcquisitionBusy
+    if isinstance(e, AcquisitionBusy):
+        # ANOTHER PROCESS FETCHES THIS COLLECTION NOW (the worker's pass): asked
+        # again later, never a defect for `supervise-pass.sh` (the seventh read)
         return True
     if isinstance(e, TransportError):
         return engine.transient(str(e))
@@ -8245,8 +8260,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_annotations_claims)
     p = averbs.add_parser("index", help="build the claim index on disk of a LARGE annotations collection's "
                                         "current snapshot (more than 250,000 claims): searched in place, "
-                                        "never loaded into the web's memory. create, update and the worker "
-                                        "build it themselves; this builds a missing one now")
+                                        "never loaded into the web's memory, with its work components. create, "
+                                        "update and the worker build them themselves (the worker only where its run "
+                                        "mode indexes: not in query mode); this builds what is missing now")
     root_arg(p); p.add_argument("collection")
     p.set_defaults(fn=cmd_annotations_index)
 
