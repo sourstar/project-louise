@@ -1877,12 +1877,32 @@ WORK_RULE = (
     "names it (\"by …\")."
 )
 
-#: subjects of a record that call it a literary work, in the vocabularies its
-#: corpora use (Library of Congress subject headings and PG's bookshelves;
-#: a word, case-blind)
-LITERARY = re.compile(r"\b(fiction|novels?|romance|drama|plays|poetry|poems|verse|tales|short stories|"
-                      r"romanzi|romanzo|racconti|poesia|teatro|roman|théâtre|poésie|erzählungen|dramen)\b",
-                      re.IGNORECASE)
+#: A LITERARY WORK, as the record's own subjects say it — the Library of
+#: Congress Subject Headings Project Gutenberg's records carry (its RDF
+#: `dcterms:subject`, app/plugins/gutenberg/rdf.py), where the genre is the
+#: heading's FORM: its last subdivision ("Napoleon I … -- Fiction", "-- Drama",
+#: "-- Poetry", "-- Juvenile fiction") or a genre heading of its own
+#: ("Historical fiction", "Short stories", "Love stories", "English poetry").
+#: Never a word anywhere in a heading: "Roman Empire", "Romance languages",
+#: "Drama -- History and criticism" are about history, languages or
+#: literature, and calling them fiction would tell the model a history book
+#: invents (architecture, 2026-11-26).
+LITERARY_FORMS = frozenset({"fiction", "juvenile fiction", "drama", "juvenile drama", "poetry",
+                            "juvenile poetry", "comic books, strips, etc"})
+LITERARY_HEADING = re.compile(
+    r"^(?:[\w' .-]+ )?(?:fiction|poetry|drama|stories|short stories|tales|fairy tales|fables|"
+    r"novels|romances|plays|verse|ballads|sonnets|epic poetry)$", re.IGNORECASE)
+
+
+def literary(subject: str) -> bool:
+    """Whether one subject heading calls its record a literary work."""
+    parts = [p.strip().rstrip(".") for p in str(subject).split("--")]
+    if not parts or not parts[0]:
+        return False
+    if any(p.lower() in ("history and criticism", "criticism and interpretation", "bibliography",
+                         "study and teaching", "translations into english") for p in parts[1:]):
+        return False
+    return parts[-1].lower() in LITERARY_FORMS or (len(parts) == 1 and bool(LITERARY_HEADING.match(parts[0])))
 
 
 def _work_said(h: dict) -> str:
@@ -1901,7 +1921,7 @@ def _work_said(h: dict) -> str:
     subjects = [str(s) for s in subjects][:6]
     if subjects:
         said = "; ".join(subjects)[:240]
-        parts.append(("a literary work — " if any(LITERARY.search(s) for s in subjects) else "")
+        parts.append(("a literary work — " if any(literary(s) for s in subjects) else "")
                      + f"subjects: {said}")
     return (" — " + " — ".join(parts)) if parts else ""
 
