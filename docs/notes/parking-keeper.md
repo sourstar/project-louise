@@ -398,6 +398,6 @@ answer of the new process is heard and gated by itself from this release
 on; until its cycles are counted, and for the first two minutes of every new
 process (after any restart of the model or of LocalAI), the model is stopped
 for room, not parked. A failed look at a query side is looked at again after
-FAIL_TTL_S (5 min), doubled at each failure in a row for its run up to 30 min, a timed-out encoder held as busy for every collection on it (`encoder_timeouts`), never at every step — and at once where another query
+FAIL_TTL_S (5 min), doubled at each failure in a row for its run up to 30 min (the document side's look the same, each collection's own), never at every step — and at once where another query
 run is heard meanwhile.
 

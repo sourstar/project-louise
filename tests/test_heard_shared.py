@@ -741,32 +741,74 @@ def test_a_failing_document_side_does_not_take_the_query_probe_along(node, endpo
     assert len(q) <= 9, f"{len(q)} query probes in 3 h"
 
 
-def test_a_look_that_timed_out_holds_the_encoder_as_busy_for_every_collection_on_it(node, endpoint, monkeypatch):
-    """THE SEVENTH READ, run: N collections on one hung encoder sent N probes
-    every FAIL_TTL_S, and on the main loop held it 98 % of the time. A look
-    that times out holds the endpoint as the embed stage does
-    (`encoder_timeouts`), and the idle round waits that hold."""
+def test_a_document_look_that_keeps_failing_is_put_off_longer_each_time_and_holds_nobody_else(
+        node, endpoint, monkeypatch):
+    """THE SEVENTH READ, run: N collections on one hung encoder probed it every
+    FAIL_TTL_S, and on the main loop held it up to 98 %. THE EIGHTH: a hold
+    shared by the encoder paused every collection's embedding, for deferrals
+    the embed stage does not hold for. Each collection's own look backs off;
+    nothing else is held."""
     import httpx
     from app import encoder_timeouts
     root, collection, codex = node
     con = db.connect(collection)
-    real, looks = run_check.answering_run, []
+    assert backend_gate.embed_allowed(con, collection) is True
+    clock, looks = [time.time()], []
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
 
     def hung(recipe, query=False, **k):
-        looks.append(1)
+        if not query:
+            looks.append(clock[0])
         raise httpx.ReadTimeout("timed out")
     monkeypatch.setattr(run_check, "answering_run", hung)
     encoder_timeouts._holds.clear()
-    try:
-        run_check._verdicts.clear()
-        assert backend_gate.embed_allowed(con, collection) is False
-        assert worker._endpoint_busy_holds(collection), "held as busy"
-        n = len(looks)
-        monkeypatch.setattr(run_check, "verdict_outdated", lambda c: True)
-        worker._settle_the_run(con, collection)
-        assert len(looks) == n, "the idle round waits the hold"
-    finally:
-        encoder_timeouts._holds.clear()
+    run_check._verdicts.clear()
+    for _ in range(120):                                   # 2 h, a step a minute
+        backend_gate.embed_allowed(con, collection)
+        clock[0] += 60
+    gaps = [round(b - a) for a, b in zip(looks, looks[1:])]
+    assert 300 <= gaps[0] <= 360 and 600 <= gaps[1] <= 660 and 1200 <= gaps[2] <= 1260, gaps
+    assert all(g <= run_check.FAIL_CAP_S + 60 for g in gaps), gaps
+    assert not encoder_timeouts.any_held(), "no other collection held by this one's look"
+    # another run heard: looked at at once
+    n = len(looks)
+    time.sleep(0.01)
+    _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}))
+    backend_gate.embed_allowed(con, collection)
+    assert len(looks) == n + 1
+
+
+def test_a_suspect_query_run_is_sent_back_even_while_its_failed_look_is_put_off(node, endpoint, monkeypatch):
+    """THE EIGHTH READ, run: a query look failed (its side put off up to 30
+    min), then a context of the query run failed its canary — every embed step
+    missed the cache and probed the document side, and the query run was never
+    sent back to the gate until the bound passed."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    real, q = run_check.answering_run, []
+
+    def query_fails(recipe, query=False, **k):
+        if query:
+            q.append(1)
+            raise OSError("not answering")
+        return real(recipe, query=query, **k)
+    monkeypatch.setattr(run_check, "answering_run", query_fails)
+    run_check._verdicts.clear()
+    backend_gate.embed_allowed(con, collection)
+    assert q == [1]
+    monkeypatch.setattr(run_check, "answering_run", real)
+    suspect = {"on": True}
+    real_suspect = run_check._suspect
+    monkeypatch.setattr(run_check, "_suspect",
+                        lambda c, role="document": suspect["on"] if role == "query" else real_suspect(c, role))
+    looked = []
+    real_look_q = run_check._look_at_the_query_side
+    monkeypatch.setattr(run_check, "_look_at_the_query_side",
+                        lambda *a, **k: (looked.append(1), suspect.update(on=False), real_look_q(*a, **k))[2])
+    for _ in range(5):
+        backend_gate.embed_allowed(con, collection)
+    assert looked == [1], "the suspect query run is looked at — and sent back — at once, once"
 
 
 def test_a_settled_collection_is_looked_at_again_on_the_search_beat_when_its_verdict_is_outdated(

@@ -1481,8 +1481,9 @@ def _where(collection) -> str:
 #: one its look heard, or the one heard before it where the look heard none —,
 #: the kept statements as they were when it was given — `_kept_stamp` —, the
 #: query side: its run, or (QUERY_UNSETTLED, when, the run heard then, failures before),
-#: whether the look settled it (False: the encoder could not be asked, the gate deferred))
-_verdicts: dict[str, tuple[bool, str, float, str | None, tuple, Any, bool]] = {}
+#: whether the look settled it (False: the encoder could not be asked, the gate deferred),
+#: how many unsettled looks in a row before this one, for that run (its backoff))
+_verdicts: dict[str, tuple[bool, str, float, str | None, tuple, Any, bool, int]] = {}
 
 
 def _kept_stamp(collection) -> tuple:
@@ -2108,18 +2109,8 @@ def _look(collection, stop: Callable[[], bool] | None,
         # seventh read), as a deferred gate is not
         return False, str(e), run_id, not isinstance(e, (emb.GateDeferred, embeddings.ReceiptRefused))
     except Exception as e:                              # noqa: BLE001
-        # the endpoint away: a deferral, retried; nothing is flagged. ONE THAT
-        # TIMED OUT IS HELD AS BUSY, as the embed stage holds it
-        # (`encoder_timeouts.hold`, doubling while it stays silent, released by
-        # its first answer): every collection on it then waits that hold, not
-        # FAIL_TTL_S each — N collections sent N probes to one hung encoder, and
-        # on the main loop held it half the time (the seventh read, run)
-        if recipe is not None and isinstance(e, (httpx.TimeoutException, embeddings.EndpointTimedOut)):
-            try:
-                from . import encoder_timeouts
-                encoder_timeouts.hold(encoder_timeouts.endpoint_of(recipe))
-            except Exception:                           # noqa: BLE001 — a hold is a courtesy
-                pass
+        # the endpoint away: a deferral, retried — less often each time it
+        # fails again (`embed_allowed`'s backoff); nothing is flagged
         return False, f"the encoder could not be asked: {type(e).__name__}: {e}", run_id, False
 
 
@@ -2179,6 +2170,8 @@ QUERY_UNSETTLED = "unsettled"
 #: worker's main loop for its timeout, and at FAIL_TTL_S each it held it half the time (the
 #: sixth read, run: 1,800 s hung in a simulated hour)
 QUERY_FAIL_CAP_S = 1800.0
+#: the document side's the same (`embed_allowed`)
+FAIL_CAP_S = QUERY_FAIL_CAP_S
 
 
 def _asymmetric(collection) -> bool:
@@ -2302,7 +2295,8 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         query_heard: list = []
         was_q = cached[5] if cached is not None else None
         if (isinstance(was_q, tuple) and was_q and was_q[0] == QUERY_UNSETTLED and _asymmetric(collection)
-                and _query_settled(was_q, heard_now.get("query"), time.time())):
+                and not _suspect(collection, "query")
+                and _query_settled(was_q, answering(collection).get("query"), time.time())):
             # ITS OWN BOUND STILL RUNS: not asked again because the DOCUMENT side
             # is looked at (the seventh read, run: a document side failing too
             # took the query probe along every FAIL_TTL_S, and the backoff
@@ -2324,10 +2318,23 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         # stamped AFTER looking: a statement the look itself wrote (a gate)
         # is not a reason to look again — and FRESH FROM THEN: a look that took
         # its whole timeout (300 s, as FAIL_TTL_S) was stored expired, and
-        # every step looked again, each a 300 s hang (the fifth read)
-        _verdicts[where] = (allowed, reason,
-                            time.time() + (PASS_TTL_S if allowed else FAIL_TTL_S), run_id,
-                            _kept_stamp(collection), query_run, settled)
+        # every step looked again, each a 300 s hang (the fifth read). A look
+        # that does not settle AGAIN, for the same run, is put off longer each
+        # time — FAIL_TTL_S doubled, up to FAIL_CAP_S — as the query side's is:
+        # a hung encoder's probe holds its caller for its timeout, and at
+        # FAIL_TTL_S each it held the main loop half the time (the seventh read,
+        # run). The collection's own verdict alone: no other collection, and
+        # none of its embedding, is held by it (the eighth read: a hold shared
+        # by the encoder paused every collection on it, for deferrals the embed
+        # stage does not hold for, and no look's answer released it)
+        fails = 0
+        if not allowed and not settled and cached is not None and not cached[0] \
+                and len(cached) > 6 and not cached[6] and cached[3] == run_id:
+            fails = (cached[7] if len(cached) > 7 else 0) + 1
+        ttl = PASS_TTL_S if allowed else (min(FAIL_TTL_S * 2 ** min(fails, 3), FAIL_CAP_S) if not settled
+                                          else FAIL_TTL_S)
+        _verdicts[where] = (allowed, reason, time.time() + ttl, run_id,
+                            _kept_stamp(collection), query_run, settled, fails)
         if cached is None or cached[0] != allowed or cached[1] != reason:
             db.log_event(con, "info" if allowed else "error", "run-check",
                          (f"[{collection.name}] embedding "

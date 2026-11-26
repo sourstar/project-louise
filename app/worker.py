@@ -7112,6 +7112,8 @@ def _settle_runs_for_search() -> None:
                     if con is not None:
                         con.close()
                 continue
+            if _endpoint_busy_holds(c):
+                continue            # held as busy by the embed stage: asked when the hold ends
             con = None
             try:
                 con = db.connect(c)

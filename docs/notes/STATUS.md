@@ -51,8 +51,11 @@ measured (published figures disagree).
   round's settle never runs where embed producers do (the node's setting) — the search beat now looks
   again at a settled collection whose verdict is outdated — that a failing document side took the query
   probe along every 5 min, and that N collections on one hung encoder probed it N times (a look that
-  times out now holds the encoder as busy, `encoder_timeouts`, and the idle round waits the hold); an
-  eighth read follows. And the
+  times out now holds the encoder as busy, `encoder_timeouts`, and the idle round waits the hold); the
+  eighth, that a suspect query run was never sent back while its failed look was put off, and that the
+  shared hold paused every collection's embedding for deferrals the embed stage does not hold for, with
+  no look's answer to release it — the hold WITHDRAWN: a collection's own unsettled look backs off as the
+  query side's does (300 → 600 → 1,200 → 1,800 s), holding nobody else; a ninth read follows. And the
   manual door, `hold embedder check`, is
   shut on a running node — the worker holds every collection's lock — so its hint now says to pause
   the collection first; that is how today's gate was run. I had told München the record was shared
