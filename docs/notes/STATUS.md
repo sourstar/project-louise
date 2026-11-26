@@ -55,7 +55,15 @@ measured (published figures disagree).
   eighth, that a suspect query run was never sent back while its failed look was put off, and that the
   shared hold paused every collection's embedding for deferrals the embed stage does not hold for, with
   no look's answer to release it — the hold WITHDRAWN: a collection's own unsettled look backs off as the
-  query side's does (300 → 600 → 1,200 → 1,800 s), holding nobody else; a ninth read follows. And the
+  query side's does (300 → 600 → 1,200 → 1,800 s), holding nobody else. The ninth read, run (blocking):
+  that backoff counted looks that cost nothing — a refused connection while LocalAI restarts, a twin busy, a
+  room short — and kept embedding paused up to 25 min after the encoder was back; and per collection, six
+  collections on one hung encoder probed it six times a period again. Now only a look that HELD its caller
+  (30 s or more) is backed off, and the backoff is the ENCODER's (`run_check._slow`): read only before a
+  look, a valid verdict standing meanwhile, cleared by the first look that settles or comes back quickly,
+  and passed over by a run heard since; a quick failure is asked again at 300 s, as on main. A suspect run
+  whose re-gate cannot finish is looked at again when its verdict expires, not at every step: a verdict
+  keeps the canary failures its look saw, and only a new one sends it back. And the
   manual door, `hold embedder check`, is
   shut on a running node — the worker holds every collection's lock — so its hint now says to pause
   the collection first; that is how today's gate was run. I had told München the record was shared

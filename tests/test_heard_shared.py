@@ -629,6 +629,15 @@ def test_a_binding_survives_a_restart_and_a_stale_read(node, endpoint, pids, mon
 
 # ---- the sixth read (2026-11-26) -------------------------------------------------------
 
+def _hung_clock(monkeypatch) -> list:
+    """The clock a look is timed on (`run_check._look_clock`), for a probe to
+    move as a hung one holds its caller; the encoders' backoff fresh."""
+    mono = [1000.0]
+    monkeypatch.setattr(run_check, "_look_clock", lambda: mono[0])
+    monkeypatch.setattr(run_check, "_slow", {})
+    return mono
+
+
 def test_a_look_that_did_not_settle_is_looked_at_again_on_the_idle_round(node, endpoint, monkeypatch):
     """THE SIXTH READ, run: a tested run heard again (R2, by the web) on a
     collection with nothing to embed: the idle round looked, the encoder was
@@ -663,10 +672,12 @@ def test_a_query_look_that_keeps_failing_for_one_run_is_put_off_longer_each_time
     assert backend_gate.embed_allowed(con, collection) is True
     real, clock, looks = run_check.answering_run, [time.time()], []
     monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+    mono = _hung_clock(monkeypatch)
 
     def failing(recipe, query=False, **k):
         if query:
             looks.append(clock[0])
+            mono[0] += 300.0                             # HUNG: the probe held its caller (the ninth read)
             raise OSError("timed out")
         return real(recipe, query=query, **k)
     monkeypatch.setattr(run_check, "answering_run", failing)
@@ -722,16 +733,19 @@ def test_a_run_heard_after_a_look_that_heard_nothing_is_looked_at_at_once(node, 
 def test_a_failing_document_side_does_not_take_the_query_probe_along(node, endpoint, monkeypatch):
     """THE SEVENTH READ, run: with the document look failing too, the query
     probe followed its FAIL_TTL_S pace — 35 probes in 3 h where the backoff
-    allows about 6."""
+    allows about 6. Hung probes, both (the ninth read: only a look that held
+    its caller is backed off)."""
     root, collection, codex = node
     con = db.connect(collection)
     assert backend_gate.embed_allowed(con, collection) is True
     clock, q = [time.time()], []
     monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+    mono = _hung_clock(monkeypatch)
 
     def failing(recipe, query=False, **k):
         if query:
             q.append(clock[0])
+        mono[0] += 300.0
         raise OSError("not answering")
     monkeypatch.setattr(run_check, "answering_run", failing)
     run_check._verdicts.clear()
@@ -756,9 +770,12 @@ def test_a_document_look_that_keeps_failing_is_put_off_longer_each_time_and_hold
     clock, looks = [time.time()], []
     monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
 
+    mono = _hung_clock(monkeypatch)
+
     def hung(recipe, query=False, **k):
         if not query:
             looks.append(clock[0])
+        mono[0] += 300.0                                     # it held its caller its timeout
         raise httpx.ReadTimeout("timed out")
     monkeypatch.setattr(run_check, "answering_run", hung)
     encoder_timeouts._holds.clear()
@@ -802,6 +819,7 @@ def test_a_suspect_query_run_is_sent_back_even_while_its_failed_look_is_put_off(
     real_suspect = run_check._suspect
     monkeypatch.setattr(run_check, "_suspect",
                         lambda c, role="document": suspect["on"] if role == "query" else real_suspect(c, role))
+    monkeypatch.setattr(run_check, "_canary_counts", lambda c: (0, 1))   # a failure the verdict did not see
     looked = []
     real_look_q = run_check._look_at_the_query_side
     monkeypatch.setattr(run_check, "_look_at_the_query_side",
@@ -825,3 +843,86 @@ def test_a_settled_collection_is_looked_at_again_on_the_search_beat_when_its_ver
     time.sleep(0.01)
     _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}))
     assert worker._settle_wanted(collection), "a run heard since: looked at on the beat"
+
+
+# ---- the ninth read (2026-11-26) -------------------------------------------------------
+
+def test_a_look_that_fails_quickly_is_asked_again_at_its_bound_and_embedding_resumes(node, endpoint, monkeypatch):
+    """THE NINTH READ, run (BLOCKING): every unsettled look was backed off —
+    a refused connection (LocalAI restarting), a twin busy, a room short — and
+    embedding resumed up to 25 min after the encoder was back. Only a look that
+    held its caller is backed off; a quick one is asked again at FAIL_TTL_S."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    real, clock, looks = run_check.answering_run, [time.time()], []
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+    _hung_clock(monkeypatch)                              # the look clock does not move: every failure quick
+    down = {"on": True}
+
+    def restarting(recipe, query=False, **k):
+        if not query:
+            looks.append(clock[0])
+        if down["on"]:
+            raise OSError("connection refused")
+        return real(recipe, query=query, **k)
+    monkeypatch.setattr(run_check, "answering_run", restarting)
+    run_check._verdicts.clear()
+    for _ in range(40):                                   # 40 min down, a step a minute
+        assert backend_gate.embed_allowed(con, collection) is False
+        clock[0] += 60
+    gaps = [round(b - a) for a, b in zip(looks, looks[1:])]
+    assert gaps and all(300 <= g <= 360 for g in gaps), gaps
+    down["on"] = False
+    back = clock[0]
+    while not backend_gate.embed_allowed(con, collection):
+        clock[0] += 60
+        assert clock[0] - back <= run_check.FAIL_TTL_S + 60, "embedding resumes within one bound"
+
+
+def test_a_hung_encoder_is_asked_by_one_look_for_every_collection_on_it(node, endpoint, monkeypatch):
+    """THE NINTH READ, run: with the backoff per collection, six collections on
+    one hung encoder probed it six times a period on one thread (98 % held).
+    The backoff is the ENCODER's: a collection whose own verdict is new is not
+    asked while another's look found the encoder hung — and a run heard since
+    (an answer, some process) is looked at at once."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    _hung_clock(monkeypatch)
+    looks = []
+    real = run_check.answering_run
+    monkeypatch.setattr(run_check, "answering_run",
+                        lambda recipe, query=False, **k: (looks.append(query), real(recipe, query=query, **k))[1])
+    now = time.time()
+    run_check._slow[run_check._flight(collection)] = (2, now + 600)        # another collection's hung look
+    if run_check._flights_query(collection) is not None:
+        run_check._slow[run_check._flights_query(collection)] = (2, now + 600)
+    run_check._verdicts.clear()
+    assert backend_gate.embed_allowed(con, collection) is False and looks == [], "not asked again"
+    v = run_check._verdicts[run_check._where(collection)]
+    assert "held its last look" in v[1] and v[2] >= now + 590, v[:3]
+    time.sleep(0.01)
+    _as_another_process(lambda: run_check.heard(_recipe(collection), {R1}))
+    assert backend_gate.embed_allowed(con, collection) is True and False in looks, "a run heard: asked"
+
+
+def test_a_suspect_run_whose_re_gate_cannot_finish_is_not_looked_at_every_step(node, endpoint, monkeypatch):
+    """THE NINTH READ, run: a suspect query run whose re-gate the card had no
+    room for — twenty steps, twenty probes of each side. A verdict keeps the
+    canary failures its look saw; only a new one sends it back before it
+    expires (the run stays suspect, `check_write` refuses meanwhile)."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    monkeypatch.setattr(run_check, "_suspect", lambda c, role="document": role == "query")
+    counts = {"q": 1}
+    monkeypatch.setattr(run_check, "_canary_counts", lambda c: (0, counts["q"]))
+    looked = []
+    monkeypatch.setattr(run_check, "_look_at_the_query_side",
+                        lambda *a, **k: looked.append(1))        # the re-gate deferred: nothing settled
+    for _ in range(20):
+        backend_gate.embed_allowed(con, collection)
+    assert looked == [1], f"{len(looked)} query looks in 20 steps"
+    counts["q"] = 2                                                # ANOTHER canary failure: at once
+    backend_gate.embed_allowed(con, collection)
+    assert looked == [1, 1]

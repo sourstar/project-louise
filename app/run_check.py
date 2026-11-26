@@ -976,7 +976,7 @@ def _claim_twin(server: str, twin: str, name: str) -> _TwinClaim:
     leaves the process's lock alone, said."""
     import fcntl
     busy = (f"{name}: another collection's gate measures on {twin} now; this one is asked "
-            f"again at the next round")
+            f"again within {FAIL_TTL_S} s")
     with _guard:
         lock = _looking.setdefault(f"{server} {twin}", threading.Lock())
     if not lock.acquire(blocking=False):
@@ -1483,7 +1483,7 @@ def _where(collection) -> str:
 #: query side: its run, or (QUERY_UNSETTLED, when, the run heard then, failures before),
 #: whether the look settled it (False: the encoder could not be asked, the gate deferred),
 #: how many unsettled looks in a row before this one, for that run (its backoff))
-_verdicts: dict[str, tuple[bool, str, float, str | None, tuple, Any, bool, int]] = {}
+_verdicts: dict[str, tuple[bool, str, float, str | None, tuple, Any, bool, int, tuple]] = {}
 
 
 def _kept_stamp(collection) -> tuple:
@@ -1783,6 +1783,13 @@ def _flight(collection) -> str:
     return f"{url} {model}"
 
 
+def _flights_query(collection) -> str | None:
+    """The query side's key in `_flights`, where the space has a query encoder
+    of its own; None otherwise."""
+    models = _models(collection)
+    return f"{models[1][0]} {models[1][1]}" if len(models) > 1 else None
+
+
 def _flights(collection) -> list[str]:
     """Every model a look at this collection may gate, in one order for all
     callers (sorted), each taken without waiting (`embed_allowed`)."""
@@ -1879,6 +1886,35 @@ def _suspect(collection, role: str = "document") -> bool:
     return _canary.get(who, 0) > _canary_gated.get((_where(collection), role), 0)
 
 
+def _canary_counts(collection) -> tuple[int, int]:
+    """The canary failures seen so far of the runs this collection's document
+    and query sides reach — kept in a verdict, so that only a NEW one sends a
+    verdict back (`_suspect_since`)."""
+    if not _canary:
+        return (0, 0)
+    try:
+        recipe = collections_mod.recipe_for(collection)
+    except Exception:                                   # noqa: BLE001
+        return (0, 0)
+    return (_canary.get(_who(recipe, False), 0), _canary.get(_who(recipe, True), 0))
+
+
+def _suspect_since(collection, cached, role: str = "document") -> bool:
+    """Is the run of `role` suspect (`_suspect`) by a canary failure the
+    verdict `cached` did not see? A look that could not finish its re-gate
+    stored what it saw: looked at again only when it expires, not at every
+    step (the ninth read, run: twenty steps, twenty probes of each side, for a
+    re-gate the card had no room for). The run stays suspect meanwhile, and
+    `check_write` refuses what it would write."""
+    if not _suspect(collection, role):
+        return False
+    seen = cached[8] if cached is not None and len(cached) > 8 else None
+    if not seen:
+        return True
+    i = 1 if role == "query" else 0
+    return _canary_counts(collection)[i] > seen[i]
+
+
 def _send_back(collection, run_id: str, role: str,
                log: Callable[[str], None] | None) -> None:
     """Set aside what this peer keeps for the suspect run in this space, and
@@ -1953,6 +1989,8 @@ def reset_cache() -> None:
     _entries.clear()
     _record_read.clear()
     _aside_said.clear()
+    with _slow_lock:
+        _slow.clear()
 
 
 def check_write(collection, recipe, answered: set) -> None:
@@ -2173,6 +2211,48 @@ QUERY_FAIL_CAP_S = 1800.0
 #: the document side's the same (`embed_allowed`)
 FAIL_CAP_S = QUERY_FAIL_CAP_S
 
+#: ONLY A LOOK THAT HELD ITS CALLER this long is backed off (the ninth read,
+#: run): a refused connection (LocalAI restarting), a twin busy, a room short
+#: cost nothing to ask again, and backed off with the hung ones they kept
+#: embedding paused up to 25 min after the encoder was back. A hung probe holds
+#: its caller for its timeout, and only that is worth not repeating
+SLOW_LOOK_S = 30.0
+#: ONE BACKOFF PER ENCODER MODEL (`_flights`' key) -> (slow looks in a row,
+#: until when no collection's look asks it again): with it held per collection,
+#: six collections on one hung encoder probed it six times a period on one
+#: thread, 98 % of it held (the ninth read, run). Read only BEFORE A LOOK — a
+#: valid verdict and the embed stage never read it — and cleared by the first
+#: look that settles, or that comes back quickly
+_slow: dict[str, tuple[int, float]] = {}
+_slow_lock = threading.Lock()
+
+
+def _look_clock() -> float:
+    """How long a look took is read on this clock (its own, so a test can move it)."""
+    return time.monotonic()
+
+
+def _slow_until(key: str, now: float) -> float | None:
+    """Until when no look asks this encoder model again, or None."""
+    with _slow_lock:
+        got = _slow.get(key)
+    return got[1] if got is not None and got[1] > now else None
+
+
+def _note_look(key: str, took: float, settled: bool) -> tuple[int, float | None]:
+    """A look at this encoder model ended after `took` s: (slow looks in a row,
+    until when the next is put off — None where it is not). A settled look or
+    a quick one clears it; a slow unsettled one doubles it (FAIL_TTL_S, 600,
+    1,200, then FAIL_CAP_S)."""
+    with _slow_lock:
+        if settled or took < SLOW_LOOK_S:
+            _slow.pop(key, None)
+            return 0, None
+        n = _slow[key][0] + 1 if key in _slow else 1
+        until = time.time() + min(FAIL_TTL_S * 2 ** min(n - 1, 3), FAIL_CAP_S)
+        _slow[key] = (n, until)
+        return n, until
+
 
 def _asymmetric(collection) -> bool:
     """Has this collection's space a query encoder of its own? Only then is a
@@ -2253,7 +2333,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
     if cached is not None and cached[2] > now and cached[4] == stamp and (
             now_answering is None or cached[3] == now_answering) \
             and _query_settled(cached[5], heard_now.get("query") if _asymmetric(collection) else None, now) \
-            and not _suspect(collection) and not _suspect(collection, "query"):
+            and not _suspect_since(collection, cached) and not _suspect_since(collection, cached, "query"):
         return cached[0]
     with _guard:
         keys = _flights(collection)
@@ -2279,7 +2359,30 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             db.log_event(con, "error" if message.startswith("CANARY") else "info", "run-check",
                          f"[{collection.name}] {message}"[:500])
 
-        allowed, reason, run_id, settled = _look(collection, stop, log)
+        doc_key = _flight(collection)
+        slow_until = _slow_until(doc_key, now)
+        slow_n = 0
+        if slow_until is not None and not _suspect_since(collection, cached) and (
+                cached is None or now_answering is None or cached[3] == now_answering):
+            # (a run heard since — some process had an answer — is looked at: the
+            # encoder answers again)
+            # THE ENCODER HELD A LOOK, AND ITS BACKOFF RUNS (`_slow`): not asked
+            # again by this collection either. Its verdict stands as it was —
+            # one validated stays so (every answer is still checked before its
+            # write, invariant 1), one paused stays paused — until then
+            with _slow_lock:
+                slow_n = _slow.get(doc_key, (0, 0.0))[0]
+            if cached is not None:
+                allowed, reason, settled = cached[0], cached[1], (cached[6] if len(cached) > 6 else True)
+            else:
+                allowed, settled = False, False
+                reason = (f"the encoder held its last look {SLOW_LOOK_S:.0f} s or more ({slow_n} in a row); "
+                          f"asked again at {time.strftime('%H:%M:%S', time.localtime(slow_until))}")
+            run_id = cached[3] if cached is not None else None
+        else:
+            t_look = _look_clock()
+            allowed, reason, run_id, settled = _look(collection, stop, log)
+            slow_n, slow_until = _note_look(doc_key, _look_clock() - t_look, settled or allowed)
         # THE RUN A VERDICT IS ABOUT: the one its look heard; where it heard
         # none (the encoder could not be asked), the one heard BEFORE it — so
         # a run heard since, by any process, is looked at at once, and one
@@ -2294,16 +2397,33 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         # twin load and stop on each, for a query model in LocalAI's cooldown)
         query_heard: list = []
         was_q = cached[5] if cached is not None else None
+        q_key = _flights_query(collection)
+        q_heard = answering(collection).get("query") if q_key is not None else None
+        q_same = q_heard is None or was_q == q_heard or (
+            isinstance(was_q, tuple) and len(was_q) > 2 and was_q[0] == QUERY_UNSETTLED and was_q[2] == q_heard)
+        # (a query run heard since — some process had an answer — is looked at)
+        q_slow = (q_key is not None and q_same and _slow_until(q_key, time.time()) is not None
+                  and not _suspect_since(collection, cached, "query"))
+        q_took = 0.0
         if (isinstance(was_q, tuple) and was_q and was_q[0] == QUERY_UNSETTLED and _asymmetric(collection)
-                and not _suspect(collection, "query")
+                and not _suspect_since(collection, cached, "query")
                 and _query_settled(was_q, answering(collection).get("query"), time.time())):
             # ITS OWN BOUND STILL RUNS: not asked again because the DOCUMENT side
             # is looked at (the seventh read, run: a document side failing too
             # took the query probe along every FAIL_TTL_S, and the backoff
             # counted 35 failures and held none of them)
             query_run = was_q
+        elif q_slow:
+            # the query encoder held a look and its backoff runs (`_slow`): kept
+            # as it was, or unsettled from now
+            query_run = was_q if was_q is not None else \
+                (QUERY_UNSETTLED, time.time(), heard_now.get("query"), 0)
         else:
+            t_q = _look_clock()
             query_run = _look_at_the_query_side(collection, stop, log, heard_by=query_heard)
+            q_took = _look_clock() - t_q
+            if q_key is not None:
+                _note_look(q_key, q_took, query_run is not None)
         if query_run is None and _asymmetric(collection):
             # WHEN it failed — after the look, which may have taken its whole
             # timeout (the fourth read: stamped before it, a probe that timed
@@ -2312,7 +2432,10 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             # probe hanging while the web heard R2 recorded R2 as looked at)
             heard_then = query_heard[-1] if query_heard else heard_now.get("query")
             was = cached[5] if cached is not None else None
-            again = (isinstance(was, tuple) and was and was[0] == QUERY_UNSETTLED and was[2] == heard_then)
+            # BACKED OFF ONLY WHERE THE LOOK HELD ITS CALLER (the ninth read):
+            # a quick failure is asked again at FAIL_TTL_S
+            again = (isinstance(was, tuple) and was and was[0] == QUERY_UNSETTLED and was[2] == heard_then
+                     and q_took >= SLOW_LOOK_S)
             query_run = (QUERY_UNSETTLED, time.time(), heard_then,
                          ((was[3] if len(was) > 3 else 0) + 1) if again else 0)
         # stamped AFTER looking: a statement the look itself wrote (a gate)
@@ -2327,14 +2450,15 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         # none of its embedding, is held by it (the eighth read: a hold shared
         # by the encoder paused every collection on it, for deferrals the embed
         # stage does not hold for, and no look's answer released it)
-        fails = 0
-        if not allowed and not settled and cached is not None and not cached[0] \
-                and len(cached) > 6 and not cached[6] and cached[3] == run_id:
-            fails = (cached[7] if len(cached) > 7 else 0) + 1
-        ttl = PASS_TTL_S if allowed else (min(FAIL_TTL_S * 2 ** min(fails, 3), FAIL_CAP_S) if not settled
-                                          else FAIL_TTL_S)
-        _verdicts[where] = (allowed, reason, time.time() + ttl, run_id,
-                            _kept_stamp(collection), query_run, settled, fails)
+        # ...THE ENCODER'S, not the collection's, and only for a look that held
+        # its caller (`_slow`, `_note_look`; the ninth read: a backoff of every
+        # unsettled look kept embedding paused 25 min after a LocalAI restart)
+        if slow_until is not None:
+            expires = max(slow_until, time.time() + 1.0)
+        else:
+            expires = time.time() + (PASS_TTL_S if allowed else FAIL_TTL_S)
+        _verdicts[where] = (allowed, reason, expires, run_id,
+                            _kept_stamp(collection), query_run, settled, slow_n, _canary_counts(collection))
         if cached is None or cached[0] != allowed or cached[1] != reason:
             db.log_event(con, "info" if allowed else "error", "run-check",
                          (f"[{collection.name}] embedding "
