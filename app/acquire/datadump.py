@@ -172,17 +172,27 @@ def dump_folders(base: Path) -> list[Path]:
     among them passed over unless it states itself."""
     out: list[Path] = []
     for p in sorted(q for q in Path(base).iterdir() if q.is_dir()):
-        if _reference_source(p):
-            continue                        # EuroVoc's release, laid beside the dumps: not a dump
         if (p / STATEMENT).is_file():
             out.append(p)
             continue
         stated = [c for c in sorted(q for q in p.iterdir() if q.is_dir()) if (c / STATEMENT).is_file()]
         if stated:
             out += stated
+        elif _reference_source(p):
+            # EuroVoc's release laid beside the dumps: said once, not a dump —
+            # and only a folder that states no dump and holds no stated one
+            # (architecture's read of b4f6b52a: tested BEFORE the statements,
+            # over the whole tree, it hid a dated dump holding an unpacked
+            # EuroVoc beside its languages)
+            if p not in _REFERENCE_SAID:
+                _REFERENCE_SAID.add(p)
+                print(f"[datadump] {p}: a EuroVoc release, not a Data Dump", flush=True)
         elif next(p.rglob("*.zip"), None) is not None:
             out.append(p)                   # zips and no statement: said, as before
     return out
+
+
+_REFERENCE_SAID: set[Path] = set()
 
 
 def _reference_source(folder: Path) -> bool:
@@ -193,8 +203,7 @@ def _reference_source(folder: Path) -> bool:
     if (folder / STATEMENT).is_file():
         return False
     from ..refs import eurovoc
-    return any((folder / name).is_file() for name in eurovoc.FILES) or \
-        any(next(folder.rglob(name), None) is not None for name in eurovoc.FILES[:1])
+    return any((folder / name).is_file() for name in eurovoc.FILES)     # ITS files, at its top level
 
 
 class Dumps:

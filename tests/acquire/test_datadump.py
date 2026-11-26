@@ -197,3 +197,31 @@ def test_a_reference_source_beside_the_dumps_is_not_taken_for_a_dump(tmp_path):
     with zipfile.ZipFile(ev / "x.zip", "w") as z:
         z.writestr("a", b"a")
     assert ev not in datadump.dump_folders(tmp_path)
+
+
+def test_a_dated_dump_holding_an_unpacked_eurovoc_beside_its_languages_is_still_the_dump(tmp_path):
+    """Architecture's read of b4f6b52a: the EuroVoc test ran before the
+    statements, over the whole tree, and hid the newer bulk."""
+    import json
+    from app.acquire import datadump
+    from app.refs import eurovoc
+    dated = tmp_path / "dump-2026-12-15"
+    bg = dated / "datadump-bg"
+    bg.mkdir(parents=True)
+    (bg / "datadump.json").write_text(json.dumps({"language": "bg", "created": "2026-12-15T01:00:00+01:00"}))
+    ev = dated / "euvoc-2026-12-01"
+    ev.mkdir()
+    (ev / eurovoc.FILES[0]).write_bytes(b"<rdf/>")
+    assert datadump.dump_folders(tmp_path) == [bg]
+
+
+def test_a_folder_holding_eurovoc_deep_below_is_not_taken_for_eurovoc(tmp_path):
+    import zipfile
+    from app.acquire import datadump
+    from app.refs import eurovoc
+    d = tmp_path / "datadump-it"
+    (d / "deep").mkdir(parents=True)
+    (d / "deep" / eurovoc.FILES[0]).write_bytes(b"<rdf/>")
+    with zipfile.ZipFile(d / "x.zip", "w") as z:
+        z.writestr("a", b"a")
+    assert datadump.dump_folders(tmp_path) == [d], "said as before (no statement), never dropped"

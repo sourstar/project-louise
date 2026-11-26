@@ -641,6 +641,126 @@ def _lone_wrapper_head(entries: list[os.DirEntry]) -> bytes | None:
     return view[wrappers[0]][:_HEAD] if len(wrappers) == 1 else None
 
 
+#: THE UNIT'S DAY, KEPT BY PHYSICAL IDENTITY (lessons C1/C4, 2026-11-25: the
+#: startup scan read every unit, ~970 k on one thread, 791-963 s on the node,
+#: and an interrupted walk started again from zero). A unit's day is a pure
+#: function of its files and of the code that derives it, so it is kept in
+#: the derived cache keyed on the unit's path and its files' (name, size,
+#: mtime_ns), and on a digest of that code: an unchanged unit is only listed
+#: and statted. Derived, re-creatable, never exchanged (invariant 6).
+#: THE STANDARD, NOT ADOPTED: a make-style dependency cache (ccache, Bazel's
+#: action cache) keys the same way, on inputs and the tool's version; one
+#: SQLite table is that, for one function.
+DAY_CACHE_KIND = "eurlex-unit-days"
+
+
+def _day_code_digest() -> str:
+    """A digest of EVERY module the day is derived through, whole (not a list
+    of functions, which a helper's rule change would slip past): any edit to
+    one walks every unit once again — correct, and one walk per such deploy."""
+    import hashlib
+    from . import formex as _fx, from_tree as _ft, rdf as _rdf
+    h = hashlib.sha256()
+    for mod in (__import__(__name__, fromlist=["_"]), _fx, _ft, _rdf):
+        try:
+            h.update(Path(mod.__file__).read_bytes())
+        except (OSError, TypeError, AttributeError):
+            h.update(repr(mod).encode())
+    return h.hexdigest()[:16]
+
+
+def _formex_title_only(view: dict, act) -> bool:
+    """Does the Formex SOURCE hold no text but the title: its body's
+    PREAMBLE and ENACTING.TERMS (absent or empty) and every annex the
+    wrapper names hold no text? Read from the files, not from the parse."""
+    def text(el) -> str:
+        return "".join(el.itertext()).strip()
+    try:
+        body = formex._parse(view[act.body_file], act.body_file)
+    except (KeyError, formex.FormexError):
+        return False
+    for el in body.iter():
+        tag = el.tag.rsplit("}", 1)[-1] if isinstance(el.tag, str) else ""
+        if tag in ("PREAMBLE", "ENACTING.TERMS") and text(el):
+            return False
+    try:
+        annexes = formex.annex_names(formex._parse(view[act.wrapper_file], act.wrapper_file))
+    except (KeyError, formex.FormexError):
+        return False
+    for name in annexes:
+        if name in view:
+            try:
+                if text(formex._parse(view[name], name)):
+                    return False
+            except formex.FormexError:
+                return False
+    return True
+
+
+class _DayCache:
+    """{unit path: (signature, day or error)} in one SQLite table under the
+    derived cache. Lookups one SELECT a unit; writes batched, committed every
+    BATCH and at the end; a cache that does not open is no cache."""
+    BATCH = 5000
+
+    def __init__(self, root: Path, tree_facts: bool) -> None:
+        import sqlite3
+        from app import derived
+        self.code = f"{_day_code_digest()}|{int(tree_facts)}"
+        self.pending: list[tuple[str, str, str | None, str | None]] = []
+        self.con = None
+        place = derived.place_kept(DAY_CACHE_KIND, root) or (root / derived.BESIDE / DAY_CACHE_KIND)
+        try:
+            place.mkdir(parents=True, exist_ok=True)
+            con = sqlite3.connect(place / "days.sqlite", timeout=30, check_same_thread=False)
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute("CREATE TABLE IF NOT EXISTS day(path TEXT PRIMARY KEY, sig TEXT NOT NULL, "
+                        "day TEXT, err TEXT)")
+            self.con = con
+        except (OSError, sqlite3.Error):
+            self.con = None
+
+    def sig(self, entries) -> str:
+        parts = [self.code]
+        for e in entries:
+            st = e.stat()
+            parts.append(f"{e.name}:{st.st_size}:{st.st_mtime_ns}")
+        return "|".join(parts)
+
+    def get(self, path: str, sig: str):
+        if self.con is None:
+            return None
+        try:
+            row = self.con.execute("SELECT sig, day, err FROM day WHERE path=?", (path,)).fetchone()
+        except Exception:   # noqa: BLE001 — a cache read that fails is a miss
+            return None
+        return (row[1], row[2]) if row is not None and row[0] == sig else None
+
+    def put(self, path: str, sig: str, day: str | None, err: str | None) -> None:
+        if self.con is None:
+            return
+        self.pending.append((path, sig, day, err))
+        if len(self.pending) >= self.BATCH:
+            self.flush()
+
+    def flush(self) -> None:
+        if self.con is None or not self.pending:
+            return
+        try:
+            with self.con:
+                self.con.executemany("INSERT OR REPLACE INTO day(path, sig, day, err) VALUES(?,?,?,?)",
+                                     self.pending)
+        except Exception:   # noqa: BLE001 — a cache that cannot be written is no cache
+            pass
+        self.pending.clear()
+
+    def close(self) -> None:
+        self.flush()
+        if self.con is not None:
+            self.con.close()
+            self.con = None
+
+
 def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool = False) -> str | None:
     """The day the unit's id sorts under: a consolidation's CELEX date, an
     original's OJ publication date from its wrapper's head. An act without
@@ -811,6 +931,17 @@ class EurlexSource:
         guard = eli.CollisionGuard()
         held: dict[int, tuple[str, int, int]] = {}
         say = state.say if callable(getattr(state, "say", None)) else None
+        days = _DayCache(root, self.TREE_FACTS)
+        try:
+            yield from self._walk(root, days, say, guard, held)
+        finally:
+            days.close()
+        for nid in sorted(held):
+            locator, mtime, size = held[nid]
+            yield DocRef(source_id=self.source_id, native_id=str(nid), locator=locator,
+                         mtime=mtime, size=size)
+
+    def _walk(self, root: Path, days: "_DayCache", say, guard, held):
         walked = 0
         for ld in self._lang_dirs(root):
             m = _LANG_DIR.match(ld.name)
@@ -841,12 +972,19 @@ class EurlexSource:
                         # not landed yet, or landed before parser 3 kept its
                         # tree: the next fetch completes it (app/acquire/cellar.py)
                         continue
-                    try:
-                        day = _unit_day(unit, celex, entries, self.TREE_FACTS)
-                    except (OSError, ValueError) as e:
-                        day, err = None, str(e)
+                    sig = days.sig(entries)
+                    kept = days.get(str(unit), sig)
+                    if kept is not None:
+                        day, err = kept
                     else:
-                        err = "no consolidation date in its CELEX and no OJ date in its wrapper"
+                        try:
+                            day = _unit_day(unit, celex, entries, self.TREE_FACTS)
+                        except (OSError, ValueError) as e:
+                            day, err = None, str(e)
+                        else:
+                            err = None if day is not None else \
+                                "no consolidation date in its CELEX and no OJ date in its wrapper"
+                        days.put(str(unit), sig, day, err)
                     if day is None:
                         yield DocRef(source_id=self.source_id, native_id=celex, locator=str(unit),
                                      scope="container", error=f"{unit_rel(lang, celex)}: {err}"[:200])
@@ -867,10 +1005,6 @@ class EurlexSource:
                     stats = [x.stat() for x in entries]
                     held[nid] = (str(unit), max(s.st_mtime_ns for s in stats) // 1_000_000_000,
                                  sum(s.st_size for s in stats))
-        for nid in sorted(held):
-            locator, mtime, size = held[nid]
-            yield DocRef(source_id=self.source_id, native_id=str(nid), locator=locator,
-                         mtime=mtime, size=size)
 
     def superseded_ids(self, ref: DocRef) -> list[str]:
         """The ids this unit could have had under another of its forms
@@ -1284,13 +1418,14 @@ class EurlexSource:
         if own_eli and own_eli != work_eli:
             keys.add(PROFILE.key(own_eli))
         sections = formex.sections(act)
-        if not any(text.strip() for _, text in sections) and not any(i.code == "no-text-layer" for i in found):
+        if act.rendered_sections is None and _formex_title_only(view, act):
             # A CHUNKLESS DOCUMENT STATES WHY (lesson E1, 2026-11-25: 41 Formex
-            # acts whose source holds only a title, an empty PREAMBLE and
-            # ENACTING.TERMS; app/build_check.py refuses a chunkless document
-            # that states none): said, never refused — the record is its title
-            found.append(Issue("title-only", f"the {form or 'source'} body holds no text but the act's title: "
-                                             f"no recital, article or annex"))
+            # acts whose source holds only a title; app/build_check.py refuses
+            # a chunkless document that states none). Decided from the SOURCE,
+            # never from the parse's output (architecture's read of b4f6b52a:
+            # a parse that LOSES an act's text must stay caught by the check)
+            found.append(Issue("title-only", "the Formex body's PREAMBLE and ENACTING.TERMS and its "
+                                             "annexes hold no text: the record is the act's title"))
         return CanonicalDoc(
             uid=f"{self.source_id}:{raw.ref.native_id}",
             title=act.title or note.expression_title or celex,
