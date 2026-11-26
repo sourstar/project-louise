@@ -158,6 +158,9 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(w1.pcm === 1 && w1.channels === 1 && w1.rate === 16000 && w1.bits === 16, '2. 16-bit PCM, 16 kHz, mono', w1);
   check(w1.samples > 16000 * 1.5 && w1.samples < 16000 * 12, '2. the recording, speech and the quiet after it', w1.samples);
   check(w1.peak > 3000, '2. the speech is in it', w1.peak);
+  // THE READY PING (operator, 2026-11-26): one soft tone when the microphone turns red
+  check(await page.evaluate(() => louiseVoice.pings()) === 1, '2. one ping when the microphone was ready',
+        await page.evaluate(() => louiseVoice.pings()));
   check(p1.type === 'audio/wav' && p1.fields.response_format === 'json' && !('model' in p1.fields)
         && !('language' in p1.fields), '2. no model named, and no language while results show in their own', p1.fields);
   // HANDS-FREE (operator, 2026-11-11): asked at once, as Ask asks, and the answer read by itself
@@ -481,11 +484,12 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await emit('end', { state: 'done', reason: '' });
   await until(() => __speech.length >= 4, 8000);
   const t18 = await page.evaluate(() => louiseVoice.timeline());
-  // a long first sentence goes in two, cut at its last clause mark under 90
+  // a long first sentence goes WHOLE, up to its full stop (operator, 2026-11-26)
   const LONGFIRST = 'Il poema, composto in terzine incatenate di endecasillabi, si divide in tre cantiche e cento canti complessivi [1].';
-  const pieces = await page.evaluate(t => { const r = []; return louiseVoice.firstPieces(t); }, LONGFIRST);
-  check(pieces.length === 2 && pieces[0] === 'Il poema, composto in terzine incatenate di endecasillabi,' && pieces[0].length <= 90
-        && pieces.join(' ') === LONGFIRST, '18. a long first sentence is read in two, at a clause mark', pieces);
+  const pieces = await page.evaluate(t => louiseVoice.sentences(t), LONGFIRST + ' Il secondo libro segue la stessa forma.');
+  check(pieces[0] === LONGFIRST && (await page.evaluate(() => typeof louiseVoice.firstPieces)) === 'undefined',
+        '18. a long first sentence is read whole, not cut at a comma', pieces);
+  check(t18.sentences.every(t => t.chars > 0) && t18.sentences.length >= 1, '18. every piece read is a whole sentence', t18.sentences);
   check(Array.isArray(t18.started) && t18.started.length === 1, '18. the reading\'s start is kept', t18.started);
   check(Array.isArray(t18.taps) && t18.taps.length === 1 && t18.taps[0] < lastWordAt && t18.started[0] >= t18.taps[0],
         '18. the tap is kept, beside the start it made', { taps: t18.taps, started: t18.started, lastWordAt });

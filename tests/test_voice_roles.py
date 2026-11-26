@@ -117,6 +117,25 @@ def test_the_steps_of_a_synthesis_are_the_nodes_and_go_in_every_request(node, co
     assert voice.settings().tts_steps == "24" and platform_config.tts_steps("24") == 24
 
 
+def test_a_readings_first_sentence_is_made_at_half_the_steps(node, config_dir):
+    """Operator, 2026-11-26: the first sentence at half the steps, the rest
+    at full. Sentence 0 of a reading only; a request outside a reading, and
+    every later sentence, keep the node's steps — or the model's own, unset."""
+    calls, _, _ = node
+    speech.synthesize_timed({"input": IT}, url="http://ai", reading="r1", n=0, admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "16"}, "unset: half the model's 32"
+    speech.synthesize_timed({"input": IT + " Poi."}, url="http://ai", reading="r1", n=1, admin=False)
+    assert "params" not in calls[-1], "the second sentence: the model's own steps"
+    (config_dir / "platform.toml").write_text(TABLE + 'tts_steps = "24"\n', encoding="utf-8")
+    speech.synthesize_timed({"input": IT + " Tre."}, url="http://ai", reading="r2", n=0, admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "12"}
+    speech.synthesize_timed({"input": IT + " Tre."}, url="http://ai", reading="r2", n=1, admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "24"}, "the same words later in a reading: made again, at full"
+    speech.synthesize({"input": IT + " Quattro."}, url="http://ai", admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "24"}, "outside a reading: full"
+    assert speech.first_steps(4) == 4 and speech.first_steps(5) == 4, "never under the lowest accepted"
+
+
 def test_steps_that_are_not_a_number_in_range_are_refused_at_load(node, config_dir):
     for bad in ('"many"', '"3"', '"65"', '"2.5"', '"-8"'):
         (config_dir / "platform.toml").write_text(f"[speech]\ntts_steps = {bad}\n", encoding="utf-8")

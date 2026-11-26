@@ -951,6 +951,14 @@ measured (published figures disagree).
     the operator's monitor is dropped only when the worker's rule has been seen live. Fixed the same day: the
     watcher says once whether it is armed, with its limit, its two lines and the reading
     (`memory_yield.watch`).
+- **The voice: the first sentence whole and at half the steps; a ping when the microphone is ready (operator,
+  2026-11-26).** (1) A reading's sentence 0 is made at half `[speech] tts_steps` (the model's 32 when unset: 16),
+  every later one at full (`speech.first_steps`; the steps are in the kept clip's key). (2) The first sentence is
+  no longer cut at its last , ; : past 90 characters (`firstPieces` removed): its second half waited for its own
+  synthesis, a gap longer than a full stop's. (3) One soft 880 Hz tone of 160 ms when the microphone turns red,
+  phone and car alike, from its own context opened in the tap; the microphone's energy check ignores it.
+  Measured before: 11-26's reading, sentence 1 (114 chars) made in 4.6 s at 32 steps; the first word 48.9 s after
+  Ask is the larger part, and is architecture's (mode-switch-room). After: owed, from the next voice-timeline line.
 - **The Ask button is Abort while a question is being answered (operator, 2026-11-25: "while a query is in
   processing I want the Ask button to switch to Abort"; `app/templates/ask.html`, 07 §7.4).** Pressed, the
   question's search and answer jobs are cancelled on the node (`DELETE /ask/relay/<id>`, the route the "stuck"

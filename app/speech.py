@@ -573,6 +573,16 @@ NO_SYNTHETIC = (b'{"error": {"message": "no synthetic voice is set on this node,
                 b'voice is read to an admin only"}}')
 
 
+#: the model's own steps where `[speech] tts_steps` is unset (OmniVoice: 32)
+MODEL_STEPS = 32
+
+
+def first_steps(steps: int | None) -> int:
+    """The steps of a reading's first sentence: half the node's (or the
+    model's own, unset), never under the lowest `TTS_STEPS` accepts."""
+    return max(platform_config.TTS_STEPS[0], (steps if steps is not None else MODEL_STEPS) // 2)
+
+
 def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
                      reading: str | None = None, n: int | None = None,
                      last: bool = False, account_voice: str | None = None,
@@ -631,6 +641,16 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     # sent — a reader chooses no cost on the card. Unset, nothing is sent and
     # the model's own default stands. In the kept clip's key with the rest.
     steps = platform_config.tts_steps(node.tts_steps)
+    # THE FIRST SENTENCE AT HALF THE STEPS (operator, 2026-11-26: "process the
+    # first sentence at the half of the samples. The voice will be less
+    # fitting the real one, but the answer will be much faster. Then after
+    # the first sentence, we can switch to the full steps"): sentence 0 of a
+    # reading is what the reader waits for (4.6 s for 114 chars at 32 steps,
+    # the voice-timeline line of 11-26); every later one is made while the
+    # one before plays. The half is in the kept clip's key, so a half-step
+    # clip is never served for a full one.
+    if reading is not None and n == 0:
+        steps = first_steps(steps)
     if steps is not None:
         out["params"] = {**(out.get("params") if isinstance(out.get("params"), dict) else {}),
                          "flow_steps": str(steps)}

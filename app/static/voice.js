@@ -88,11 +88,13 @@
   };
   // sentences being synthesized at once (pump)
   const IN_FLIGHT = 2;
-  // THE FIRST SOUND (München, 2026-11-08: OmniVoice takes 1.5-2x a clip's
-  // length to make it, 12-33 s for a first sentence of 9-17 s): a first
-  // sentence longer than FIRST_MAX is read in two, cut at its last clause
-  // mark (, ; :) between FIRST_MIN and FIRST_MAX characters
-  const FIRST_MAX = 90, FIRST_MIN = 30;
+  // THE FIRST SENTENCE GOES WHOLE, up to its full stop (operator,
+  // 2026-11-26: "there's a gap between the first comma and the rest of the
+  // sentence that is longer of a full period. So the first sentence must be
+  // provided up to the first full stop"). Until then a first sentence over
+  // 90 characters was cut at its last , ; : and its second half waited for
+  // its own synthesis. Its first sound is paid instead by the node making
+  // it at half the steps (app/speech.py `first_steps`).
   // a WAV of no samples: played in the tap, it lets the page play the rest (iOS)
   const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=';
   const WORKLET = "class LouiseCapture extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(2048);this.n=0}"
@@ -173,6 +175,8 @@
     // microphone's route is up, and the page says so (`wake`)
     if (r.first_ms === null) r.first_ms = Math.round(performance.now() - r.opened);
     if (!r.live) { if (top > 0) { r.live = true; wake(r, 'sound'); } else r.zero_ms += ms; }
+    // the ready ping as the microphone hears it: neither speech nor the floor
+    if (r.deaf_until && performance.now() < r.deaf_until) { r.ms += ms; return false; }
     const loud = rms > Math.max(FLOOR_MIN, FLOOR_X * (r.floor === null ? 0 : r.floor));
     r.floor = r.floor === null ? rms : Math.min(r.floor, rms);
     r.ms += ms;
@@ -267,6 +271,7 @@
   async function start() {
     stopReading(); auto = false;         // the microphone would hear the answer
     unlock();                            // inside the tap: the answer may be read later
+    pingUnlock();                        // inside the tap: the ready ping may sound
     busy = true; micState('busy', 'opening the microphone…'); active();
     let stream;
     try {
@@ -355,9 +360,41 @@
     r.wake_ms = Math.round(performance.now() - r.opened);
     clearTimeout(r.waking);
     if (rec !== r && !busy) return;            // ended meanwhile
+    // the ping says it without the screen; the microphone hears it, so its
+    // energy is not counted as speech (`hear`)
+    if (ping()) r.deaf_until = performance.now() + PING_MS + PING_TAIL_MS;
     const t0 = performance.now();
     const show = () => { if (rec === r) micState('rec', 'recording ' + clock(performance.now() - t0) + ' — tap the microphone to stop'); };
     show(); r.tick = setInterval(show, 250);
+  }
+
+  // THE READY PING (operator, 2026-11-26: "Send a gentle ping when the
+  // microphone is ready (both car and no car) so the user knows when to talk
+  // without watching the screen"): one short soft tone when the microphone
+  // turns red (`wake`), on the phone and on a car's hands-free alike. Its own
+  // context, opened in the tap — the capture's is clocked by the output and
+  // may run no callback on a car (THE SECOND WAY TO RECORD). Web Audio's
+  // OscillatorNode, nothing fetched. False where the browser gives no sound.
+  const PING_MS = 160, PING_TAIL_MS = 120, PING_HZ = 880, PING_GAIN = 0.12;
+  let pingCtx = null, pingCount = 0;
+  function pingUnlock() {
+    if (!AC) return;
+    try { if (!pingCtx || pingCtx.state === 'closed') pingCtx = new AC(); pingCtx.resume().catch(() => {}); }
+    catch (e) { pingCtx = null; }
+  }
+  function ping() {
+    if (!pingCtx || pingCtx.state === 'closed') return false;
+    try {
+      const t = pingCtx.currentTime, osc = pingCtx.createOscillator(), g = pingCtx.createGain();
+      osc.type = 'sine'; osc.frequency.value = PING_HZ;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(PING_GAIN, t + 0.02);           // no click at the start
+      g.gain.exponentialRampToValueAtTime(0.0001, t + PING_MS / 1000); // a soft end
+      osc.connect(g); g.connect(pingCtx.destination);
+      osc.start(t); osc.stop(t + PING_MS / 1000 + 0.02);
+      pingCount++;
+      return true;
+    } catch (e) { return false; }
   }
 
   function release(r) {
@@ -459,14 +496,6 @@
   const now = () => Math.round(performance.now());
   let times = { asked: null, first: null, last: null, started: [], taps: [], items: [] };
 
-  // the first sentence of a reading in two where it is long (FIRST_MAX)
-  function firstPieces(s) {
-    if (s.length <= FIRST_MAX) return [s];
-    const head = s.slice(0, FIRST_MAX);
-    let at = -1;
-    for (const m of head.matchAll(/[,;:](?=\s)/g)) if (m.index + 1 >= FIRST_MIN) at = m.index + 1;
-    return at < 0 ? [s] : [s.slice(0, at), s.slice(at).trim()];
-  }
   // the answer AS WRITTEN (ask.html `answerSource`): the page shows its
   // Markdown formatted, the node drops the marks before reading (app/speech.py)
   const answerText = () => {
@@ -683,13 +712,11 @@
   function feed(r) {
     const t = answerText();
     r.ended = !writing; r.text = t;
-    for (const whole of cut(r, t, r.ended)) {
-      for (const s of (r.items.length ? [whole] : firstPieces(whole))) {
-        const it = { text: s, n: r.items.length, t: { chars: s.length, cut: now() } };
-        times.items.push(it.t);
-        it.p = new Promise((ok, no) => { it.ok = ok; it.no = no; }); it.p.catch(() => {});
-        r.items.push(it);
-      }
+    for (const s of cut(r, t, r.ended)) {
+      const it = { text: s, n: r.items.length, t: { chars: s.length, cut: now() } };
+      times.items.push(it.t);
+      it.p = new Promise((ok, no) => { it.ok = ok; it.no = no; }); it.p.catch(() => {});
+      r.items.push(it);
     }
     pump(r);
     if (r.more) { const f = r.more; r.more = null; f(); }
@@ -816,6 +843,8 @@
                  turn: t.turn ?? null, node: t.node ?? null, cache: t.cache ?? null,
                  play: rel(t.play), end: rel(t.end) })) };
     },
-    sentences, cut, firstPieces, downsample, wavBytes,
+    // how many ready pings sounded on this page
+    pings: () => pingCount,
+    sentences, cut, downsample, wavBytes,
   };
 })();
