@@ -116,14 +116,82 @@ def test_P4_a_stop_mid_listing_keeps_what_was_listed_and_the_next_pass_resumes(t
     assert all("1972" not in str(w) for w in calls), calls
 
 
-def test_P5_a_fingerprint_that_no_longer_holds_never_refreshes_the_rows_kept_since(tmp_path, monkeypatch):
-    """The probe's race, as its outcome: another pass kept the window anew
-    (`new`, the unit changed at 5000) after this pass asked the fingerprint
-    `old`; `vouched` for `old` must not put a fresh `at` on rows it did not
-    see — nor the old rows back."""
+def test_X1_vouched_racing_keep_never_puts_old_rows_back(tmp_path, monkeypatch):
+    """Architecture's X1: a child runs vouched("old") and pauses INSIDE the
+    lock after its read; the parent keeps "new" meanwhile. With the flock the
+    parent waits and the rows end "new"; without it the old rows came back."""
+    import os
+    import time
     monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
     cellar_listing.keep(URL, 1972, ("it",), 1, "old", [[CELEX, "it", 100, "true"]], force=True)
+    read_r, read_w = os.pipe()
+    pid = os.fork()
+    if pid == 0:                                                  # the child: vouched, paused after its read
+        try:
+            real = cellar_listing.json.loads
+
+            def loads(b, *a, **k):
+                out = real(b, *a, **k)
+                os.write(read_w, b"r")
+                time.sleep(0.5)
+                return out
+            cellar_listing.json.loads = loads
+            cellar_listing.vouched(URL, 1972, ("it",), 1, "old", force=True)
+        finally:
+            os._exit(0)
+    os.read(read_r, 1)                                            # the child holds the lock, has read
+    t0 = time.monotonic()
     cellar_listing.keep(URL, 1972, ("it",), 1, "new", [[CELEX, "it", 5000, "true"]], force=True)
-    cellar_listing.vouched(URL, 1972, ("it",), 1, "old", force=True)
+    waited = time.monotonic() - t0
+    os.waitpid(pid, 0)
     dates, _ = cellar_listing.coverage({(CELEX, "it")}, {"it": 0.0}, URL)
-    assert dates[(CELEX, "it")] == 5000, "the changed unit reads changed: Cellar's tree"
+    assert dates[(CELEX, "it")] == 5000, "the old rows came back"
+    assert waited > 0.2, "keep waited for the child's lock"
+
+
+def test_P5_a_fingerprint_that_no_longer_holds_leaves_the_window_as_kept(tmp_path, monkeypatch):
+    import gzip as _gz
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    cellar_listing.keep(URL, 1972, ("it",), 1, "new", [[CELEX, "it", 5000, "true"]], force=True, at=123.0)
+    cellar_listing.vouched(URL, 1972, ("it",), 1, "old", force=True, at=999.0)
+    p = cellar_listing._path(URL, 1972, ("it",), True)
+    data = json.loads(_gz.decompress(p.read_bytes()))
+    assert data["at"] == 123.0 and data["rows"] == [[CELEX, "it", 5000, "true"]]
+
+
+def test_an_oserror_while_listing_holds_the_pass_back(tmp_path, monkeypatch):
+    """Review of 7eb82ba1, 1: ENOSPC in `keep` left prepare as an OSError, the
+    engine went on "not prepared", every tree asked of Cellar."""
+    base, corpus = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(datadump, "_DUMPS", datadump.Dumps(base))
+    monkeypatch.setattr(eurlex_dump, "build_newer", lambda *a, **k: None)
+
+    def full(*a, **k):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(cellar, "_window_files", full)
+    f = _unit()
+    with pytest.raises(HeldBack):
+        cellar.TreeUnits().prepare([f], [f], SimpleNamespace(corpus_dir=corpus, name="eu"), SimpleNamespace(url=URL))
+
+
+def test_a_covered_window_is_asked_again_once_a_day_and_its_units_come_back_at_once(tmp_path, monkeypatch):
+    import time
+    base, corpus = _setup(tmp_path, monkeypatch)
+    eurlex_dump._record_incomplete(corpus, {"it": {CELEX: "true"}})
+    eurlex_dump.mark_deferred(corpus, "it", CELEX, "waits for its window")
+    created = datadump._stamp(CREATED).timestamp()
+    cellar_listing.keep(URL, 1972, ("it",), 1, None, [[CELEX, "it", 100, "true"]], force=True, at=created + 10)
+    asked = []
+
+    def window(client, url, year, langs, code_of, charge, place=None, learned=None):
+        asked.append((year, langs))
+        cellar_listing.vouched(url, year, langs, 1, None, force=True, at=time.time())
+        return iter(())
+    monkeypatch.setattr(cellar, "_window_files", window)
+    units = cellar.TreeUnits()
+    units._prepare_bulk(base, corpus, ["it"], [_unit()], "eu", URL)
+    assert asked == [(1972, ("it",))], "known whole more than a day ago: its fingerprint asked again"
+    assert [c for _, c, _ in eurlex_dump.incomplete_due(corpus, ("it",))] == [CELEX], "listed: due at once"
+    asked.clear()
+    units._prepare_bulk(base, corpus, ["it"], [_unit()], "eu", URL)
+    assert asked == [], "known whole within the day: nothing asked"

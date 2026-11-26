@@ -90,27 +90,30 @@ def _locked(path: Path):
 
 
 def keep(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str | None, rows: list, *,
-         force: bool = False) -> None:
+         force: bool = False, at: float | None = None) -> None:
+    """The window as listed. `at`: when its COUNT was asked — what the rows
+    are known whole as of (review of 7eb82ba1, 3a: the last page's time is
+    later than what the count vouched for)."""
     path = _path(endpoint, year, languages, force)
     with _locked(path):
-        _keep(path, year, languages, n, last, rows, force=force, endpoint=endpoint)
+        _keep(path, year, languages, n, last, rows, force=force, endpoint=endpoint, at=at)
 
 
 def _keep(path: Path, year: int, languages: tuple[str, ...], n: int, last: str | None, rows: list, *,
-          force: bool, endpoint: str) -> None:
+          force: bool, endpoint: str, at: float | None) -> None:
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
     import time
     tmp.write_bytes(gzip.compress(json.dumps({"n": n, "last": last, "rows": rows, "year": year,
                                               "languages": list(languages), "force": force,
                                               "endpoint": endpoint.rstrip("/"), "shape": SHAPE,
-                                              "at": time.time()},
+                                              "at": time.time() if at is None else at},
                                              separators=(",", ":")).encode(), 6))
     os.replace(tmp, path)
 
 
 
 def vouched(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str | None, *,
-            force: bool = False) -> None:
+            force: bool = False, at: float | None = None) -> None:
     """The window's fingerprint was asked NOW and still holds (cellar
     `_window_files`): its `at` — when it was last known whole, which
     `coverage` reads — is set to now, the file rewritten whole (review of
@@ -125,14 +128,14 @@ def vouched(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: 
             return
         if data.get("shape") != SHAPE or data.get("n") != n or data.get("last") != last:
             return              # another format, or another pass kept other rows meanwhile
-        data["at"] = time.time()
+        data["at"] = time.time() if at is None else at
         tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
         tmp.write_bytes(gzip.compress(json.dumps(data, separators=(",", ":")).encode(), 6))
         os.replace(tmp, path)
 
 
 def coverage(wanted: set[tuple[str, str]], after: dict[str, float],
-             endpoint: str) -> tuple[dict[tuple[str, str], int], set[tuple[int, str]]]:
+             endpoint: str) -> tuple[dict[tuple[str, str], int], dict[tuple[int, str], float]]:
     """WHAT THE KEPT LISTING VOUCHES FOR SINCE THE DUMP (architecture's decision,
     2026-11-26, on EUR-Lex5.next's 122,317 units asked first): a window is a
     whole enumeration of a (CELEX year, language set) with each unit's
@@ -144,9 +147,10 @@ def coverage(wanted: set[tuple[str, str]], after: dict[str, float],
     11-19, dated by the work alone, still lay beside them and would vouch a
     unit whose manifestation Cellar replaced). Anything else is not counted,
     and its window is listed again. Returns the wanted units' dates from such
-    windows, and the (year, language) pairs they cover. Read-only."""
+    windows, and the (year, language) pairs they cover with the `at` each is
+    known whole as of. Read-only."""
     dates: dict[tuple[str, str], int] = {}
-    cover: set[tuple[int, str]] = set()
+    cover: dict[tuple[int, str], float] = {}
     for p in sorted(_base().glob("*/*.json.gz")):
         try:
             data = json.loads(gzip.decompress(p.read_bytes()))
@@ -157,7 +161,8 @@ def coverage(wanted: set[tuple[str, str]], after: dict[str, float],
         if data.get("shape") != SHAPE or p != _path(endpoint, year, langs, force):
             continue
         fresh = {l for l in langs if at > after.get(l, float("inf"))}
-        cover |= {(year, l) for l in fresh}
+        for l in fresh:
+            cover[(year, l)] = max(at, cover.get((year, l), 0.0))
         for row in data.get("rows") or []:
             k = (str(row[0]), str(row[1]))
             if k[1] in fresh and k in wanted and isinstance(row[2], int) and row[2] > dates.get(k, -1):

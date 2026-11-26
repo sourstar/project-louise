@@ -143,7 +143,11 @@ plugin, because a verifier needs it to reproduce our records:
     moment it is, and `records-vs-origin` re-fetches the tree from Cellar
     and compares. The node also writes where each tree came from
     (`.eurlex-tree-sources.jsonl`, work_trees.record_source): LOCAL, beside
-    the corpus, never in a SHARD or a record (no wire format changed).
+    the corpus, never in a SHARD or a record (no wire format changed). A
+    window vouches as of when its count was asked, and is asked again once
+    a day while it holds units still due; the bound left — a change Cellar
+    makes within the day before a unit lands — is caught by the next complete
+    listing, which sees the unit's later date and fetches it again.
   * The DATA DUMP is a TRANSPORT for items, never the origin (amended
     2026-11-14, operator: "every time there is a bulk download that saves a
     relevant amount of single requests to the source, we start from the bulk

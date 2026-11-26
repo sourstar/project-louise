@@ -236,14 +236,14 @@ def test_the_kept_listing_vouches_only_for_windows_known_whole_after_the_dump(tm
     cellar_listing.keep(url, 1973, ("it", "fr"), 0, None, [])
     after = {"it": time.time() + 60, "fr": 0.0}                  # 1972's kept before the dump, for it
     dates, cover = cellar_listing.coverage({(CELEX, "it")}, after, url)
-    assert dates == {} and cover == {(1973, "fr")}, "an empty window still covers its languages"
+    assert dates == {} and set(cover) == {(1973, "fr")}, "an empty window still covers its languages"
     monkeypatch.setattr(time, "time", lambda: after["it"] + 1)
     cellar_listing.vouched(url, 1972, ("it",), 3, None)          # another fingerprint: nothing vouched
     assert cellar_listing.coverage({(CELEX, "it")}, after, url)[0] == {}
     cellar_listing.vouched(url, 1972, ("it",), 2, None)          # its fingerprint asked now, and holding
     dates, cover = cellar_listing.coverage({(CELEX, "it")}, after, url)
     assert dates == {(CELEX, "it"): 100} and (1972, "it") in cover
-    assert cellar_listing.coverage({(CELEX, "it")}, after, "https://other.test") == ({}, set()), \
+    assert cellar_listing.coverage({(CELEX, "it")}, after, "https://other.test") == ({}, {}), \
         "another endpoint's windows vouch for nothing"
 
 
@@ -257,7 +257,7 @@ def test_a_window_of_the_format_before_11_19_vouches_for_nothing(tmp_path, monke
     old_shape = {"n": 1, "last": None, "rows": [[CELEX, "it", 100]], "year": 1972, "languages": ["it"],
                  "force": False, "endpoint": "https://cellar.test", "shape": "work-modified", "at": 9e9}
     cellar_listing._path("https://cellar.test", 1972, ("it",)).write_bytes(gzip.compress(json.dumps(old_shape).encode()))
-    assert cellar_listing.coverage({(CELEX, "it")}, {"it": 0.0}, "https://cellar.test") == ({}, set())
+    assert cellar_listing.coverage({(CELEX, "it")}, {"it": 0.0}, "https://cellar.test") == ({}, {})
 
 
 def test_prepare_lists_the_missing_windows_first_and_an_unlisted_one_leaves_its_units_waiting(tmp_path, monkeypatch):

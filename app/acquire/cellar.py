@@ -492,6 +492,7 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     deferred to the next round."""
     from . import cellar_listing
     lang_text = ",".join(languages) if len(languages) <= 4 else f"{len(languages)} languages"
+    counted_at = time.time()                # what the window is known whole as of (review of 7eb82ba1, 3a)
     try:
         counted = sparql(client, base, fingerprint_query(year, languages),
                          what=f"the count of {year} ({lang_text})", charge=charge)
@@ -512,7 +513,7 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     force = place is not None
     kept = cellar_listing.held(base, year, languages, want, latest, force=force)
     if kept is not None:
-        cellar_listing.vouched(base, year, languages, want, latest, force=force)     # known whole now
+        cellar_listing.vouched(base, year, languages, want, latest, force=force, at=counted_at)
         # the window as the last pass listed it: its count and its latest
         # modification are the same, so no row moved (cellar_listing.py)
         for row in kept:
@@ -548,7 +549,7 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
         # re-listed next pass (worded for engine.transient)
         raise TransportError(f"cellar: the {year} window answered {got} of the {want} rows its "
                              f"count names (connection timed out, the answer cut)")
-    cellar_listing.keep(base, year, languages, want, latest, listed, force=force)
+    cellar_listing.keep(base, year, languages, want, latest, listed, force=force, at=counted_at)
 
 
 # ---- one unit ---------------------------------------------------------------------------------
@@ -943,11 +944,17 @@ def _say_cellar(name: str) -> Callable[[str], None]:
     return lambda message: print(f"{time.strftime('%H:%M:%S')} [{name} info:cellar] {message}", flush=True)
 
 
+#: a covered window's fingerprint is asked again after this (once a day)
+WINDOW_REFRESH_S = 24 * 3600.0
+
+
 class WindowNotListed(Waiting):
     """A unit asked first whose listing window is not known whole since the
-    dump was cut: it WAITS — the engine records nothing (spec.Waiting), and
-    TreeUnits.fetch raises it before any request, never marking it tried or
-    deferred."""
+    dump was cut: it WAITS. Nothing is asked of Cellar; the engine records
+    nothing (spec.Waiting); TreeUnits.fetch marks it deferred in the dump's
+    ledger (never tried), so it is due again after `engine.retry_wait_s(n)`
+    — 60 s up to 2 h, n counted with Cellar's episodes on it — or at once
+    when its window comes back listed (`eurlex_dump.mark_listed`, n from 0)."""
 
 
 def window_year(celex: str) -> int | None:
@@ -1398,8 +1405,7 @@ class TreeUnits(CellarUnits):
             # whose dump is stamped into the corpus holds the pass back
             # (review of 13743848, 1: an unset EURLEX_DATADUMP_DIR sent every
             # tree to Cellar)
-            self._prepare_bulk(None, Path(collection.corpus_dir), langs, pending,
-                               getattr(collection, "name", "eurlex"), getattr(endpoint, "url", None))
+            self._prepare_bulk_held(None, collection, langs, pending, endpoint)
             return []
         try:
             eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs, stop=_stop_requested)
@@ -1409,9 +1415,24 @@ class TreeUnits(CellarUnits):
             raise HeldBack(f"{getattr(collection, 'name', 'eurlex')}: a newer Data Dump of {', '.join(langs)} "
                            f"was not built ({type(e).__name__}: {str(e)[:300]}); bulk first, so Cellar is "
                            f"not asked for its units until it is") from e
-        self._prepare_bulk(dumps.base, Path(collection.corpus_dir), langs, pending,
-                           getattr(collection, "name", "eurlex"), getattr(endpoint, "url", None))
+        self._prepare_bulk_held(dumps.base, collection, langs, pending, endpoint)
         return []
+
+    def _prepare_bulk_held(self, dump_base, collection, langs, pending, endpoint) -> None:
+        """`_prepare_bulk`, whatever stops it holding the pass back (review of
+        7eb82ba1, 1: an OSError in the listing phase — ENOSPC on the fast
+        drive — left prepare as itself, the engine went on "not prepared",
+        and every tree was asked of Cellar: F4 again)."""
+        from .spec import HeldBack
+        name = getattr(collection, "name", "eurlex")
+        try:
+            self._prepare_bulk(dump_base, Path(collection.corpus_dir), langs, pending, name,
+                               getattr(endpoint, "url", None))
+        except (TransferAborted, HeldBack):
+            raise
+        except Exception as e:  # noqa: BLE001 — whatever stopped the bulk, Cellar waits for it
+            raise HeldBack(f"{name}: the trees the Data Dump holds were not readied ({type(e).__name__}: "
+                           f"{str(e)[:300]}); bulk first, so Cellar is not asked for them until they are") from e
 
     def _prepare_bulk(self, dump_base: Path, corpus: Path, langs: list[str], pending: list[RemoteFile],
                       name: str, base_url: str | None = None) -> None:
@@ -1445,18 +1466,31 @@ class TreeUnits(CellarUnits):
             got = datadump._stamp(when)
             if got is not None:
                 after[lang] = got.timestamp()
-        dates, cover = cellar_listing.coverage(due, after, base_url) if due and base_url else ({}, set())
+        dates, cover = cellar_listing.coverage(due, after, base_url) if due and base_url else ({}, {})
+        # A COVERED WINDOW IS ASKED AGAIN ONCE A DAY (architecture's decision,
+        # 2026-11-26, the operator's bulk-check rule): its fingerprint, for a
+        # window known whole more than REFRESH_S ago that holds units still
+        # due — a change Cellar made since is then seen. THE BOUND LEFT: a
+        # change within the day before a unit lands lands the dump's tree; the
+        # next complete listing sees its date and fetches it again.
         missing: dict[int, set[str]] = {}
+        stale = 0
+        now = time.time()
         for celex, lang in due:
             year = window_year(celex)
-            if year is not None and (year, lang) not in cover:
+            if year is None:
+                continue
+            at = cover.get((year, lang))
+            if at is None or now - at > WINDOW_REFRESH_S:
+                stale += at is not None and lang not in missing.get(year, set())
                 missing.setdefault(year, set()).add(lang)
         unlisted: set[tuple[int, str]] = set()
         if missing and base_url:
             t0, asked = time.monotonic(), 0
             code_of = {v: k for k, v in LANGUAGES.items()}
             say(f"listing what changed since the dump: {sum(len(v) for v in missing.values())} "
-                f"(year, language) window(s) of {len(missing)} year(s), before any unit is built from it")
+                f"(year, language) window(s) of {len(missing)} year(s), {stale} of them known whole more "
+                f"than a day ago, before any unit is built from it")
             # THE SPLIT, LEARNED across the years, as `listing` does (review of
             # a783fd1c, 3: a 24-language count ran past 900 s on 11-14)
             learned = {"group": max(len(v) for v in missing.values())}
@@ -1478,9 +1512,13 @@ class TreeUnits(CellarUnits):
                             say(f"cellar: the {year} window ({', '.join(window)}) is not listed "
                                 f"({str(e)[:200]}): its units wait")
             dates, cover = cellar_listing.coverage(due, after, base_url)
+            back = [(l, c) for c, l in due if (window_year(c), l) in cover]
+            if back:
+                eurlex_dump.mark_listed(corpus, back)       # their wait is over: n from 0
             say(f"listed {asked} window(s) in {time.monotonic() - t0:.0f} s")
         elif missing:
             unlisted = {(y, l) for y, ls in missing.items() for l in ls}
+        cover = {k for k, at in cover.items() if k not in unlisted}
         key = str(corpus.resolve())
         with self._lock:
             self._bulk[key] = bulk

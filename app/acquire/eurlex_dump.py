@@ -430,6 +430,8 @@ def _fold(record: dict, marks: list[dict]) -> dict:
             entry["tried"] = value
         elif kind == "state" and isinstance(value, dict):
             entry.update({k: value[k] for k in ("held", "lacks", "whole") if k in value})
+        elif kind == "listed":
+            entry.pop("deferred", None)          # its window came back listed: due at once, n from 0
         elif kind == "deferred" and isinstance(value, dict):
             prev = entry.get("deferred") if isinstance(entry.get("deferred"), dict) else {}
             entry["deferred"] = {"at": value.get("at"), "n": int(prev.get("n") or 0) + 1, "why": value.get("why")}
@@ -614,6 +616,15 @@ def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
     """A recorded incomplete unit Cellar did not give either (a failure that
     is not the endpoint going away): not asked first again."""
     _mark(corpus, [(lang, celex, "tried", why[:300])])
+
+
+def mark_listed(corpus: Path, units: list[tuple[str, str]]) -> None:
+    """Recorded units whose listing window came back listed (cellar
+    TreeUnits.prepare): their wait for it is over, due at once, the episode
+    count from 0 (architecture's review of 7eb82ba1, 4). One write."""
+    import time as _time
+    when = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+    _mark(corpus, [(lang, celex, "listed", when) for lang, celex in units])
 
 
 def mark_deferred(corpus: Path, lang: str, celex: str, why: str) -> None:
