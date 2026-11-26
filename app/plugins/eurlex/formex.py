@@ -1090,11 +1090,38 @@ def attributes_of(root: ET.Element) -> list[list]:
     return [[e.tag, dict(e.attrib)] for e in root.iter() if isinstance(e.tag, str) and e.attrib]
 
 
+#: a member Cellar repaired under a doubled name: `<the name the wrapper uses>---<its old name>`
+_DOUBLED = "---"
+
+
+def doubled_names(files: dict[str, bytes], wanted: list[str]) -> tuple[dict[str, bytes], dict[str, str]]:
+    """The files, with each name the wrapper wants and the items lack read
+    from the ONE member named `<that name>---…` (2026-11-26, 32015D1735 hr:
+    Cellar's corrected package holds the body as
+    `L_2015252HR.01004901.xml---L_2015252HR.01005202.tif.xml` and the annex
+    as `…01005201.xml---…01005203.tif.xml`, the wrapper naming
+    `…01004901.xml` and `…01005201.xml`; the act's text is there, under its
+    doubled name). Returns the files to read and `{wanted name: member}`.
+    The held names are not changed: nothing is renamed in the unit. Two
+    members of one prefix resolve nothing."""
+    out = dict(files)
+    aliases: dict[str, str] = {}
+    for want in wanted:
+        if want in files:
+            continue
+        hits = [n for n in files if n.startswith(want + _DOUBLED)]
+        if len(hits) == 1:
+            out[want] = files[hits[0]]
+            aliases[want] = hits[0]
+    return out, aliases
+
+
 def parse(files: dict[str, bytes], celex: str | None = None, listed=None, adopted: str | None = None) -> Act:
     """The manifestation's items by name → the act (`celex`'s, where the
     items hold more than one act: `own_wrapper`). Raises FormexError when
     the wrapper, the body or an annex it names is missing or unreadable."""
     wname, wrapper = wrapper_of(files, celex, listed, adopted)
+    files, aliases = doubled_names(files, [*main_names(wrapper), *annex_names(wrapper)])
     # A FILE UNDER ANOTHER'S NAME is never read as what its name says: the
     # record would be another file's text in its place, every check passing
     wrong = not_its_name(files, wrapper, wname)
@@ -1227,6 +1254,8 @@ def parse(files: dict[str, bytes], celex: str | None = None, listed=None, adopte
     for name in sorted(files):
         if name not in read and name.lower().endswith(".xml"):
             meta.setdefault("other_items", {})[name] = tree(_parse(files[name], name))
+    if aliases:
+        meta["doubled_names"] = dict(sorted(aliases.items()))    # the name read -> the member held
     date = _date_iso(bib.find("DATE")) if bib is not None else None
     if root.tag == "CONS.ACT":
         base_date = doc.find("./FAM.COMP/BIB.DATA/DATE")
