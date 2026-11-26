@@ -313,7 +313,9 @@ def _host_floor_gib() -> int | None:
     gives its room back by being stopped."""
     from . import platform_config
     try:
-        return int(platform_config.load().models.page_floor_gib)
+        # `seen`: re-read only when the file changed — this is asked on the
+        # embed stage's hot path, once a check (`parks_now`)
+        return int(platform_config.seen().models.page_floor_gib)
     except Exception:   # noqa: BLE001
         return None
 
@@ -335,11 +337,13 @@ def parks_now(recipe, query: bool = False) -> bool:
     from . import model_load
     url, model = _who(recipe, query)
     try:
-        if not url or not model or _host_floor_gib() == 0:
+        if not url or not model:
             return False
         server = model_load.server_of(url)
         model_load.refresh_row(server, model)
-        return model in model_load.parks(server)
+        # the file's word first (a set lookup): on a node where nothing parks
+        # — every node until a model's file says so — a check costs no more
+        return model in model_load.parks(server) and _host_floor_gib() != 0
     except Exception:   # noqa: BLE001 — unread: nothing more is asked of the run
         return False
 

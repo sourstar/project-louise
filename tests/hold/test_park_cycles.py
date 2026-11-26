@@ -560,8 +560,9 @@ def localai(monkeypatch, tmp_path, isolated_config):
         monkeypatch.setattr(httpc, "post", r.post)
         return r
     monkeypatch.setattr(own_unloads, "_path", lambda: tmp_path / "state" / "model-unloads.json")
-    monkeypatch.setattr(platform_config, "load", lambda *a, **k: SimpleNamespace(
-        models=SimpleNamespace(page_floor_gib=make.floor_gib)))
+    said = lambda *a, **k: SimpleNamespace(models=SimpleNamespace(page_floor_gib=make.floor_gib))   # noqa: E731
+    monkeypatch.setattr(platform_config, "load", said)
+    monkeypatch.setattr(platform_config, "seen", said)
     make.floor_gib = 8
     model_load.reset()
     resident.reset()
@@ -624,8 +625,10 @@ def test_a_node_with_no_host_floor_parks_nothing_and_is_asked_nothing(localai):
     r = localai()
     localai.floor_gib = 0
     parker = run_check.Parker(_recipe(), name="c")
-    assert parker.parks() is False and run_check.parks_now(_recipe()) is False
-    assert r.gets == [], "the runner is not even asked"
+    assert parker.parks() is False, "the gate asks nothing"
+    assert r.gets == [], "nor the runner"
+    model_load.loaded_models(S, 0.0)
+    assert M in model_load.parks(S) and run_check.parks_now(_recipe()) is False, "and a write is held to nothing"
     with pytest.raises(emb.GateError, match="page_floor_gib is 0"):
         parker.prepare()                         # and the pass, were it asked, says why it cannot run
 
