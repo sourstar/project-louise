@@ -612,7 +612,11 @@ def first_steps(steps: int | None) -> int:
 #: QUOTE_GAP_MS between them. A quotation too short to tell (one word, a
 #: name) stays in the sentence's language: the text says nothing of it, and
 #: the answer's sources are not looked up for it.
-QUOTE = re.compile(r'(«\s*[^«»]+?\s*»|“[^“”]+?”|„[^„“”]+?[“”]|"[^"]+?")')
+QUOTE = re.compile(r'(«\s*[^«»]+?\s*»|“[^“”]+?”|„[^„“”]+?[“”]|"[^"]+?"'
+                   # a quotation the reading's pieces cut across (architecture,
+                   # 2026-11-26): still open at a piece's end, or closed at its start
+                   r'|«[^«»]+$|“[^“”]+$|„[^„“”]+$|^[^«»“”„"]+[»”])')
+QUOTE_MARKS = "«»“”„\""
 QUOTE_MIN_WORDS = 2
 QUOTE_GAP_MS = 60
 
@@ -626,7 +630,7 @@ def quote_segments(text: str, sentence_lang: str | None) -> list[tuple[str, str 
         return []                 # nothing says the sentence's own language: nothing to tell a quotation from
     at = 0
     for m in QUOTE.finditer(text):
-        inner = m.group(0)[1:-1].strip()
+        inner = m.group(0).strip().strip(QUOTE_MARKS).strip()
         lang = language(inner) if len(re.findall(r"[^\W\d_]+", inner)) >= QUOTE_MIN_WORDS else None
         if lang is None or lang == sentence_lang:
             continue
@@ -713,7 +717,9 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     wav = str(body.get("response_format") or "wav").lower() == "wav"
     if _steps_n is None and wav:
         around = QUOTE.sub(" ", text)
-        sentence_lang = spoken_language(around, context, body.get("language"))
+        # the answer around it read without ITS quotations, which would make an
+        # Italian answer quoting English read as English
+        sentence_lang = spoken_language(around, QUOTE.sub(" ", context) if context else "", body.get("language"))
         segs = quote_segments(text, sentence_lang)
         if segs:
             return _synthesize_segments(segs, body, url, reading=reading, n=n, last=last,

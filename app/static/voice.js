@@ -84,12 +84,15 @@
   // "Smith v." | "Jones"): never a sentence's end
   const TITLES = new Set(('dr mr mrs ms prof st jr sr sig sigg dott ing avv arch geom rag on '
                           + 'mme mlle mgr pr hr fr frl sra srta '
-                          + 'abs art artt nr no hrn vgl cfr pag pp cap v vs cit ca').split(' '));
+                          + 'abs art artt nr hrn vgl cfr pag pp cap v vs cit ca '
+                          + 'sez sec cod civ reg dir vol capt col gen lt rev gov sen').split(' '));
   const endsInName = p => {
-    // a dotted acronym or abbreviation ("U.S.", "e.g.", "z.B.", "i.e.")
-    if (/(?:^|[\s(«"'“‘])(?:\p{L}\.){2,}$/u.test(p)) return true;
+    // an ordinal or a day ("am 1." | "Januar", "18." | "August"): the number
+    // and what it counts are said together (architecture, 2026-11-26)
+    if (/(?:^|\s)\d{1,2}\.$/.test(p)) return true;
     const m = /(?:^|[\s(«"'“‘])([\p{L}]{1,5})\.$/u.exec(p);
-    // one letter of either case ("G.", "z.", "B."), or a title
+    // one letter of either case ("G.", "z.", "B." — and so the last of a dotted
+    // acronym, "U.S.", "e.g.", "z.B."), or a title
     return !!m && (m[1].length === 1 || TITLES.has(m[1].toLowerCase()));
   };
   // sentences being synthesized at once (pump)
@@ -1085,6 +1088,7 @@
       const q = document.getElementById('q');
       stopReading(); dropAhead();
       answerRates = { ...rates };            // this answer's rates, for every reading of it
+      outlier = false;                       // a slow clip of the last answer says nothing of this one's
       memo = null;                           // and its cut is its own
       times = { asked: now(), first: null, last: null, started: [], taps: [], items: [] };
       auto = !!speak && dictated !== null && !!q && q.value.trim() === dictated;

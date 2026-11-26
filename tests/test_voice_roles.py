@@ -218,6 +218,24 @@ def test_a_quotations_neighbours_keep_the_sentences_language_and_punctuation_is_
     assert speech.quote_segments('Tom «Un pour tous, tous pour un»', None) == []
 
 
+def test_a_quotation_the_pieces_cut_across_is_still_spoken_in_its_language(node, monkeypatch):
+    """Architecture, 2026-11-26: at the first-sound budget the operator's own
+    example goes as "…che «the" | "law is … obeyed» per tutti."; the second
+    piece's closed half is the quotation, and the answer around is read
+    without its quotations."""
+    calls, _, _ = node
+
+    class W:
+        status_code, headers = 200, {"content-type": "audio/wav"}
+        content = _wav(300)
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or W())
+    ctx = 'Il giudice ha detto che «the law is the law and it must be obeyed» per tutti.'
+    speech.synthesize_timed({"input": 'law is the law and it must be obeyed» per tutti.', "context": ctx},
+                            url="http://ai", admin=False)
+    sent = calls[-2:]
+    assert [c["language"] for c in sent] == ["en", "it"] and sent[1]["voice"] == SYNTH_IT
+
+
 def test_a_quotation_the_node_cannot_join_goes_as_one_sentence(node, monkeypatch):
     calls, _, _ = node
 

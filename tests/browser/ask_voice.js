@@ -605,6 +605,19 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
     louiseVoice.sentences('Nach § 3 Abs. 1 BGB gilt das z. B. auch für Hrn. Meier und andere. Das ist klar und gut so.'),
     louiseVoice.sentences('As e.g. the U.S. Supreme Court held in Smith v. Jones, it is so. The next sentence is here.')]);
   check(abbr24.every(x => x.length === 2), '24. "Abs.", "z. B.", "Hrn.", "e.g.", "U.S.", "v." end no sentence', abbr24);
+  // a day, an ordinal, a court's or a century's abbreviation: no sentence's end (architecture, 2026-11-26)
+  const days24 = await page.evaluate(() => [
+    louiseVoice.sentences('Das Gesetz tritt am 1. Januar 2025 in Kraft und gilt für alle. Das ist eine neue Regel für alle Bürger.'),
+    louiseVoice.sentences('Das BGB wurde am 18. August 1896 verkündet und gilt seitdem. Das ist ein altes Gesetz des Reiches.'),
+    louiseVoice.sentences('Secondo Cass. civ., sez. III, n. 1234 la regola vale per tutti. Così ha deciso la corte suprema.'),
+    louiseVoice.sentences('Il romanzo nel sec. XIX in Inghilterra fu il genere maggiore. Così fu per molti decenni ancora.'),
+    // "no" is a word: its stop ends a sentence
+    louiseVoice.sentences('Is it legal under the statute? No. The statute forbids it for everyone.')]);
+  check(days24.slice(0, 4).every(x => x.length === 2) && days24[4].length >= 2,
+        '24. "am 1." "18." "Cass. civ., sez." "sec." end no sentence; "No." does', days24);
+  // a stop the segmenter starts no sentence after is never a cut
+  const lower24 = await page.evaluate(() => louiseVoice.split('Era la fine del 1914. e la guerra continuava ancora a lungo', 24, true));
+  check(!lower24 || !/1914\.$/.test(lower24[0]), '24. a stop with no sentence after it is never a cut', lower24);
   const none24 = await page.evaluate(() => louiseVoice.split('Abcdefghijklmnopqrstuvwxyz abcdefghij klmno pqrst', 18));
   check(none24 && none24[0] === 'Abcdefghijklmnopqrstuvwxyz', '24. no gap within the budget: the first one past it', none24);
   // the lead: once a long piece is playing, the next sentence is not cut to
