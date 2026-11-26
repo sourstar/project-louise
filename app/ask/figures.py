@@ -346,7 +346,11 @@ def figure_place(collection: str, uid: str, hash_: str, *,
     if got is None:
         raise FigureNotServed(404, f"{uid}: no record held")
     record, shard = got
-    want = fig.bare(hash_)
+    try:
+        want = fig.bare(hash_)
+    except fig.FigureError:
+        # a hash that is no hash names no figure: 404, as any other this record does not name (it was a 500)
+        raise FigureNotServed(404, f"{uid} names no figure {str(hash_)[:20]!r}: not a sha256") from None
     entry = next((e for e in record.get("figures") or [] if fig.bare(str(e["hash"])) == want), None)
     if entry is None:
         raise FigureNotServed(404, f"{uid} names no figure {want[:12]}…")
@@ -479,6 +483,18 @@ def entry_not_displayable(entry: dict) -> str | None:
         return f"{media}, {_size(size if isinstance(size, int) else None)}: not a type this page shows"
     if isinstance(size, int) and size > MAX_DISPLAY_BYTES:
         return f"{media or 'image'}, {_size(size)}: over the 16 MiB display cap"
+    return None
+
+
+def placed_not_displayable(media: str, size: int) -> str | None:
+    """`not_displayable`'s two refusals that need no byte of the plate — its
+    type and its length, in the same words — asked by a caller that knows
+    both before it reads: a plate that will not be shown is not held to find
+    that out."""
+    if media not in DISPLAYABLE:
+        return f"{media or 'an unnamed type'}, {_size(size)}: not a type this page shows"
+    if size > MAX_DISPLAY_BYTES:
+        return f"{media}, {_size(size)}: over the 16 MiB display cap"
     return None
 
 

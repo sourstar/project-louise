@@ -314,16 +314,20 @@ def stream_figure(path: Path, sha256: str, chunk: int = STREAM_CHUNK) -> Iterato
     (EUR-Lex's largest is 565 MB; `read_figure` would hold it whole, twice
     while it decompresses). The container's frame is read through zstd's
     streaming decoder (pyarrow's `CompressedInputStream`: the library's own
-    call), hashed as it goes. A plate that does not hash to its key, or does
-    not have the length its index states, RAISES `FigureError` after its last
-    piece: a receiver that was sent pieces sees the transfer fail, never a
-    whole file that is not the plate. One that decompresses PAST that length
-    raises at the piece that passes it, and that piece is not handed on."""
+    call), hashed as it goes. THE LAST PIECE IS HELD BACK until the whole
+    hashes to its key and has the length its index states; where it does not,
+    `FigureError` is raised in its place — so a receiver never holds a whole
+    file that is not the plate: it is at least that piece short, and its
+    transfer fails (an HTTP answer that declared the length is cut before
+    it; the first cut handed every piece on and raised after the last, and a
+    damaged plate of the right length arrived whole with status 200). One
+    that decompresses PAST its length raises at the piece that passes it."""
     want = bare(sha256)
     entry = read_index(path).get(want)
     if entry is None:
         raise FigureError(f"{Path(path).name}: holds no figure {want[:12]}…")
     sha, sent = hashlib.sha256(), 0
+    last: bytes | None = None
     with open(path, "rb") as f:
         with pa.CompressedInputStream(pa.PythonFile(_Extent(f, entry.offset, entry.frame_bytes), mode="r"),
                                       "zstd") as plain:
@@ -344,10 +348,14 @@ def stream_figure(path: Path, sha256: str, chunk: int = STREAM_CHUNK) -> Iterato
                     raise FigureError(f"{Path(path).name}: figure {want[:12]}… decompresses past the "
                                       f"{entry.bytes} bytes its index states")
                 sha.update(piece)
-                yield piece
+                if last is not None:
+                    yield last
+                last = piece
     if sent != entry.bytes or sha.hexdigest() != want:
         raise FigureError(f"{Path(path).name}: figure {want[:12]}… streamed {sent} bytes hashing to "
                           f"{sha.hexdigest()[:12]}… (its index states {entry.bytes})")
+    if last is not None:
+        yield last
 
 
 def walk(path: Path) -> Iterator[tuple[str, bytes]]:

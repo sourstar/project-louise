@@ -399,35 +399,62 @@ display rule above like any plate.
 
 This is the first time a node itself decodes a figure, and the sentence
 above — "only a peer that DISPLAYS one decodes it" — now reads: a browser,
-or this renderer. What bounds it (app/ask/preview.py):
+or this renderer. Three lines bound it, in this order, and the order is the
+point: an estimate is not a bound (app/ask/preview.py).
 
-- **The header first, by a reader of our own**: the first image directory
-  of a classic TIFF, five tags. Declared pixels, the bytes they decode to
-  and the compression are held to caps BEFORE the decoder is handed the
-  file — as the two caps above are for a browser.
-- **Caps from the corpus**, as this section's were (München's header count
-  over its 335,166 images, 2026-11-26, no pixel decoded — 300,775 read, of
-  which 250,220 TIFF and 50,555 JPEG that the page shows itself; 34,362
-  packaged TIFFs whose directory lies past their first MiB were not:
-  declared pixels p50
-  0.137 MP, p99 27.7 MP, max 324.7 MP; decoded bytes p99 40 MiB, max
-  539 MiB; the largest file 565.7 MB): 400 megapixels declared, 1 GiB
-  decoded, 1 GiB of file. Over a cap the plate is "not displayable —
-  download", as before.
-- **A closed list of codings**, the ones that corpus holds and no other:
-  uncompressed, LZW, CCITT Group 3, PackBits, CCITT Group 4. JPEG-in-TIFF,
-  Deflate and BigTIFF are refused until a corpus shows them.
-- **A child process**, one at a time on a node: the web never holds the
-  plate's bytes and never runs the decoder. The child reads the plate in
-  pieces, hashed as they go; its parent kills it past 180 s or past its
-  memory, and the kernel takes the child before the web should memory run
-  out. Measured on the two largest honest shapes: 0.8 s and 406 MiB for
-  15,794 × 20,561 at 8 bits, 1.7 s and 926 MiB for 9,954 × 18,942 RGB;
-  0.3 s and 88 MiB for a 2,400 × 3,200 fax page (synthetic pages, this
-  session's machine).
-- **A refusal is remembered** with its reason, so a plate that cannot be
-  previewed costs one attempt: for good where the reason is the file's,
-  for an hour where it may be the moment's.
+1. **The header first, by a reader of our own**: the first image directory
+   of a classic TIFF. What the file DECLARES is held to caps before the
+   decoder is handed it — its pixels, its sides, what rendering it would
+   hold (a model by kind of image: a palette page is held five bytes a
+   pixel), its tiles, the bytes its tags point at — and its coding, a
+   **closed list**: the ones that corpus holds and no other (uncompressed,
+   LZW, CCITT Group 3, PackBits, CCITT Group 4). JPEG-in-TIFF, Deflate and
+   BigTIFF are refused until a corpus shows them.
+   **A directory two readers would read differently is refused**: tags out
+   of ascending order, a tag twice, a count or a type the standard does not
+   give a tag. libtiff takes the FIRST of two entries, Pillow and our reader
+   the LAST: the first cut of this renderer decoded a Deflate plate that
+   declared LZW in a second `Compression` entry (found by the independent
+   review, 2026-11-26, before anything was merged). The rule is general on
+   purpose: it is not a list of the tags we thought of.
+2. **The child's own limits.** One child process per preview, at most three
+   at once on a node across processes; the web never holds the plate's
+   bytes and never runs the decoder. The child reads the plate in pieces,
+   hashed as they go; from the moment the decoder is handed the file it
+   has a data limit (RLIMIT_DATA) of the model's cap and 768 MiB; an alarm;
+   it ends when its parent does; and the kernel takes it before the web
+   should memory run out. A plate that passes the header and needs more
+   than that fails in the child alone.
+3. **The parent's watch**: the child's resident memory and its seconds
+   (180), read every 50 ms.
+
+**Caps from the corpus**, as this section's were (München's header count
+over its 335,166 images, 2026-11-26, no pixel decoded — 300,775 read, of
+which 250,220 TIFF and 50,555 JPEG that the page shows itself; 34,362
+packaged TIFFs whose directory lies past their first MiB were not: declared
+pixels p50 0.137 MP, p99 27.7 MP, max 324.7 MP; decoded bytes p99 40 MiB,
+max 539 MiB; the largest file 565.7 MB): 400 megapixels declared, 65,535 a
+side, 1 GiB held by the model, 1 GiB of file, 16 MiB of tag values. Over a
+cap the plate is "not displayable — download", as before. Measured on the
+corpus's largest shapes under all three lines: 0.7 s and 404 MiB resident
+for 15,794 × 20,561 at 8 bits, 1.4 s and 917 MiB for the 565 MB file of
+9,954 × 18,942 RGB, 0.25 s and 71 MiB for a 2,400 × 3,200 fax page
+(synthetic pages, the session's machine; the table is in the module).
+
+**The preview is the pixels.** The PNG carries nothing of the plate's
+metadata — a colour profile, a description are the publisher's bytes, and
+the PNG writer would copy them in whole — and is held to the display rule
+above and to its size before the web reads it.
+
+**A refusal is remembered** with its reason, so a plate that cannot be
+previewed costs one attempt: for good where the reason is the FILE's (a
+cap, a coding, a decoder that fails or crashes on it), for an hour where it
+may be the MOMENT's (not done in time, killed by another, the store full,
+the held copy damaged) — and a moment's refusal answers `503`, not `415`.
+What is kept and what is refused carry the renderer's version and the
+pinned Pillow in their name: another cap, coding or decoder asks afresh.
+A kept preview is never an answer by itself: the licence class, the
+acknowledgement and "is the plate held" are asked first, at every request.
 
 The decoder is Pillow's (libtiff), declared and pinned. A sandbox proper —
 seccomp or landlock around the child, or a decoder compiled to WebAssembly

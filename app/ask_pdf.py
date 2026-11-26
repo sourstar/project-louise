@@ -53,6 +53,7 @@ import threading
 import time
 import unicodedata
 from collections import OrderedDict
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Literal
@@ -415,22 +416,33 @@ def filename(question: str, when: datetime) -> str:
 def _plate_bytes(collection: str, uid: str, hash_: str) -> tuple[bytes, str]:
     """What the page drew for a plate, and its type: the plate's own bytes
     by the figure route's own functions — or, for a plate the page shows as
-    this node's PREVIEW (a TIFF: app/ask/preview.py), that PNG, kept or
-    rendered now. `figures.FigureNotServed` where it is not served;
-    `PlateNotDrawn` with the reason where the route would refuse it inline —
-    said BEFORE its bytes are read, so at most the display cap's 16 MiB is
-    ever held for one: EUR-Lex's largest plate is 565 MB and the PDF is laid
-    out in the web's process."""
+    this node's PREVIEW (a TIFF: app/ask/preview.py), that PNG as it is
+    kept. `figures.FigureNotServed` where it is not served; `PlateNotDrawn`
+    with the reason where the route would refuse it inline — said BEFORE its
+    bytes are read, so at most the display cap's 16 MiB is ever held for
+    one: EUR-Lex's largest plate is 565 MB and the PDF is laid out in the
+    web's process.
+
+    A preview NOT KEPT YET is rendered here only while this PDF's seconds
+    for it last (`RENDER_S`, the clock `plate_shown` sets): a PDF may name
+    4,800 plates, a render is a child process, and the page that asked for
+    the PDF has normally drawn — so kept — every one of them already."""
     from app.ask import figures as figures_mod, preview as preview_mod
     path, want, entry, _tree = figures_mod.figure_place(collection, uid, hash_)
     media = str(entry.get("media_type") or "")
     if media in preview_mod.PREVIEW_OF:
+        clock = _render_clock.get()
+        began = time.monotonic()
         try:
-            return preview_mod.png(collection, uid, hash_), "image/png"
+            return preview_mod.png(collection, uid, hash_, render=clock is None or clock[0] > 0), "image/png"
+        except preview_mod.NotPreviewableNow as e:
+            raise PlateNotDrawn(f"not drawn: {e}; it is on the page") from None
         except preview_mod.NotPreviewable as e:
             raise PlateNotDrawn(f"not displayable: {e}") from None
-    size = figures_mod.held_size(path, want)
-    why = figures_mod.entry_not_displayable({"media_type": media, "bytes": size})
+        finally:
+            if clock is not None:
+                clock[0] -= time.monotonic() - began
+    why = figures_mod.placed_not_displayable(media, figures_mod.held_size(path, want))
     if why is not None:
         raise PlateNotDrawn(f"not displayable: {why}")
     return figures_mod.placed_bytes(path, want), media
@@ -442,13 +454,22 @@ class PlateNotDrawn(Exception):
 
 _SPENT = (f"not drawn: this PDF's {MAX_PLATE_BYTES // (1024 * 1024)} MiB of plates are spent; "
           "it is on the page")
+#: the seconds one PDF may spend MAKING previews that are not kept yet (waiting
+#: for a renderer included); past them a plate with no kept preview is listed,
+#: not drawn. One render already begun is not cut short: its own bound is the
+#: renderer's (preview.RENDER_TIMEOUT_S).
+RENDER_S = 20.0
+#: this PDF's clock for it — [seconds left] — or None: no clock (a caller of
+#: `plate_shown` that sets none)
+_render_clock: ContextVar[list[float] | None] = ContextVar("pdf_render_clock", default=None)
 
 
-def plate_shown(p: PdfPlate, budget: list[int]) -> dict:
+def plate_shown(p: PdfPlate, budget: list[int], renders: list[float] | None = None) -> dict:
     """What the PDF shows for one plate: `img` with its `data:` source where
     the figure route would draw it inline, else `none` with the reason; a
     `link` as the origin's http(s) address. `budget` is the bytes left for
-    this PDF's plates (MAX_PLATE_BYTES), spent here."""
+    this PDF's plates (MAX_PLATE_BYTES), spent here; `renders` the seconds
+    left for making previews not kept yet (`RENDER_S`), spent here too."""
     caption = (p.caption or "").strip()
     if p.kind == "link":
         href = safe_url(p.href)
@@ -460,6 +481,7 @@ def plate_shown(p: PdfPlate, budget: list[int]) -> dict:
     if not (p.collection and p.uid and p.hash):
         return {"kind": "none", "caption": caption, "note": "not drawn: the page named no plate"}
     from app.ask import figures as figures_mod
+    clock = _render_clock.set(renders)
     try:
         data, media = _plate_bytes(p.collection, p.uid, p.hash)
     except figures_mod.FigureNotServed as e:
@@ -468,6 +490,8 @@ def plate_shown(p: PdfPlate, budget: list[int]) -> dict:
         return {"kind": "none", "caption": caption, "note": str(e)}
     except Exception as e:   # noqa: BLE001 — a plate left out with its reason, never a PDF refused
         return {"kind": "none", "caption": caption, "note": f"not drawn: {type(e).__name__}"}
+    finally:
+        _render_clock.reset(clock)
     why = figures_mod.not_displayable(data, media)
     if why is not None:
         return {"kind": "none", "caption": caption, "note": f"not displayable: {why}"}
@@ -486,7 +510,7 @@ def build_html(doc: AskPdf, *, base_url: str, node: str, when: datetime,
     and what a test reads."""
     numbers = frozenset(r.n for r in doc.references)
     cites = cited(doc.answer)
-    budget = [MAX_PLATE_BYTES]
+    budget, renders = [MAX_PLATE_BYTES], [RENDER_S]
     refs = []
     for r in sorted(doc.references, key=lambda r: r.n):
         shown_title = r.title.strip() or (r.title_original or "").strip() or f"#{r.n}"
@@ -505,7 +529,7 @@ def build_html(doc: AskPdf, *, base_url: str, node: str, when: datetime,
             "moved_by": [m.strip() for m in r.moved_by if m.strip()],
             "cited": r.n in cites,
             "unread": r.read is False,
-            "plates": [plate_shown(p, budget) for p in r.plates],
+            "plates": [plate_shown(p, budget, renders) for p in r.plates],
         })
     return _ENV.get_template("pdf/answer.html").render(
         paper=PAPER[doc.paper], margin=MARGIN[doc.paper],

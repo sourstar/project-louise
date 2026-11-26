@@ -2,23 +2,40 @@
 why a child, and what bounds it).
 
     python -m app.ask.preview_child <container> <hash> <dest.png> <width> <max height>
+                                    <data bytes> <seconds>
 
 One figure streamed from its container to a temporary file beside `dest`,
 checked against its hash and its length as it goes (`figures.stream_figure`:
 its bytes are never held here); its TIFF header read and held to the caps
 BEFORE any pixel (`preview.tiff_header`, `preview.refused`); then, and only
 then, Pillow's TIFF decoder — that one plugin, nothing sniffed — its first
-image reduced to at most `width` × `max height` and written as PNG to `dest`.
+image reduced to at most `width` × `max height` (`render`) and written as
+PNG to `dest` (`write`),
+with NOTHING of the plate's metadata (a colour profile, a description: the
+publisher's bytes, which Pillow's PNG writer would copy in whole).
 
-Exit 0: `dest` is the preview. Exit 3 (`preview.REFUSED`): refused before
-decoding, `{"refused": why}` on stdout. Anything else: the decoder failed.
+ITS OWN LIMITS, set when it is run as a program (`_bound_myself`,
+`_limit_data`), never when `main` is called by a test: the kernel's first
+choice should its cgroup's memory run out; ended when its parent is gone
+(`parallel.watch_parent`); an alarm after `<seconds>`; and, from the moment
+the decoder is handed the file, a data limit of `<data bytes>` past what the
+process holds then (RLIMIT_DATA, POSIX setrlimit, as the parse pool's large
+lane sets it).
+
+What it says, one line of JSON on stdout, and its exit code:
+  0                       `dest` is the preview;
+  3  {"refused": why}     refused before decoding — the file's (`preview.REFUSED`);
+  4  {"now": why}         not possible just now — the container or the store
+                          not readable or writable, a module missing: the
+                          node's, tried again later (`preview.NOT_NOW`);
+  1  {"failed": why}      the decoder failed on the file — the file's.
 The parent kills this process past its seconds or its memory.
 
 A 1-bit page (the fax codings of an official journal's forms) is turned to
 grey before it is reduced, so its lines are antialiased instead of dropped;
 palette and CMYK become RGB; 16-bit grey becomes 8 by its high byte (the
-corpus holds two). Nothing of the original
-changes: it is held as it came, and offered as a download beside its preview.
+corpus holds two). Nothing of the original changes: it is held as it came,
+and offered as a download beside its preview.
 """
 from __future__ import annotations
 
@@ -28,8 +45,9 @@ import sys
 from pathlib import Path
 
 
-def render(source: Path, dest: Path, width: int, max_height: int, declared: tuple[int, int]) -> None:
-    """`source`'s first image as a PNG of at most `width` × `max_height`."""
+def render(source: Path, width: int, max_height: int, declared: tuple[int, int]):
+    """`source`'s first image, decoded and reduced to at most `width` ×
+    `max_height`: a Pillow image in L, LA, RGB or RGBA."""
     from PIL import Image
     from app.ask import preview
     # Pillow's own guard, set to the same cap: it warns past it and refuses at twice
@@ -58,56 +76,100 @@ def render(source: Path, dest: Path, width: int, max_height: int, declared: tupl
             # `thumbnail` keeps the aspect and never enlarges; `reducing_gap`
             # lets it shrink by whole factors first — a 325 MP page in a second
             im.thumbnail((width, max_height), Image.LANCZOS, reducing_gap=2.0)
-        im.save(dest, "PNG")
+        return im.copy() if im.readonly else im
 
 
-def _first_for_the_oom_killer() -> None:
-    """Should the web's memory run out while this child decodes, the kernel
-    takes THIS process, not the web (as a parse child before the worker,
-    app/parallel.py; raising one's own score needs no privilege)."""
-    try:
-        with open("/proc/self/oom_score_adj", "w") as f:
-            f.write("1000")
-    except OSError:
-        pass
+def write(im, dest: Path) -> None:
+    """THE PIXELS AND NOTHING ELSE, as PNG: Pillow's PNG writer copies
+    `info` — the plate's colour profile, its text — into the file verbatim
+    (an 8 MiB profile gave an 8 MiB preview that passed the display rule)."""
+    im.info = {}
+    im.save(dest, "PNG")
 
 
-def main(argv: list[str]) -> int:
+def _say(key: str, why: object) -> None:
+    print(json.dumps({key: str(why)[:400]}), flush=True)
+
+
+def main(argv: list[str], before_decoding=None) -> int:
+    """One figure's preview (the module's docstring). `before_decoding` is
+    called once the figure's copy is written and its header has passed, and
+    before the decoder is handed it: where a child sets its data limit."""
     container, want, dest, width, max_height = Path(argv[0]), argv[1], Path(argv[2]), int(argv[3]), int(argv[4])
-    _first_for_the_oom_killer()
-    from app.ask import preview
-    from app.hold import figures as fig
+    try:
+        from app.ask import preview
+        from app.hold import figures as fig
+    except ImportError as e:
+        _say("now", f"the renderer's modules do not load here ({e})")
+        return 4                            # preview.NOT_NOW, which did not load
     source = dest.with_name(dest.name + ".src")
     try:
         try:
             size = fig.read_index(container)[want].bytes
         except KeyError:
-            print(json.dumps({"refused": "the figure is not in the container its record names"}))
-            return preview.REFUSED
+            _say("now", "the figure is not in the container held for it")
+            return preview.NOT_NOW
+        except (fig.FigureError, OSError) as e:
+            _say("now", f"the container held for it does not read ({e})")
+            return preview.NOT_NOW
         if size > preview.MAX_SOURCE_BYTES:
-            print(json.dumps({"refused": preview.refused(preview.TiffHeader(1, 1, 1, 1), size)}))
+            _say("refused", preview.refused(preview.TiffHeader(1, 1, 1, 1), size))
             return preview.REFUSED
         # IN PIECES, to the file the decoder will read: this process never
         # holds the figure's bytes (565 MB for the corpus's largest), and
-        # `stream_figure` fails a figure that is not its hash or its length
+        # `stream_figure` fails a figure that is not its hash or its length.
+        # A copy that is damaged, a store that is full: the node's and the
+        # moment's — the copy is fetched again, the store is freed
         try:
             with open(source, "wb") as out:
                 for piece in fig.stream_figure(container, want):
                     out.write(piece)
         except fig.FigureError as e:
-            print(json.dumps({"refused": f"the figure held is not the one its record names ({e})"}))
-            return preview.REFUSED
+            _say("now", f"the figure held is not the one its record names ({e})")
+            return preview.NOT_NOW
+        except OSError as e:
+            _say("now", f"its copy could not be written beside the previews ({e.strerror or e})")
+            return preview.NOT_NOW
         with open(source, "rb") as f:
             try:
                 header = preview.tiff_header(f)
             except preview.NotPreviewable as e:
-                print(json.dumps({"refused": f"image/tiff: {e}"}))
+                _say("refused", f"image/tiff: {e}")
                 return preview.REFUSED
         why = preview.refused(header, size)
         if why is not None:
-            print(json.dumps({"refused": why}))
+            _say("refused", why)
             return preview.REFUSED
-        render(source, dest, width, max_height, (header.width, header.height))
+        if before_decoding is not None:
+            before_decoding()
+        # DECODING: what fails here is the file's, but for an error of the
+        # system under it (Pillow's own decoding errors carry no errno)
+        try:
+            im = render(source, width, max_height, (header.width, header.height))
+        except ImportError as e:
+            _say("now", f"the decoder does not load here ({e})")
+            return preview.NOT_NOW
+        except MemoryError:
+            _say("failed", "it needs more memory than a preview is given")
+            return 1
+        except OSError as e:
+            if e.errno is not None:
+                _say("now", f"its copy could not be read back ({e.strerror or e})")
+                return preview.NOT_NOW
+            _say("failed", f"{type(e).__name__}: {e}")
+            return 1
+        except Exception as e:              # noqa: BLE001 — whatever the decoder raises on the file, said
+            _say("failed", f"{type(e).__name__}: {e}")
+            return 1
+        # WRITING: the store's, and the moment's
+        try:
+            write(im, dest)
+        except MemoryError:
+            _say("failed", "it needs more memory than a preview is given")
+            return 1
+        except OSError as e:
+            _say("now", f"the preview could not be written ({e.strerror or e})")
+            return preview.NOT_NOW
         return 0
     finally:
         try:
@@ -116,5 +178,57 @@ def main(argv: list[str]) -> int:
             pass
 
 
+def _vm_data() -> int | None:
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("VmData:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _bound_myself(seconds: int) -> None:
+    """This process's own settings (the module's docstring), all but its
+    data limit, which `_limit_data` sets later."""
+    try:
+        # the kernel takes THIS process, not the web, should the cgroup's
+        # memory run out (as a parse child before the worker, app/parallel.py;
+        # raising one's own score needs no privilege)
+        with open("/proc/self/oom_score_adj", "w") as f:
+            f.write("1000")
+    except OSError:
+        pass
+    import signal
+    signal.alarm(max(1, seconds))           # SIGALRM ends it: the parent's own clock is shorter
+    try:
+        from app import parallel
+        parallel.watch_parent()             # its parent gone, it ends: nobody is left to watch it
+    except ImportError:
+        pass                                # `main` says it, as "now"
+
+
+def _limit_data(data_bytes: int) -> None:
+    """THE DATA LIMIT, counted from what this process holds NOW — its
+    modules loaded, the figure's copy written: RLIMIT_DATA is every private
+    writable mapping, the allocators' reserves among them (the arrow pool the
+    copy is streamed through reserves a gigabyte of address space; a limit
+    counted from before it refused the corpus's own largest plate, measured
+    2026-11-26). Past it an allocation fails in this process and nowhere
+    else: a MemoryError, said as the file's."""
+    import resource
+    vm = _vm_data()
+    if vm is None or data_bytes <= 0:
+        return
+    _soft, hard = resource.getrlimit(resource.RLIMIT_DATA)
+    want = vm + data_bytes
+    if hard != resource.RLIM_INFINITY:
+        want = min(want, hard)
+    resource.setrlimit(resource.RLIMIT_DATA, (want, hard))
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    _data = int(sys.argv[6]) if len(sys.argv) > 6 else 0
+    _bound_myself(int(sys.argv[7]) if len(sys.argv) > 7 else 600)
+    sys.exit(main(sys.argv[1:6], before_decoding=lambda: _limit_data(_data)))

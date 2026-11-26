@@ -232,9 +232,12 @@ async def figure(collection: str, uid: str, hash: str, download: bool = False):
     answered inline as the PNG this node renders from it (app/ask/preview.py:
     a child process, the header's caps before any pixel), with
     `X-Louise-Preview` saying so; where none can be rendered, 415 with the
-    reason, as for any plate that is not displayable. Its own bytes are
-    `download=1`'s. The plate's bytes are NOT read here for it, and a plate
-    over `STREAMED_OVER` is sent in pieces: EUR-Lex's largest is 565 MB and
+    reason, as for any plate that is not displayable — 503 with
+    `Retry-After` where it is the moment's (every renderer busy, not done in
+    time). Its own bytes are `download=1`'s. NO plate's bytes are read here
+    before its type and its length — the container's word — say it will be
+    shown, and a download over `STREAMED_OVER` is sent in pieces, its last
+    held back until the whole is its hash: EUR-Lex's largest is 565 MB and
     the web's budget is under 1 GB."""
     from fastapi.responses import Response, StreamingResponse
     from starlette.concurrency import run_in_threadpool
@@ -247,6 +250,11 @@ async def figure(collection: str, uid: str, hash: str, download: bool = False):
         if not download and media in preview_mod.PREVIEW_OF:
             try:
                 png = await run_in_threadpool(preview_mod.png, collection, uid, hash)
+            except preview_mod.NotPreviewableNow as e:
+                # the moment's — every renderer busy, not done in time: asked again, it may be made
+                return JSONResponse({"exit": 3, "error": f"no preview just now: {e}; ask with download=1 "
+                                                         f"for the file"},
+                                    status_code=503, headers={**nosniff, "Retry-After": "30"})
             except preview_mod.NotPreviewable as e:
                 return JSONResponse({"exit": 2, "error": f"not displayable: {e}; ask with download=1 for the file"},
                                     status_code=415, headers=nosniff)
@@ -266,7 +274,7 @@ async def figure(collection: str, uid: str, hash: str, download: bool = False):
         if not download:
             # refused on what the record and the container say, BEFORE its bytes
             # are read: a plate that will not be shown is not held to find that out
-            why = figures_mod.entry_not_displayable({"media_type": media, "bytes": size})
+            why = figures_mod.placed_not_displayable(media, size)
             if why is not None:
                 return JSONResponse({"exit": 2, "error": f"not displayable: {why}; ask with download=1 for "
                                                          f"the file"}, status_code=415, headers=nosniff)

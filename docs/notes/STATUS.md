@@ -70,7 +70,24 @@ measured (published figures disagree).
   THINGS THE CORPUS'S SIZE FORCED BESIDE IT: the figure route read every plate WHOLE before deciding to
   show it (565 MB into a web budgeted under 1 GB) — it now refuses on the type and the container's
   length first, and sends a download over 32 MiB in pieces, hashed as it goes; and Pillow reduces
-  16-bit grey by CLIPPING (a ramp came out white) — the child takes the high byte. The caps are set from München's header count of the corpus (335,166 images,
+  16-bit grey by CLIPPING (a ramp came out white) — the child takes the high byte.
+  *THE INDEPENDENT REVIEW, BEFORE ANYTHING MERGED, FOUND TWO BLOCKING DEFECTS AND SIX MORE, each run, not
+  argued:* (1) a second `Compression` entry in the directory decoded a Deflate plate behind a declared LZW
+  — libtiff takes the first of two entries, Pillow and my reader the last: the closed list of codings was
+  no list. Now any directory two readers would read differently is refused (ascending order, no tag
+  twice, the standard's count and type). (2) A streamed download of the right length and the wrong hash
+  arrived WHOLE with status 200, where main answered 404: the hash was compared after the last byte was
+  sent. The last piece is held back. (3) The header's caps did not bound the decoder (a 46,000² tile for
+  a 16 × 16 image: 1.8 GiB; 150 tags at one 2 MiB value: 303 MiB before any pixel): tiles, tag bytes, a
+  side and a per-kind model are now read, and the BOUND is the child's own data limit. (4) A full store,
+  a missing container, a damaged copy were remembered as the file's FOR GOOD, and nothing versioned a
+  refusal: the moment's are an hour's and a 503, and the renderer's version is in the name. (5) The PNG
+  carried the plate's colour profile verbatim. (6) An interrupted parent left the child unwatched; a PDF
+  could start 4,800 children; the tests set pytest's own oom score to 1000. All fixed with a test each;
+  three at once on a node instead of one. AND THE FIX'S OWN DEFECT, found by running the limit against
+  the corpus's real sizes (the lesson of the parking gate): a data limit counted from before the copy
+  was streamed refused the corpus's largest plate — the arrow pool reserves a gigabyte of address space
+  — so it is counted from the moment the decoder is handed the file. The caps are set from München's header count of the corpus (335,166 images,
   36,971 units; 300,775 headers read): declared pixels p50 0.137 MP, p99 27.7, max 324.7 (three
   certificate forms, 15,794 × 20,561, 8-bit, uncompressed); 46 over the browser's 64 MP, 5 over 256;
   decoded size p99 40 MiB, max 539 MiB; the largest file 565.7 MB (9,954 × 18,942 RGB). So: at most
@@ -168,7 +185,9 @@ measured (published figures disagree).
   wrapper's receipts can put the count in a statement": both forms are with the operator.
 - **A MODEL FILE WITH NO PINNED SEED IS ANOTHER RUN AT EVERY LOAD (Tensor's finding in its harness; the
   node counted by München, 01:10Z): 59 model files behind a vega package, 58 with seed 0, ONE with none —
-  index-translate-9b, a translation model outside Louise's set, no collection's encoder.** LocalAI draws a
+  index-translate-9b, a translation model outside Louise's set, no collection's encoder.** (It IS used: the node's
+  platform.toml sends what is read in Latin and Ancient Greek to it, `[translate] reading`, 2026-10-12;
+  on the operator's word München put `seed: 0` in its file the same day — 59 of 59.) LocalAI draws a
   seed at each load where the file pins none, and the seed is in the options the wrapper states. For an
   encoder that would be a gate asked again after every reload and no vector until it passes — nothing
   wrong written, the time lost and the reason said nowhere. No such encoder exists on the node. CLOSED
