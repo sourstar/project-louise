@@ -80,7 +80,7 @@ import httpx
 
 from ..transfer.manager import current_handle
 from . import budget
-from .spec import AcquisitionSpec, Endpoint, Filter, RemoteFile, TransferAborted, TransportError
+from .spec import AcquisitionSpec, Endpoint, Filter, RemoteFile, TransferAborted, TransportError, Waiting
 
 PREFIX = "cellar:"
 SPARQL_PATH = "/webapi/rdf/sparql"
@@ -943,10 +943,11 @@ def _say_cellar(name: str) -> Callable[[str], None]:
     return lambda message: print(f"{time.strftime('%H:%M:%S')} [{name} info:cellar] {message}", flush=True)
 
 
-class WindowNotListed(TransportError):
+class WindowNotListed(Waiting):
     """A unit asked first whose listing window is not known whole since the
-    dump was cut: it waits (worded as an episode, so the unit is deferred,
-    never marked tried)."""
+    dump was cut: it WAITS — the engine records nothing (spec.Waiting), and
+    TreeUnits.fetch raises it before any request, never marking it tried or
+    deferred."""
 
 
 def window_year(celex: str) -> int | None:
@@ -1287,12 +1288,13 @@ class TreeUnits(CellarUnits):
                 self._count(Fetched(files={}, moved=0, tree_from="held"))
                 return 0
         root = _corpus_of(dest, remote)
+        from . import work_trees
+        bulk, not_before = self._bulk_of(root, unit, remote, dest)      # WindowNotListed: it waits
         try:
-            from . import work_trees
-            bulk, not_before = self._bulk_of(root, unit, remote, dest)
             got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent,
                                        trees=work_trees.recent_for(root) if root is not None else None,
-                                       listed_mtime=remote.mtime, bulk=bulk, bulk_not_before=not_before)
+                                       listed_mtime=remote.mtime if remote.mtime is not None else not_before,
+                                       bulk=bulk, bulk_not_before=not_before)
         except TransportError as e:
             # a unit the dump lacked that Cellar does not give either: not
             # asked first again (eurlex_dump.mark_tried), so the complete
@@ -1347,10 +1349,12 @@ class TreeUnits(CellarUnits):
             return None, None
         if (year, unit["lang"]) not in cover:
             raise WindowNotListed(f"cellar: {unit['celex']} ({unit['lang']}): its {year} window is not "
-                                  f"listed since the dump was cut (connection timed out: it waits for the listing)")
+                                  f"known whole since the dump was cut; nothing asked, it waits for the listing")
         when = dates.get((unit["celex"], unit["lang"]))
-        if when is None or when > after:
-            return None, None                   # absent from the listing, or changed since the dump
+        if when is None:
+            return None, None                   # absent from the listing: Cellar's tree
+        if when > after:
+            return None, when                   # changed since the dump: Cellar's tree, no older than this
         return bulk, when
 
     def _reform(self, dest: Path, remote: RemoteFile, note) -> bool:
@@ -1424,7 +1428,7 @@ class TreeUnits(CellarUnits):
             got = datadump._stamp(when)
             if got is not None:
                 after[lang] = got.timestamp()
-        dates, cover = cellar_listing.coverage(due, after) if due else ({}, set())
+        dates, cover = cellar_listing.coverage(due, after, base_url) if due and base_url else ({}, set())
         missing: dict[int, set[str]] = {}
         for celex, lang in due:
             year = window_year(celex)
@@ -1436,23 +1440,28 @@ class TreeUnits(CellarUnits):
             code_of = {v: k for k, v in LANGUAGES.items()}
             say(f"listing what changed since the dump: {sum(len(v) for v in missing.values())} "
                 f"(year, language) window(s) of {len(missing)} year(s), before any unit is built from it")
+            # THE SPLIT, LEARNED across the years, as `listing` does (review of
+            # a783fd1c, 3: a 24-language count ran past 900 s on 11-14)
+            learned = {"group": max(len(v) for v in missing.values())}
             with httpx.Client(timeout=TIMEOUT_S) as client:
                 for year in sorted(missing):
                     _stop_check()
-                    window = tuple(sorted(missing[year]))
-                    try:
-                        for _ in _window_files(client, base_url, year, window, code_of, budget.acquire_bytes,
-                                               place=lambda *a: False, learned={"group": len(window)}):
-                            pass
-                        asked += 1
-                    except TransportError as e:
-                        if isinstance(e, TransferAborted):
-                            raise
-                        unlisted |= {(year, l) for l in window}
-                        say(f"cellar: the {year} window ({', '.join(window)}) is not listed ({str(e)[:200]}): "
-                            f"its units wait")
-            dates, cover = cellar_listing.coverage(due, after)
-            say(f"listed {asked} year window(s) in {time.monotonic() - t0:.0f} s")
+                    langs_y = sorted(missing[year])
+                    group = max(1, learned["group"])
+                    for window in (tuple(langs_y[i:i + group]) for i in range(0, len(langs_y), group)):
+                        try:
+                            for _ in _window_files(client, base_url, year, window, code_of, budget.acquire_bytes,
+                                                   place=lambda *a: False, learned=learned):
+                                pass
+                            asked += 1
+                        except TransportError as e:
+                            if isinstance(e, TransferAborted):
+                                raise
+                            unlisted |= {(year, l) for l in window}
+                            say(f"cellar: the {year} window ({', '.join(window)}) is not listed "
+                                f"({str(e)[:200]}): its units wait")
+            dates, cover = cellar_listing.coverage(due, after, base_url)
+            say(f"listed {asked} window(s) in {time.monotonic() - t0:.0f} s")
         elif missing:
             unlisted = {(y, l) for y, ls in missing.items() for l in ls}
         key = str(corpus.resolve())

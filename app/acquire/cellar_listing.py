@@ -76,8 +76,11 @@ def keep(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str
     path = _path(endpoint, year, languages, force)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
+    import time
     tmp.write_bytes(gzip.compress(json.dumps({"n": n, "last": last, "rows": rows, "year": year,
-                                              "languages": list(languages)},
+                                              "languages": list(languages), "force": force,
+                                              "endpoint": endpoint.rstrip("/"), "shape": SHAPE,
+                                              "at": time.time()},
                                              separators=(",", ":")).encode(), 6))
     os.replace(tmp, path)
 
@@ -85,40 +88,52 @@ def keep(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str
 
 def vouched(endpoint: str, year: int, languages: tuple[str, ...], *, force: bool = False) -> None:
     """The window's fingerprint was asked NOW and still holds (cellar
-    `_window_files`): its file's time says when it was last known whole, which
-    `coverage` reads (architecture's decision of 2026-11-26)."""
+    `_window_files`): its `at` — when it was last known whole, which
+    `coverage` reads — is set to now, the file rewritten whole (review of
+    a783fd1c, 5: a file's mtime is not a statement). A window kept before
+    `at` was stored is left as it is: it vouches for nothing, and is listed."""
+    import time
+    path = _path(endpoint, year, languages, force)
     try:
-        os.utime(_path(endpoint, year, languages, force))
-    except OSError:
-        pass
+        data = json.loads(gzip.decompress(path.read_bytes()))
+    except (OSError, ValueError, EOFError):
+        return
+    if data.get("shape") != SHAPE:
+        return
+    data["at"] = time.time()
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
+    tmp.write_bytes(gzip.compress(json.dumps(data, separators=(",", ":")).encode(), 6))
+    os.replace(tmp, path)
 
 
-def coverage(wanted: set[tuple[str, str]], after: dict[str, float]) -> tuple[dict[tuple[str, str], int],
-                                                                           set[tuple[int, str]]]:
+def coverage(wanted: set[tuple[str, str]], after: dict[str, float],
+             endpoint: str) -> tuple[dict[tuple[str, str], int], set[tuple[int, str]]]:
     """WHAT THE KEPT LISTING VOUCHES FOR SINCE THE DUMP (architecture's decision,
     2026-11-26, on EUR-Lex5.next's 122,317 units asked first): a window is a
     whole enumeration of a (CELEX year, language set) with each unit's
-    modified date, so one known whole after the stamped dump's `created`
-    (`after`, `{lang: epoch}`; its file's time: kept, or its fingerprint asked
-    and holding) says for every unit of it whether it changed since.
-    Returns the wanted units' dates from such windows, and the (year,
-    language) pairs they cover. A window kept before `languages` was stored
-    covers the languages its rows name. Read-only, one pass over the kept files
-    (0.1 s on the node's 112)."""
+    modified date, so one known whole (`at`) after the stamped dump's
+    `created` (`after`, `{lang: epoch}`) says for each of its units whether it
+    changed since. ONLY a window of this endpoint and this SHAPE counts: the
+    file must sit at the path its own (year, languages, force) name for
+    `endpoint` (review of a783fd1c, blocking: windows of the format before
+    11-19, dated by the work alone, still lay beside them and would vouch a
+    unit whose manifestation Cellar replaced). Anything else is not counted,
+    and its window is listed again. Returns the wanted units' dates from such
+    windows, and the (year, language) pairs they cover. Read-only."""
     dates: dict[tuple[str, str], int] = {}
     cover: set[tuple[int, str]] = set()
     for p in sorted(_base().glob("*/*.json.gz")):
         try:
-            kept_at = p.stat().st_mtime
             data = json.loads(gzip.decompress(p.read_bytes()))
-            year = int(data.get("year") or p.parent.name)
-        except (OSError, ValueError, EOFError):
+            year, langs = int(data["year"]), tuple(data["languages"])
+            at, force = float(data["at"]), bool(data.get("force"))
+        except (OSError, ValueError, EOFError, KeyError, TypeError):
             continue
-        rows = data.get("rows") or []
-        langs = data.get("languages") or sorted({str(r[1]) for r in rows})
-        fresh = {l for l in langs if kept_at > after.get(l, float("inf"))}
+        if data.get("shape") != SHAPE or p != _path(endpoint, year, langs, force):
+            continue
+        fresh = {l for l in langs if at > after.get(l, float("inf"))}
         cover |= {(year, l) for l in fresh}
-        for row in rows:
+        for row in data.get("rows") or []:
             k = (str(row[0]), str(row[1]))
             if k[1] in fresh and k in wanted and isinstance(row[2], int) and row[2] > dates.get(k, -1):
                 dates[k] = row[2]

@@ -36,7 +36,7 @@ from . import updatefiles
 from .transport_https import RangeUnsupported
 from .spec import (AcquisitionPlan, AcquisitionSpec, ChecksumSource, DiskPreflightError,
                     Endpoint, Filter, HeldBack, LicenseAckRequiredError, RemoteFile, TransferAborted,
-                    Transport, TransportError, estimated_bytes_for, resolve_profile)
+                    Transport, TransportError, Waiting, estimated_bytes_for, resolve_profile)
 from .transports import REGISTRY
 
 _DRY_RUN_ASSUMED_RATE_BPS = 5_000_000   # ~5 MB/s — a named placeholder; P0.7 has real measurement
@@ -945,7 +945,11 @@ def _unit_fetch(endpoint, f: RemoteFile, collection, spec: AcquisitionSpec,
     pass compares (`_is_pending`). Raises as the normal path raises."""
     dest = collection.corpus_dir / f.rel_path
     started = time.monotonic()
-    moved = int(spec.unit_fetcher.fetch(endpoint, f, dest) or 0)
+    try:
+        moved = int(spec.unit_fetcher.fetch(endpoint, f, dest) or 0)
+    except Waiting as e:
+        return _FileResult(remote=f, endpoint_url=endpoint.url, status="deferred",
+                            error=f"{type(e).__name__}: {e}"[:300])
     elapsed = time.monotonic() - started
     manager.record_throughput(endpoint_key, moved, elapsed)
     digest = checksum.digest_and_verify(dest, spec.checksums)

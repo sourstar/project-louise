@@ -387,17 +387,20 @@ def stamped_mtd(dump_base: Path | None, corpus_root: Path, lang: str, *,
                 log: Callable[[str], None] = print) -> Path | None:
     """The MTD zip of the dump stamped into the corpus for `lang`
     (eurlex_dump.stamp: the dump whose build recorded what this language
-    lacks), resolved through its links; None, said, where that dump or its
-    MTD is not found. Dated layout (`dump-…/datadump-<lang>/LEG_MTD.zip` →
-    `../datadump-mtd/`) and flat layout alike: the language folder's MTD."""
+    lacks), resolved through its links; None where no dump is stamped for
+    it. A STAMPED dump that cannot be found — the folder absent (an unmounted
+    drive, a container without the bind), the dump or its MTD not under it —
+    raises OSError, which holds the pass back (architecture's review of
+    a783fd1c, blocking: a quiet None sent every tree to Cellar, F4 again).
+    Dated layout (`dump-…/datadump-<lang>/LEG_MTD.zip` → `../datadump-mtd/`)
+    and flat layout alike: the language folder's MTD."""
     from . import eurlex_dump
     when = eurlex_dump.stamp(corpus_root).get(lang)
-    if dump_base is None or when is None:
+    if when is None:
         return None
-    if not Path(dump_base).is_dir():
-        log(f"[work-trees] the Data Dump folder {dump_base} (EURLEX_DATADUMP_DIR) is not there; "
-            f"{lang}'s trees come from Cellar")
-        return None
+    if dump_base is None or not Path(dump_base).is_dir():
+        raise OSError(f"the Data Dump folder {dump_base} (EURLEX_DATADUMP_DIR) is not there, and the dump "
+                      f"of {when} is stamped into the corpus for {lang}")
     want = datadump._stamp(when)
     for folder in datadump.dump_folders(dump_base):
         got = datadump.statement(folder)
@@ -406,10 +409,8 @@ def stamped_mtd(dump_base: Path | None, corpus_root: Path, lang: str, *,
         zips = eurlex_dump.mtd_zips([folder])
         if zips:
             return zips[0].resolve()
-        log(f"[work-trees] {folder}: the dump stamped for {lang} holds no MTD zip; its trees come from Cellar")
-        return None
-    log(f"[work-trees] the dump stamped for {lang} ({when}) is not under {dump_base}; its trees come from Cellar")
-    return None
+        raise OSError(f"{folder}: the dump stamped for {lang} ({when}) holds no MTD zip")
+    raise OSError(f"the dump stamped for {lang} ({when}) is not under {dump_base}")
 
 
 _BULK: dict[str, BulkTrees] = {}

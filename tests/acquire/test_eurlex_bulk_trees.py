@@ -158,7 +158,8 @@ def _due_units(tmp_path, *, dates, cover, after=1000.0):
 
 def test_a_unit_changed_since_the_dump_or_absent_from_its_window_takes_cellar_s_tree(tmp_path):
     units, corpus, remote, dest = _due_units(tmp_path, dates={(CELEX, "it"): 2000}, cover={(1972, "it")})
-    assert units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, remote, dest) == (None, None)
+    assert units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, remote, dest) == (None, 2000), \
+        "changed: Cellar's tree, and no kept tree older than the date that said so"
     units, corpus, remote, dest = _due_units(tmp_path, dates={}, cover={(1972, "it")})
     assert units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, remote, dest) == (None, None)
 
@@ -167,7 +168,22 @@ def test_a_unit_whose_window_is_not_known_whole_since_the_dump_waits(tmp_path):
     units, corpus, remote, dest = _due_units(tmp_path, dates={(CELEX, "it"): 900}, cover=set())
     with pytest.raises(cellar.WindowNotListed) as e:
         units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, remote, dest)
-    assert cellar._episode(e.value), "deferred, never marked tried"
+    from app.acquire.spec import Waiting
+    assert isinstance(e.value, Waiting), "the engine records nothing: no failure, no retry"
+
+
+def test_a_waiting_unit_is_deferred_by_the_engine_with_nothing_recorded(tmp_path):
+    from app.acquire import engine
+    from app.acquire.spec import Waiting
+
+    class Fetcher:
+        def fetch(self, endpoint, f, dest):
+            raise cellar.WindowNotListed("cellar: its window is not known whole; it waits")
+    spec = SimpleNamespace(unit_fetcher=Fetcher(), checksums=None)
+    coll = SimpleNamespace(corpus_dir=tmp_path)
+    f = RemoteFile(rel_path="lang=it/x/tree.json", mtime=None, remote="x")
+    got = engine._unit_fetch(SimpleNamespace(url="https://cellar.test"), f, coll, spec, None, "k")
+    assert got.status == "deferred"
 
 
 def _statement(folder, lang="it", created=CREATED):
@@ -194,17 +210,52 @@ def test_the_mtd_read_is_the_one_of_the_dump_stamped_into_the_corpus(tmp_path, l
     assert work_trees.stamped_mtd(base, corpus, "fr", log=said.append) is None, "fr has no dump stamped"
 
 
+@pytest.mark.parametrize("gone", ["folder", "dump", "mtd"])
+def test_a_stamped_dump_that_cannot_be_found_holds_the_pass_back(tmp_path, monkeypatch, gone):
+    """Architecture's review of a783fd1c, blocking: an unmounted dump drive sent
+    every tree to Cellar (F4 again)."""
+    from app.acquire.spec import HeldBack
+    base, corpus = tmp_path / "datadump", tmp_path / "corpus"
+    if gone != "folder":
+        _statement(base / "datadump-it", "it", CREATED if gone == "mtd" else "2026-11-08T01:00:00+01:00")
+        _zip(base / "datadump-it" / "other.zip", {"x": b"x"})
+    eurlex_dump._stamp(corpus, {"it": CREATED})
+    with pytest.raises(OSError):
+        work_trees.stamped_mtd(base, corpus, "it", log=lambda m: None)
+    monkeypatch.setattr(work_trees, "_BULK", {})
+    due = [RemoteFile(rel_path=cellar.rel_path("it", CELEX), mtime=None, remote=cellar.encode(CELEX, "it"))]
+    with pytest.raises(HeldBack):
+        cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
+
+
 def test_the_kept_listing_vouches_only_for_windows_known_whole_after_the_dump(tmp_path, monkeypatch):
+    import time
     monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
-    cellar_listing.keep("https://cellar.test", 1972, ("it",), 2, None, [[CELEX, "it", 100], ["31972R0001", "it", 7]])
-    cellar_listing.keep("https://cellar.test", 1973, ("it", "fr"), 0, None, [])
-    old = cellar_listing._path("https://cellar.test", 1972, ("it",))
-    os.utime(old, (10, 10))                                       # known whole before the dump
-    dates, cover = cellar_listing.coverage({(CELEX, "it")}, {"it": 50.0, "fr": 50.0})
-    assert dates == {} and cover == {(1973, "it"), (1973, "fr")}, "an empty window still covers its languages"
-    cellar_listing.vouched("https://cellar.test", 1972, ("it",))  # its fingerprint asked now, and holding
-    dates, cover = cellar_listing.coverage({(CELEX, "it")}, {"it": 50.0, "fr": 50.0})
+    url = "https://cellar.test"
+    cellar_listing.keep(url, 1972, ("it",), 2, None, [[CELEX, "it", 100], ["31972R0001", "it", 7]])
+    cellar_listing.keep(url, 1973, ("it", "fr"), 0, None, [])
+    after = {"it": time.time() + 60, "fr": 0.0}                  # 1972's kept before the dump, for it
+    dates, cover = cellar_listing.coverage({(CELEX, "it")}, after, url)
+    assert dates == {} and cover == {(1973, "fr")}, "an empty window still covers its languages"
+    monkeypatch.setattr(time, "time", lambda: after["it"] + 1)
+    cellar_listing.vouched(url, 1972, ("it",))                   # its fingerprint asked now, and holding
+    dates, cover = cellar_listing.coverage({(CELEX, "it")}, after, url)
     assert dates == {(CELEX, "it"): 100} and (1972, "it") in cover
+    assert cellar_listing.coverage({(CELEX, "it")}, after, "https://other.test") == ({}, set()), \
+        "another endpoint's windows vouch for nothing"
+
+
+def test_a_window_of_the_format_before_11_19_vouches_for_nothing(tmp_path, monkeypatch):
+    """Architecture's repro: windows dated by the work alone, beside the new."""
+    import gzip
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    p = tmp_path / "listing" / "1972" / "0123456789abcdef01234567.json.gz"
+    p.parent.mkdir(parents=True)
+    p.write_bytes(gzip.compress(json.dumps({"n": 1, "last": None, "rows": [[CELEX, "it", 100]]}).encode()))
+    old_shape = {"n": 1, "last": None, "rows": [[CELEX, "it", 100]], "year": 1972, "languages": ["it"],
+                 "force": False, "endpoint": "https://cellar.test", "shape": "work-modified", "at": 9e9}
+    cellar_listing._path("https://cellar.test", 1972, ("it",)).write_bytes(gzip.compress(json.dumps(old_shape).encode()))
+    assert cellar_listing.coverage({(CELEX, "it")}, {"it": 0.0}, "https://cellar.test") == ({}, set())
 
 
 def test_prepare_lists_the_missing_windows_first_and_an_unlisted_one_leaves_its_units_waiting(tmp_path, monkeypatch):
@@ -227,7 +278,7 @@ def test_prepare_lists_the_missing_windows_first_and_an_unlisted_one_leaves_its_
     due = [RemoteFile(rel_path=cellar.rel_path("it", c), mtime=None, remote=cellar.encode(c, "it"))
            for c in (CELEX, "31973R0002")]
     units._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
-    assert listed == [(1972, ("it",)), (1973, ("it",))]
+    assert listed == [(1972, ("it",)), (1973, ("it",))], "listed first, one window a year"
     unit = {"celex": CELEX, "lang": "it"}
     assert units._bulk_of(corpus, unit, due[0], corpus / due[0].rel_path)[1] == 100
     with pytest.raises(cellar.WindowNotListed):
@@ -271,3 +322,26 @@ def test_prepare_readies_the_bulk_before_the_pass_and_an_mtd_that_does_not_open_
     monkeypatch.setattr(work_trees, "_BULK", {})
     with pytest.raises(HeldBack):
         units._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
+
+
+def test_the_split_a_year_learned_is_kept_for_the_years_after(tmp_path, monkeypatch):
+    """Review of a783fd1c, 3: `learned` was made afresh every year, each of ~75
+    years re-paying the wide counts' 900 s timeouts."""
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    monkeypatch.setattr(work_trees, "_BULK", {})
+    base, corpus = tmp_path / "datadump", tmp_path / "corpus"
+    for lang in ("it", "fr"):
+        _statement(base / f"datadump-{lang}", lang)
+        _zip(base / f"datadump-{lang}" / "LEG_MTD.zip", {MEMBER: (FX / MTD).read_bytes()})
+    eurlex_dump._stamp(corpus, {"it": CREATED, "fr": CREATED})
+    calls = []
+
+    def window(client, url, year, langs, code_of, charge, place=None, learned=None):
+        calls.append((year, langs))
+        learned["group"] = 1                                     # as a timed-out count teaches it
+        return iter(())
+    monkeypatch.setattr(cellar, "_window_files", window)
+    due = [RemoteFile(rel_path=cellar.rel_path(l, c), mtime=None, remote=cellar.encode(c, l))
+           for c in ("31972R0001", "31973R0002") for l in ("it", "fr")]
+    cellar.TreeUnits()._prepare_bulk(base, corpus, ["fr", "it"], due, "eu", "https://cellar.test")
+    assert calls == [(1972, ("fr", "it")), (1973, ("fr",)), (1973, ("it",))]
