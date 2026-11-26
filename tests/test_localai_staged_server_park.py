@@ -316,7 +316,7 @@ def test_the_card_s_rows_are_recorded_with_what_they_did_not_measure():
                 "| a failed return (`failed`) | no switch on a card |",
                 "| the gate's clause with the FINGERPRINT texts (§3.3) |",
                 "| a quantized model, buffers above 1 GiB, the 35B, OmniVoice |",
-                "| parking BEHIND THE VEGA WRAPPER (LocalAI, the wrapper, the engine) | both copies were on the engine directly;",
+                "| parking BEHIND THE VEGA WRAPPER (LocalAI, the wrapper, the engine) ON THE CARD | both copies were on the engine directly.",
                 "| the engine's own COUNT of the forty cycles | the tool did not read it yet (§10); the forty stand on their times"):
         assert row in still, row
     assert "No real model parks" in still and "both copies are removed" in still
@@ -351,9 +351,16 @@ def test_a_cycle_is_counted_by_the_engine_and_the_note_says_how_a_gate_asks_for_
                  "FAIL: cycle 1: answered with the same bytes, but the engine's counts started again",
                  "| A. the gate reads `/backend/monitor` itself |", "| B. the wrapper reads `Status`",
                  "| C. count the HTTP 200s (the tool until today) |", "3,168 s of gates",
-                 "**NOT shown:** the route against a backend behind the VeGa wrapper"):
+                 # the card's own reading of the counts (München), and what `total` is
+                 "`parks` 1, `unparks` 0, `parked` 1, `parked_host`\n605,265,920, and the same 17 ms later",
+                 "2 and 2, 3 and 3, `no_room` 0 throughout",
+                 "**`memory.total` is not the model's share of anything.**",
+                 "**NOT shown:** a failed return on a card"):
         assert said in section, said
     assert 98 + 1983 + 70 + 509 + 508 == 3168
+    # `total` is the process's virtual size and `rss` its resident set, by the engine's patch
+    engine = (PATCHES / "staged" / "0023-llama-cpp-park-when-told.patch").read_text(encoding="utf-8")
+    assert 'std::ifstream statm("/proc/self/statm");' in engine and "memory->set_total(virtual_bytes);" in engine
     # every row of the choice has its pros and its cons
     rows = [line for line in section.splitlines() if line.startswith(("| A. ", "| B. ", "| C. "))]
     assert len(rows) == 3 and all(len([c for c in row.split("|")[2:4] if c.strip()]) == 2 for row in rows)

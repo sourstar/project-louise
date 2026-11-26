@@ -1121,8 +1121,8 @@ this computation, try again later.","type":"no_room_on_device"}}` and
 | a failed return (`failed`) | no switch on a card | shown on the CPU server only (§8) |
 | the gate's clause with the FINGERPRINT texts (§3.3) | the forty cycles compared the tool's own sixteen sentences, not the gate's sixteen; München confirms the fingerprint texts were NOT run on the copy | at the gated run of the first real model that parks — it is part of that gate |
 | a quantized model, buffers above 1 GiB, the 35B, OmniVoice | §3.1's rows; only bge-m3 F16 (one 577 MiB buffer) has parked | before any of them is switched to parking |
-| parking BEHIND THE VEGA WRAPPER (LocalAI, the wrapper, the engine) | both copies were on the engine directly; the wrapper's part for a return (#882) is tested against a scripted backend, and `Free` and `Status` pass through it as any call it does not intercept | at the gated run of the first real model that parks: the first time the three meet |
-| the engine's own COUNT of the forty cycles | the tool did not read it yet (§10); the forty stand on their times — every return 226–246 ms, where a load is 4.17 s | from the next row on, the tool counts each cycle |
+| parking BEHIND THE VEGA WRAPPER (LocalAI, the wrapper, the engine) ON THE CARD | both copies were on the engine directly. Since: the three parts together on the CPU stand-in, 25 of 25 (§11) | a copy of a vega model behind the wrapper on the node (München's, after §11), then the gated run of the first real model that parks |
+| the engine's own COUNT of the forty cycles | the tool did not read it yet (§10); the forty stand on their times — every return 226–246 ms, where a load is 4.17 s. Since: three cycles counted on the card (§10) | from the next row on, the tool counts each cycle |
 
 No real model parks: no model file but the two copies ever carried `park:
 true` or `GGML_SYCL_PARKABLE`, and both copies are removed. Which models
@@ -1230,8 +1230,79 @@ with the operator's choice on the statement:
 A is enough for the gate's own verdict; B is what "the statement says the
 cycles" needs, and nothing less does.
 
-**NOT shown:** the route against a backend behind the VeGa wrapper (it
-forwards every call but `LoadModel` and `Embedding` untouched — read from
-`Proxy.handler`, not run); the counts on a card (the card's rows of §9 did
-not ask for them; the engine's `Status` did answer there — it is where
-`/system`'s parked sizes came from).
+**ON THE CARD (München, 2026-11-26 00:55:45–00:56:03Z;** a copy of bge-m3 on
+`ed93e3c1b2e2` directly, verify on, the node embedding beside it, the floor
+at 12 GiB and back to 0): before the park `parks` 0, `unparks` 0, `parked`
+0, `park_size` 605,265,920; the park 200 in 0.234 s, 1.3 s after the last
+request; parked `parks` 1, `unparks` 0, `parked` 1, `parked_host`
+605,265,920, and the same 17 ms later — a read brings nothing back; the
+return 200 in 0.341 s with the same vector, then `parks` 1, `unparks` 1,
+`parked` 0; two more cycles, 2 and 2, 3 and 3, `no_room` 0 throughout. A
+park 23 ms after a request: 409 `model_busy`, the counts unchanged. After
+`/backend/shutdown`: 500 "not currently loaded". With the node at work a
+park took 182–234 ms and a return 312–341 ms (142 and 228 on the paused
+node). The process's resident memory shows the copy: 492 MB loaded, 1,097
+MB parked, 496 MB back.
+
+**`memory.total` is not the model's share of anything.** It read 38.85 GB
+loaded and 4.73 GB parked on the card. It is the process's VIRTUAL size
+(`/proc/self/statm`, by the patch), which a device runtime's mappings
+dominate; `rss` beside it is the resident set. Nothing should be built on
+`total`.
+
+**NOT shown:** a failed return on a card (no switch for it there, and none
+is provoked); the route behind the VeGa wrapper on a card (§11 shows it on
+the CPU stand-in).
+
+## 11. Behind the VeGa wrapper: the three parts together (2026-11-26)
+
+On the card both copies were on the engine directly, so LocalAI's `Free`,
+`Status` and repeated `LoadModel` had never passed through the wrapper to a
+real engine. Run here before any model behind the wrapper is given `park:
+true` on the node (the architecture session's order):
+`tools/measure/park_behind_vega.py` starts a receipts service
+(app/vega/service.py), LocalAI's real server (the node's tree + staged 0024,
+0027, 0029) with the wrapper AS A BACKEND IT STARTS (`run.sh --addr`, as on
+the node), and behind the wrapper LocalAI's llama.cpp backend built from the
+park engine's source for CPU with the stand-in device. Inputs tagged as
+Louise's client tags them; the model keeps its context until a park frees
+it. bge-small-en-v1.5 F16.
+
+**25 of 25.** The five things the wrapper's part for a return (#882)
+assumes, one cycle by hand:
+
+| | asked | seen |
+|---|---|---|
+| 1 | a park passes the wrapper | 200; the ENGINE counts `parks` 1, `parked` 1 through `/backend/monitor`; `/system` says parked |
+| 2 | the return's `LoadModel` is the load in force | the wrapper's line "the load in force asked again … the backend: 'Model already loaded' … stands", once; ONE load stated; the receipt of the first Embedding after the return names the run of before the park |
+| 3 | that Embedding has its receipt, and one context was created | a receipt for it; the wrapper's `created` 1 → 2 |
+| 4 | a return that FAILS | answered 200 by a NEW wrapper process, which states its load: 2 processes, 2 loads stated; THE RUN ID IS THE SAME; the wrapper's counts and the engine's both start again |
+| 5 | a park inside the idle second | 409 `model_busy`, "its last request was 1 ms ago" |
+
+Then the rows, each cycle counted by the engine:
+
+    20 cycles, back by the request        20 of 20 the same bytes; 20 parks and 20 returns COUNTED, in the one process
+    20 cycles, back by /backend/load      20 of 20 the same bytes; 20 parks and 20 returns COUNTED, in the one process
+    a park asked while a request runs     1134 parks answered: {(409, 'model_busy'): 1134}; the request whole
+    the engine, in all                    parks 41, unparks 41
+    the wrapper, in all                   41 repeated loads let through, ONE load stated; created 1 -> 42, canary_failed 0
+    a parked model shut down              200 in 103 ms; the load afresh stated, the same run id
+    a return refused twice                503 no_room_on_device twice, still parked, then served; one load stated
+    a FAILED return                       `cycles` FAILS at cycle 1: "the engine's counts started again"
+
+**What it adds for the gate (§10):** a failed return paid as a load keeps
+the RUN ID and gives valid receipts — nothing in a receipt tells it from a
+cycle. Two counts do, and they agree: the engine's (`parks`, `unparks` back
+at 0) and the wrapper's (`created` back at 1).
+
+**Found on the way, in the harness's own model file and not on the node:**
+a model file that pins no `seed` gets a seed drawn by LocalAI at each load;
+the seed is in the run's options, so every load is ANOTHER RUN — six loads,
+six run ids, differing in `Seed` alone. All 15 vega model files staged here
+pin `"seed": 0`; nothing refuses one that does not (the architecture
+session's to judge).
+
+**NOT shown:** a card. The stand-in parks a CPU buffer; the times are not
+the card's, and the wrapper's reading of the device (which card the backend
+holds, how much moved) was not exercised — the run is a CPU run and says so.
+A copy of a vega model behind the wrapper on the node is München's next row.

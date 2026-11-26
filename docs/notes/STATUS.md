@@ -900,7 +900,14 @@ measured (published figures disagree).
   (`Status`, since `ed93e3c1b2e2`) and LocalAI's own `GET /backend/monitor?model=` serves the counts: read without bringing a
   parked model back, 7 and 7 after seven cycles, started again at 0 after a failed return. `tools/measure/park_http.py cycles` took
   a failed return for a cycle until today and now counts each one. Tonight's forty cycles on the card were not counted; they stand
-  on their times (226–246 ms a return, 4.17 s a load). NOT shown: the route behind the VeGa wrapper, the counts on a card.
+  on their times (226–246 ms a return, 4.17 s a load). ON THE CARD since (München, 00:55Z): three cycles counted, 1 and 1, 2 and
+  2, 3 and 3; a read leaves a parked copy parked.
+- **PARKING BEHIND THE VEGA WRAPPER, THE THREE PARTS TOGETHER (2026-11-26; parking-step-2.md §11):** LocalAI's real server, the
+  wrapper started by it as on the node, the park engine's CPU build with the stand-in device — `tools/measure/park_behind_vega.py`,
+  25 of 25. A park passes the wrapper; the return's `LoadModel` is "the load in force", ONE load stated over 41 returns, the receipts
+  naming one run; the wrapper's `created` goes up by one a return, no canary failure; a refused return keeps the run; a FAILED
+  return is answered by a new wrapper process with THE SAME run id and valid receipts — only the engine's and the wrapper's counts
+  starting again tell it from a cycle. NOT shown: a card (München's next row: a copy of a vega model behind the wrapper).
 - **Live 2026-11-25 15:18:30Z to 23:45:20Z, and the engine a rollback puts back: engine `619655e5833b`** (`engine-canary.series`: `792f050e318e`'s series + 0028; the operator:
   "Deploy and engine swap"). München: byte check VEGA/1 against VEGA/2 all identical (bge-m3, nemotron, qwen3-4b); five gates passed,
   each "exact, 3 fresh load(s)", every fingerprint identical to before — wikipedia (bge-m3) 109 s, gutenberg (qwen3-embedding-4b)
