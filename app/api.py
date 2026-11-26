@@ -1163,8 +1163,9 @@ async def chat_completions(body: ChatBody, request: Request):
     # an admin's question traced (app/query_trace.py)
     from . import query_trace
     who, admin = query_trace.viewer_of(request)
-    trace = query_trace.start("chat", f"chat-{uuid.uuid4().hex[:12]}", who, query, admin=admin,
-                              search_id=body.search_id)
+    # off the event loop: a trace reads the node's collections at its start
+    trace = await run_in_threadpool(lambda: query_trace.start(
+        "chat", f"chat-{uuid.uuid4().hex[:12]}", who, query, admin=admin, search_id=body.search_id))
     kept = web.kept_search(body.search_id, query)
     if kept is not None:
         # the page's hits, untouched; this request's own timings start at 0

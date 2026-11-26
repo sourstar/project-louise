@@ -73,6 +73,11 @@ KEEP_DAYS = 30
 #: the hits of a result kept, and the characters of each passage
 HITS_KEPT = 50
 TEXT_CHARS = 400
+#: a question's text and an answer kept to this many characters (an MCP call's
+#: arguments are its query; a runaway answer is no reason to fill the drive)
+QUERY_CHARS, ANSWER_CHARS = 2_000, 50_000
+#: the traces kept on the drive at most, the oldest days dropped first, beside KEEP_DAYS
+MAX_BYTES = 256 << 20
 #: a trace that never ends (a job lost) is written after this long
 MAX_S = 30 * 60.0
 
@@ -257,7 +262,7 @@ class Trace:
 
     def __init__(self, kind: str, job: str, who: str, query: str, *, search_id: str | None = None,
                  sample_s: float | None = None) -> None:
-        self.kind, self.job, self.who, self.query = kind, job, who, query
+        self.kind, self.job, self.who, self.query = kind, job, who, str(query)[:QUERY_CHARS]
         self.search_id = search_id
         self.t0 = time.time()
         self._m0 = time.monotonic()
@@ -312,7 +317,10 @@ class Trace:
         self._t1 = time.time()
         if self._answer:
             self.marks.append(["last_word", getattr(self, "_last_word", self.ms())])
-            self.data["answer"] = "".join(self._answer)
+            answer = "".join(self._answer)
+            self.data["answer"] = answer[:ANSWER_CHARS]
+            if len(answer) > ANSWER_CHARS:
+                self.data["answer_chars"] = len(answer)
         if error:
             self.mark("error")
             self.data["error"] = error[:500]
@@ -447,7 +455,27 @@ def write(record: dict, root: Path | None = None) -> Path:
             f.write(line.encode("utf-8"))
         if fresh:
             _prune(d, day)
+        _cap(d, path)
     return path
+
+
+def _cap(d: Path, today: Path) -> None:
+    """The oldest days dropped while the traces hold more than MAX_BYTES;
+    today's file is never dropped (the line just written is in it)."""
+    files = sorted(d.glob("*.jsonl"))
+    try:
+        total = sum(f.stat().st_size for f in files)
+    except OSError:
+        return
+    for f in files:
+        if total <= MAX_BYTES or f == today:
+            break
+        try:
+            size = f.stat().st_size
+            f.unlink()
+            total -= size
+        except OSError:
+            pass
 
 
 def _prune(d: Path, today: str) -> None:

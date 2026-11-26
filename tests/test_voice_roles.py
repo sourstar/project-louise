@@ -236,6 +236,23 @@ def test_a_quotation_the_pieces_cut_across_is_still_spoken_in_its_language(node,
     assert [c["language"] for c in sent] == ["en", "it"] and sent[1]["voice"] == SYNTH_IT
 
 
+def test_a_quotation_still_open_at_a_pieces_end_is_spoken_in_its_language(node, monkeypatch):
+    """Architecture, 2026-11-26: the first half of a quotation the pieces cut
+    across ("… che «the law is the law and"): the Italian lead-in in Italian,
+    the open quotation in English."""
+    calls, _, _ = node
+
+    class W:
+        status_code, headers = 200, {"content-type": "audio/wav"}
+        content = _wav(300)
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or W())
+    ctx = 'Il giudice ha detto in aula che «the law is the law and it must be obeyed» per tutti.'
+    before = len(calls)
+    speech.synthesize_timed({"input": 'Il giudice ha detto in aula che «the law is the law and', "context": ctx},
+                            url="http://ai", admin=False)
+    assert [c["language"] for c in calls[before:]] == ["it", "en"]
+
+
 def test_a_quotation_the_node_cannot_join_goes_as_one_sentence(node, monkeypatch):
     calls, _, _ = node
 

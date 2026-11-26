@@ -615,6 +615,24 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
     louiseVoice.sentences('Is it legal under the statute? No. The statute forbids it for everyone.')]);
   check(days24.slice(0, 4).every(x => x.length === 2) && days24[4].length >= 2,
         '24. "am 1." "18." "Cass. civ., sez." "sec." end no sentence; "No." does', days24);
+  // PINNED THROUGH split() (architecture, 2026-11-26: sentences under
+  // MIN_SENTENCE were joined by length anyway): a day or an ordinal's stop is
+  // never a piece's end; "no." ends a sentence
+  const pin24 = await page.evaluate(() => [
+    louiseVoice.split('Das Gesetz tritt am 1. Januar 2025 in Kraft und gilt', 22),
+    louiseVoice.split('Das BGB wurde am 18. August 1896 verkündet und gilt seitdem', 20),
+    louiseVoice.sentences("The court's answer to the question was a clear no. The statute forbids it for everyone.").length]);
+  check(pin24[0] && pin24[1] && !/\d\.$/.test(pin24[0][0]) && !/\d\.$/.test(pin24[1][0]) && pin24[2] === 2,
+        '24. no piece ends at "am 1." or "am 18."; "a clear no." ends a sentence', pin24);
+  // a slow clip of the last answer says nothing of the next one's
+  const out24 = await page.evaluate(() => {
+    const v = louiseVoice; v.setRates({ per_step_char: 1.5, overhead: 150, audio_char: 71, full: 32 });
+    v.learn({ chars: 30, steps: 16, synth: 14000, audio: 2000, n: 0 });
+    v.asking();
+    v.learn({ chars: 30, steps: 16, synth: 14000, audio: 2000, n: 0 });
+    return v.rates().per_step_char;
+  });
+  check(out24 === 1.5, '24. a new answer\'s first slow clip is an outlier, whatever the last answer\'s was', out24);
   // a stop the segmenter starts no sentence after is never a cut
   const lower24 = await page.evaluate(() => louiseVoice.split('Era la fine del 1914. e la guerra continuava ancora a lungo', 24, true));
   check(!lower24 || !/1914\.$/.test(lower24[0]), '24. a stop with no sentence after it is never a cut', lower24);

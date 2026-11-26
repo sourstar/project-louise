@@ -88,7 +88,10 @@
                           + 'sez sec cod civ reg dir vol capt col gen lt rev gov sen').split(' '));
   const endsInName = p => {
     // an ordinal or a day ("am 1." | "Januar", "18." | "August"): the number
-    // and what it counts are said together (architecture, 2026-11-26)
+    // and what it counts are said together (architecture, 2026-11-26). It also
+    // holds a real sentence's end after a small number ("He died at 64. His
+    // son…"), as TITLES do after art/cap/cod: harmless — the two sentences are
+    // read as one piece, with no pause between them, nothing lost or misread
     if (/(?:^|\s)\d{1,2}\.$/.test(p)) return true;
     const m = /(?:^|[\s(«"'“‘])([\p{L}]{1,5})\.$/u.exec(p);
     // one letter of either case ("G.", "z.", "B." — and so the last of a dotted
@@ -297,6 +300,8 @@
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
     } catch (e) {
       busy = false; rest();
+      // no recording, no release(): the tone's context sleeps here
+      if (toneCtx && toneCtx.state === 'running') toneCtx.suspend().catch(() => {});
       report('not opened: ' + ((e && (e.name || e.message)) || e), { ua: navigator.userAgent });
       say(e && e.name === 'NotAllowedError'
         ? 'the microphone is not allowed for this page — allow it in the browser to speak a question'
@@ -923,8 +928,10 @@
     it.t.got = now();
     if (!live(r)) return null;
     it.t.n = it.n; learn(it.t);
-    if (it.trimStart || it.trimEnd)
+    if (it.trimStart || it.trimEnd) {
       blob = new Blob([trimWav(await blob.arrayBuffer(), it.trimStart, it.trimEnd)], { type: blob.type || 'audio/wav' });
+      if (!live(r)) return null;               // stopped during the trim: no URL to leak
+    }
     const u = URL.createObjectURL(blob); r.urls.push(u); return u;
   }
 

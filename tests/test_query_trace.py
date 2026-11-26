@@ -564,3 +564,23 @@ def test_a_chat_completions_trace_carries_the_servers_own_timings(traced, monkey
     _wait(lambda: _lines(traced))
     (got,) = _lines(traced)
     assert got["kind"] == "chat" and got["answer_timings"] == t
+
+
+def test_a_query_and_an_answer_are_bounded_and_so_is_the_drive(traced, monkeypatch, tmp_path):
+    """Architecture, 2026-11-26: an MCP call's whole arguments are its query,
+    a runaway answer is no reason to fill the drive, and 30 days is no size."""
+    t = query_trace.Trace("mcp:louise_search", "b1", "admin:admin", "q" * 10_000, sample_s=10.0)
+    t.word("a" * 60_000)
+    t.end(); t.join(5)
+    (got,) = _lines(traced)
+    assert len(got["query"]) == query_trace.QUERY_CHARS and len(got["answer"]) == query_trace.ANSWER_CHARS
+    assert got["answer_chars"] == 60_000
+    d = tmp_path / "cap"
+    d.mkdir()
+    for day in ("2026-11-20", "2026-11-21", "2026-11-22"):
+        (d / f"{day}.jsonl").write_bytes(b"x" * 400)
+    monkeypatch.setattr(query_trace, "MAX_BYTES", 1000)
+    query_trace.write({"started": "2026-11-23T09:00:00.000+00:00"}, root=d)
+    left = sorted(f.name for f in d.glob("*.jsonl"))
+    assert "2026-11-20.jsonl" not in left and "2026-11-23.jsonl" in left, left
+    assert sum((d / f).stat().st_size for f in left) <= 1000

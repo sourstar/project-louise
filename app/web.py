@@ -1171,7 +1171,10 @@ async def ask_query(request: Request, body: AskQueryBody):
     (app/cancel.py)."""
     from . import query_trace
     who, admin = query_trace.viewer_of(request)
-    trace = query_trace.start("search", "query-" + secrets.token_hex(6), who, body.query, admin=admin)
+    # off the event loop: a trace reads the node's collections at its start
+    from starlette.concurrency import run_in_threadpool
+    trace = await run_in_threadpool(query_trace.start, "search", "query-" + secrets.token_hex(6), who, body.query,
+                                    admin=admin)
     try:
         result = await cancel.while_connected(request, _ask_result, body)
     except cancel.Cancelled:
