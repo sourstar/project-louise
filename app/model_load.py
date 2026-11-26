@@ -541,6 +541,16 @@ class _NoRoute(Exception):
     """The server answered, and not as LocalAI's `/system` does."""
 
 
+def cached_models(server: str) -> tuple[frozenset[str] | None, float] | None:
+    """What the last `/system` answer for `server` said, and its age in
+    seconds — the cache alone, never a fetch and never the per-server lock a
+    question's own fresh read takes (app/query_trace.py reads it beside a
+    question). None when nothing was read yet."""
+    with _lock:
+        got = _systems.get(server)
+    return None if got is None else (got[1], round(time.monotonic() - got[0], 3))
+
+
 def loaded_models(server: str, max_age_s: float | None = None) -> frozenset[str] | None:
     """What `server` holds, from an answer at most `max_age_s` old (default
     `SYSTEM_TTL_S`; a runner with no `/system` is not asked again for

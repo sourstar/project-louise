@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import sys
 import threading
 import time
 from contextlib import closing
@@ -172,13 +173,17 @@ def _servers() -> list[str]:
 
 
 def _models() -> dict[str, Any]:
-    """Per model server: what `/system` says is loaded now, and parked."""
+    """Per model server: what `/system` last said is loaded, how old that
+    reading is (`age_s`; null: never read), and parked. The cache only
+    (model_load.cached_models): a fetch would hold the per-server lock a
+    question's own fresh read waits behind (0.95 s measured)."""
     from app import model_load
     out: dict[str, Any] = {}
     for s in _servers():
         try:
-            loaded = model_load.loaded_models(s)
-            out[s] = {"loaded": sorted(loaded) if loaded is not None else None,
+            got = model_load.cached_models(s)
+            loaded, age = got if got is not None else (None, None)
+            out[s] = {"loaded": sorted(loaded) if loaded is not None else None, "age_s": age,
                       "parked": sorted(model_load.parked(s))}
         except Exception as e:   # noqa: BLE001 — recorded, never raised
             out[s] = {"error": f"{type(e).__name__}: {e}"[:200]}
@@ -255,10 +260,16 @@ class Trace:
         self._answer: list[str] = []
         self._ended = threading.Event()
         self._t1: float | None = None
+        # the directory resolved NOW, on the question's thread: the sampler
+        # writes after the request has returned, when a test's LOUISE_ROOT
+        # may already be undone (architecture, 2026-11-26: a test's line in /data)
+        self._dir = trace_dir()
         self._cards: dict[str, Any] = {}
         self._sample_s = SAMPLE_S if sample_s is None else sample_s
         self._cpu = _cpu_times()
         self._thread = threading.Thread(target=self._run, name=f"query-trace-{job}", daemon=True)
+        with _live_lock:
+            _live.add(self)
         self._thread.start()
 
     def ms(self) -> float:
@@ -323,10 +334,14 @@ class Trace:
             self.samples.append(self._sample(False))
         self.samples.append(self._sample(True))
         try:
-            write(self.record())
+            write(self.record(), root=self._dir)
         except Exception as e:   # noqa: BLE001 — said, never raised
+            # stderr: in `ask serve` stdout is the JSON-RPC channel
             print(f"{time.strftime('%H:%M:%S')} [node warn:ask] query trace of {self.job} not written: {e}",
-                  flush=True)
+                  file=sys.stderr, flush=True)
+        finally:
+            with _live_lock:
+                _live.discard(self)
 
     def record(self) -> dict:
         """The line. A question that never ended (MAX_S) has no end: `ended`
@@ -337,11 +352,27 @@ class Trace:
                 "ended": _iso(t1) if t1 is not None else None,
                 "ms": round((t1 - self.t0) * 1000, 1) if t1 is not None else None,
                 # in time order: `last_word` is the last delta's time, put in at the end
-                "marks": sorted(self.marks, key=lambda m: m[1]), **self.data, "samples": self.samples,
+                "marks": sorted(list(self.marks), key=lambda m: m[1]), **dict(self.data), "samples": self.samples,
                 "model_events": _safe(_model_events, self.t0 - 1, t1 if t1 is not None else time.time())}
 
     def join(self, timeout: float | None = None) -> None:
         self._thread.join(timeout)
+
+
+#: the traces whose line is not written yet: a process that ends (`ask serve`
+#: at the end of its input) writes them first (`flush`)
+_live: set[Trace] = set()
+_live_lock = threading.Lock()
+
+
+def flush(timeout: float = 5.0) -> None:
+    """Every trace still sampling — its question over — written before the
+    process exits (its sampler is a daemon thread, which exit would kill)."""
+    with _live_lock:
+        live = list(_live)
+    deadline = time.monotonic() + timeout
+    for t in live:
+        t.join(max(0.0, deadline - time.monotonic()))
 
 
 def start(kind: str, job: str, who: str | None, query: str, *, admin: bool | None = None,
@@ -365,7 +396,7 @@ def viewer_of(request: Any) -> tuple[str, bool]:
     return who, auth.admin(v)
 
 
-def run(kind: str, who: str, admin: bool, query: str, fn, *args: Any, **kw: Any) -> Any:
+def run(kind: str, who: str, admin: bool, query: str, fn, /, *args: Any, **kw: Any) -> Any:
     """`fn(*args, **kw)`, an admin's traced: its result kept (`hits_of`) and
     an exception recorded, then raised as it was."""
     import secrets

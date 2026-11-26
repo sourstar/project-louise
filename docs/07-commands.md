@@ -1872,14 +1872,28 @@ THE FIRST SENTENCE IS READ WHOLE, up to its full stop, and made at half the node
 sentence at the half of the samples ... after the first sentence, we can switch to the full steps"). It
 replaces 2026-11-08's cut of a first sentence over 90 characters at its last clause mark, whose second half
 waited for its own clip: a gap longer than a full stop's. Sentence 0 of a reading (`Louise-Reading: <id>/0`)
-is synthesized at half `[speech] tts_steps`, every later one at full; unset, every sentence at the model's
-own. A kept clip still takes its turn, so the next sentence does not wait for it. THE READY TONE (*added
+is synthesized at half `[speech] tts_steps` — unset, at half the model's own 32 — and every later one at
+full (unset: the model's own, nothing sent). A kept clip still takes its turn: it waits for the sentence
+before it, and the next one does not wait for it. THE READY TONE (*added
 2026-11-26*, operator: "Send a gentle ping when the microphone is ready (both car and no car) so the user
 knows when to talk without watching the screen"): one soft 160 ms tone at 880 Hz when the microphone turns
 red — only once it gives sound — from the page's own audio context; the microphone's energy check does not
 count the windows that may hold its echo (on the recording's own clock: the audio captured when it played,
 the output's latency, 400 ms for the route and the buffering, and the tone with its tail), and the
 recording's report says its context's state and latency.
+- AN ADMIN'S QUESTIONS ARE TRACED (*added 2026-11-26*, operator: "Log admin only queries with timestamps for
+  timing analysis. Include which models are loaded, system and gpu memory usage, cpu load, load/unload/parking
+  of the models, together with query and results for a full analysis of both speed and quality";
+  `app/query_trace.py`). Every question an admin asks — the Ask page's relay (search, answer), `/ask/query`,
+  `/v1/chat/completions`, `/api/ask/search|chat|pdf|lookup|traverse`, MCP over HTTP, and `ask serve`'s
+  stdio, which only the node's operator runs — is one JSON line in `<LOUISE_ROOT>/state/query-traces/<UTC
+  day>.jsonl`, kept 30 days: its start and end, marks in ms (`search_done`, `first_word`, `last_word`, `cut`,
+  `error`), the search's own timings, the node sampled every second (CPU busy %, load average, RAM and swap,
+  each card's VRAM and its processes where they changed), the models loaded (with the reading's age) and
+  parked per model server at its start and end, the node's `models` event lines meanwhile (loads, unloads,
+  evictions, parks, returns), the query, the top 50 results with their scores and `moved_by`, and the
+  answer's text and how many sources it read. Joined by `search_id`. Nobody else's question is read; no
+  token, cookie or key is recorded (invariant 8).
 - the LocalAGI routes below require the token read from
   `DEPOSIT_TOKEN_FILE`, reads included, and that token opens nothing
   else: an agent that can write its memory cannot pause the node.
@@ -2392,7 +2406,7 @@ variable, a file, a log line or a message.
              # `tts_steps` (added 2026-11-25, operator): the steps of one synthesis, 4 to 64, sent with every
              # request to the text-to-speech model; fewer are faster and coarser; unset, the model's own (32).
              # A reading's FIRST sentence is made at half of it (amended 2026-11-26, operator; 7.4); unset,
-             # nothing is sent for any sentence.
+             # at half the model's own 32, and nothing is sent for the others.
              # The node's choice, never a reader's: `node speech set --steps N`, or the System page's Models panel
 [certifier]  valid_from = "2026-10-07T00:00:00Z"        # this node as a certifier (09 §9.11): from when its own key certifies, and
              # revoked_at = "…"                          # when it was revoked — the anchor document it serves at

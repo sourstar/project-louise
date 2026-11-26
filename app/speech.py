@@ -455,17 +455,6 @@ class Turns:
                 st["done"].add(n); st["seen"] = time.monotonic()
                 self._cv.notify_all()
 
-    def served(self, reading: str | None, n: int | None) -> None:
-        """Sentence n answered without a call (a kept clip): arrived and done."""
-        if reading is None or n is None:
-            return
-        with self._cv:
-            now = time.monotonic()
-            self._forget(now)
-            st = self._readings.setdefault(reading, {"arrived": set(), "done": set(), "seen": now})
-            st["arrived"].add(n); st["done"].add(n); st["seen"] = now
-            self._cv.notify_all()
-
     def _forget(self, at: float) -> None:
         for k in [k for k, v in self._readings.items() if at - v["seen"] > TURN_FORGET_S]:
             del self._readings[k]
@@ -584,10 +573,16 @@ NO_SYNTHETIC = (b'{"error": {"message": "no synthetic voice is set on this node,
                 b'voice is read to an admin only"}}')
 
 
-def first_steps(steps: int) -> int:
-    """The steps of a reading's first sentence: half the node's, never under
-    the lowest `TTS_STEPS` accepts."""
-    return max(platform_config.TTS_STEPS[0], steps // 2)
+#: the text-to-speech model's own steps where `[speech] tts_steps` is unset
+#: (OmniVoice's default, docs/07 §7.8)
+MODEL_STEPS = 32
+
+
+def first_steps(steps: int | None) -> int:
+    """The steps of a reading's first sentence: half the node's — or half the
+    model's own default where the node sets none — never under the lowest
+    `TTS_STEPS` accepts."""
+    return max(platform_config.TTS_STEPS[0], (steps if steps is not None else MODEL_STEPS) // 2)
 
 
 def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
@@ -656,10 +651,9 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     # the voice-timeline line of 11-26); every later one is made while the
     # one before plays. The half is in the kept clip's key, so a half-step
     # clip is never served for a full one.
-    # Only where the node sets its steps: unset, the model's own default
-    # stands for every sentence, as before — nothing is sent to a model that
-    # may not read the parameter.
-    if reading is not None and n == 0 and steps is not None:
+    # The operator's words: "the half of the samples" — of the node's steps,
+    # or, unset, of the model's own default (MODEL_STEPS)
+    if reading is not None and n == 0:
         steps = first_steps(steps)
     if steps is not None:
         out["params"] = {**(out.get("params") if isinstance(out.get("params"), dict) else {}),
@@ -675,10 +669,13 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     key = _clip_key(url, out)
     kept = _clip_get(key)
     if kept is not None:
-        # a kept clip still takes its turn, at once: the next sentence of the
-        # reading waits for n to be DONE, and a hit that skipped `turn` left
-        # it waiting TURN_ARRIVE_S (5,000 ms measured) for an n never marked
-        _TURNS.served(reading, n)
+        # a kept clip still TAKES ITS TURN: the next sentence of the reading
+        # waits for n to be DONE, and a hit that skipped `turn` left it
+        # waiting TURN_ARRIVE_S (5,000 ms measured) for an n never marked;
+        # marked done at once, n+1 overtook an n-1 still at the model
+        # (architecture, 2026-11-26) — so it waits for n-1 like any sentence
+        with _TURNS.turn(reading, n):
+            pass
         clip = audio_ms(kept[0])
         return 200, kept[0], kept[1], [("cache", 1.0)] + ([("audio", clip)] if clip is not None else [])
     with _TURNS.turn(reading, n) as waited:

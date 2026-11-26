@@ -1528,6 +1528,14 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
             if trace is not None:
                 trace.end(error=failed)
 
+    if trace is not None:
+        # a caller that leaves before the first chunk never runs `sse` at all,
+        # so its `finally` never ends the trace: the response's background
+        # task does (Trace.end is once only)
+        from starlette.background import BackgroundTask
+        return StreamingResponse(sse(), media_type="text/event-stream",
+                                 background=BackgroundTask(trace.end,
+                                                           error="cancelled: the reader left before the answer"))
     return StreamingResponse(sse(), media_type="text/event-stream")
 
 

@@ -591,6 +591,7 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(await until(() => __toasts.some(t => /sends only silence/.test(t)), 14000), '21. silence: it is said',
         await page.evaluate(() => __toasts));
   check(await page.evaluate(() => !document.getElementById('mic').classList.contains('rec')), '21. and the recording ended');
+  check(await page.evaluate(() => louiseVoice.tones()) === 0, '21. no ready tone for a microphone that gave only silence');
   const t21 = Date.now(); while (!(posted.reports || []).length && Date.now() - t21 < 4000) await sleep(40);
   const r21 = (posted.reports || [])[0] || {};
   check(r21.outcome === 'silent' && r21.frames > 0 && r21.peak === 0 && r21.heard === false && r21.ms >= 8000,
@@ -632,31 +633,57 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   //     A microphone that hears only a faint hum and, after `delay`, the tone
   //     itself: not speech — the recording runs until its quiet bound. Both
   //     ways of recording: the worklet's windows, and the recorder's
-  for (const [mode, delay] of [['webaudio', 300], ['recorder', 0]]) {
+  //     Then SPEECH right after the tone: its end is still found (the floor
+  //     follows its minimum inside the window), and the tone is not
+  //     "speech" either. And a tone context that is not running plays nothing.
+  const case23 = async (mode, delay, speechAfter, suspended) => {
     posted.reports = [];
     await page.goto('http://localhost/ask');
-    await page.evaluate(([mode, delay]) => {
+    await page.evaluate(([mode, delay, speechAfter, suspended]) => {
       const c = new AudioContext(), d = c.createMediaStreamDestination();
       const hum = c.createConstantSource(); hum.offset.value = 0.002; hum.connect(d); hum.start();
-      addEventListener('louise-ready-tone', () => setTimeout(() => {
+      const tone = () => {
         const o = c.createOscillator(), g = c.createGain();
         o.frequency.value = 880; g.gain.value = 0.06;                 // the tone's 0.12 at coupling 0.5
         o.connect(g); g.connect(d); o.start(); o.stop(c.currentTime + 0.16);
-      }, delay));
-      navigator.mediaDevices.getUserMedia = async () => d.stream;
+        if (speechAfter) {                                             // 3 s of "speech" 250 ms after the tone
+          const v = c.createOscillator(), vg = c.createGain();
+          v.frequency.value = 220; vg.gain.value = 0.25;
+          v.connect(vg); vg.connect(d); v.start(c.currentTime + 0.41); v.stop(c.currentTime + 3.41);
+        }
+      };
+      addEventListener('louise-ready-tone', () => setTimeout(tone, delay));
+      navigator.mediaDevices.getUserMedia = async () => {
+        if (suspended) {                                               // the tone's context taken away
+          const t = louiseVoice.toneContext(); await t.suspend(); t.resume = () => Promise.resolve();
+        }
+        return d.stream;
+      };
       if (mode === 'recorder')
         window.AudioWorkletNode = function (ctx) { const g = ctx.createGain(); g.port = { onmessage: null }; return g; };
       document.getElementById('q').value = '';
-    }, [mode, delay]);
+    }, [mode, delay, speechAfter, suspended]);
     await page.click('#mic');
     const t23 = Date.now();
     while (!(posted.reports || []).length && Date.now() - t23 < 20000) await sleep(50);
-    const r23 = (posted.reports || [])[0] || {};
-    check(r23.tone && r23.tone.played === true && r23.deaf_end_ms > 0 && r23.heard === false && r23.stop === 'quiet'
-          && r23.ms >= 7500 && (mode === 'webaudio' ? r23.mode === 'webaudio' : r23.mode === 'recorder'),
-          `23. ${mode}: the tone the microphone heard ${delay} ms later is not taken for speech`, r23);
+    const r = (posted.reports || [])[0] || {};
     await until(() => !document.getElementById('speak').classList.contains('on'), 15000);
+    return r;
+  };
+  for (const [mode, delay] of [['webaudio', 300], ['recorder', 0], ['recorder', 300]]) {
+    const r23 = await case23(mode, delay, false, false);
+    check(r23.tone && r23.tone.played === true && r23.deaf_end_ms > 0 && r23.heard === false && r23.stop === 'quiet'
+          && r23.ms >= 7500 && r23.mode === mode,
+          `23. ${mode}: the tone the microphone heard ${delay} ms later is not taken for speech`, r23);
   }
+  for (const mode of ['webaudio', 'recorder']) {
+    const r = await case23(mode, 0, true, false);
+    check(r.heard === true && r.stop === 'speech' && r.ms >= 4300,
+          `23. ${mode}: speech right after the tone is heard to its end, not cut`, r);
+  }
+  const rs = await case23('webaudio', 0, false, true);
+  check(rs.tone && rs.tone.played === false && rs.tone.state === 'suspended' && rs.deaf_end_ms == null,
+        '23. a tone context that is not running: no tone, and nothing ignored', rs);
 
   check(errors.length === 0, 'no page errors', errors);
   console.log(failures ? `${failures} FAILED` : 'ALL PASSED');

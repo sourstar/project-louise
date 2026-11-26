@@ -177,7 +177,15 @@
     if (!r.live) { if (top > 0) { r.live = true; wake(r, 'sound'); } else r.zero_ms += ms; }
     // the ready tone as the microphone hears it, on the AUDIO's own clock
     // (`r.ms`, where this window starts): neither speech nor the floor
-    if (r.deaf_end_ms != null && r.ms < r.deaf_end_ms) { r.ms += ms; return false; }
+    // The FLOOR still follows its minimum there: speech that starts inside
+    // the window would otherwise set the first counted floor at speech level,
+    // and "loud" then needs 4x speech — its end was lost (architecture,
+    // 2026-11-26: 3 s of speech stopped at 2,322 ms). The tone only raises
+    // the level, so a minimum is safe.
+    if (r.deaf_end_ms != null && r.ms < r.deaf_end_ms) {
+      r.floor = r.floor === null ? rms : Math.min(r.floor, rms);
+      r.ms += ms; return false;
+    }
     const loud = rms > Math.max(FLOOR_MIN, FLOOR_X * (r.floor === null ? 0 : r.floor));
     r.floor = r.floor === null ? rms : Math.min(r.floor, rms);
     r.ms += ms;
@@ -275,6 +283,7 @@
     stopReading(); auto = false;         // the microphone would hear the answer
     unlock();                            // inside the tap: the answer may be read later
     toneUnlock();                        // inside the tap: the ready tone may sound
+    toneLast = null;                     // this recording's tone, not the last one's
     busy = true; micState('busy', 'opening the microphone…'); active();
     let stream;
     try {
@@ -428,6 +437,9 @@
   }
 
   function release(r) {
+    // the tone's context sleeps between recordings (the next tap resumes it)
+    setTimeout(() => { if (!rec && toneCtx && toneCtx.state === 'running') toneCtx.suspend().catch(() => {}); },
+               TONE_MS + 500);
     clearInterval(r.tick); clearTimeout(r.watch); clearTimeout(r.max); clearTimeout(r.waking);
     if (r.mr && r.mr.state !== 'inactive') { try { r.mr.stop(); } catch (e) { /* already */ } }
     try { if (r.src) r.src.disconnect(); if (r.node) r.node.disconnect(); } catch (e) { /* already */ }
@@ -874,7 +886,7 @@
                  play: rel(t.play), end: rel(t.end) })) };
     },
     // how many ready tones sounded on this page, and the last one's context
-    tones: () => toneCount, toneLast: () => toneLast, deafEnd,
+    tones: () => toneCount, toneLast: () => toneLast, toneContext: () => toneCtx, deafEnd,
     sentences, cut, downsample, wavBytes,
   };
 })();

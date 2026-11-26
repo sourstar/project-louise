@@ -361,3 +361,108 @@ def test_no_trace_lands_outside_the_tests_temporary_directories(query_traces_sta
     t = query_trace.Trace("search", "g1", "admin:admin", "q", sample_s=10.0)
     t.end(); t.join(5)
     assert list(d.glob("*.jsonl")), "written there"
+
+
+# ---- architecture's re-read, 2026-11-26 -------------------------------------
+
+def test_the_directory_is_the_one_in_force_when_the_question_started(tmp_path, monkeypatch):
+    """B1: the sampler writes after the request returned, when a test's root
+    may be undone; the directory is resolved at the start."""
+    first, later = tmp_path / "first", tmp_path / "later"
+    monkeypatch.setattr(query_trace, "trace_dir", lambda: first)
+    t = query_trace.Trace("search", "d1", "admin:admin", "q", sample_s=10.0)
+    monkeypatch.setattr(query_trace, "trace_dir", lambda: later)
+    t.end(); t.join(5)
+    assert list(first.glob("*.jsonl")) and not later.exists()
+
+
+def test_the_models_are_read_from_the_cache_alone(monkeypatch):
+    """S3: never a fetch, never the lock a question's fresh read takes."""
+    from app import model_load
+
+    def no(*a, **kw):
+        raise AssertionError("fetched")
+    monkeypatch.setattr(model_load, "loaded_models", no)
+    monkeypatch.setattr(model_load, "_fetch_system", no)
+    monkeypatch.setattr(query_trace, "_servers", lambda: ["http://ai", "http://never"])
+    monkeypatch.setitem(model_load._systems, "http://ai", (time.monotonic() - 3.0, frozenset({"qwen"}), 2.0))
+    got = query_trace._models()
+    assert got["http://ai"]["loaded"] == ["qwen"] and 2.9 <= got["http://ai"]["age_s"] < 10
+    assert got["http://never"]["loaded"] is None and got["http://never"]["age_s"] is None
+
+
+def test_the_web_writes_the_questions_model_lines_to_the_event_log(monkeypatch):
+    """S6: question_card's lines (unloaded before / after the search, loading
+    ahead) reach the node's event log from the web too."""
+    from fastapi.testclient import TestClient
+    from app import api, deadman, idle_trim, model_pins, question_card, warmup
+    monkeypatch.setattr(warmup, "start", lambda: None)
+    monkeypatch.setattr(idle_trim, "start", lambda: None)
+    monkeypatch.setattr(deadman, "arm", lambda **kw: None)
+    monkeypatch.setattr(question_card, "_log", [None])
+    with TestClient(api.app):
+        assert question_card._log[0] is model_pins.node_event
+
+
+def test_ask_query_traces_an_admin(traced, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import api
+    monkeypatch.setattr(web, "_ask_result", lambda body: {"hits": [], "timings": {"total": 3.0}})
+    monkeypatch.setattr(query_trace, "viewer_of", lambda request: ("user:bob", False))
+    c = TestClient(api.app)
+    assert c.post("/ask/query", json={"query": "whales"}).status_code == 200
+    time.sleep(0.3)
+    assert _lines(traced) == []
+    monkeypatch.setattr(query_trace, "viewer_of", lambda request: ("admin:admin", True))
+    r = c.post("/ask/query", json={"query": "whales"})
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    assert got["kind"] == "search" and got["search_id"] == r.headers["X-Louise-Search"]
+
+
+def test_mcp_over_http_and_ask_serve_are_traced(traced, monkeypatch):
+    import io
+    from fastapi.testclient import TestClient
+    from app import api
+    from app.ask import mcp
+    monkeypatch.setattr(mcp, "_call_tool", lambda name, args: {"hits": [{"title": "T"}]})
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+           "params": {"name": "louise_search", "arguments": {"query": "whales"}}}
+    monkeypatch.setattr(query_trace, "viewer_of", lambda request: ("admin:admin", True))
+    assert TestClient(api.app).post("/api/ask/mcp", json=msg).status_code == 200
+    _wait(lambda: len(_lines(traced)) == 1)
+    out = io.StringIO()
+    mcp.serve_stdio(io.StringIO(json.dumps(msg) + "\n"), out)
+    lines = _lines(traced)
+    assert [l["who"] for l in lines] == ["admin:admin", "cli:ask serve"], "ask serve's default call is traced"
+    assert "query trace" not in out.getvalue(), "stdout stays the JSON-RPC channel"
+
+
+def test_a_streamed_chat_whose_caller_leaves_before_the_first_chunk_is_ended(traced, monkeypatch):
+    """S2: `sse` never runs, so the response's background task ends it."""
+    from app import api
+    chat = _answer_setup(monkeypatch, _stream_of("The whale."))
+    t = query_trace.Trace("chat", "c9", "admin:admin", "whales", sample_s=10.0)
+    resp = api._chat_answer(chat, "whales", {"hits": [], "timings": {"total": 0.0}}, time.time(), trace=t)
+    import asyncio
+    asyncio.run(resp.background())             # what Starlette runs once the response is done
+    t.join(5)
+    (got,) = _lines(traced)
+    assert got["ended"] and "left before the answer" in got["error"]
+
+
+def test_a_cut_answers_marks_are_in_time_order(traced, monkeypatch):
+    class Cut:
+        whole = False
+        def why(self):
+            return "the token limit was reached"
+    def stream(messages, temperature=0.3):
+        yield "The "
+        yield "whale "
+        return Cut()
+    chat = _answer_setup(monkeypatch, stream)
+    web._relay_answer_job(relay.Job(id="a8", kind="answer", owner="admin:admin"), chat)
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    times = [m[1] for m in got["marks"]]
+    assert times == sorted(times) and {"first_word", "last_word", "cut"} <= {m[0] for m in got["marks"]}

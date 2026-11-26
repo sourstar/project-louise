@@ -225,4 +225,8 @@ def serve_stdio(inp=None, out=None, *, call: Callable[[str, dict[str, Any]], Any
         if response is not None:
             out.write(json.dumps(response, ensure_ascii=False) + "\n")
             out.flush()
+    # the last calls' traces written before the process ends (their samplers
+    # are daemon threads)
+    from app import query_trace
+    query_trace.flush()
     return 0
