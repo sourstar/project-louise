@@ -1,0 +1,321 @@
+"""THE ADMIN'S QUESTIONS, TRACED (operator, 2026-11-26, verbatim: "Log admin
+only queries with timestamps for timing analysis. Include which models are
+loaded, system and gpu memory usage, cpu load, load/unload/parking of the
+models, together with query and results for a full analysis of both speed
+and quality").
+
+ONE JSON LINE PER QUESTION JOB of an admin (the Ask page's relay: a search,
+or an answer), in `state/query-traces/<UTC day>.jsonl`. Joined by
+`search_id` (an answer that reused the page's search names it). A line:
+
+- `kind`, `job`, `who`, `query`, `search_id`, `started` / `ended` (UTC ISO,
+  ms) and `ms` (the job's length);
+- `marks`: [name, ms from the start] — `search_done`, `first_word`,
+  `last_word`, `cut`, `error` — and `timings`, the search's own per stage
+  (app/retrieval.py: languages, catalog, fts, dense, rerank, per collection);
+- `samples`: the node every `SAMPLE_S` from the start to the end — `ms`,
+  CPU busy % since the sample before (/proc/stat), the load average, RAM
+  total / available / swap used (/proc/meminfo), and per card its VRAM used
+  and each process's VRAM, host GTT and label (the GPU probe, GPU_PROBE_URL);
+  the first and the last sample also carry `models`: per model server, what
+  `/system` says is loaded and what is parked;
+- `model_events`: the node's `models` lines written meanwhile, by the web and
+  by the worker (cold starts, loads, evictions, parks and returns, pins:
+  db.NODE_STAGES `models`, read from the events table they are written to);
+- `results`: the hits as ranked — collection, id, title, the fused and the
+  reranker's score, `moved_by`, language and the first characters of the
+  passage — and, for an answer, `answer`: its text as written, and why it
+  was cut when it was.
+
+/proc is the host's in a container (loadavg, stat and meminfo are not
+namespaced), which is the node's view a timing needs.
+
+WHO WRITES. The question's own thread only marks times (`mark`, a list
+append); the sampler — one daemon thread per trace — reads the node and
+writes the line once the job ends (CLAUDE.md: telemetry is published by
+someone other than the thread doing the work). A trace NEVER RAISES into its
+question: every read that fails is recorded as its error and the question
+goes on.
+
+KEPT `KEEP_DAYS` days: the oldest files go when a new day's is opened.
+
+THE STANDARD this is not: OpenTelemetry traces (spans with attributes,
+exported over OTLP) say the same — a span per stage, resource metrics beside
+— and pay once a collector is run (Tempo, Jaeger) and more than one process
+is traced end to end. Today it would be a dependency and a service for one
+admin's questions; the JSON lines map onto spans one to one if it is adopted.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import threading
+import time
+from contextlib import closing
+from pathlib import Path
+from typing import Any
+
+from app import config
+
+#: how often the node is sampled while a question runs
+SAMPLE_S = 1.0
+#: the days of traces kept
+KEEP_DAYS = 30
+#: the hits of a result kept, and the characters of each passage
+HITS_KEPT = 50
+TEXT_CHARS = 400
+#: a trace that never ends (a job lost) is written after this long
+MAX_S = 30 * 60.0
+
+HIT_KEYS = ("source_collection", "collection", "uid", "book_id", "chunk_id", "title", "authors", "lang",
+            "rrf", "score", "rerank_score", "moved_by", "chapter", "origin_url")
+
+
+def is_admin(owner: str | None) -> bool:
+    """A relay job's owner (web._relay_owner: "<role>:<name>") is an admin."""
+    return bool(owner) and str(owner).split(":", 1)[0] == "admin"
+
+
+def trace_dir() -> Path:
+    return config.louise_root() / "state" / "query-traces"
+
+
+def _iso(t: float) -> str:
+    return _dt.datetime.fromtimestamp(t, _dt.timezone.utc).isoformat(timespec="milliseconds")
+
+
+# ---- the node, read ---------------------------------------------------------
+
+def _cpu_times(path: Path = Path("/proc/stat")) -> tuple[int, int] | None:
+    """(busy, total) jiffies of all CPUs."""
+    try:
+        first = path.read_text().splitlines()[0].split()
+    except (OSError, IndexError):
+        return None
+    if not first or first[0] != "cpu":
+        return None
+    nums = [int(x) for x in first[1:]]
+    idle = nums[3] + (nums[4] if len(nums) > 4 else 0)        # idle + iowait
+    return sum(nums) - idle, sum(nums)
+
+
+def _meminfo(path: Path = Path("/proc/meminfo")) -> dict[str, int]:
+    out: dict[str, int] = {}
+    try:
+        for line in path.read_text().splitlines():
+            key, _, rest = line.partition(":")
+            if key in ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree", "Cached"):
+                out[key] = int(rest.split()[0]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return out
+
+
+def _loadavg(path: Path = Path("/proc/loadavg")) -> list[float] | None:
+    try:
+        return [float(x) for x in path.read_text().split()[:3]]
+    except (OSError, ValueError):
+        return None
+
+
+def _gpus() -> list[dict] | dict:
+    from app import gpu
+    got = gpu.panel(config.GPU_PROBE_URL)
+    if got.get("state") != "ok":
+        return {"state": got.get("state"), "error": got.get("error")}
+    return [{"card": d.card, "name": d.name, "vram_total": d.vram_total, "vram_used": d.vram_used,
+             "processes": [{"label": p.label, "container": p.container, "vram": p.vram, "host": p.host,
+                            "ram": p.ram} for p in d.processes]}
+            for d in got.get("devices") or ()]
+
+
+def _servers() -> list[str]:
+    from app import model_load
+    urls = [config.CHAT_URL, config.RERANK_URL, config.TRANSLATE_URL]
+    out: list[str] = []
+    for u in urls:
+        if u:
+            s = model_load.server_of(u)
+            if s not in out:
+                out.append(s)
+    return out
+
+
+def _models() -> dict[str, Any]:
+    """Per model server: what `/system` says is loaded now, and parked."""
+    from app import model_load
+    out: dict[str, Any] = {}
+    for s in _servers():
+        try:
+            loaded = model_load.loaded_models(s, max_age_s=0.0)
+            out[s] = {"loaded": sorted(loaded) if loaded is not None else None,
+                      "parked": sorted(model_load.parked(s))}
+        except Exception as e:   # noqa: BLE001 — recorded, never raised
+            out[s] = {"error": f"{type(e).__name__}: {e}"[:200]}
+    return out
+
+
+def _model_events(since: float, until: float) -> list[list]:
+    """The node's `models` lines from `since` to `until` (seconds), as
+    [UTC ISO, level, message]: the events table of the first collection,
+    where model_load and model_pins write them (a table bounded at 5,000
+    rows, db.log_event)."""
+    from app import collections as collections_mod, db
+    cols = collections_mod.load_all()
+    if not cols:
+        return []
+    with closing(db.connect(cols[0])) as con:
+        rows = con.execute("SELECT ts, level, message FROM events WHERE stage = 'models' "
+                           "AND ts >= ? AND ts <= ? ORDER BY id",
+                           (int(since), int(until) + 1)).fetchall()
+    return [[_iso(r[0]), r[1], r[2]] for r in rows]
+
+
+def _safe(fn, *args):
+    try:
+        return fn(*args)
+    except Exception as e:   # noqa: BLE001 — a trace never takes its question down
+        return {"error": f"{type(e).__name__}: {e}"[:300]}
+
+
+def hits_of(result: dict) -> list[dict]:
+    out = []
+    for rank, h in enumerate((result or {}).get("hits") or [], 1):
+        if not isinstance(h, dict):
+            continue
+        row = {"rank": rank, **{k: h[k] for k in HIT_KEYS if h.get(k) not in (None, "", [])}}
+        text = h.get("text") or h.get("snippet")
+        if text:
+            row["text"] = str(text)[:TEXT_CHARS]
+        out.append(row)
+        if len(out) >= HITS_KEPT:
+            break
+    return out
+
+
+# ---- one question -----------------------------------------------------------
+
+class Trace:
+    """A question job of an admin, sampled while it runs and written when it
+    ends. `mark` and `note` are what the question's thread calls."""
+
+    def __init__(self, kind: str, job: str, who: str, query: str, *, search_id: str | None = None,
+                 sample_s: float | None = None) -> None:
+        self.kind, self.job, self.who, self.query = kind, job, who, query
+        self.search_id = search_id
+        self.t0 = time.time()
+        self._m0 = time.monotonic()
+        self.marks: list[list] = []
+        self.data: dict[str, Any] = {}
+        self.samples: list[dict] = []
+        self._answer: list[str] = []
+        self._ended = threading.Event()
+        self._sample_s = SAMPLE_S if sample_s is None else sample_s
+        self._cpu = _cpu_times()
+        self._thread = threading.Thread(target=self._run, name=f"query-trace-{job}", daemon=True)
+        self._thread.start()
+
+    def ms(self) -> float:
+        return round((time.monotonic() - self._m0) * 1000, 1)
+
+    def mark(self, name: str) -> None:
+        self.marks.append([name, self.ms()])
+
+    def note(self, **data: Any) -> None:
+        self.data.update(data)
+
+    def word(self, text: str) -> None:
+        """A delta of the answer: its first and last times, and its text."""
+        if not self._answer:
+            self.mark("first_word")
+        self._answer.append(text)
+        self._last_word = self.ms()
+
+    def end(self, error: str | None = None) -> None:
+        if error:
+            self.mark("error")
+            self.data["error"] = error[:500]
+        if self._answer:
+            self.marks.append(["last_word", getattr(self, "_last_word", self.ms())])
+            self.data["answer"] = "".join(self._answer)
+        self._ended.set()
+
+    # -- the sampler's thread --
+    def _sample(self, with_models: bool) -> dict:
+        s: dict[str, Any] = {"ms": self.ms()}
+        now = _cpu_times()
+        if now and self._cpu and now[1] > self._cpu[1]:
+            s["cpu_pct"] = round(100.0 * (now[0] - self._cpu[0]) / (now[1] - self._cpu[1]), 1)
+        self._cpu = now or self._cpu
+        s["load"] = _loadavg()
+        mem = _meminfo()
+        if mem:
+            s["ram"] = {"total": mem.get("MemTotal"), "available": mem.get("MemAvailable"),
+                        "swap_used": (mem.get("SwapTotal", 0) - mem.get("SwapFree", 0)) or 0}
+        s["gpus"] = _safe(_gpus)
+        if with_models:
+            s["models"] = _safe(_models)
+        return s
+
+    def _run(self) -> None:
+        self.samples.append(self._sample(True))
+        deadline = time.monotonic() + MAX_S
+        while not self._ended.wait(self._sample_s):
+            if time.monotonic() > deadline:
+                self.data.setdefault("error", f"the job did not end within {MAX_S / 60:.0f} min")
+                break
+            self.samples.append(self._sample(False))
+        self.samples.append(self._sample(True))
+        try:
+            write(self.record())
+        except Exception as e:   # noqa: BLE001 — said, never raised
+            print(f"{time.strftime('%H:%M:%S')} [node warn:ask] query trace of {self.job} not written: {e}",
+                  flush=True)
+
+    def record(self) -> dict:
+        t1 = time.time()
+        return {"kind": self.kind, "job": self.job, "who": self.who, "query": self.query,
+                "search_id": self.search_id, "started": _iso(self.t0), "ended": _iso(t1),
+                "ms": round((t1 - self.t0) * 1000, 1), "marks": self.marks, **self.data,
+                "samples": self.samples, "model_events": _safe(_model_events, self.t0 - 1, t1)}
+
+    def join(self, timeout: float | None = None) -> None:
+        self._thread.join(timeout)
+
+
+def start(kind: str, job: str, owner: str | None, query: str, **kw: Any) -> Trace | None:
+    """A trace for an admin's job; None for anyone else (nothing is read)."""
+    if not is_admin(owner):
+        return None
+    try:
+        return Trace(kind, job, str(owner), query, **kw)
+    except Exception:   # noqa: BLE001 — no trace, the question as before
+        return None
+
+
+_write_lock = threading.Lock()
+
+
+def write(record: dict, root: Path | None = None) -> Path:
+    d = root if root is not None else trace_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    day = record["started"][:10]
+    path = d / f"{day}.jsonl"
+    line = json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str) + "\n"
+    with _write_lock:
+        fresh = not path.exists()
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line)
+        if fresh:
+            _prune(d, day)
+    return path
+
+
+def _prune(d: Path, today: str) -> None:
+    cut = (_dt.date.fromisoformat(today) - _dt.timedelta(days=KEEP_DAYS)).isoformat()
+    for f in d.glob("*.jsonl"):
+        if f.stem < cut:
+            try:
+                f.unlink()
+            except OSError:
+                pass

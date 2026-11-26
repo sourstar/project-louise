@@ -951,6 +951,16 @@ measured (published figures disagree).
     the operator's monitor is dropped only when the worker's rule has been seen live. Fixed the same day: the
     watcher says once whether it is armed, with its limit, its two lines and the reading
     (`memory_yield.watch`).
+- **An admin's questions are traced for timing and quality (operator, 2026-11-26: "Log admin only queries with
+  timestamps ... which models are loaded, system and gpu memory usage, cpu load, load/unload/parking of the
+  models, together with query and results"; `app/query_trace.py`).** One JSON line per Ask search or answer job
+  of an admin in `state/query-traces/<UTC day>.jsonl` (30 days kept), joined by `search_id`: the start and end,
+  marks (`search_done`, `first_word`, `last_word`, `cut`, `error`) in ms, the search's own timings, the node
+  sampled every second (CPU busy %, load average, RAM and swap, each card's VRAM and its processes; the models
+  loaded and parked per server at the start and the end), the node's `models` event lines meanwhile (web and
+  worker: cold starts, loads, evictions, parks, returns), the query, the top 50 hits with their scores and
+  `moved_by`, and the answer's text. Nobody else's question is read. Only the relay (the Ask page);
+  `/ask/query`, `/v1/chat/completions` and MCP are not traced yet.
 - **The voice: the first sentence whole and at half the steps; a ping when the microphone is ready (operator,
   2026-11-26).** (1) A reading's sentence 0 is made at half `[speech] tts_steps` (the model's 32 when unset: 16),
   every later one at full (`speech.first_steps`; the steps are in the kept clip's key). (2) The first sentence is

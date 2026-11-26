@@ -1278,6 +1278,23 @@ def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
     # THE CARD FOR THE QUESTION (docs/notes/ask-card-workflow.md spec 3–4;
     # app/question_card.py): room for the query encoders before, the answer's
     # models after — behind, so the results are not held
+    from . import question_card, query_trace
+    # an admin's question, traced for timing and quality (app/query_trace.py)
+    trace = query_trace.start("search", job.id, job.owner, body.query)
+    try:
+        result = _relay_search_traced(job, body, trace)
+    except BaseException as e:
+        if trace is not None:
+            trace.end(error=f"{type(e).__name__}: {e}")
+        raise
+    if trace is not None:
+        trace.note(speed=body.speed, collections=body.collections, timings=result.get("timings"),
+                   reranked=result.get("reranked"), rerank_withheld=result.get("rerank_withheld"),
+                   results=query_trace.hits_of(result))
+        trace.end()
+
+
+def _relay_search_traced(job: relay.Job, body: AskQueryBody, trace) -> dict:
     from . import question_card
     cols = _question_collections(body.collections)
     question_card.before_search(cols, speed=body.speed)
@@ -1290,22 +1307,41 @@ def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
             result = _ask_result(body)
     finally:
         ahead.stop()
+    if trace is not None:
+        trace.mark("search_done")
     question_card.after_search(cols, speed=body.speed, ahead=ahead)
     _say_search_timings(body, result)
     html = TEMPLATES.env.get_template("_ask_results.html").render(result=result)
-    job.emit("result", html=html, search_id=keep_search(body.query, result),
-             hits=len(result.get("hits") or []))
+    sid = keep_search(body.query, result)
+    if trace is not None:
+        trace.search_id = sid
+    job.emit("result", html=html, search_id=sid, hits=len(result.get("hits") or []))
+    return result
 
 
 def _relay_answer(job: relay.Job, chat) -> None:
     """The answer as /v1/chat/completions writes it (`api.answer_parts`), its
     words relayed as `delta` events. Each word is progress; a keepalive is
     not (a model that writes nothing for STUCK_S is stuck)."""
-    from . import api
+    from . import api, query_trace
     user = [m for m in chat.messages if m.get("role") == "user"]
     if not user:
         raise ValueError("no user message")
     query = api._text_of(user[-1].get("content", ""))
+    # an admin's answer, traced (app/query_trace.py), joined to its search by search_id
+    trace = query_trace.start("answer", job.id, job.owner, query, search_id=chat.search_id)
+    try:
+        _relay_answer_traced(job, chat, query, trace)
+    except BaseException as e:
+        if trace is not None:
+            trace.end(error=f"{type(e).__name__}: {e}")
+        raise
+    if trace is not None:
+        trace.end()
+
+
+def _relay_answer_traced(job: relay.Job, chat, query: str, trace) -> None:
+    from . import api, query_trace
     t0 = time.time()
     kept = kept_search(chat.search_id, query)
     if kept is not None:
@@ -1316,12 +1352,19 @@ def _relay_answer(job: relay.Job, chat) -> None:
             verify=chat.verify, rerank_depth=chat.rerank_depth, all_languages=chat.all_languages,
             **({"show_in": chat.answer_lang} if chat.answer_lang else {}),
             **({"annotations": chat.annotations} if chat.annotations is not None else {}))
+    if trace is not None:
+        trace.mark("search_done")
+        trace.note(search_reused=kept is not None, model=chat.model, collections=chat.collections,
+                   answer_lang=chat.answer_lang, timings=result.get("timings"),
+                   results=query_trace.hits_of(result))
     job.touch("answer: waiting for the model")
     with contextlib.closing(api.answer_parts(chat, query, result, t0)) as parts:
         for kind, value in parts:
             job.token.check()               # cancelled: closing() stops the model writing
             if kind == "delta":
                 job.touch("answer")
+                if trace is not None:
+                    trace.word(value)
                 job.emit("delta", text=value)
             elif kind == "reading":
                 # the sources read as older language: their badges on the page
@@ -1331,6 +1374,9 @@ def _relay_answer(job: relay.Job, chat) -> None:
                 # the others are marked on the page and in its PDF
                 job.emit("read", count=value)
             elif kind == "cut":
+                if trace is not None:
+                    trace.mark("cut")
+                    trace.note(cut=str(value))
                 job.emit("delta", text=f"\n[answer cut: {value}]")
                 job.emit("cut", why=value)
 
