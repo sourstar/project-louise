@@ -1078,8 +1078,9 @@ measured (published figures disagree).
   sentence is synthesized as its own segment in that language and joined to the rest (60 ms between), in the
   piece's one turn and at its steps (`speech.quote_segments`); a one-word quotation, or one in the sentence's
   language, stays in the sentence — the text alone says nothing of it. (2–3) Each source in the answer's
-  prompt says its first publication (and by whom where an annotation or PG's automatic summary states it) and its
-  subjects, and that they call it a literary work (`retrieval._work_said`); the model is told that a literary
+  prompt says its first publication ("by PG's automatic summary" where that is where the year was read) and
+  what its own classification says it is — PG's LCSH form, its "Category: …" shelves, its LCC class, for PG's
+  records only (a Wikipedia article's categories say what it is about) — and its subjects, and that they call it a literary work (`retrieval._work_said`); the model is told that a literary
   work's events are what it narrates, never historical fact, and that a source's "now" counts from its first
   publication, never from today. (4) The answer's sources (`louise_sources`) and its PDF carry the first
   publication. Coverage is the corpus's: Gutenberg states a first publication for ~12 % of its books (marc520);

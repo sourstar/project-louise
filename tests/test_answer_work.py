@@ -50,11 +50,16 @@ def test_a_literary_work_is_told_by_its_subject_headings_form_never_by_a_word_in
     yes = ["Napoleon I, Emperor of the French, 1769-1821 -- Fiction", "Historical fiction", "Short stories",
            "Love stories", "English poetry", "France -- History -- Revolution, 1789-1799 -- Drama",
            "Fairy tales", "Adventure stories", "Napoleon I, Emperor of the French, 1769-1821 -- Juvenile fiction",
-           "Detective and mystery stories", "Science fiction"]
+           "Detective and mystery stories", "Science fiction",
+           # their qualifiers stripped, whatever follows (architecture, 2026-11-26)
+           "Fairy tales -- Germany", "Short stories, American", "Greek drama (Tragedy)",
+           "English poetry -- 19th century", "Epic poetry, Greek", "Detective and mystery stories, English",
+           "Science fiction, American", "Gothic fiction (Literary genre)", "Sonnets, English",
+           "Russian fiction -- Translations into English", "Poetry -- Translations into English"]
     no = ["Romance languages -- Grammar", "Rome -- History -- Empire, 30 B.C.-476 A.D.",
           "Drama -- History and criticism", "English poetry -- History and criticism",
           "Napoleon I, Emperor of the French, 1769-1821", "France -- History -- 1789-1815",
-          "Fiction -- Technique", "Romanticism", "Universe", "Poetry -- Translations into English"]
+          "Fiction -- Technique", "Romanticism", "Universe", "Bible stories", "Bible stories, English"]
     assert [s for s in yes if not retrieval.literary(s)] == []
     assert [s for s in no if retrieval.literary(s)] == []
     _, user = _sources({**BARE, "work_subjects": "France -- History -- 1789-1815 | Historical fiction"})
@@ -115,3 +120,57 @@ def test_the_search_brings_each_hits_subjects_and_shelves_from_its_record(tmp_pa
     except Exception:   # noqa: BLE001 — what follows the attach needs a whole collection; the attach is done first
         pass
     assert hits[0]["subjects"] == "Poetry | PQ" and hits[0]["bookshelves"] == "Category: Poetry"
+
+
+def test_a_collection_whose_subjects_are_not_a_librarys_headings_gets_none(tmp_path):
+    """A Wikipedia article's categories say what it is about ("Italian
+    poetry", "1890s novels"): read as a genre they would call it literature."""
+    import sqlite3
+    from types import SimpleNamespace
+    con = sqlite3.connect(tmp_path / "w.db")
+    con.row_factory = sqlite3.Row
+    con.execute("CREATE TABLE documents (source TEXT, native_id TEXT, title TEXT, authors TEXT, lang TEXT, "
+                "subjects TEXT, bookshelves TEXT)")
+    con.execute("INSERT INTO documents VALUES ('wikipedia', '7', 'Giacomo Leopardi', '', 'it', "
+                "'Italian poetry | 1830s novels', '')")
+    hits = [{"book_id": 7, "chunk_id": "wikipedia:7:0:1"}]
+    try:
+        retrieval._attach_metadata_and_enqueue(con, SimpleNamespace(plugin="wikipedia", codex=None,
+                                                                    embed_mode="off", name="wikipedia"), hits)
+    except Exception:   # noqa: BLE001 — the attach is done first
+        pass
+    assert "subjects" not in hits[0] and retrieval._work_said(hits[0]) == ""
+
+
+def test_through_the_search_a_novels_record_says_so_in_the_answers_header(isolated_config, monkeypatch, tmp_path):
+    """Architecture, 2026-11-26: the classification must reach the answer on
+    the live path, not only when a test hands it in."""
+    import shutil
+    from pathlib import Path
+    from app import collections as collections_mod, db, discovery
+    corpus = tmp_path / "corpus_w"
+    shutil.copytree(Path(__file__).parent / "fixtures" / "gutenberg-mini" / "corpus", corpus)
+    c = collections_mod.Collection(name="gutenberg", plugin="gutenberg", profile=None, embed_mode_default=None,
+                                   corpus_dir=corpus, manifest_path=tmp_path / "m" / "manifest.db",
+                                   fts_dir=tmp_path / "m" / "fts", lance_dir=tmp_path / "m" / "lancedb")
+    con = db.connect(c)
+    discovery.sync_collection(con, c)
+    con.execute("UPDATE documents SET title='Le Rouge', authors='Stendhal', subjects=?, bookshelves=? "
+                "WHERE native_id='10003'",
+                ("France -- History -- 1815-1830 -- Fiction | PQ", "Category: Novels"))
+    con.commit()
+    monkeypatch.setattr(retrieval.refs, "get_store", lambda: None)
+    monkeypatch.setattr(retrieval.refs.RESOLVER, "resolve", lambda q, s: [])
+    hit = {"book_id": 10003, "chunk_id": "gutenberg:10003:0:1", "uid": "gutenberg:10003", "text": "Julien…",
+           "score": 1.0, "rrf": 0.03, "source_collection": "gutenberg"}
+    monkeypatch.setattr(retrieval, "_search_one_collection",
+                        lambda con, c, q, k, mode, tr, ids, plan=None, depth=0: {
+                            "catalog": [], "merged": [dict(hit)], "translations": {},
+                            "timings": {"catalog": 0.0}, "scope": {}})
+    monkeypatch.setattr(retrieval, "_rerank_list", lambda q, hits, recipe, budget_s, depth: (hits, False))
+    out = retrieval.search(con, "Julien Sorel", k=5, collection=c, translate=False)
+    assert out["hits"], out
+    _, user = retrieval.build_answer_messages("Julien Sorel", out)[0:2]
+    head = user["content"].split("[1]")[1].split("\n")[0]
+    assert "a literary work — Gutenberg category: Novels — LCC PQ — subjects: France -- History -- 1815-1830 -- Fiction" \
+        in head, head

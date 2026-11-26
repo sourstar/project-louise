@@ -1327,6 +1327,12 @@ def _legs_withheld(collection, partial: dict) -> list[dict]:
     return out
 
 
+#: the plugins whose records' `subjects` are a library's subject headings
+#: and class codes (LCSH, LCC) and whose `bookshelves` hold the library's
+#: own categories — what a work IS, not what it is about
+CLASSIFIED_PLUGINS = frozenset({"gutenberg"})
+
+
 def _attach_metadata_and_enqueue(con, collection, hits: list[dict]) -> None:
     """Attaches title/authors/lang to each hit and, in 'lazy' embed_mode,
     queues the hit documents not yet embedded. Shared by search() and
@@ -1344,8 +1350,14 @@ def _attach_metadata_and_enqueue(con, collection, hits: list[dict]) -> None:
             # answer's model is told the work IS (`_work_said`; operator,
             # 2026-11-26: "Collections like gutenberg carry the category tag
             # to determine what's fiction, what's a fact and what's an opinion")
-            meta[int(r["native_id"])] = {"title": r["title"], "authors": r["authors"], "lang": r["lang"],
-                                         "subjects": r["subjects"] or "", "bookshelves": r["bookshelves"] or ""}
+            meta[int(r["native_id"])] = {"title": r["title"], "authors": r["authors"], "lang": r["lang"]}
+            # ONLY WHERE THE SUBJECTS ARE A LIBRARY'S HEADINGS: PG's LCSH and
+            # LCC, and its category shelves. A Wikipedia article's categories
+            # ("Italian poetry", "1890s novels") say what it is ABOUT, and
+            # read as a genre they would call an encyclopedia literature
+            # (architecture, 2026-11-26)
+            if collection.plugin in CLASSIFIED_PLUGINS:
+                meta[int(r["native_id"])].update(subjects=r["subjects"] or "", bookshelves=r["bookshelves"] or "")
     for h in hits:
         h.update(meta.get(h["book_id"], {}))
         h.pop("rrf", None)
@@ -1903,14 +1915,24 @@ LITERARY_HEADING = re.compile(
 
 
 def literary(subject: str) -> bool:
-    """Whether one subject heading calls its record a literary work."""
+    """Whether one subject heading calls its record a literary work: its
+    form subdivision (the last), or its main heading as a genre — with its
+    qualifiers stripped ("Fairy tales -- Germany", "Short stories, American",
+    "Greek drama (Tragedy)", "Epic poetry, Greek") — never a heading about
+    literature (its criticism, its history, its study) nor about the Bible."""
     parts = [p.strip().rstrip(".") for p in str(subject).split("--")]
     if not parts or not parts[0]:
         return False
+    if len(parts) > 1 and parts[-1].lower() in LITERARY_FORMS:
+        return True                       # the heading's FORM: "France -- History -- … -- Drama"
     if any(p.lower() in ("history and criticism", "criticism and interpretation", "bibliography",
-                         "study and teaching", "translations into english") for p in parts[1:]):
+                         "study and teaching", "history", "technique", "authorship", "indexes") for p in parts[1:]):
         return False
-    return parts[-1].lower() in LITERARY_FORMS or (len(parts) == 1 and bool(LITERARY_HEADING.match(parts[0])))
+    main = re.sub(r"\s*\([^)]*\)\s*$", "", parts[0])          # "(Tragedy)", "(Literary genre)"
+    main = re.sub(r",\s*[^,]+$", "", main)                        # ", American", ", Greek", ", English"
+    if re.match(r"^bible\b", main, re.IGNORECASE):
+        return False
+    return parts[-1].lower() in LITERARY_FORMS or bool(LITERARY_HEADING.match(main))
 
 
 #: PG's own shelves of kind ("Category: Novels", "Category: Essays, Letters &
@@ -1952,10 +1974,11 @@ def _split(v) -> list[str]:
 
 def _work_said(h: dict) -> str:
     """What a hit's own record says of its WORK, for the answer's header:
-    its first publication (`first_published`, and by whom where an
-    automatic summary states it), what it is (`_work_kind`), PG's category
-    shelves, its LCC class and its subject headings. Empty where the record
-    says nothing."""
+    its first publication (`first_published`; "by PG's automatic summary"
+    where that is where the year was read, app/ask/works.py), what it is
+    (`_work_kind`), PG's category shelves, its LCC class and its subject
+    headings — set on a hit only for a CLASSIFIED_PLUGINS record. Empty
+    where the record says nothing."""
     parts = []
     year = h.get("first_published")
     if year:
