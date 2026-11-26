@@ -209,9 +209,11 @@ class Retry:
             yield k
 
     def episode(self, reason: str, *, retry_after: str | float | None = None,
-                cause: BaseException | None = None) -> None:
+                cause: BaseException | None = None, cool: bool = True) -> None:
         """The origin's episode on this attempt: recorded, and the endpoint
-        cooled down for the wait the next attempt will take."""
+        cooled down for the wait the next attempt will take — unless `cool`
+        is False (a query that ran out its own bound: its size, not the
+        endpoint's state, cellar.sparql in a listing thread)."""
         self.last, self.cause = reason, cause
         self._took = self.clock() - self._t0
         self._asked = (float(retry_after) if isinstance(retry_after, (int, float))
@@ -220,7 +222,7 @@ class Retry:
         # down for exactly that, so every worker sharing it waits alike
         self._next = SCALE * wait_s(self._attempt + 1, self.policy, asked=self._asked, took=self._took,
                                     draw=self.draw)
-        if self.manager is not None and self.key:
+        if cool and self.manager is not None and self.key:
             self.manager.cool_down(self.key, self._next, f"{self.what}: {reason}")
 
     def _wait(self, attempt: int) -> None:
