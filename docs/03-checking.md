@@ -369,11 +369,14 @@ each answer held to the same text's first and counted in the same
 `load_variation`. Every cycle is COUNTED by the engine's own counts — one
 park more, then one return more — and one that something else touched is
 asked again, never assumed; counts that start again between the park and
-the answer are a return that failed and a load that answered in its place,
-and fail the run; a model whose cycles cannot be counted is not admitted.
-The statement is unchanged: the cycles are recorded on the node beside the
-batching, and a run gated while its model did not park is gated again
-before anything is written from it once it does.)
+the answer are a return that failed and a load that answered in its place:
+the run is refused as a run that parks and NO statement is kept — its
+vectors were a fresh load's, so the statement it had stands and it is the
+run it was once its model no longer parks; a model whose cycles cannot be
+counted is not admitted. The statement is unchanged: the cycles are
+recorded on the node beside the batching, for the statement of the pass
+that counted them and no other, and a run gated while its model did not
+park is gated again before anything is written from it once it does.)
 One whose answers to a text differ is **near-exact** when
 they all stay within cosine 0.99999 of each other and the run reaches
 the stored CPU reference at 0.999 (docs/notes/near-exact-runs.md);

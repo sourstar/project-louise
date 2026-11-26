@@ -26,17 +26,29 @@ measured (published figures disagree).
   counts of its parks and returns (`GET /backend/monitor`), each answer to the same text's first bytes
   (`embedder.park_cycles`, `run_check.Parker`; docs/notes/parking-keeper.md §6, 03 §3.3 amended). Counts
   that start again between the park and the answer — a return that failed, answered 200 by a load under
-  the same run id — FAIL the run; a cycle something else touched is asked again and never counted; cycles
-  that cannot be counted refuse it. THE STATEMENT IS UNCHANGED (the operator's third choice was not
+  the same run id — REFUSE the run as a run that parks, with NO statement kept (its vectors were a fresh
+  load's; a kept FAIL would stop the collection even with `park: true` out again); a cycle something else
+  touched is asked again and never counted; cycles that cannot be counted refuse it; a runner that cannot
+  say whether the model parks defers it. THE STATEMENT IS UNCHANGED (the operator's third choice was not
   answered: no wire change is taken without his word): the cycles are recorded on the node
-  (`gate-parks.json`) and a run gated while its model did not park is gated again before a write. The
+  (`gate-parks.json`), bound to the digest of the statement of the same pass, and a run gated while its
+  model did not park is gated again before a write — the query side too. AN INDEPENDENT REVIEW READ THE
+  FIRST CUT BEFORE IT WAS MERGED and found eight things, two of them false passes (the record admitted a
+  run on another pass's statement; silence from `/system` skipped the pass), all fixed and each a test
+  (tests/hold/test_park_cycles.py, 50). OPEN, the operator's: the gate's other single-text passes still
+  judge what the client's NaN retry returned (parking-keeper.md §6, last paragraph). The
   request itself brings the weights back for the gate (`model_load.returns_on_request`: no warm whose
   vector nobody reads). What the byte check costs is said by the gate's report, the evictor's line ("…
   to host memory in N s") and the load record. NOT held to the wrapper's `created`, against what the
   entry below says: a parking model creates a context for every request, so it counts requests. NEXT: the
   staged `vega-bge-m3` file (`park: true`, `GGML_SYCL_PARKABLE=1`, `GGML_SYCL_PARK_VERIFY=1`) in a PR of
-  its own, applied by München, one gate (98 s + ~2 min of cycles), then §5's rows. OPEN, asked of Tensor:
-  whether `/backend/park` parks a model LocalAI holds pinned — the gate pins its model throughout.
+  its own, applied by München, one gate (98 s + ~2 min of cycles), then §5's rows. ANSWERED by Tensor the
+  same morning (parking-step-2.md §12, the live build's tree): a PINNED model is parked by the route — the
+  pin is the watchdog's — and the gate twin keeps `park: true`; a file with `park: true` on an engine
+  without `GGML_SYCL_PARKABLE=1` is listed as parking and gives NO counts (the monitor answers 500): the
+  gate refuses that run and names the env line. The node's live `vega-bge-m3` is AHEAD of main's staged
+  copy (`context_on_demand`, `context_canary:true`; München read it 05:40Z) — the staged file's PR starts
+  from the live options. On the card, still owed: a pinned copy and a twin behind the wrapper.
 
 - **PARKING BEHIND THE LIVE WRAPPER, ON THE CARD, ON A COPY (München, 01:22–01:25Z, the node embedding
   beside it): every junction has now run together — the patched server, main's wrapper (47bf02ea…), the

@@ -52,8 +52,10 @@ inject it. It does one HTTP GET, to ask the platform what a run stands for.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import threading
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
@@ -109,16 +111,7 @@ def record_batching(root: Path, name: str, role: str, run_id: str, measured: dic
     in the statement (no wire change): a statement's `batch_invariant` says
     only "as this peer contributed then", and on a node at EMBED_BATCH=1 that
     was one text a request — no evidence for a batch (2026-10-30)."""
-    p = _batching_file(root, name)
-    try:
-        got = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        got = {}
-    got[f"{role}:{run_id}"] = {k: int(v) for k, v in measured.items()}
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(got, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, p)
+    _record(_batching_file(root, name), f"{role}:{run_id}", {k: int(v) for k, v in measured.items()})
 
 
 def batching_measured(root: Path, name: str, role: str, run_id: str) -> dict[str, int] | None:
@@ -177,16 +170,8 @@ def record_contexts(root: Path, name: str, role: str, run_id: str, *, contexts: 
     loads and contexts together (`load_variation`). Read by `hold embedder
     check`'s report and `contexts_measured`. `/vega/keeps` cannot answer it
     afterwards: its counts start again at every load, and the gate reloads."""
-    p = _contexts_file(root, name)
-    try:
-        got = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        got = {}
-    got[f"{role}:{run_id}"] = {"contexts": int(contexts), "closest": float(closest), "at": at}
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(got, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, p)
+    _record(_contexts_file(root, name), f"{role}:{run_id}",
+            {"contexts": int(contexts), "closest": float(closest), "at": at})
 
 
 def contexts_measured(root: Path, name: str, role: str, run_id: str) -> dict[str, Any] | None:
@@ -203,28 +188,56 @@ def _parks_file(root: Path, name: str) -> Path:
     return directory(root, name).parent / "gate-parks.json"
 
 
+#: one writer at a time in this process: `check` runs on the embed stage's
+#: threads, and several borrow a sibling's record in the same moment
+_records_lock = threading.Lock()
+
+
+def _record(p: Path, key: str, value: dict[str, Any]) -> None:
+    """One key of a gate record file set, the file replaced whole — under a
+    lock and through a temporary name of this thread's own (eight threads of
+    `check_write` shared one name per pid: `FileNotFoundError` on the first
+    round, the review of 2026-11-26)."""
+    with _records_lock:
+        try:
+            got = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            got = {}
+        got[key] = value
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(f".{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(got, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, p)
+
+
+def statement_digest(body: dict[str, Any]) -> str:
+    """What names ONE statement's body among all a run may get: its bytes,
+    keys sorted (its seed and time are inside)."""
+    return "sha256:" + hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
 def record_parks(root: Path, name: str, role: str, run_id: str, *, cycles: int, closest: float,
-                 park_s: float | None, return_s: float | None, at: str) -> None:
+                 park_s: float | None, return_s: float | None, at: str, statement: str) -> None:
     """THE PARK CYCLES, COUNTED (`embedder.park_cycles`): how many
     park-and-return cycles the gate asked `run_id` after, each one the
     engine's own count, the closest an answer after a return came to the same
     text's first (1.0: the same bytes), and the median seconds of a park and
     of a return as the gate met them. LOCAL, as the batching and the contexts
     are (no wire change): the statement says only how far apart the run's
-    answers came (`load_variation`). Read by `check` — a model that parks NOW
-    is written from only where its run's cycles are on record — and by `hold
-    embedder check`'s report."""
-    p = _parks_file(root, name)
-    try:
-        got = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        got = {}
-    got[f"{role}:{run_id}"] = {"cycles": int(cycles), "closest": float(closest), "at": at,
-                               "park_s": park_s, "return_s": return_s}
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(got, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, p)
+    answers came (`load_variation`).
+
+    BOUND TO THE STATEMENT OF THE SAME PASS (`statement`: its body's digest).
+    The record is evidence for that verdict and no other: a pass whose
+    answers after a return differed keeps a FAILING statement and 64 counted
+    cycles, and counted alone they would admit the run on a statement another
+    pass made — its own older one, or a sibling collection's (the review of
+    2026-11-26, both reproduced). Read by `check` — a model that parks NOW is
+    written from only where the statement it is admitted by is the one its
+    cycles were counted for — and by `hold embedder check`'s report."""
+    _record(_parks_file(root, name), f"{role}:{run_id}",
+            {"cycles": int(cycles), "closest": float(closest), "at": at,
+             "park_s": park_s, "return_s": return_s, "statement": statement})
 
 
 def parks_measured(root: Path, name: str, role: str, run_id: str) -> dict[str, Any] | None:
@@ -238,34 +251,44 @@ def parks_measured(root: Path, name: str, role: str, run_id: str) -> dict[str, A
     return got if isinstance(got, dict) else None
 
 
-def _parks_counted(measured: dict[str, Any] | None) -> bool:
+def _parks_counted(measured: dict[str, Any] | None, body: dict[str, Any]) -> bool:
+    """PARK_CYCLES counted cycles, for THIS statement."""
     try:
-        return measured is not None and int(measured.get("cycles", 0)) >= emb.PARK_CYCLES
+        return (measured is not None and int(measured.get("cycles", 0)) >= emb.PARK_CYCLES
+                and measured.get("statement") == statement_digest(body))
     except (TypeError, ValueError):
         return False
 
 
-def parks_for_space(root: Path, name: str, codex: Codex, role: str, run_id: str, *,
-                    signer: str | None) -> dict[str, Any] | None:
-    """The park cycles `run_id` was gated on, for THIS SPACE: this
-    collection's own record, else that of another collection of the space on
-    this peer that holds a statement for the run — copied into this
-    collection's own, as its statement and its batching are
-    (`batching_for_space`: the gate runs once per (space, run))."""
+def parks_for_space(root: Path, name: str, codex: Codex, role: str, run_id: str,
+                    body: dict[str, Any], *, signer: str | None) -> dict[str, Any] | None:
+    """The park cycles counted for the statement `body` of `run_id`, for THIS
+    SPACE: this collection's own record, else that of another collection of
+    the space on this peer that holds THE SAME STATEMENT — one borrowed, as
+    `statements_for_space` copies it, byte for byte — copied into this
+    collection's own (`batching_for_space`: the gate runs once per (space,
+    run)). A sibling whose statement for the run is another one lends
+    nothing: its cycles are that verdict's."""
     own = parks_measured(root, name, role, run_id)
-    if _parks_counted(own):
+    if _parks_counted(own, body):
         return own
     for other in _others(root, name):
         theirs = parks_measured(root, other, role, run_id)
-        if not _parks_counted(theirs):
+        if not _parks_counted(theirs, body):
             continue
-        if run_id not in statements(root, other, codex, role, signer=signer):
-            continue                    # a record without the space's statement for the run
-        record_parks(root, name, role, run_id, cycles=int(theirs["cycles"]),
-                     closest=float(theirs.get("closest", 1.0)), park_s=theirs.get("park_s"),
-                     return_s=theirs.get("return_s"), at=str(theirs.get("at", "")))
+        held = statements(root, other, codex, role, signer=signer).get(run_id)
+        if held is None or statement_digest(held) != theirs.get("statement"):
+            continue                    # a record without the statement it was counted for
+        _record(_parks_file(root, name), f"{role}:{run_id}", dict(theirs))
         return theirs
     return own
+
+
+def parks_counted(root: Path, name: str, codex: Codex, role: str, run_id: str,
+                  body: dict[str, Any], *, signer: str | None) -> bool:
+    """Were PARK_CYCLES park cycles counted for this statement of the run —
+    here, or by a collection of the space that holds the same statement?"""
+    return _parks_counted(parks_for_space(root, name, codex, role, run_id, body, signer=signer), body)
 
 
 def keep(root: Path, name: str, statement: dict[str, Any]) -> Path:
@@ -670,7 +693,7 @@ def check(root: Path, name: str, codex: Codex, answered: set, *,
                 f"(version {body.get('version')}) does not say how many fresh contexts the gate "
                 f"counted; nothing from it is written until the gate has run again (03 §3.3, "
                 f"09 §9.12 version {emb.CONTEXTS_VERSION})", run_id)
-        if parks and not _parks_counted(parks_for_space(root, name, codex, role, run_id, signer=signer)):
+        if parks and not parks_counted(root, name, codex, role, run_id, body, signer=signer):
             # A MODEL THAT PARKS NOW, GATED WHILE IT DID NOT (its file gained
             # `park: true`, or the runner its patch, under the same run): a
             # return is an upload of the weights again, which that gate never
@@ -763,9 +786,11 @@ def validate(root: Path, name: str, codex: Codex, *, role: str, reference,
     if run.contexts:
         record_contexts(root, name, role, stated.run_id, contexts=run.contexts,
                         closest=run.context_variation, at=now)
-    if run.park_cycles and not run.park_failed:
+    if run.park_cycles:
+        # for THIS statement, pass or fail: what `check` holds the record to
         record_parks(root, name, role, stated.run_id, cycles=run.park_cycles,
-                     closest=run.park_variation, park_s=run.park_s, return_s=run.return_s, at=now)
+                     closest=run.park_variation, park_s=run.park_s, return_s=run.return_s, at=now,
+                     statement=statement_digest(statement["body"]))
     if on_run is not None:
         on_run(run)
     return statement["body"]

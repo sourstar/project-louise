@@ -307,14 +307,25 @@ def fresh_contexts(recipe, *, query: bool = False, stated=None, probe_item=PROBE
 
 
 def parks_now(recipe, query: bool = False) -> bool:
-    """Does this peer's runner say the side's model PARKS — from its last
-    `/system` answer, no request (`model_load.parks`)? What `runs.check`
-    holds a run's park cycles to. False where nothing is known: a model that
-    is not loaded parks nothing, and is read again when it is."""
+    """Does this peer's runner say the side's model PARKS (`model_load.parks`:
+    its `/system` row)? What `runs.check` holds a run's park cycles to.
+
+    From the last answer, without a request — but for a model a warm has just
+    loaded, whose row this process has not read yet (`model_load.row_read`):
+    the cached answer then lists it and says nothing of it, a check passed on
+    that silence, and the next one refused the same run (the review of
+    2026-11-26). There the runner is asked once, now. False where it cannot
+    say: a model that is not loaded parks nothing, and is read again when it
+    is."""
     from . import model_load
     url, model = _who(recipe, query)
     try:
-        return bool(url and model) and model in model_load.parks(model_load.server_of(url))
+        if not url or not model:
+            return False
+        server = model_load.server_of(url)
+        if not model_load.row_read(server, model):
+            model_load.loaded_models(server, 0.0)
+        return model in model_load.parks(server)
     except Exception:   # noqa: BLE001 — unread: nothing more is asked of the run
         return False
 
@@ -362,7 +373,8 @@ class Parker:
         (`model_load.returns_on_request`), so the answer held to the bytes is
         the first one computed on the weights that came back."""
         from . import model_load
-        with model_load.returns_on_request():
+        # ...and as the engine gave it: a NaN is not asked again (`unhealed`)
+        with model_load.returns_on_request(), embeddings.unhealed():
             v = self.one([text])[0]
         self.runs = (self.runs or set()) | set(self.one.runs)
         return v
@@ -376,12 +388,25 @@ class Parker:
         return own_unloads.since(key, max(time.time() - self._parked_at, 0.0)) is not None
 
     def parks(self) -> bool:
+        """Asked of the runner NOW. A runner with no `/system` is not LocalAI
+        and parks nothing. A LocalAI that does not answer, or does not list
+        the model that has just answered the gate's texts, DEFERS the gate: a
+        pass skipped on silence would certify a parking run on no cycle at
+        all (the review of 2026-11-26; `creates_per_request` defers on the
+        same silence)."""
         from . import model_load
         if not self.url or not self.model:
             return False
         server = model_load.server_of(self.url)
-        if model_load.loaded_models(server, 0.0) is None:
+        ids = model_load.loaded_models(server, 0.0)
+        if model_load.no_system_route(server):
             return False
+        if ids is None or self.model not in ids:
+            raise emb.GateDeferred(
+                f"{self.name}: the model server "
+                + ("did not answer" if ids is None else f"does not list {self.model} as loaded")
+                + " when the gate asked whether the model parks (`/system`); a run is not admitted on "
+                  "park cycles nobody could ask for, and the gate is tried again")
         return self.model in model_load.parks(server)
 
     def counts(self) -> tuple[int, int, int] | None:
@@ -389,8 +414,20 @@ class Parker:
         return model_load.park_counts(self.url, self.model)
 
     def prepare(self) -> None:
-        from . import localai_reclaimer, model_evict, model_load
-        floor = int(model_evict.rule()[1])
+        from . import localai_reclaimer, model_evict, model_load, platform_config, resident
+        server = model_load.server_of(self.url)
+        try:
+            floor = int(platform_config.load().models.page_floor_gib * model_evict.GIB)
+        except Exception as e:   # noqa: BLE001 — an unread file is not "no floor"
+            raise emb.GateDeferred(
+                f"{self.name}: the node's platform file could not be read ({type(e).__name__}), so the "
+                f"host floor for the gate's park cycles is not known; nothing is certified, and it is "
+                f"tried again") from None
+        if resident._settings_held(server):
+            # LocalAI's settings did not answer the keeper a moment ago: not asked again here
+            raise emb.GateDeferred(
+                f"{self.name}: LocalAI's settings are not being written for now (they did not answer the "
+                f"keeper), so its park floor cannot be confirmed for the gate's park cycles; tried again")
         if floor <= 0:
             raise emb.GateError(
                 f"{self.name}: {self.model}'s file says `park: true` and this node keeps no host floor "
@@ -398,7 +435,7 @@ class Parker:
                 f"and a run that asks to park is not admitted without them. Set the floor, or take "
                 f"`park: true` out of the model's file")
         try:
-            localai_reclaimer.set_park_floor(model_load.server_of(self.url), floor)
+            localai_reclaimer.set_park_floor(server, floor)
         except localai_reclaimer.NotTaken as e:
             raise emb.GateDeferred(
                 f"{self.name}: LocalAI's park floor could not be set for the gate's park cycles "
@@ -938,10 +975,7 @@ def _said(name: str, role: str, run_id: str, then: Callable[[Any], None] | None)
             if not run.ok:
                 log.warning("%s: the gate FAILED %s run %s…: %s", name, role, run_id[:23], run.why())
             elif getattr(run, "park_cycles", 0):
-                log.info("%s: %s run %s…: %d park cycles, each counted by the engine, the same bytes after "
-                         "every return%s", name, role, run_id[:23], run.park_cycles,
-                         "" if run.park_s is None or run.return_s is None else
-                         f" — a park {run.park_s:.2f} s, a return {run.return_s:.2f} s at the median")
+                log.info("%s: %s run %s…: %s", name, role, run_id[:23], run.parks_said())
         except Exception:   # noqa: BLE001 — a log line never ends a gate
             pass
         if then is not None:
@@ -1737,8 +1771,13 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
         suspect = _suspect(collection, "query")
         if suspect:
             _send_back(collection, run_id, "query", log)
-        if run_id in runs_mod.statements_for_space(_root(), name, codex, "query",
-                                                   signer=signer()):
+        held = runs_mod.statements_for_space(_root(), name, codex, "query", signer=signer()).get(run_id)
+        # A QUERY MODEL THAT PARKS NOW is held to its counted cycles as a
+        # document one is (`runs.check`): no vector of it is written, and a
+        # query embedded on weights that came back wrong searches a
+        # coherent-looking wrong neighbourhood all the same
+        if held is not None and not (parks_now(recipe, True) and not runs_mod.parks_counted(
+                _root(), name, codex, "query", run_id, held, signer=signer())):
             if recheck(_root(), name, codex, recipe, run_id, role="query", stop=stop,
                        log=log):
                 return

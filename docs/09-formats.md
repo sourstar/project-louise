@@ -2098,10 +2098,10 @@ its holder gates the run again before writing from it — not a failure.
 
 A run whose model parks (*amended 2026-11-26*; 03 §3.3) is asked after 64
 counted park-and-return cycles too. The statement has NO key for them: what
-the answers differ by is in `load_variation`, a return that failed makes it
-`"0"`, and that the cycles were counted is the holder's own record
-(`gate-parks.json`, beside its batching), which it requires before writing
-from a run whose model parks now.
+the answers differ by is in `load_variation`, and that the cycles were
+counted is the holder's own record (`gate-parks.json`, beside its batching),
+bound to the digest of the statement body of the same pass, which it
+requires before writing from a run whose model parks now.
 
 A peer keeps one statement per run it has validated, and a vector is
 written only from an answer naming a run with a passing statement for

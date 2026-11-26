@@ -173,13 +173,27 @@ failed there has spent seconds, not the gate's minutes.
 
 | what the gate meets | verdict |
 |---|---|
-| a park refused 409 (the model works), counts something else moved, a model found parked, a model the runner no longer holds | not a cycle: asked again, 10 times 3 s apart, then DEFERRED |
-| counts that STARTED AGAIN between the park and the answer | the return failed and a load answered in its place (200, the same vectors, the same run id): the run FAILS, and the fresh loads and contexts are not spent on it |
-| the same, where Louise itself stopped the parked model meanwhile (app/own_unloads.py: a question took the card) | not a cycle: asked again |
+| a park refused 409 (the model works), counts something else moved, a model found parked, a model the runner no longer holds | not a cycle: one text puts the model back on the card, the cycle is asked again, 10 times 3 s apart, then DEFERRED with the last reason |
+| counts that STARTED AGAIN between the park and the answer | the return failed and a load answered in its place (200, the same vectors, the same run id): REFUSED as a run that parks, and NO statement kept (below) |
+| the same, where Louise itself stopped the parked model meanwhile (app/own_unloads.py: a question took the card, another gate reloaded the shared load, a twin was let go) | not a cycle: asked again |
+| 500 `model_stopped` (the park broke its backend) | REFUSED, the same way |
 | 412 `cannot_park` | REFUSED: the file says `park: true` and the engine was not started with `GGML_SYCL_PARKABLE=1` |
 | 412 `host_memory_floor`, `parking_off` | deferred |
-| no counts to read | REFUSED after three reads |
+| `/system` silent, or not listing the model that has just answered | deferred: silence is never "does not park" |
+| a NaN after a return | a wrong answer: the run FAILS, statement kept. The gate's request is not healed by the client's retry (`embeddings.unhealed`) |
+| no counts to read | REFUSED after three reads. It is what a file with `park: true` on an engine WITHOUT `GGML_SYCL_PARKABLE=1` gives: `/system` lists `"parks": true` on the file's word, the engine's status is "Unimplemented" and the monitor answers 500 (Tensor, parking-step-2.md §12) — the refusal names the env line |
 | an answer that differs | counted in `load_variation`: fails an `exact` collection's run, admitted within 0.99999 for a `near` one |
+
+**Refused, not failed, and why.** A return that fails is answered by a fresh
+load: the vectors are right — fresh loads are what the gate certifies
+elsewhere — so nothing wrong was written, and the defect is the cold start
+nobody sees. A FAILING statement kept for it would replace the run's good
+one and stop its collection even after `park: true` is taken out again (the
+run id does not change with that line), on a verdict that a stop made by
+anything else — a tool, the kernel — would also produce. So the gate raises,
+keeps nothing, and says the two ways out; with the line out the model does
+not park, its statement stands and embedding goes on. While the line stays
+the gate is tried at every look and says the same thing.
 
 **The floor.** LocalAI parks nothing while `park_host_floor_bytes` is 0, and
 the keeper that sets it beats in the worker; a gate from the command line may
@@ -188,14 +202,20 @@ run with the worker stopped. The gate sets the same one value itself
 nothing: a model that asks to park is refused there, with the two ways out.
 
 **The statement is unchanged** (no wire change; the operator's third choice,
-not answered). A failed pass makes `load_variation` 0, an inexact one lowers
-it, as the fresh contexts do. What the statement cannot say — that the cycles
-were asked — the node records beside the batching
-(`gate-parks.json` beside `gate-batching.json`: cycles, closest, the median
-seconds of a park and of a return), and `runs.check` holds a model that parks NOW to it: a
-run gated while its model did not park (its file gained `park: true`, or the
-runner its patch, under the same run id) is gated again before anything is
-written from it. Putting `park_cycles` in the signed statement instead is
+not answered). An inexact return lowers `load_variation`, as a fresh context
+does. What the statement cannot say — that the cycles were asked — the node
+records beside the batching (`gate-parks.json` beside `gate-batching.json`:
+cycles, closest, the median seconds of a park and of a return, AND THE
+DIGEST OF THE STATEMENT BODY OF THE SAME PASS), and `runs.check` holds a
+model that parks NOW to it: a run gated while its model did not park (its
+file gained `park: true`, or the runner its patch, under the same run id) is
+gated again before anything is written from it. The digest is what the
+review of 2026-11-26 added: counted alone, the 64 cycles of a pass that
+FAILED on an inexact return admitted the run on another pass's statement —
+its own older one, or a sibling collection's. A sibling lends its cycles
+only together with the statement they were counted for. The query side is
+held to the same record by the look (`_look_at_the_query_side`): nobody
+writes a query's vector, so `runs.check` never sees it. Putting `park_cycles` in the signed statement instead is
 09 §9.12 version 7 — a wire change, one more gate of every parking run, and
 the only way a PEER can see the cycles were counted.
 
@@ -209,13 +229,32 @@ the card's bytes back at every return) is read in three places: the gate's
 report (`hold embedder check`: "parking … a park N s, a return N s at the
 median"), the evictor's line ("card: parked X (… MiB to host memory in N s)")
 and the load record ("parked: X came back from host memory in N s") — against
-0.14–0.23 s and 0.23–0.39 s on the card's copies without the check (§4).
+0.14–0.23 s and 0.23–0.39 s on the card's copies without the check (§4). The
+gate's own figures are what this node's client met: room made before the
+return and VeGa's receipt are inside them.
 
-**Open, asked of Tensor**: whether `/backend/park` parks a model LocalAI
-holds PINNED. The gate pins its model (the twin, or the shared load) for its
-whole length, so a server that refuses a pinned model would defer every such
-gate with the server's own word in the reason.
+**Open, the operator's**: the client asks a null or NaN vector again before
+anyone sees it (`embeddings._embed_batch`, "intermittent SYCL corruption").
+The park cycles now judge the engine's own first answer; the gate's other
+single-text passes — the two orders, the first text after a fresh load —
+still judge what the client's retry returned. Making them all judge the raw
+answer is one line, and would FAIL a run that gives a NaN once in a while
+and is healed today: a change of every encoder's gate, not taken here.
 
-The gate twin (`<model>--gate`) is the model's own file under another name:
-`park: true` and its `env` go with it, it states the same run, and its cycles
-are that run's.
+**A pinned model is parked** (asked of Tensor, answered 2026-11-26, off the
+node on the live build's tree e37b86e0…, parking-step-2.md §12): the park
+route does not look at the pin — HTTP 200, the engine counts it — whether the
+file says `pinned: true` or `toggle-pinned` set it. The pin is the
+watchdog's: LocalAI never parks a pinned model BY ITSELF. So the gate, which
+pins its model (the twin, or the shared load) for its whole length, parks it
+all the same. The pin does not hold the card's room for a model that is
+away: a return another load took the room of is 503, the client's deferral,
+and the gate is deferred.
+
+**The gate twin** (`<model>--gate`) is the model's own config-json under
+another name, written through `/models/import`: `park: true` (a config key
+with a json tag) and its `env` go with it, it states the same run, and its
+cycles are that run's (the same §12: the twin's file had `park: true`,
+`/system` listed it, it parked and came back, counts 1 and 1). NOT YET ON
+THE CARD: a pinned copy and a twin behind the wrapper — München runs both on
+copies after the deploy.

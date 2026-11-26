@@ -261,6 +261,7 @@ def reset() -> None:
         _run_on_demand.clear()
         _parks.clear()
         _parked.clear()
+        _unread.clear()
         _probe_locks.clear()
         _flights.clear()
         _recent.clear()
@@ -327,6 +328,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         _backends[server] = backends
         _parks[server] = parks
         _parked[server] = parked
+        _unread.difference_update({k for k in _unread if k[0] == server})
         for m in parked:
             # its present state on the card begins again when it is back: what
             # a park leaves is never "the model at rest" (`steady_vram`)
@@ -809,11 +811,26 @@ def park_counts(url: str, model: str | None) -> tuple[int, int, int] | None:
     return out[0], out[1], out[2]
 
 
+#: (server, model) noted loaded by a warm (`_note_loaded`) whose `/system` row
+#: this process has not read yet: the cached answer lists it and says nothing
+#: of it — not its size, not whether it parks (`row_read`)
+_unread: set[tuple[str, str]] = set()
+
+
+def row_read(server: str, model: str) -> bool:
+    """Whether what this process knows of `model` at `server` comes from a
+    `/system` row READ since the model was last noted loaded. False right
+    after a warm: `parks` then says nothing of it either way."""
+    with _lock:
+        return (server_of(server), model) not in _unread
+
+
 def _note_loaded(server: str, model: str) -> None:
     with _lock:
         got = _systems.get(server)
         if got is not None and got[1] is not None:
             _systems[server] = (got[0], got[1] | {model}, got[2])
+            _unread.add((server, model))
         # one that came back from a park is on the card from here on; the
         # next reading says what it holds
         _parked.get(server, {}).pop(model, None)
@@ -900,6 +917,8 @@ def ensure_loaded(url: str, model: str | None, warm: Callable[[float], object], 
         return None
     if back and _return_on_request.get():
         _make_room(server, model)
+        from app import model_evict
+        model_evict.load_ended(server, model, True)   # no warm of ours to end it: a paged room is not kept
         with _lock:
             _systems.pop(server, None)       # the request that follows changes what it says
         return None
