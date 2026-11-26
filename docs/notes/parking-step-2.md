@@ -1194,9 +1194,10 @@ process's first return:
 
 **How a gate asks for one cycle**, through LocalAI alone:
 
-1. Read the counts (`/backend/monitor`). None — a model that cannot park
-   has no `Status`, and LocalAI answers with a sample of the process instead
-   — means the clause cannot be checked: said in plain words, not passed.
+1. Read the counts (`/backend/monitor`). None — a model whose engine cannot
+   park has no `Status`, and the route answers HTTP 500 for it (§12;
+   LocalAI's fallback sample fails, localai-bugs.md B26) — means the clause
+   cannot be checked: said in plain words, not passed.
 2. `POST /backend/park {"model"}` once the model has been a second without
    a request. 409 `model_busy`: wait and ask again, bounded, and a model
    still busy at the bound is NOT a cycle. 412 `parking_off`, `cannot_park`,
@@ -1385,3 +1386,34 @@ cycles had rolled: their parts are not known, only their totals.
 any model but bge-m3 F16; the gate's sixteen fingerprint texts (the tool's
 sixteen sentences again, now with receipts) — the gated run of the first
 real model that parks.
+
+## 12. A pinned model, an imported twin, a file that says park where the engine cannot (2026-11-26)
+
+The gate pins its model — the twin `<model>--gate`, or the shared load — for
+its whole length, and will park it for the clause. The architecture
+session's questions, answered on the real server of §8 (the park engine's
+CPU build, the stand-in device), each line read off it:
+
+| asked | answered |
+|---|---|
+| **does `POST /backend/park` park a PINNED model?** | **YES: 200**, `{"message":"model parked","parked":{…}}`, the engine's counts `parks` 1, `parked` 1, `/system` "parked"; the next request brings it back, `unparks` 1. For a model pinned in its file (`pinned: true`) and for one pinned by `PUT /models/toggle-pinned/<name>/pin` alike. There is no status for "pinned": nothing to defer on |
+| what pinning still does | it is the WATCHDOG'S: a pinned model is left out of the idle, LRU and memory evictions, so LocalAI never parks one BY ITSELF. Under its own limit of one loaded model: asking for another model PARKED a parking model that was not pinned (`parks` 1), and left a pinned one loaded, untouched (`parks` 0), two models loaded |
+| what `toggle-pinned` does to a loaded model that parks | 200; the same process stays loaded; its file is rewritten whole, keys sorted, `park: true` kept and `pinned: true` added; `unpin` takes `pinned` out and keeps `park` |
+| **does `/api/models/config-json/<model>` return `park`?** | **YES**: `"park": true` for a model whose file says it; the key is ABSENT where the file does not |
+| **does a twin written through `/models/import` from it keep `park: true`?** | **YES**: the main config's JSON, renamed `copy--gate` and pinned, imported — 200 "Model configuration created successfully"; its file has `park: true` and `pinned: true`; `config-json` of the twin returns both; loaded, `/system` lists it as a model that parks; parked 200, back by the next request, counts 1 and 1 |
+| a twin of a model whose file has no `park` | no key; a park is 412 `cannot_park`, "its file does not say `park: true`" |
+| **the file says `park: true` and the ENGINE cannot park** (its switch is not in the model's env) | `/system` still lists `"parks": true` — that key is the FILE's word, not the engine's; `/backend/monitor` answers **500** "… code = Unimplemented desc = llama-cpp: no status for a model that cannot park, then failed local node process sample …"; the park is **412 `cannot_park`**, "its backend does not park"; the model stays loaded and serves |
+
+Three things follow for the gate.
+
+- Pinning does not reserve the card for a PARKED model: while the gate's
+  model is away another load may take the room, and the return is then the
+  503 `no_room_on_device` deferral, pinned or not.
+- A twin carries the engine's half only if it carries the main model's
+  `env`: `park: true` without `GGML_SYCL_PARKABLE=1` is the last row — 412,
+  and no counts. The import keeps the whole config, env included; the row
+  says what a twin that lost it would show.
+- "No counts" is a 500 from the route, not a 200 with other keys.
+
+**NOT shown:** a card (München's copies were never pinned); the twin behind
+the VeGa wrapper.

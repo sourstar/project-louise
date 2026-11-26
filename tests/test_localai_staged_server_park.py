@@ -375,3 +375,35 @@ def test_the_tool_s_sixteen_sentences_are_not_the_gate_s_fingerprints():
     tool = (ROOT / "tools" / "measure" / "park_http.py").read_text(encoding="utf-8")
     assert 'TEXTS = [f"sentence number {i}: the quick brown fox' in tool and "for i in range(16)]" in tool
     assert "fingerprint" not in tool.lower()
+
+
+def test_a_pinned_model_is_parked_when_told_and_never_by_the_watchdog_itself():
+    """§12, for the gate, which pins the model it parks. The explicit park does not look at the pin; the
+    watchdog's evictions skip a pinned model before any is chosen - upstream's lines, which the patch leaves."""
+    section = NOTE[NOTE.index("## 12. A pinned model, an imported twin, a file that says park where the engine cannot (2026-11-26)"):]
+    for said in ("| **does `POST /backend/park` park a PINNED model?** | **YES: 200**",
+                 "so LocalAI never parks one BY ITSELF", "left a pinned one loaded, untouched (`parks` 0)",
+                 "`park: true` kept and `pinned: true` added",
+                 "| **does `/api/models/config-json/<model>` return `park`?** | **YES**",
+                 "| **does a twin written through `/models/import` from it keep `park: true`?** | **YES**",
+                 "that key is the FILE's word, not the engine's", "the park is **412 `cannot_park`**, \"its backend does not park\"",
+                 "Pinning does not reserve the card for a PARKED model",
+                 "**NOT shown:** a card (München's copies were never pinned)"):
+        assert said in section, said
+    # the code that makes it so
+    patch = _text()
+    assert "func (ml *ModelLoader) ParkModel(ctx context.Context, modelName string) (ParkedState, error)" in patch
+    park_go = patch[patch.index("+++ b/pkg/model/park.go"):]
+    park_go = park_go[:park_go.index("\ndiff --git ", 10)]
+    assert "inned" not in park_go, "the explicit park does not ask whether the model is pinned"
+    # the config key travels through the import and the config route: a field of the model's configuration
+    assert 'Park *bool `yaml:"park,omitempty" json:"park,omitempty"`' in patch
+    for words in ("its file does not say `park: true`", "its backend does not park"):
+        assert words in patch, words
+    # §10's first step says what the route answers where there are no counts, as measured
+    assert "the route answers HTTP 500 for it (§12;" in NOTE
+    bugs = (ROOT / "docs" / "notes" / "localai-bugs.md").read_text(encoding="utf-8")
+    assert "defects found (B1–B26)" in bugs
+    row = next(line for line in bugs.splitlines() if line.startswith("| B26 | defect |"))
+    assert "`config.Model + \".bin\"`" in row and "**to file upstream**" in row
+
