@@ -959,8 +959,13 @@ measured (published figures disagree).
   sampled every second (CPU busy %, load average, RAM and swap, each card's VRAM and its processes; the models
   loaded and parked per server at the start and the end), the node's `models` event lines meanwhile (web and
   worker: cold starts, loads, evictions, parks, returns), the query, the top 50 hits with their scores and
-  `moved_by`, and the answer's text. Nobody else's question is read. Only the relay (the Ask page);
-  `/ask/query`, `/v1/chat/completions` and MCP are not traced yet.
+  `moved_by`, and the answer's text. Nobody else's question is read. EVERY WAY AN ADMIN ASKS: the relay, `/ask/query`,
+  `/v1/chat/completions`, `/api/ask/search|chat|pdf|lookup|traverse`, MCP over HTTP and `ask serve`'s stdio. After
+  architecture's read (2026-11-26): the end time is the question's (a 1.3 s job had been written as 2,301 ms);
+  the web's own model lines ("unloaded before the search", "loading ahead") now reach the event log
+  (`question_card.set_log` at the web's start); `/system` from model_load's cache, never a read a question's
+  fresh one waits behind; a card's process list only when it changed; the answer's `read` count. OWED: the
+  GPU probe's `/gpu` scan cost on the node, once (measuring.md), when the branch is in a release.
 - **The voice: the first sentence whole and at half the steps; a ping when the microphone is ready (operator,
   2026-11-26).** (1) A reading's sentence 0 is made at half `[speech] tts_steps` (the model's 32 when unset: 16),
   every later one at full (`speech.first_steps`; the steps are in the kept clip's key). (2) The first sentence is

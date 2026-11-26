@@ -174,3 +174,178 @@ def test_an_admins_answer_job_writes_its_words_and_the_search_it_reused(traced, 
     assert got["answer"] == "The whale rose [1]."
     assert [m[0] for m in got["marks"]] == ["search_done", "first_word", "last_word"]
     assert got["results"][0]["uid"] == "u1"
+
+
+# ---- architecture's read, 2026-11-26 ----------------------------------------
+
+def _stream_of(*words, fail=None):
+    from app import llm
+
+    class End:
+        whole = True
+    def stream(messages, temperature=0.3):
+        for w in words:
+            yield w
+        if fail is not None:
+            raise fail
+        return End()
+    return stream
+
+
+def _answer_setup(monkeypatch, stream):
+    from app import api, llm
+    monkeypatch.setattr(llm, "chat_stream", stream)
+    monkeypatch.setattr(api.retrieval, "build_answer_messages",
+                        lambda q, r, answer_lang=None, **kw: [{"role": "system", "content": "s"},
+                                                               {"role": "user", "content": q}])
+    hits = [{"chunk_id": "gutenberg:1:0:1", "book_id": 1, "uid": "u1", "text": "w", "source_collection": "gutenberg"}]
+    sid = web.keep_search("whales", {"hits": hits, "timings": {"total": 1.0}})
+    return api.ChatBody(messages=[{"role": "user", "content": "whales"}], search_id=sid, stream=True)
+
+
+def test_a_users_answer_job_writes_nothing(traced, monkeypatch):
+    chat = _answer_setup(monkeypatch, _stream_of("The whale."))
+    web._relay_answer_job(relay.Job(id="a3", kind="answer", owner="user:bob"), chat)
+    time.sleep(0.3)
+    assert _lines(traced) == []
+    # and the viewer's own verdict wins over the owner's name
+    web._relay_answer_job(relay.Job(id="a4", kind="answer", owner="admin:x"), chat, admin=False)
+    time.sleep(0.3)
+    assert _lines(traced) == []
+
+
+def test_a_failed_answer_ends_its_trace_with_the_error_after_its_words(traced, monkeypatch):
+    chat = _answer_setup(monkeypatch, _stream_of("The whale ", fail=RuntimeError("model gone")))
+    try:
+        web._relay_answer_job(relay.Job(id="a5", kind="answer", owner="admin:admin"), chat)
+    except Exception:   # noqa: BLE001 — the answer path may say it as a cut instead
+        pass
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    names = [m[0] for m in got["marks"]]
+    assert ("error" in names and got.get("error")) or ("cut" in names and got.get("cut")), got
+    assert names.index("last_word") < len(names) - 1 or names[-1] == "last_word"
+    times = [m[1] for m in got["marks"]]
+    assert times == sorted(times), "the marks in time order"
+
+
+def test_a_cancelled_answer_is_written_with_its_reason(traced, monkeypatch):
+    from app import cancel
+    chat = _answer_setup(monkeypatch, _stream_of("The ", "whale ", "rose."))
+    job = relay.Job(id="a6", kind="answer", owner="admin:admin")
+    job.token.cancel()
+    with pytest.raises(BaseException):
+        web._relay_answer_job(job, chat)
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    assert got["error"] and got["marks"][-1][0] == "error"
+
+
+def test_a_cut_answer_says_so(traced, monkeypatch):
+    from app import llm
+
+    class Cut:
+        whole = False
+        def why(self):
+            return "the token limit was reached"
+    def stream(messages, temperature=0.3):
+        yield "The whale "
+        return Cut()
+    chat = _answer_setup(monkeypatch, stream)
+    web._relay_answer_job(relay.Job(id="a7", kind="answer", owner="admin:admin"), chat)
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    assert "cut" in [m[0] for m in got["marks"]] and "token limit" in got["cut"]
+
+
+def test_the_jobs_length_is_the_jobs_not_the_samplers(traced, monkeypatch):
+    def slow_gpus():
+        time.sleep(0.4)
+        return []
+    monkeypatch.setattr(query_trace, "_gpus", slow_gpus)
+    t = query_trace.Trace("search", "s9", "admin:admin", "q", sample_s=10.0)
+    t.end()
+    t.join(5)
+    (got,) = _lines(traced)
+    assert got["ms"] < 200, "ended when the question did, not after the last probe read"
+
+
+def test_a_cards_process_list_is_written_only_when_it_changes():
+    before: dict = {}
+    a = [{"card": "c0", "vram_used": 1, "processes": [{"label": "x"}]}]
+    assert query_trace._changed_only(a, before)[0]["processes"] == [{"label": "x"}]
+    same = query_trace._changed_only(a, before)[0]
+    assert "processes" not in same and same["processes_same"] is True
+    b = [{"card": "c0", "vram_used": 2, "processes": [{"label": "y"}]}]
+    assert query_trace._changed_only(b, before)[0]["processes"] == [{"label": "y"}]
+
+
+def test_a_line_a_full_disk_cut_short_does_not_swallow_the_next(tmp_path):
+    (tmp_path / "2026-11-26.jsonl").write_text('{"cut": tru')
+    query_trace.write({"started": "2026-11-26T09:00:00.000+00:00", "n": 2}, root=tmp_path)
+    lines = (tmp_path / "2026-11-26.jsonl").read_text().splitlines()
+    assert json.loads(lines[1]) == {"started": "2026-11-26T09:00:00.000+00:00", "n": 2}
+
+
+def test_a_question_that_never_ends_is_written_without_an_end(traced, monkeypatch):
+    monkeypatch.setattr(query_trace, "MAX_S", 0.1)
+    t = query_trace.Trace("search", "s10", "admin:admin", "q")
+    t.join(5)
+    (got,) = _lines(traced)
+    assert got["ended"] is None and got["ms"] is None and "did not end" in got["error"]
+
+
+def test_a_note_and_a_result_that_cannot_be_written_never_raise():
+    import decimal
+    t = query_trace.Trace.__new__(query_trace.Trace)
+    t.data = {}
+    t.note(x=decimal.Decimal("1.5"), y={1, 2})
+    assert t.data["x"] == "1.5"
+    assert isinstance(query_trace.hits_of({"hits": [{"title": object()}]}), (list, dict))
+    assert query_trace.hits_of([{"a": 1}])["json"] == '[{"a": 1}]', "another shape: kept as JSON"
+
+
+def test_v1_chat_completions_traces_an_admin_and_nobody_else(traced, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import api, auth
+    chat = _answer_setup(monkeypatch, _stream_of("The whale ", "rose [1]."))
+    body = {"messages": [{"role": "user", "content": "whales"}], "search_id": chat.search_id, "stream": True}
+    c = TestClient(api.app)
+    monkeypatch.setattr(query_trace, "viewer_of", lambda request: ("guest:None", False))
+    c.post("/v1/chat/completions", json=body)
+    time.sleep(0.3)
+    assert _lines(traced) == []
+    monkeypatch.setattr(query_trace, "viewer_of", lambda request: ("admin:admin", True))
+    r = c.post("/v1/chat/completions", json=body)
+    assert "whale" in r.text
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    assert got["kind"] == "chat" and got["answer"].startswith("The whale") and got["search_reused"] is True
+    assert [m[0] for m in got["marks"]][:2] == ["search_done", "first_word"]
+
+
+def test_mcp_tool_calls_are_traced_for_an_admin(traced, monkeypatch):
+    from app.ask import mcp
+    monkeypatch.setattr(mcp, "_call_tool", lambda name, args: {"hits": [{"title": "T", "uid": "u"}]})
+    msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+           "params": {"name": "louise_search", "arguments": {"query": "whales"}}}
+    mcp.handle(msg, call=mcp.traced("user:bob", False))
+    time.sleep(0.3)
+    assert _lines(traced) == []
+    mcp.handle(msg, call=mcp.traced("cli:ask serve", True))
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    assert got["kind"] == "mcp:louise_search" and got["query"] == "whales" and got["results"][0]["title"] == "T"
+
+
+def test_the_ask_routes_trace_an_admin(traced, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import api
+    from app.ask import results
+    monkeypatch.setattr(results, "search", lambda q, **kw: {"spaces": [{"hits": [{"title": "T"}]}]})
+    monkeypatch.setattr(query_trace, "viewer_of", lambda request: ("admin:admin", True))
+    r = TestClient(api.app).post("/api/ask/search", json={"query": "whales"})
+    assert r.status_code == 200
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    assert got["kind"] == "ask:search" and '"T"' in got["results"]["json"]

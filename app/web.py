@@ -1156,12 +1156,28 @@ async def ask_query(request: Request, body: AskQueryBody):
     """The Ask page's search, stopped if the page's request goes — a reader
     who asks again, or closes the tab, leaves no search running for nobody
     (app/cancel.py)."""
+    from . import query_trace
+    who, admin = query_trace.viewer_of(request)
+    trace = query_trace.start("search", "query-" + secrets.token_hex(6), who, body.query, admin=admin)
     try:
         result = await cancel.while_connected(request, _ask_result, body)
     except cancel.Cancelled:
+        if trace is not None:
+            trace.end(error="cancelled: the page's request went")
         return Response(status_code=499)
+    except BaseException as e:
+        if trace is not None:
+            trace.end(error=f"{type(e).__name__}: {e}")
+        raise
+    sid = keep_search(body.query, result)
+    if trace is not None:
+        trace.mark("search_done")
+        trace.search_id = sid
+        trace.note(speed=body.speed, collections=body.collections, timings=result.get("timings"),
+                   results=query_trace.hits_of(result))
+        trace.end()
     resp = TEMPLATES.TemplateResponse(request, "_ask_results.html", {"result": result})
-    resp.headers["X-Louise-Search"] = keep_search(body.query, result)
+    resp.headers["X-Louise-Search"] = sid
     return resp
 
 
@@ -1277,13 +1293,13 @@ def _rerank_verdict(result: dict) -> str:
             + "; ".join(f"{n or 'the list'}: {why.get(n) or 'no reranker or no hits'}"[:200] for n in kept))
 
 
-def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
+def _relay_search(job: relay.Job, body: AskQueryBody, admin: bool | None = None) -> None:
     # THE CARD FOR THE QUESTION (docs/notes/ask-card-workflow.md spec 3–4;
     # app/question_card.py): room for the query encoders before, the answer's
     # models after — behind, so the results are not held
     from . import question_card, query_trace
     # an admin's question, traced for timing and quality (app/query_trace.py)
-    trace = query_trace.start("search", job.id, job.owner, body.query)
+    trace = query_trace.start("search", job.id, job.owner, body.query, admin=admin)
     try:
         result = _relay_search_traced(job, body, trace)
     except BaseException as e:
@@ -1322,13 +1338,13 @@ def _relay_search_traced(job: relay.Job, body: AskQueryBody, trace) -> dict:
     return result
 
 
-def _relay_answer_job(job: relay.Job, chat) -> None:
+def _relay_answer_job(job: relay.Job, chat, admin: bool | None = None) -> None:
     """`_relay_answer`, an admin's traced (app/query_trace.py) and joined to
     its search by `search_id`."""
     from . import api, query_trace
     user = [m for m in chat.messages if m.get("role") == "user"]
     query = api._text_of(user[-1].get("content", "")) if user else ""
-    trace = query_trace.start("answer", job.id, job.owner, query, search_id=chat.search_id)
+    trace = query_trace.start("answer", job.id, job.owner, query, admin=admin, search_id=chat.search_id)
     try:
         _relay_answer(job, chat, trace)
     except BaseException as e:
@@ -1379,6 +1395,8 @@ def _relay_answer(job: relay.Job, chat, trace=None) -> None:
                 # how many of the sources the answer was given (api._fit_answer):
                 # the others are marked on the page and in its PDF
                 job.emit("read", count=value)
+                if trace is not None:
+                    trace.note(read=value)
             elif kind == "cut":
                 if trace is not None:
                     trace.mark("cut")
@@ -1411,11 +1429,13 @@ def ask_active():
 def relay_start(request: Request, body: RelayBody):
     """Start the page's search or answer as a job; `{"id"}` to listen to."""
     owner = _relay_owner(request)
+    from . import auth
+    admin = auth.admin(getattr(request.state, "viewer", None))
     if body.kind == "search":
         if body.search is None:
             raise HTTPException(422, "a search job needs `search`")
         q = body.search
-        job = relay.start("search", owner, lambda j: _as_question(_relay_search, j, q), label=q.query,
+        job = relay.start("search", owner, lambda j: _as_question(lambda jj, qq: _relay_search(jj, qq, admin), j, q), label=q.query,
                           replaces=body.replaces)
     else:
         from .api import ChatBody
@@ -1423,7 +1443,7 @@ def relay_start(request: Request, body: RelayBody):
             chat = ChatBody(**{**(body.answer or {}), "stream": True})
         except Exception as e:   # noqa: BLE001 — pydantic's message, to the page
             raise HTTPException(422, f"an answer job needs /v1/chat/completions' body: {e}")
-        job = relay.start("answer", owner, lambda j: _as_question(_relay_answer_job, j, chat),
+        job = relay.start("answer", owner, lambda j: _as_question(lambda jj, cc: _relay_answer_job(jj, cc, admin), j, chat),
                           label=str((chat.messages or [{}])[-1].get("content", ""))[:80],
                           replaces=body.replaces)
     return {"id": job.id}

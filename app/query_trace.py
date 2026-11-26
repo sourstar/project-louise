@@ -4,8 +4,11 @@ loaded, system and gpu memory usage, cpu load, load/unload/parking of the
 models, together with query and results for a full analysis of both speed
 and quality").
 
-ONE JSON LINE PER QUESTION JOB of an admin (the Ask page's relay: a search,
-or an answer), in `state/query-traces/<UTC day>.jsonl`. Joined by
+ONE JSON LINE PER QUESTION of an admin, in `state/query-traces/<UTC
+day>.jsonl`, wherever it is asked: the Ask page's relay (a search, an
+answer) and its `/ask/query`, `/v1/chat/completions`, `ask` over HTTP
+(`/api/ask/search|chat|pdf|lookup|traverse`) and MCP (`/api/ask/mcp`, and
+`ask serve`'s stdio, which only the node's operator can run). Joined by
 `search_id` (an answer that reused the page's search names it). A line:
 
 - `kind`, `job`, `who`, `query`, `search_id`, `started` / `ended` (UTC ISO,
@@ -14,11 +17,15 @@ or an answer), in `state/query-traces/<UTC day>.jsonl`. Joined by
   `last_word`, `cut`, `error` — and `timings`, the search's own per stage
   (app/retrieval.py: languages, catalog, fts, dense, rerank, per collection);
 - `samples`: the node every `SAMPLE_S` from the start to the end — `ms`,
-  CPU busy % since the sample before (/proc/stat), the load average, RAM
-  total / available / swap used (/proc/meminfo), and per card its VRAM used
-  and each process's VRAM, host GTT and label (the GPU probe, GPU_PROBE_URL);
-  the first and the last sample also carry `models`: per model server, what
-  `/system` says is loaded and what is parked;
+  CPU busy % since the sample before (/proc/stat; the first is taken
+  `FIRST_S` in, so it has an interval), the load average, RAM total /
+  available / swap used (/proc/meminfo), and per card its VRAM used and —
+  where it changed since the sample before — each process's VRAM, host GTT
+  and label (the GPU probe, GPU_PROBE_URL); the first and the last sample
+  also carry `models`: per model server (the chat, rerank and translation
+  servers and every collection's encoders), what `/system` says is loaded and
+  what is parked, from model_load's cache (never a read of its own that a
+  question's fresh read would wait behind);
 - `model_events`: the node's `models` lines written meanwhile, by the web and
   by the worker (cold starts, loads, evictions, parks and returns, pins:
   db.NODE_STAGES `models`, read from the events table they are written to);
@@ -57,8 +64,9 @@ from typing import Any
 
 from app import config
 
-#: how often the node is sampled while a question runs
+#: how often the node is sampled while a question runs, and when the first is
 SAMPLE_S = 1.0
+FIRST_S = 0.1
 #: the days of traces kept
 KEEP_DAYS = 30
 #: the hits of a result kept, and the characters of each passage
@@ -129,15 +137,37 @@ def _gpus() -> list[dict] | dict:
             for d in got.get("devices") or ()]
 
 
+def _changed_only(cards, before: dict[str, Any]) -> Any:
+    """Each card's process list only where it differs from the sample before
+    (`before`: card -> its last list, updated); else `processes_same`."""
+    if not isinstance(cards, list):
+        return cards
+    out = []
+    for c in cards:
+        c = dict(c)
+        procs = c.get("processes")
+        if procs == before.get(c.get("card")):
+            c.pop("processes", None)
+            c["processes_same"] = True
+        else:
+            before[c.get("card")] = procs
+        out.append(c)
+    return out
+
+
 def _servers() -> list[str]:
-    from app import model_load
-    urls = [config.CHAT_URL, config.RERANK_URL, config.TRANSLATE_URL]
+    """The model servers a question meets: chat, rerank, translation, and
+    every collection's encoders and reranker (gpu_models.origins)."""
+    from app import collections as collections_mod, gpu_models, model_load
+    try:
+        cols = collections_mod.load_all()
+    except Exception:   # noqa: BLE001 — the node's own servers still
+        cols = []
     out: list[str] = []
-    for u in urls:
-        if u:
-            s = model_load.server_of(u)
-            if s not in out:
-                out.append(s)
+    for u in gpu_models.origins(cols, [config.CHAT_URL, config.RERANK_URL, config.TRANSLATE_URL]):
+        s = model_load.server_of(u)
+        if s not in out:
+            out.append(s)
     return out
 
 
@@ -147,7 +177,7 @@ def _models() -> dict[str, Any]:
     out: dict[str, Any] = {}
     for s in _servers():
         try:
-            loaded = model_load.loaded_models(s, max_age_s=0.0)
+            loaded = model_load.loaded_models(s)
             out[s] = {"loaded": sorted(loaded) if loaded is not None else None,
                       "parked": sorted(model_load.parked(s))}
         except Exception as e:   # noqa: BLE001 — recorded, never raised
@@ -178,7 +208,21 @@ def _safe(fn, *args):
         return {"error": f"{type(e).__name__}: {e}"[:300]}
 
 
-def hits_of(result: dict) -> list[dict]:
+def hits_of(result: Any) -> list[dict] | dict:
+    """The hits as ranked; a result of another shape (ask over HTTP, MCP)
+    kept as JSON, cut at RESULT_CHARS. Never raises (`_safe`)."""
+    got = _safe(_hits_of, result)
+    return got
+
+
+#: a result that is not a hit list, kept to this many characters of JSON
+RESULT_CHARS = 20_000
+
+
+def _hits_of(result: Any) -> list[dict] | dict:
+    if not (isinstance(result, dict) and isinstance(result.get("hits"), list)):
+        text = json.dumps(result, ensure_ascii=False, default=str)
+        return {"json": text[:RESULT_CHARS], "chars": len(text)}
     out = []
     for rank, h in enumerate((result or {}).get("hits") or [], 1):
         if not isinstance(h, dict):
@@ -210,6 +254,8 @@ class Trace:
         self.samples: list[dict] = []
         self._answer: list[str] = []
         self._ended = threading.Event()
+        self._t1: float | None = None
+        self._cards: dict[str, Any] = {}
         self._sample_s = SAMPLE_S if sample_s is None else sample_s
         self._cpu = _cpu_times()
         self._thread = threading.Thread(target=self._run, name=f"query-trace-{job}", daemon=True)
@@ -222,7 +268,11 @@ class Trace:
         self.marks.append([name, self.ms()])
 
     def note(self, **data: Any) -> None:
-        self.data.update(data)
+        """Facts of the question; never raises into it."""
+        try:
+            self.data.update({k: json.loads(json.dumps(v, default=str)) for k, v in data.items()})
+        except Exception as e:   # noqa: BLE001
+            self.data.setdefault("note_errors", []).append(f"{type(e).__name__}: {e}"[:200])
 
     def word(self, text: str) -> None:
         """A delta of the answer: its first and last times, and its text."""
@@ -232,12 +282,17 @@ class Trace:
         self._last_word = self.ms()
 
     def end(self, error: str | None = None) -> None:
-        if error:
-            self.mark("error")
-            self.data["error"] = error[:500]
+        """The question is over: its end time is now, not when the sampler
+        has read the node once more."""
+        if self._ended.is_set():
+            return
+        self._t1 = time.time()
         if self._answer:
             self.marks.append(["last_word", getattr(self, "_last_word", self.ms())])
             self.data["answer"] = "".join(self._answer)
+        if error:
+            self.mark("error")
+            self.data["error"] = error[:500]
         self._ended.set()
 
     # -- the sampler's thread --
@@ -252,12 +307,13 @@ class Trace:
         if mem:
             s["ram"] = {"total": mem.get("MemTotal"), "available": mem.get("MemAvailable"),
                         "swap_used": (mem.get("SwapTotal", 0) - mem.get("SwapFree", 0)) or 0}
-        s["gpus"] = _safe(_gpus)
+        s["gpus"] = _changed_only(_safe(_gpus), self._cards)
         if with_models:
             s["models"] = _safe(_models)
         return s
 
     def _run(self) -> None:
+        self._ended.wait(FIRST_S)              # the first CPU % has an interval
         self.samples.append(self._sample(True))
         deadline = time.monotonic() + MAX_S
         while not self._ended.wait(self._sample_s):
@@ -273,24 +329,56 @@ class Trace:
                   flush=True)
 
     def record(self) -> dict:
-        t1 = time.time()
+        """The line. A question that never ended (MAX_S) has no end: `ended`
+        and `ms` are null, and its error says so."""
+        t1 = self._t1
         return {"kind": self.kind, "job": self.job, "who": self.who, "query": self.query,
-                "search_id": self.search_id, "started": _iso(self.t0), "ended": _iso(t1),
-                "ms": round((t1 - self.t0) * 1000, 1), "marks": self.marks, **self.data,
-                "samples": self.samples, "model_events": _safe(_model_events, self.t0 - 1, t1)}
+                "search_id": self.search_id, "started": _iso(self.t0),
+                "ended": _iso(t1) if t1 is not None else None,
+                "ms": round((t1 - self.t0) * 1000, 1) if t1 is not None else None,
+                "marks": self.marks, **self.data, "samples": self.samples,
+                "model_events": _safe(_model_events, self.t0 - 1, t1 if t1 is not None else time.time())}
 
     def join(self, timeout: float | None = None) -> None:
         self._thread.join(timeout)
 
 
-def start(kind: str, job: str, owner: str | None, query: str, **kw: Any) -> Trace | None:
-    """A trace for an admin's job; None for anyone else (nothing is read)."""
-    if not is_admin(owner):
+def start(kind: str, job: str, who: str | None, query: str, *, admin: bool | None = None,
+          **kw: Any) -> Trace | None:
+    """A trace for an admin's question; None for anyone else (nothing is
+    read). `admin`: the viewer's own verdict (auth.admin); None reads it from
+    a relay owner's role (`is_admin`)."""
+    if not (admin if admin is not None else is_admin(who)):
         return None
     try:
-        return Trace(kind, job, str(owner), query, **kw)
+        return Trace(kind, job, str(who), query, **kw)
     except Exception:   # noqa: BLE001 — no trace, the question as before
         return None
+
+
+def viewer_of(request: Any) -> tuple[str, bool]:
+    """(who, admin) of an HTTP request (the auth middleware's viewer)."""
+    from app import auth
+    v = getattr(getattr(request, "state", None), "viewer", None)
+    who = f"{v.role}:{v.name}" if v is not None else "nobody"
+    return who, auth.admin(v)
+
+
+def run(kind: str, who: str, admin: bool, query: str, fn, *args: Any, **kw: Any) -> Any:
+    """`fn(*args, **kw)`, an admin's traced: its result kept (`hits_of`) and
+    an exception recorded, then raised as it was."""
+    import secrets
+    trace = start(kind, secrets.token_hex(6), who, query, admin=admin)
+    if trace is None:
+        return fn(*args, **kw)
+    try:
+        out = fn(*args, **kw)
+    except BaseException as e:
+        trace.end(error=f"{type(e).__name__}: {e}")
+        raise
+    trace.note(results=hits_of(out))
+    trace.end()
+    return out
 
 
 _write_lock = threading.Lock()
@@ -304,8 +392,13 @@ def write(record: dict, root: Path | None = None) -> Path:
     line = json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str) + "\n"
     with _write_lock:
         fresh = not path.exists()
-        with path.open("a", encoding="utf-8") as f:
-            f.write(line)
+        with path.open("a+b") as f:
+            # a line a full disk cut short is ended first, so this one stays whole
+            if f.seek(0, 2) > 0:
+                f.seek(-1, 2)
+                if f.read(1) != b"\n":
+                    f.write(b"\n")
+            f.write(line.encode("utf-8"))
         if fresh:
             _prune(d, day)
     return path

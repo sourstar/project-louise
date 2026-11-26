@@ -46,12 +46,14 @@ class SearchBody(BaseModel):
 
 
 @router.post("/search")
-async def search(body: SearchBody) -> JSONResponse:
+async def search(body: SearchBody, request: Request) -> JSONResponse:
     from starlette.concurrency import run_in_threadpool
+    from app import query_trace
     from app.ask import results
+    who, admin = query_trace.viewer_of(request)
     try:
         out = await run_in_threadpool(
-            results.search, body.query, collections=body.collections, space=body.space, filters=body.filters,
+            query_trace.run, "ask:search", who, admin, body.query, results.search, body.query, collections=body.collections, space=body.space, filters=body.filters,
             limit=body.limit, rerank_depth=body.rerank_depth, as_of=body.as_of, freshness=body.freshness,
             translate=body.translate, all_languages=body.all_languages, annotations=body.annotations,
             history=body.history)
@@ -72,15 +74,18 @@ class ChatBody(BaseModel):
 
 
 @router.post("/chat")
-async def chat(body: ChatBody) -> JSONResponse:
+async def chat(body: ChatBody, request: Request) -> JSONResponse:
     """`ask chat` over HTTP (05 §5.4; 07 §7.4): the answer with every tool
     call made and what it returned. `/v1/chat/completions` stays what it
     was — retrieval then an answer, for clients that speak that protocol."""
     import json
     from starlette.concurrency import run_in_threadpool
+    from app import query_trace
     from app.ask import chat as chat_mod
+    who, admin = query_trace.viewer_of(request)
     try:
-        out = await run_in_threadpool(chat_mod.ask, body.question, collections=body.collections,
+        out = await run_in_threadpool(query_trace.run, "ask:chat", who, admin, body.question,
+                                      chat_mod.ask, body.question, collections=body.collections,
                                       history=body.history, answer_lang=body.answer_lang,
                                       speed=body.speed)
     except CodexError as e:
@@ -123,8 +128,10 @@ async def pdf(body: PdfBody, request: Request):
             doc = ask_pdf.from_given(body.question, body.answer, body.references or [], paper=body.paper,
                                      tz=body.tz, answer_lang=body.answer_lang, collections=body.collections)
         else:
-            out = chat_mod.ask(body.question, collections=body.collections, answer_lang=body.answer_lang,
-                               passages=True)
+            from app import query_trace
+            who, admin = query_trace.viewer_of(request)
+            out = query_trace.run("ask:pdf", who, admin, body.question, chat_mod.ask, body.question,
+                                  collections=body.collections, answer_lang=body.answer_lang, passages=True)
             doc = ask_pdf.from_chat(body.question, out, paper=body.paper, tz=body.tz, collections=body.collections)
         return ask_pdf.make(doc, base_url=base)
     try:
@@ -169,9 +176,11 @@ class LookupBody(BaseModel):
 
 
 @router.post("/lookup")
-async def lookup(body: LookupBody) -> JSONResponse:
+async def lookup(body: LookupBody, request: Request) -> JSONResponse:
+    from app import query_trace
     from app.ask import lookup as lookup_mod
-    return _answer(lookup_mod.lookup, body.id)
+    who, admin = query_trace.viewer_of(request)
+    return _answer(query_trace.run, "ask:lookup", who, admin, body.id, lookup_mod.lookup, body.id)
 
 
 class TraverseBody(BaseModel):
@@ -183,11 +192,14 @@ class TraverseBody(BaseModel):
 
 
 @router.post("/traverse")
-async def traverse(body: TraverseBody) -> JSONResponse:
+async def traverse(body: TraverseBody, request: Request) -> JSONResponse:
     from starlette.concurrency import run_in_threadpool
+    from app import query_trace
     from app.ask import traverse as traverse_mod
+    who, admin = query_trace.viewer_of(request)
     try:
-        out = await run_in_threadpool(traverse_mod.traverse, body.id, relation=body.relation,
+        out = await run_in_threadpool(query_trace.run, "ask:traverse", who, admin, body.id,
+                                      traverse_mod.traverse, body.id, relation=body.relation,
                                       depth=body.depth, collection=body.collection, resolve_in=body.resolve_in)
     except CodexError as e:
         code = int(getattr(e, "exit_code", 2))
@@ -308,10 +320,12 @@ async def mcp_route(request: Request) -> JSONResponse:
     except ValueError:
         return JSONResponse({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "not JSON"}},
                             status_code=400)
+    from app import query_trace
+    call = mcp.traced(*query_trace.viewer_of(request))
     if isinstance(message, list):
-        answers = [r for r in [await run_in_threadpool(mcp.handle, m) for m in message] if r is not None]
+        answers = [r for r in [await run_in_threadpool(mcp.handle, m, call=call) for m in message] if r is not None]
         return JSONResponse(answers) if answers else Response(status_code=202)
-    response = await run_in_threadpool(mcp.handle, message)
+    response = await run_in_threadpool(mcp.handle, message, call=call)
     if response is None:
         return Response(status_code=202)
     return JSONResponse(response)
