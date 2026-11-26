@@ -1484,8 +1484,8 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     if counters.get("waiting_units"):
         db.log_event(con, "info", "acquire",
                      f"{counters['waiting_units']} unit(s) wait for what the pass could not do first "
-                     f"(their listing): nothing asked of the origin; each due again after its "
-                     f"wait (60 s to 2 h) or as soon as its listing comes back")
+                     f"(their listing): nothing asked of the origin; each due again when its "
+                     f"wait (60 s to 2 h) ends")
     if prepare is not None:
         # what it opened for the pass (a bulk's index) is let go with it
         close = getattr(spec.unit_fetcher, "close", None)

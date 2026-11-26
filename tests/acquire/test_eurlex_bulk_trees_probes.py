@@ -78,7 +78,7 @@ def test_P3_a_waiting_unit_leaves_the_asked_first_list_so_the_complete_listing_r
     units = cellar.TreeUnits()
     key = str(corpus.resolve())
     units._bulk[key] = {"it": object()}
-    units._after[key], units._cover[key], units._dates[key] = {"it": 1000.0}, set(), {}
+    units._after[key], units._cover[key], units._dates[key] = {"it": 1000.0}, {}, {}
     f = _unit()
     with pytest.raises(cellar.WindowNotListed):
         units.fetch(SimpleNamespace(url=URL), f, corpus / f.rel_path)
@@ -139,7 +139,8 @@ def test_X1_vouched_racing_keep_never_puts_old_rows_back(tmp_path, monkeypatch):
             cellar_listing.vouched(URL, 1972, ("it",), 1, "old", force=True)
         finally:
             os._exit(0)
-    os.read(read_r, 1)                                            # the child holds the lock, has read
+    os.close(read_w)
+    assert os.read(read_r, 1) == b"r"                             # the child holds the lock, has read
     t0 = time.monotonic()
     cellar_listing.keep(URL, 1972, ("it",), 1, "new", [[CELEX, "it", 5000, "true"]], force=True)
     waited = time.monotonic() - t0
@@ -178,7 +179,7 @@ def test_a_covered_window_is_asked_again_once_a_day_and_its_units_come_back_at_o
     import time
     base, corpus = _setup(tmp_path, monkeypatch)
     eurlex_dump._record_incomplete(corpus, {"it": {CELEX: "true"}})
-    eurlex_dump.mark_deferred(corpus, "it", CELEX, "waits for its window")
+    eurlex_dump.mark_waiting(corpus, "it", CELEX, "waits for its window")
     created = datadump._stamp(CREATED).timestamp()
     cellar_listing.keep(URL, 1972, ("it",), 1, None, [[CELEX, "it", 100, "true"]], force=True, at=created + 10)
     asked = []
@@ -195,3 +196,79 @@ def test_a_covered_window_is_asked_again_once_a_day_and_its_units_come_back_at_o
     asked.clear()
     units._prepare_bulk(base, corpus, ["it"], [_unit()], "eu", URL)
     assert asked == [], "known whole within the day: nothing asked"
+
+
+# ---- architecture's probes against d863230c (Y1-Y3), inverted --------------------------------
+
+OTHER = "31990R0001"
+DAY = 24 * 3600.0
+
+
+def _n(corpus, celex, kind="deferred"):
+    return (eurlex_dump.incomplete(corpus)["it"][celex].get(kind) or {}).get("n", 0)
+
+
+def _defer(corpus, celex, times, at):
+    for _ in range(times):
+        eurlex_dump.mark_deferred(corpus, "it", celex, "cellar: 503 to the tree (an episode)")
+    rec = eurlex_dump.incomplete(corpus)
+    rec["it"][celex]["deferred"]["at"] = at
+    with eurlex_dump._locked(corpus):
+        eurlex_dump._write_incomplete(corpus, rec)
+
+
+def test_Y1_a_window_whose_relisting_failed_keeps_its_units_backoff(tmp_path, monkeypatch):
+    import time
+    base, corpus = _setup(tmp_path, monkeypatch)
+    eurlex_dump._record_incomplete(corpus, {"it": {CELEX: "true"}})
+    created = datadump._stamp(CREATED).timestamp()
+    cellar_listing.keep(URL, 1972, ("it",), 1, None, [[CELEX, "it", 100, "true"]], force=True,
+                        at=max(created + 10, time.time() - DAY - 3600))
+    _defer(corpus, CELEX, 4, time.time() - 7200)
+
+    def timed_out(*a, **k):
+        raise cellar.TransportError("cellar: the count of 1972 (it): ReadTimeout timed out")
+    monkeypatch.setattr(cellar, "sparql", timed_out)
+    units = cellar.TreeUnits()
+    f = _unit()
+    units._prepare_bulk(base, corpus, ["it"], [f], "eu", URL)
+    assert _n(corpus, CELEX) == 4, "a failed re-listing ends no wait"
+    for k in (1, 2, 3):
+        with pytest.raises(cellar.WindowNotListed):
+            units.fetch(SimpleNamespace(url=URL), f, corpus / f.rel_path)
+        assert _n(corpus, CELEX, "waiting") == k, "the window's own wait grows, pass after pass"
+    assert _n(corpus, CELEX) == 4, "the episode keeps its count"
+    assert eurlex_dump.incomplete_due(corpus, ("it",), now=time.time() + 61) == [], "not back after 60 s"
+
+
+def test_Y2_a_cellar_episode_keeps_its_backoff_when_another_window_is_listed(tmp_path, monkeypatch):
+    import time
+    base, corpus = _setup(tmp_path, monkeypatch)
+    eurlex_dump._record_incomplete(corpus, {"it": {CELEX: "true", OTHER: "true"}})
+    created = datadump._stamp(CREATED).timestamp()
+    cellar_listing.keep(URL, 1972, ("it",), 1, None, [[CELEX, "it", 100, "true"]], force=True,
+                        at=max(created + 10, time.time() - 60))
+    _defer(corpus, CELEX, 4, time.time() - 7200)
+
+    def sparql(client, base_, query, *, what="", charge=None):
+        return [{"n": {"value": "0"}}] if "COUNT(*)" in query else []
+    monkeypatch.setattr(cellar, "sparql", sparql)
+    cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], [_unit(), _unit(OTHER)], "eu", URL)
+    assert _n(corpus, CELEX) == 4
+
+
+def test_Y3_a_window_older_than_a_day_when_the_unit_is_reached_no_longer_vouches(tmp_path, monkeypatch):
+    import time
+    base, corpus = _setup(tmp_path, monkeypatch)
+    created = datadump._stamp(CREATED).timestamp()
+    t0 = time.time()
+    cellar_listing.keep(URL, 1972, ("it",), 1, None, [[CELEX, "it", 100, "true"]], force=True,
+                        at=max(created + 10, t0 - 23 * 3600))
+    monkeypatch.setattr(cellar, "sparql", lambda *a, **k: (_ for _ in ()).throw(AssertionError("asked")))
+    units = cellar.TreeUnits()
+    f = _unit()
+    units._prepare_bulk(base, corpus, ["it"], [f], "eu", URL)
+    assert units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, f, corpus / f.rel_path)[1] == 100
+    monkeypatch.setattr(time, "time", lambda: t0 + 30 * 3600)
+    with pytest.raises(cellar.WindowNotListed):
+        units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, f, corpus / f.rel_path)

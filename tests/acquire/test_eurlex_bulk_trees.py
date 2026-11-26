@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import zipfile
 from types import SimpleNamespace
 
@@ -139,13 +140,14 @@ def test_a_held_unit_on_the_due_path_never_takes_the_bulk_tree(tmp_path, monkeyp
     os.rmdir((corpus / rel).parent)
     key = str(corpus.resolve())
     units._after[key] = {"it": 1000.0}
-    units._cover[key] = {(1972, "it")}
+    units._cover[key] = {(1972, "it"): time.time()}
     units._dates[key] = {(CELEX, "it"): 900}
     assert units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, remote, corpus / rel) == (bulk, 900), \
         "not held, listed unchanged since the dump: the bulk's tree"
 
 
 def _due_units(tmp_path, *, dates, cover, after=1000.0):
+    cover = {k: time.time() for k in cover} if isinstance(cover, set) else cover
     units = cellar.TreeUnits()
     corpus = tmp_path / "corpus"
     key = str(corpus.resolve())
@@ -381,7 +383,7 @@ def test_a_window_kept_in_the_older_format_is_paged_once_and_kept_anew(tmp_path,
 
 def test_a_waiting_unit_is_marked_so_the_complete_listing_has_its_turn(tmp_path, monkeypatch):
     marked = []
-    monkeypatch.setattr(eurlex_dump, "mark_deferred", lambda root, lang, celex, why: marked.append((lang, celex)))
+    monkeypatch.setattr(eurlex_dump, "mark_waiting", lambda root, lang, celex, why: marked.append((lang, celex)))
     units, corpus, remote, dest = _due_units(tmp_path, dates={}, cover=set())
     with pytest.raises(cellar.WindowNotListed):
         units.fetch(SimpleNamespace(url="https://cellar.test"), remote, dest)

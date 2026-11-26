@@ -951,10 +951,11 @@ WINDOW_REFRESH_S = 24 * 3600.0
 class WindowNotListed(Waiting):
     """A unit asked first whose listing window is not known whole since the
     dump was cut: it WAITS. Nothing is asked of Cellar; the engine records
-    nothing (spec.Waiting); TreeUnits.fetch marks it deferred in the dump's
-    ledger (never tried), so it is due again after `engine.retry_wait_s(n)`
-    — 60 s up to 2 h, n counted with Cellar's episodes on it — or at once
-    when its window comes back listed (`eurlex_dump.mark_listed`, n from 0)."""
+    nothing (spec.Waiting); TreeUnits.fetch marks it waiting in the dump's
+    ledger (`eurlex_dump.mark_waiting`, never tried), so it is due again
+    after `engine.retry_wait_s(n)` of its own count — 60 s up to 2 h — and
+    the count restarts from 0 once a pass lists its window (`mark_listed`);
+    a unit inside its wait is reached only when the wait ends."""
 
 
 def window_year(celex: str) -> int | None:
@@ -1127,7 +1128,7 @@ class CellarUnits:
         self._since = time.monotonic()
         self._bulk: dict[str, dict] = {}            # corpus root → {lang: work_trees.BulkTrees}
         self._dates: dict[str, dict] = {}           # corpus root → {(celex, lang): listed mtime}
-        self._cover: dict[str, set] = {}            # corpus root → {(year, lang)} known whole since the dump
+        self._cover: dict[str, dict] = {}           # corpus root → {(year, lang): at}, known whole since the dump
         self._after: dict[str, dict] = {}           # corpus root → {lang: the stamped dump's created, epoch}
 
     def _count(self, got: "Fetched") -> None:
@@ -1303,7 +1304,7 @@ class TreeUnits(CellarUnits):
             # complete listing have its turn (review of 13743848, 3)
             if root is not None and remote.mtime is None:
                 from . import eurlex_dump
-                eurlex_dump.mark_deferred(root, unit["lang"], unit["celex"], str(e))
+                eurlex_dump.mark_waiting(root, unit["lang"], unit["celex"], str(e))
             raise
         try:
             got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent,
@@ -1353,7 +1354,7 @@ class TreeUnits(CellarUnits):
         with self._lock:
             bulk = (self._bulk.get(key) or {}).get(unit["lang"])
             dates = self._dates.get(key) or {}
-            cover = self._cover.get(key) or set()
+            cover = self._cover.get(key) or {}
             after = (self._after.get(key) or {}).get(unit["lang"])
         if bulk is None:
             return None, None
@@ -1362,9 +1363,17 @@ class TreeUnits(CellarUnits):
         year = window_year(unit["celex"])
         if year is None or after is None:
             return None, None
-        if (year, unit["lang"]) not in cover:
+        at = cover.get((year, unit["lang"]))
+        if at is None:
             raise WindowNotListed(f"cellar: {unit['celex']} ({unit['lang']}): its {year} window is not "
                                   f"known whole since the dump was cut; nothing asked, it waits for the listing")
+        if time.time() - at > WINDOW_REFRESH_S:
+            # THE BOUND, ENFORCED AT FETCH TIME (architecture's decision on
+            # d863230c, Y3): a window counted more than a day ago no longer
+            # vouches, whenever in the pass the unit is reached; it waits for
+            # the next prepare to ask the window again
+            raise WindowNotListed(f"cellar: {unit['celex']} ({unit['lang']}): its {year} window was known "
+                                  f"whole more than a day ago; nothing asked, it waits for the listing")
         when = dates.get((unit["celex"], unit["lang"]))
         if when is None:
             # absent from the listing, or listed with no modification date (58
@@ -1512,13 +1521,17 @@ class TreeUnits(CellarUnits):
                             say(f"cellar: the {year} window ({', '.join(window)}) is not listed "
                                 f"({str(e)[:200]}): its units wait")
             dates, cover = cellar_listing.coverage(due, after, base_url)
-            back = [(l, c) for c, l in due if (window_year(c), l) in cover]
+            # only the windows LISTED this pass end their units' wait (review
+            # of d863230c, Y1: a re-listing that failed reset it; Y2: every
+            # covered window's units were marked, ~122k marks a pass)
+            now_listed = {(y, l) for y, ls in missing.items() for l in ls} - unlisted
+            back = [(l, c) for c, l in due if (window_year(c), l) in now_listed and (window_year(c), l) in cover]
             if back:
                 eurlex_dump.mark_listed(corpus, back)       # their wait is over: n from 0
             say(f"listed {asked} window(s) in {time.monotonic() - t0:.0f} s")
         elif missing:
             unlisted = {(y, l) for y, ls in missing.items() for l in ls}
-        cover = {k for k, at in cover.items() if k not in unlisted}
+        cover = {k: at for k, at in cover.items() if k not in unlisted}
         key = str(corpus.resolve())
         with self._lock:
             self._bulk[key] = bulk
