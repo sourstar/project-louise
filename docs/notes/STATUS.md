@@ -70,6 +70,19 @@ measured (published figures disagree).
   every lock, an orphaned rsync of one collection kept another's after the worker died. Recorded, not
   changed: a dead holder's row still reads "in progress" on the Library card, and puts a refused retry off,
   for up to 305 s where no lock is taken to tell; a lock probe would refuse a real taker instead.
+- **OCR AND A PDF TEXT LAYER THROUGH RAGE — PROPOSED, NOT BUILT** (operator, 2026-11-26: "the RAGE ingestion API
+  to be extended for image OCR and adding of text layer to pdf (if pdf form is preserved in the parsed corpus). This
+  is architecture's call"). The design and the operator's question: [ocr-in-rage.md](ocr-in-rage.md) — recommended,
+  the reading as its own member beside the figures (records untouched), the engine chosen on 100 measured pages,
+  OCRmyPDF for the layer as derived data. EUR-Lex5's case: 4,711 scans in 559 html units, 418 PDFs without text.
+- **AN ANSWER'S LINE SAYS WHERE THE SECONDS BEFORE ITS FIRST WORD WENT (the Bug session, from the
+  operator's read-aloud question: "answer: 1017 chars in 9.9 s, first word at 5.2 s", and nothing said
+  why).** `llm.chat_stream` counts the chat model's load, the wait at the card's gate, the request to its
+  first token, and reads the server's own count of the prompt and the answer — llama.cpp's `timings`,
+  LocalAI's `usage` (its times asked with the `Extra-Usage` header), Ollama's last line — and the answer's
+  line carries them: "[before the request 0.3 s (the model's load 0.0, the gate 0.3); first token 4.9 s
+  after it; prompt 3,412 tokens in 4.6 s; 220 tokens written in 4.7 s]". Where the server counts nothing,
+  the line says so.
 
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
   `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"
