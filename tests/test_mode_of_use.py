@@ -535,3 +535,95 @@ def test_the_control_route_refuses_to_run_everything_in_chat_mode(client):
     node_mode.switch("embed", by="test")
     node_state.set_worker_state("paused")
     assert client.post("/api/control", json={"state": "running"}, headers=ADMIN).status_code == 200
+
+
+def _rooms(monkeypatch, *fits, why="chat-35b needs 21,715 MiB … — vega-bge-m3 pinned by work in flight"):
+    """The room the switch is told, one answer an ask (the last one for ever)."""
+    from app import model_evict
+    asked: list = []
+
+    def room(server, model):
+        asked.append(model)
+        f = fits[min(len(asked) - 1, len(fits) - 1)]
+        return None if f is None else model_evict.Outcome(f, why="" if f else why)
+    monkeypatch.setattr(model_evict, "room_before_load", room)
+    return asked
+
+
+def test_a_switch_makes_the_room_first_and_waits_for_it(platform, monkeypatch, capsys):
+    """München, 2026-11-26 (10:44:41Z): the room for the 35B was asked while the
+    embed mode's batches pinned their encoders; nothing gave way, the load went
+    into the full card and died for device memory 75.2 s later, and the first
+    question waited behind it and the reload — 48.9 s to its first word. The
+    switch asks again until the room is there, then loads."""
+    from app import model_evict
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    asked = _rooms(monkeypatch, False, False, True)
+    inside = []
+    real_warm = runner.warm
+    monkeypatch.setattr(__import__("app.llm", fromlist=["warm"]), "warm",
+                        lambda *a, **k: (inside.append(model_evict._room_made.get()), real_warm()))
+    slept = []
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=slept.append)
+    assert asked == ["chat-35b"] * 3 and slept == [worker.MODE_ROOM_POLL_S] * 2
+    assert got["loaded"] is True and runner.calls == [("unload", "chat-9b"), ("warm", "chat-35b")]
+    assert inside == [True], "the room is made: the cold-load hook does not make it again"
+
+
+def test_a_switch_whose_room_never_comes_sends_no_load_the_card_cannot_hold(platform, monkeypatch, capsys):
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    asked = _rooms(monkeypatch, False)
+    clock = [0.0]
+
+    def sleep(s):
+        clock[0] += s
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=sleep,
+                              clock=lambda: clock[0])
+    assert got["loaded"] is False and ("warm", "chat-35b") not in runner.calls
+    assert len(asked) == int(worker.MODE_ROOM_WAIT_S / worker.MODE_ROOM_POLL_S) + 1, "bounded"
+    out = capsys.readouterr().out
+    assert "chat-35b not loaded now — no room on the card after 120 s" in out and "pinned by work in flight" in out
+    assert "it loads when there is room, or at the first question" in out
+
+
+def test_a_switch_counts_the_room_once_the_driver_shows_the_old_model_gone(platform, monkeypatch):
+    """The card's reading lags a process's exit: counted from a reading that
+    still holds the 9B, the room would stop models the switch need not stop."""
+    from app import model_evict, resident
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    GIB = 1 << 30
+    monkeypatch.setattr(model_evict, "need_of", lambda server, model: 6 * GIB if model == "chat-9b" else None)
+    readings = iter([(32 * GIB, 20 * GIB), (32 * GIB, 20 * GIB), (32 * GIB, 19 * GIB), (32 * GIB, 14 * GIB)])
+    seen = []
+
+    def card():
+        got = next(readings)
+        seen.append(got[1] // GIB)
+        return got
+    monkeypatch.setattr(resident, "_card", card)
+    asked_after = []
+    from app import model_evict as me
+    monkeypatch.setattr(me, "room_before_load", lambda s, m: asked_after.append(list(seen)) or None)
+    worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
+    assert asked_after == [[20, 20, 19, 14]], "the room asked once the card shows half the 9B given back"
+
+
+def test_a_switch_waiting_for_room_stops_waiting_when_the_model_is_loaded_meanwhile(platform, monkeypatch):
+    """The keeper's beat (or a question) may load it while the switch waits:
+    counted then, the model's own bytes would read as a card with no room."""
+    from app import model_load
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    asked = _rooms(monkeypatch, False)
+    looks = []
+    monkeypatch.setattr(model_load, "loaded_models",
+                        lambda server, *a, **k: looks.append(1) or ({"chat-35b"} if len(looks) > 2 else set()))
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
+    assert len(asked) == 2 and got["loaded"] is True, "it stopped waiting once the model was there"

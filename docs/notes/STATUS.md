@@ -20,6 +20,23 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **THE FIRST QUESTION AFTER THE SWITCH TO QUERY MODE WAITED 48.9 s FOR ITS FIRST WORD: THE SWITCH LOADED
+  THE 35B INTO A FULL CARD (the operator's microphone and read-aloud, ~10:47Z; München counted every
+  part from the node's lines).** The voice itself was fine (first sound 5.1 s after the first word, no
+  gap). The search took 43.2 s, of which `languages` 22.0 — the query's language step asks the CHAT
+  model, which was still loading (LocalAI received no other request until it was up) — and the rerank
+  12.5; the answer's first word 5.2 s after. The load: at the switch (10:44:41Z) the room for the 35B
+  was asked while the embed mode's batches still pinned their six encoders: "10,172 MiB over the 0.98
+  line … room is made by unloading", nothing could give way, and NO LINE SAID SO; the load went into the
+  full card and died for device memory 75.2 s later ("UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY"), and the
+  keeper's reload took 87.5 s more. FIXED (branch mode-switch-room): the switch waits for the driver to
+  show the old chat model gone, makes the new one's room FIRST and asks again until it is there (5 s,
+  within 120 s — the old mode's batches let their encoders go in seconds), never sends a load the card
+  cannot hold (said, and loaded by the keeper or the first question), and stops waiting if it was loaded
+  meanwhile; a room refused before ANY load is now said ("card: no room made for … — … pinned by work in
+  flight"). Not yet read: the five `/v1/detokenize` 500s at 10:47:53 (the gutenberg rerank's cut, by
+  their time; LocalAI logs no body).
+
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
   `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"
   for wikipedia's fifty records).** 50 candidates, 38 works of 266 records, 269 lookups returning 456

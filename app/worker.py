@@ -6688,6 +6688,11 @@ _node_mode_seen: list = [None, None]
 #: how long a switch waits for an answer in flight before it unloads the chat
 #: model that answer is using
 MODE_ANSWER_WAIT_S = 120.0
+#: how long a switch waits for the room of the mode's chat model, and how often
+#: it asks again (`_mode_models`): the old mode's embedding ends its batch and
+#: lets its encoders go in seconds
+MODE_ROOM_WAIT_S = 120.0
+MODE_ROOM_POLL_S = 5.0
 
 
 def _rate_said(bps: int | None) -> str:
@@ -6737,15 +6742,17 @@ def _start_mode_models(before: str, mode: str) -> None:
 
 
 def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
-                 question=None, sleep=None) -> dict:
+                 question=None, sleep=None, room_wait_s: float = MODE_ROOM_WAIT_S,
+                 clock=time.monotonic) -> dict:
     """A switch's models, off the round's thread: the chat model of the mode
     left is unloaded (LocalAI's `/backend/shutdown`, `model_load.unload` —
     its memory is what the switch is for), after any answer in flight has
     ended or `wait_s` has passed, and the chat model of the mode entered is
-    loaded (`llm.warm`, which makes its room from the models used least
-    recently). Where both modes name one model nothing is unloaded. Never
-    raises: a model that does not load is said, and loads at its first
-    question as it always did."""
+    loaded (`llm.warm`) once its room is made from the models used least
+    recently — asked again until it is, within `room_wait_s`; never sent into
+    a card that cannot hold it. Where both modes name one model nothing is
+    unloaded. Never raises: a model that does not load is said, and loads at
+    its first question as it always did."""
     from . import llm
     log = _node_line("models")
     old, new = config.chat_model_for(before), config.chat_model_for(mode)
@@ -6759,16 +6766,64 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
     until = time.monotonic() + wait_s
     while question() and time.monotonic() < until and not _stop.is_set():
         sleep(1.0)
+    from . import model_evict
+    try:
+        gives = model_evict.need_of(config.CHAT_URL, old) or 0
+        card_before = resident._card() if gives else None
+    except Exception:   # noqa: BLE001 — unread: nothing waited for
+        gives, card_before = 0, None
     try:
         out["unloaded"] = model_load.unload(config.CHAT_URL, old)
     except Exception as e:   # noqa: BLE001 — the runner keeps it; the load below makes its own room
         log(f"{mode} mode: {old} was not unloaded ({type(e).__name__}: {e})")
-    try:
-        llm.warm()
-        out["loaded"] = True
-    except Exception as e:   # noqa: BLE001 — it loads at the first question
-        log(f"{mode} mode: {new} did not load now ({type(e).__name__}: {str(e)[:200]}); "
-            f"it loads at the first question")
+    if out["unloaded"] and card_before is not None:
+        # THE DRIVER SHOWS WHAT THE STOP GAVE BACK before the room is counted
+        # (the card's reading lags a process's exit): counted from a reading
+        # that still holds it, the room would stop models the switch need not
+        # stop. Half of what it held, within ROOM_WAIT_S
+        settle = clock() + model_evict.ROOM_WAIT_S
+        while clock() < settle and not _stop.is_set():
+            try:
+                card = resident._card()
+            except Exception:   # noqa: BLE001
+                card = None
+            if card is None or card[1] <= card_before[1] - gives // 2:
+                break
+            sleep(model_evict.ROOM_POLL_S)
+    # THE ROOM FIRST, AND WAITED FOR (München, 2026-11-26, the switch to query
+    # mode at 10:44:41Z): the room for the 35B was asked while the embed mode's
+    # batches still pinned their encoders — "10,172 MiB over the line", nothing
+    # could give way, nothing said so — and the load went into the full card and
+    # died for device memory 75.2 s later; the first question waited behind it
+    # and the reload (48.9 s to its first word). Asked again until the room is
+    # there, bounded; a room still not there is said, and no load is sent that
+    # the card cannot hold: the keeper's beats or the first question load it
+    room = None
+    until = clock() + room_wait_s
+    while not _stop.is_set():
+        try:
+            # loaded meanwhile (the keeper's beat, a question): nothing to make room for
+            ids = model_load.loaded_models(model_load.server_of(config.CHAT_URL))
+            room = None if ids is not None and new in ids else \
+                model_evict.room_before_load(config.CHAT_URL, new)
+        except Exception:   # noqa: BLE001 — not told: the load goes as before
+            room = None
+        if room is None or room.fits is not False or clock() >= until:
+            break
+        sleep(MODE_ROOM_POLL_S)
+    if _stop.is_set():
+        return out                        # the worker stops: the model loads at the first question
+    if room is not None and room.fits is False:
+        log(f"{mode} mode: {new} not loaded now — no room on the card after {room_wait_s:.0f} s "
+            f"({room.why}); it loads when there is room, or at the first question")
+    else:
+        try:
+            with model_evict.room_made():     # made above: the cold-load hook does not make it again
+                llm.warm()
+            out["loaded"] = True
+        except Exception as e:   # noqa: BLE001 — it loads at the first question
+            log(f"{mode} mode: {new} did not load now ({type(e).__name__}: {str(e)[:200]}); "
+                f"it loads at the first question")
     log(f"{mode} mode: {old} {'unloaded' if out['unloaded'] else 'was not loaded'}; "
         f"{new} {'loaded' if out['loaded'] else 'not loaded'}")
     return out

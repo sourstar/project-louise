@@ -446,6 +446,7 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
         known = {r.key for r in resident.current()} | set(use)
         mem = resident._memory_now()
         keep = {tuple(k) for k in protect} | {(server, m) for m in exclude}
+        pinned = sorted(m for m in held if (server, m) in pins and (server, m) in known and (server, m) not in keep)
         parks, away = model_load.parks(server), model_load.parked(server)     # the same answer: no request
         loaded = [Loaded(m, int(size or 0), use.get((server, m)), cpu.get(m, 0.0) > BUSY_CPU_PERCENT,
                          parks=m in parks, parked=m in away)
@@ -463,7 +464,8 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
             f"{t:.2f} line, and the models that may give way to it hold "
             f"{sum(v.size for v in order) // MIB:,} MiB"
             + (f" — {', '.join(v.model for v in newer)} were used more recently, are busy, or hold none"
-               if newer else "")))
+               if newer else "")
+            + (f" — {', '.join(pinned)} pinned by work in flight" if pinned else "")))
     gone: list[Loaded] = []
     away_now: list[tuple[Loaded, int]] = []
     freed = 0
@@ -785,7 +787,20 @@ def horizon_for(server: str, model: str) -> float | None:
 def before_load(server: str, model: str) -> Outcome | None:
     """The cold-load hook (`model_load.ensure_loaded`): room made for
     `model` before its load, unless the keeper made it already or the
-    node's mode unloads nothing. Never raises."""
+    node's mode unloads nothing — and a room that could NOT be made SAID
+    (München, 2026-11-26: the query-mode switch's 35B was "10,172 MiB over
+    the line … room is made by unloading", nothing was unloaded and no line
+    said why; the load went into the full card and died for device memory
+    75 s later). Never raises."""
+    got = room_before_load(server, model)
+    if got is not None and got.fits is False:
+        _say("info", f"card: no room made for {model} before its load — {got.why}; the load goes as before")
+    return got
+
+
+def room_before_load(server: str, model: str) -> Outcome | None:
+    """`before_load`'s room, unsaid: None where none is made (the keeper made
+    it, the size is not known, the node's mode unloads nothing)."""
     if _room_made.get():
         return None
     from app import resident
