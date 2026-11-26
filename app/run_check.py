@@ -2223,7 +2223,7 @@ SLOW_LOOK_S = 30.0
 #: thread, 98 % of it held (the ninth read, run). Read only BEFORE A LOOK — a
 #: valid verdict and the embed stage never read it — and cleared by the first
 #: look that settles, or that comes back quickly
-_slow: dict[str, tuple[int, float]] = {}
+_slow: dict[str, tuple[int, float, str | None]] = {}
 _slow_lock = threading.Lock()
 
 
@@ -2232,25 +2232,37 @@ def _look_clock() -> float:
     return time.monotonic()
 
 
-def _slow_until(key: str, now: float) -> float | None:
-    """Until when no look asks this encoder model again, or None."""
+def _slow_until(key: str, now: float, heard: str | None = None) -> float | None:
+    """Until when no look asks this encoder model again, or None — None too
+    where a run other than the one heard when it was marked has been heard
+    since (`heard`): some process had an answer, and the new run is gated at
+    once (the tenth read, run: a verdict dropped by `check_write` for R2 took
+    the backoff's path, and R2 waited up to 30 min for its gate)."""
     with _slow_lock:
         got = _slow.get(key)
-    return got[1] if got is not None and got[1] > now else None
+    if got is None or got[1] <= now:
+        return None
+    marked = got[2] if len(got) > 2 else None
+    if heard is not None and heard != marked:
+        return None                     # (marked with nothing heard: anything heard came after)
+    return got[1]
 
 
-def _note_look(key: str, took: float, settled: bool) -> tuple[int, float | None]:
+def _note_look(key: str, took: float, answered: bool, heard: str | None = None) -> tuple[int, float | None]:
     """A look at this encoder model ended after `took` s: (slow looks in a row,
-    until when the next is put off — None where it is not). A settled look or
-    a quick one clears it; a slow unsettled one doubles it (FAIL_TTL_S, 600,
-    1,200, then FAIL_CAP_S)."""
+    until when the next is put off — None where it is not). A look the encoder
+    ANSWERED (it named a run, or the look settled) clears it, however long its
+    gate ran (the tenth read, run: a 240 s gate that deferred backed the whole
+    encoder off to 30 min); so does a quick one; a slow look the encoder never
+    answered doubles it (FAIL_TTL_S, 600, 1,200, then FAIL_CAP_S). `heard`:
+    the run heard before it, which a run heard since passes over."""
     with _slow_lock:
-        if settled or took < SLOW_LOOK_S:
+        if answered or took < SLOW_LOOK_S:
             _slow.pop(key, None)
             return 0, None
         n = _slow[key][0] + 1 if key in _slow else 1
         until = time.time() + min(FAIL_TTL_S * 2 ** min(n - 1, 3), FAIL_CAP_S)
-        _slow[key] = (n, until)
+        _slow[key] = (n, until, heard)
         return n, until
 
 
@@ -2360,7 +2372,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
                          f"[{collection.name}] {message}"[:500])
 
         doc_key = _flight(collection)
-        slow_until = _slow_until(doc_key, now)
+        slow_until = _slow_until(doc_key, now, now_answering)
         slow_n = 0
         if slow_until is not None and not _suspect_since(collection, cached) and (
                 cached is None or now_answering is None or cached[3] == now_answering):
@@ -2382,7 +2394,9 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         else:
             t_look = _look_clock()
             allowed, reason, run_id, settled = _look(collection, stop, log)
-            slow_n, slow_until = _note_look(doc_key, _look_clock() - t_look, settled or allowed)
+            # a look that heard a run did not hang, whatever its gate did after
+            slow_n, slow_until = _note_look(doc_key, _look_clock() - t_look,
+                                            settled or allowed or run_id is not None, now_answering)
         # THE RUN A VERDICT IS ABOUT: the one its look heard; where it heard
         # none (the encoder could not be asked), the one heard BEFORE it — so
         # a run heard since, by any process, is looked at at once, and one
@@ -2402,7 +2416,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         q_same = q_heard is None or was_q == q_heard or (
             isinstance(was_q, tuple) and len(was_q) > 2 and was_q[0] == QUERY_UNSETTLED and was_q[2] == q_heard)
         # (a query run heard since — some process had an answer — is looked at)
-        q_slow = (q_key is not None and q_same and _slow_until(q_key, time.time()) is not None
+        q_slow = (q_key is not None and q_same and _slow_until(q_key, time.time(), q_heard) is not None
                   and not _suspect_since(collection, cached, "query"))
         q_took = 0.0
         if (isinstance(was_q, tuple) and was_q and was_q[0] == QUERY_UNSETTLED and _asymmetric(collection)
@@ -2415,15 +2429,22 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             query_run = was_q
         elif q_slow:
             # the query encoder held a look and its backoff runs (`_slow`): kept
-            # as it was, or unsettled from now
-            query_run = was_q if was_q is not None else \
-                (QUERY_UNSETTLED, time.time(), heard_now.get("query"), 0)
+            # as it was — an unsettled one stamped from now, so its own bound
+            # keeps the verdict fresh and the document side is not probed at
+            # every step meanwhile (the tenth read, run: 30 probes in 30 steps) —
+            # or unsettled from now
+            if isinstance(was_q, tuple) and len(was_q) > 2 and was_q[0] == QUERY_UNSETTLED:
+                query_run = (QUERY_UNSETTLED, time.time(), was_q[2], was_q[3] if len(was_q) > 3 else 0)
+            elif was_q is not None:
+                query_run = was_q
+            else:
+                query_run = (QUERY_UNSETTLED, time.time(), heard_now.get("query"), 0)
         else:
             t_q = _look_clock()
             query_run = _look_at_the_query_side(collection, stop, log, heard_by=query_heard)
             q_took = _look_clock() - t_q
             if q_key is not None:
-                _note_look(q_key, q_took, query_run is not None)
+                _note_look(q_key, q_took, query_run is not None or bool(query_heard), q_heard)
         if query_run is None and _asymmetric(collection):
             # WHEN it failed — after the look, which may have taken its whole
             # timeout (the fourth read: stamped before it, a probe that timed
@@ -2435,7 +2456,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             # BACKED OFF ONLY WHERE THE LOOK HELD ITS CALLER (the ninth read):
             # a quick failure is asked again at FAIL_TTL_S
             again = (isinstance(was, tuple) and was and was[0] == QUERY_UNSETTLED and was[2] == heard_then
-                     and q_took >= SLOW_LOOK_S)
+                     and q_took >= SLOW_LOOK_S and not query_heard)
             query_run = (QUERY_UNSETTLED, time.time(), heard_then,
                          ((was[3] if len(was) > 3 else 0) + 1) if again else 0)
         # stamped AFTER looking: a statement the look itself wrote (a gate)

@@ -894,9 +894,10 @@ def test_a_hung_encoder_is_asked_by_one_look_for_every_collection_on_it(node, en
     monkeypatch.setattr(run_check, "answering_run",
                         lambda recipe, query=False, **k: (looks.append(query), real(recipe, query=query, **k))[1])
     now = time.time()
-    run_check._slow[run_check._flight(collection)] = (2, now + 600)        # another collection's hung look
+    heard = run_check.answering(collection)
+    run_check._slow[run_check._flight(collection)] = (2, now + 600, heard.get("document"))   # another's hung look
     if run_check._flights_query(collection) is not None:
-        run_check._slow[run_check._flights_query(collection)] = (2, now + 600)
+        run_check._slow[run_check._flights_query(collection)] = (2, now + 600, heard.get("query"))
     run_check._verdicts.clear()
     assert backend_gate.embed_allowed(con, collection) is False and looks == [], "not asked again"
     v = run_check._verdicts[run_check._where(collection)]
@@ -926,3 +927,83 @@ def test_a_suspect_run_whose_re_gate_cannot_finish_is_not_looked_at_every_step(n
     counts["q"] = 2                                                # ANOTHER canary failure: at once
     backend_gate.embed_allowed(con, collection)
     assert looked == [1, 1]
+
+
+# ---- the tenth read (2026-11-26) -------------------------------------------------------
+
+def test_a_new_run_is_gated_at_once_while_the_encoder_is_marked_slow(node, endpoint, monkeypatch):
+    """THE TENTH READ, run: the model marked slow by another collection's look;
+    bge-m3 restarted with another env, `check_write` dropped this collection's
+    verdict for R2 — and the next look took the backoff's path, R2 ungated
+    until the mark ended (up to 30 min). A run other than the one heard when
+    the mark was set passes it over."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    _hung_clock(monkeypatch)
+    assert backend_gate.embed_allowed(con, collection) is True
+    heard = run_check.answering(collection)
+    now = time.time()
+    run_check._slow[run_check._flight(collection)] = (2, now + 1800, heard.get("document"))
+    looks = []
+    real = run_check.answering_run
+    monkeypatch.setattr(run_check, "answering_run",
+                        lambda recipe, query=False, **k: (looks.append(query), real(recipe, query=query, **k))[1])
+    time.sleep(0.01)
+    _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}))
+    run_check.forget(collection)                                   # `check_write` dropped it for R2
+    backend_gate.embed_allowed(con, collection)
+    assert False in looks, "R2 looked at — and its gate run — at once"
+
+
+def test_a_long_gate_that_defers_does_not_back_the_encoder_off(node, endpoint, monkeypatch):
+    """THE TENTH READ, run: a look's time included its gate, and a 240 s gate
+    that deferred ("another request held the context") backed the whole
+    encoder off to 30 min — the encoder had answered every probe. A look that
+    heard a run did not hang."""
+    from app.hold import embedder as hold_emb
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    mono = _hung_clock(monkeypatch)
+    clock = [time.time()]
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+    real_look = run_check._look
+
+    def long_deferred(c, stop, log):
+        mono[0] += 240.0
+        return False, str(hold_emb.GateDeferred("another request held the context")), R1, False
+    monkeypatch.setattr(run_check, "_look", long_deferred)
+    run_check._verdicts.clear()
+    for _ in range(5):
+        backend_gate.embed_allowed(con, collection)
+        clock[0] += run_check.FAIL_TTL_S + 1
+    assert run_check._slow == {}, "no encoder backoff for looks the encoder answered"
+    monkeypatch.setattr(run_check, "_look", real_look)
+
+
+def test_another_collections_query_mark_does_not_send_every_step_to_the_document_encoder(
+        node, endpoint, monkeypatch):
+    """THE TENTH READ, run (nit): while another collection kept the query model
+    marked, this one's unsettled query side was kept past its own bound — the
+    verdict never fresh, the document encoder probed at every step (30 in 30)."""
+    root, collection, codex = node
+    if run_check._flights_query(collection) is None:
+        pytest.skip("the fixture's space has no query encoder of its own")
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    _hung_clock(monkeypatch)
+    clock = [time.time()]
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+    looks = []
+    real = run_check.answering_run
+    monkeypatch.setattr(run_check, "answering_run",
+                        lambda recipe, query=False, **k: (looks.append(query), real(recipe, query=query, **k))[1])
+    key = run_check._verdicts[run_check._where(collection)]
+    heard_q = run_check.answering(collection).get("query")
+    run_check._verdicts[run_check._where(collection)] = key[:5] + (
+        (run_check.QUERY_UNSETTLED, clock[0] - 10_000, heard_q, 1),) + key[6:]       # its own bound long past
+    run_check._slow[run_check._flights_query(collection)] = (3, clock[0] + 1800, heard_q)
+    for _ in range(30):
+        backend_gate.embed_allowed(con, collection)
+        clock[0] += 60
+    assert looks.count(False) <= 6, f"{looks.count(False)} document probes in 30 steps"
