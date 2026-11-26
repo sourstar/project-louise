@@ -102,36 +102,54 @@ def test_gutenbergs_category_shelves_and_class_say_fiction_fact_or_opinion():
     assert "LCC E300" in retrieval._work_said({"subjects": "United States -- History | E300"}), "an LCC with digits"
 
 
-def test_a_topic_shelf_says_nothing_and_the_records_own_nonfiction_vetoes_a_form_shelf():
-    """Architecture's read, 2026-11-26, over PG's catalogue: topic shelves
-    (Adventure, Humour, Mythology, History - Religious, Politics) made
-    Anabasis, Plutarch and the US Constitution literature or opinion; a
-    biography on a Poetry shelf was called a poem; a bare "Poetry" heading
-    made Aristotle's Poetics literary; scripture was framed two ways.
-    PROVISIONAL records, shaped as PG's; the real ones from their RDF are to
-    replace them (gutenberg.org was down for maintenance)."""
-    w = retrieval._work_said
-    for shelves in ("Category: Adventure", "Category: Humour", "Category: Mythology, Legends & Folklore"):
-        assert "a literary work" not in w({"subjects": "Greece -- History -- Expedition of Cyrus, 401 B.C. | PA",
-                                           "bookshelves": shelves}), shelves
-    for shelves in ("Category: History - Religious", "Category: Politics"):
-        assert "opinion" not in w({"subjects": "United States -- Constitution | KF", "bookshelves": shelves}), shelves
-    assert "a literary work" not in w({"subjects": "Browning, Robert, 1812-1889 -- Biography | PR",
-                                       "bookshelves": "Category: Biographies | Category: Poetry"}), "a life vetoes"
-    assert "a literary work" not in w({"subjects": "Mississippi River -- Description and travel",
-                                       "bookshelves": "Category: Humour | Category: Short Stories"})
-    poetics = w({"subjects": "Poetry | PN", "bookshelves": "Category: Philosophy & Ethics"})
-    assert "a literary work" not in poetics and "opinion or belief (by its Gutenberg category)" in poetics
-    assert w({"subjects": "Poetry | PQ"}).startswith(" — a literary work (by its subject headings)"), \
-        "a bare Poetry heading on a book of poems still counts"
-    assert w({"subjects": "Fourth dimension | QA", "bookshelves": "Category: Science-Fiction & Fantasy"}) \
-        .startswith(" — a literary work (by its Gutenberg category)"), "Flatland: the shelf is all it says"
-    for subj, shelf in (("Bible | BS", "Category: Religion/Spirituality"), ("Bible | BS", "Category: Poetry"),
-                        ("Sacred books -- China", "Category: Philosophy & Ethics")):
-        said = w({"subjects": subj, "bookshelves": shelf})
-        assert "a literary work" not in said and "opinion" not in said, ("scripture: no verdict", said)
-    system, _ = _sources(BARE)
-    assert "what it states is its author's view" in system
+#: THE REAL RECORDS (tests/fixtures/gutenberg-real, copied byte for byte from
+#: the node's mirror, 2026-11-26): each one's verdict, as its own RDF gives
+#: its subjects and shelves to the parser (app/plugins/gutenberg/rdf.py).
+#: None: no verdict — a fact, or scripture.
+REAL = {
+    5: None, 7: None, 14: None, 89: None, 566: None, 686: None, 732: None,          # law, treaties, history, reference
+    674: None, 1170: None, 656: None, 3176: None, 4763: None,                     # lives, history, travel, logic
+    10: None, 30: None, 17: None, 216: None, 2017: None,                           # scripture: never framed
+    151: "a literary work", 201: "a literary work", 2600: "a literary work",       # poems, Flatland, a novel
+    1874: "a literary work", 119: "a literary work", 1194: "a literary work",      # its own headings say fiction
+    1962: "a work of opinion or belief", 5428: "a work of opinion or belief",      # the Defences of poetry
+    1974: "a work of opinion or belief", 7148: "a work of opinion or belief",      # Poetics, Schlegel's Lectures
+    3623: None,                                     # The Golden Bough: anthropology; Religion is a topic shelf
+}
+
+
+def _real(n: int) -> dict:
+    from pathlib import Path
+    from app.plugins.gutenberg import rdf
+    m = rdf.parse(Path(__file__).parent / "fixtures" / "gutenberg-real" / str(n), n)
+    return {"subjects": m["subjects"], "bookshelves": m["bookshelves"]}
+
+
+import pytest
+
+
+@pytest.mark.parametrize("n", sorted(REAL))
+def test_a_real_records_verdict(n):
+    """Architecture's read, 2026-11-26: on these, topic shelves (Adventure,
+    Humour, Mythology, History - Religious, Religion, Politics) had called
+    history, biography, travel, law and scripture literature or opinion, and
+    scripture written as a subdivision ("Taoism -- Sacred books") was framed."""
+    said = retrieval._work_said(_real(n))
+    got = ("a literary work" if " — a literary work (" in said else
+           "a work of opinion or belief" if " — a work of opinion or belief (" in said else None)
+    assert got == REAL[n], said[:240]
+
+
+def test_all_28_real_records_are_judged():
+    assert len(REAL) == 28
+
+
+def test_a_verdict_says_its_basis():
+    assert "a literary work (by its subject headings)" in retrieval._work_said(_real(2600))
+    assert "a literary work (by its Gutenberg category)" in retrieval._work_said(_real(201)), \
+        "Flatland: its shelves are all that says so"
+    assert "a work of opinion or belief (by its Gutenberg category)" in retrieval._work_said(_real(1974))
+    assert "LCC F001" in retrieval._work_said(_real(7)), "an LCC with digits is read as one"
 
 
 def test_the_search_brings_each_hits_subjects_and_shelves_from_its_record(tmp_path):
@@ -174,36 +192,40 @@ def test_a_collection_whose_subjects_are_not_a_librarys_headings_gets_none(tmp_p
     assert "subjects" not in hits[0] and retrieval._work_said(hits[0]) == ""
 
 
-def test_through_the_search_a_novels_record_says_so_in_the_answers_header(isolated_config, monkeypatch, tmp_path):
+def test_through_the_real_stages_and_search_each_record_says_what_it_is(isolated_config, monkeypatch, tmp_path):
     """Architecture, 2026-11-26: the classification must reach the answer on
-    the live path, not only when a test hands it in."""
+    the live path. Real records (War and Peace, the US Constitution) through
+    the real discovery and RDF stage into the manifest, a real
+    `retrieval.search` over them, and the answer's prompt: no subject is
+    handed in."""
     import shutil
     from pathlib import Path
-    from app import collections as collections_mod, db, discovery
-    corpus = tmp_path / "corpus_w"
-    shutil.copytree(Path(__file__).parent / "fixtures" / "gutenberg-mini" / "corpus", corpus)
+    from app import collections as collections_mod, db, discovery, worker
+    corpus = tmp_path / "corpus_real"
+    for n in (2600, 5):
+        d = corpus / str(n)
+        shutil.copytree(Path(__file__).parent / "fixtures" / "gutenberg-real" / str(n), d)
+        (d / f"pg{n}.txt.utf8").write_text("A text of the book.\n", encoding="utf-8")
     c = collections_mod.Collection(name="gutenberg", plugin="gutenberg", profile=None, embed_mode_default=None,
                                    corpus_dir=corpus, manifest_path=tmp_path / "m" / "manifest.db",
                                    fts_dir=tmp_path / "m" / "fts", lance_dir=tmp_path / "m" / "lancedb")
     con = db.connect(c)
     discovery.sync_collection(con, c)
-    con.execute("UPDATE documents SET title='Le Rouge', authors='Stendhal', subjects=?, bookshelves=? "
-                "WHERE native_id='10003'",
-                ("France -- History -- 1815-1830 -- Fiction | PQ", "Category: Novels"))
-    con.commit()
+    for row in con.execute("SELECT * FROM documents ORDER BY uid").fetchall():
+        worker.stage_rdf(con, row, c)
     monkeypatch.setattr(retrieval.refs, "get_store", lambda: None)
     monkeypatch.setattr(retrieval.refs.RESOLVER, "resolve", lambda q, s: [])
-    hit = {"book_id": 10003, "chunk_id": "gutenberg:10003:0:1", "uid": "gutenberg:10003", "text": "Julien…",
-           "score": 1.0, "rrf": 0.03, "source_collection": "gutenberg"}
+    hits = [{"book_id": n, "chunk_id": f"gutenberg:{n}:0:1", "uid": f"gutenberg:{n}", "text": "…",
+             "score": 1.0, "rrf": 0.03, "source_collection": "gutenberg"} for n in (2600, 5)]
     monkeypatch.setattr(retrieval, "_search_one_collection",
                         lambda con, c, q, k, mode, tr, ids, plan=None, depth=0: {
-                            "catalog": [], "merged": [dict(hit)], "translations": {},
+                            "catalog": [], "merged": [dict(h) for h in hits], "translations": {},
                             "timings": {"catalog": 0.0}, "scope": {}})
-    monkeypatch.setattr(retrieval, "_rerank_list", lambda q, hits, recipe, budget_s, depth: (hits, False))
-    out = retrieval.search(con, "Julien Sorel", k=5, collection=c, translate=False)
-    assert out["hits"], out
-    _, user = retrieval.build_answer_messages("Julien Sorel", out)[0:2]
-    head = user["content"].split("[1]")[1].split("\n")[0]
-    assert "a literary work (by its subject headings) — Gutenberg category: Novels — LCC PQ — subjects: " \
-           "France -- History -- 1815-1830 -- Fiction" \
-        in head, head
+    monkeypatch.setattr(retrieval, "_rerank_list", lambda q, hs, recipe, budget_s, depth: (hs, False))
+    out = retrieval.search(con, "Napoleon", k=5, collection=c, translate=False)
+    _, user = retrieval.build_answer_messages("Napoleon", out)[0:2]
+    heads = {h.split(" — ")[0].split(":")[1]: h for h in
+             (line for line in user["content"].splitlines() if line.startswith("["))}
+    novel, law = heads.get("2600", ""), heads.get("5", "")
+    assert "a literary work (by its subject headings)" in novel and "Gutenberg category: Historical Novels" in novel
+    assert "a literary work" not in law and "opinion" not in law and "LCC JK, KF" in law

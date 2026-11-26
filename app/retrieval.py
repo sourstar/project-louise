@@ -1944,14 +1944,21 @@ def literary(subject: str) -> bool:
 LITERARY_SHELVES = frozenset(s.casefold() for s in (
     "Novels", "Historical Novels", "Short Stories", "Poetry", "Plays/Films/Dramas",
     "Science-Fiction & Fantasy", "Romance", "Crime, Thrillers and Mystery", "Crime, Thrillers & Mystery"))
+#: "Religion/Spirituality" is a TOPIC shelf too, as Mythology and History -
+#: Religious are: it made The Golden Bough (anthropology) opinion, and reaches
+#: 4,159 records of the corpus (architecture, 2026-11-26)
 OPINION_SHELVES = frozenset(s.casefold() for s in (
-    "Essays, Letters & Speeches", "Philosophy & Ethics", "Religion/Spirituality"))
+    "Essays, Letters & Speeches", "Philosophy & Ethics"))
 #: the record's own statements that it is NOT invention — a life, a history
 #: of a literature, a travel account, sources, scripture: they veto a shelf
 #: and a bare genre heading (a form subdivision "-- Fiction" still stands)
 NONFICTION_SUBDIVISIONS = frozenset(("biography", "history and criticism", "criticism and interpretation",
                                      "technique", "description and travel", "sources"))
-SCRIPTURE = re.compile(r"^(sacred books|bible)\b", re.IGNORECASE)
+#: scripture, wherever in a heading the record says it: "Bible", "Taoism --
+#: Sacred books", "Theravada Buddhism -- Sacred texts", "Koran" (the real
+#: records: KJV #10 and #30, Book of Mormon #17, Tao Te Ching #216,
+#: Dhammapada #2017 — shelved as Poetry, as Religion, as Mythology)
+SCRIPTURE = re.compile(r"^(sacred books|sacred texts|bible|koran|qur.an|talmud|vedas|upanishads)\b", re.IGNORECASE)
 #: a BARE genre heading is a topic: a work ABOUT poetry (Aristotle's Poetics,
 #: Shelley's Defence of Poetry) as often as a book of poems
 BARE_GENRES = frozenset(("poetry", "drama", "fiction"))
@@ -1982,7 +1989,7 @@ def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -
     Scripture gets no verdict at all: the same work on two shelves must not
     be framed two ways (invariant 4, no point of view by default)."""
     cats = {c.casefold() for c in categories}
-    if any(SCRIPTURE.match(x) for x in subjects):
+    if any(SCRIPTURE.match(p.strip()) for x in subjects for p in x.split("--")):
         return None
     if any(literary(x) and _main_heading(x).casefold() not in BARE_GENRES or
            (len(x.split("--")) > 1 and x.split("--")[-1].strip().casefold() in LITERARY_FORMS)
