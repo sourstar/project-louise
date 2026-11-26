@@ -24,6 +24,11 @@ _indexes: dict[tuple[str, str], tantivy.Index] = {}
 _opening: dict[tuple[str, str], threading.Lock] = {}
 #: how many indexes `open_all` opens at once: I/O, not CPU
 OPEN_THREADS = 8
+#: base directory -> how many times its handles were forgotten (`forget`,
+#: `forget_missing`). An open that began before a forget does not store its
+#: handle after it (`get_index`): the forget waits for the opens it can see
+#: (`_opens_settled`), and one that registered while it waited is caught here
+_forgotten: dict[str, int] = {}
 #: the same key -> (the one writer for that index, its lock). See `_writer`.
 _writers: dict = {}
 
@@ -141,6 +146,7 @@ def get_index(group: str, collection=None) -> tantivy.Index:
         if key in _indexes:
             return _indexes[key]
         gate = _opening.setdefault(key, threading.Lock())
+        epoch = _forgotten.get(key[0], 0)
     # THE OPEN IS OUTSIDE THE MODULE'S LOCK, under this index's own: two
     # callers of one index still open it once, and the open of another index
     # waits for nobody (`_opening`)
@@ -161,8 +167,13 @@ def get_index(group: str, collection=None) -> tantivy.Index:
             idx.register_tokenizer("stem_tok", _stem_analyzer())
         manual_reader(idx)
         with _lock:
-            _indexes[key] = idx
-            _writers.pop(key, None)     # a new Index object: a writer on the old one is stale
+            if _forgotten.get(key[0], 0) == epoch:
+                _indexes[key] = idx
+                _writers.pop(key, None)     # a new Index object: a writer on the old one is stale
+            # else: the collection was forgotten while this opened. The caller
+            # keeps its own reference, as a thread that held one always did;
+            # the handle is not kept for the next caller, whose collection at
+            # this path may be another one
         return idx
 
 
@@ -387,8 +398,11 @@ def forget(fts_dir) -> int:
     holding one keeps its own reference; nothing is closed here. How many
     handles went."""
     base = str(fts_dir)
+    with _lock:
+        _forgotten[base] = _forgotten.get(base, 0) + 1     # an open in flight stores nothing after this
     _opens_settled(lambda k: k[0] == base)
     with _lock:
+        _forgotten[base] += 1                              # nor one that began while this waited
         keys = [k for k in _indexes if k[0] == base] + [k for k in _writers if k[0] == base]
         for k in keys:
             _indexes.pop(k, None)
@@ -402,8 +416,15 @@ def forget_missing() -> int:
     shared text index removed with its last member (app/text_index.py),
     whose path a group formed again with the same identity would reuse."""
     from pathlib import Path
+    with _lock:
+        for b in {k[0] for k in list(_indexes) + list(_writers) + list(_opening)}:
+            if not Path(b).is_dir():
+                _forgotten[b] = _forgotten.get(b, 0) + 1
     _opens_settled(lambda k: not Path(k[0]).is_dir())
     with _lock:
+        for b in {k[0] for k in list(_indexes) + list(_writers) + list(_opening)}:
+            if not Path(b).is_dir():
+                _forgotten[b] = _forgotten.get(b, 0) + 1
         keys = [k for k in list(_indexes) + list(_writers) if not Path(k[0]).is_dir()]
         for k in keys:
             _indexes.pop(k, None)

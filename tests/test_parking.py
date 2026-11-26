@@ -196,20 +196,27 @@ def test_a_parked_model_is_listed_and_nothing_is_learnt_from_what_is_left_of_it(
     assert model_load.steady_vram(S, "vega-bge-m3") is None, "what a park leaves is never the model at rest"
 
 
-def test_a_model_listed_parked_that_is_on_the_card_is_loaded_and_its_record_is_put_right(node):
-    """The record stale one way (the note, §7): a request crossed the park
-    and the engine brought the weights back itself. Told from the reading —
-    nearer what the model holds loaded than what a park leaves."""
-    r = node({"vega-bge-m3": 900}, parks=["vega-bge-m3"])
-    _in_set("vega-bge-m3")
-    model_load.loaded_models(S, 0.0)                    # seen loaded and at rest: 900 MiB
-    r.parked["vega-bge-m3"] = 600
-    r.on_card = lambda m: 900                           # ...and its process holds all of it
+def test_a_model_listed_parked_is_parked_whatever_its_reading(node):
+    """The review of 2026-11-25, reproduced: a first cut took a parked model
+    for "on the card" when it read near what it held at rest — and after one
+    partly paged reading (600 of 939 MiB, routine in query mode) the spec's
+    own parked row (337 MiB, 603 to return) was misread, and the keeper
+    un-parked it at every beat. Nothing is told from the reading any more."""
+    r = node({"vega-bge-m3": 939}, parks=["vega-bge-m3"])
     model_load.loaded_models(S, 0.0)
-    assert model_load.parked(S) == {} and model_load.parked_stale(S) == {"vega-bge-m3"}
+    r.on_card = lambda m: 600                           # partly paged: the fewest reading over half the largest
+    model_load.loaded_models(S, 0.0)
+    r.parked["vega-bge-m3"] = 603
+    r.on_card = lambda m: 337
+    model_load.loaded_models(S, 0.0)
+    assert model_load.parked(S) == {"vega-bge-m3": (603 * MIB, 603 * MIB)}
+    r.on_card = lambda m: 939                           # ...and even holding all of it: the listing's word stands
+    model_load.loaded_models(S, 0.0)
+    assert "vega-bge-m3" in model_load.parked(S)
+    assert not hasattr(model_load, "parked_stale") and not hasattr(model_load, "record_loaded")
     did = resident._parked_follow([S])
-    assert did["record"] == ["vega-bge-m3"] and _verbs(r, "load") == ["vega-bge-m3"]
-    assert any("listed parked" in t and "says loaded again" in t for t in node.said)
+    assert set(did) == {"floor", "stopped"} and did["stopped"] == [] and not _verbs(r, "load"), \
+        "Louise never calls /backend/load: the model's next request makes the record exact"
 
 
 # ---- the verb: /backend/park ------------------------------------------------------
@@ -271,6 +278,51 @@ def test_what_a_park_leaves_on_the_card_is_not_counted_as_freed(node):
     out = model_evict.make_room_for(S, "big", horizon=time.time())
     assert out.fits is True and out.parked == ("vega-bge-m3",) and out.unloaded == ("omnivoice-cpp",)
     assert r.asked == [("park", "vega-bge-m3"), ("shutdown", "omnivoice-cpp")]
+
+
+def test_where_the_parks_leave_the_room_short_the_parked_ones_are_stopped_and_it_fits(node):
+    """The review of 2026-11-25, reproduced: 360 MiB free, a 900 MiB model
+    that parks, a 1,000 MiB one, 2,200 needed. The check counted both whole
+    (2,260); the park gave 600 — "1,935 of 2,200 MiB made", one model parked
+    and one stopped for a load that still had no room. What the check counted
+    is made: the parked model is stopped for what its process still holds."""
+    r = node({"vega-a": 900, "omnivoice-cpp": 1_000}, extra_mib=28_763, parks=["vega-a"])
+    _used(vega_a=30, omnivoice_cpp=2)
+    _known(big=2_200)
+    out = model_evict.make_room_for(S, "big", horizon=time.time())
+    assert out.fits is True, out.why
+    assert r.asked == [("park", "vega-a"), ("shutdown", "omnivoice-cpp"), ("shutdown", "vega-a")]
+    assert out.parked == () and set(out.unloaded) == {"vega-a", "omnivoice-cpp"}
+    assert not [t for t in node.said if t.startswith("card: parked")], "it did not stay parked: not said as parked"
+
+
+def test_a_model_parked_a_moment_ago_and_asked_for_since_is_neither_stopped_nor_counted(node, monkeypatch):
+    """The stops take seconds. A model parked at their start may be pinned by
+    an embed batch and back on the card before the room is counted short:
+    read again first — it is not stopped while it works, and the room its
+    park gave is taken again."""
+    r = node({"vega-a": 900, "omnivoice-cpp": 1_000}, extra_mib=28_763, parks=["vega-a"])
+    _used(vega_a=30, omnivoice_cpp=2)
+    _known(big=2_200)
+    real_post = r.post
+
+    def post(url, json=None, **kw):
+        got = real_post(url, json=json, **kw)
+        if url.endswith("/backend/shutdown") and json["model"] == "omnivoice-cpp":
+            r.parked.pop("vega-a", None)                # ...asked for meanwhile: back on the card
+        return got
+    monkeypatch.setattr(httpc, "post", post)
+    out = model_evict.make_room_for(S, "big", horizon=time.time())
+    assert r.asked == [("park", "vega-a"), ("shutdown", "omnivoice-cpp")], "the one that came back is not stopped"
+    assert out.fits is False and out.parked == () and out.unloaded == ("omnivoice-cpp",)
+    assert "1,360 of 2,200 MiB made" in out.why, "and the room its park gave is not counted"
+
+    r = node({"vega-a": 900, "omnivoice-cpp": 1_000}, extra_mib=28_763, parks=["vega-a"])
+    model_load.reset()
+    _known(big=2_200)
+    monkeypatch.setattr(model_pins, "read_pinned", lambda server, model: model == "vega-a" and bool(r.parked))
+    out = model_evict.make_room_for(S, "big", horizon=time.time())
+    assert ("shutdown", "vega-a") not in r.asked and out.parked == ("vega-a",), "pinned since its park: left parked"
 
 
 def test_a_busy_model_is_not_stopped_the_next_candidate_gives_the_room(node):
@@ -418,7 +470,7 @@ def test_the_keeper_writes_the_hosts_floor_where_a_model_parks_and_nowhere_else(
     r = node({"vega-bge-m3": 2_000, "louise-chat": 7_000}, patched=False)
     model_load.loaded_models(S, 0.0)
     resident._threshold(S)
-    assert resident._parked_follow([S]) == {"floor": [], "record": [], "stopped": []} and r.posted == []
+    assert resident._parked_follow([S]) == {"floor": [], "stopped": []} and r.posted == []
 
     r = node({"vega-bge-m3": 2_000, "louise-chat": 7_000}, parks=["vega-bge-m3"])
     model_load.reset()
@@ -473,15 +525,18 @@ def test_a_settings_write_that_is_not_answered_is_not_sent_again_at_each_beat(no
         clock["t"] += 60.0
     assert len(sent) == 1, "one write, never answered: not repeated at each beat"
     said = [t for t in node.said if "not sent again at each beat" in t]
-    assert len(said) == 1 and "park floor" in said[0] and "60 min" in said[0] and SECRET not in said[0]
+    assert len(said) == 1 and "park floor" in said[0] and "10 min" in said[0] and SECRET not in said[0]
     clock["t"] += localai_reclaimer.SETTINGS_HOLD_S
     resident._threshold(S)
     resident._parked_follow([S])
     assert len(sent) == 2, "after the hold it is asked once more"
-    with pytest.raises(localai_reclaimer.NotTaken) as e:
-        monkeypatch.setattr(httpc, "post", lambda *a, **k: (_ for _ in ()).throw(httpx.ConnectTimeout("down")))
-        localai_reclaimer.set_park_floor(S, 5)
-    assert not isinstance(e.value, localai_reclaimer.NotAnswered), "a server that is down was sent nothing"
+    for nothing_sent in (httpx.ConnectTimeout("down"), httpx.PoolTimeout("no connection free"),
+                         httpx.WriteTimeout("not written")):
+        with pytest.raises(localai_reclaimer.NotTaken) as e:
+            monkeypatch.setattr(httpc, "post", lambda *a, _x=nothing_sent, **k: (_ for _ in ()).throw(_x))
+            localai_reclaimer.set_park_floor(S, 5)
+        assert not isinstance(e.value, localai_reclaimer.NotAnswered), \
+            f"{type(nothing_sent).__name__}: the write never went out whole — asked again at the next beat"
 
 
 def test_the_host_under_its_floor_takes_its_memory_back_from_the_parked_model_used_longest_ago(node, monkeypatch):
@@ -502,6 +557,14 @@ def test_the_host_under_its_floor_takes_its_memory_back_from_the_parked_model_us
     monkeypatch.setattr(model_pins, "recorded", lambda: {(S, "vega-bge-m3")})
     model_load.loaded_models(S, 0.0)
     assert model_evict.host_claims([S]) == [], "a gate's or a pass's pin: never touched"
+    monkeypatch.setattr(model_pins, "recorded", lambda: None)
+    assert model_evict.host_claims([S]) == [], "the pin record unread: nothing is stopped on a guess"
+    monkeypatch.setattr(model_pins, "recorded", lambda: frozenset())
+    monkeypatch.setattr(model_pins, "read_pinned", lambda server, model: True)
+    assert model_evict.host_claims([S]) == [], "a pin LocalAI holds and the record does not: the operator's"
+    monkeypatch.setattr(model_pins, "read_pinned", lambda server, model: False)
+    monkeypatch.setattr(model_use, "last_used", lambda: {})
+    assert model_evict.host_claims([S]) == [], "a model Louise does not know — parked by hand — is never touched"
     monkeypatch.setattr(model_evict, "host_available", lambda: None)
     assert model_evict.host_claims([S]) == [], "unread: nothing is stopped on a guess"
 
@@ -558,6 +621,121 @@ def test_idle_and_in_host_memory_is_unloaded_where_the_rule_does_not_page(node, 
     assert model_evict.host_leftovers([S], in_set) == [], "said and done once"
 
 
+def test_a_model_whole_on_the_card_is_never_taken_for_one_in_host_memory(node, monkeypatch):
+    """The review of 2026-11-25, reproduced: "under its floor of the LARGEST
+    it was seen holding" stopped vega-dar-legal-it — about 1.8 GiB at rest,
+    8,453 MiB at its largest (a context made on demand), 0.21 — whole and on
+    the card, at every idle minute, and the keeper loaded it back each time.
+    The test is against what the model holds AT REST, where that is known;
+    unknown, with something on the card, it is left alone."""
+    r = node({"vega-dar-legal-it": 1_816, "learnt": 2_500, "half-out": 3_000})
+    _used(vega_dar_legal_it=1, learnt=1, half_out=1)
+    _known(vega_dar_legal_it=8_453, learnt=5_700, half_out=3_300)
+    monkeypatch.setattr(model_evict, "rule", lambda: ("unload", 12 * GIB, 3 * GIB))
+    rests = {"learnt": 2_500 * MIB, "half-out": 3_000 * MIB}
+    monkeypatch.setattr(resident, "rest_known", lambda s, m, mem: rests.get(m))
+    model_load.loaded_models(S, 0.0)
+    assert model_evict.host_leftovers([S], set()) == [] and r.asked == [], \
+        "0.21 of its largest and whole; at rest; and one whose rest nobody knows"
+    was = r.on_card
+    r.on_card = lambda m: {"half-out": 1_400, "learnt": 1_300}.get(m, was(m))      # 0.47 and 0.52 of their rest
+    model_load.loaded_models(S, 0.0)
+    assert [m for _s, m in model_evict.host_leftovers([S], set())] == ["half-out"], \
+        "under half of what it rests at: in host memory; just over half: on the card"
+
+
+#: THE NODE'S OWN SET IN EMBED MODE (München, `resident show` and the card, 2026-11-25 22:32–22:41Z):
+#: model -> (MiB on the card, MiB at rest as the keeper counts it or None where it is not known, MiB at its largest)
+NODE_EMBED_MODE = {
+    "louise-chat-qwen3.5-9b-q4-p0": (5_882, 5_882, 8_104),
+    "louise-translate-madlad": (7_221, 7_221, 8_005),
+    "louise-tts-omnivoice": (1_672, 1_672, 2_867),
+    "louise-rerank-nemotron-1b": (3_163, 3_163, 3_348),
+    "louise-rerank-medcpt": (423, None, 423),
+    "vega-nemotron-embed": (2_519, 2_229, 4_404),
+    "vega-qwen3-embedding-4b": (2_736, 2_736, 5_685),
+    "vega-medcpt-query": (197, None, 481),
+    "vega-bge-m3": (615, 615, 1_335),
+    "vega-dar-legal-it": (1_816, None, 8_453),          # 0.21 of its largest, whole and on the card
+    "vega-medcpt-article-ov": (312, None, 312),
+}
+
+
+def test_on_the_nodes_own_numbers_nothing_healthy_is_stopped_and_the_four_of_that_night_are(node, monkeypatch):
+    """A rule that STOPS a model is run against the sizes of the models it
+    will meet (the lesson of the review, 2026-11-25): the node's set in embed
+    mode as München read it — nothing is stopped; and the same set as it
+    stood at the switch, the four idle Ask models reading 0 MiB — exactly
+    those four."""
+    r = node({m: v[0] for m, v in NODE_EMBED_MODE.items()})
+    for m, (_here, _rest, largest) in NODE_EMBED_MODE.items():
+        with model_load._lock:
+            model_load._sizes[(S, m)] = largest * MIB
+        node_state.touch_encoder(S, m, now=time.time() - 3_600)
+    monkeypatch.setattr(resident, "rest_known",
+                        lambda s, m, mem: (NODE_EMBED_MODE[m][1] or 0) * MIB or None)
+    monkeypatch.setattr(model_evict, "rule", lambda: ("unload", 12 * GIB, 3 * GIB))
+    in_set = {(S, m) for m in NODE_EMBED_MODE}
+    model_load.loaded_models(S, 0.0)
+    assert model_evict.host_leftovers([S], in_set) == [] and r.asked == []
+    four = ("louise-translate-madlad", "louise-tts-omnivoice", "louise-rerank-nemotron-1b", "louise-rerank-medcpt")
+    _paged_out(r, *four)
+    model_load.loaded_models(S, 0.0)
+    assert sorted(m for _s, m in model_evict.host_leftovers([S], in_set)) == sorted(four)
+
+
+def test_a_paged_out_model_reads_a_mib_or_less_not_zero_and_is_still_taken(node, monkeypatch):
+    """The node's own paged-out readings (2026-11-25): tts-omnivoice 1.1 MiB,
+    dar-legal-it 0.5, nemotron 0.4, bge-m3 0.4. "Nothing on the card" is
+    under 2 % of the largest, whatever is known of the model at rest."""
+    r = node({"louise-tts-omnivoice": 2_867, "vega-dar-legal-it": 8_453})
+    _used(louise_tts_omnivoice=1, vega_dar_legal_it=1)
+    _known(louise_tts_omnivoice=2_867, vega_dar_legal_it=8_453)
+    r.get_real = r.get
+
+    def get(url, **kw):
+        got = r.get_real(url, **kw)
+        if url.endswith("/system"):
+            rows = got.json()["loaded_models"]
+            for row in rows:
+                row["size_vram"] = {"louise-tts-omnivoice": 1_153_434, "vega-dar-legal-it": 524_288}[row["id"]]
+            return SimpleNamespace(status_code=200, json=lambda: {"loaded_models": rows})
+        return got
+    monkeypatch.setattr(httpc, "get", get)
+    monkeypatch.setattr(model_evict, "rule", lambda: ("unload", 12 * GIB, 3 * GIB))
+    monkeypatch.setattr(resident, "rest_known", lambda s, m, mem: None)       # nobody knows what they rest at
+    model_load.loaded_models(S, 0.0)
+    assert sorted(m for _s, m in model_evict.host_leftovers([S], set())) == \
+        ["louise-tts-omnivoice", "vega-dar-legal-it"]
+
+
+def test_a_model_this_stopped_is_not_stopped_by_it_again_within_the_hour(node, monkeypatch):
+    """Loaded back and paged out again, the card is too full for the set:
+    the budget's to say — never a stop and a load at every beat."""
+    r = node({"louise-translate-madlad": 6_000})
+    _used(louise_translate_madlad=1)
+    _known(louise_translate_madlad=6_000)
+    _paged_out(r, "louise-translate-madlad")
+    monkeypatch.setattr(model_evict, "rule", lambda: ("unload", 12 * GIB, 3 * GIB))
+    model_load.loaded_models(S, 0.0)
+    assert len(model_evict.host_leftovers([S], set())) == 1
+    r.models["louise-translate-madlad"] = 6_000         # the keeper loaded it back, and it reads 0 again
+    model_load.loaded_models(S, 0.0)
+    assert model_evict.host_leftovers([S], set()) == [] and len(_verbs(r, "shutdown")) == 1
+    model_evict._left_at[(S, "louise-translate-madlad")] -= model_evict.LEFTOVER_AGAIN_S + 1
+    assert len(model_evict.host_leftovers([S], set())) == 1, "an hour later it may be asked again"
+
+    # ...and a spell under a paging rule ends the hour: query -> embed -> query -> embed within it
+    # must stop what the second spell in query mode left in host memory (the 22:30Z case, again)
+    r.models["louise-translate-madlad"] = 6_000
+    model_load.loaded_models(S, 0.0)
+    assert model_evict.host_leftovers([S], set()) == []
+    monkeypatch.setattr(model_evict, "rule", lambda: ("page", 12 * GIB, None))
+    assert model_evict.host_leftovers([S], set()) == []
+    monkeypatch.setattr(model_evict, "rule", lambda: ("unload", 12 * GIB, 3 * GIB))
+    assert len(model_evict.host_leftovers([S], set())) == 1
+
+
 def test_a_pinned_a_busy_a_parked_and_a_model_that_holds_no_vram_are_left(node, monkeypatch):
     r = node({"pinned": 2_000, "busy": 2_000, "vega-dar": 2_300, "on-cpu": 0, "elsewhere": 1_000},
              parks=["vega-dar"], cpu={"busy": 80.0})
@@ -597,6 +775,10 @@ def test_the_keepers_beat_gives_the_host_back_and_takes_it_for_no_eviction(node,
         resident._track[(S, "louise-translate-madlad")].warmed_at = resident._now() - 30.0   # warmed half a minute ago
     monkeypatch.setattr(resident, "_due", resident._due)          # the real back-off, by the node's own record
     monkeypatch.setattr(resident, "_question_now", lambda: False)
+    monkeypatch.setattr(resident, "_settling", lambda now=None: True)
+    resident.beat([], embed_mode=lambda c: "all", state="running")
+    assert _verbs(r, "shutdown") == [], "nor in the minutes after a resume, beside the keeper's own loads"
+    monkeypatch.setattr(resident, "_settling", lambda now=None: False)
     penalized = []
     monkeypatch.setattr(resident, "_penalize", lambda r_, stayed: penalized.append(r_.model))
     resident.beat([], embed_mode=lambda c: "all", state="running")

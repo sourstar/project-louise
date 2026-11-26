@@ -222,14 +222,18 @@ _parks: dict[str, frozenset[str]] = {}
 #: size that costs a copy, for which room is made as for a load
 #: (`ensure_loaded`). Nothing is learnt of a model's size from such a row
 _parked: dict[str, dict[str, tuple[int, int]]] = {}
-#: server -> the models listed parked whose process holds the model on the
-#: card all the same: LocalAI's record is stale ONE way (the note, §7 — a
-#: request that took its client before a park and reached the backend after
-#: it is served by the engine's own return), and `POST /backend/load` makes
-#: it exact. Told from the reading: nearer what the model holds loaded than
-#: what a park leaves of it (`_on_card`). The keeper's to reconcile
-#: (app/resident.py `_parked_follow`); for every reader here it is LOADED
-_parked_stale: dict[str, frozenset[str]] = {}
+#: A MODEL LISTED PARKED IS PARKED, FOR LOUISE — even in the one case where
+#: LocalAI's record is stale (parking-step-2.md §7: a request that took its
+#: client before a park and reached the backend after it is served by the
+#: engine's own return, and the weights are on the card under a record that
+#: says parked). Nothing here tells that case from a reading: a first cut did
+#: ("nearer what the model holds loaded than what a park leaves"), and a
+#: model whose at-rest size had been learnt from one partly paged reading was
+#: taken for on the card while truly parked, which the keeper then un-parked
+#: at every beat (the review of 2026-11-25, reproduced). The record heals by
+#: the server's own design at the model's next request — its `LoadModel` is
+#: answered "already loaded" — and until then Louise makes room for a return
+#: that costs nothing, which errs on the side of room.
 _probe_locks: dict[str, threading.Lock] = {}
 _flights: dict[tuple[str, str], _Flight] = {}
 _recent: deque[ColdStart] = deque(maxlen=100)
@@ -255,7 +259,6 @@ def reset() -> None:
         _run_on_demand.clear()
         _parks.clear()
         _parked.clear()
-        _parked_stale.clear()
         _probe_locks.clear()
         _flights.clear()
         _recent.clear()
@@ -295,7 +298,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
     listed = {m["id"]: _options_on_demand(m["load_options"]) for m in held
               if isinstance(m.get("load_options"), dict)}
     parks = frozenset(m["id"] for m in held if m.get("parks") is True)
-    parked, stale = {}, set()
+    parked = {}
     for m in held:
         pid = (m.get("process") or {}).get("pid") if isinstance(m.get("process"), dict) else None
         if isinstance(pid, int):
@@ -310,12 +313,8 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         now[m["id"]] = size if ok else 0
         away = _parked_row(m)
         if away is not None:
-            with _lock:
-                back = _on_card(server, m["id"], now[m["id"]], away[1])
-            if not back:
-                parked[m["id"]] = away      # NOT on the card: no size is learnt from what is left of it
-                continue
-            stale.add(m["id"])              # on the card under a record that says parked: loaded, for us
+            parked[m["id"]] = away          # NOT on the card: no size is learnt from what is left of it
+            continue
         if ok:
             sizes[(server, m["id"])] = size
     with _lock:
@@ -326,7 +325,6 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         _backends[server] = backends
         _parks[server] = parks
         _parked[server] = parked
-        _parked_stale[server] = frozenset(stale)
         for m in parked:
             # its present state on the card begins again when it is back: what
             # a park leaves is never "the model at rest" (`steady_vram`)
@@ -453,20 +451,6 @@ def _parked_row(row: dict) -> tuple[int, int] | None:
     return count(got.get("size_host")), count(got.get("size_vram_needed"))
 
 
-def _on_card(server: str, model: str, size: int, needed: int) -> bool:
-    """Whether a model LISTED PARKED is on the card all the same (the stale
-    record, `_parked_stale`): its process holds nearer what the model holds
-    loaded and at rest than what a park leaves of it — over the at-rest size
-    less half of what a return commits. Only where this process knows the
-    model at rest (`_load_rest`, `_rest`): unknown, the listing's word
-    stands. Called under `_lock`."""
-    if not size or not needed:
-        return False
-    key = (server, model)
-    rest = (_load_rest.get(key) or (None, None))[1] or _rest.get(key)
-    return bool(rest) and size > rest - needed // 2
-
-
 def parks(server: str) -> frozenset[str]:
     """The models `server`'s LAST `/system` answer said can be parked
     (`"parks": true`); no request. Empty on a server without the patch."""
@@ -480,12 +464,6 @@ def parked(server: str) -> dict[str, tuple[int, int]]:
     no request — read right after `held_sizes`, it is the same answer."""
     with _lock:
         return dict(_parked.get(server_of(server), {}))
-
-
-def parked_stale(server: str) -> frozenset[str]:
-    """The models listed parked that are on the card (`_parked_stale`)."""
-    with _lock:
-        return _parked_stale.get(server_of(server), frozenset())
 
 
 def steady_vram(server: str, model: str) -> tuple[int, float] | None:
@@ -771,30 +749,12 @@ def park(url: str, model: str | None) -> tuple[str, int]:
         return PARKED, moved if isinstance(moved, int) and not isinstance(moved, bool) and moved > 0 else 0
     if status == 409 and kind == "model_busy":
         return PARK_BUSY, 0
-    if (status == 404 and kind == "model_not_loaded") or (status == 500 and kind == "model_stopped"):
+    if status == 500 and kind == "model_stopped":
+        _note_own(server, model)             # our park broke its backend and LocalAI stopped it: Louise's doing
         return PARK_GONE, 0
+    if status == 404 and kind == "model_not_loaded":
+        return PARK_GONE, 0                  # gone before the park: not ours
     return PARK_STOP, 0
-
-
-#: a return is a copy of the weights (15.5 ms for bge-m3 on the card); the
-#: server stops a backend that has not answered one in 60 s
-RECORD_TIMEOUT_S = 75.0
-
-
-def record_loaded(url: str, model: str) -> bool:
-    """`POST <server>/backend/load {"model": …}` for a model LocalAI lists
-    parked while its process holds it on the card (`parked_stale`): the
-    engine answers its `LoadModel` "already loaded", and LocalAI's record —
-    and its watchdog's — says loaded again. True when it answered 200. Never
-    raises."""
-    server = server_of(url)
-    try:
-        r = httpc.post(f"{server}/backend/load", json={"model": model}, timeout=RECORD_TIMEOUT_S)
-    except Exception:   # noqa: BLE001 — asked again at the next beat
-        return False
-    with _lock:
-        _systems.pop(server, None)
-    return r.status_code == 200
 
 
 def _note_loaded(server: str, model: str) -> None:

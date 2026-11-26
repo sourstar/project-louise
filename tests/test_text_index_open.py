@@ -100,9 +100,39 @@ def test_a_forget_waits_for_an_open_in_flight_and_leaves_no_handle_behind(held, 
     go.set()
     opener.join(5)
     forgetter.join(5)
-    assert forgot == [1]
+    assert forgot == [0], "the open in flight stored nothing: there was no handle to drop"
     with fts._lock:
         assert not [k for k in fts._indexes if k[0] == str(fts.base_of(held))], "no handle left behind"
+
+
+def test_an_open_that_registers_while_a_forget_waits_stores_nothing_after_it(held, monkeypatch):
+    """The review of 2026-11-25: the forget waits for the opens it can see; an
+    open of another group of the same collection that begins while it waits
+    was neither waited for nor dropped, and stored its handle afterwards."""
+    real = fts.tantivy.Index
+    groups = fts.existing_groups(held)[:2]
+    first_in, second_in, go = threading.Event(), threading.Event(), threading.Event()
+
+    def slow(schema, path=None, **kw):
+        (first_in if path.endswith(groups[0]) else second_in).set()
+        go.wait(5)
+        return real(schema, path=path, **kw)
+    monkeypatch.setattr(fts.tantivy, "Index", slow)
+    a = threading.Thread(target=fts.get_index, args=(groups[0], held))
+    a.start()
+    assert first_in.wait(5)
+    f = threading.Thread(target=fts.forget, args=(fts.base_of(held),))
+    f.start()
+    time.sleep(0.1)                              # the forget is waiting on the first open's gate
+    b = threading.Thread(target=fts.get_index, args=(groups[1], held))
+    b.start()
+    assert second_in.wait(5)                     # a second open began AFTER the forget's snapshot
+    go.set()
+    for t in (a, b, f):
+        t.join(5)
+    with fts._lock:
+        assert not [k for k in fts._indexes if k[0] == str(fts.base_of(held))], "neither handle is kept"
+    assert fts.get_index(groups[1], held) is fts.get_index(groups[1], held), "and the next open is kept again"
 
 
 def test_a_group_that_cannot_be_opened_is_said_and_the_others_still_open(held, monkeypatch):

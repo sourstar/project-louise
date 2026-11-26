@@ -63,6 +63,61 @@ def test_every_stop_and_park_the_runner_took_is_noted_and_a_refused_one_is_not(r
     assert model_load.park(S, "m")[0] == model_load.PARK_BUSY and own_unloads.since((S, "m"), 60) is None
 
 
+def test_a_park_that_broke_its_backend_is_louises_own_and_a_model_already_gone_is_not(runner):
+    runner["park"] = (500, {"error": {"type": "model_stopped", "code": 500, "message": "stopped"}})
+    assert model_load.park(S, "m")[0] == model_load.PARK_GONE and own_unloads.since((S, "m"), 60) == ""
+    own_unloads._path().unlink()
+    runner["park"] = (404, {"error": {"type": "model_not_loaded", "code": 404, "message": "not loaded"}})
+    assert model_load.park(S, "m")[0] == model_load.PARK_GONE and own_unloads.since((S, "m"), 60) is None
+
+
+def test_a_warm_that_left_its_model_unloaded_is_no_load_to_be_evicted_from(isolated_config, monkeypatch):
+    """The review of 2026-11-25: a parked model's return the card refused
+    (503: it stays parked) ended the keeper's warm without raising; marked as
+    a load, the next beat found it "off the card again" and took a back-off
+    and a penalty for an eviction nobody made."""
+    said, penalized = [], []
+    resident.reset()
+    resident.set_log(lambda level, text: said.append(text))
+    monkeypatch.setattr(resident, "_penalize", lambda r, stayed: penalized.append(r.model))
+    state = {"loaded": False}
+    r = resident.Resident(S, "vega-bge-m3", ("query encoder",), ("wikipedia",), warm=lambda: None)
+    try:
+        with resident._lock:
+            resident._last = {r.key: r}
+        monkeypatch.setattr(resident, "preloads", lambda state=None: (True, ""))
+        monkeypatch.setattr(resident, "_loaded", lambda r_: state["loaded"])
+        monkeypatch.setattr(resident, "_plan_now", lambda want, mem=None: None)
+        monkeypatch.setattr(resident, "room", lambda r_: None)
+        resident._warm_all([r], lambda: False)
+        with resident._lock:
+            t = resident._track[r.key]
+            assert t.warmed_at is None and t.next_try > resident._now(), "not a load: asked again in two minutes"
+        assert resident._due(r, resident._now() + resident.RETRY_UNLOADED_S + 1) is True
+        assert penalized == [] and not [x for x in said if "off the card again" in x]
+        # a load that KEEPS failing is asked less and less often: each try makes its room first
+        waits = []
+        for _ in range(8):
+            with resident._lock:
+                resident._track[r.key].next_try = 0.0
+            resident._warm_all([r], lambda: False)
+            with resident._lock:
+                waits.append(round(resident._track[r.key].next_try - resident._now()))
+        assert waits == [240, 480, 960, 1920, 3840, 7200, 7200, 7200], "doubled, up to the back-off's cap"
+        # ...and a load that takes: not loaded before the warm, loaded after it
+        answers = iter([False, True])
+        monkeypatch.setattr(resident, "_loaded", lambda r_: next(answers))
+        with resident._lock:
+            resident._track[r.key].next_try = 0.0
+        resident._warm_all([r], lambda: False)
+        with resident._lock:
+            assert resident._track[r.key].fails == 0 and resident._track[r.key].warmed_at is not None
+    finally:
+        resident.reset()
+        from app import model_pins
+        resident.set_log(model_pins.node_event)
+
+
 def _warmed(r: resident.Resident, ago_s: float) -> float:
     now = resident._now()
     with resident._lock:

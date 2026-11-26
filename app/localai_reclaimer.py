@@ -69,8 +69,12 @@ class NotAnswered(NotTaken):
     and a server patch for it rides the park server build."""
 
 
-#: how long a server whose settings write did not answer is left alone
-SETTINGS_HOLD_S = 3600.0
+#: how long a server whose settings write did not answer is left alone. Ten
+#: minutes: in the server's fault it bounds the requests left hanging at six
+#: an hour; where the answer was only slow, the switch a change of mode asked
+#: for is at most ten minutes late (the review of 2026-11-25: an hour held
+#: the reclaimer wrong for an hour after one slow answer)
+SETTINGS_HOLD_S = 600.0
 
 
 def wanted(rule: str) -> bool:
@@ -130,7 +134,10 @@ def set_key(server: str, key: str, value: Any) -> bool:
         status = r.status_code
     except Exception as e:   # noqa: BLE001 — as above
         import httpx
-        if isinstance(e, httpx.TimeoutException) and not isinstance(e, httpx.ConnectTimeout):
+        # ReadTimeout alone: the request went out whole and no answer came. A
+        # pool or a write timeout sent nothing, a connect timeout reached
+        # nobody — those are asked again at the next beat, as any failure is
+        if isinstance(e, httpx.ReadTimeout):
             raise NotAnswered(f"the write was sent and not answered in {TIMEOUT_S:.0f} s "
                               f"({type(e).__name__})") from None
         raise NotTaken(f"its settings could not be written ({type(e).__name__})") from None
