@@ -328,3 +328,50 @@ cycles are that run's (the same §12: the twin's file had `park: true`,
 `/system` listed it, it parked and came back, counts 1 and 1). NOT YET ON
 THE CARD: a pinned copy and a twin behind the wrapper — München runs both on
 copies after the deploy.
+
+## 7. A park is for a run admitted to park (2026-11-26, found on the node)
+
+**What happened.** bge-m3's file got its three parking lines at 07:59:32Z.
+`/models/reload` re-read the file and left the running backend as it was:
+`/system` listed no `parks` for it and the monitor answered "no status for
+a model that cannot park" — the file said it parks, the PROCESS did not.
+After `POST /backend/shutdown` and one question (08:06:30Z) the new process
+answered: "parking: this model can park, 577.23 MiB of weights leave the
+device when it is told to", run `sha256:0211…1dde` (the run of last night's
+copies: same engine, env and weights), `/system` `parks: true`. Then:
+
+- the WORKER said nothing about the run — it had not heard it. The record of
+  which run answers was each process's own; the web heard it from the
+  question, and wikipedia had nothing to embed (03 §3.3, amended the same
+  day: a run heard by any process is now written where every one reads it,
+  `run_check._tell` / `_last_heard`);
+- 27 s after the load the keeper wrote "LocalAI's park floor set to
+  12,288 MiB … vega-bge-m3 can be parked" — for a run whose cycles nobody
+  had counted. A write was held to the counted cycles (`runs.check`,
+  `parks=`); a PARK was not;
+- `louise hold embedder check wikipedia` was refused: "held by the node
+  (worker) … retry when it is done". The manual door is open for a paused
+  collection only (`node pause wikipedia`, the check, `node resume`), and
+  the gate test's own words now say so.
+
+**The rule** (the operator, the same morning, of the statement field:
+"Either a model is validated or it does not embed"): the evictor PARKS a
+collection's encoder only when the run that answers now has its park
+cycles counted for EVERY collection that uses it, document side and query
+side (`run_check.park_admitted`, asked in `model_evict.make_room_for`, kept
+30 s a model). Otherwise — a run nobody has heard, one not gated, one the
+gate refused — it gives its room by a stop, as before parking existed, and
+the line says "its file says it parks and its run is not admitted to:
+stopped". A model that is no collection's encoder has no gate and parks as
+LocalAI says. The keeper still writes the host floor for a server where a
+model parks: the floor is LocalAI's condition for any park, the gate's own
+cycles included.
+
+**Not changed:** LocalAI itself never parks a model by itself (Tensor,
+parking-step-2.md §12), so nothing else on the node decides a park.
+
+**For whoever puts `park: true` into the next encoder's file:** the env
+takes effect in a NEW process — stop the model, do not reload it; the first
+answer of the new process is heard and gated by itself from this release
+on; until its cycles are counted the model is stopped for room, not parked.
+

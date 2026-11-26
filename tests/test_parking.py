@@ -271,6 +271,44 @@ def test_a_model_that_parks_is_parked_and_counted_at_what_left_the_card(node):
     assert "Do parking." in line[0] and not [t for t in node.said if t.startswith("card: unloaded")]
 
 
+def test_an_encoder_whose_run_is_not_admitted_to_park_is_stopped_for_its_room(node, monkeypatch):
+    """München, 2026-11-26: bge-m3 restarted with `park: true` and its env;
+    one minute later the keeper said "vega-bge-m3 can be parked" — and the
+    gate's park cycles had not run for that run. A park is for a run
+    admitted to park; any other gives its room as before parking existed."""
+    from app import run_check
+    asked = []
+    verdict = {"vega-bge-m3": False}
+    monkeypatch.setattr(run_check, "park_admitted", lambda server, model: asked.append(model) or verdict.get(model))
+
+    def room():
+        r = node({"vega-bge-m3": 2_000, "omnivoice-cpp": 1_700, "louise-chat": 7_000}, extra_mib=20_000,
+                 parks=["vega-bge-m3", "omnivoice-cpp"], floor=12 * GIB)
+        _used(vega_bge_m3=30, omnivoice_cpp=2, louise_chat=0.1)
+        _known(vega_qwen3_4b=1_900)                          # 323 MiB free: 1,577 short
+        node.said.clear()
+        return r, model_evict.make_room_for(S, "vega-qwen3-4b", horizon=time.time())
+
+    r, out = room()
+    assert out.fits is True and out.unloaded == ("vega-bge-m3",) and out.parked == ()
+    assert _verbs(r, "park") == [] and "vega-bge-m3" not in r.models, "stopped: nothing of it was parked"
+    line, = [t for t in node.said if t.startswith("card: unloaded")]
+    assert "vega-bge-m3 (last used 30.0 h ago, 2,000 MiB, its file says it parks and its run is not admitted to: stopped)" in line
+    assert sorted(asked) == ["omnivoice-cpp", "vega-bge-m3"], "asked of each loaded model that says it parks, and of no other"
+    # its cycles counted: parked, as LocalAI lists it
+    verdict["vega-bge-m3"] = True
+    r, out = room()
+    assert out.parked == ("vega-bge-m3",) and out.unloaded == () and "vega-bge-m3" in r.models
+    # a model that is no collection's encoder (None): LocalAI's word stands
+    verdict["vega-bge-m3"] = None
+    r, out = room()
+    assert out.parked == ("vega-bge-m3",)
+    # an answer that cannot be had is a stop, never a park
+    monkeypatch.setattr(run_check, "park_admitted", lambda server, model: (_ for _ in ()).throw(OSError("unreadable")))
+    r, out = room()
+    assert out.unloaded == ("vega-bge-m3",) and out.parked == () and _verbs(r, "park") == []
+
+
 def test_what_a_park_leaves_on_the_card_is_not_counted_as_freed(node):
     """2,000 MiB held, 1,700 moved: a need of 1,900 over what is free takes
     the next candidate too — the pre-check's bound is not the count."""

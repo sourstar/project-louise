@@ -354,6 +354,64 @@ def parks_now(recipe, query: bool = False) -> bool:
 PARK_IDLE_S = 1.2
 
 
+#: (server, model) -> (until, the answer): `park_admitted`, asked by the evictor
+_park_admitted: dict[tuple[str, str], tuple[float, bool | None]] = {}
+PARK_ADMITTED_TTL_S = 30.0
+
+
+def park_admitted(server: str, model: str) -> bool | None:
+    """MAY THE NODE PARK THIS MODEL NOW? The operator, 2026-11-26: "Either a
+    model is validated or it does not embed" — and a model that parks is
+    validated AS ONE THAT PARKS by its counted cycles (`embedder.
+    park_cycles`), which a write was held to (`runs.check`) and a park was
+    not: the keeper counted bge-m3 as parkable the minute its new process
+    answered, its gate not yet run (München, the same day).
+
+      None   no collection's encoder (a chat model, a reranker): no gate
+             speaks of it, and LocalAI's own word stands;
+      True   for EVERY collection whose document or query encoder it is, the
+             run that answers now has its cycles counted against the
+             statement this peer holds for it;
+      False  otherwise — a run nobody has heard yet, one not gated, one whose
+             cycles were refused, anything that cannot be read. The evictor
+             then STOPS the model for its room, as before parking existed: a
+             stop is always right, a park is right only for an admitted run.
+
+    Kept `PARK_ADMITTED_TTL_S` a model: the evictor asks for every candidate
+    of every load."""
+    from . import model_load
+    key = (model_load.server_of(server), model)
+    now = time.monotonic()
+    kept = _park_admitted.get(key)
+    if kept is not None and kept[0] > now:
+        return kept[1]
+    answer: bool | None = None
+    try:
+        for c in collections_mod.load_all():
+            if not applies(c):
+                continue
+            recipe = collections_mod.recipe_for(c)
+            roles = ["document"] + (["query"] if c.codex.space.query.encoder is not None else [])
+            for role in roles:
+                endpoint, named = _who(recipe, role == "query")
+                if (model_load.server_of(endpoint), named) != key:
+                    continue
+                run_id = _last_heard(((endpoint, named), role))
+                held = (runs_mod.statements_for_space(_root(), c.name, c.codex, role, signer=signer())
+                        .get(run_id) if run_id else None)
+                if held is None or not runs_mod.passing(held, c.codex) or not runs_mod.parks_counted(
+                        _root(), c.name, c.codex, role, run_id, held, signer=signer()):
+                    answer = False
+                    break
+                answer = True
+            if answer is False:
+                break
+    except Exception:                                   # noqa: BLE001 — unreadable: a stop, never a park
+        answer = False
+    _park_admitted[key] = (now + PARK_ADMITTED_TTL_S, answer)
+    return answer
+
+
 class Parker:
     """The model's park cycles as the gate asks them (`embedder.park_cycles`):
     whether it parks, the engine's own counts, the park itself.
@@ -1454,10 +1512,127 @@ _noted: set[tuple[tuple[str, str], str, str]] = set()
 
 
 def heard(recipe, answered: set, *, role: str = "document") -> None:
-    """Remember which run this endpoint's answers named."""
+    """Remember which run this endpoint's answers named — and TELL THE OTHER
+    PROCESSES when it is news (`_tell`): a run a question heard first is
+    gated by the worker, which never asks a model it has nothing to embed
+    with (the module's "WHO HEARS A RUN")."""
     named = [r for r in answered if r]
-    if named:
-        _answering[(_who(recipe, role == "query"), role)] = sorted(named)[-1]
+    if not named:
+        return
+    key = (_who(recipe, role == "query"), role)
+    run = sorted(named)[-1]
+    news = _answering.get(key) != run or (_shared().get(_heard_key(key)) or {}).get("run") != run
+    now = time.time()
+    _answering[key] = run
+    _answering_at[key] = now
+    if news:
+        _tell(key, run, now)
+
+
+# ---- WHO HEARS A RUN (2026-11-26) ---------------------------------------------------
+#
+# `_answering` is this process's own. Until this day it was the only record:
+# the WEB heard a model's new run from a question's answer, and the WORKER —
+# which gates — heard a run only from its own embed stage. München, bge-m3
+# restarted with another env (its three parking lines): one question
+# answered from run 0211…, and four minutes later the worker had said
+# nothing — wikipedia had nothing to embed, `_settle_the_run` read the
+# worker's own record (the old run, validated) and looked no further. "Gated
+# at once, whether or not it has anything to embed" (03 §3.3) held only for
+# a run the worker itself heard. On a node that withholds, the vector leg
+# would have waited for a gate that never came.
+#
+# So what any process hears is written where every process reads it:
+# `state/heard.json`, beside the worker's re-check record — per (endpoint,
+# model, role) the run and when, replaced under a file lock, read again when
+# the file changes. `answering` takes the later of what this process heard
+# and what another told.
+
+HEARD_KIND = "louise-heard"
+#: how long a process waits for the record's lock before it leaves the news
+#: untold (the next answer tells it): a search never waits on this
+HEARD_WAIT_S = 0.5
+_answering_at: dict[tuple[tuple[str, str], str], float] = {}
+_heard_read: dict[str, tuple[tuple[int, int], dict[str, dict[str, Any]]]] = {}
+
+
+def heard_path() -> Path:
+    return collections_mod.louise_root() / "state" / "heard.json"
+
+
+def _heard_key(key: tuple[tuple[str, str], str]) -> str:
+    (endpoint, model), role = key
+    return f"{endpoint}\n{model}\n{role}"
+
+
+def _read_heard(path: Path) -> dict[str, dict[str, Any]]:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        rows = doc.get("heard") if doc.get("kind") == HEARD_KIND else None
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {k: v for k, v in (rows or {}).items()
+            if isinstance(v, dict) and isinstance(v.get("run"), str) and isinstance(v.get("at"), (int, float))}
+
+
+def _shared() -> dict[str, dict[str, Any]]:
+    """What every process has told, read again when the file changes (keyed
+    on its path, CLAUDE.md). One stat a call; {} where there is no record."""
+    path = heard_path()
+    try:
+        st = path.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return {}
+    cached = _heard_read.get(str(path))
+    if cached is None or cached[0] != stamp:
+        cached = _heard_read[str(path)] = (stamp, _read_heard(path))
+    return cached[1]
+
+
+def _tell(key: tuple[tuple[str, str], str], run: str, at: float) -> None:
+    """Write `run` as the last heard for `key`, unless the record says it
+    already. Never raises and never waits past `HEARD_WAIT_S`: untold news
+    is told by the next answer."""
+    import fcntl
+    path = heard_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path.with_name(path.name + ".lock"), "a+b") as lock:
+            deadline = time.monotonic() + HEARD_WAIT_S
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        return
+                    time.sleep(0.01)
+            try:
+                rows = _read_heard(path)
+                k = _heard_key(key)
+                if (rows.get(k) or {}).get("run") == run:
+                    return
+                rows[k] = {"run": run, "at": round(at, 3)}
+                tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+                tmp.write_text(json.dumps({"kind": HEARD_KIND, "heard": rows}, sort_keys=True),
+                               encoding="utf-8")
+                os.replace(tmp, path)
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+def _last_heard(key: tuple[tuple[str, str], str]) -> str | None:
+    """The run last heard for `key` by ANY process: this one's own, unless
+    another told a different one later."""
+    said = _shared().get(_heard_key(key))
+    if said is not None and said["run"] != _answering.get(key) \
+            and float(said["at"]) > _answering_at.get(key, 0.0):
+        _answering[key] = said["run"]
+        _answering_at[key] = float(said["at"])
+    return _answering.get(key)
 
 
 def _note_options(recipe, answered: set, known: dict[str, dict[str, Any]], *,
@@ -1501,15 +1676,17 @@ def engine_counts(get=httpx.get) -> dict[tuple[str, str], dict[str, Any]]:
 
 
 def answering(collection) -> dict[str, str | None]:
-    """role -> the run this collection's encoder last stated, as far as THIS
-    process has heard. Empty for a collection older than version 3."""
+    """role -> the run this collection's encoder last stated, as far as ANY
+    process of the node has heard (`_last_heard`: the web hears a new run
+    from a question, the worker from its embed stage — and the worker gates).
+    Empty for a collection older than version 3."""
     if not applies(collection):
         return {}
     try:
         recipe = collections_mod.recipe_for(collection)
     except Exception:                                   # noqa: BLE001
         return {}
-    return {role: _answering.get((_who(recipe, role == "query"), role))
+    return {role: _last_heard((_who(recipe, role == "query"), role))
             for role in runs_mod.ROLES}
 
 
@@ -1703,6 +1880,9 @@ def _gated_again(collection, role: str = "document") -> None:
 def reset_cache() -> None:
     _verdicts.clear()
     _answering.clear()
+    _answering_at.clear()
+    _heard_read.clear()
+    _park_admitted.clear()
     _canary.clear()
     _canary_unconfirmed.clear()
     _canary_gated.clear()
@@ -1939,12 +2119,17 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
     # has since heard another run from it, the verdict is about a run that no
     # longer answers, however fresh it is: look again — for every collection
     # of the encoder, not only the one that noticed.
-    now_answering = answering(collection).get("document")
+    heard_now = answering(collection)
+    now_answering = heard_now.get("document")
     stamp = _kept_stamp(collection)
     # ...and a verdict given before a context of the run failed its canary is
     # about a run that has to be gated again (`_suspect`)
+    # ...and one given before the QUERY encoder was heard from another run is
+    # about that side's old run (2026-11-26: only the document side was held
+    # to this, and a query run a question heard would have waited the TTL out)
     if cached is not None and cached[2] > now and cached[4] == stamp and (
             now_answering is None or cached[3] is None or cached[3] == now_answering) \
+            and (heard_now.get("query") is None or cached[5] == heard_now.get("query")) \
             and not _suspect(collection) and not _suspect(collection, "query"):
         return cached[0]
     with _guard:
@@ -1977,7 +2162,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         # is not a reason to look again
         _verdicts[where] = (allowed, reason,
                             now + (PASS_TTL_S if allowed else FAIL_TTL_S), run_id,
-                            _kept_stamp(collection))
+                            _kept_stamp(collection), answering(collection).get("query"))
         if cached is None or cached[0] != allowed or cached[1] != reason:
             db.log_event(con, "info" if allowed else "error", "run-check",
                          (f"[{collection.name}] embedding "

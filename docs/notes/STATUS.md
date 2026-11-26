@@ -20,6 +20,33 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **PARKING SWITCHED ON FOR bge-m3, AND THE THREE DEFECTS THE STEP FOUND (München, 07:59–08:12Z; operator:
+  "Yes", then "switch it on straight after the deploy, without waiting for the comparison").** The three
+  lines went into the node's file by hand, key by key equal to main's staged one. (1) `/models/reload`
+  does not apply an env: the running backend stayed, `/system` listed no `parks` — a model's env needs
+  the model STOPPED. (2) After the stop and one question the new process answered from run 0211…1dde
+  (last night's copies' run) and THE WORKER NEVER GATED IT: which run answers was each process's own
+  record, the web heard it, wikipedia had nothing to embed. "Gated at once, whether or not it has
+  anything to embed" held only for a run the worker itself heard. Now what any process hears is written
+  to `state/heard.json` and the worker's round gates it (03 §3.3 amended); an asymmetric space's query
+  run, which only a question ever hears, the same — its verdict was held to the document run alone.
+  (3) THE KEEPER COUNTED THE UNGATED RUN AS ONE IT MAY PARK ("vega-bge-m3 can be parked", 27 s after its
+  load): a write was held to the counted cycles, a park was not. The evictor now parks an encoder only
+  as a run admitted to park for every collection that uses it, and stops it otherwise
+  (`run_check.park_admitted`; parking-keeper.md §7). And the manual door, `hold embedder check`, is
+  shut on a running node — the worker holds every collection's lock — so its hint now says to pause
+  the collection first; that is how today's gate was run. I had told München the record was shared
+  between web and worker: it was not, and the four silent minutes are what showed it.
+  No throughput row: wikipedia's queue is 0.
+- **THE DEPLOY OF 8c92a5f0 (e5272e7, live 07:54:43Z; München's rows).** No gate at the worker's start:
+  every collection said "embedding enabled: run … is validated for this space" and nothing else, as the
+  release promised. Staging with ten more test files: 3271 passed / 2 skipped, 11, 92, 491 / 9 skipped,
+  25. The relay's question, second web start of the day (not like for like with the morning's 108 s):
+  51.2 s — languages 12.7, catalog 2.7, fts 4.5 (wikidata), dense 2.3, rerank 20.4, of which wikipedia
+  10.3 with "works 9,229 [claims 8,837, facts 212, passages 180 for 6 edition(s)]": the works of fifty
+  records are the CLAIMS, the seek table in place. `tools/measure/works_walk.py` splits that figure
+  into the frames read, the collection's relations and the members' rows (run owed by München).
+
 - **THE DEPLOY OF a2b5935b (7fe5362, live 05:40:17Z) AND WHAT ITS FIRST QUESTION SAID (München's rows).**
   *The node reset itself at 05:09:03Z during the deploy's first final run* ("uncorrected error … data
   fabric sync flood", Ryzen 7600, 2×32 GB non-ECC at 6400 MT/s; no OOM, pools healthy); the deploy was
