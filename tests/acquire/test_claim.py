@@ -522,3 +522,26 @@ def test_a_writer_is_handed_its_own_passs_lock_and_no_other(tmp_path):
         with claim_mod.passing_locks(None) as fds:
             assert fds == (), "a writer that names nothing it writes is handed no scoped lock"
     assert claim_mod._held_fds == {}
+
+
+def test_a_staged_part_is_handed_its_passs_lock(tmp_path, monkeypatch):
+    """THE DELTA READ, run: with ACQUIRE_STAGING_DIR set (live on the node),
+    every streaming fetch lands its `.part` in the staging area, outside the
+    corpus — and was handed no lock. The pass's scope is its corpus and its
+    part of the staging area (`engine._writes_under`)."""
+    from app import config
+    from app.acquire import engine
+    staging = tmp_path / "staging"
+    monkeypatch.setattr(config, "ACQUIRE_STAGING_DIR", staging)
+    collection = _collection(tmp_path)
+    con = db.connect(collection)
+    with claim_mod.acquisition_claim(con, "test", scope=engine._writes_under(collection)):
+        fd = claim_mod._held_fds[str(claim_mod.lock_path(con))][0]
+        with claim_mod.passing_locks(staging / collection.name / "1" / "2" / "12.zip.part") as fds:
+            assert fds == (fd,)
+        with claim_mod.passing_locks(collection.corpus_dir / "12.zip.part") as fds:
+            assert fds == (fd,)
+        with claim_mod.passing_locks(staging / "other" / "x.part") as fds:
+            assert fds == (), "another collection's staging is not this pass's"
+    monkeypatch.setattr(config, "ACQUIRE_STAGING_DIR", None)
+    assert engine._writes_under(collection) == (collection.corpus_dir,)

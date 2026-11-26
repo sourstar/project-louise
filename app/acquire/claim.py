@@ -139,7 +139,7 @@ def _record(source_id: str, now: float, locked: bool = False) -> str:
 #: their descriptors and the corpus each pass writes (its `scope`): a renewal
 #: keeps saying so (`refresh_claim`), and a fetch's rsync is handed its own
 #: (`passing_locks`)
-_held_fds: dict[str, tuple[int, "Path | None"]] = {}
+_held_fds: dict[str, tuple[int, "tuple[Path, ...] | None"]] = {}
 _fds_lock = threading.Lock()
 
 
@@ -159,8 +159,8 @@ def passing_locks(writes: "Path | None" = None):
     from pathlib import Path
     target = Path(writes).resolve() if writes is not None else None
     with _fds_lock:
-        yield tuple(fd for fd, scope in _held_fds.values()
-                    if scope is None or (target is not None and target.is_relative_to(scope)))
+        yield tuple(fd for fd, scopes in _held_fds.values()
+                    if scopes is None or (target is not None and any(target.is_relative_to(s) for s in scopes)))
 
 
 def _age(claim: dict, now: float) -> float:
@@ -242,7 +242,7 @@ def _busy(source_id: str, existing: dict | None, now: float, why: str, retry_in:
 
 
 @contextmanager
-def acquisition_claim(con, source_id: str, force: bool = False, scope: "Path | None" = None):
+def acquisition_claim(con, source_id: str, force: bool = False, scope=None):
     """Claim acquisition for `source_id`, or raise AcquisitionBusy.
 
     THE CLAIM IS AN FLOCK on `acquire.lock` beside the manifest (the standard
@@ -259,8 +259,9 @@ def acquisition_claim(con, source_id: str, force: bool = False, scope: "Path | N
     live holder's: its renewals then match no row, and the Library shows the
     forcing process (no caller in app/ passes it; kept for the command line).
 
-    `scope`: the corpus the pass writes — its writers are handed this lock
-    and no other (`passing_locks`).
+    `scope`: where the pass writes — a path or several (its corpus, and its
+    staging area where `.part` files land: `engine._staging_target`) — its
+    writers are handed this lock and no other (`passing_locks`).
 
     Released on the way out even if the body raises."""
     path = lock_path(con)
@@ -307,8 +308,10 @@ def acquisition_claim(con, source_id: str, force: bool = False, scope: "Path | N
         raise
     if fd is not None:
         from pathlib import Path
+        scopes = None if scope is None else tuple(
+            Path(s).resolve() for s in ((scope,) if isinstance(scope, (str, os.PathLike)) else scope))
         with _fds_lock:
-            _held_fds[str(path)] = (fd, Path(scope).resolve() if scope is not None else None)
+            _held_fds[str(path)] = (fd, scopes)
     try:
         yield
     finally:

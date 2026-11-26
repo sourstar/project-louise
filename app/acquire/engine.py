@@ -761,6 +761,20 @@ def _adopt_one_file(f: RemoteFile, collection, spec: AcquisitionSpec) -> _FileRe
                         digest=digest, adopted=True)
 
 
+def _writes_under(collection) -> "tuple[Path, ...] | None":
+    """Where a pass of `collection` writes its files: its corpus, and its
+    part of the staging area (`_staging_target`) where one is set — the claim's
+    lock is handed to the writers there (`claim.passing_locks`; the delta read:
+    with staging live on the node, a staged `.part` was handed no lock)."""
+    corpus = getattr(collection, "corpus_dir", None)
+    if corpus is None:
+        return None
+    out = [Path(corpus)]
+    if config.ACQUIRE_STAGING_DIR is not None:
+        out.append(config.ACQUIRE_STAGING_DIR / collection.name)
+    return tuple(out)
+
+
 def _staging_target(collection, f: RemoteFile, dest: Path) -> Path:
     """Where the streaming transports WRITE (STATUS 5i): the staging area
     on fast storage when config.ACQUIRE_STAGING_DIR names one and it has
@@ -1219,7 +1233,7 @@ def _run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
     with _listing_bound(stop, priority):
         spec = effective_spec(collection, spec, profile,   # peer plane, when the TOML says so
                               stop=stop)
-    with claim_mod.acquisition_claim(con, spec.source_id, scope=getattr(collection, "corpus_dir", None)):
+    with claim_mod.acquisition_claim(con, spec.source_id, scope=_writes_under(collection)):
         keepalive = _ClaimKeepalive(collection, spec.source_id)
         keepalive.start()
         try:
