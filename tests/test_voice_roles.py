@@ -194,6 +194,46 @@ def test_a_quotation_in_another_language_is_spoken_in_it(node, monkeypatch):
     assert len(calls) == before + 2
 
 
+def test_a_quotations_neighbours_keep_the_sentences_language_and_punctuation_is_no_call(node, monkeypatch):
+    """Architecture's read, 2026-11-26: the lead-in and the tail were left to
+    `context`, which holds the quotation ("per tutti" spoken English in the
+    English voice); a "." after the guillemets was a third call; a format the
+    node cannot join turned the sentence into a 502."""
+    calls, _, _ = node
+
+    class W:
+        status_code, headers = 200, {"content-type": "audio/wav"}
+        content = _wav(300)
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or W())
+    s = 'Il giudice ha detto che «the law is the law and it must be obeyed» per tutti.'
+    speech.synthesize_timed({"input": s, "context": "«the law is the law and it must be obeyed»"}, url="http://ai",
+                            admin=False)
+    sent = calls[-3:]
+    assert [c["language"] for c in sent] == ["it", "en", "it"] and "context" not in sent[2]
+    assert sent[0]["voice"] == SYNTH_IT and sent[2]["voice"] == SYNTH_IT, "the sentence's voice, not the quotation's"
+    before = len(calls)
+    speech.synthesize_timed({"input": 'Il motto era «Un pour tous, tous pour un».', "language": "it"}, url="http://ai")
+    assert len(calls) == before + 2 and calls[-1]["input"].endswith("».") , "the stop goes with the quotation"
+    # nothing says the sentence's language: nothing to tell a quotation from, it goes whole
+    assert speech.quote_segments('Tom «Un pour tous, tous pour un»', None) == []
+
+
+def test_a_quotation_the_node_cannot_join_goes_as_one_sentence(node, monkeypatch):
+    calls, _, _ = node
+
+    class Mp3:
+        status_code, headers, content = 200, {"content-type": "audio/mpeg"}, b"ID3..."
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or Mp3())
+    s = 'Il motto dei moschettieri era "Un pour tous, tous pour un", scritto da Dumas nel romanzo.'
+    before = len(calls)
+    status, content, ctype, _ = speech.synthesize_timed({"input": s, "response_format": "mp3"}, url="http://ai")
+    assert status == 200 and len(calls) == before + 1, "another format: never segmented"
+    before = len(calls)
+    status, content, ctype, _ = speech.synthesize_timed({"input": s}, url="http://ai")
+    assert status == 200 and content == b"ID3..." and calls[-1]["input"].startswith("Il motto"), \
+        "clips that do not join: the sentence again, as one request, never a 502"
+
+
 def test_a_kept_clip_takes_its_turn_in_order(node, monkeypatch):
     """A cache hit returns before the model's call; it still TAKES ITS TURN:
     marked done (unmarked, sentence n+1 waited TURN_ARRIVE_S for it), and
