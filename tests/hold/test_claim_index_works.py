@@ -173,3 +173,19 @@ def test_the_worker_adds_them_in_a_process_of_its_own(held):
     (dest / "works.json").unlink()
     got = claim_index.add_works_isolated(tree, dest, stop=lambda: True, poll_s=0.0)
     assert "stopped" in got and not claim_index.has_works(dest), "a stop writes nothing"
+
+
+def test_the_hand_command_adds_them_where_the_worker_does_not_index(held, capsys):
+    """München, 2026-11-26: the node in query mode runs no index work, so the
+    keeper waited; `hold annotations index` is the hand that adds them."""
+    import json as _json
+    from types import SimpleNamespace as NS
+    from app import louise
+    root, tcoll, annotations, tree, dest = held
+    assert not claim_index.has_works(dest)
+    assert louise.cmd_annotations_index(NS(root=str(root), collection="pubmed-same-work")) == 0
+    out = _json.loads(capsys.readouterr().out)
+    assert out["skipped"] == "built" and out["works"]["works"] == 1 and claim_index.has_works(dest)
+    assert louise.cmd_annotations_index(NS(root=str(root), collection="pubmed-same-work")) == 0
+    out = _json.loads(capsys.readouterr().out)
+    assert "works" not in out, "once: what it lacks only"

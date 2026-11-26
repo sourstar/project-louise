@@ -587,6 +587,7 @@ def _at_run(ctx: _Ctx, run_: str):
 def _fetch(ctx: _Ctx, mk: dict, started: str) -> dict:
     from app import db
     from app.acquire import engine
+    from app.acquire.claim import AcquisitionBusy
     from app.acquire.spec import DiskPreflightError, LicenseAckRequiredError
     c = _at_run(ctx, mk["run"])
     profile = c.profile
@@ -609,6 +610,12 @@ def _fetch(ctx: _Ctx, mk: dict, started: str) -> dict:
                 got = engine.run_acquisition(con, c, ctx.spec, profile, stop=ctx.stop)
             except LicenseAckRequiredError as e:
                 raise _Refused(str(e)) from None
+            except AcquisitionBusy as e:
+                # the worker fetches this collection now: waiting, never a try
+                # counted toward MAX_TRIES (the seventh read: three nights beside
+                # a long worker fetch and the update waited for a human)
+                raise _Waiting(f"another process is fetching {ctx.name} now ({e.holder}); "
+                               f"asked again next time") from None
             except DiskPreflightError as e:
                 raise _Failed(f"not enough free space for run {mk['run']}: {e}") from None
             if ctx.stop.is_set() or got.get("stopped") or got.get("aborted"):

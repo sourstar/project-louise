@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import zipfile
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -760,6 +761,20 @@ def _adopt_one_file(f: RemoteFile, collection, spec: AcquisitionSpec) -> _FileRe
                         digest=digest, adopted=True)
 
 
+def _writes_under(collection) -> "tuple[Path, ...] | None":
+    """Where a pass of `collection` writes its files: its corpus, and its
+    part of the staging area (`_staging_target`) where one is set — the claim's
+    lock is handed to the writers there (`claim.passing_locks`; the delta read:
+    with staging live on the node, a staged `.part` was handed no lock)."""
+    corpus = getattr(collection, "corpus_dir", None)
+    if corpus is None:
+        return None
+    out = [Path(corpus)]
+    if config.ACQUIRE_STAGING_DIR is not None:
+        out.append(config.ACQUIRE_STAGING_DIR / collection.name)
+    return tuple(out)
+
+
 def _staging_target(collection, f: RemoteFile, dest: Path) -> Path:
     """Where the streaming transports WRITE (STATUS 5i): the staging area
     on fast storage when config.ACQUIRE_STAGING_DIR names one and it has
@@ -1218,7 +1233,7 @@ def _run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
     with _listing_bound(stop, priority):
         spec = effective_spec(collection, spec, profile,   # peer plane, when the TOML says so
                               stop=stop)
-    with claim_mod.acquisition_claim(con, spec.source_id):
+    with claim_mod.acquisition_claim(con, spec.source_id, scope=_writes_under(collection)):
         keepalive = _ClaimKeepalive(collection, spec.source_id)
         keepalive.start()
         try:
@@ -1240,6 +1255,17 @@ def _run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
                         # worker's post-fetch rescan keys on "fetched"
                         total["stopped"] = str(e)
                         break
+                    except Exception as e:
+                        # ...AND TOLD on any other way out: a mid-pass busy
+                        # manifest names what landed (`e.fetched`), and the
+                        # torrents before this one landed files too (the
+                        # seventh read)
+                        if total.get("fetched"):
+                            try:
+                                e.fetched = int(getattr(e, "fetched", 0) or 0) + int(total["fetched"])
+                            except (AttributeError, TypeError, ValueError):
+                                pass
+                        raise
                     for k, v in part.items():
                         total[k] = total.get(k, 0) + v if isinstance(v, (int, float)) else v
                 return total
@@ -1270,14 +1296,29 @@ class _ClaimKeepalive:
         self._thread.join(timeout=5)
 
     def _run(self) -> None:
+        """ITS CLAIM MUST NOT GO STALE UNDER A LIVE PASS: a renewal that fails
+        (the manifest busy past its timeout) or a connection that does not
+        open is asked again at the next tick — one of either ended this thread
+        for the rest of the pass, and the claim read stale under a live fetch
+        (the reads of 2026-11-26). With it alive, a live pass's claim is taken
+        over only where its manifest refused every write for STALE_AFTER_SECONDS
+        — and then the pass's own writes fail first and end it (its `_apply`
+        renews too), so no stop for a lost claim is needed here; the standard
+        alternative, an flock the kernel drops with its holder, is in claim.py."""
         from .. import db as _db
-        con = _db.connect(self._collection)
+        con = None
         try:
             last = time.time()
             while not self._done.wait(30):
-                last = claim_mod.refresh_claim(con, self._source_id, last)
+                try:
+                    if con is None:
+                        con = _db.connect(self._collection)
+                    last = claim_mod.refresh_claim(con, self._source_id, last)
+                except Exception:   # noqa: BLE001 — never the keepalive: asked again at the next tick
+                    continue
         finally:
-            con.close()
+            if con is not None:
+                con.close()
 
 
 def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: str,
@@ -1467,10 +1508,16 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     last_report = [time.monotonic()]
     workers = min(manager.platform.transfer.workers, max(1, len(items)))
     # the claim is already held by run_acquisition, covering the whole pass
-    transfer_pool.run_pool(
-        items,
-        _make_worker(transport, collection, spec, manager, ranked, stop, priority),
-        _apply, max_workers=workers, stop=stop)
+    try:
+        transfer_pool.run_pool(
+            items,
+            _make_worker(transport, collection, spec, manager, ranked, stop, priority),
+            _apply, max_workers=workers, stop=stop)
+    except sqlite3.OperationalError as e:
+        # the manifest busy mid-pass: the caller retries the fetch; what landed
+        # before is told, so its scan is asked (app/worker.py)
+        e.fetched = counters["fetched"]
+        raise
 
     _unit_reports(con, spec, last_report, final=True)
     if prepare is not None:

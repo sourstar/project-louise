@@ -352,3 +352,24 @@ def test_with_the_node_paused_a_cold_load_unloads_nothing(card, monkeypatch):
     node_state.set_worker_state("paused")
     model_load.ensure_loaded(S, "vega-bge-m3", lambda bound: None, caller="query embedding", max_age_s=0.0)
     assert r.unloaded == []
+
+
+def test_a_room_refused_names_the_models_pinned_by_work_and_the_load_hook_says_it(card, monkeypatch):
+    """München, 2026-11-26, the switch to query mode: "louise-chat-qwen3.6-35b-a3b
+    is 10,172 MiB over the 0.98 line … room is made by unloading" — and nothing
+    was unloaded and no line said why: the embed mode's batches still pinned
+    their encoders. The load went into the full card and died 75 s later."""
+    card({"vega-nemotron": 4_400, "vega-bge-m3": 900}, extra_mib=26_000)
+    _used(vega_nemotron=1, vega_bge_m3=2)
+    monkeypatch.setattr(model_pins, "_applies", lambda server, model: True)
+    assert model_pins.hold(S, "vega-nemotron", "worker embed wikidata") is True
+    assert model_pins.hold(S, "vega-bge-m3", "worker embed wikipedia") is True
+    _known(chat_35b=21_715)
+    got = model_evict.make_room_for(S, "chat-35b", horizon=NOW)
+    assert got.fits is False and "vega-bge-m3, vega-nemotron pinned by work in flight" in got.why
+    said = []
+    monkeypatch.setattr(model_evict, "_say", lambda level, m: said.append(m))
+    monkeypatch.setattr(model_evict, "room_before_load", lambda server, model: got)
+    assert model_evict.before_load(S, "chat-35b") is got
+    assert said and said[0].startswith("card: no room could be made for chat-35b before its load — ") \
+        and "pinned by work in flight" in said[0]

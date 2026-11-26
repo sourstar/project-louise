@@ -20,6 +20,113 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **THE FIRST QUESTION AFTER THE SWITCH TO QUERY MODE WAITED 48.9 s FOR ITS FIRST WORD: THE SWITCH LOADED
+  THE 35B INTO A FULL CARD (the operator's microphone and read-aloud, ~10:47Z; München counted every
+  part from the node's lines).** The voice itself was fine (first sound 5.1 s after the first word, no
+  gap). The search took 43.2 s, of which `languages` 22.0 — the query's language step asks the CHAT
+  model, which was still loading (LocalAI received no other request until it was up) — and the rerank
+  12.5; the answer's first word 5.2 s after. The load: at the switch (10:44:41Z) the room for the 35B
+  was asked while the embed mode's batches still pinned their six encoders: "10,172 MiB over the 0.98
+  line … room is made by unloading", nothing could give way, and NO LINE SAID SO; the load went into the
+  full card and died for device memory 75.2 s later ("UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY"), and the
+  keeper's reload took 87.5 s more. FIXED (branch mode-switch-room): the switch waits for the driver to
+  show the old chat model gone, makes the new one's room FIRST and asks again until it is there (5 s,
+  within PIN_IDLE_S + a beat + a batch, 240 s); into a mode that does not embed the old mode's idle pins
+  go at once and a batch's as it ends (RULE 1); it sends no load whose room was refused (said; the keeper
+  or the first question loads it), asks no room beside a call RUNNING (a question's step, a keeper's warm —
+  the claim refreshed to a TTL ahead; a question's linger holds no model) and goes on after it, joins a
+  load already in flight, waits for a load of the OLD model to end before it unloads it, makes its room
+  whatever the run mode (the operator's own act), and stops for a newer switch or a store no longer on the
+  mode its round read; a partial room is made once. (Four reads on: a question told by the claim stopped
+  the switch for a keeper's warm and for a linger; told by marks of its own, it missed overlapping
+  questions and every route outside the Ask page — a call running is all the switch must not stand
+  beside.) The fifth read, run: every process wrote ONE claim row, so a keeper's warm in the worker
+  ending wrote 0 over the web's question still running, and the web's linger hid the worker's call —
+  now one row a process, every process's read (also the pre-existing #76: a person's 5-minute linger
+  no longer ended by another process's call); the keeper's own loads count as busy; a call begun while
+  the room was made sends it round again before the load; the answer's wait waits for a call running,
+  not a linger (it cost every switch within 5 min of a question its 120 s); "loaded" is what the runner
+  lists after the warm. The sixth read, run: a room made before a call was trusted after it — the call's
+  own cold load could take it, and the load then went with the hook off, the incident's path — and a call
+  begun at the bound was loaded beside; now a call seen sends the room round again (made again after it),
+  and one still running at the bound means no load. The claim rows' prune is a range on the key (LIKE
+  matched other keys and used no index), runs at a process's first write and then hourly, and takes the
+  one row of before; a process whose pid namespace cannot be read has a row of its own (a token). The
+  seventh read: a cold load running in the worker itself (an embed producer's encoder warmed behind its
+  batch, 5–24 s) is a call beside the room too — the switch to embed mode counted the 9B's room on a card
+  that did not yet show those bytes (pre-existing on main, the same kind as the incident); a room made by
+  paging that no load uses is forgotten; the paging line is said once a minute; and the row of before is
+  written beside each process's own, in one statement, for the GPU governor of the code before until deploy
+  stage 8 makes its container again. A room refused before ANY load is now said, once a minute a reason
+  ("card: no room could be made for … — … pinned by work in flight"). The query-mode paging rule is
+  unchanged: the first read's idea that the driver cannot page pinned models was unmeasured — a pin is
+  the reclaimer's word, not the driver's — and refusing to page on it unloaded a question's own query
+  encoder where main paged (the second read, run): withdrawn. Not yet read: the five `/v1/detokenize` 500s at 10:47:53 (the gutenberg rerank's cut, by
+  their time; LocalAI logs no body).
+- **A DEAD WORKER'S ACQUISITION CLAIM REFUSED ITS SUCCESSOR'S FETCH, AND NOTHING ASKED AGAIN; A
+  COLLECTION'S RESUME ASKED NO FETCH (München, D6/D7, after the 09:00:20Z hardware reset).** The claim
+  the killed worker held was 179 s old; the new worker's startup fetch got `AcquisitionBusy` ("re-run
+  once the claim goes stale after 300s"), logged it as an ERROR, and nothing re-ran it — EUR-Lex5.next's
+  fetch stood still until a hand toggle of `acquire_enabled`; `node pause` / `node resume
+  EUR-Lex5.next` in between asked no fetch either (the gap, München: 1 h 48 min without a fetch). FIXED
+  (app/acquire/claim.py, app/worker.py): a claim names the BOOT it was made in (`boot_id`, the same in
+  every container of the host) and one of another boot is dead whatever its age; a refusal is a deferral
+  (warn, "asked again in N s") and, when that time comes, the claim is READ first — while its holder
+  renews it nothing is asked, once it is not held ONE discovery (re-armed blindly, a `hold records fetch`
+  beside the worker would have cost a full discovery every five minutes; the independent read, run); a
+  fetch the collection's OWN pause stopped is asked again by its resume (its pause is told before its
+  threads are retired, so a retirement is not mistaken for it), and a resume with nothing cut costs
+  nothing; a re-arm for a collection the round does not run (paused, another writer's lock) waits for it,
+  one retired is dropped. The standard alternative written down in claim.py: an flock per collection,
+  dropped by the kernel with its holder. The second read, run: a free claim's retry now asks the FETCH
+  (`_acquire`), never a discovery that queues behind the running scan and walks the corpus again; a fetch
+  started meanwhile forgets the retry; the stop keeps the FIRST event that stopped it (a resume while the
+  fetch unwound read the retirement instead, and D7 came back); a waiting re-arm comes back when the
+  node holds the collection again, O(1), and a removed collection forgets it; an unreadable claim is read
+  again in 30 s, not every round. The third read, run: a wall clock stepped back made a LIVE claim read
+  as stale and another process took it — within one boot a claim's age is now the boot's own clock
+  (CLOCK_BOOTTIME, never stepped); a claim is taken under BEGIN IMMEDIATE and renewed and given back by
+  compare-and-set (read then written apart, a holder could overwrite another's fresh claim); the
+  keepalive thread outlives a busy manifest (one locked write ended it for the pass); a retry due while
+  the refused thread still ends is kept; acquisition turned on again while the stopped fetch unwinds asks
+  it again; a free claim's retry for a paused collection comes back as the fetch, not a discovery. The
+  fourth read, run: under BEGIN IMMEDIATE first, a refusal on a busy manifest came back as
+  OperationalError and armed no retry (D6 again) — a live claim now refuses before the lock, and a busy
+  deferral is asked again in 30 s; a busy give-back no longer replaces the pass's result; a boot clock
+  that reads a claim in the future gives way to the wall clock; the re-arm "acquisition turned on again"
+  is forgotten when a fresh fetch starts. The fifth read, run: the fourth round's stop for a claim taken
+  over reported a stopped pass as a complete fetch — WITHDRAWN: with the keepalive kept alive (a renewal
+  or a connection that fails is asked again at the next tick), a live pass's claim goes stale only where
+  its manifest refuses every write for 300 s, and then its own writes fail first; only a BUSY manifest is
+  a deferral retried (a read-only or full one is an error, left to discovery); a retried fetch starts on
+  a thread and connection of its own (on the main loop it waited out the busy timeout) and says why.
+  THE CLAIM IS NOW THAT FLOCK (the sixth read: every staleness rule had its own way to be wrong):
+  `acquire.lock` beside the manifest, held for the pass, dropped by the kernel with its holder; the row is
+  kept for the Library and the refusal's words. The seventh read, run: a row whose writer said it held the
+  lock (`"lock": true`) is dead once the lock is taken (a holder SIGKILLed in the same boot refused 305 s);
+  the lock is let go whatever the row's give-back raises; a fetch's rsync inherits the lock (`pass_fds`), so
+  it lives as long as the last writer of a `.part`; `hold records fetch` and `hold update` read another
+  process's fetch as a deferral (exit 3; waiting, never a try); the pause of a fetch begun before the first
+  lock take reaches it. Not changed: the retry deadlines stay on the wall clock — a clock stepped back
+  delays a retry at most to the collection's next discovery, which asks the fetch itself. The eighth read
+  (safe to merge): a writer is handed its OWN pass's lock only (`scope`, the corpus it writes) — handed
+  every lock, an orphaned rsync of one collection kept another's after the worker died. Recorded, not
+  changed: a dead holder's row still reads "in progress" on the Library card, and puts a refused retry off,
+  for up to 305 s where no lock is taken to tell; a lock probe would refuse a real taker instead.
+- **OCR AND A PDF TEXT LAYER THROUGH RAGE — PROPOSED, NOT BUILT** (operator, 2026-11-26: "the RAGE ingestion API
+  to be extended for image OCR and adding of text layer to pdf (if pdf form is preserved in the parsed corpus). This
+  is architecture's call"). The design and the operator's question: [ocr-in-rage.md](ocr-in-rage.md) — recommended,
+  the reading as its own member beside the figures (records untouched), the engine chosen on 100 measured pages,
+  OCRmyPDF for the layer as derived data. EUR-Lex5's case: 4,711 scans in 559 html units, 418 PDFs without text.
+- **AN ANSWER'S LINE SAYS WHERE THE SECONDS BEFORE ITS FIRST WORD WENT (the Bug session, from the
+  operator's read-aloud question: "answer: 1017 chars in 9.9 s, first word at 5.2 s", and nothing said
+  why).** `llm.chat_stream` counts the chat model's load, the wait at the card's gate, the request to its
+  first token, and reads the server's own count of the prompt and the answer — llama.cpp's `timings`,
+  LocalAI's `usage` (its times asked with the `Extra-Usage` header), Ollama's last line — and the answer's
+  line carries them: "[before the request 0.3 s (the model's load 0.0, the gate 0.3); first token 4.9 s
+  after it; prompt 3,412 tokens in 4.6 s; 220 tokens written in 4.7 s]". Where the server counts nothing,
+  the line says so.
+
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
   `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"
   for wikipedia's fifty records).** 50 candidates, 38 works of 266 records, 269 lookups returning 456
