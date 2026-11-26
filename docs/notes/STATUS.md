@@ -80,7 +80,12 @@ measured (published figures disagree).
   every look like the encoder's mark, doubled by any slow look that does not settle, cleared by one that
   does; siblings of one space share it. Two rules, then: the encoder's mark for a probe it did not answer
   (every collection on it waits), the gate's for a gate that holds its caller (the collections that run it
-  wait). And the
+  wait). The thirteenth read, run: a quick look returned the gate's EXPIRED backoff and every round looked
+  (171 gates in 3 h, main 36); the query side doubled only a timed-out look (a late deferral every 300 s,
+  44 %); siblings on R1 passed R2's gate backoff at an engine switch and hung one after another; a sibling
+  held only by the backoff gave the encoder's frozen reason. Fixed; and the QUERY gate is the gate's backoff
+  too, keyed the same way. Measured against main by the reader, 3 h: every case no worse than main but the
+  recovery after a hang ends (≤ one backoff step, by design). And the
   manual door, `hold embedder check`, is
   shut on a running node — the worker holds every collection's lock — so its hint now says to pause
   the collection first; that is how today's gate was run. I had told München the record was shared

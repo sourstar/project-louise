@@ -1127,3 +1127,80 @@ def test_a_hung_gate_beside_a_quickly_failing_query_side_backs_off(node, endpoin
         clock[0] += 60
     share = held[0] / (clock[0] - start)
     assert len(gates) <= 8 and share <= 0.21, (len(gates), round(share, 3))
+
+
+# ---- the thirteenth read (2026-11-26) ---------------------------------------------------
+
+def test_a_gate_that_hung_once_then_defers_quickly_is_not_asked_every_round(node, endpoint, monkeypatch):
+    """THE THIRTEENTH READ, run (BLOCKING): `_note_gate`'s quick branch returned
+    the gate's backoff EXPIRED — the verdict expired in 1 s and every round
+    looked (171 gates in 3 h; main 36)."""
+    import httpx
+    from app.hold import embedder as hold_emb
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    mono = _hung_clock(monkeypatch)
+    clock = [time.time()]
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+
+    def probe(recipe, query=False, **k):
+        if query:
+            raise OSError("query model refused")
+        return R2
+    monkeypatch.setattr(run_check, "answering_run", probe)
+    gates = []
+
+    def gate(*a, role="document", **k):
+        gates.append(clock[0])
+        if len(gates) == 1:
+            mono[0] += 300.0
+            clock[0] += 300.0
+            try:
+                raise httpx.ReadTimeout("timed out")
+            except httpx.ReadTimeout as e:
+                raise hold_emb.GateDeferred("the encoder could not embed: timed out") from e
+        raise hold_emb.GateDeferred("another collection's gate measures on the twin now")
+    monkeypatch.setattr(run_check, "validate", gate)
+    run_check._verdicts.clear()
+    start = clock[0]
+    while clock[0] - start < 3 * 3600:
+        backend_gate.embed_allowed(con, collection)
+        clock[0] += 60
+    gaps = [round(b - a) for a, b in zip(gates, gates[1:])]
+    assert len(gates) <= 40, (len(gates), gaps[:8])
+
+
+def test_a_query_gate_that_defers_late_backs_off_and_is_the_gates(node, endpoint, monkeypatch):
+    """THE THIRTEENTH READ, run (BLOCKING): the query side's `again` doubled only
+    a look that TIMED OUT; a query gate that ran 240 s and deferred was asked
+    every 300 s (44 %). And it is the GATE's backoff, shared by the space."""
+    from app.hold import embedder as hold_emb
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    mono = _hung_clock(monkeypatch)
+    clock = [time.time()]
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+    monkeypatch.setattr(run_check, "answering_run",
+                        lambda recipe, query=False, **k: R2 if query else R1)
+    gates, held = [], [0.0]
+    real = run_check.validate
+
+    def gate(*a, role="document", **k):
+        if role != "query":
+            return real(*a, role=role, **k)
+        gates.append(clock[0])
+        mono[0] += 240.0
+        clock[0] += 240.0
+        held[0] += 240.0
+        raise hold_emb.GateDeferred("another request held the context")
+    monkeypatch.setattr(run_check, "validate", gate)
+    start = clock[0]
+    while clock[0] - start < 3 * 3600:
+        assert backend_gate.embed_allowed(con, collection) is True
+        clock[0] += 60
+    share = held[0] / (clock[0] - start)
+    assert share <= 0.21, (len(gates), round(share, 3))
+    q_key = run_check._flights_query(collection)
+    assert any(k[0] == q_key for k in run_check._gate_slow), "the query gate's backoff is the gate's"
