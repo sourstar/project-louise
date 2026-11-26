@@ -1146,7 +1146,7 @@
     tones: () => toneCount, toneLast: () => toneLast, toneContext: () => toneCtx, deafEnd,
     sentences, cut, downsample, wavBytes, split, budget, trimWav, rates: () => ({ ...rates }),
     // a test's or an operator's rates, kept as measured ones are
-    setRates(k) { rates = { ...RATES0, ...k }; answerRates = null; try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {} },
+    setRates(k) { rates = { ...RATES0, ...k }; answerRates = null; outlier = false; try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {} },
     learn, planned,
   };
 })();
