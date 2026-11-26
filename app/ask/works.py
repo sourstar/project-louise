@@ -738,25 +738,48 @@ def best_passages(collection, plan, editions: Sequence[Edition]) -> dict[str, di
 
 def one_hit_per_work(hits: list[dict[str, Any]], collection, prefer: Sequence[str], *,
                      root: Path | None = None, annotations: Iterable | None = None,
-                     plan=None, limit: int | None = None) -> list[dict[str, Any]]:
+                     plan=None, limit: int | None = None,
+                     timings: dict[str, float] | None = None) -> list[dict[str, Any]]:
     """`collapse` with the work groups held here. A grouping that cannot be
     read returns the list as it ranked: a guess about what a book IS never
-    costs a reader a hit (and never the search)."""
+    costs a reader a hit (and never the search).
+
+    `timings`, where given, is told what the grouping was made of, in ms:
+    "claims" (the work claims and the collection's own relations walked),
+    "facts" (the editions' facts read) and "passages" (the best passage of
+    each edition shown in another's place — a search inside the collection's
+    text index, with how many: "passages_n"). The node, 2026-11-26: a first
+    question's "works 18,792" for wikipedia, of a rerank whose model answered
+    in 1.8 s, and nothing said which of the three it was."""
+    import time
     if not hits or getattr(collection, "codex", None) is None:
         return hits
+    told = timings if timings is not None else {}
+    t0 = time.monotonic()
     try:
         work_of, members = work_groups(collection, [_uid(h) for h in hits], root=root,
                                        annotations=annotations)
     except Exception:   # noqa: BLE001
         return hits
+    finally:
+        told["claims"] = round((time.monotonic() - t0) * 1000, 1)
     if not work_of:
         return hits
+    t0 = time.monotonic()
     try:
         facts = _facts_of(collection, hits, work_of, root=root)
     except Exception:   # noqa: BLE001 — no facts: the language and the rank decide, as before
         facts = {}
-    return collapse(hits, work_of, members, prefer, facts,
-                    passages=lambda es: best_passages(collection, plan, es), limit=limit)
+    told["facts"] = round((time.monotonic() - t0) * 1000, 1)
+
+    def passages(editions):
+        t = time.monotonic()
+        try:
+            return best_passages(collection, plan, editions)
+        finally:
+            told["passages"] = round(told.get("passages", 0.0) + (time.monotonic() - t) * 1000, 1)
+            told["passages_n"] = told.get("passages_n", 0) + len(editions)
+    return collapse(hits, work_of, members, prefer, facts, passages=passages, limit=limit)
 
 
 def _facts_of(collection, hits: Sequence[dict[str, Any]], work_of: dict[str, str], *,

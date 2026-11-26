@@ -1236,9 +1236,18 @@ def _rerank_parts_said(timings: dict) -> str:
         if not isinstance(p, dict) or not p.get("records"):
             continue
         detail = [f"answers {p.get('call_ms', 0):,.0f}"]
-        detail += [f"{label} {p[key]:,.0f}" for key, label in (("warm_ms", "load"), ("fit_ms", "cut"),
-                                                              ("works_ms", "works"))
+        detail += [f"{label} {p[key]:,.0f}" for key, label in (("warm_ms", "load"), ("fit_ms", "cut"))
                    if float(p.get(key) or 0) >= 50.0]
+        if float(p.get("works_ms") or 0) >= 50.0:
+            # ...and what the works were made of (the node, 2026-11-26: "works
+            # 18,792" for wikipedia on a first question, and nothing to tell
+            # the claims walked from the passages looked up)
+            inside = [f"{label} {p[key]:,.0f}" for key, label in (
+                ("works_claims_ms", "claims"), ("works_facts_ms", "facts")) if float(p.get(key) or 0) >= 50.0]
+            if float(p.get("works_passages_ms") or 0) >= 50.0:
+                inside.append(f"passages {p['works_passages_ms']:,.0f}"
+                              + (f" for {p['works_passages_n']} edition(s)" if p.get("works_passages_n") else ""))
+            detail.append(f"works {p['works_ms']:,.0f}" + (f" [{', '.join(inside)}]" if inside else ""))
         out.append(f"{name} {p.get('rerank', 0):,.0f} ({p.get('records', 0)} records, {p.get('texts', 0)} texts, "
                    f"{p.get('chars', 0) / 1000:,.0f}k chars, {p.get('calls', 0)} call(s): {', '.join(detail)})")
     return f"; rerank by list: {'; '.join(out)}" if out else ""

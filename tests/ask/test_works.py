@@ -95,6 +95,33 @@ def test_the_work_groups_are_read_from_the_held_claims(tmp_path):
     assert [e["uid"] for e in out[0]["editions"]] == ["pubmed:2", "pubmed:3"]
 
 
+def test_the_grouping_says_what_it_was_made_of(tmp_path, monkeypatch):
+    """The node, 2026-11-26: "works 18,792" for wikipedia on a first question
+    (the reranker itself had answered in 1.8 s) and nothing to tell the
+    claims walked from the passages looked up."""
+    import time
+    target, tcoll, held, codex = setup(tmp_path)
+    looked = []
+
+    def slow_passages(collection, plan, editions):
+        looked.append(len(editions))
+        time.sleep(0.02)
+        return {}
+    monkeypatch.setattr(works, "best_passages", slow_passages)
+    hits = [hit("pubmed:2", "en"), hit("pubmed:4", "en"), hit("pubmed:1", "la")]
+    told: dict = {}
+    out = works.one_hit_per_work(hits, tcoll, works.preference(None, "la"), root=tmp_path,
+                                 annotations=[held], timings=told)
+    assert [retrieval.record_of(h) for h in out] == ["pubmed:1", "pubmed:4"], "nothing of the grouping changes"
+    assert {"claims", "facts"} <= set(told) and all(isinstance(told[k], float) for k in ("claims", "facts"))
+    if looked:
+        assert told["passages"] >= 20.0 and told["passages_n"] == sum(looked)
+    # no work among the hits: the claims were still walked, and that is said
+    told = {}
+    works.one_hit_per_work([hit("pubmed:4", "en")], tcoll, ("en",), root=tmp_path, annotations=[held], timings=told)
+    assert "claims" in told and "passages" not in told
+
+
 def test_a_withheld_annotations_copy_groups_nothing(tmp_path, monkeypatch):
     from app import copy_state
     target, tcoll, held, codex = setup(tmp_path)
