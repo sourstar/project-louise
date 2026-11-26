@@ -27,8 +27,12 @@ measured (published figures disagree).
   claims; the members' rows 0.31 s; the collection's own relations 0. Warm: 0.34 s, and still 450 frames
   and 358 MB decompressed: the index's 32 MiB of kept frames hold about 26 of this size. So it is the
   walk, not the manifest and not the relations; the seek table (11-22) removed the part indexes from the
-  web's memory and left the frames. NEXT, not built: the claim's two ends and its two lengths kept in
-  the index itself, per claim, so the walk opens no frame. ALSO, from Tensor's ordered suite of main (12
+  web's memory and left the frames. BUILT the same day (branch works-index): the claim index's WORK
+  COMPONENTS — each record a work claim names, its work and that work's members with their lengths and
+  centres, computed once from the claims (all 12,326,519 of wikipedia-articles' are work claims, München
+  counted) and added beside the built index by the worker's keeper, in a process of its own, as the seek
+  table was. A question's grouping then reads two binary searches and a slice a record, and no frame;
+  the grouping read through them is the claims' record for record (test). ~750 MiB on ssd5 (450 GB free). ALSO, from Tensor's ordered suite of main (12
   failures that pass alone, both causes mine): `search_memory.measure()` replaced the reranker and two
   writers and never put them back — the second test of the tool switched reranking off for every test
   after it; and the parking tests borrowed a helper without the clock its module resets. Fixed

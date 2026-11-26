@@ -657,12 +657,32 @@ def _walk(collection, uids: Sequence[str], indexes: list, edges: "_Edges",
     sizes: dict[str, int] = {}
     centres: set[str] = set()
     step = list(dict.fromkeys(uids))
+    read: set[tuple[int, int]] = set()      # (index, component) already joined
     while step:                     # the candidates' works, whole: a star of claims
         step = [u for u in dict.fromkeys(step) if u not in seen]   # reaches every
         seen.update(step)                                          # edition through its centre
         nxt: list[str] = []
         for u in step:
-            for idx in indexes:
+            for n, idx in enumerate(indexes):
+                # THE WORK, WHOLE, where the index keeps its components (app/hold/
+                # claim_index.py, 2026-11-26): its members joined at once, no frame
+                # opened; a record's length the larger of what its claims state
+                comp = getattr(idx, "work_component", None)
+                got = comp(u) if comp is not None else None
+                if got is not None:
+                    number, members = got
+                    if number < 0 or (n, number) in read:
+                        continue
+                    read.add((n, number))
+                    for m, tokens, centre in members:
+                        if tokens is not None:
+                            sizes[m] = max(tokens, sizes.get(m, tokens))
+                        if centre:
+                            centres.add(m)
+                        join(u, m)
+                        if m not in seen:
+                            nxt.append(m)
+                    continue
                 for cl in idx.by_target.get(u, ()):
                     c = cl.claim
                     if c["type"] not in WORK_TYPES:
