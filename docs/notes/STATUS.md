@@ -20,6 +20,15 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **AN ANSWER'S LINE SAYS WHERE THE SECONDS BEFORE ITS FIRST WORD WENT (the Bug session, from the
+  operator's read-aloud question: "answer: 1017 chars in 9.9 s, first word at 5.2 s", and nothing said
+  why).** `llm.chat_stream` counts the chat model's load, the wait at the card's gate, the request to its
+  first token, and reads the server's own count of the prompt and the answer — llama.cpp's `timings`,
+  LocalAI's `usage` (its times asked with the `Extra-Usage` header), Ollama's last line — and the answer's
+  line carries them: "[before the request 0.3 s (the model's load 0.0, the gate 0.3); first token 4.9 s
+  after it; prompt 3,412 tokens in 4.6 s; 220 tokens written in 4.7 s]". Where the server counts nothing,
+  the line says so.
+
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
   `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"
   for wikipedia's fifty records).** 50 candidates, 38 works of 266 records, 269 lookups returning 456
