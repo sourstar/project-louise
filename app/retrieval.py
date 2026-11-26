@@ -1336,10 +1336,16 @@ def _attach_metadata_and_enqueue(con, collection, hits: list[dict]) -> None:
     if ids:
         marks = ",".join("?" for _ in ids)
         for r in con.execute(
-                f"SELECT native_id,title,authors,lang FROM documents "
+                f"SELECT native_id,title,authors,lang,subjects,bookshelves FROM documents "
                 f"WHERE source=? AND native_id IN ({marks})",
                 [collection.plugin] + [str(i) for i in ids]):
-            meta[int(r["native_id"])] = {"title": r["title"], "authors": r["authors"], "lang": r["lang"]}
+            # the record's own classification — its subject headings and
+            # class codes, its shelves (PG's "Category: …") — for what the
+            # answer's model is told the work IS (`_work_said`; operator,
+            # 2026-11-26: "Collections like gutenberg carry the category tag
+            # to determine what's fiction, what's a fact and what's an opinion")
+            meta[int(r["native_id"])] = {"title": r["title"], "authors": r["authors"], "lang": r["lang"],
+                                         "subjects": r["subjects"] or "", "bookshelves": r["bookshelves"] or ""}
     for h in hits:
         h.update(meta.get(h["book_id"], {}))
         h.pop("rrf", None)
@@ -1873,8 +1879,10 @@ WORK_RULE = (
     "\"the author imagines …\", never present its events or its characters' deeds as historical fact. "
     "A time span or a 'now' in a source (\"dead these hundred years\", \"today\") counts from that "
     "work's first publication, when its header gives one: date it from that year, never from today; "
-    "where the header gives none, do not turn it into a date. A date's source is named where the header "
-    "names it (\"by …\")."
+    "where the header gives none, do not turn it into a date. Where its header says a work of opinion or "
+    "belief (essays, letters, speeches, philosophy, religion, politics), what it states is its author's "
+    "view: attribute it (\"X argues …\", \"according to X …\"), never present it as established fact. "
+    "A date's source is named where the header names it (\"by …\")."
 )
 
 #: A LITERARY WORK, as the record's own subjects say it — the Library of
@@ -1905,24 +1913,67 @@ def literary(subject: str) -> bool:
     return parts[-1].lower() in LITERARY_FORMS or (len(parts) == 1 and bool(LITERARY_HEADING.match(parts[0])))
 
 
+#: PG's own shelves of kind ("Category: Novels", "Category: Essays, Letters &
+#: Speeches", "Category: History - European"): what the work IS, by the
+#: shelf's NAME (a word of it, these names being kinds, not topics)
+CATEGORY = "Category:"
+CATEGORY_LITERARY = re.compile(r"\b(novels?|fiction|short stories|poetry|drama|plays|theatre|humou?r|"
+                               r"mythology|legends|folklore|fairy tales|romance|adventure|mystery|crime)\b",
+                               re.IGNORECASE)
+CATEGORY_OPINION = re.compile(r"\b(essays|letters|speeches|philosophy|ethics|religio\w*|spirituality|"
+                              r"politics|opinion|sermons|theology)\b", re.IGNORECASE)
+#: Library of Congress Classification, as PG's records carry it (its class
+#: letters, "PQ", "DC", "PZ"): PZ is fiction in English and juvenile
+#: fiction; B but BF (psychology) is philosophy and religion. The other
+#: literature classes (PA-PT) hold criticism and the classics' histories
+#: too: they are named, never read as fiction.
+LCC = re.compile(r"^[A-Z]{1,3}$")
+
+
+def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -> str | None:
+    """What a record says its work IS — "a literary work", "a work of
+    opinion or belief" — or None where it says neither. Its own subject
+    headings' form first (`literary`), then PG's category shelves, then its
+    LCC class."""
+    if any(literary(x) for x in subjects) or any(CATEGORY_LITERARY.search(c) for c in categories) \
+            or "PZ" in classes:
+        return "a literary work"
+    if any(CATEGORY_OPINION.search(c) for c in categories) \
+            or any(c.startswith("B") and not c.startswith("BF") for c in classes):
+        return "a work of opinion or belief"
+    return None
+
+
+def _split(v) -> list[str]:
+    if isinstance(v, str):
+        return [x.strip() for x in v.split("|") if x.strip()]
+    return [str(x).strip() for x in (v or ()) if str(x).strip()]
+
+
 def _work_said(h: dict) -> str:
     """What a hit's own record says of its WORK, for the answer's header:
     its first publication (`first_published`, and by whom where an
-    annotation or an automatic summary states it), its subjects, and that
-    they call it a literary work. Empty where the record says nothing."""
+    automatic summary states it), what it is (`_work_kind`), PG's category
+    shelves, its LCC class and its subject headings. Empty where the record
+    says nothing."""
     parts = []
     year = h.get("first_published")
     if year:
         by = h.get("first_published_by")
         parts.append(f"first published {year}" + (f" (by {by})" if by else ""))
-    subjects = h.get("work_subjects") or h.get("subjects") or ()
-    if isinstance(subjects, str):
-        subjects = [s.strip() for s in subjects.split("|") if s.strip()]
-    subjects = [str(s) for s in subjects][:6]
+    every = _split(h.get("work_subjects")) or _split(h.get("subjects"))
+    classes = [x for x in _split(h.get("subjects")) if LCC.match(x)]
+    subjects = [x for x in every if not LCC.match(x)]
+    categories = [x[len(CATEGORY):].strip() for x in _split(h.get("bookshelves")) if x.startswith(CATEGORY)]
+    kind = _work_kind(subjects, categories, classes)
+    if kind:
+        parts.append(kind)
+    if categories:
+        parts.append("Gutenberg category: " + "; ".join(categories[:4])[:160])
+    if classes:
+        parts.append("LCC " + ", ".join(classes[:3]))
     if subjects:
-        said = "; ".join(subjects)[:240]
-        parts.append(("a literary work — " if any(literary(s) for s in subjects) else "")
-                     + f"subjects: {said}")
+        parts.append("subjects: " + "; ".join(subjects[:6])[:240])
     return (" — " + " — ".join(parts)) if parts else ""
 
 

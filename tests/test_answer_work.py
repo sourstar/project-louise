@@ -72,3 +72,46 @@ def test_the_answers_sources_and_its_pdf_show_the_first_publication():
                               when=datetime(2026, 11, 26, tzinfo=timezone.utc))
     assert "first published 1855 · by PG&#39;s automatic summary" in html or "first published 1855 · by PG's automatic summary" in html
     assert ask_pdf._year_said(HISTORY) == "1855 · by PG's automatic summary" and ask_pdf._year_said(BARE) is None
+
+
+def test_gutenbergs_category_shelves_and_class_say_fiction_fact_or_opinion():
+    """Operator, 2026-11-26: "Collections like gutenberg carry the category
+    tag to determine what's fiction, what's a fact and what's an opinion"."""
+    novel = retrieval._work_said({"subjects": "Napoleon I, Emperor of the French, 1769-1821 | PQ",
+                                  "bookshelves": "Category: Novels | Category: Historical Fiction | Best Books Ever"})
+    assert novel.startswith(" — a literary work — Gutenberg category: Novels; Historical Fiction — LCC PQ")
+    assert "Best Books" not in novel, "a shelf that is not a category is not said"
+    essay = retrieval._work_said({"subjects": "Liberty | JC",
+                                  "bookshelves": "Category: Essays, Letters & Speeches | Category: Politics"})
+    assert essay.startswith(" — a work of opinion or belief — ")
+    history = retrieval._work_said({"subjects": "France -- History -- 1789-1815 | DC",
+                                    "bookshelves": "Category: History - European"})
+    assert "a literary work" not in history and "opinion" not in history
+    assert "Gutenberg category: History - European — LCC DC" in history
+    assert retrieval._work_said({"subjects": "Ethics | BJ"}).startswith(" — a work of opinion or belief")
+    assert "opinion" not in retrieval._work_said({"subjects": "Psychology | BF"}), "BF is psychology"
+    assert retrieval._work_said({"subjects": "Animals -- Juvenile fiction | PZ"}).startswith(" — a literary work")
+    assert "a literary work" not in retrieval._work_said({"subjects": "Shakespeare -- Criticism | PR"}), \
+        "PA-PT hold criticism too: named, never read as fiction"
+    system, _ = _sources(BARE)
+    assert "what it states is its author's view" in system
+
+
+def test_the_search_brings_each_hits_subjects_and_shelves_from_its_record(tmp_path):
+    """The hit had only title, authors and language: the record's own
+    classification reached nothing (2026-11-26)."""
+    import sqlite3
+    from types import SimpleNamespace
+    con = sqlite3.connect(tmp_path / "m.db")
+    con.row_factory = sqlite3.Row
+    con.execute("CREATE TABLE documents (source TEXT, native_id TEXT, title TEXT, authors TEXT, lang TEXT, "
+                "subjects TEXT, bookshelves TEXT, state TEXT)")
+    con.execute("INSERT INTO documents VALUES ('gutenberg', '42', 'T', 'A', 'it', 'Poetry | PQ', "
+                "'Category: Poetry', 'embedded')")
+    hits = [{"book_id": 42, "chunk_id": "gutenberg:42:0:1"}]
+    try:
+        retrieval._attach_metadata_and_enqueue(con, SimpleNamespace(plugin="gutenberg", codex=None,
+                                                                    embed_mode="off", name="gutenberg"), hits)
+    except Exception:   # noqa: BLE001 — what follows the attach needs a whole collection; the attach is done first
+        pass
+    assert hits[0]["subjects"] == "Poetry | PQ" and hits[0]["bookshelves"] == "Category: Poetry"
