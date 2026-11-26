@@ -6240,7 +6240,28 @@ def cmd_check(a) -> int:
             aid = written.get(o.check)
             print(f"  {o.result.upper():<13} {o.check:<18} {o.why}"
                   f"{f'  [{aid[:20]}…]' if aid else ''}")
+        print(_issues_line(a.root, name, codex))
     return 0 if report.ok else 1
+
+
+def _issues_line(root, name: str, codex) -> str:
+    """THE ORIGIN'S INCONSISTENCIES, COUNTED PER CODE, on `hold check`'s own
+    output by default (operator, 2026-11-26, of the orphan images: "Add this
+    check to the collections' parsing consistency checks" — and a signal
+    nobody is shown is no signal: until now the counts were in `hold
+    collection show` and `hold issues list` only). The most frequent first.
+    A count, never a verdict: it fails no check and writes nothing; one that
+    cannot be read says so. The `--json` form is 09 §9.8's and is unchanged."""
+    try:
+        got = _issues_summary(root, name, codex)
+    except Exception as e:   # noqa: BLE001 — a count never costs the check its report
+        return f"  {'ISSUES':<13} not counted ({type(e).__name__})"
+    by_code = sorted(got.get("by_code", {}).items(), key=lambda kv: (-kv[1]["documents"], kv[0]))
+    if not by_code:
+        return f"  {'ISSUES':<13} none recorded by the parses"
+    return (f"  {'ISSUES':<13} {got['total']:,} recorded by the parses: "
+            + "; ".join(f"{code} {v['documents']:,}" for code, v in by_code)
+            + f"  (`louise hold issues list {name} --code <code>`)")
 
 
 def _check_origin(a, codex, *, local=None, run: str | None = None):

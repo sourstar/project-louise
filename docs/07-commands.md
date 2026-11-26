@@ -1418,7 +1418,11 @@ reader needs at the command line:
 - **`issues list`.** *Added 2026-10-25 (06 §6.1).* The inconsistencies in
   the origin that the last parse of each document met: `uid`, code and
   detail a line on stdout, the counts per code with each code's meaning
-  on stderr first (both under `issues` with `--json`). `--code` keeps one
+  on stderr first (both under `issues` with `--json`). *Amended
+  2026-11-26* (operator, of the orphan images: "Add this check to the
+  collections' parsing consistency checks"): `hold check` prints the
+  counts per code itself, by default, as its last line — a count, never a
+  verdict: it fails no check, and the `--json` form (09 §9.8) is unchanged. `--code` keeps one
   code's documents, read through its index; `--limit` stops after N. A
   code the collection's plugin does not declare is exit 2, naming the
   codes it does. Read-only, no lock. `hold collection show` prints the
