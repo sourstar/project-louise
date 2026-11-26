@@ -35,7 +35,13 @@ measured (published figures disagree).
   threads are retired, so a retirement is not mistaken for it), and a resume with nothing cut costs
   nothing; a re-arm for a collection the round does not run (paused, another writer's lock) waits for it,
   one retired is dropped. The standard alternative written down in claim.py: an flock per collection,
-  dropped by the kernel with its holder.
+  dropped by the kernel with its holder. The second read, run: a free claim's retry now asks the FETCH
+  (`_acquire`), never a discovery that queues behind the running scan and walks the corpus again; a fetch
+  started meanwhile forgets the retry; the stop keeps the FIRST event that stopped it (a resume while the
+  fetch unwound read the retirement instead, and D7 came back); a waiting re-arm comes back when the
+  node holds the collection again, O(1), and a removed collection forgets it; an unreadable claim is read
+  again in 30 s, not every round; a claim stamped after now by a clock stepped back is stale, and a live
+  holder rewrites its own at once after such a step.
 
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
   `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"

@@ -53,9 +53,12 @@ class AcquisitionBusy(RuntimeError):
     `retry_in`: the seconds until its claim goes stale, if it is not renewed
     (the caller asks again then: a refusal is a deferral, never a failure)."""
 
-    def __init__(self, message: str, retry_in: float = float(STALE_AFTER_SECONDS)) -> None:
+    def __init__(self, message: str, retry_in: float = float(STALE_AFTER_SECONDS), *,
+                 holder: str = "", held_for: int = 0) -> None:
         super().__init__(message)
         self.retry_in = max(1.0, float(retry_in))
+        self.holder = holder
+        self.held_for = held_for
 
 
 def boot_id() -> str | None:
@@ -64,8 +67,9 @@ def boot_id() -> str | None:
     host, another after every boot. None where it cannot be read. Under a
     runtime with a kernel of its own (gVisor, Kata) each sandbox has its own:
     every writer of a manifest is on one kernel already (invariant 6, /data is
-    a local filesystem), and a node that ran its passes in such sandboxes
-    would have to drop this rule."""
+    a local filesystem), and a node that ran its passes in such sandboxes —
+    or in LXC/Incus containers (TrueNAS "Instances"), whose liblxc gives each
+    its own — would have to drop this rule."""
     try:
         with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as f:
             got = f.read().strip()
@@ -115,8 +119,14 @@ def held(claim: dict | None, now: float | None = None) -> bool:
     if not claim:
         return False
     now = time.time() if now is None else now
-    if now - float(claim.get("ts", 0)) > STALE_AFTER_SECONDS:
+    ts = float(claim.get("ts", 0))
+    if now - ts > STALE_AFTER_SECONDS:
         return False          # stale: the holder died or hung; take it over
+    if ts > now + 2 * _REFRESH_EVERY:
+        # MADE AFTER NOW by more than two refreshes: the clock was stepped back
+        # since, and a live holder rewrites its claim within one refresh of any
+        # step (`refresh_claim`) — this one did not
+        return False
     made_in, this = claim.get("boot"), boot_id()
     if made_in and this and made_in != this:
         # MADE IN ANOTHER BOOT: its holder is dead for certain, whatever its age
@@ -158,7 +168,8 @@ def acquisition_claim(con, source_id: str, force: bool = False):
             f"{existing.get('holder') or 'pid ' + str(existing.get('pid'))} "
             f"(claimed {held_for}s ago). Wait for it to finish, or re-run once the "
             f"claim goes stale after {STALE_AFTER_SECONDS}s.",
-            retry_in=STALE_AFTER_SECONDS - (now - float(existing.get("ts", now))) + 5)
+            retry_in=STALE_AFTER_SECONDS - (now - float(existing.get("ts", now))) + 5,
+            holder=str(existing.get("holder") or f"pid {existing.get('pid')}"), held_for=held_for)
     db.set_control(con, CLAIM_KEY, _record(source_id, now))
     try:
         yield
@@ -171,8 +182,8 @@ def refresh_claim(con, source_id: str, last_refresh: float) -> float:
     """Keep a long-running acquisition's claim from going stale under it.
     Returns the (possibly unchanged) last-refresh timestamp."""
     now = time.time()
-    if now - last_refresh < _REFRESH_EVERY:
-        return last_refresh
+    if 0 <= now - last_refresh < _REFRESH_EVERY:
+        return last_refresh           # a clock stepped back refreshes at once: its ts is in the future
     if _mine(read_claim(con)):
         db.set_control(con, CLAIM_KEY, _record(source_id, now))
     return now

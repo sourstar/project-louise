@@ -2792,7 +2792,9 @@ def _acquire_worker(collection, spec, profile: str, reason: str) -> None:
         with _acquire_lock:
             _claim_retries[collection.name] = retry_at
         db.log_event(con, "warn", "acquire",
-                     f"corpus fetch ({reason}) deferred — {e} Asked again in {e.retry_in:.0f} s."[:400])
+                     f"corpus fetch ({reason}) deferred — another writer holds the acquisition claim "
+                     f"({e.holder}, claimed {e.held_for} s ago); asked again in {e.retry_in:.0f} s, "
+                     f"when it would be stale"[:400])
     except sqlite3.OperationalError as e:
         # The manifest was busy past the busy timeout — a discovery pass
         # streaming millions of rows can starve this thread. NOTHING moved
@@ -3011,6 +3013,9 @@ def _acquire(con, collection, reason: str) -> None:
                 _paused_aborts.add(collection.name)
             return
         off.clear()                 # acquisition is on here (checked above): nothing to stop
+        # a retry another writer's claim left owes nothing once a fetch starts:
+        # asked after it, it would pay a full discovery for a fetch that ran
+        _claim_retries.pop(collection.name, None)
         thread = threading.Thread(
             target=_acquire_worker,
             args=(collection, spec, collection.profile or "demo", reason),
@@ -4045,6 +4050,66 @@ def _finish_completed_acquires(cons, all_collections, last_discover,
             last_discover[collection.name] = time.time()
 
 
+#: how soon a claim that could not be read (the manifest busy) is read again
+CLAIM_READ_AGAIN_S = 30.0
+CLAIM_FREE_REASON = "the claim that refused it is no longer held"
+
+
+def _retry_refused_fetches(due: list[str], all_collections, cons, known) -> None:
+    """The fetches another writer's claim refused, their time come: the claim
+    read first (one control row) — still held, put off to its next staleness;
+    unread, put off CLAIM_READ_AGAIN_S; free, THE FETCH ITSELF is asked
+    (`_acquire`, whose gates — acquisition off, frozen, paused — make the
+    others free), never a discovery: a discovery request queues behind the
+    scan already running and then walks the whole corpus again (the read of
+    2026-11-26: EUR-Lex5.next's 18 minutes). A collection not run this round
+    waits for it (`_paused_waiting`); one no longer held is dropped."""
+    live = {c.name: c for c in all_collections}
+    held = {c.name for c in (known or ())}
+    for n in due:
+        try:
+            busy = (acquire_claim.busy_for(cons[n])
+                    if cons is not None and n in cons else None)
+        except Exception:   # noqa: BLE001 — the manifest busy: read again soon
+            with _acquire_lock:
+                if n in _claim_retries:
+                    _claim_retries[n] = time.time() + CLAIM_READ_AGAIN_S
+            continue
+        with _acquire_lock:
+            if n not in _claim_retries:
+                continue
+            if busy is not None:
+                _claim_retries[n] = time.time() + busy
+                continue
+            del _claim_retries[n]
+            if n not in live:
+                if n in held:
+                    _paused_waiting.add(n)
+                    _rearm_reason[n] = CLAIM_FREE_REASON
+                continue
+        if cons is not None and n in cons:
+            try:
+                _acquire(cons[n], live[n], CLAIM_FREE_REASON)
+            except Exception as e:   # noqa: BLE001 — one collection's fetch, not the round
+                with _acquire_lock:
+                    _claim_retries[n] = time.time() + CLAIM_READ_AGAIN_S
+                try:
+                    db.log_event(cons[n], "warn", "acquire",
+                                 f"{CLAIM_FREE_REASON}: the fetch could not be started, asked again in "
+                                 f"{CLAIM_READ_AGAIN_S:.0f} s: {type(e).__name__}: {e}"[:400])
+                except Exception:   # noqa: BLE001
+                    pass
+
+
+def _runs_again(name: str) -> None:
+    """The node holds `name` again (`_hold_locks`): a re-arm that waited for
+    it is pending now — O(1), so a round with one waiting walks no list."""
+    with _acquire_lock:
+        if name in _paused_waiting:
+            _paused_waiting.discard(name)
+            _paused_aborts.add(name)
+
+
 def _rearm_paused_aborts(all_collections, last_discover, pipeline: bool,
                          cons=None, known=None) -> list[str]:
     """Restart the corpus fetches the node's pause stopped or refused.
@@ -4072,43 +4137,26 @@ def _rearm_paused_aborts(all_collections, last_discover, pipeline: bool,
 
     `known`: every collection the node holds. One of them not run this round
     (`all_collections` is the round's: one paused on its own, or another
-    writer's lock) WAITS for it (`_paused_waiting`), not dropped as retired —
-    its fetch was lost so (2026-11-26).
+    writer's lock) WAITS for it (`_paused_waiting`, back by `_runs_again`
+    when the node holds it again), not dropped as retired — its fetch was
+    lost so (2026-11-26).
 
     A FETCH ANOTHER WRITER'S CLAIM REFUSED (`_claim_retries`) is asked again
     when the claim it met is no longer held — read first, one control row:
     while its holder renews it, it is put off to the claim's next staleness
     and nothing is asked (the read of 2026-11-26: re-armed blindly, a holder
     renewing every 60 s cost a full discovery every five minutes, longer than
-    EUR-Lex5.next's 18-minute walk).
+    EUR-Lex5.next's 18-minute walk) — and then the fetch itself
+    (`_retry_refused_fetches`).
     """
     due: list[str] = []
     with _acquire_lock:
         if _claim_retries:
             now = time.time()
             due = [n for n, at in _claim_retries.items() if at <= now]
-    for n in due:
-        try:
-            busy = (acquire_claim.busy_for(cons[n])
-                    if cons is not None and n in cons else None)
-        except Exception:   # noqa: BLE001 — the manifest busy: read again next round
-            continue
-        with _acquire_lock:
-            if n not in _claim_retries:
-                continue
-            if busy is not None:
-                _claim_retries[n] = time.time() + busy
-                continue
-            del _claim_retries[n]
-            _paused_aborts.add(n)
-            _rearm_reason.setdefault(n, "the claim that refused it is no longer held")
+    if due:
+        _retry_refused_fetches(due, all_collections, cons, known)
     with _acquire_lock:
-        if _paused_waiting:
-            # a waiting name whose collection runs again (an O(collections)
-            # look, only while one waits)
-            back = _paused_waiting & {c.name for c in all_collections}
-            _paused_waiting.difference_update(back)
-            _paused_aborts.update(back)
         if not _paused_aborts:
             # THE IDLE ROUND COSTS NOTHING. This runs every round the node
             # is not paused and almost always has nothing to do; it must not
@@ -4603,7 +4651,12 @@ class _AnyStop:
     def is_set(self) -> bool:
         for e in self._events:
             if e.is_set():
-                self.fired = e
+                # THE FIRST ONE, kept: a collection's resume clears its pause
+                # while the fetch still unwinds, and a later poll read the
+                # retirement the pause caused instead — no re-arm (the read of
+                # 2026-11-26, run)
+                if self.fired is None:
+                    self.fired = e
                 return True
         return False
 
@@ -6490,6 +6543,14 @@ def _leave(gone: str, cons, current, previous_by_name, last_discover, why: str) 
                   _archive_log_state, _archive_last_kick, _sizing_names,
                   _license_nagged, _profile_nagged, _pipeline_idle_log):
         table.pop(gone, None)
+    # ...and what waited to fetch it again: a collection made again under this
+    # name owes none of it (`_gone.pop` at re-add, the same lesson)
+    with _acquire_lock:
+        for table in (_claim_retries, _rearm_reason):
+            table.pop(gone, None)
+        _paused_waiting.discard(gone)
+        _paused_aborts.discard(gone)
+    _own_pauses.pop(gone, None)
     # its index and vector handles, keyed on paths a re-created collection
     # of the same name reuses (normattiva, 2026-10-13: 244 fts errors)
     left = previous_by_name.get(gone)
@@ -8046,6 +8107,7 @@ def _hold_locks(collections, paused: set[str], cons=None) -> list:
             _locks[name] = lock_mod.take(Path(c.manifest_path).parent, name,
                                          "the node (worker)")
             _own_pause_event(name).clear()
+            _runs_again(name)
             _lock_nagged.pop(name, None)
         except lock_mod.Held as e:
             if _lock_nagged.get(name) != str(e) and cons and name in cons:

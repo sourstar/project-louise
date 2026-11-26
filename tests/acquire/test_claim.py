@@ -164,3 +164,19 @@ def test_a_claim_made_in_another_boot_is_dead_whatever_its_age(con, monkeypatch)
 def test_the_boot_is_read_from_the_kernel():
     got = claim_mod.boot_id()
     assert got is None or (len(got) >= 32 and got == claim_mod.boot_id())
+
+
+def test_a_claim_made_after_now_is_a_clock_stepped_back_and_its_live_holder_rewrites_it(con, monkeypatch):
+    """THE SECOND READ: a claim whose holder died right after the clock was
+    stepped back an hour read as held for that hour. A live holder rewrites
+    its claim at its next refresh after any step."""
+    now = time.time()
+    db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(
+        {"pid": 8, "holder": "8@4026533985", "ts": now + 3600, "source_id": "eurlex", "boot": claim_mod.boot_id()}))
+    assert claim_mod.busy_for(con) is None
+    db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(
+        {"pid": 8, "holder": "8@4026533985", "ts": now + 30, "source_id": "eurlex", "boot": claim_mod.boot_id()}))
+    assert claim_mod.busy_for(con) is not None, "a refresh's jitter is not a step"
+    with claim_mod.acquisition_claim(con, "eurlex", force=True):
+        stamped = claim_mod.refresh_claim(con, "eurlex", last_refresh=now + 3600)   # stepped back since
+        assert stamped <= time.time() + 1 and claim_mod.read_claim(con)["ts"] <= time.time() + 1
