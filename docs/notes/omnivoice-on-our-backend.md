@@ -1094,6 +1094,13 @@ word cut or a word's natural tail is for the ear. The probe on the card,
 after the fix and on the same sentences: `MTMD_DEBUG_OMNIVOICE=<dir>` in a
 COPY's env, then `audio-joined.bin` is the audio with `finish()` bypassed.
 
+**The readings after the swap, in one form:** `tools/measure/speech_tail.py`
+reads a clip (its pad, then its last 300 ms in 10 ms chunks counted back from
+the pad, as the trim counts them, and how much is under -50 dBFS) and a raw
+`audio-joined.bin` the same way. On the CPU sentence above: the clip "0 ms
+under -50 dBFS, ENDS IN SOUND; the last 5 ms -33.3 dBFS", its raw audio
+"ENDS IN SOUND; the last 100 ms -22.0 dBFS".
+
 **(c)**, the phone flushing its buffer at `ended`, can still be heard on top:
 it is the voice rework's, measured on the phone after this fix.
 
