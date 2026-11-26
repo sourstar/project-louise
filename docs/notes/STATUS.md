@@ -46,7 +46,12 @@ measured (published figures disagree).
   no longer ended by another process's call); the keeper's own loads count as busy; a call begun while
   the room was made sends it round again before the load; the answer's wait waits for a call running,
   not a linger (it cost every switch within 5 min of a question its 120 s); "loaded" is what the runner
-  lists after the warm. A room refused before ANY load is now said, once a minute a reason
+  lists after the warm. The sixth read, run: a room made before a call was trusted after it — the call's
+  own cold load could take it, and the load then went with the hook off, the incident's path — and a call
+  begun at the bound was loaded beside; now a call seen sends the room round again (made again after it),
+  and one still running at the bound means no load. The claim rows' prune is a range on the key (LIKE
+  matched other keys and used no index), runs at a process's first write and then hourly, and takes the
+  one row of before; a process whose pid namespace cannot be read has a row of its own (a token). A room refused before ANY load is now said, once a minute a reason
   ("card: no room could be made for … — … pinned by work in flight"). The query-mode paging rule is
   unchanged: the first read's idea that the driver cannot page pinned models was unmeasured — a pin is
   the reclaimer's word, not the driver's — and refusing to page on it unloaded a question's own query

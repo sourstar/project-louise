@@ -53,6 +53,7 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
 from collections import Counter
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
@@ -417,16 +418,29 @@ def _claim_key() -> str:
     process, one row let a keeper's warm in the worker write 0 over the web's
     question still running, and the web's linger hide the worker's call —
     every reader of the claim was wrong for up to half a TTL. Readers take
-    every process's row (`claims`)."""
+    every process's row (`claims`). Where the pid namespace cannot be read,
+    a token drawn once for the process stands for it: two containers' pid 7
+    (`init: true`) must never share a row (the sixth read)."""
     try:
-        ns = os.stat("/proc/self/ns/pid").st_ino
+        ns = str(os.stat("/proc/self/ns/pid").st_ino)
     except OSError:
-        ns = 0
+        ns = _PROCESS_TOKEN
     return f"{CLAIM_KEY}:{os.getpid()}@{ns}"
 
 
-#: a row of a process gone this long is removed by the next writer
+_PROCESS_TOKEN = "t" + uuid.uuid4().hex[:12]
+
+#: a row of a process gone this long is removed by a writer; each process
+#: prunes at its first write and then at most this often, so a person's
+#: request pays one write and not two (the sixth read)
 CLAIM_ROW_GONE_S = 3600.0
+_pruned_at: list[float] = []
+
+#: the per-process rows, as a range on the key — `key` is BINARY, and LIKE
+#: (case-insensitive, `_` a wildcard) matched other keys and used no index
+#: (the sixth read, run: `SCAN control`); ';' follows ':' in every collation
+_ROWS = "(key >= ? AND key < ?)"
+_ROW_BOUNDS = (CLAIM_KEY + ":", CLAIM_KEY + ";")
 
 
 def _write_claim(until: float) -> None:
@@ -442,16 +456,22 @@ def _write_claim(until: float) -> None:
             con.execute("INSERT INTO control(key, value) VALUES(?, ?) "
                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                         (key, repr(until)))
-            con.execute("DELETE FROM control WHERE key LIKE ? AND key != ? AND CAST(value AS REAL) < ?",
-                        (CLAIM_KEY + ":%", key, time.time() - CLAIM_ROW_GONE_S))
+            now = time.time()
+            if not _pruned_at or now - _pruned_at[0] >= CLAIM_ROW_GONE_S:
+                # rows of processes gone, and the one row of before (expired
+                # an hour: no process of the old code still writes it)
+                con.execute(f"DELETE FROM control WHERE ({_ROWS} OR key = ?) AND key != ? "
+                            "AND CAST(value AS REAL) < ?",
+                            (*_ROW_BOUNDS, CLAIM_KEY, key, now - CLAIM_ROW_GONE_S))
+                _pruned_at[:] = [now]
     except Exception:   # noqa: BLE001
         pass
 
 
 def _claims_of(con) -> list[float]:
     out: list[float] = []
-    for (value,) in con.execute("SELECT value FROM control WHERE key = ? OR key LIKE ?",
-                                (CLAIM_KEY, CLAIM_KEY + ":%")).fetchall():
+    for (value,) in con.execute(f"SELECT value FROM control WHERE key = ? OR {_ROWS}",
+                                (CLAIM_KEY, *_ROW_BOUNDS)).fetchall():
         try:
             out.append(float(value))
         except (TypeError, ValueError):
@@ -477,13 +497,6 @@ def claims() -> list[float]:
 
 _claim_seen: dict[str, tuple[float, bool]] = {}
 _claim_lock = threading.Lock()
-
-
-def claim_until() -> float | None:
-    """The node's interactive claim — the latest of every process's
-    (`claims`) — read now; None where none is written or it cannot be read."""
-    got = claims()
-    return max(got) if got else None
 
 
 def interactive_active() -> bool:

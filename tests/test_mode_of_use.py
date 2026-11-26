@@ -666,7 +666,7 @@ def test_a_call_that_holds_the_card_for_the_whole_wait_leaves_the_load_to_the_fi
     got = worker._mode_models("embed", "query", question=lambda: False, sleep=clock.sleep, clock=clock,
                               busy=lambda: True)
     assert asked == [] and got["loaded"] is False and ("warm", "chat-35b") not in runner.calls
-    assert "a call held the card for the whole 240 s" in capsys.readouterr().out
+    assert "a call was still running on the card when the 240 s wait ended" in capsys.readouterr().out
 
 
 def test_a_call_is_running_while_its_claim_is_refreshed_and_a_linger_is_none(monkeypatch):
@@ -876,3 +876,148 @@ def test_into_a_mode_that_does_not_embed_the_old_modes_idle_pins_go_at_once(plat
         with worker._pins_lock:
             worker._pins.pop("worker embed wikipedia", None)
             worker._pins.pop("worker embed pubmed", None)
+
+
+def test_a_room_made_before_a_call_is_made_again_after_it(platform, monkeypatch):
+    """THE SIXTH READ, run: the room made, then a call began — its own cold load
+    took what the room had freed — and when it ended the load went with the
+    cold-load hook off, into a card with no room: the incident's own path. A
+    call seen after the room was made sends the room round again."""
+    from app import model_evict
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    asked = _rooms(monkeypatch, True)
+    inside = []
+    real_warm = runner.warm
+    monkeypatch.setattr(__import__("app.llm", fromlist=["warm"]), "warm",
+                        lambda *a, **k: (inside.append(model_evict._room_made.get()), real_warm()))
+    # top: idle -> room; re-check: a call -> round again; top: idle -> room; re-check: idle -> load
+    calls = iter([False, True, False, False])
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None,
+                              busy=lambda: next(calls, False))
+    assert asked == ["chat-35b", "chat-35b"], "the room asked again once the call had ended"
+    assert got["loaded"] is True and inside == [True]
+
+
+def test_a_call_begun_after_the_room_at_the_bound_sends_no_load(platform, monkeypatch, capsys):
+    """THE SIXTH READ, run: the room came late in the wait, a question began
+    while it was made, and the bound passed — the load went beside the call."""
+    from app import model_evict
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    clock = _Clock()
+
+    def room(server, model, *, horizon, protect=(), **kw):
+        clock.t += worker.MODE_ROOM_WAIT_S                 # the room took the rest of the wait
+        return model_evict.Outcome(True)
+    monkeypatch.setattr(model_evict, "make_room_for", room)
+    calls = iter([False, True])                            # idle at the top; a question at the re-check
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=clock.sleep, clock=clock,
+                              busy=lambda: next(calls, True))
+    assert got["loaded"] is False and ("warm", "chat-35b") not in runner.calls
+    assert "a call was still running on the card when the 240 s wait ended" in capsys.readouterr().out
+
+
+def test_a_load_the_runner_does_not_list_after_the_warm_is_not_loaded(platform, monkeypatch, capsys):
+    """The fifth read, run: a load that failed (HTTP 500, out of device memory)
+    raises nothing from the warm. Loaded is what the runner lists after it."""
+    from app import model_load
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    _rooms(monkeypatch, True)
+    monkeypatch.setattr(model_load, "loaded_models", lambda server, *a, **k: set())
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None, busy=lambda: False)
+    assert ("warm", "chat-35b") in runner.calls and got["loaded"] is False
+    assert "chat-35b not loaded" in capsys.readouterr().out
+
+
+def test_the_keepers_loads_count_as_a_call_beside_the_room(monkeypatch):
+    """The fifth read: the keeper makes its room before it takes the claim, so a
+    switch's room made beside one of its loads would count the card twice."""
+    from app import resident
+    monkeypatch.setattr(worker, "_live_call", lambda: False)
+    monkeypatch.setattr(resident, "warming", lambda: True)
+    assert worker._busy_for_room() is True
+    monkeypatch.setattr(resident, "warming", lambda: False)
+    assert worker._busy_for_room() is False
+
+
+def test_a_misread_of_the_store_is_read_again_before_it_ends_the_switch(platform, monkeypatch):
+    """`stale()`: one read off the mode the round read is read once more (a
+    misread would end the switch for good); two are a switch back."""
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    _rooms(monkeypatch, True)
+    reads = iter(["embed"])                                 # one misread, then the store as it is
+    real = node_mode.current
+    monkeypatch.setattr(node_mode, "current", lambda *a, **k: next(reads, None) or real(*a, **k))
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None,
+                              busy=lambda: False, expect="query")
+    assert got["loaded"] is True and ("warm", "chat-35b") in runner.calls
+
+    runner.calls.clear()
+    monkeypatch.setattr(node_mode, "current", lambda *a, **k: "embed")    # switched back for real
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None,
+                              busy=lambda: False, expect="query")
+    assert got["loaded"] is False and runner.calls == []
+
+
+def test_the_claim_rows_are_one_a_process_read_with_the_row_of_before_and_pruned(isolated_config, monkeypatch):
+    """THE SIXTH READ, run: the prune's LIKE matched other keys (`_` a wildcard)
+    and used no index; the row of before was never pruned; and a person's
+    request paid a second write each time. A range on the key; at a process's
+    first write and then hourly; the one row of before read and pruned."""
+    import sqlite3
+    from app import node_state
+    from app.rage import dispatch
+    node_state.connect().close()
+    con = sqlite3.connect(node_state.path(), isolation_level=None)
+    old = time.time() - dispatch.CLAIM_ROW_GONE_S - 10
+    con.executemany("INSERT INTO control(key, value) VALUES(?, ?)",
+                    [("interactive_until:99@1", repr(old)),            # a process gone an hour
+                     ("interactive_until", repr(time.time() + 3.0)),   # the row of before, a call running
+                     ("interactiveXuntil:1", repr(old)),              # another key: never touched
+                     ("INTERACTIVE_UNTIL:1", repr(old))])
+    dispatch._claim_seen.clear()
+    assert dispatch.interactive_active() and worker._live_call(), "the row of before is read"
+
+    monkeypatch.setattr(dispatch, "_pruned_at", [])
+    monkeypatch.setattr(dispatch, "_claim_key", lambda: "interactive_until:7@5")
+    dispatch._write_claim(0.0)
+    keys = {k for (k,) in con.execute("SELECT key FROM control")}
+    assert "interactive_until:99@1" not in keys, "a gone process's row pruned"
+    assert {"interactive_until", "interactiveXuntil:1", "INTERACTIVE_UNTIL:1", "interactive_until:7@5"} <= keys
+
+    con.execute("UPDATE control SET value=? WHERE key='interactive_until'", (repr(old),))
+    con.execute("INSERT INTO control(key, value) VALUES('interactive_until:98@1', ?)", (repr(old),))
+    dispatch._write_claim(0.0)                                          # within the hour: one write only
+    assert con.execute("SELECT COUNT(*) FROM control WHERE key='interactive_until:98@1'").fetchone()[0] == 1
+    dispatch._pruned_at[:] = [time.time() - dispatch.CLAIM_ROW_GONE_S - 1]
+    dispatch._write_claim(0.0)                                          # an hour on: pruned, the row of before too
+    keys = {k for (k,) in con.execute("SELECT key FROM control")}
+    assert "interactive_until:98@1" not in keys and "interactive_until" not in keys
+    for sql, args in ((f"SELECT value FROM control WHERE key = ? OR {dispatch._ROWS}",
+                       ("interactive_until", *dispatch._ROW_BOUNDS)),):
+        plan = " ".join(r[-1] for r in con.execute("EXPLAIN QUERY PLAN " + sql, args))
+        assert "SCAN control" not in plan, plan
+    con.close()
+
+
+def test_a_process_with_no_pid_namespace_has_a_row_of_its_own(monkeypatch):
+    """THE SIXTH READ: with `ns = 0`, web and worker — both pid 7 under
+    `init: true` — shared one row, and the one-row fault came back."""
+    from app.rage import dispatch
+
+    real_stat = os.stat
+
+    def no_ns(path, *a, **k):
+        if str(path) == "/proc/self/ns/pid":
+            raise OSError("no /proc")
+        return real_stat(path, *a, **k)
+    monkeypatch.setattr(dispatch.os, "stat", no_ns)
+    key = dispatch._claim_key()
+    assert key == f"interactive_until:{os.getpid()}@{dispatch._PROCESS_TOKEN}" and not key.endswith("@0")

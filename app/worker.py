@@ -6770,8 +6770,7 @@ def _keeper_loading() -> bool:
     """The keeper's loads in this process (`resident._warm_all`): they make
     their room before they take the claim, and a switch's room made beside one
     would count the card twice (the fifth read)."""
-    t = getattr(resident, "_warm_thread", None)
-    return t is not None and t.is_alive()
+    return resident.warming()
 
 
 def _busy_for_room() -> bool:
@@ -6887,7 +6886,6 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
     # in flight or the model there already: nothing to make
     room = None
     waited_busy = False
-    there = False
     until = clock() + room_wait_s
     while not _stop.is_set() and not newer():
         if not resident.node_embeds():
@@ -6902,10 +6900,15 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
             ids = model_load.loaded_models(server)
             if (ids is not None and new in ids and new not in model_load.parked(server)) \
                     or model_load.in_flight(server, new):
-                room, waited_busy, there = None, False, True
+                room, waited_busy = None, False
                 break
             if busy():
-                waited_busy = True
+                # A CALL RUNNING: no room made beside it, and none made before it
+                # trusted after it — its own cold load may take what was freed,
+                # and the load below goes with the cold-load hook off (the sixth
+                # read, run). Asked again once nobody is beside it: still there,
+                # it costs one reading of the card
+                waited_busy, room = True, None
                 if clock() >= until:
                     break
                 sleep(MODE_ROOM_POLL_S)
@@ -6919,12 +6922,14 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
         if room.fits is not False:
             # THE ROOM MADE, AND STILL NOBODY BESIDE IT right before the load (the
             # fifth read, run: a question begun while the room was made took it, and
-            # the load still went): a call begun meanwhile sends it round again —
-            # the room stays made
-            if busy() and clock() < until:
-                waited_busy = True
-                sleep(MODE_ROOM_POLL_S)
-                continue
+            # the load still went): a call begun meanwhile sends it round again and
+            # the room is made again after it (the sixth read: the call's own load
+            # may have taken it); one still running at the bound means no load
+            if busy():
+                waited_busy, room = True, None
+                if clock() < until:
+                    sleep(MODE_ROOM_POLL_S)
+                    continue
             break
         # a refusal that unloaded or parked something has made what room it can:
         # asked again, it would stop again what the keeper loads back between asks
@@ -6937,7 +6942,8 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
     if gone is not None:
         return said(gone)
     if waited_busy:
-        return said(f"a call held the card for the whole {room_wait_s:.0f} s; it loads at the first question")
+        return said(f"a call was still running on the card when the {room_wait_s:.0f} s wait ended; "
+                    f"it loads at the first question")
     if room is not None and room.fits is False:
         log(f"{mode} mode: {new} not loaded now — no room on the card"
             + ("" if room.unloaded or room.parked else f" after {room_wait_s:.0f} s")
