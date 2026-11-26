@@ -732,7 +732,7 @@ def test_a_fetch_its_collections_own_pause_stopped_is_asked_again_by_its_resume(
         worker._own_pause_event(collection.name).set()     # `node pause <collection>`: `_hold_locks`
         worker._gone_event(collection.name).set()          # then `retire_collection`
         assert stop.is_set()
-        worker._own_pause_event(collection.name).clear()   # resumed while it unwinds (the lock taken again)
+        worker._own_pauses.pop(collection.name, None)      # resumed while it unwinds (`_hold_locks` takes it)
         assert stop.is_set(), "rsync's grace: polled again"
         return _DONE
     collection, con = _wired(tmp_path, monkeypatch, run)
@@ -994,4 +994,60 @@ def test_a_retried_fetch_never_holds_the_main_loop_on_a_busy_manifest(tmp_path, 
         assert started == ["the manifest was busy"], "and the fetch says why it is asked"
     finally:
         _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_two_asks_at_once_start_one_fetch(tmp_path, monkeypatch):
+    """THE SIXTH READ, run: registered before it was started, the fetch thread
+    read as not alive, and a retry beside a discovery started two passes on one
+    pending list — the claim, the same process's, refused neither."""
+    gate = threading.Event()
+    runs = []
+
+    def run(con, collection, spec, profile, stop=None):
+        runs.append(1)
+        gate.wait(5)
+        return _DONE
+    collection, con = _wired(tmp_path, monkeypatch, run)
+    real_log = worker.db.log_event
+
+    def slow_log(c, level, stage, msg, *a, **k):
+        if "started in the background" in msg:
+            time.sleep(0.3)                                # the courtesy line on a busy manifest
+        return real_log(c, level, stage, msg, *a, **k)
+    monkeypatch.setattr(worker.db, "log_event", slow_log)
+    try:
+        ts = [threading.Thread(target=worker._acquire, args=(db.connect(collection), collection, why))
+              for why in ("retry", "discovery")]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(5)
+        time.sleep(0.2)
+        assert runs == [1], "one pass"
+    finally:
+        gate.set()
+        t = worker._acquire_threads.get(collection.name)
+        if t is not None:
+            t.join(5)
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_files_landed_before_a_busy_write_are_scanned(tmp_path, monkeypatch):
+    """THE SIXTH READ, run: the busy write after the last rows committed; the
+    retried fetch found nothing pending and asked no scan."""
+    import sqlite3
+
+    def busy_after_three(*a, **k):
+        e = sqlite3.OperationalError("database is locked")
+        e.fetched = 3
+        raise e
+    collection, con = _wired(tmp_path, monkeypatch, busy_after_three)
+    try:
+        worker._acquire_worker(collection, _SPEC, "demo", "startup")
+        assert worker._acquire_done[collection.name] is True, "what landed asks its scan"
+    finally:
+        _forget_more(collection.name)
+        worker._retry_reason.pop(collection.name, None)
         _forget(collection)

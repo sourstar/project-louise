@@ -317,3 +317,36 @@ def test_the_claims_keepalive_outlives_a_connection_that_does_not_open(tmp_path,
     keep._done = type("Done", (), {"wait": lambda self, s: next(waits)})()
     keep._run()
     assert opens == [1, 1] and calls == [1], "opened again at the next tick, and renewed"
+
+
+def test_the_claim_is_a_lock_a_live_holder_keeps_and_a_dead_one_drops(con):
+    """THE SIXTH READ: a live pass whose renewals failed past 300 s could have
+    its claim taken, and both fetched one pending list. The claim is an flock
+    beside the manifest: a live holder's is never taken — its row stale or
+    gone — and the kernel drops a dead holder's at once."""
+    import fcntl as _fcntl
+    path = claim_mod.lock_path(con)
+    assert path is not None and path.name == "acquire.lock"
+    other = os.open(path, os.O_RDWR | os.O_CREAT)        # another holder's open description
+    _fcntl.flock(other, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+    try:
+        db.set_control(con, claim_mod.CLAIM_KEY, "")      # its row given back, or never renewed
+        with pytest.raises(claim_mod.AcquisitionBusy) as e:
+            with claim_mod.acquisition_claim(con, "eurlex"):
+                pass
+        assert "its lock is held" in str(e.value)
+    finally:
+        os.close(other)                                   # its holder dies: the kernel drops the lock
+    with claim_mod.acquisition_claim(con, "eurlex"):
+        assert claim_mod.read_claim(con)["pid"] == os.getpid()
+        nested = os.open(path, os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                _fcntl.flock(nested, _fcntl.LOCK_EX | _fcntl.LOCK_NB)   # held while the pass runs
+        finally:
+            os.close(nested)
+    probe = os.open(path, os.O_RDWR)
+    try:
+        _fcntl.flock(probe, _fcntl.LOCK_EX | _fcntl.LOCK_NB)            # and let go after
+    finally:
+        os.close(probe)

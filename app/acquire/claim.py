@@ -29,19 +29,18 @@ made a live claim read as stale, and another process took it while its
 holder fetched (the third read, run). The wall clock (`ts`) dates a claim
 that names no boot, and is kept for whoever reads the row.
 
-ONE WRITER AT A TIME: a claim is taken under BEGIN IMMEDIATE (read, check and
-write in one transaction), renewed and given back only where it is still the
-holder's own (one compare-and-set statement) — read then written apart, a
-holder could overwrite the claim another had just taken.
+ONE WRITER AT A TIME: the claim's lock is an flock (`acquisition_claim`); its
+row is renewed and given back only where it is still the holder's own (one
+compare-and-set statement).
 
-THE STANDARD ALTERNATIVE, written down: an flock on a per-collection lock
-file, as the collection's write lock is (app/hold/lock.py) — the kernel drops
-it with its holder, so a dead holder is known at once, a reset or an OOM kill
-alike, with no staleness to wait out. It would replace this row and its
-refresh, and the Library card's "in progress" would read the lock instead.
-It pays the next time a dead holder's claim costs a wait that matters: an
-OOM-killed fetch (no reset) still waits up to STALE_AFTER_SECONDS here.
+THE CLAIM IS AN FLOCK (2026-11-26, the standard written down here before):
+`acquire.lock` beside the manifest, as the collection's write lock is
+(app/hold/lock.py) — the kernel drops it with its holder, so a dead holder
+is known at once, a reset or an OOM kill alike, and a live holder's lock is
+never taken. The row stays, for who holds it: the Library card's "in
+progress", a refusal's words, the timing of a refused fetch's retry.
 """
+import fcntl
 import json
 import os
 import sqlite3
@@ -186,43 +185,78 @@ def _set_if_mine(con, value: str) -> bool:
     return bool(cur.rowcount)
 
 
+#: the file beside the manifest whose flock IS the acquisition's claim (`acquisition_claim`)
+ACQUIRE_LOCK = "acquire.lock"
+
+
+def lock_path(con) -> "Path | None":
+    """`acquire.lock` beside the manifest `con` is open on; None where it has
+    no file (an in-memory database)."""
+    from pathlib import Path
+    try:
+        row = con.execute("PRAGMA database_list").fetchone()
+        f = row[2] if row else ""
+    except Exception:   # noqa: BLE001 — no file: the row alone, as before
+        return None
+    return Path(f).parent / ACQUIRE_LOCK if f else None
+
+
+def _busy(source_id: str, existing: dict | None, now: float, why: str, retry_in: float) -> AcquisitionBusy:
+    holder = str((existing or {}).get("holder") or f"pid {(existing or {}).get('pid', '?')}")
+    age = int(_age(existing, now)) if existing else 0
+    return AcquisitionBusy(f"{source_id}: acquisition already running in {holder} ({why}). Wait for it to "
+                           f"finish, or re-run once it has.", retry_in=retry_in, holder=holder, held_for=age)
+
+
 @contextmanager
 def acquisition_claim(con, source_id: str, force: bool = False):
     """Claim acquisition for `source_id`, or raise AcquisitionBusy.
 
-    Released on the way out even if the body raises, so a crash inside
-    run_acquisition does not leave the claim held for the full stale window.
-    """
-    def refuse_if_live(existing: dict | None, now: float) -> None:
-        if not force and _is_live(existing, now):
-            age = _age(existing, now)
-            raise AcquisitionBusy(
-                f"{source_id}: acquisition already running in "
-                f"{existing.get('holder') or 'pid ' + str(existing.get('pid'))} "
-                f"(claimed {int(age)}s ago). Wait for it to finish, or re-run once the "
-                f"claim goes stale after {STALE_AFTER_SECONDS}s.",
-                retry_in=STALE_AFTER_SECONDS - age + 5,
-                holder=str(existing.get("holder") or f"pid {existing.get('pid')}"), held_for=int(age))
-    # A LIVE CLAIM REFUSES WITHOUT THE WRITE LOCK (the fourth read, run: under
-    # BEGIN IMMEDIATE first, a refusal on a manifest a scan streams into waited
-    # out the busy timeout and came back as OperationalError, not as the
-    # refusal — no retry was armed and the fetch was lost: D6 again). Only a
-    # claim that looks free is taken, and read again, under the lock
-    refuse_if_live(read_claim(con), time.time())
-    # read, check and write in ONE transaction (the module's docstring); a
-    # caller already inside one keeps it, as before
-    own_tx = not con.in_transaction
-    if own_tx:
-        con.execute("BEGIN IMMEDIATE")
+    THE CLAIM IS AN FLOCK on `acquire.lock` beside the manifest (the standard
+    this module's docstring wrote down, taken 2026-11-26 after six reads of
+    staleness rules: a dead holder's claim refused its successor for its 300 s
+    — D6 — and a live holder's could be taken after renewals that failed). The
+    kernel drops it with its holder, a crash or a reset alike, so a held lock
+    IS a live holder, and one is never taken. The row (`CLAIM_KEY`) is kept,
+    renewed by the holder: a fresh row of another process refuses too (one
+    that takes no lock, from before this), and it says who holds it — the
+    Library's "in progress", a refusal's words, the retry's timing
+    (`busy_for`). Where the manifest has no file the row alone decides, as
+    before. `force` takes the row without the lock, as before.
+
+    Released on the way out even if the body raises."""
+    path = lock_path(con)
+    fd = None
+    if path is not None:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            fd = None
+            if not force:
+                existing = read_claim(con)
+                now = time.time()
+                raise _busy(source_id, existing, now, "its lock is held: the kernel drops it with its holder",
+                            busy_for(con, now) or float(STALE_AFTER_SECONDS))
     try:
-        now = time.time()                 # after the lock's wait: the record's time is the write's
-        refuse_if_live(read_claim(con), now)
+        now = time.time()
+        # ...AND A FRESH ROW OF ANOTHER PROCESS refuses too, the lock free or not:
+        # a process that takes no lock (one from before this, during a deploy)
+        # is told by its row alone, aged as before (`_is_live`: the boot's clock,
+        # another boot dead). Read without the write lock: a refusal on a busy
+        # manifest is said at once (the fourth read)
+        existing = read_claim(con)
+        if not force and _is_live(existing, now):
+            raise _busy(source_id, existing, now, f"claimed {int(_age(existing, now))}s ago",
+                        STALE_AFTER_SECONDS - _age(existing, now) + 5)
+        # the lock ours, the row no other's: written (one statement; no other
+        # process that locks writes it meanwhile)
         db.set_control(con, CLAIM_KEY, _record(source_id, now))
-        if own_tx:
-            con.execute("COMMIT")
     except BaseException:
-        if own_tx and con.in_transaction:
-            con.execute("ROLLBACK")
+        if fd is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
         raise
     try:
         yield
@@ -230,10 +264,13 @@ def acquisition_claim(con, source_id: str, force: bool = False):
         try:
             _set_if_mine(con, "")
         except sqlite3.OperationalError:
-            # the manifest busy past its timeout: the claim goes stale by itself
-            # (and with the boot), and the pass's own result or error stands —
-            # raised here, it replaced both (the fourth read, run)
+            # the manifest busy past its timeout: the row goes stale by itself;
+            # the lock below is let go all the same, and the pass's own result
+            # or error stands (the fourth read, run)
             pass
+        if fd is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
 
 def refresh_claim(con, source_id: str, last_refresh: float) -> float:

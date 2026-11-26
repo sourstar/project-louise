@@ -1289,7 +1289,7 @@ class _ClaimKeepalive:
                     if con is None:
                         con = _db.connect(self._collection)
                     last = claim_mod.refresh_claim(con, self._source_id, last)
-                except (sqlite3.OperationalError, OSError):
+                except Exception:   # noqa: BLE001 — never the keepalive: asked again at the next tick
                     continue
         finally:
             if con is not None:
@@ -1483,10 +1483,16 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
     last_report = [time.monotonic()]
     workers = min(manager.platform.transfer.workers, max(1, len(items)))
     # the claim is already held by run_acquisition, covering the whole pass
-    transfer_pool.run_pool(
-        items,
-        _make_worker(transport, collection, spec, manager, ranked, stop, priority),
-        _apply, max_workers=workers, stop=stop)
+    try:
+        transfer_pool.run_pool(
+            items,
+            _make_worker(transport, collection, spec, manager, ranked, stop, priority),
+            _apply, max_workers=workers, stop=stop)
+    except sqlite3.OperationalError as e:
+        # the manifest busy mid-pass: the caller retries the fetch; what landed
+        # before is told, so its scan is asked (app/worker.py)
+        e.fetched = counters["fetched"]
+        raise
 
     _unit_reports(con, spec, last_report, final=True)
     if prepare is not None:

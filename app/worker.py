@@ -2788,7 +2788,10 @@ def _acquire_worker(collection, spec, profile: str, reason: str) -> None:
         result = acquire_engine.run_acquisition(
             con, collection, spec, profile, stop=stop)
         fetched_any = bool(result.get("fetched"))
-        db.log_event(con, "info", "acquire", f"corpus fetch ({reason}): {result}")
+        try:
+            db.log_event(con, "info", "acquire", f"corpus fetch ({reason}): {result}")
+        except sqlite3.OperationalError:
+            pass    # the pass is done: a busy manifest's line is no reason to fetch again
     except (LicenseAckRequiredError, DiskPreflightError) as e:
         db.log_event(con, "error", "acquire", str(e))
     except acquire_claim.AcquisitionBusy as e:
@@ -2821,12 +2824,19 @@ def _acquire_worker(collection, spec, profile: str, reason: str) -> None:
         # fetch was lost until the interval's discovery (the fourth read, run).
         # What landed before a mid-pass busy write is scanned by the discovery
         # the retried fetch asks, or by the next one
+        # WHAT LANDED BEFORE IT is scanned: the pass tells how many it fetched
+        # (`engine`: `e.fetched`), and the completion below asks the scan — the
+        # retried fetch may land nothing and ask none (the sixth read, run)
+        fetched_any = bool(getattr(e, "fetched", 0))
         with _acquire_lock:
             _claim_retries[collection.name] = time.time() + CLAIM_READ_AGAIN_S
             _retry_reason[collection.name] = "the manifest was busy"
-        db.log_event(con, "warn", "acquire",
-                     f"corpus fetch ({reason}) deferred — manifest busy "
-                     f"({e}); retrying in {CLAIM_READ_AGAIN_S:.0f} s")
+        try:
+            db.log_event(con, "warn", "acquire",
+                         f"corpus fetch ({reason}) deferred — manifest busy "
+                         f"({e}); retrying in {CLAIM_READ_AGAIN_S:.0f} s")
+        except sqlite3.OperationalError:
+            pass                    # the retry is armed: the line is a courtesy
     except httpx.TransportError as e:
         # THE ORIGIN DID NOT ANSWER — a timeout, a reset, a refused
         # connection: the origin's state, not the collection's (CLAUDE.md:
@@ -3042,6 +3052,7 @@ def _acquire(con, collection, reason: str) -> None:
         # the old thread ended before the change's discovery came, a fresh fetch
         # ran, and the re-arm asked a discovery and a fetch more)
         _claim_retries.pop(collection.name, None)
+        _retry_reason.pop(collection.name, None)
         if _rearm_reason.get(collection.name) == ACQUIRE_ON_REASON:
             _rearm_reason.pop(collection.name, None)
             _paused_aborts.discard(collection.name)
@@ -3050,9 +3061,16 @@ def _acquire(con, collection, reason: str) -> None:
             args=(collection, spec, collection.profile or "demo", reason),
             name=f"acquire-{collection.name}", daemon=True)
         _acquire_threads[collection.name] = thread
-    db.log_event(con, "info", "acquire",
-                 f"corpus fetch ({reason}) started in the background")
-    thread.start()
+        # STARTED UNDER THE LOCK THAT REGISTERED IT: registered, not yet started,
+        # it read as not alive, and a second `_acquire` meanwhile (a retry beside
+        # a discovery) started a second pass on the same pending list (the sixth
+        # read, run); `retire_collection` could not join it either
+        thread.start()
+    try:
+        db.log_event(con, "info", "acquire",
+                     f"corpus fetch ({reason}) started in the background")
+    except sqlite3.OperationalError:
+        pass                        # a courtesy line on a busy manifest: the fetch runs all the same
 
 
 _archive_threads: dict[str, threading.Thread] = {}
@@ -8179,7 +8197,10 @@ def _hold_locks(collections, paused: set[str], cons=None) -> list:
         try:
             _locks[name] = lock_mod.take(Path(c.manifest_path).parent, name,
                                          "the node (worker)")
-            _own_pause_event(name).clear()
+            # a fresh event for what starts now; one still unwinding keeps its own,
+            # set — cleared, a resume before its next poll read the retirement the
+            # pause caused instead, and no re-arm (D7 again: the sixth read, run)
+            _own_pauses.pop(name, None)
             _runs_again(name)
             _lock_nagged.pop(name, None)
         except lock_mod.Held as e:
