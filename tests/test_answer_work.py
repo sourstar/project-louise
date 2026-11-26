@@ -115,6 +115,11 @@ REAL = {
     1962: "a work of opinion or belief", 5428: "a work of opinion or belief",      # the Defences of poetry
     1974: "a work of opinion or belief", 7148: "a work of opinion or belief",      # Poetics, Schlegel's Lectures
     3623: None,                                     # The Golden Bough: anthropology; Religion is a topic shelf
+    44027: None,      # The Expositor's Bible: The Psalms — "Bible. Psalms -- Commentaries", a Poetry shelf
+    30252: None,      # Ezekiel's visitors — "-- Criticism, interpretation, etc." outranks Science-Fiction & Fantasy
+    # Cheyne's Job and Solomon: a study (its criticism headings), on a Philosophy & Ethics shelf — opinion by
+    # that shelf, as the probe's Bible criticism on a Philosophy shelf (#45475); architecture expected none
+    65866: "a work of opinion or belief",
 }
 
 
@@ -140,8 +145,8 @@ def test_a_real_records_verdict(n):
     assert got == REAL[n], said[:240]
 
 
-def test_all_28_real_records_are_judged():
-    assert len(REAL) == 28
+def test_all_31_real_records_are_judged():
+    assert len(REAL) == 31
 
 
 def test_a_verdict_says_its_basis():

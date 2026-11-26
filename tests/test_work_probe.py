@@ -48,11 +48,9 @@ CASES = [
     ("Sermons on Essays shelf", "Sermons, American | BV", "Category: Essays, Letters & Speeches", OPN),
     ("Republic", "Political science -- Early works to 1800 | JC", "Category: Philosophy & Ethics", OPN),
     ("A Modest Proposal (#1080)", "Political satire, English | Religious satire, English | PR", "Category: Essays, Letters & Speeches", None),
-    # architecture's final read, 2026-11-26 — headings shaped as those records' (the reader checked the real ones)
-    ("Expositor's Bible: The Psalms (#44027)", "Bible. Psalms -- Commentaries | BS", "Category: Poetry", None),
-    ("a Psalms commentary (#30252)", "Bible. Psalms -- Criticism, interpretation, etc. | BS", "Category: Poetry", None),
-    ("Cheyne's criticism (#65866)", "Bible. Proverbs -- Criticism, interpretation, etc. | Gnomic poetry, Hebrew | BS",
-     "", None),
+    # (#44027, #30252, #65866 are real fixtures now: tests/test_answer_work.py REAL)
+    ("a genre heading on a study, no shelf", "Bible. Proverbs -- Criticism, interpretation, etc. | "
+     "Gnomic poetry, Hebrew | BS", "", None),
     ("a study of satire (#29237)", "Satire, English -- History and criticism | PR", "Category: Essays, Letters & Speeches", OPN),
     ("Bible stories, juvenile fiction (#11083)", "Bible stories -- Juvenile fiction | BS", "Category: Children & Young Adult Reading", None),
 ]
