@@ -980,6 +980,17 @@ measured (published figures disagree).
   (`question_card.set_log` at the web's start); `/system` from model_load's cache, never a read a question's
   fresh one waits behind; a card's process list only when it changed; the answer's `read` count. OWED: the
   GPU probe's `/gpu` scan cost on the node, once (measuring.md), when the branch is in a release.
+- **A source is a work of its time; a quotation in another language is spoken in it (operator, 2026-11-26).**
+  (1) A quoted span («…», “…”, „…“, "…") of two words or more that reads clearly as another language than its
+  sentence is synthesized as its own segment in that language and joined to the rest (60 ms between), in the
+  piece's one turn and at its steps (`speech.quote_segments`); a one-word quotation, or one in the sentence's
+  language, stays in the sentence — the text alone says nothing of it. (2–3) Each source in the answer's
+  prompt says its first publication (and by whom where an annotation or PG's automatic summary states it) and its
+  subjects, and that they call it a literary work (`retrieval._work_said`); the model is told that a literary
+  work's events are what it narrates, never historical fact, and that a source's "now" counts from its first
+  publication, never from today. (4) The answer's sources (`louise_sources`) and its PDF carry the first
+  publication. Coverage is the corpus's: Gutenberg states a first publication for ~12 % of its books (marc520);
+  the rest say none, and nothing is imported (CLAUDE.md).
 - **The voice: the first sound within a second, the steps rising 16→32 by 4 (operator, 2026-11-26, replacing the
   same day's first sentence read whole).** The page cuts the reading into pieces: the first sized to be made within
   1 s at 16 steps (~30 characters at ~1.5 ms a char a step + 150 ms), each next to be made while the one before

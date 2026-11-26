@@ -28,6 +28,7 @@ public API surface is unchanged.
 """
 import contextvars
 import json
+import re
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -1853,6 +1854,58 @@ ANSWER_SYSTEM = (
     "facts, not ranked evidence — use them but do not cite them with [n]."
 )
 
+#: A SOURCE IS A WORK OF ITS TIME (operator, 2026-11-26: "the AI summary
+#: makes no distinction between facts and fiction; it happens that a
+#: historical character is mentioned in a book, and the content of the book
+#: is reported as an historical fact"; "sometimes a source reports a time
+#: span related to the time the source has been written (Napoleon is dead
+#: since 100 years and still...); the AI summary must take into account the
+#: publication date (the first publication date, not the publication in
+#: Gutenberg)"). Each source's header says what its own record says of the
+#: work — its first publication, its subjects, whether they call it a
+#: literary work (`_work_said`) — and the model is told how to read them.
+#: Only the collection's own corpus, or an annotation named as such
+#: (CLAUDE.md, "A collection holds only the information contained in its
+#: corpus"); where the record says nothing, the header says nothing.
+WORK_RULE = (
+    " Each source is a work of its own time. Where its header says it is a literary work (fiction, a "
+    "novel, a play, poetry), what it tells is what that work narrates: write \"in the novel …\" or "
+    "\"the author imagines …\", never present its events or its characters' deeds as historical fact. "
+    "A time span or a 'now' in a source (\"dead these hundred years\", \"today\") counts from that "
+    "work's first publication, when its header gives one: date it from that year, never from today; "
+    "where the header gives none, do not turn it into a date. A date's source is named where the header "
+    "names it (\"by …\")."
+)
+
+#: subjects of a record that call it a literary work, in the vocabularies its
+#: corpora use (Library of Congress subject headings and PG's bookshelves;
+#: a word, case-blind)
+LITERARY = re.compile(r"\b(fiction|novels?|romance|drama|plays|poetry|poems|verse|tales|short stories|"
+                      r"romanzi|romanzo|racconti|poesia|teatro|roman|théâtre|poésie|erzählungen|dramen)\b",
+                      re.IGNORECASE)
+
+
+def _work_said(h: dict) -> str:
+    """What a hit's own record says of its WORK, for the answer's header:
+    its first publication (`first_published`, and by whom where an
+    annotation or an automatic summary states it), its subjects, and that
+    they call it a literary work. Empty where the record says nothing."""
+    parts = []
+    year = h.get("first_published")
+    if year:
+        by = h.get("first_published_by")
+        parts.append(f"first published {year}" + (f" (by {by})" if by else ""))
+    subjects = h.get("work_subjects") or h.get("subjects") or ()
+    if isinstance(subjects, str):
+        subjects = [s.strip() for s in subjects.split("|") if s.strip()]
+    subjects = [str(s) for s in subjects][:6]
+    if subjects:
+        said = "; ".join(subjects)[:240]
+        parts.append(("a literary work — " if any(LITERARY.search(s) for s in subjects) else "")
+                     + f"subjects: {said}")
+    return (" — " + " — ".join(parts)) if parts else ""
+
+
 #: QWEN3'S OWN SWITCH, in the prompt — as `llm._RESTRICT_SYSTEM` carries it.
 #: The node's chat model ignores `chat_template_kwargs.enable_thinking` and
 #: thinks before it answers. Measured on "Diritto all'oblio" over
@@ -1928,14 +1981,14 @@ def build_answer_messages(query: str, result: dict, answer_lang: str | None = No
         loc = f"{source_id}:{h['book_id']}"
         if h.get("chapter"):
             loc += f" {h['chapter']}"
-        head = f"[{i}] {loc} — {h.get('title','?')} — {h.get('authors','?')} ({h.get('lang','?')})"
+        head = f"[{i}] {loc} — {h.get('title','?')} — {h.get('authors','?')} ({h.get('lang','?')})" + _work_said(h)
         blocks.append(head + (h.get("reading") or "") + "\n" + h["text"][:1800])
     if result["catalog"]:
         cat = "\n".join(f"- {c['title']} — {c['authors']} (book #{c['book_id']})"
                         for c in result["catalog"][:8])
         blocks.append("[catalog matches]\n" + cat)
     context = "\n\n---\n\n".join(blocks) if blocks else "(no sources found)"
-    system = ANSWER_SYSTEM
+    system = ANSWER_SYSTEM + WORK_RULE
     if any(h.get("reading") for h in shown_hits):
         from . import historical
         system += historical.SYSTEM_RULE
