@@ -328,7 +328,7 @@ def test_prepare_readies_the_bulk_before_the_pass_and_an_mtd_that_does_not_open_
         units._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
 
 
-def test_the_split_a_year_learned_is_kept_for_the_years_after(tmp_path, monkeypatch):
+def test_listing_windows_start_one_language_wide(tmp_path, monkeypatch):
     """Review of a783fd1c, 3: `learned` was made afresh every year, each of ~75
     years re-paying the wide counts' 900 s timeouts."""
     monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")

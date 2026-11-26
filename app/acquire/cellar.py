@@ -314,7 +314,10 @@ def _answer_of(fn: Callable[[], Any], *, poll_s: float = 1.0) -> Any:
             box["value"] = fn()
         except BaseException as e:            # noqa: BLE001 — raised again in the caller
             box["error"] = e
-    t = threading.Thread(target=run, name="cellar-sparql", daemon=True)
+    import contextvars
+    # the pass's transfer handle crosses into the thread (review of a69741dd,
+    # S4: unbound, every SPARQL byte was charged at BACKFILL with no stop)
+    t = threading.Thread(target=contextvars.copy_context().run, args=(run,), name="cellar-sparql", daemon=True)
     t.start()
     while t.is_alive():
         t.join(poll_s)
@@ -949,8 +952,12 @@ def _say_cellar(name: str) -> Callable[[str], None]:
     return lambda message: print(f"{time.strftime('%H:%M:%S')} [{name} info:cellar] {message}", flush=True)
 
 
-#: the listing phase's windows at once (Cellar's endpoint allows 4 connections)
+#: the listing phase's windows at once, at most (the endpoint's etiquette
+#: decides below it: TransferManager.endpoint_slots)
 LISTING_SLOTS = 4
+#: the listing phase's own endpoint key: its episodes cool the listing
+#: threads (review of a69741dd, S2), never the fetch threads (Z2)
+LISTING_KEY = "cellar-listing"
 #: languages a listing-phase window starts with (see `_prepare_bulk`)
 LISTING_START_GROUP = 1
 
@@ -971,7 +978,8 @@ class _Learned(dict):
 
     def __init__(self, group: int, say=None) -> None:
         super().__init__(group=max(1, group))
-        self._guard = __import__("threading").Lock()
+        import threading
+        self._guard = threading.Lock()
         self.say = say
 
     @property
@@ -1449,7 +1457,8 @@ class TreeUnits(CellarUnits):
         from . import cellar_listing
         from ..plugins.eurlex.source import LANGUAGES
         with self._lock:
-            lock = self._window_locks.setdefault((key, year, lang), __import__("threading").Lock())
+            import threading
+            lock = self._window_locks.setdefault((key, year, lang), threading.Lock())
             base_url = self._base_url.get(key)
         with lock:
             _stop_check()                               # a stop while queued on the lock asks nothing
@@ -1625,47 +1634,92 @@ class TreeUnits(CellarUnits):
             # keyless as before); the split, should one still be needed, is
             # learned once for all (`_Learned`, under a lock)
             import contextvars
-            from concurrent.futures import ThreadPoolExecutor
+            import threading
+            from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
+            from ..transfer.bucket import Priority
+            from ..transfer.manager import Direction, current_handle, get_manager
+            from .specs import EURLEX_SPEC
+            mgr = get_manager()
+            # ONE SOURCE OF TRUTH for the slots (review of a69741dd, S1): the
+            # endpoint's etiquette, at most LISTING_SLOTS
+            slots = max(1, min(LISTING_SLOTS, mgr.endpoint_slots(EURLEX_SPEC.endpoints[0], EURLEX_SPEC)))
             learned = _Learned(LISTING_START_GROUP, say=say)
-            windows = [(year, tuple(langs_y[i:i + learned.group]))
-                       for year in sorted(missing) for langs_y in [sorted(missing[year])]
-                       for i in range(0, len(langs_y), learned.group)]
+            outer = current_handle()
+            # THE PHASE'S OWN STOP (B1): set by the pass's stop or by a local
+            # fault, so the windows in flight end at their next request and none
+            # begins after it
+            phase = threading.Event()
             failed: list[tuple[int, tuple[str, ...], str]] = []
-            guard = __import__("threading").Lock()
+            guard = threading.Lock()
 
-            def one(year: int, window: tuple[str, ...]) -> bool:
-                _stop_check()
-                t1 = time.monotonic()
-                try:
-                    with httpx.Client(timeout=TIMEOUT_S) as client:
-                        n = sum(1 for _ in _window_files(client, base_url, year, window, code_of,
-                                                         budget.acquire_bytes, place=lambda *a: False,
-                                                         learned=learned))
-                except TransferAborted:
-                    raise
-                except TransportError as e:            # the origin's: this window's units wait
-                    with guard:
-                        failed.append((year, window, f"{type(e).__name__}: {str(e)[:200]}"))
-                    return False
-                say(f"cellar: listed {year} ({', '.join(window)}): {n} units in {time.monotonic() - t1:.0f} s")
-                return True
-            with ThreadPoolExecutor(max_workers=LISTING_SLOTS, thread_name_prefix="cellar-listing") as pool:
-                futures = [pool.submit(contextvars.copy_context().run, one, y, w) for y, w in windows]
-                # a stop, or a LOCAL fault (an OSError writing a window: ENOSPC
-                # on the cache drive), ends the phase: the windows not begun
-                # are cancelled, those in flight end at their next request,
-                # and it is raised — a local fault holds the pass back
-                # (_prepare_bulk_held), never leaves the trees to Cellar
-                ended = None
-                for fut in futures:
-                    try:
-                        asked += bool(fut.result())
-                    except BaseException as e:  # noqa: BLE001 — raised once every window has ended
-                        ended = ended or e
-                        for other in futures:
-                            other.cancel()
+            def year_windows(year: int) -> int:
+                """One year's windows, shaped when its turn comes (the split
+                learned by an earlier year narrows it), bound to the phase's
+                stop under a LISTING key: an episode cools the listing threads,
+                never the fetch threads (Z2; S2)."""
+                n_listed = 0
+                bound = mgr.bind(outer.priority if outer is not None else Priority.BACKFILL, Direction.DOWN,
+                                 stop=phase, endpoint_key=LISTING_KEY)
+                with bound:
+                    langs_y = sorted(missing[year])
+                    i = 0
+                    while i < len(langs_y):
+                        group = learned.group
+                        window = tuple(langs_y[i:i + group])
+                        i += group
+                        _stop_check()
+                        if mgr.cooled_for(LISTING_KEY) > 0:
+                            # Cellar asked the listing to wait: this window is not
+                            # asked now; its units wait (S2: no burst after a 503)
+                            with guard:
+                                failed.append((year, window, f"cooled {mgr.cooled_for(LISTING_KEY):.0f} s more"))
+                            continue
+                        t1 = time.monotonic()
+                        try:
+                            with httpx.Client(timeout=TIMEOUT_S) as client:
+                                n = sum(1 for _ in _window_files(client, base_url, year, window, code_of,
+                                                                 budget.acquire_bytes, place=lambda *a: False,
+                                                                 learned=learned))
+                        except TransferAborted:
+                            raise
+                        except TransportError as e:    # the origin's: this window's units wait
+                            with guard:
+                                failed.append((year, window, f"{type(e).__name__}: {str(e)[:200]}"))
+                            continue
+                        except BaseException:
+                            phase.set()                # a LOCAL fault: every other window ends now
+                            raise
+                        say(f"cellar: listed {year} ({', '.join(window)}): {n} units in "
+                            f"{time.monotonic() - t1:.0f} s")
+                        n_listed += 1
+                return n_listed
+
+            pool = ThreadPoolExecutor(max_workers=slots, thread_name_prefix="cellar-listing")
+            ended: BaseException | None = None
+            try:
+                pending_f = {pool.submit(contextvars.copy_context().run, year_windows, y) for y in sorted(missing)}
+                while pending_f:
+                    done, pending_f = wait(pending_f, timeout=0.2, return_when=FIRST_EXCEPTION)
+                    for fut in done:
+                        if fut.cancelled():
+                            continue
+                        e = fut.exception()
+                        if e is None:
+                            asked += fut.result()
+                        elif ended is None or isinstance(ended, TransferAborted) and not isinstance(e, TransferAborted):
+                            ended = e                  # a local fault outranks the stop it caused
+                    if ended is not None or (outer is not None and outer.stop is not None and outer.stop.is_set()):
+                        phase.set()
+                        for fut in pending_f:
+                            fut.cancel()
+                        if ended is None:
+                            ended = TransferAborted("cellar: stopped between requests")
+            finally:
                 if ended is not None:
-                    raise ended
+                    phase.set()
+                pool.shutdown(wait=True, cancel_futures=True)
+            if ended is not None:
+                raise ended
             for year, window, why in failed:
                 unlisted |= {(year, l) for l in window}
                 say(f"cellar: the {year} window ({', '.join(window)}) is not listed ({why}): its units wait")
