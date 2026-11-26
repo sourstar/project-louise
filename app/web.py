@@ -530,6 +530,52 @@ async def ask_voice_report(request: Request):
     return Response(status_code=204)
 
 
+def _filler_reader(request: Request) -> tuple[bool, str | None]:
+    """(admin, the voice the account keeps — an admin's only), as
+    `/v1/audio/speech` reads them (app/api.py `audio_speech`)."""
+    from . import auth, users
+    v = getattr(request.state, "viewer", None)
+    admin = auth.admin(v)
+    return admin, (users.voice_of(auth.account(v)) if admin else None)
+
+
+@ask_router.get("/ask/voice/fillers")
+def ask_voice_fillers(request: Request, lang: str = "", voice: str | None = None):
+    """THE PHRASES THAT COVER THE WAIT (docs/notes/hands-free-voice.md §7,
+    Decision 5A): `{"lang", "voice", "ready": [{"id", "kind": "short" |
+    "long", "url"}]}` — the clips ready in the voice this reader's answer
+    would be read in (`voice`, the page's choice, counts for an admin only)
+    for `lang`, one of the five main languages; another gets none. A pool
+    short of a kind is made in the background, and this answers at once
+    with what is ready, possibly nothing (app/fillers.py)."""
+    from . import fillers
+    admin, mine = _filler_reader(request)
+    return fillers.ready(lang, asked=voice, account_voice=mine, admin=admin)
+
+
+@ask_router.get("/ask/voice/fillers/{clip_id}")
+def ask_voice_filler(request: Request, clip_id: str):
+    """One phrase's audio, as speech answers it; 404 for a clip gone, one
+    this reader may not hear, or one another engine made."""
+    from . import fillers
+    got = fillers.clip(clip_id, admin=_filler_reader(request)[0])
+    if got is None:
+        raise HTTPException(404, "no such phrase: /ask/voice/fillers lists the ready ones")
+    return Response(content=got[0], media_type=got[1], headers={"Cache-Control": "no-store"})
+
+
+class FillersUsedBody(BaseModel):
+    ids: list[str] = Field(default_factory=list, max_length=16)
+
+
+@ask_router.post("/ask/voice/fillers/used")
+def ask_voice_fillers_used(request: Request, body: FillersUsedBody):
+    """The phrases the page played: each is deleted and its kind remade in
+    the background, of another text, never during a question (app/fillers.py)."""
+    from . import fillers
+    return {"removed": fillers.used(body.ids, admin=_filler_reader(request)[0])}
+
+
 VOICE_TIMELINE_MAX = 8192
 #: the sentences of a reading the line names (the page sends as many at most)
 VOICE_TIMELINE_SENTENCES = 12

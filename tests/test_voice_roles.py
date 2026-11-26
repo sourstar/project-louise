@@ -253,6 +253,27 @@ def test_a_quotation_still_open_at_a_pieces_end_is_spoken_in_its_language(node, 
     assert [c["language"] for c in calls[before:]] == ["it", "en"]
 
 
+def test_a_segmented_sentence_keeps_keep_and_background(node, monkeypatch):
+    """Architecture, 2026-11-26 (main's #944): each quoted-language segment is
+    made as its sentence asks — keep=False writes no kept clip, background=True
+    takes no question's claim (the phrases that cover the wait)."""
+    seen, put = [], []
+    monkeypatch.setattr(speech, "_synthesize_call",
+                        lambda url, model, out, last=False, background=False:
+                        seen.append(background) or (200, _wav(200), "audio/wav", [("synth", 10.0)]))
+    monkeypatch.setattr(speech, "_clip_put", lambda key, data, ctype: put.append(key))
+    monkeypatch.setattr(speech.model_load, "backend_of", lambda url, model, *a, **k: "engine-1")
+    s = 'Il motto dei moschettieri era "Un pour tous, tous pour un", scritto da Dumas nel romanzo.'
+    status, *_ = speech.synthesize_timed({"input": s, "language": "it"}, url="http://ai", keep=False)
+    assert status == 200 and len(seen) == 3 and put == [], "keep=False: no segment is kept"
+    seen.clear()
+    speech.synthesize_timed({"input": s, "language": "it"}, url="http://ai", background=True)
+    assert seen == [True, True, True], "background=True: every segment as background work"
+    seen.clear(); put.clear()
+    speech.synthesize_timed({"input": s, "language": "it"}, url="http://ai")
+    assert seen == [False, False, False] and len(put) == 3, "a reader's sentence: kept, as a question"
+
+
 def test_a_quotation_the_node_cannot_join_goes_as_one_sentence(node, monkeypatch):
     calls, _, _ = node
 

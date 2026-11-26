@@ -208,6 +208,8 @@ _DERIVED_WRITERS = {
     "app/ask/preview.py": "a PNG preview of a plate the page cannot show (a TIFF), rendered again from the "
                           "plate held on a miss",
     "app/speech.py": "synthesized sentences, made again by the speech model on a miss",
+    "app/fillers.py": "the phrases that cover the wait, per voice and language, made again by the speech model "
+                      "when a pool is short",
     "app/hold/claim_index.py": "a large annotations snapshot's claim index, rebuilt from its held parts",
     "app/acquire/work_trees.py": "eurlex's whole tree per work, fetched again from Cellar on a miss",
     "app/acquire/cellar_listing.py": "Cellar's listing windows kept between passes, paged again on a miss",

@@ -142,6 +142,11 @@ class _Flight:
 _lock = threading.Lock()
 _systems: dict[str, tuple[float, frozenset[str] | None, float]] = {}   # server -> (at, ids, ttl)
 _pids: dict[str, dict[str, int]] = {}                                    # server -> {model: backend pid}
+#: server -> {model: (pid, started_at)}: a backend PROCESS as the listing names it — the pid alone is
+#: LocalAI's container's count, which starts again at every restart of that container
+_procs: dict[str, dict[str, tuple]] = {}
+#: (server, model, pid, started_at) -> time.monotonic() this process first read it
+_proc_first_seen: dict[tuple, float] = {}
 #: (server, model) -> the most bytes `/system` gave as the model's `size_vram`
 #: (the driver's per-process count, as app/gpu_models.py reads it), KEPT after
 #: the model goes: what the resident keeper's room check needs is the size of
@@ -248,10 +253,13 @@ def reset() -> None:
     with _lock:
         _systems.clear()
         _pids.clear()
+        _procs.clear()
+        _proc_first_seen.clear()
         _sizes.clear()
         _held.clear()
         _cpu.clear()
         _backends.clear()
+        _configured.clear()
         _rest.clear()
         _anchor.clear()
         _load_seen.clear()
@@ -294,7 +302,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
     if not isinstance(rows, list):
         raise _NoRoute()
     held = [m for m in rows if isinstance(m, dict) and isinstance(m.get("id"), str)]
-    pids, sizes, now, cpu = {}, {}, {}, {}
+    pids, sizes, now, cpu, procs = {}, {}, {}, {}, {}
     # the backend each loaded model runs on, where the listing names it (our P1)
     backends = {m["id"]: m["backend"] for m in held if isinstance(m.get("backend"), str) and m["backend"]}
     # only a row that LISTS its options says whether it was loaded on demand
@@ -306,6 +314,9 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         pid = (m.get("process") or {}).get("pid") if isinstance(m.get("process"), dict) else None
         if isinstance(pid, int):
             pids[m["id"]] = pid
+            started = (m.get("process") or {}).get("started_at")
+            if isinstance(started, (str, int, float)) and not isinstance(started, bool) and started != "":
+                procs[m["id"]] = (pid, started)
         proc = m.get("process") if isinstance(m.get("process"), dict) else {}
         try:
             cpu[m["id"]] = float(proc.get("cpu_percent") or 0.0)
@@ -323,6 +334,10 @@ def _fetch_system(server: str) -> frozenset[str] | None:
     with _lock:
         before = _pids.get(server)          # None: this process's first reading of the server
         _pids[server] = pids
+        _procs[server] = procs
+        stamp = time.monotonic()
+        for m, (pid, started) in procs.items():
+            _proc_first_seen.setdefault((server, m, pid, started), stamp)
         _held[server] = now
         _cpu[server] = cpu
         _backends[server] = backends
@@ -529,6 +544,19 @@ def held_sizes(server: str, max_age_s: float | None = None) -> dict[str, tuple[i
         return {m: (pids.get(m), now.get(m, 0)) for m in ids}
 
 
+def known_process(server: str, model: str) -> tuple[tuple, float] | None:
+    """`model`'s backend PROCESS as the LAST `/system` answer this process
+    read gave it — (pid, started_at) — and when this process first saw that
+    process (time.monotonic()); no request. None where the listing names no
+    pid and start (app/run_check.py binds a heard run to it)."""
+    server = server_of(server)
+    with _lock:
+        proc = _procs.get(server, {}).get(model)
+        if proc is None:
+            return None
+        return proc, _proc_first_seen.get((server, model, *proc), time.monotonic())
+
+
 def in_flight(server: str, model: str) -> bool:
     """Is a load of `model` on `server` running in THIS process now
     (`ensure_loaded`'s flight)? A model still loading is not listed loaded:
@@ -614,6 +642,53 @@ def backend_of(url: str, model: str | None, max_age_s: float | None = None) -> s
         return None
     with _lock:
         return _backends.get(server, {}).get(model)
+
+
+#: how long a model's configured backend is trusted: a swap is an operator's
+#: deploy, seen within this long
+CONFIG_TTL_S = 30.0
+#: (server, model) -> (monotonic time read, the backend its config names or None)
+_configured: dict[tuple[str, str], tuple[float, str | None]] = {}
+
+
+def configured_backend(url: str, model: str | None, max_age_s: float | None = None) -> str | None:
+    """The BACKEND `model`'s config names at `url`'s runner — `backend` in
+    LocalAI's model-config API (`GET /api/models/config-json/<model>`, as
+    app/model_pins.py reads its pin) — READ WITHOUT LOADING THE MODEL: the
+    backend its next load runs on. A Louise engine is installed under a name
+    of its own (`louise-sycl-f16-llama-cpp-<digest>-…`) and a model is moved
+    to it by its config (backend-qualification-2026-11-21.md, phase 1), so
+    the name is the engine. From an answer at most `max_age_s` old (default
+    CONFIG_TTL_S); None when the runner cannot say (bounded: PROBE_TIMEOUT_S)."""
+    if not model:
+        return None
+    server = server_of(url)
+    limit = CONFIG_TTL_S if max_age_s is None else max_age_s
+    with _lock:
+        got = _configured.get((server, model))
+    if got is not None and time.monotonic() - got[0] < limit:
+        return got[1]
+    backend: str | None = None
+    try:
+        r = httpc.get(f"{server}/api/models/config-json/{model}", timeout=PROBE_TIMEOUT_S)
+        if r.status_code == 200:
+            v = (r.json() or {}).get("backend")
+            backend = v if isinstance(v, str) and v.strip() else None
+    except Exception:   # noqa: BLE001 — unreachable, not LocalAI's: not known
+        backend = None
+    with _lock:
+        _configured[(server, model)] = (time.monotonic(), backend)
+    return backend
+
+
+def engine_of(url: str, model: str | None, max_age_s: float | None = None) -> str | None:
+    """THE ENGINE THAT ANSWERS `model`'s NEXT REQUEST, never loading it to
+    learn it: the backend it is loaded on (`backend_of`), else — not loaded —
+    the one its config names for its next load (`configured_backend`), each
+    from an answer at most `max_age_s` old (their own defaults where None;
+    0: read now, each bounded by PROBE_TIMEOUT_S). None when neither can be
+    read."""
+    return backend_of(url, model, max_age_s) or configured_backend(url, model, max_age_s)
 
 
 def backend_pid(url: str, model: str | None, max_age_s: float = INTERACTIVE_TTL_S) -> int | None:

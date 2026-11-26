@@ -222,7 +222,7 @@ def test_two_caches_place_each_kind_by_how_it_is_read(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "FILES_CACHE_DIR", files)
     for kind in derived.FILES:
         assert derived.place(kind, origin) == files / kind / before[kind].name, kind
-    for kind in ("legi-facts", "wikidata-labels", "annotation-claim-index", "speech-clips"):
+    for kind in ("legi-facts", "wikidata-labels", "annotation-claim-index", "speech-clips", "speech-fillers"):
         assert derived.place(kind, origin).parent.parent == fast, kind
     assert derived.apart("wikidata-pack", "wikidata-labels")
     assert derived.places_key() != str(fast), "an answer kept per process is keyed on both caches"

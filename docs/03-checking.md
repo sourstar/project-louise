@@ -328,6 +328,20 @@ held to the rules below with the header in place of a receipt.
   goes on, and the search says so — a peer that fails may still search
   with what it holds (02 §2.4). An encoder that cannot be reached is a
   deferral, and returns nothing to quarantine.
+  *"At once, and by itself" names who must hear the run (amended
+  2026-11-26).* The process that gates is the worker; the process that
+  answers a question is another, and a model started again with another
+  env or build is first heard by whichever asks it first. So a run heard
+  by ANY process of the peer is written where every one reads it
+  (`state/heard.json`: per endpoint, model and role, the run and when),
+  and the worker's own round gates a run a question heard first —
+  whether or not the collection has anything to embed. Until that day
+  the worker learnt of a run only from its own embed stage: bge-m3,
+  restarted with another env on the reference node, answered a question
+  from a run nobody had gated, and four minutes later no gate had begun
+  (wikipedia had nothing to embed). By hand the gate is `louise hold
+  embedder check <name>` — for a PAUSED collection, since the worker
+  holds the lock of every collection it runs (07 §7.7).
 
 An endpoint that states no run identity cannot be held to a validated
 run: a peer may search with it and writes nothing through it. An

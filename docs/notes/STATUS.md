@@ -20,6 +20,87 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **PARKING SWITCHED ON FOR bge-m3, AND THE THREE DEFECTS THE STEP FOUND (München, 07:59–08:12Z; operator:
+  "Yes", then "switch it on straight after the deploy, without waiting for the comparison").** The three
+  lines went into the node's file by hand, key by key equal to main's staged one. (1) `/models/reload`
+  does not apply an env: the running backend stayed, `/system` listed no `parks` — a model's env needs
+  the model STOPPED. (2) After the stop and one question the new process answered from run 0211…1dde
+  (last night's copies' run) and THE WORKER NEVER GATED IT: which run answers was each process's own
+  record, the web heard it, wikipedia had nothing to embed. "Gated at once, whether or not it has
+  anything to embed" held only for a run the worker itself heard. Now what any process hears is written
+  to `state/heard.json` and the worker's round gates it (03 §3.3 amended); an asymmetric space's query
+  run, which only a question ever hears, the same — its verdict was held to the document run alone.
+  (3) THE KEEPER COUNTED THE UNGATED RUN AS ONE IT MAY PARK ("vega-bge-m3 can be parked", 27 s after its
+  load): a write was held to the counted cycles, a park was not. The evictor now parks an encoder only
+  as a run admitted to park for every collection that uses it, and stops it otherwise
+  (`run_check.park_admitted`; parking-keeper.md §7) — bound to the backend PROCESS (pid and start) the
+  run was heard from, where the answer can only be that process's, and asked by the question card's path
+  too. Three independent reads: the first found the card parking without the rule and a model name
+  standing in for a process; the second found a pid standing in for a process (LocalAI's container
+  counts pids again after a restart), a run bound from an answer two processes could have given, an
+  unreadable file making a model parkable, and the query side's verdict recording a run its look had
+  not settled; the third found a binding erased by any process that could not bind and a failed query
+  look looked at again at every step; the fourth, a failed look stamped before it ended; the fifth, a
+  verdict stored already expired after a look that took its whole timeout (each step a 300 s hang), a run
+  heard DURING a failed look counted as looked at, a failed document look's "no run" matching every run
+  heard after it, and the keep rule without a test — all fixed with tests; the sixth, a tested run whose
+  look did not settle once (the encoder busy, the re-check deferred) never looked at again on a collection
+  with nothing to embed, and a query probe that times out holding the main loop half the time — an
+  unsettled look now expires on the idle round too, and a query look failing for one run backs off
+  (300 → 600 → 1,200 → 1,800 s; another run heard is looked at at once); the seventh, that the idle
+  round's settle never runs where embed producers do (the node's setting) — the search beat now looks
+  again at a settled collection whose verdict is outdated — that a failing document side took the query
+  probe along every 5 min, and that N collections on one hung encoder probed it N times (a look that
+  times out now holds the encoder as busy, `encoder_timeouts`, and the idle round waits the hold); the
+  eighth, that a suspect query run was never sent back while its failed look was put off, and that the
+  shared hold paused every collection's embedding for deferrals the embed stage does not hold for, with
+  no look's answer to release it — the hold WITHDRAWN: a collection's own unsettled look backs off as the
+  query side's does (300 → 600 → 1,200 → 1,800 s), holding nobody else. The ninth read, run (blocking):
+  that backoff counted looks that cost nothing — a refused connection while LocalAI restarts, a twin busy, a
+  room short — and kept embedding paused up to 25 min after the encoder was back; and per collection, six
+  collections on one hung encoder probed it six times a period again. Now only a look that HELD its caller
+  (30 s or more) is backed off, and the backoff is the ENCODER's (`run_check._slow`): read only before a
+  look, a valid verdict standing meanwhile, cleared by the first look that settles or comes back quickly,
+  and passed over by a run heard since; a quick failure is asked again at 300 s, as on main. A suspect run
+  whose re-gate cannot finish is looked at again when its verdict expires, not at every step: a verdict
+  keeps the canary failures its look saw, and only a new one sends it back. The tenth read and the delta
+  read, run: the mark keeps the run heard when it was set, and a run heard since passes it (a verdict
+  `check_write` dropped for R2 waited for the mark); a look the encoder answered does not set it — unless a
+  request of it timed out (`_timed_out` along the exception chain: a gate whose first request waited its
+  300 s, counted as answered, held the main loop half the time again); and an unsettled query side is kept
+  by the mark itself, as long as it and no longer (`_query_kept`; re-stamped, it outlived the mark). The
+  eleventh read, run: a mark set by ONE collection's own gate timeouts held another on the model whose gate
+  would pass, for as long as the first kept timing out — so the encoder's mark is now set only where the
+  encoder did not answer its PROBE (it is hung for everyone), and a gate that hung after the probe answered
+  backs off its own collection alone (300, 600, 1,200, 1,800 s); `_timed_out` stops where a chain was cut
+  on purpose (`from None`: VeGa's receipts read timing out is not the encoder). The twelfth read, run: kept
+  in a verdict's expiry only, that own backoff was passed whenever an asymmetric space's query side failed
+  quickly (50 % of the main loop, 91 % for two); and a gate deferring late without a timeout was asked every
+  300 s (44 %). The backoff is now the GATE's — (model, space, run, how this peer contributes) — read before
+  every look like the encoder's mark, doubled by any slow look that does not settle, cleared by one that
+  does; siblings of one space share it. Two rules, then: the encoder's mark for a probe it did not answer
+  (every collection on it waits), the gate's for a gate that holds its caller (the collections that run it
+  wait). The thirteenth read, run: a quick look returned the gate's EXPIRED backoff and every round looked
+  (171 gates in 3 h, main 36); the query side doubled only a timed-out look (a late deferral every 300 s,
+  44 %); siblings on R1 passed R2's gate backoff at an engine switch and hung one after another; a sibling
+  held only by the backoff gave the encoder's frozen reason. Fixed; and the QUERY gate is the gate's backoff
+  too, keyed the same way. Measured against main by the reader, 3 h: every case no worse than main but the
+  recovery after a hang ends (≤ one backoff step, by design). The fourteenth read: nothing blocking; at a
+  worker start or a query engine switch, siblings now share the query gate's backoff too, and a held
+  sibling's reason follows the gate's backoff instead of freezing. And the
+  manual door, `hold embedder check`, is
+  shut on a running node — the worker holds every collection's lock — so its hint now says to pause
+  the collection first; that is how today's gate was run. I had told München the record was shared
+  between web and worker: it was not, and the four silent minutes are what showed it.
+  No throughput row: wikipedia's queue is 0.
+- **THE DEPLOY OF 8c92a5f0 (e5272e7, live 07:54:43Z; München's rows).** No gate at the worker's start:
+  every collection said "embedding enabled: run … is validated for this space" and nothing else, as the
+  release promised. Staging with ten more test files: 3271 passed / 2 skipped, 11, 92, 491 / 9 skipped,
+  25. The relay's question, second web start of the day (not like for like with the morning's 108 s):
+  51.2 s — languages 12.7, catalog 2.7, fts 4.5 (wikidata), dense 2.3, rerank 20.4, of which wikipedia
+  10.3 with "works 9,229 [claims 8,837, facts 212, passages 180 for 6 edition(s)]": the works of fifty
+  records are the CLAIMS, the seek table in place. `tools/measure/works_walk.py` splits that figure
+  into the frames read, the collection's relations and the members' rows (run owed by München).
 - **THE FIRST QUESTION AFTER THE SWITCH TO QUERY MODE WAITED 48.9 s FOR ITS FIRST WORD: THE SWITCH LOADED
   THE 35B INTO A FULL CARD (the operator's microphone and read-aloud, ~10:47Z; München counted every
   part from the node's lines).** The voice itself was fine (first sound 5.1 s after the first word, no
