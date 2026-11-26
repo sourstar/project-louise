@@ -280,26 +280,6 @@ def test_a_busy_give_back_leaves_the_passes_own_result(con, monkeypatch):
     assert got == {"fetched": 7}, "the pass's result stands; the claim goes stale by itself"
 
 
-def test_a_holder_whose_claim_was_taken_over_is_told_so(con):
-    """THE FOURTH READ, run: renewals failed past the claim's staleness,
-    another process took it, and the first fetch went on beside it."""
-    import threading
-    from app.acquire import engine
-    lost = threading.Event()
-    with claim_mod.acquisition_claim(con, "eurlex"):
-        db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(
-            {"pid": 9, "holder": "9@1", "ts": time.time(), "source_id": "eurlex", "boot": claim_mod.boot_id(),
-             "up": claim_mod.uptime()}))
-        claim_mod.refresh_claim(con, "eurlex", last_refresh=0.0, lost=lost)
-        assert lost.is_set()
-        stop = engine._ClaimStop(None, lost)
-        assert stop.is_set(), "the pass's stop: it ends at its next unit"
-    lost.clear()
-    db.set_control(con, claim_mod.CLAIM_KEY, "")
-    claim_mod.refresh_claim(con, "eurlex", last_refresh=0.0, lost=lost)
-    assert not lost.is_set(), "given back, taken by nobody: nothing lost"
-
-
 def test_a_boot_clock_that_reads_a_claim_in_the_future_gives_way_to_the_wall_clock(con, monkeypatch):
     """THE FOURTH READ: a claim's "up" ahead of the reader's CLOCK_BOOTTIME (a
     time namespace, a CRIU restore) read a day-old claim as held."""
@@ -309,3 +289,31 @@ def test_a_boot_clock_that_reads_a_claim_in_the_future_gives_way_to_the_wall_clo
         {"pid": 8, "holder": "8@1", "ts": time.time() - 86_400, "source_id": "eurlex", "boot": "this-boot",
          "up": 50_000.0}))
     assert claim_mod.busy_for(con) is None, "a day old by the wall clock"
+
+
+def test_the_claims_keepalive_outlives_a_connection_that_does_not_open(tmp_path, monkeypatch):
+    """THE FIFTH READ: the keepalive's connect sat outside its try — one that
+    raised ended the thread, and the claim went stale under a live pass."""
+    import sqlite3
+    from app.acquire import engine
+    opens, calls = [], []
+
+    from app import db as app_db
+    real_connect = app_db.connect
+
+    def connect(collection, **k):
+        opens.append(1)
+        if len(opens) == 1:
+            raise sqlite3.OperationalError("unable to open database file")
+        return real_connect(collection)
+    monkeypatch.setattr(engine.claim_mod, "refresh_claim", lambda con, sid, last: calls.append(1) or last)
+    monkeypatch.setattr(app_db, "connect", connect)
+    waits = iter([False, False, True])
+    keep = engine._ClaimKeepalive.__new__(engine._ClaimKeepalive)
+    keep._source_id = "eurlex"
+    keep._collection = collections_mod.Collection(
+        name="eurlex", plugin="eurlex", profile=None, embed_mode_default=None, corpus_dir=tmp_path / "c",
+        manifest_path=tmp_path / "m.db", fts_dir=tmp_path / "f", lance_dir=tmp_path / "l")
+    keep._done = type("Done", (), {"wait": lambda self, s: next(waits)})()
+    keep._run()
+    assert opens == [1, 1] and calls == [1], "opened again at the next tick, and renewed"

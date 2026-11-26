@@ -49,10 +49,14 @@ measured (published figures disagree).
   it again; a free claim's retry for a paused collection comes back as the fetch, not a discovery. The
   fourth read, run: under BEGIN IMMEDIATE first, a refusal on a busy manifest came back as
   OperationalError and armed no retry (D6 again) — a live claim now refuses before the lock, and a busy
-  deferral is asked again in 30 s; a busy give-back no longer replaces the pass's result; a holder whose
-  claim was taken over (renewals failed past its staleness) stops its files at their unit instead of
-  fetching beside its successor; a boot clock that reads a claim in the future gives way to the wall
-  clock; the re-arm "acquisition turned on again" is forgotten when a fresh fetch starts.
+  deferral is asked again in 30 s; a busy give-back no longer replaces the pass's result; a boot clock
+  that reads a claim in the future gives way to the wall clock; the re-arm "acquisition turned on again"
+  is forgotten when a fresh fetch starts. The fifth read, run: the fourth round's stop for a claim taken
+  over reported a stopped pass as a complete fetch — WITHDRAWN: with the keepalive kept alive (a renewal
+  or a connection that fails is asked again at the next tick), a live pass's claim goes stale only where
+  its manifest refuses every write for 300 s, and then its own writes fail first; only a BUSY manifest is
+  a deferral retried (a read-only or full one is an error, left to discovery); a retried fetch starts on
+  a thread and connection of its own (on the main loop it waited out the busy timeout) and says why.
 
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
   `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"

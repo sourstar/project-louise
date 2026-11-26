@@ -236,17 +236,12 @@ def acquisition_claim(con, source_id: str, force: bool = False):
             pass
 
 
-def refresh_claim(con, source_id: str, last_refresh: float, lost=None) -> float:
+def refresh_claim(con, source_id: str, last_refresh: float) -> float:
     """Keep a long-running acquisition's claim from going stale under it.
-    Returns the (possibly unchanged) last-refresh timestamp. `lost`: an event
-    set when the row holds ANOTHER process's live claim — taken over after
-    renewals that failed for its staleness — so the pass stops beside it
-    rather than fetching the same pending list (the fourth read, run)."""
+    Returns the (possibly unchanged) last-refresh timestamp. Renews only a
+    claim that is still this process's (`_set_if_mine`)."""
     now = time.time()
     if 0 <= now - last_refresh < _REFRESH_EVERY:
         return last_refresh           # a clock stepped back refreshes at once
-    if not _set_if_mine(con, _record(source_id, now)) and lost is not None:
-        other = read_claim(con)
-        if other and not _mine(other) and held(other, now):
-            lost.set()
+    _set_if_mine(con, _record(source_id, now))
     return now

@@ -2806,15 +2806,24 @@ def _acquire_worker(collection, spec, profile: str, reason: str) -> None:
                      f"({e.holder}, claimed {e.held_for} s ago); asked again in {e.retry_in:.0f} s, "
                      f"when it would be stale"[:400])
     except sqlite3.OperationalError as e:
+        if not _busy_error(e):
+            # NOT A BUSY MANIFEST (read-only, full, an I/O error): retried every
+            # 30 s it would list the origin again each time, for ever (the fifth
+            # read, run) — said as what it is, and left to the next discovery
+            db.log_event(con, "error", "acquire",
+                         f"corpus fetch ({reason}) failed: the manifest refused it: "
+                         f"{type(e).__name__}: {e}"[:400])
+            return
         # The manifest was busy past the busy timeout — a discovery pass
-        # streaming millions of rows can starve this thread. NOTHING moved
-        # and nothing is inconsistent: the claim was never taken, so this
-        # is a deferral, not a failure — and ASKED AGAIN, as a refusal is
-        # (`_claim_retries`): the completion flag asks nothing for a fetch
-        # that fetched nothing, and the fetch was lost until the interval's
-        # discovery (the fourth read of the claim fix, run)
+        # streaming millions of rows can starve this thread. A deferral, not a
+        # failure, and ASKED AGAIN, as a refusal is (`_claim_retries`): the
+        # completion flag asks nothing for a fetch that fetched nothing, and the
+        # fetch was lost until the interval's discovery (the fourth read, run).
+        # What landed before a mid-pass busy write is scanned by the discovery
+        # the retried fetch asks, or by the next one
         with _acquire_lock:
             _claim_retries[collection.name] = time.time() + CLAIM_READ_AGAIN_S
+            _retry_reason[collection.name] = "the manifest was busy"
         db.log_event(con, "warn", "acquire",
                      f"corpus fetch ({reason}) deferred — manifest busy "
                      f"({e}); retrying in {CLAIM_READ_AGAIN_S:.0f} s")
@@ -4073,6 +4082,18 @@ def _finish_completed_acquires(cons, all_collections, last_discover,
 #: how soon a claim that could not be read (the manifest busy) is read again
 CLAIM_READ_AGAIN_S = 30.0
 CLAIM_FREE_REASON = "the claim that refused it is no longer held"
+#: name -> why a retry was armed where it is not a refusal (`_claim_retries`). Guarded by `_acquire_lock`.
+_retry_reason: dict[str, str] = {}
+
+
+def _busy_error(e: BaseException) -> bool:
+    """Is this sqlite3 error a BUSY or LOCKED manifest (a deferral), not one
+    that refuses the write (read-only, full, I/O, schema)?"""
+    code = getattr(e, "sqlite_errorcode", None)
+    if code is not None:
+        return code & 0xFF in (5, 6)          # SQLITE_BUSY, SQLITE_LOCKED (and their extended codes)
+    text = str(e).lower()
+    return "locked" in text or "busy" in text
 ACQUIRE_ON_REASON = "acquisition turned on again"
 
 
@@ -4115,18 +4136,37 @@ def _retry_refused_fetches(due: list[str], all_collections, cons, known) -> None
                     _paused_waiting.add(n)
                     _rearm_reason[n] = CLAIM_FREE_REASON
                 continue
-        if cons is not None and n in cons:
+        with _acquire_lock:
+            why = _retry_reason.pop(n, CLAIM_FREE_REASON)
+        # OFF THE MAIN LOOP: `_acquire` writes its line on the manifest it is
+        # given, and a busy one (the reason a retry may be armed) held the main
+        # loop the busy timeout, 60 s (the fifth read, run). A thread of its
+        # own, with a connection of its own
+        threading.Thread(target=_acquire_retried, args=(live[n], why), name=f"acquire-retry-{n}",
+                         daemon=True).start()
+
+
+def _acquire_retried(collection, why: str) -> None:
+    """`_acquire` for a retried fetch, on its own connection. A fetch that
+    cannot be started is asked again in CLAIM_READ_AGAIN_S."""
+    con = None
+    try:
+        con = db.connect(collection)
+        _acquire(con, collection, why)
+    except Exception as e:   # noqa: BLE001 — one collection's fetch, not the worker
+        with _acquire_lock:
+            _claim_retries[collection.name] = time.time() + CLAIM_READ_AGAIN_S
+            _retry_reason[collection.name] = why
+        if con is not None:
             try:
-                _acquire(cons[n], live[n], CLAIM_FREE_REASON)
-            except Exception as e:   # noqa: BLE001 — one collection's fetch, not the round
-                with _acquire_lock:
-                    _claim_retries[n] = time.time() + CLAIM_READ_AGAIN_S
-                try:
-                    db.log_event(cons[n], "warn", "acquire",
-                                 f"{CLAIM_FREE_REASON}: the fetch could not be started, asked again in "
-                                 f"{CLAIM_READ_AGAIN_S:.0f} s: {type(e).__name__}: {e}"[:400])
-                except Exception:   # noqa: BLE001
-                    pass
+                db.log_event(con, "warn", "acquire",
+                             f"{why}: the fetch could not be started, asked again in "
+                             f"{CLAIM_READ_AGAIN_S:.0f} s: {type(e).__name__}: {e}"[:400])
+            except Exception:   # noqa: BLE001
+                pass
+    finally:
+        if con is not None:
+            con.close()
 
 
 def _runs_again(name: str) -> None:
@@ -6579,7 +6619,7 @@ def _leave(gone: str, cons, current, previous_by_name, last_discover, why: str) 
     # ...and what waited to fetch it again: a collection made again under this
     # name owes none of it (`_gone.pop` at re-add, the same lesson)
     with _acquire_lock:
-        for table in (_claim_retries, _rearm_reason):
+        for table in (_claim_retries, _rearm_reason, _retry_reason):
             table.pop(gone, None)
         _paused_waiting.discard(gone)
         _paused_aborts.discard(gone)

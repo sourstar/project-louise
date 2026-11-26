@@ -603,6 +603,13 @@ def test_an_idle_round_does_not_walk_the_collection_list(monkeypatch):
 
 # ---- a fetch another writer's claim refused, and a collection's resume (2026-11-26, D6 / D7) ----
 
+def _retries_ended(timeout=5.0):
+    """The retried fetches run on threads of their own (`_acquire_retried`)."""
+    deadline = time.monotonic() + timeout
+    for t in [t for t in threading.enumerate() if t.name.startswith("acquire-retry-")]:
+        t.join(max(0.0, deadline - time.monotonic()))
+
+
 def _forget_more(*names):
     with worker._acquire_lock:
         for n in names:
@@ -660,6 +667,7 @@ def test_a_fetch_refused_by_anothers_claim_is_asked_again_once_and_only_when_it_
         db.set_control(con, claim_mod.CLAIM_KEY, "")    # the holder ends
         clock[0] += 310
         worker._rearm_paused_aborts([collection], {}, True, cons=cons, known=[collection])
+        _retries_ended()
         assert fetched == [(collection.name, "the claim that refused it is no longer held")], "THE FETCH, once"
         assert asked == [], "never a discovery: it queues behind the running scan and walks the corpus"
         assert collection.name not in worker._claim_retries
@@ -787,6 +795,7 @@ def test_a_claim_retry_for_a_collection_not_run_waits_and_says_why_when_it_comes
         fetched = []
         monkeypatch.setattr(worker, "_acquire", lambda c, coll, why: fetched.append(why))
         worker._rearm_paused_aborts([collection], {}, True, cons={collection.name: con}, known=[collection])
+        _retries_ended()
         assert fetched == ["the claim that refused it is no longer held"]
     finally:
         _forget_more(collection.name)
@@ -937,5 +946,52 @@ def test_the_re_arm_acquisition_turned_on_left_is_forgotten_when_a_fresh_fetch_s
         assert collection.name not in worker._paused_aborts, "the fresh fetch owes it nothing"
     finally:
         alive.set()
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+
+def test_only_a_busy_manifest_is_a_deferral_retried_and_said_so(tmp_path, monkeypatch):
+    """THE FIFTH READ, run: a read-only manifest was retried every 30 s, for
+    ever, listing the origin each time, and said "manifest busy"."""
+    import sqlite3
+    for err, retried in ((sqlite3.OperationalError("database is locked"), True),
+                         (sqlite3.OperationalError("attempt to write a readonly database"), False)):
+        def run(*a, _e=err, **k):
+            raise _e
+        sub = tmp_path / ("busy" if retried else "readonly")
+        sub.mkdir()
+        collection, con = _wired(sub, monkeypatch, run)
+        try:
+            worker._acquire_worker(collection, _SPEC, "demo", "startup")
+            rows = con.execute("SELECT level, message FROM events WHERE stage = 'acquire' ORDER BY id").fetchall()
+            assert (collection.name in worker._claim_retries) is retried, str(err)
+            if retried:
+                assert rows[-1][0] == "warn" and worker._retry_reason[collection.name] == "the manifest was busy"
+            else:
+                assert rows[-1][0] == "error" and "the manifest refused it" in rows[-1][1]
+        finally:
+            _forget_more(collection.name)
+            worker._retry_reason.pop(collection.name, None)
+            _forget(collection)
+
+
+def test_a_retried_fetch_never_holds_the_main_loop_on_a_busy_manifest(tmp_path, monkeypatch):
+    """THE FIFTH READ, run: `_acquire` wrote its line on the main loop's
+    connection to the manifest a scan starved, and the round waited the busy
+    timeout (60 s deployed)."""
+    started = []
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, **k: _DONE)
+    monkeypatch.setattr(worker, "_acquire", lambda c, coll, why: (time.sleep(1.0), started.append(why)))
+    try:
+        with worker._acquire_lock:
+            worker._claim_retries[collection.name] = time.time() - 1
+            worker._retry_reason[collection.name] = "the manifest was busy"
+        t0 = time.monotonic()
+        worker._rearm_paused_aborts([collection], {}, True, cons={collection.name: con}, known=[collection])
+        assert time.monotonic() - t0 < 0.5, "the round does not wait for it"
+        _retries_ended()
+        assert started == ["the manifest was busy"], "and the fetch says why it is asked"
+    finally:
         _forget_more(collection.name)
         _forget(collection)
