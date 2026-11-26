@@ -20,6 +20,21 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
+  `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"
+  for wikipedia's fifty records).** 50 candidates, 38 works of 266 records, 269 lookups returning 456
+  claims. Cold: 4.89 s, of which 4.19 s reading frames — 618 MB decompressed, 512,000 lines, for 456
+  claims; the members' rows 0.31 s; the collection's own relations 0. Warm: 0.34 s, and still 450 frames
+  and 358 MB decompressed: the index's 32 MiB of kept frames hold about 26 of this size. So it is the
+  walk, not the manifest and not the relations; the seek table (11-22) removed the part indexes from the
+  web's memory and left the frames. NEXT, not built: the claim's two ends and its two lengths kept in
+  the index itself, per claim, so the walk opens no frame. ALSO, from Tensor's ordered suite of main (12
+  failures that pass alone, both causes mine): `search_memory.measure()` replaced the reranker and two
+  writers and never put them back — the second test of the tool switched reranking off for every test
+  after it; and the parking tests borrowed a helper without the clock its module resets. Fixed
+  (Tensor's commit taken whole), with a third of the same kind found while running it in that order:
+  the seconds of a model's last park, kept between tests.
+
 - **THE DEPLOY OF a2b5935b (7fe5362, live 05:40:17Z) AND WHAT ITS FIRST QUESTION SAID (München's rows).**
   *The node reset itself at 05:09:03Z during the deploy's first final run* ("uncorrected error … data
   fabric sync flood", Ryzen 7600, 2×32 GB non-ECC at 6400 MT/s; no OOM, pools healthy); the deploy was
