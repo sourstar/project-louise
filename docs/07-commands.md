@@ -1879,7 +1879,13 @@ at half `[speech] tts_steps` (unset: half the model's own 32) plus 4 a piece, up
 second at its steps, and each next so it is made while the one before plays, from rates it measures (each
 clip's `synth`, `audio` and `steps`; until then ~1.5 ms a character a step, 71 ms of sound a character); a
 sentence that fits goes whole, a longer one — the stream's open sentence too, as soon as there is more of it
-than the budget — is cut at the best boundary within it: a ; or :, a comma, else a gap between two words.
+than the budget — is cut at the best boundary within it: a ; or :, a comma (，、；： in a language written
+without spaces), else a gap between two words; never after a full stop inside a sentence (an abbreviation,
+an initial: "art. 5", "G. Cesare"). The budget of each next piece is the LEAD the pieces before it leave —
+the time from when the last is made to when its playing ends, predicted per reading — so a long piece
+playing lets the next sentence go whole. A clip far slower than predicted (a cold load) is not learned as
+speed, and one answer's rates are taken once, when it is asked: read again, it is cut in the same pieces and
+the node's kept clips serve it.
 The next piece starts after that boundary's pause (a word's none, a comma's 180 ms, a ; or :'s 300 ms; a
 sentence's its own), the silence the model left at the cut trimmed first. A kept clip still takes its turn:
 it waits for the piece before it, and the next one does not wait for it. The reading's line in the node's log

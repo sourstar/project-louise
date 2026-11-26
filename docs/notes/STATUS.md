@@ -986,6 +986,10 @@ measured (published figures disagree).
   plays; a piece ends at a ; or :, a comma, or a word gap, and the next starts after that boundary's pause (0 /
   180 / 300 ms), the model's silence at the cut trimmed. The node makes piece n at half the steps plus 4n, up to
   full (`speech.reading_steps`) and says the steps in `Server-Timing`; the page learns its rates from each clip.
+  After architecture's read (2026-11-26): never cut after a full stop inside a sentence ("art." | "5", "G." |
+  "Cesare"); each budget from the predicted lead of the pieces queued, not the one piece before (a 175-char
+  sentence had gone in 9 pieces); a clip over 3x the prediction (a cold load) is not learned; one answer's rates
+  fixed when it is asked, so a re-read finds the kept clips; ，、；： cut a language without spaces.
   MEASURED: nothing on the node yet; the next reading's line says each piece's budget, steps and boundary.
 - **The voice: the first sentence whole and at half the steps; a ping when the microphone is ready (operator,
   2026-11-26).** (1) A reading's sentence 0 is made at half `[speech] tts_steps` (the model's 32 when unset: 16),

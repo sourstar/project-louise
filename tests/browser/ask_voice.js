@@ -169,9 +169,6 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   // THE READY PING (operator, 2026-11-26): one soft tone when the microphone turns red
   check(await page.evaluate(() => louiseVoice.tones()) === 1 && (await page.evaluate(() => __toneRed)).join() === 'true',
         '2. one ready tone, once the microphone is red', await page.evaluate(() => ({ n: louiseVoice.tones(), red: __toneRed })));
-  await sleep(900);
-  check(await page.evaluate(() => louiseVoice.toneContext() && louiseVoice.toneContext().state) === 'suspended',
-        '2. and its context sleeps once the recording is over', await page.evaluate(() => louiseVoice.toneContext().state));
   check(p1.type === 'audio/wav' && p1.fields.response_format === 'json' && !('model' in p1.fields)
         && !('language' in p1.fields), '2. no model named, and no language while results show in their own', p1.fields);
   // HANDS-FREE (operator, 2026-11-11): asked at once, as Ask asks, and the answer read by itself
@@ -185,6 +182,9 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
         '2. every sentence, in order', posted.speech.map(b => b.input));
   check(await page.evaluate(() => document.getElementById('mic-status').hidden && !document.getElementById('mic').classList.contains('rec')),
         '2. the microphone is idle again');
+  // after the reading's checks: waiting here earlier let the short fake reading end unseen (architecture, 2026-11-26)
+  check(await until(() => louiseVoice.toneContext() && louiseVoice.toneContext().state === 'suspended', 3000),
+        '2. and the tone\'s context sleeps once the recording is over', await page.evaluate(() => louiseVoice.toneContext().state));
 
   // 3. tap and tap again: stopped by hand, in the page's answer language; the
   //    question asked is replaced, one typed and not yet asked is added to
@@ -516,7 +516,8 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   //     one-second budget, cut at a boundary while the sentence is still being
   //     written, each next sized to be made while the one before plays — and
   //     the pause before a piece is its boundary's
-  await page.evaluate(() => louiseVoice.setRates({ per_step_char: 1.5, overhead: 150, audio_char: 71, full: 32, fixed: true }));
+  // not fixed: what a clip teaches moves the rates (the fake node's clips say no times, so none do here)
+  await page.evaluate(() => louiseVoice.setRates({ per_step_char: 1.5, overhead: 150, audio_char: 71, full: 32 }));
   await reset(); answerJob = 'live';
   await asked(() => page.evaluate(() => { document.getElementById('q').value = 'Chi scrisse la Commedia?'; ask(); }));
   const W24 = (LONGFIRST + ' Ognuna conta trentatré canti, più il proemio [4].').match(/\S+\s*/g);
@@ -542,7 +543,7 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
         '24. the pieces are the text, every word once, in order', in24);
   const kinds = t24.sentences.map(t => t.gap);
   check(kinds.includes('comma') && kinds[kinds.length - 1] === 'sentence',
-        '24. each piece says the boundary it was cut at', kinds);
+        '24. each piece says the boundary it was cut at', { kinds, in24, budgets: t24.sentences.map(t => t.budget) });
   const ci = kinds.indexOf('comma'), pause = t24.sentences[ci + 1].play - t24.sentences[ci].end;
   check(pause >= 170, '24. the piece after a comma starts after a comma\'s pause', { pause, row: t24.sentences[ci] });
   check(t24.sentences.slice(1, -1).every((t, k) => t.budget >= t24.sentences[k].chars),
@@ -556,6 +557,53 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   });
   check(trimmed[1] < 44 + 2 * 16000 * 0.25 && trimmed[2] > 44 + 2 * 16000 * 0.69 && trimmed[2] < trimmed[0],
         '24. the silence the model left at a cut is trimmed, at the side cut', trimmed);
+  // THE SAME ANSWER READ AGAIN IS CUT IN THE SAME PIECES, whatever was
+  // learned meanwhile (its rates are taken once, when it was asked): the
+  // node's kept clips serve it (operator, 2026-11-09)
+  await page.evaluate(() => { for (let k = 0; k < 4; k++) louiseVoice.learn({ chars: 30, steps: 16, synth: 200, audio: 2100, n: 0 }); });
+  const moved = await page.evaluate(() => louiseVoice.rates().per_step_char);
+  await page.evaluate(() => { __speech.length = 0; });
+  await page.click('#speak');
+  await until(n => __speech.length >= n, 8000, in24.length);
+  await until(() => !document.getElementById('speak').classList.contains('on'), 20000);
+  const again24 = await page.evaluate(() => __speech.map(b => b.input));
+  check(moved < 1.5 && JSON.stringify(again24) === JSON.stringify(in24),
+        '24. read again after the rates moved: the same pieces', { moved, in24, again24 });
+  // never after a full stop inside a sentence: an abbreviation, an initial, a number's (architecture, 2026-11-26)
+  const cuts24 = await page.evaluate(() => {
+    const v = louiseVoice, cutsOf = (s, max) => { const out = []; let x = s; for (let n = 0; x && n < 20; n++) {
+      const g = x.length > max ? v.split(x, max) : null; if (!g) { out.push(x); break; } out.push(g[0]); x = g[1]; } return out; };
+    return [cutsOf("Ai sensi dell'art. 5 del decreto legislativo n. 196 del 2003 il titolare risponde [1].", 20),
+            cutsOf('Lo storico G. Cesare scrisse che il prof. Bianchi aveva torto sul punto [2].', 20),
+            cutsOf('东京是日本的首都和最大的城市，人口超过一千三百万；它也是世界上最大的都市圈之一。', 20)];
+  });
+  check(cuts24[0].concat(cuts24[1]).every(p => !/(art|n|G|prof)\.$/.test(p)),
+        '24. no piece ends at an abbreviation or an initial', cuts24.slice(0, 2));
+  check(cuts24[2].length >= 2 && /[，；]$/.test(cuts24[2][0])
+        && cuts24[2].join('') === '东京是日本的首都和最大的城市，人口超过一千三百万；它也是世界上最大的都市圈之一。',
+        '24. a language without spaces is cut at its own comma or semicolon', cuts24[2]);
+  // the lead: once a long piece is playing, the next sentence is not cut to
+  // the floor (architecture's case: pieces of 24, 51, 89 and 19, then a
+  // sentence of 175 that went in 9). At 32 steps a character is made in
+  // ~48 ms and plays ~71 ms, so the lead grows: the 175 go in two at most
+  const lead = await page.evaluate(() => {
+    const v = louiseVoice; let p = { made: 0, free: 0 };
+    p = v.planned(p, 0, 24, 'word'); p = v.planned(p, 1, 51, 'word'); p = v.planned(p, 2, 89, 'comma'); p = v.planned(p, 3, 19, 'sentence');
+    const b4 = v.budget(4, p), p5 = v.planned(p, 4, b4, 'comma');
+    return [b4, v.budget(5, p5)];
+  });
+  check(lead[0] >= 120 && lead[0] + lead[1] >= 175,
+        '24. the lead of the pieces queued sizes the next: a 175-character sentence after them goes in two at most', lead);
+  // what is learned: a clip far slower than predicted (a cold load) is not speed
+  const learned = await page.evaluate(() => {
+    const v = louiseVoice; v.setRates({ per_step_char: 1.5, overhead: 150, audio_char: 71, full: 32 });
+    v.learn({ chars: 30, steps: 16, synth: 14000, audio: 2000, n: 0 });
+    const afterLoad = v.rates().per_step_char;
+    v.learn({ chars: 30, steps: 16, synth: 1110, audio: 2100, n: 0 });
+    return [afterLoad, v.rates().per_step_char];
+  });
+  check(learned[0] === 1.5 && learned[1] > 1.5 && learned[1] < 1.7,
+        '24. a cold load is not learned as speed, an ordinary clip is', learned);
   await page.evaluate(k => louiseVoice.setRates(JSON.parse(k)), FAST);
   answerJob = 'a1';
 

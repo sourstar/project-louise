@@ -88,13 +88,10 @@
   };
   // sentences being synthesized at once (pump)
   const IN_FLIGHT = 2;
-  // THE FIRST SENTENCE GOES WHOLE, up to its full stop (operator,
-  // 2026-11-26: "there's a gap between the first comma and the rest of the
-  // sentence that is longer of a full period. So the first sentence must be
-  // provided up to the first full stop"). Until then a first sentence over
-  // 90 characters was cut at its last , ; : and its second half waited for
-  // its own synthesis. Its first sound is paid instead by the node making
-  // it at half the steps (app/speech.py `first_steps`).
+  // HOW A READING IS CUT: in pieces sized from the node's measured speed
+  // (THE FIRST SOUND WITHIN A SECOND, below `cut`; operator, 2026-11-26),
+  // replacing the same day's first sentence read whole and 2026-11-08's cut
+  // of a first sentence past 90 characters at its last , ; :.
   // a WAV of no samples: played in the tap, it lets the page play the rest (iOS)
   const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=';
   const WORKLET = "class LouiseCapture extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(2048);this.n=0}"
@@ -621,49 +618,86 @@
   const RATES0 = { per_step_char: 1.5, overhead: 150, audio_char: 71, full: 32 };
   let rates = { ...RATES0 };
   try { const k = JSON.parse(localStorage.getItem(RATES_KEY) || 'null'); if (k && typeof k === 'object') rates = { ...rates, ...k }; } catch (e) {}
+  // A SAMPLE FAR SLOWER THAN PREDICTED IS NOT SPEED: `synth` holds a cold
+  // load or a wait for the card (architecture, 2026-11-26: one 14 s clip took
+  // the rate from 1.5 to 11.9 and a dozen later pieces to the floor); one over
+  // OUTLIER_X times the prediction is not learned from
+  const OUTLIER_X = 3;
   function learn(t) {
     if (rates.fixed || !t || !(t.chars > 0)) return;
     if (t.steps > 0 && t.synth > 0 && !t.cache) {
       const one = Math.max(0.05, (t.synth - rates.overhead) / (t.chars * t.steps));
+      if (one > OUTLIER_X * rates.per_step_char) return;
       rates.per_step_char = 0.7 * rates.per_step_char + 0.3 * one;
       rates.full = Math.max(rates.full === RATES0.full ? 0 : rates.full, t.steps, 2 * (t.steps - RAMP * (t.n || 0)));
     }
     if (t.audio > 0) rates.audio_char = 0.7 * rates.audio_char + 0.3 * (t.audio / t.chars);
     try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {}
   }
+  // THE RATES OF ONE ANSWER: taken once when it is asked (`asking`), so every
+  // reading of it — stopped and started again, read again — is cut in the
+  // same pieces and finds the node's kept clips (operator, 2026-11-09: "keep
+  // the buffering available even when I stop/start the speech"); what is
+  // learned meanwhile sizes the next answer
+  let answerRates = null;
   // the steps the node makes piece n at (app/speech.py `reading_steps`)
-  const stepsOf = n => Math.min(rates.full, Math.floor(rates.full / 2) + RAMP * n);
-  // how many characters piece n may hold: the first made within the first
-  // second, each next within what the one before it plays
-  function budget(n, prevChars) {
-    const per = rates.per_step_char * stepsOf(n);
-    const time = n === 0 ? FIRST_SOUND_MS - NET_MS - rates.overhead
-                         : prevChars * rates.audio_char - rates.overhead;
+  const stepsOf = (n, k = rates) => Math.min(k.full, Math.floor(k.full / 2) + RAMP * n);
+  // THE LEAD: a reading's pieces are made one after the other and played one
+  // after the other; `plan` predicts, per reading, when the last piece will
+  // be made (`made`) and when its playing and pause will end (`free`). Piece
+  // n may take what is left of that lead: the first, FIRST_SOUND_MS; each
+  // next, the time from the last made to the last played — which grows as
+  // the pieces before play (architecture, 2026-11-26: a budget from the one
+  // piece before alone stuck at its floor after a short one, and cut a 175
+  // character sentence in 9).
+  function budget(n, p, k = rates) {
+    const per = k.per_step_char * stepsOf(n, k);
+    const time = n === 0 ? FIRST_SOUND_MS - NET_MS - k.overhead : (p.free - p.made) - k.overhead;
     return Math.max(MIN_PIECE * 2, Math.floor(time / per));
+  }
+  // the lead after piece n of `chars`, cut at `gap`
+  function planned(p, n, chars, gap, k = rates) {
+    const make = k.overhead + k.per_step_char * stepsOf(n, k) * chars;
+    const made = p.made + make, play = Math.max(made, p.free);
+    return { made, free: play + chars * k.audio_char + (GAP_MS[gap] || 0) };
   }
   // the boundary after s[0..i): its kind, strongest first
   const RANK = { sentence: 4, clause: 3, comma: 2, word: 1 };
+  // the punctuation of languages written without spaces between words: a
+  // cut there needs no space after it
+  const WIDE_CLAUSE = '；：', WIDE_COMMA = '，、';
   function kindAt(s, i) {
     const c = s[i - 1];
-    if (c === ';' || c === ':') return 'clause';
-    if (c === ',') return 'comma';
-    if (/[.!?…]/.test(c)) return 'clause';     // a stop inside what the segmenter calls one sentence
+    if (c === ';' || c === ':' || WIDE_CLAUSE.includes(c)) return 'clause';
+    if (c === ',' || WIDE_COMMA.includes(c)) return 'comma';
     return 'word';
   }
-  // s cut within `max` characters at its best boundary: [piece, rest, kind, at],
-  // or null where none is final yet. A strong boundary in the last two thirds of
-  // the budget is taken before a weaker later one; only a gap with a word
-  // after it counts (the stream may not have written it yet).
-  function split(s, max) {
+  // NEVER AFTER A FULL STOP INSIDE A SENTENCE (architecture, 2026-11-26: "Ai
+  // sensi dell'art." | "5 del decreto", "Lo storico G." | "Cesare" — the
+  // operator's 2026-11-08 "G. Cesare" defect): a stop that ends a sentence
+  // is already the segmenter's boundary, so one inside is an abbreviation, an
+  // initial or a number's, and the gap after it is not a place to cut
+  const INNER_STOP = /[.!?…]["'»”)\]]*$/;
+  // s cut within `max` characters at its best boundary: [piece, rest, kind, at,
+  // restAt], or null where none is final yet. A strong boundary in the last
+  // two thirds of the budget is taken before a weaker later one; only a gap
+  // with a word after it counts (the stream may not have written it yet).
+  function split(s, max, open = false) {
     let best = null;
     for (let i = MIN_PIECE; i < Math.min(s.length - 1, max + 1); i++) {
-      // a rest too short to be a piece of its own ("[1].") is read with this one
-      if (s[i] !== ' ' || s.slice(i + 1).replace(/\[\d+\]/g, '').trim().length < MIN_PIECE) continue;
+      // a gap between two words, or the place after wide punctuation
+      const wide = (WIDE_CLAUSE + WIDE_COMMA).includes(s[i - 1]) && s[i] !== ' ';
+      if (s[i] !== ' ' && !wide) continue;
+      const restAt = wide ? i : i + 1;
+      // a rest too short to be a piece of its own ("[1].") is read with this
+      // one — of text that is final: the stream's open sentence has more coming
+      if (!open && s.slice(restAt).replace(/\[\d+\]/g, '').trim().length < MIN_PIECE) continue;
+      if (INNER_STOP.test(s.slice(0, i)) || endsInName(s.slice(0, i))) continue;
       const kind = kindAt(s, i), key = [i >= max / 3 ? RANK[kind] : 0, i];
-      if (!best || key[0] > best.key[0] || (key[0] === best.key[0] && key[1] > best.key[1])) best = { i, kind, key };
+      if (!best || key[0] > best.key[0] || (key[0] === best.key[0] && key[1] > best.key[1])) best = { i, kind, key, restAt };
     }
     if (!best) return null;
-    return [s.slice(0, best.i).trim(), s.slice(best.i + 1).trim(), best.kind, best.i];
+    return [s.slice(0, best.i).trim(), s.slice(best.restAt).trim(), best.kind, best.i, best.restAt];
   }
   // a WAV of 16-bit PCM with the silence the model left at the cut trimmed
   // (at its start, its end or both), TRIM_KEEP_MS of it kept; anything else,
@@ -858,6 +892,7 @@
 
   // the reading takes in what the answer box holds now
   function push(r, text, gap) {
+    r.plan = planned(r.plan, r.items.length, text.length, gap, r.rates);
     const prev = r.items[r.items.length - 1];
     const it = { text, n: r.items.length, gap, trimEnd: gap !== 'sentence', trimStart: !!prev && prev.gap !== 'sentence',
                  t: { chars: text.length, cut: now(), gap, budget: r.budget } };
@@ -873,8 +908,7 @@
     // the best boundary within it; the open sentence of the stream too, once
     // there is more of it than the budget holds
     for (;;) {
-      const prev = r.items[r.items.length - 1];
-      const max = r.budget = budget(r.items.length, prev ? prev.text.length : 0);
+      const max = r.budget = budget(r.items.length, r.plan, r.rates);
       if (r.queue.length) {
         const s = r.queue[0];
         const got = s.length > max ? split(s, max) : null;
@@ -886,10 +920,10 @@
       if (r.ended || t.indexOf('\n', r.at) >= 0) break;
       const open = collapse(t.slice(r.at)).slice(r.off);
       if (open.length <= max) break;            // it may still end within the budget
-      const got = split(open, max);
+      const got = split(open, max, true);
       if (!got) break;
       push(r, got[0], got[2]);
-      r.off += got[3] + 1;                       // the reading's place: past the piece and its space
+      r.off += got[4];                           // the reading's place: past the piece (and its space)
     }
     pump(r);
     if (r.more) { const f = r.more; r.more = null; f(); }
@@ -910,7 +944,7 @@
   function newReading() {
     return { id: Math.random().toString(36).slice(2, 12) || 'r', ctl: new AbortController(), lang: answerLang, text: '', at: 0, off: 0, ended: false,
              items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false, voice: chosenVoice(),
-             queue: [], budget: null };
+             queue: [], budget: null, plan: { made: 0, free: 0 }, rates: { ...(answerRates || rates) } };
   }
   function dropAhead() {
     const r = ahead; if (!r) return;
@@ -978,6 +1012,7 @@
     asking() {
       const q = document.getElementById('q');
       stopReading(); dropAhead();
+      answerRates = { ...rates };            // this answer's rates, for every reading of it
       times = { asked: now(), first: null, last: null, started: [], taps: [], items: [] };
       auto = !!speak && dictated !== null && !!q && q.value.trim() === dictated;
       if (auto) unlock();
@@ -1026,6 +1061,7 @@
     tones: () => toneCount, toneLast: () => toneLast, toneContext: () => toneCtx, deafEnd,
     sentences, cut, downsample, wavBytes, split, budget, trimWav, rates: () => ({ ...rates }),
     // a test's or an operator's rates, kept as measured ones are
-    setRates(k) { rates = { ...RATES0, ...k }; try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {} },
+    setRates(k) { rates = { ...RATES0, ...k }; answerRates = null; try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {} },
+    learn, planned,
   };
 })();
