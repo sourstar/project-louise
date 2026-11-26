@@ -354,40 +354,35 @@ def parks_now(recipe, query: bool = False) -> bool:
 PARK_IDLE_S = 1.2
 
 
-#: (server, model) -> (until, the answer): `park_admitted`, asked by the evictor
-_park_admitted: dict[tuple[str, str], tuple[float, bool | None]] = {}
-PARK_ADMITTED_TTL_S = 30.0
+def park_admitted(server: str, model: str, pid: int | None) -> bool | None:
+    """MAY THE NODE PARK THIS MODEL'S PROCESS `pid` NOW? The operator,
+    2026-11-26: "Either a model is validated or it does not embed" — and a
+    model that parks is validated AS ONE THAT PARKS by its counted cycles
+    (`embedder.park_cycles`), which a write was held to (`runs.check`) and a
+    park was not: the keeper counted bge-m3 as parkable the minute its new
+    process answered, its gate not yet run (München, the same day).
 
-
-def park_admitted(server: str, model: str) -> bool | None:
-    """MAY THE NODE PARK THIS MODEL NOW? The operator, 2026-11-26: "Either a
-    model is validated or it does not embed" — and a model that parks is
-    validated AS ONE THAT PARKS by its counted cycles (`embedder.
-    park_cycles`), which a write was held to (`runs.check`) and a park was
-    not: the keeper counted bge-m3 as parkable the minute its new process
-    answered, its gate not yet run (München, the same day).
-
-      None   no collection's encoder (a chat model, a reranker): no gate
+      None   no collection whose run is checked uses it (a chat model, a
+             reranker, an encoder of version-2 collections only): no gate
              speaks of it, and LocalAI's own word stands;
       True   for EVERY collection whose document or query encoder it is, the
-             run that answers now has its cycles counted against the
-             statement this peer holds for it;
-      False  otherwise — a run nobody has heard yet, one not gated, one whose
-             cycles were refused, anything that cannot be read. The evictor
-             then STOPS the model for its room, as before parking existed: a
+             run last heard from it was heard FROM THIS PROCESS (`pid`, as
+             the runner's listing gives it: a model name is not a process —
+             a restart with another env is another run under the same name)
+             and has its cycles counted against the statement this peer holds;
+      False  otherwise — a process nobody has heard, a run not gated, one
+             whose cycles were refused, anything that cannot be read. The
+             evictor then STOPS it for its room, as before parking existed: a
              stop is always right, a park is right only for an admitted run.
 
-    Kept `PARK_ADMITTED_TTL_S` a model: the evictor asks for every candidate
-    of every load."""
+    Asked afresh each time (~0.2 ms a collection): a cached answer outlived
+    a refusal and a new run by up to its lifetime (the second review)."""
     from . import model_load
     key = (model_load.server_of(server), model)
-    now = time.monotonic()
-    kept = _park_admitted.get(key)
-    if kept is not None and kept[0] > now:
-        return kept[1]
     answer: bool | None = None
     try:
-        for c in collections_mod.load_all():
+        served, _unreadable = collections_mod.load_all(skip_unreadable=True)   # one bad file stops no other's park
+        for c in served:
             if not applies(c):
                 continue
             recipe = collections_mod.recipe_for(c)
@@ -396,19 +391,19 @@ def park_admitted(server: str, model: str) -> bool | None:
                 endpoint, named = _who(recipe, role == "query")
                 if (model_load.server_of(endpoint), named) != key:
                     continue
-                run_id = _last_heard(((endpoint, named), role))
+                heard_key = ((endpoint, named), role)
+                run_id = _last_heard(heard_key)
+                said = _shared().get(_heard_key(heard_key)) or {}
+                if pid is None or said.get("run") != run_id or said.get("pid") != pid:
+                    return False
                 held = (runs_mod.statements_for_space(_root(), c.name, c.codex, role, signer=signer())
                         .get(run_id) if run_id else None)
                 if held is None or not runs_mod.passing(held, c.codex) or not runs_mod.parks_counted(
                         _root(), c.name, c.codex, role, run_id, held, signer=signer()):
-                    answer = False
-                    break
+                    return False
                 answer = True
-            if answer is False:
-                break
     except Exception:                                   # noqa: BLE001 — unreadable: a stop, never a park
-        answer = False
-    _park_admitted[key] = (now + PARK_ADMITTED_TTL_S, answer)
+        return False
     return answer
 
 
@@ -1479,7 +1474,8 @@ def _where(collection) -> str:
 
 #: place -> (allowed, reason, fresh until, the run the verdict is about,
 #: the kept statements as they were when it was given — `_kept_stamp`)
-_verdicts: dict[str, tuple[bool, str, float, str | None, tuple]] = {}
+#: where -> (allowed, reason, until, the document run, the kept stamp, the query run)
+_verdicts: dict[str, tuple[bool, str, float, str | None, tuple, str | None]] = {}
 
 
 def _kept_stamp(collection) -> tuple:
@@ -1521,12 +1517,27 @@ def heard(recipe, answered: set, *, role: str = "document") -> None:
         return
     key = (_who(recipe, role == "query"), role)
     run = sorted(named)[-1]
-    news = _answering.get(key) != run or (_shared().get(_heard_key(key)) or {}).get("run") != run
+    pid = _pid_of(key)
+    said = _shared().get(_heard_key(key)) or {}
+    news = (_answering.get(key) != run or said.get("run") != run
+            or (pid is not None and said.get("pid") != pid))
     now = time.time()
     _answering[key] = run
     _answering_at[key] = now
     if news:
-        _tell(key, run, now)
+        _tell(key, run, now, pid)
+
+
+def _pid_of(key: tuple[tuple[str, str], str]) -> int | None:
+    """The backend process that answers `key`, as this process last read the
+    runner's listing (no request): what a heard run is BOUND to. None where
+    the runner names no pids."""
+    try:
+        from . import model_load
+        (endpoint, model), _role = key
+        return model_load.known_pid(endpoint, model)
+    except Exception:                                   # noqa: BLE001
+        return None
 
 
 # ---- WHO HEARS A RUN (2026-11-26) ---------------------------------------------------
@@ -1550,7 +1561,7 @@ def heard(recipe, answered: set, *, role: str = "document") -> None:
 
 HEARD_KIND = "louise-heard"
 #: how long a process waits for the record's lock before it leaves the news
-#: untold (the next answer tells it): a search never waits on this
+#: untold (the next answer tells it): a search waits on it only for news
 HEARD_WAIT_S = 0.5
 _answering_at: dict[tuple[tuple[str, str], str], float] = {}
 _heard_read: dict[str, tuple[tuple[int, int], dict[str, dict[str, Any]]]] = {}
@@ -1581,18 +1592,23 @@ def _shared() -> dict[str, dict[str, Any]]:
     path = heard_path()
     try:
         st = path.stat()
-        stamp = (st.st_mtime_ns, st.st_size)
+        stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
     except OSError:
         return {}
     cached = _heard_read.get(str(path))
-    if cached is None or cached[0] != stamp:
+    # A STAMP MADE IN THE LAST TWO SECONDS IS NOT TRUSTED (git's "racy" index
+    # rule): two writes of the same size within one tick of a coarse clock
+    # leave the same stamp, and the second would never be read
+    racy = time.time() - st.st_mtime_ns / 1e9 < 2.0
+    if cached is None or cached[0] != stamp or racy:
         cached = _heard_read[str(path)] = (stamp, _read_heard(path))
     return cached[1]
 
 
-def _tell(key: tuple[tuple[str, str], str], run: str, at: float) -> None:
-    """Write `run` as the last heard for `key`, unless the record says it
-    already. Never raises and never waits past `HEARD_WAIT_S`: untold news
+def _tell(key: tuple[tuple[str, str], str], run: str, at: float, pid: int | None = None) -> None:
+    """Write `run` — and the backend `pid` it was heard from, where known —
+    as the last heard for `key`, unless the record says it already. Never
+    raises and waits at most `HEARD_WAIT_S`, and only for news: untold news
     is told by the next answer."""
     import fcntl
     path = heard_path()
@@ -1611,13 +1627,16 @@ def _tell(key: tuple[tuple[str, str], str], run: str, at: float) -> None:
             try:
                 rows = _read_heard(path)
                 k = _heard_key(key)
-                if (rows.get(k) or {}).get("run") == run:
+                if (rows.get(k) or {}).get("run") == run and (rows.get(k) or {}).get("pid") == pid:
                     return
-                rows[k] = {"run": run, "at": round(at, 3)}
+                rows[k] = {"run": run, "at": round(at, 3), "pid": pid}
                 tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-                tmp.write_text(json.dumps({"kind": HEARD_KIND, "heard": rows}, sort_keys=True),
-                               encoding="utf-8")
-                os.replace(tmp, path)
+                try:
+                    tmp.write_text(json.dumps({"kind": HEARD_KIND, "heard": rows}, sort_keys=True),
+                                   encoding="utf-8")
+                    os.replace(tmp, path)
+                finally:
+                    tmp.unlink(missing_ok=True)
             finally:
                 fcntl.flock(lock, fcntl.LOCK_UN)
     except OSError:
@@ -1882,7 +1901,6 @@ def reset_cache() -> None:
     _answering.clear()
     _answering_at.clear()
     _heard_read.clear()
-    _park_admitted.clear()
     _canary.clear()
     _canary_unconfirmed.clear()
     _canary_gated.clear()
@@ -2092,6 +2110,22 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
         log("query " + told)
     except Exception as e:                              # noqa: BLE001
         log(f"the query encoder's run could not be settled: {type(e).__name__}: {e}")
+
+
+def verdict_outdated(collection) -> bool:
+    """Is this process's verdict for `collection` about other runs than the
+    ones last heard (any process)? The worker's idle round looks again when
+    it is (`worker._settle_the_run`): a run gated before, heard again after a
+    restart, is re-checked there — not only a run never tested (the second
+    review: three idle rounds left a kept statement unchecked while the
+    web's vector leg waited for it)."""
+    cached = _verdicts.get(_where(collection))
+    if cached is None:
+        return False
+    heard_now = answering(collection)
+    doc, query = heard_now.get("document"), heard_now.get("query")
+    return (doc is not None and cached[3] is not None and cached[3] != doc) or \
+        (query is not None and cached[5] != query)
 
 
 def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) -> bool:

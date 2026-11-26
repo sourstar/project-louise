@@ -458,7 +458,8 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
         keep = {tuple(k) for k in protect} | {(server, m) for m in exclude}
         parks, away = model_load.parks(server), model_load.parked(server)     # the same answer: no request
         # PARKED ONLY AS A RUN ADMITTED TO PARK (`_may_park`): any other gives its room by a stop
-        unadmitted = {m for m in parks if m in held and m not in away and not _may_park(server, m)}
+        unadmitted = {m for m in parks if m in held and m not in away
+                      and not _may_park(server, m, held[m][0])}
         loaded = [Loaded(m, int(size or 0), use.get((server, m)), cpu.get(m, 0.0) > BUSY_CPU_PERCENT,
                          parks=m in parks and m not in unadmitted, parked=m in away,
                          unadmitted=m in unadmitted)
@@ -556,19 +557,22 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
 
 
 #: what `give_back` did
-def _may_park(server: str, model: str) -> bool:
+def _may_park(server: str, model: str, pid: int | None) -> bool:
     """Whether a model LocalAI lists as one that parks may be PARKED by this
-    node now (`run_check.park_admitted`): an encoder only once the run that
-    answers has its park cycles counted for every collection that uses it;
-    a model that is no collection's encoder as LocalAI says. Anything that
-    cannot be read is a stop — always right — never a park."""
+    node now, its process `pid` (`run_check.park_admitted`): an encoder only
+    once the run heard from that process has its park cycles counted for
+    every collection that uses it; a model that is no collection's encoder
+    as LocalAI says. Anything that cannot be read is a stop — always right —
+    never a park. Asked by EVERY path that gives a model's room back: the
+    evictor and the question card (app/question_card.py)."""
     try:
         from . import run_check
-        return run_check.park_admitted(server, model) is not False
+        return run_check.park_admitted(server, model, pid) is not False
     except Exception:   # noqa: BLE001
         return False
 
 
+#: what `give_back` did
 PARKED, UNLOADED, KEPT = "parked", "unloaded", "kept"
 
 

@@ -174,18 +174,14 @@ def no_runner_says_what_it_holds(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_park_is_remembered_from_another_test():
-    """Two things the evictor keeps per process, each a test's own: whether a
-    model's run is admitted to park (`run_check.park_admitted`, kept half a
-    minute a model — one test's "not admitted" for (server, model) would stop
-    the next test's model where it expects a park), and how long its last
-    park took (`model_evict._park_took`: tests/hold/test_park_cycles.py's
-    "is None before the first park" failed after tests/test_parking.py had
-    parked the same model on the same address, 2026-11-26)."""
-    from app import model_evict, run_check
-    run_check._park_admitted.clear()
+    """How long a model's last park took is kept per process
+    (`model_evict._park_took`), and is a test's own: tests/hold/
+    test_park_cycles.py's "None before the first park" failed whenever
+    tests/test_parking.py had parked the same model on the same address
+    before it in the run (2026-11-26)."""
+    from app import model_evict
     model_evict._park_took.clear()
     yield
-    run_check._park_admitted.clear()
     model_evict._park_took.clear()
 
 

@@ -273,13 +273,14 @@ def test_a_model_that_parks_is_parked_and_counted_at_what_left_the_card(node):
 
 def test_an_encoder_whose_run_is_not_admitted_to_park_is_stopped_for_its_room(node, monkeypatch):
     """München, 2026-11-26: bge-m3 restarted with `park: true` and its env;
-    one minute later the keeper said "vega-bge-m3 can be parked" — and the
+    27 s later the keeper said "vega-bge-m3 can be parked" — and the
     gate's park cycles had not run for that run. A park is for a run
     admitted to park; any other gives its room as before parking existed."""
     from app import run_check
     asked = []
     verdict = {"vega-bge-m3": False}
-    monkeypatch.setattr(run_check, "park_admitted", lambda server, model: asked.append(model) or verdict.get(model))
+    monkeypatch.setattr(run_check, "park_admitted",
+                        lambda server, model, pid: asked.append(model) or verdict.get(model))
 
     def room():
         r = node({"vega-bge-m3": 2_000, "omnivoice-cpp": 1_700, "louise-chat": 7_000}, extra_mib=20_000,
@@ -304,7 +305,8 @@ def test_an_encoder_whose_run_is_not_admitted_to_park_is_stopped_for_its_room(no
     r, out = room()
     assert out.parked == ("vega-bge-m3",)
     # an answer that cannot be had is a stop, never a park
-    monkeypatch.setattr(run_check, "park_admitted", lambda server, model: (_ for _ in ()).throw(OSError("unreadable")))
+    monkeypatch.setattr(run_check, "park_admitted",
+                        lambda server, model, pid: (_ for _ in ()).throw(OSError("unreadable")))
     r, out = room()
     assert out.unloaded == ("vega-bge-m3",) and out.parked == () and _verbs(r, "park") == []
 

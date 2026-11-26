@@ -4425,8 +4425,10 @@ def _settle_the_run(con, collection) -> None:
     """A version-3 copy whose encoder's run is not yet tested is gated AT
     ONCE (03 §3.3), whether or not it has anything to embed: a collection
     that arrived whole from its peers has no embed work to reach the gate
-    through, and would wait in quarantine for ever. Costs a dictionary
-    lookup a round — `embed_allowed` caches its verdict."""
+    through, and would wait in quarantine for ever. So is one whose verdict
+    is about another run than any process last heard (`run_check.
+    verdict_outdated`): a run tested before is RE-CHECKED by itself too. Costs
+    a dictionary lookup a round — `embed_allowed` caches its verdict."""
     from . import copy_state, run_check
     if not run_check.applies(collection):
         return
@@ -4434,7 +4436,7 @@ def _settle_the_run(con, collection) -> None:
         gate = copy_state.of(collection).test("gate")
     except Exception:   # noqa: BLE001
         return
-    if gate is not None and gate.status == copy_state.OPEN:
+    if (gate is not None and gate.status == copy_state.OPEN) or run_check.verdict_outdated(collection):
         if _preload_holds(con, collection):
             return              # not beside the keeper's loads after a start: the next round
         backend_gate.embed_allowed(con, collection, stop=_stop.is_set)

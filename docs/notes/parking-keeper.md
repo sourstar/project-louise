@@ -355,20 +355,33 @@ copies: same engine, env and weights), `/system` `parks: true`. Then:
   the gate test's own words now say so.
 
 **The rule** (the operator, the same morning, of the statement field:
-"Either a model is validated or it does not embed"): the evictor PARKS a
-collection's encoder only when the run that answers now has its park
-cycles counted for EVERY collection that uses it, document side and query
-side (`run_check.park_admitted`, asked in `model_evict.make_room_for`, kept
-30 s a model). Otherwise — a run nobody has heard, one not gated, one the
-gate refused — it gives its room by a stop, as before parking existed, and
-the line says "its file says it parks and its run is not admitted to:
-stopped". A model that is no collection's encoder has no gate and parks as
-LocalAI says. The keeper still writes the host floor for a server where a
-model parks: the floor is LocalAI's condition for any park, the gate's own
-cycles included.
+"Either a model is validated or it does not embed"): a collection's encoder
+is PARKED only when the run last heard from ITS PROCESS has its park cycles
+counted for EVERY collection that uses it, document side and query side
+(`run_check.park_admitted(server, model, pid)`). The run heard is bound to
+the backend pid the runner's listing named when it was heard: a model name
+is not a process — a restart with another env is another run under the same
+name, and a process nothing of Louise has asked yet (the keeper's warm reads
+no run) is not admitted. Asked afresh each time (~0.2 ms a collection): a
+refusal and a new run count at once. Otherwise — a process nobody heard, a
+run not gated, one the gate refused, anything unreadable — it gives its room
+by a stop, as before parking existed, and the line says "its file says it
+parks and its run is not admitted to: stopped". A model that is no
+collection's encoder has no gate and parks as LocalAI says.
 
-**Not changed:** LocalAI itself never parks a model by itself (Tensor,
-parking-step-2.md §12), so nothing else on the node decides a park.
+**Every path that gives a model's room back asks it:** the evictor
+(`model_evict.make_room_for`) and the question card (`question_card.
+_give_back`, a question taking the card from the corpus encoders) — the
+first cut asked it on the evictor's path only, and the second independent
+read found the card's (the most frequent) parking without it. LocalAI never
+parks a model by itself (Tensor, parking-step-2.md §12); the gate's own
+cycles park its model by request (`Parker.park`), outside this rule, which
+is what the cycles are for. The keeper still writes the host floor for a
+server where a model parks: it is LocalAI's condition for any park.
+
+**A run tested before and heard again** — after a restart, the model put
+back — is re-checked by the worker's idle round by itself
+(`run_check.verdict_outdated`), not only a run never tested.
 
 **For whoever puts `park: true` into the next encoder's file:** the env
 takes effect in a NEW process — stop the model, do not reload it; the first

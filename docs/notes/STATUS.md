@@ -33,7 +33,9 @@ measured (published figures disagree).
   (3) THE KEEPER COUNTED THE UNGATED RUN AS ONE IT MAY PARK ("vega-bge-m3 can be parked", 27 s after its
   load): a write was held to the counted cycles, a park was not. The evictor now parks an encoder only
   as a run admitted to park for every collection that uses it, and stops it otherwise
-  (`run_check.park_admitted`; parking-keeper.md §7). And the manual door, `hold embedder check`, is
+  (`run_check.park_admitted`; parking-keeper.md §7) — bound to the backend PROCESS the run was heard
+  from, and asked by the question card's path too (the second independent read found it parking
+  without the rule, and a model name standing in for a process). And the manual door, `hold embedder check`, is
   shut on a running node — the worker holds every collection's lock — so its hint now says to pause
   the collection first; that is how today's gate was run. I had told München the record was shared
   between web and worker: it was not, and the four silent minutes are what showed it.

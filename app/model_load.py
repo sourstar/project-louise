@@ -529,6 +529,13 @@ def held_sizes(server: str, max_age_s: float | None = None) -> dict[str, tuple[i
         return {m: (pids.get(m), now.get(m, 0)) for m in ids}
 
 
+def known_pid(server: str, model: str) -> int | None:
+    """The backend pid of `model` as the LAST `/system` answer this process
+    read gave it — no request (app/run_check.py binds a heard run to it)."""
+    with _lock:
+        return _pids.get(server_of(server), {}).get(model)
+
+
 def held_cpu(server: str) -> dict[str, float]:
     """`{model: cpu_percent}` of the backends as the LAST `/system` answer
     gave them — no request: read right after `held_sizes`, it is the same
