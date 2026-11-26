@@ -38,7 +38,7 @@
 </div>
 {% endif %}
 <div class="note">
-  {% for k,v in (result.timings or {}).items() if k != 'per_collection' %}<span class="badge">{{ k }} {{ v }} ms</span>{% endfor %}
+  {% for k,v in (result.timings or {}).items() if k not in ('per_collection', 'rerank_parts') %}<span class="badge">{{ k }} {{ v }} ms</span>{% endfor %}
   {# how many languages the question went out in, and who translated it —
      fifty codes in a row buried the rest of this line; they stay in the
      tooltip #}

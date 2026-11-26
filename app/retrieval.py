@@ -497,6 +497,22 @@ def _reading_copies(head: list[dict], owner: list[tuple[int, dict]], texts: list
     return originals, found.version, years
 
 
+#: WHAT ONE LIST'S RERANK WAS MADE OF, for the search's own timings
+#: (`_rerank_parts`; München, 2026-11-25: a question's "rerank 20,000" in
+#: query mode, and nothing said of how many lists, how many texts or which
+#: part). Set by the caller that wants it; `_rerank_held` fills it and
+#: changes nothing of what it does.
+_rerank_note: contextvars.ContextVar[dict | None] = \
+    contextvars.ContextVar("retrieval_rerank_note", default=None)
+
+
+def _note_rerank(**parts) -> None:
+    note = _rerank_note.get()
+    if note is not None:
+        for k, v in parts.items():
+            note[k] = round(note.get(k, 0) + v, 1) if isinstance(v, float) else note.get(k, 0) + v
+
+
 def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: int,
                  queries: dict[str, str] | None) -> tuple[list[dict], bool]:
     """`_rerank_list`'s work, inside the list's one claim."""
@@ -524,11 +540,16 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
     # cold one took that request as its load — 10 s timeout, the text cut by
     # bytes instead of tokens, a second load started by the next text, and
     # no cold start logged (München, 2026-10-27 15:42)
+    t_part = time.monotonic()
     try:
         _warm_reranker(recipe)
     except model_load.LoadTimeout as e:
         return _fused_order(hits, str(e))
+    finally:
+        _note_rerank(warm_ms=(time.monotonic() - t_part) * 1000)
+    t_part = time.monotonic()
     texts = fit_to_window(texts, recipe)
+    _note_rerank(records=len(head), fit_ms=(time.monotonic() - t_part) * 1000)
     # the query each text is judged against: its record's language's variant
     variants = {k.lower(): v for k, v in (queries or {}).items() if v}
     groups: dict[str, list[int]] = {}
@@ -568,8 +589,12 @@ def _rerank_held(query: str, hits: list[dict], recipe, budget_s: float, depth: i
         # start the budget paid (model_load; the cached check missed it)
         pid = model_load.backend_pid(recipe.url, recipe.model)
         sent = time.monotonic()
+        _note_rerank(calls=1, texts=len(distinct), chars=sum(len(x) for x in distinct))
         try:
-            data = _rerank_call(recipe, body, remaining, deadline)
+            try:
+                data = _rerank_call(recipe, body, remaining, deadline)
+            finally:
+                _note_rerank(call_ms=(time.monotonic() - sent) * 1000)
             rows = data["results"] if isinstance(data, dict) else data
             got = {int(o["index"]): float(o["relevance_score"] if "relevance_score" in o
                                           else o["score"]) for o in rows}
@@ -807,6 +832,25 @@ def _reranked(query: str, hits: list[dict], recipe, budget_s: float,
     finally:
         _rerank_why.reset(token)
     return ranked, ok, (why[0] if why and not ok else None)
+
+
+def _rerank_parts(run) -> tuple[Any, dict]:
+    """`run()` — one list's rerank and the grouping of its works — with what
+    it was made of: {"rerank": the whole of it in ms, and from
+    `_rerank_held`: "records" judged, "calls" (one per query variant),
+    "texts" and "chars" sent, "warm_ms" (0 where the model was loaded),
+    "fit_ms" (the texts cut to the model's window by its own tokenizer),
+    "call_ms" (the reranker's answers), and "works_ms" where the caller
+    notes it}. Nothing of the search changes."""
+    note: dict = {}
+    token = _rerank_note.set(note)
+    t0 = time.monotonic()
+    try:
+        got = run()
+    finally:
+        _rerank_note.reset(token)
+    note["rerank"] = round((time.monotonic() - t0) * 1000, 1)
+    return got, note
 
 
 def _rerank_withheld(collection, reason: str) -> dict:
@@ -1461,12 +1505,19 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
     # queries and found it on 2 (docs/notes/one-language-per-work.md) —
     # editions are grouped after the reranker instead, never dropped.
     candidates = partial["merged"][: max(k * 4, rerank_depth)]
-    ranked, reranked, rerank_why = _reranked(plan.core, candidates,
-                                             collections_mod.reranker_for(collection),
-                                             _rerank_budget_s(rerank_depth), rerank_depth,
-                                             plan.translations)
-    final = _one_hit_per_work(ranked, collection, plan, show_in, annotations, limit=k)[:k]
+
+    def _rerank_and_group():
+        ranked, reranked, rerank_why = _reranked(plan.core, candidates,
+                                                 collections_mod.reranker_for(collection),
+                                                 _rerank_budget_s(rerank_depth), rerank_depth,
+                                                 plan.translations)
+        t_works = time.monotonic()
+        final = _one_hit_per_work(ranked, collection, plan, show_in, annotations, limit=k)[:k]
+        _note_rerank(works_ms=(time.monotonic() - t_works) * 1000)
+        return final, reranked, rerank_why
+    (final, reranked, rerank_why), parts = _rerank_parts(_rerank_and_group)
     timings["rerank"] = round((time.time() - t0) * 1000, 1)
+    timings["rerank_parts"] = {collection.name: parts}
 
     # This one WRITES (the lazy-embed queue): a search nobody is waiting for
     # enqueues nothing.
@@ -1671,15 +1722,24 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
     # not the sum.
     budget_s = _rerank_budget_s(rerank_depth)
 
+    rerank_parts: dict[str, dict] = {}
+
     def _rerank_one(item):
         collection, merged = item
         candidates = merged[: max(k * 4, rerank_depth)]
-        ranked, ok, why = _reranked(plan.core, candidates,
-                                    collections_mod.reranker_for(collection), budget_s,
-                                    rerank_depth, plan.translations)
-        # each work once, per collection (work claims are about one
-        # collection's records), before the fuse cuts to k
-        return _one_hit_per_work(ranked, collection, plan, show_in, annotations, limit=k), ok, why
+
+        def run():
+            ranked, ok, why = _reranked(plan.core, candidates,
+                                        collections_mod.reranker_for(collection), budget_s,
+                                        rerank_depth, plan.translations)
+            # each work once, per collection (work claims are about one
+            # collection's records), before the fuse cuts to k
+            t_works = time.monotonic()
+            grouped = _one_hit_per_work(ranked, collection, plan, show_in, annotations, limit=k)
+            _note_rerank(works_ms=(time.monotonic() - t_works) * 1000)
+            return grouped, ok, why
+        got, rerank_parts[collection.name] = _rerank_parts(run)
+        return got
 
     ranked = _rerank_lists(per_collection, _rerank_one)
     reranked = {c.name: ok for (c, _), (_, ok, _) in zip(per_collection, ranked)}
@@ -1718,6 +1778,9 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
         "dense": max((t.get("dense", 0.0) for t in timings_per_collection.values()), default=0.0),
         "rerank": rerank_ms,
         "per_collection": timings_per_collection,
+        # what each list's rerank was made of (`_rerank_parts`); lists that
+        # share a reranker ran one after the other (`_rerank_lists`)
+        "rerank_parts": rerank_parts,
     }
     timings["total"] = round((time.time() - t_total) * 1000, 1)
 

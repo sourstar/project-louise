@@ -66,6 +66,11 @@ against the reclaimer.
   within REEVICTED_WITHIN_S is not loaded again for 10 min, then 20, 40 …,
   capped at BACKOFF_CAP_S, and said each time with the model's tier; one
   that stayed longer than that starts the count again.
+  NOT FOR AN UNLOAD LOUISE MADE ITSELF (2026-11-25, app/own_unloads.py): a
+  question that took the card, a load's room, a change of mode, a gate's
+  twin. Those are in the node's own record, read here; the back-off and the
+  penalty below are feedback on what the RECLAIMER evicts, and a question
+  ten minutes after a load cost the budget 8,880 MiB for two hours.
 
 THE BUDGET — WHAT IS PRELOADED AT ALL (`plan`; the defect it fixes, measured
 by the node, 2026-11-08 03:25). The room check judges one load against the
@@ -271,6 +276,11 @@ DEFAULT_THRESHOLD = 0.95
 SETTINGS_TIMEOUT_S = 2.0
 #: a model this keeper loaded, off the card again this soon: space is claimed
 REEVICTED_WITHIN_S = 600.0
+#: a warm that left its model unloaded (refused for room, or failed without
+#: raising) is tried again after this, with no back-off and no penalty
+RETRY_UNLOADED_S = 120.0
+#: the keeper's clock and the record's are read a moment apart
+OWN_UNLOAD_SLACK_S = 5.0
 #: the first back-off after a repeat eviction, doubled each time, and its cap
 BACKOFF_FIRST_S, BACKOFF_CAP_S = 600.0, 7200.0
 MIB = 1 << 20
@@ -406,6 +416,7 @@ class _Track:
     strikes: int = 0                    # repeat evictions in a row
     next_try: float = 0.0               # not loaded again before this `_now()`
     waiting: bool = False               # "stays unloaded" said, until it fits
+    fails: int = 0                      # warms in a row that left it unloaded (`_warm_all`)
 
 
 _lock = threading.Lock()
@@ -445,6 +456,9 @@ def reset() -> None:
         _over_said = None
         _reclaimer_seen.clear()
         _reclaimer_failed.clear()
+        _park_floor_seen.clear()
+        _park_floor_failed.clear()
+        _settings_hold.clear()
         _pids_seen = (frozenset(), frozenset())
         _last, _last_why, _last_switches = {}, None, Switches()
         _track.clear()
@@ -454,6 +468,11 @@ def reset() -> None:
     global _first_beat, _last_beat_wall
     _first_beat = None
     _last_beat_wall = None
+    try:
+        from app import model_evict
+        model_evict._left_at.clear()         # what the eviction stopped for the host, with the keeper's own state
+    except Exception:   # noqa: BLE001
+        pass
 
 
 def switches() -> Switches:
@@ -603,10 +622,14 @@ def forget(collection: str) -> list[str]:
 
 
 def _loaded(r: Resident) -> bool | None:
-    """Whether the runner lists the model as loaded; None when it cannot say."""
+    """Whether the runner lists the model as loaded; None when it cannot say.
+    A PARKED model (its weights in host memory, docs/notes/parking-step-2.md)
+    is listed and is NOT loaded: the keeper brings it back as it loads a
+    model that is not there — in the budget, with room, behind the beat — and
+    its warm costs a copy (`model_load.ensure_loaded`)."""
     from app import model_load
     ids = model_load.loaded_models(r.server)
-    return None if ids is None else r.model in ids
+    return None if ids is None else r.model in ids and r.model not in model_load.parked(r.server)
 
 
 def _card() -> tuple[int, int] | None:
@@ -659,6 +682,11 @@ def _threshold(server: str) -> float:
         body = r.json() if r.status_code == 200 else None
         v = body.get("memory_reclaimer_threshold") if isinstance(body, dict) else None
         on = body.get("memory_reclaimer_enabled") if isinstance(body, dict) else None
+        floor = body.get("park_host_floor_bytes") if isinstance(body, dict) else None
+        with _lock:
+            # the park floor from the same answer (`_parked_follow`): None on
+            # a server that has no such setting, or that omits it unset
+            _park_floor_seen[server] = floor if isinstance(floor, int) and not isinstance(floor, bool) else None
     except Exception:   # noqa: BLE001 — unread: the node's line
         v = None
     # ...and whether the reclaimer is on, from the same answer: what
@@ -668,6 +696,110 @@ def _threshold(server: str) -> float:
     if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 < v <= 1:
         return float(v)
     return DEFAULT_THRESHOLD
+
+
+#: server -> until when (monotonic) no settings write is sent to it: one was
+#: sent and never answered (app/localai_reclaimer.py `NotAnswered`)
+_settings_hold: dict[str, float] = {}
+
+
+def _settings_held(server: str) -> bool:
+    """Whether writes to `server`'s settings are held (`_settings_hold`)."""
+    with _lock:
+        until = _settings_hold.get(server)
+        if until is not None and _now() >= until:
+            del _settings_hold[server]
+            until = None
+    return until is not None
+
+
+def _hold_settings(server: str, what: str, e: Exception) -> None:
+    """A settings write that was not answered: no other is sent to `server`
+    for SETTINGS_HOLD_S, said once (the reason: `NotAnswered`)."""
+    from app import localai_reclaimer
+    with _lock:
+        _settings_hold[server] = _now() + localai_reclaimer.SETTINGS_HOLD_S
+    _say("warn", f"resident: {what} at {server} was not set — {e}. A settings write LocalAI does not answer "
+                 f"is not sent again at each beat: it is a known fault of the server (its watchdog exists "
+                 f"only for a limit of loaded models and runs no periodic check), and each repeat would "
+                 f"leave one more request hanging in it. Nothing is written to its settings for "
+                 f"{localai_reclaimer.SETTINGS_HOLD_S / 60:.0f} min; a restart of the worker asks again")
+
+
+#: server -> LocalAI's `park_host_floor_bytes` as its last settings answer
+#: gave it (None: unread, absent)
+_park_floor_seen: dict[str, int | None] = {}
+#: (server, floor) for which the write failed and was said: said once
+_park_floor_failed: set[tuple[str, int]] = set()
+
+
+def _parked_follow(servers: Iterable[str]) -> dict[str, list]:
+    """PARKING, THE KEEPER'S TWO DUTIES (docs/notes/parking-step-2.md §4 B,
+    §7; operator, 2026-11-25: "Do parking."). Each from readings the beat
+    already took — LocalAI's settings (`_threshold`) and `/system`
+    (`_remember`) — and nothing is asked while nothing is to change. Returns
+    what it did; never raises.
+
+    1. THE FLOOR. Where a loaded model says it parks (`"parks": true`: its
+       file says `park: true` and the server carries the patch), LocalAI's
+       `park_host_floor_bytes` is held to the node's ONE host floor
+       (`[models] page_floor_gib`, `model_evict.rule`) — the memory that must
+       stay available once weights are parked there. LocalAI reads it before
+       each park and stops the model instead where it would not hold. Never
+       set by hand; nothing written where no model parks, so a server without
+       the patch is never asked.
+    2. THE HOST. LocalAI never stops a PARKED model by itself, and the floor
+       is checked only when a model is parked: the host's own claim on that
+       memory is the eviction's to answer (`model_evict.host_claims` — space
+       claimed, as every unload is; the budget still unloads nothing)."""
+    from app import localai_reclaimer, model_evict, model_load, platform_config
+    out: dict[str, list] = {"floor": [], "stopped": []}
+    try:
+        platform_config.load()
+        floor = int(model_evict.rule()[1])
+    except Exception:   # noqa: BLE001 — the floor is not known: nothing is set by a guess
+        return out
+    servers = sorted(set(servers))
+    for s in servers:
+        try:
+            if not model_load.parks(s) or floor <= 0:
+                continue
+            with _lock:
+                seen = _park_floor_seen.get(s)
+            if seen == floor:
+                _park_floor_failed.discard((s, floor))
+                continue
+            if _settings_held(s):
+                continue
+            try:
+                localai_reclaimer.set_park_floor(s, floor)
+            except localai_reclaimer.NotAnswered as e:
+                _hold_settings(s, "LocalAI's park floor", e)
+                continue
+            except localai_reclaimer.NotTaken as e:
+                if (s, floor) not in _park_floor_failed:
+                    _park_floor_failed.add((s, floor))
+                    _say("warn", f"resident: LocalAI's park floor at {s} should be {floor // MIB:,} MiB — the "
+                                 f"host memory that stays available once a model's weights are parked there "
+                                 f"— but {e}; until it is set nothing is parked (a model gives its room back "
+                                 f"by being stopped, as before); asked again at each beat")
+                continue
+            with _lock:
+                _park_floor_seen[s] = floor
+            _park_floor_failed.discard((s, floor))
+            out["floor"].append(s)
+            _say("info", f"resident: LocalAI's park floor set to {floor // MIB:,} MiB at {s}"
+                         + (f" (it was {seen // MIB:,})" if seen else "")
+                         + f" — {', '.join(sorted(model_load.parks(s)))} can be parked: a model gives its room "
+                           f"back by moving its weights to host memory while the host keeps that much "
+                           f"available, and is stopped where it would not ([models] page_floor_gib)")
+        except Exception as e:   # noqa: BLE001 — never the keeper's beat
+            _say("warn", f"resident: LocalAI's park floor at {s} was not set ({type(e).__name__})")
+    try:
+        out["stopped"] = model_evict.host_claims(servers)
+    except Exception:   # noqa: BLE001
+        pass
+    return out
 
 
 #: server -> LocalAI's `memory_reclaimer_enabled` as its last settings answer
@@ -702,8 +834,13 @@ def _reclaimer_follows(servers: Iterable[str]) -> list[str]:
         if seen is None or seen is want:
             _reclaimer_failed.discard((s, want))
             continue
+        if _settings_held(s):
+            continue
         try:
             localai_reclaimer.set_enabled(s, want)
+        except localai_reclaimer.NotAnswered as e:
+            _hold_settings(s, "LocalAI's memory reclaimer", e)
+            continue
         except localai_reclaimer.NotTaken as e:
             if (s, want) not in _reclaimer_failed:
                 _reclaimer_failed.add((s, want))
@@ -983,6 +1120,22 @@ def _weights(server: str, model: str, mem: Memory, largest: int | None) -> int |
     return None
 
 
+def rest_known(server: str, model: str, mem: "Memory") -> int | None:
+    """What `model` holds on the card AT REST, where this node knows it: an
+    on-demand model's weights (`_weights`), a context-keeping one's size as
+    its load left it or as the file remembers it — each only where it is a
+    reading of the model whole (`_whole`). None: not known. What the
+    eviction judges "in host memory" against (`model_evict.host_leftovers`);
+    never the largest, which holds every working context."""
+    from app import model_load
+    key = (server, model)
+    largest = max([v for v in (mem.sizes.get(key), model_load.size_vram(server, model)) if v] or [0]) or None
+    if _rest_floor(server, model) != REST_FLOOR:
+        return _weights(server, model, mem, largest)
+    return next((v for v in (model_load.rest_of_load(server, model), mem.rest.get(key)) if _whole(v, largest)),
+                None)
+
+
 def _rest_floor(server: str, model: str) -> float:
     from app import model_load
     return ON_DEMAND_REST_FLOOR if model_load.context_on_demand(server, model) else REST_FLOOR
@@ -1221,6 +1374,13 @@ def _held_now(servers: Iterable[str], mem: Memory,
             return None
         for m, (pid, size) in got.items():
             k = (m, pid) if pid is not None else (s, m)
+            if m in model_load.parked(s):
+                # PARKED: its weights are in host memory and this reading is
+                # what its process still holds here — counted as read, never
+                # "whole": what a return commits is a load, placed as one
+                was = out.get(k, (0, 0, 0))
+                out[k] = (max(int(size or 0), was[0]), max(int(size or 0), was[1]), was[2])
+                continue
             largest = max([size] + [v for v in (mem.sizes.get((s, m)), model_load.size_vram(s, m)) if v])
             # an on-demand model at its weights, as `_rest_size` counts it: its
             # context is the shared budget's, taken out of the sample by the
@@ -1280,6 +1440,9 @@ def _overcommitted(servers: Iterable[str], mem: Memory, card: tuple[int, int],
                 return None
             for m, (pid, size) in sorted(got.items()):
                 if not size or (s, m) in mem.elsewhere or pid in there:
+                    continue
+                if m in model_load.parked(s):
+                    whole += int(size)              # parked: it reads short because it was moved, on purpose
                     continue
                 largest = max([int(size)] + [v for v in (mem.sizes.get((s, m)), model_load.size_vram(s, m)) if v])
                 floor = _rest_floor(s, m)
@@ -1533,10 +1696,25 @@ def _due(r: Resident, now: float) -> bool:
     said = evicted = None
     with _lock:
         t = _track.setdefault(r.key, _Track())
+        stayed = None if t.warmed_at is None else now - t.warmed_at
+    # AN UNLOAD LOUISE MADE ITSELF IS NO EVICTION (München, 2026-11-25: a
+    # question took the card ten minutes after the switch to embed mode, and
+    # the keeper took the encoders it unloaded for the reclaimer's work — a
+    # ten-minute back-off and 8,880 MiB off the budget for two hours). The
+    # back-off and the penalty are feedback on what the RECLAIMER evicts;
+    # what a question, a load's room, a change of mode or a gate unloaded is
+    # in the node's record (app/own_unloads.py), read outside the lock
+    own = None
+    if stayed is not None and stayed < REEVICTED_WITHIN_S:
+        from app import own_unloads
+        own = own_unloads.since(r.key, stayed + OWN_UNLOAD_SLACK_S)
+    with _lock:
         if t.warmed_at is not None:
             stayed = now - t.warmed_at
             t.warmed_at = None
-            if stayed < REEVICTED_WITHIN_S:
+            if own is not None:
+                pass                               # Louise's own doing: no strike, and due as it was
+            elif stayed < REEVICTED_WITHIN_S:
                 t.strikes += 1
                 wait = min(BACKOFF_FIRST_S * 2 ** (t.strikes - 1), BACKOFF_CAP_S)
                 t.next_try = now + wait
@@ -1649,6 +1827,22 @@ def beat(served: Iterable[Any], *, embed_mode: Callable[[Any], str], state: str 
         p = _plan_now(want, _remember(want))
         _say_budget(p)
         _reclaimer_follows(r.server for r in want)
+        _parked_follow(r.server for r in want)
+        with _lock:
+            loading = _warm_thread is not None and _warm_thread.is_alive()
+        if not _question_now() and not loading and not _settling():
+            # NEVER BESIDE A LOAD OF THE KEEPER'S OWN, nor in the minutes after
+            # a resume: a model on its way to the card is not one left behind.
+            # LEAVING A PAGING RULE GIVES THE HOST ITS MEMORY BACK (München,
+            # 2026-11-25): the idle models the driver still holds in host
+            # memory are stopped — the eviction's to do (`model_evict.
+            # host_leftovers`; the budget still unloads nothing) — and those
+            # of this set are loaded back onto the card by the ordinary loads
+            # of the next beats. Not an eviction the reclaimer made: no
+            # back-off and no penalty on the budget follow from it (`_due`,
+            # app/own_unloads.py)
+            from app import model_evict
+            model_evict.host_leftovers((r.server for r in want), by_key)
     else:
         with _lock:
             _out_said = frozenset()
@@ -1868,8 +2062,13 @@ def _warm_all(items: list[Resident], stop: Callable[[], bool]) -> None:
                              f"it only after space is given back ({got.says()})"
                              + (f"; {made.why}" if made is not None and made.why else ""))
             continue
-        _say("info", f"resident: loading {r.model} — {r.says()} (not on the card"
+        from app import model_load as _ml
+        _say("info", f"resident: {'bringing back' if r.model in _ml.parked(r.server) else 'loading'} {r.model} "
+                     f"— {r.says()} ("
+                     + ("parked: its weights are in host memory" if r.model in _ml.parked(r.server)
+                        else "not on the card")
                      + (f"; {got.says()}" if got is not None else "")
+                     + (f"; room made: {', '.join(made.parked)} parked" if made is not None and made.parked else "")
                      + (f"; room made: {', '.join(made.unloaded)} unloaded" if made is not None and made.unloaded
                         else "") + ")")
         t0 = time.monotonic()
@@ -1884,8 +2083,33 @@ def _warm_all(items: list[Resident], stop: Callable[[], bool]) -> None:
                          f"{time.monotonic() - t0:.1f} s ({type(e).__name__}: {str(e)[:200]}); "
                          f"tried again at the next beat")
             continue
+        # A WARM THAT DID NOT PUT THE MODEL ON THE CARD IS NO LOAD: a parked
+        # model's return the card refused (503 `no_room_on_device`: it stays
+        # parked) and a load that failed without raising both end here with
+        # the model not loaded. Marked as loaded, the next beat found it "off
+        # the card again" seconds after its "load" and took a back-off and a
+        # penalty on the budget for an eviction nobody made (the review of
+        # 2026-11-25). It is asked again after RETRY_UNLOADED_S, no more.
+        # Read NOW: the warm just changed what the runner holds
+        try:
+            from app import model_load as _ml2
+            _ml2.loaded_models(r.server, 0.0)
+        except Exception:   # noqa: BLE001 — the last reading's word then
+            pass
+        loaded = _loaded(r)
         with _lock:
-            _track.setdefault(r.key, _Track()).warmed_at = _now()
+            t = _track.setdefault(r.key, _Track())
+            if loaded is False:
+                # ...asked again after RETRY_UNLOADED_S, DOUBLED at each repeat
+                # up to BACKOFF_CAP_S: every try makes its room first, and a
+                # load that keeps failing must not stop and reload its
+                # victims every two minutes
+                t.warmed_at = None
+                t.fails += 1
+                t.next_try = _now() + min(RETRY_UNLOADED_S * 2 ** (t.fails - 1), BACKOFF_CAP_S)
+            else:
+                t.warmed_at = _now()
+                t.fails = 0
 
 
 def _make_room_shown(want: list[Resident]) -> dict[str, Any]:
@@ -2020,10 +2244,14 @@ def show() -> dict[str, Any]:
     for pl in p.placed:
         r = pl.resident
         ids = model_load.loaded_models(r.server)
+        away = model_load.parked(r.server)
         rows.append({"model": r.model, "server": r.server, "roles": list(r.roles),
                      "collections": list(r.collections), "switch": r.switch,
                      "rank": pl.rank, "tier": pl.tier, "tier_says": TIERS.get(pl.tier),
-                     "loaded": None if ids is None else r.model in ids,
+                     "loaded": None if ids is None else r.model in ids and r.model not in away,
+                     "parks": r.model in model_load.parks(r.server),
+                     "parked": None if r.model not in away else
+                     {"host_mib": away[r.model][0] // MIB, "return_mib": away[r.model][1] // MIB},
                      "size_mib": None if pl.largest is None else pl.largest // MIB,
                      "rest_mib": None if pl.size is None else pl.size // MIB,
                      "counted_mib": pl.counted // MIB,

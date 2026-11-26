@@ -212,6 +212,54 @@ def test_search_says_whether_its_list_was_reranked(isolated_config, monkeypatch,
     assert out["reranked"] is False and [h["book_id"] for h in out["hits"]] == [0, 1, 2]
 
 
+def test_a_search_says_what_each_lists_rerank_was_made_of(isolated_config, monkeypatch, tmp_path):
+    """München, 2026-11-25: a question at "rerank 20,000" and nothing to tell
+    five lists of four seconds from one list of twenty. Each list's records,
+    texts, characters, calls and the ms of its parts ride the timings; the
+    order and the hits are what they were."""
+    a = _col(tmp_path, "a", dataclasses.replace(JINA, url="http://a/v1/rerank"))
+    b = _col(tmp_path, "b")                                       # no reranker: nothing to say of it
+    _stub_pipeline(monkeypatch, {"a": _hits("a", 5), "b": _hits("b", 3)})
+    monkeypatch.setattr(config, "RERANK_URL", "")
+    calls = _server(monkeypatch)
+    out = retrieval.federated_search([a, b], "q", k=4)
+    parts = out["timings"]["rerank_parts"]
+    assert set(parts) == {"a", "b"} and out["reranked"] == {"a": True, "b": False}
+    assert parts["a"]["records"] == 5 and parts["a"]["calls"] == len(calls) == 1
+    assert parts["a"]["texts"] == len(calls[0]["json"]["documents"]) == 5
+    assert parts["a"]["chars"] == sum(len(t) for t in calls[0]["json"]["documents"])
+    assert {"rerank", "call_ms", "fit_ms", "warm_ms", "works_ms"} <= set(parts["a"])
+    assert parts["a"]["rerank"] >= parts["a"]["call_ms"] >= 0
+    assert "records" not in parts["b"] and "rerank" in parts["b"], "a list with no reranker: its time, and no call"
+
+    c = _col(tmp_path, "c", JINA)
+    _stub_pipeline(monkeypatch, {"c": _hits("c", 3)})
+    one = retrieval.search(db.connect(c), "q", k=3, collection=c)
+    assert one["timings"]["rerank_parts"]["c"]["texts"] == 3 and one["reranked"] is True
+
+    _server(monkeypatch, fail=httpx.ReadTimeout("over budget"))
+    failed = retrieval.search(db.connect(c), "q", k=3, collection=c)
+    assert failed["reranked"] is False and failed["timings"]["rerank_parts"]["c"]["calls"] == 1, \
+        "a call that failed is still a call that was made, with its time"
+
+
+def test_the_search_line_says_the_reranks_parts_slowest_list_first(isolated_config):
+    from app import web
+    body = web.AskQueryBody(query="balene")
+    t = {"total": 44_500.0, "rerank": 20_000.0, "rerank_parts": {
+        "gutenberg": {"rerank": 3_900.0, "records": 50, "texts": 98, "chars": 181_400, "calls": 1,
+                      "call_ms": 3_700.0, "fit_ms": 150.0, "warm_ms": 0.2, "works_ms": 12.0},
+        "wikipedia": {"rerank": 9_200.0, "records": 50, "texts": 100, "chars": 412_000, "calls": 2,
+                      "call_ms": 4_100.0, "fit_ms": 40.0, "warm_ms": 4_900.0, "works_ms": 160.0},
+        "notes": {"rerank": 0.4}}}
+    line = web._say_search_timings(body, {"hits": [], "timings": t})
+    assert line.endswith(
+        "rerank 20,000; rerank by list: wikipedia 9,200 (50 records, 100 texts, 412k chars, 2 call(s): "
+        "answers 4,100, load 4,900, works 160); gutenberg 3,900 (50 records, 98 texts, 181k chars, 1 call(s): "
+        "answers 3,700, cut 150)")
+    assert web._say_search_timings(body, {"hits": [], "timings": {"total": 1.0, "rerank": 1.0}}).endswith("rerank 1")
+
+
 # ---------------- how many, before and after (operator, 2026-09-18) ----------------
 
 

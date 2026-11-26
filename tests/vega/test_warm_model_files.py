@@ -106,16 +106,22 @@ def test_a_pass_reads_every_file_of_every_embedder_whole_and_writes_nothing(w, n
         ["vega-bge-m3.yaml", "vega-medcpt-article-ov.yaml", "louise-chat.yaml", "gallery.yaml", "notes.txt"])
 
 
-def test_the_rate_says_whether_a_file_came_from_memory_or_from_the_drive(w):
-    warm = w.Read("vega-qwen3-embedding-4b", files=1, bytes=2_500 * w.MIB, seconds=0.4)
-    cold = w.Read("vega-dar-legal-it", files=1, bytes=4_500 * w.MIB, seconds=9.0)
+def test_a_pass_says_the_rate_and_no_verdict(w):
+    """The first cut called anything over 4,000 MiB/s "from memory"; the
+    node's drive gives 4.3–4.8 GiB/s cold (München, 2026-11-25: 470 GiB read
+    twice at 4,490 and 4,440 MiB/s, memory at 7.3–7.5 GiB/s), so its summary
+    would have said "all from memory" of a pass read from the drive. Where a
+    rate comes from is told by a second pass, never by a constant."""
+    drive = w.Read("louise-chat-qwen3.6-35b-a3b", files=1, bytes=21_105 * w.MIB, seconds=4.69)
+    memory = w.Read("vega-dar-legal-it", files=1, bytes=1_178 * w.MIB, seconds=0.157)
     small = w.Read("vega-medcpt-query", files=3, bytes=30 * w.MIB, seconds=0.01)
-    assert "6,250 MiB/s) — from memory" in warm.says()
-    assert "500 MiB/s) — FROM THE DRIVE: it had been dropped" in cold.says()
-    assert "MiB/s" not in small.says(), "too small for its rate to say anything"
-    assert w.summary([warm, cold, small]) == \
-        "warm: 3 model(s), 7,030 MiB read in 9.4 s — FROM THE DRIVE: vega-dar-legal-it"
-    assert w.summary([warm, small]).endswith("— all from memory")
+    assert drive.says() == "louise-chat-qwen3.6-35b-a3b: 21,105 MiB in 1 file(s), 4.69 s (4,500 MiB/s)"
+    assert "(7,503 MiB/s)" in memory.says() and "MiB/s" not in small.says(), "too small for its rate to say anything"
+    said = w.summary([drive, memory, small])
+    assert said.startswith("read: 3 model(s), 22,313 MiB in 4.9 s = 4,5") and "4,500 to 7,503 MiB/s" in said
+    for text in (drive.says(), memory.says(), said):
+        assert "from memory" not in text and "DRIVE" not in text
+    assert not hasattr(w, "FROM_MEMORY_MIB_S")
 
 
 def test_weights_that_are_not_on_this_host_are_said_and_the_pass_goes_on(w, node):
@@ -130,11 +136,11 @@ def test_one_pass_by_default_the_embedders_alone_and_every_model_with_all(w, nod
     assert w.main(["--models", str(node.models)]) == 0
     out = capsys.readouterr().out
     assert "vega-bge-m3: " in out and "vega-medcpt-article-ov: " in out and "louise-chat" not in out
-    assert out.strip().splitlines()[-1].startswith("warm: 2 model(s), ")
+    assert out.strip().splitlines()[-1].startswith("read: 2 model(s), ")
     assert w.main(["--models", str(node.models), "--all", "--json"]) == 0
     got = json.loads(capsys.readouterr().out)
     assert [m["name"] for m in got["models"]] == ["louise-chat", "vega-bge-m3", "vega-medcpt-article-ov"]
-    assert got["models"][0]["bytes"] == 500_000 and got["says"].startswith("warm: 3 model(s)")
+    assert got["models"][0]["bytes"] == 500_000 and got["says"].startswith("read: 3 model(s)")
 
 
 def test_a_stop_ends_the_loop_after_the_file_in_hand(w, node, monkeypatch, capsys):

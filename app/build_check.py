@@ -53,7 +53,7 @@ class Verdict:
                 **({"detail": self.detail} if self.detail else {})}
 
 
-def check_units(con, plugin) -> Verdict:
+def check_units(con, plugin, collection=None) -> Verdict:
     """ONE UNIT, ONE LIVE ROW (the lessons, B1–B3; EUR-Lex5 held 37,695 and
     then 405 units twice, repaired by hand): no locator of the corpus is held
     by two rows that are both live. For a plugin whose unit is one document —
@@ -86,7 +86,7 @@ CHUNKLESS_SQL = ("SELECT d.uid FROM documents d WHERE d.fts_done=1 AND d.in_scop
                  "AND COALESCE(d.chunks, 0)=0")
 
 
-def check_chunkless(con, plugin) -> Verdict:
+def check_chunkless(con, plugin, collection=None) -> Verdict:
     """A DOCUMENT WITH NO CHUNK SAYS WHY (the lessons, E1; 57 of EUR-Lex5's
     were told apart by hand: 16 scans with no text layer, 41 acts whose
     source holds only a title): every document indexed with no chunk carries
@@ -131,10 +131,69 @@ def check_chunkless(con, plugin) -> Verdict:
         detail=detail)
 
 
-#: name -> the check, in the order they are run and shown
-CHECKS: dict[str, Callable[[Any, Any], Verdict]] = {
+def check_licence(con, plugin, collection=None) -> Verdict:
+    """THE SOURCE'S TERMS ARE ACKNOWLEDGED BEFORE ITS DATA IS USED (CLAUDE.md
+    invariant 9; 04 §4.4): a yellow- or red-class source with no recorded
+    acknowledgement is not discovered, not imported and not exchanged —
+    however its data arrived. The node's own resolution, never a second one
+    (`licensing.state_for`): what this says is what the worker does."""
+    from app import licensing
+    try:
+        state = licensing.state_for(collection)
+        cls = licensing.license_class_for(collection)
+    except Exception as e:   # noqa: BLE001 — a class that cannot be resolved is not judged
+        return Verdict("licence", INCONCLUSIVE, f"the licence class does not resolve ({type(e).__name__}: {e})",
+                       supplies="a plugin that declares its `license_class`, or a Codex that names its licence")
+    if state == licensing.NOT_REQUIRED:
+        return Verdict("licence", PASS, f"a {cls}-class source: no acknowledgement is required",
+                       detail={"class": cls})
+    if state == licensing.ACKNOWLEDGED:
+        return Verdict("licence", PASS, f"a {cls}-class source, its terms acknowledged on this node",
+                       detail={"class": cls})
+    return Verdict(
+        "licence", FAIL,
+        f"a {cls}-class source with no recorded acknowledgement of its terms: its data is not used here — "
+        f"not discovered, not imported, not exchanged",
+        supplies=f"read the terms, then record the acknowledgement: `louise hold collection ack "
+                 f"{getattr(collection, 'name', '<collection>')}` (it checks the terms against the Codex's pin, "
+                 f"byte for byte)",
+        detail={"class": cls})
+
+
+def check_space_pin(con, plugin, collection=None) -> Verdict:
+    """ONE COLLECTION, ONE SPACE (CLAUDE.md invariant 1; 02 §2.4): what the
+    manifest and the vector table hold is the space the Codex states. A
+    mismatch is the refusal the worker's start gives THIS collection — not
+    served, not shared, not searched — said here before a restart meets it.
+    The node's own check (`spaces.verdict`), read-only: nothing is pinned."""
+    from app import spaces
+    try:
+        ok, says = spaces.verdict(con, collection)
+    except Exception as e:   # noqa: BLE001 — not a verdict of the check
+        return Verdict("space-pin", INCONCLUSIVE, f"the space could not be checked ({type(e).__name__}: {e})",
+                       supplies="a manifest and a vector table this node can open; `louise node health` names "
+                                "which it cannot")
+    if ok:
+        return Verdict("space-pin", PASS, "the space pinned here is the one the Codex states")
+    if ok is None:
+        return Verdict("space-pin", INCONCLUSIVE,
+                       "no space is pinned yet: nothing was embedded here, so nothing can be compared",
+                       supplies="the worker pins the space at its first start with this collection; run the "
+                                "check again after it")
+    return Verdict("space-pin", FAIL, f"the worker's start would refuse this collection: {says}",
+                   supplies="a collection's space is fixed at its creation (encoder weights, chunker layers, "
+                            "cleaning version, the space block): what changed is undone, or the collection is "
+                            "re-created with the new space (`louise hold collection create … --re-create`); "
+                            "vectors of two spaces are never mixed")
+
+
+#: name -> the check, in the order they are run and shown. Each takes the
+#: manifest's read-only connection, the plugin and the collection
+CHECKS: dict[str, Callable[..., Verdict]] = {
     "units": check_units,
     "chunkless": check_chunkless,
+    "licence": check_licence,
+    "space-pin": check_space_pin,
 }
 
 
@@ -154,6 +213,6 @@ def run(collection, checks: list[str] | None = None) -> list[Verdict]:
                 for c in want]
     try:
         plugin = collection.plugin_instance()
-        return [CHECKS[c](con, plugin) for c in want]
+        return [CHECKS[c](con, plugin, collection) for c in want]
     finally:
         con.close()
