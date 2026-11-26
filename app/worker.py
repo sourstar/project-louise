@@ -6739,14 +6739,29 @@ def _apply_node_mode(node_con, *, manager=None, start=None) -> str:
     return mode
 
 
+#: the switches started (`_start_mode_models`): a switch's thread whose number
+#: is no longer the last one stops — a newer switch owns the models now
+_mode_gen = [0]
+
+
 def _start_mode_models(before: str, mode: str) -> None:
-    threading.Thread(target=_mode_models, args=(before, mode), daemon=True,
-                     name="mode-models").start()
+    _mode_gen[0] += 1
+    threading.Thread(target=_mode_models, args=(before, mode), kwargs={"gen": _mode_gen[0], "expect": mode},
+                     daemon=True, name="mode-models").start()
+
+
+def _question_in_flight() -> bool:
+    """A PERSON'S QUESTION running now (`dispatch.question`'s marks), never
+    the claim: the keeper's warms hold that too, and it lingers five minutes
+    after a question (the reads of the mode switch, 2026-11-26)."""
+    began, ended = dispatch.question_marks()
+    return began > ended
 
 
 def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
                  question=None, sleep=None, room_wait_s: float = MODE_ROOM_WAIT_S,
-                 clock=time.monotonic, question_meanwhile=None) -> dict:
+                 clock=time.monotonic, question_meanwhile=None, gen: int | None = None,
+                 expect: str | None = None) -> dict:
     """A switch's models, off the round's thread: the chat model of the mode
     left is unloaded (LocalAI's `/backend/shutdown`, `model_load.unload` —
     its memory is what the switch is for), after any answer in flight has
@@ -6765,30 +6780,38 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
             f"(set [models] chat_large and chat_small on the System page)")
         return out
     # A SWITCH BACK ends this one wherever it is — in the answer's wait, before
-    # the unload, in the room's (the second read, run: switched back during the
-    # answer's wait, this thread unloaded the chat model the node had gone
-    # back to and said the other loaded)
-    chat_then = config.chat_model_for(node_mode.current())
+    # the unload, in the room's, before the load (the second read, run:
+    # switched back during the answer's wait, this thread unloaded the chat
+    # model the node had gone back to and said the other loaded; the third:
+    # switched back before this thread first read the store). A newer switch's
+    # thread (`gen`), the store's mode moved since this one began, or — for the
+    # round's own thread (`expect`, the mode the round read) — the store no
+    # longer on it when the thread first reads it
+    mode_then = node_mode.current()
 
     def switched() -> str | None:
-        now_chat = config.chat_model_for(node_mode.current())
-        return None if now_chat == chat_then else f"the node switched again (now {now_chat})"
-    question = question or resident._question_now
+        now_mode = node_mode.current()
+        if (gen is not None and _mode_gen[0] != gen) or now_mode != mode_then or \
+                (expect is not None and now_mode != expect):
+            return f"the node switched again (now {now_mode}, chat model {config.chat_model_for(now_mode)})"
+        return None
+    question = question or _question_in_flight
     sleep = sleep or _stop.wait
     until = time.monotonic() + wait_s
     while question() and time.monotonic() < until and not _stop.is_set() and switched() is None:
         sleep(1.0)
-    if switched() is not None:
-        log(f"{mode} mode: nothing unloaded or loaded by the switch — {switched()}")
-        return out
     server = model_load.server_of(config.CHAT_URL)
     try:
-        # what it holds NOW (a model at rest holds far under its largest), else its largest
+        # what it holds NOW (a model at rest holds far under its largest); its
+        # largest only where it was not read
         now_held = (model_load.held_sizes(server, max_age_s=0.0) or {}).get(old)
-        gives = (now_held[1] if now_held and now_held[1] else model_evict.need_of(config.CHAT_URL, old)) or 0
+        gives = (now_held[1] if now_held is not None else model_evict.need_of(config.CHAT_URL, old)) or 0
         card_before = resident._card() if gives else None
     except Exception:   # noqa: BLE001 — unread: nothing waited for
         gives, card_before = 0, None
+    if switched() is not None:
+        log(f"{mode} mode: nothing unloaded or loaded by the switch — {switched()}")
+        return out
     try:
         out["unloaded"] = model_load.unload(config.CHAT_URL, old)
     except Exception as e:   # noqa: BLE001 — the runner keeps it; the load below makes its own room
@@ -6820,35 +6843,33 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
     # pins and loads its own models, the chat model first — a room asked beside
     # it could unload what it just loaded; a switch back makes this one stale;
     # a load in flight (the keeper's beat) holds part of the model already
-    # A QUESTION THAT COMES NOW, not one that only lingers: the claim outlasts
-    # a question by QUESTION_LINGER_S, and read as live it stopped the switch
-    # a minute after any question — the next one paid the cold load (the
-    # second read, run). A claim rewritten since the wait began is a call
-    claim_then = dispatch.claim_until()
+    # A PERSON'S QUESTION THAT BEGINS NOW (`dispatch.question`'s mark), not the
+    # claim: it lingers five minutes after a question (the second read) and the
+    # keeper's own warms hold it (the third read: a reranker warm read as "a
+    # person's question" ended the switch, and the first question paid the load)
+    wait_began = time.time()
 
     def a_question_now() -> bool:
-        c = dispatch.claim_until()
-        return c is not None and c > time.time() and c != claim_then
+        return dispatch.question_marks()[0] > wait_began
     meanwhile = question_meanwhile or a_question_now
-    try:
-        embeds = node_state.runs(node_state.peek_worker_state(), node_state.EMBED)
-    except Exception:   # noqa: BLE001 — unread: its pins go by themselves
-        embeds = True
 
     def ours() -> str | None:
+        gone = switched()
+        if gone is not None:
+            return gone
         if meanwhile():
             return "a person's question holds the card: it loads its models itself"
-        return switched()
+        return None
     room, gone = None, None
     until = clock() + room_wait_s
     while not _stop.is_set():
         gone = ours()
         if gone is not None:
             break
-        if not embeds:
+        if not resident.node_embeds():
             # INTO A MODE THAT DOES NOT EMBED the old mode's pins hold nothing
             # back: the idle ones go now, a batch's as it ends (RULE 1) — not
-            # PIN_IDLE_S and a beat later
+            # PIN_IDLE_S and a beat later. Read at each ask (unread: embedding)
             _release_idle_pins(time.time() + PIN_IDLE_S)
         try:
             ids = model_load.loaded_models(server)
@@ -6874,9 +6895,17 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
             + ("" if room.unloaded or room.parked else f" after {room_wait_s:.0f} s")
             + f" ({room.why}); it loads when there is room, or at the first question")
     else:
+        gone = ours()
+        if gone is not None:
+            log(f"{mode} mode: {old} {'unloaded' if out['unloaded'] else 'was not loaded'}; {new} not loaded "
+                f"by the switch — {gone}")
+            return out
         try:
-            with model_evict.room_made():     # made above: the cold-load hook does not make it again
-                llm.warm()
+            if room is not None and room.fits:
+                with model_evict.room_made():     # made above: the cold-load hook does not make it again
+                    llm.warm()
+            else:
+                llm.warm()                        # nothing made or told: the hook asks, as before
             out["loaded"] = True
         except Exception as e:   # noqa: BLE001 — it loads at the first question
             log(f"{mode} mode: {new} did not load now ({type(e).__name__}: {str(e)[:200]}); "

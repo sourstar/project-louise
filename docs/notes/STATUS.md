@@ -33,9 +33,11 @@ measured (published figures disagree).
   show the old chat model gone, makes the new one's room FIRST and asks again until it is there (5 s,
   within PIN_IDLE_S + a beat + a batch, 240 s); into a mode that does not embed the old mode's idle pins
   go at once and a batch's as it ends (RULE 1); it sends no load whose room was refused (said; the keeper
-  or the first question loads it), leaves the load to a question that comes meanwhile (a claim REWRITTEN
-  since, not one that only lingers), to a load already in flight, and stops at a switch back wherever it
-  is; a partial room is made once. A room refused before ANY load is now said, once a minute a reason
+  or the first question loads it), leaves the load to a PERSON'S question that begins meanwhile (marked by
+  `dispatch.question` itself — the claim lingers after a question and the keeper's own warms hold it,
+  and each was read as a question by an earlier cut), to a load already in flight, and stops at a switch
+  back wherever it is (a newer switch's thread, the store's mode moved, or not the mode the round read);
+  a partial room is made once. A room refused before ANY load is now said, once a minute a reason
   ("card: no room could be made for … — … pinned by work in flight"). The query-mode paging rule is
   unchanged: the first read's idea that the driver cannot page pinned models was unmeasured — a pin is
   the reclaimer's word, not the driver's — and refusing to page on it unloaded a question's own query
