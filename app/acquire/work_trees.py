@@ -33,6 +33,7 @@ no conditional request documented. The notice's dates are the validator.
 from __future__ import annotations
 
 import gzip
+import re
 import json
 import os
 import threading
@@ -236,3 +237,122 @@ def recent_for(corpus_root: Path) -> RecentTrees:
             got = _RECENT[key] = RecentTrees.under(Path(corpus_root))
         return got
 
+
+
+# ---- parser 4: the tree from the bulk, by CELEX ------------------------------------------
+
+#: the MTD's CELEX → work uuid index, derived from the MTD zips (their
+#: physical identity names the file), re-creatable, never exchanged
+INDEX_KIND = "eurlex-mtd-celex"
+#: the CELEX a tree states (`cdm:resource_legal_id_celex`); a candidate only,
+#: checked against the work's own node when the tree is taken
+_CELEX = re.compile(rb"resource_legal_id_celex[^>]*>\s*([^<\s]+)\s*<")
+_MTD_TREE = re.compile(r"^([0-9a-f-]{36})/" + re.escape(datadump.MTD_MEMBER) + r"$")
+INDEX_CHUNK = 2000
+
+
+def _index_chunk(path: str, members: list[str]) -> list[tuple[str, str]]:
+    """(CELEX, uuid) of every CELEX each member's tree states."""
+    import zipfile
+    out: list[tuple[str, str]] = []
+    with zipfile.ZipFile(path) as z:
+        for m in members:
+            uuid = m.split("/", 1)[0]
+            out.extend((c.decode("ascii", "replace"), uuid) for c in set(_CELEX.findall(z.read(m))))
+    return out
+
+
+def _identity(paths: list[Path]) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    for p in sorted(paths):
+        st = p.stat()
+        h.update(f"{p.resolve()}\0{st.st_size}\0{st.st_mtime_ns}\n".encode())
+    return h.hexdigest()[:24]
+
+
+def mtd_index(paths: list[Path], place: Path, *, threads: int,
+              log: Callable[[str], None] = print) -> dict[str, str]:
+    """`{CELEX: work uuid}` of the MTD zips `paths`, built once and kept at
+    `place/<their identity>.json.gz` (2026-11-26: parser 4 asked Cellar for
+    every tree of the 124,511 units the Data Dump lacks whole, ~98 % of the
+    pass's Cellar time, while the dump's MTD held every one of them byte for
+    byte — München's proof on 20 units — bulk first). A CELEX stated by two
+    works' trees is left out: Cellar answers it. Threads, not processes:
+    the cost is the zip's inflate, which releases the GIL."""
+    from concurrent.futures import ThreadPoolExecutor
+    import zipfile
+    dest = place / f"{_identity(paths)}.json.gz"
+    try:
+        return json.loads(gzip.decompress(dest.read_bytes()))
+    except (OSError, EOFError, ValueError):
+        pass
+    tasks: list[tuple[str, list[str]]] = []
+    for p in paths:
+        with zipfile.ZipFile(p) as z:
+            names = sorted(n for n in z.namelist() if _MTD_TREE.match(n))
+        tasks += [(str(p), names[i:i + INDEX_CHUNK]) for i in range(0, len(names), INDEX_CHUNK)]
+    log(f"[work-trees] indexing the MTD's CELEX: {sum(len(t[1]) for t in tasks)} trees, {threads} threads")
+    seen: dict[str, str] = {}
+    twice: set[str] = set()
+    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+        for got in pool.map(lambda t: _index_chunk(*t), tasks):
+            for celex, uuid in got:
+                if seen.setdefault(celex, uuid) != uuid:
+                    twice.add(celex)
+    for c in twice:
+        seen.pop(c, None)
+    place.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.{threading.get_ident()}")
+    tmp.write_bytes(gzip.compress(json.dumps(seen, sort_keys=True).encode(), 6))
+    os.replace(tmp, dest)
+    log(f"[work-trees] MTD index: {len(seen)} CELEX, {len(twice)} stated by two works left to Cellar")
+    return seen
+
+
+class BulkTrees:
+    """A unit's work tree from the dump's MTD by its CELEX
+    (cellar.fetch_unit_from_tree `bulk`): None where the MTD holds no work of
+    that CELEX, or the tree found does not state it as its work's own."""
+
+    def __init__(self, dumps: "datadump.Dumps", index: dict[str, str]) -> None:
+        self.dumps = dumps
+        self.index = index
+
+    def __call__(self, celex: str) -> dict | None:
+        from .eurlex_dump import _work_celex
+        uuid = self.index.get(celex)
+        if uuid is None:
+            return None
+        tree = self.dumps.mtd_tree(uuid)
+        if tree is None or _work_celex(tree, uuid) != celex:
+            return None
+        return tree
+
+
+_BULK: dict[str, BulkTrees | None] = {}
+_BULK_LOCK = threading.Lock()
+
+
+def bulk_for(corpus_root: Path, *, log: Callable[[str], None] = print) -> BulkTrees | None:
+    """The process's BulkTrees for a corpus root, its index built on first
+    use (under the lock: the pass's connections wait for it once); None
+    where no dump is named or its MTD does not read."""
+    import zipfile
+    from app import parallel
+    key = str(Path(corpus_root).resolve())
+    with _BULK_LOCK:
+        if key in _BULK:
+            return _BULK[key]
+        dumps = datadump.dumps()
+        got: BulkTrees | None = None
+        try:
+            paths = dumps.mtd_paths() if dumps.base is not None else []
+            if paths:
+                place = derived.place_kept(INDEX_KIND, Path(corpus_root)) \
+                    or (Path(corpus_root) / derived.BESIDE / INDEX_KIND)
+                got = BulkTrees(dumps, mtd_index(paths, place, threads=parallel.processes(), log=log))
+        except (OSError, zipfile.BadZipFile) as e:
+            log(f"[work-trees] the MTD index is not built ({e}): trees come from Cellar")
+        _BULK[key] = got
+        return got

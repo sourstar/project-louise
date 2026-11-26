@@ -797,7 +797,8 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
 def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
                          client: httpx.Client | None = None,
                          charge: Callable[[int], None] = budget.acquire_bytes,
-                         trees=None, listed_mtime: int | None = None) -> Fetched:
+                         trees=None, listed_mtime: int | None = None,
+                         bulk: Callable[[str], dict | None] | None = None) -> Fetched:
     """A PARSER-4 unit of (CELEX, language) into `dest`, whole or not at all:
     the work's non-inferred tree scoped to the language (`tree.json`) and the
     items of the best form the TREE lists (`form_of` on `from_tree.notice`) —
@@ -806,7 +807,11 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
     unit the Data Dump builds (eurlex_dump.py) is this one, byte for byte:
     what `records-vs-origin` re-fetches to check it. `listed_mtime`: the
     listing's date of the unit; a tree `trees` kept serves it only where
-    that tree dates the unit at least as late (review 2026-11-21, Q1)."""
+    that tree dates the unit at least as late (review 2026-11-21, Q1).
+    `bulk` (work_trees.BulkTrees): the work's tree from the Data Dump's MTD
+    by CELEX, taken FIRST, under the same rule as a kept one (bulk first,
+    2026-11-26: the tree landed is byte for byte the one Cellar serves,
+    München's proof on 20 units); never passed by `records-vs-origin`."""
     from ..plugins.eurlex import formex, from_tree, rdf
     from ..plugins.eurlex.source import LANGUAGES
     code = LANGUAGES[lang]
@@ -853,11 +858,15 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
         # the tree is the WORK's, every language's in it (no Accept-Language):
         # `trees` (work_trees.RecentTrees) serves one Cellar served for the
         # work's other languages within the pass
-        if trees is not None:
-            data, tree_from = trees.get(celex, lambda: _tree(client, url, celex, count), current)
+        taken = _bulk_tree(bulk, celex, code, listed_mtime)
+        if taken is not None:
+            (scoped, note), tree_from = taken, "dump"
         else:
-            data, tree_from = _tree(client, url, celex, count), "cellar"
-        scoped, note = parse(data)
+            if trees is not None:
+                data, tree_from = trees.get(celex, lambda: _tree(client, url, celex, count), current)
+            else:
+                data, tree_from = _tree(client, url, celex, count), "cellar"
+            scoped, note = parse(data)
         tree_s = time.monotonic() - t0 if tree_from == "cellar" else 0.0
         form = form_of(note)
         listed = note.items.get(form) or [] if form else []
@@ -900,6 +909,31 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
     finally:
         if own:
             client.close()
+
+
+def _say_cellar(name: str) -> Callable[[str], None]:
+    """A log line naming the collection (its corpus's name, as TreeInventory's)."""
+    return lambda message: print(f"{time.strftime('%H:%M:%S')} [{name} info:cellar] {message}", flush=True)
+
+
+def _bulk_tree(bulk, celex: str, code: str, listed_mtime: int | None):
+    """(scoped tree, notice) of the unit from the bulk's tree, or None: no
+    bulk, the MTD lacks the work, its tree does not read as the unit's, or it
+    dates the unit before the listing does (the rule a kept tree meets)."""
+    from ..plugins.eurlex import from_tree, rdf
+    full = bulk(celex) if bulk is not None else None
+    if full is None:
+        return None
+    scoped = rdf.scope(full, code)
+    try:
+        note = from_tree.notice(scoped, code, celex)
+    except from_tree.TreeError:
+        return None
+    if listed_mtime is not None:
+        held = _epoch(note.modified or note.last_modified)
+        if held is None or held < listed_mtime:
+            return None
+    return scoped, note
 
 
 def _work_of(note) -> str | None:
@@ -1213,7 +1247,8 @@ class TreeUnits(CellarUnits):
             from . import work_trees
             got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent,
                                        trees=work_trees.recent_for(root) if root is not None else None,
-                                       listed_mtime=remote.mtime)
+                                       listed_mtime=remote.mtime,
+                                       bulk=work_trees.bulk_for(root, log=_say_cellar(root.name)) if root is not None else None)
         except TransportError as e:
             # a unit the dump lacked that Cellar does not give either: not
             # asked first again (eurlex_dump.mark_tried), so the complete
