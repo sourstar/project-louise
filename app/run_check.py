@@ -760,12 +760,24 @@ def validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docume
     load), else on the shared load with them standing aside — said, never
     silent."""
     server, model = _who(recipe, role == "query")
-    _park_refused_lately(recipe, role, name, codex)
+    _park_refused_lately(recipe, role, root, name, codex)
     try:
         return _validate_on_twin_or_shared(root, name, codex, recipe, role=role, key=key, now=now,
                                            stop=stop, on_run=on_run)
     except emb.ParkRefused as e:
-        _remember_park_refusal(server, model, name, role, str(e))
+        _remember_park_refusal(server, model, root, name, role, str(e))
+        # ...and what an earlier gate counted for this run no longer admits
+        # it, here or in a sibling of the space (`runs.refuse_parks`)
+        refused_run = _last_stated.get((server, model, role))
+        if refused_run:
+            try:
+                marked = runs_mod.refuse_parks(root, name, codex, role, refused_run, why=str(e),
+                                               at=now or _now(), signer=signer(key))
+                if marked:
+                    log.warning("%s: run %s… was refused as a run that parks; the park cycles counted "
+                                "for it earlier no longer count (%s)", name, refused_run[:23], ", ".join(marked))
+            except Exception:   # noqa: BLE001 — the refusal itself is what must reach the caller
+                log.exception("%s: the earlier park records of the refused run could not be marked", name)
         raise
 
 
@@ -787,16 +799,25 @@ _park_refused: dict[tuple[str, str, str, str], tuple[float, str | None, str]] = 
 _last_stated: dict[tuple[str, str, str], str] = {}
 
 
-def _remember_park_refusal(server: str, model: str, name: str, role: str, why: str) -> None:
-    _park_refused[(server, model, role, name)] = (time.monotonic() + PARK_REFUSED_S,
-                                                  _last_stated.get((server, model, role)), why)
+def _place(root, name: str) -> str:
+    """The collection by its PLACE, as the rest of the module keys it (two
+    collections can share a name, CLAUDE.md)."""
+    try:
+        return str(runs_mod.directory(root, name))
+    except Exception:   # noqa: BLE001
+        return str(name)
 
 
-def _park_refused_lately(recipe, role: str, name: str, codex) -> None:
+def _remember_park_refusal(server: str, model: str, root, name: str, role: str, why: str) -> None:
+    _park_refused[(server, model, role, _place(root, name))] = (
+        time.monotonic() + PARK_REFUSED_S, _last_stated.get((server, model, role)), why)
+
+
+def _park_refused_lately(recipe, role: str, root, name: str, codex) -> None:
     """Raise the remembered refusal where the SAME run still answers and the
     model still parks; one tiny request to the shared load, no twin, no
     unload."""
-    who = (*_who(recipe, role == "query"), role, name)
+    who = (*_who(recipe, role == "query"), role, _place(root, name))
     kept = _park_refused.get(who)
     if kept is None:
         return

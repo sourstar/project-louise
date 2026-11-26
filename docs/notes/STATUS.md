@@ -39,8 +39,10 @@ measured (published figures disagree).
   collection of a space gating for itself; a refusal gated again every 300 s; a silent runner asked at
   every check); and in THOSE fixes one more false pass — a sibling's statement copied over a collection's
   own admitted batched writes on a verdict made at one text a request (the fault of the 714 books).
-  Withdrawn: a sibling lends its byte-exact cycles as evidence about the run, never its statement. All
-  fixed, each a test (tests/hold/test_park_cycles.py, 67). LESSON, the third time it has paid: code that
+  Withdrawn: a sibling lends its byte-exact cycles as evidence about the run, never its statement. A
+  fourth read found the lending sound and one thing more: a later refusal withdrew nothing — the older
+  record of 64 good cycles still admitted the run (`runs.refuse_parks` now marks every record of the run
+  in the space). All fixed, each a test (tests/hold/test_park_cycles.py, 69). LESSON, the third time it has paid: code that
   admits or stops a run is read by someone else before it merges, and READ AGAIN after each round of
   fixes — every round here added a defect of the class it was fixing. The rule it converged on: THE PASS NEVER MAKES
   A FAILING STATEMENT — a run that parks badly is refused as a run that parks and is the run it was once

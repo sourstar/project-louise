@@ -252,12 +252,40 @@ def parks_measured(root: Path, name: str, role: str, run_id: str) -> dict[str, A
 
 
 def _parks_counted(measured: dict[str, Any] | None, body: dict[str, Any]) -> bool:
-    """PARK_CYCLES counted cycles, for THIS statement."""
+    """PARK_CYCLES counted cycles, for THIS statement, not since refused."""
     try:
         return (measured is not None and int(measured.get("cycles", 0)) >= emb.PARK_CYCLES
+                and not measured.get("refused")
                 and measured.get("statement") == statement_digest(body))
     except (TypeError, ValueError):
         return False
+
+
+def refuse_parks(root: Path, name: str, codex: Codex, role: str, run_id: str, *, why: str, at: str,
+                 signer: str | None) -> list[str]:
+    """A GATE REFUSED THE RUN AS ONE THAT PARKS (`embedder.ParkRefused`): every
+    park record of that run and role in the space — this collection's and its
+    siblings', counted or borrowed — is marked refused, and neither counts
+    nor lends from here on. Returns the collections marked.
+
+    The newest evidence about the run is then a bad return, and an OLDER
+    record of 64 good cycles would otherwise keep it written from, and lent
+    (the fourth read of 2026-11-26, reproduced: a statement with its cycles,
+    then the same run refused by a later gate, and `check` still admitted
+    it). "Nothing is written from the run while its model parks" must hold
+    wherever a record stands. A later gate that counts its cycles writes a
+    fresh record over the mark."""
+    marked = []
+    key = f"{role}:{run_id}"
+    for who in [name, *_others(root, name)]:
+        got = parks_measured(root, who, role, run_id)
+        if got is None or got.get("refused"):
+            continue
+        if who != name and run_id not in statements(root, who, codex, role, signer=signer):
+            continue                    # another space's record of a run with the same id: not ours to mark
+        _record(_parks_file(root, who), key, {**got, "refused": {"at": at, "why": str(why)[:300]}})
+        marked.append(who)
+    return marked
 
 
 def parks_for_space(root: Path, name: str, codex: Codex, role: str, run_id: str,
@@ -284,20 +312,26 @@ def parks_for_space(root: Path, name: str, codex: Codex, role: str, run_id: str,
     own, stale, batching record — batched writes admitted on a statement that
     never measured a batch, the fault of the 714 books; and a sibling whose
     batches differed locked a healthy collection out for ever). Nor are
-    cycles that were not byte-exact lent: what a near-exact run's returns
-    differ by is in the statement of the pass that measured them, and no
-    other statement says it."""
+    cycles that were not byte-exact lent to another statement: what a
+    near-exact run's returns differ by is in the statement of the pass that
+    measured them, and no other says it — a collection holding a byte copy of
+    that same statement takes them. A record a later gate refused
+    (`refuse_parks`) lends nothing."""
     own = parks_measured(root, name, role, run_id)
     if _parks_counted(own, body):
         return own
     for other in _others(root, name):
         theirs = parks_measured(root, other, role, run_id)
         try:
-            exact = (theirs is not None and int(theirs.get("cycles", 0)) >= emb.PARK_CYCLES
-                     and float(theirs.get("closest", 0.0)) == 1.0 and not theirs.get("from"))
+            lends = (theirs is not None and int(theirs.get("cycles", 0)) >= emb.PARK_CYCLES
+                     and not theirs.get("from") and not theirs.get("refused")
+                     # byte-exact cycles are the run's; any others are their statement's alone —
+                     # and lent to a holder of that SAME statement (a byte copy of it)
+                     and (float(theirs.get("closest", 0.0)) == 1.0
+                          or theirs.get("statement") == statement_digest(body)))
         except (TypeError, ValueError):
-            exact = False
-        if not exact:
+            lends = False
+        if not lends:
             continue
         held = statements(root, other, codex, role, signer=signer).get(run_id)
         if held is None or not passing(held, codex) or statement_digest(held) != theirs.get("statement"):

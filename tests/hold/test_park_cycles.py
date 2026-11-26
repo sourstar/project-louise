@@ -499,6 +499,53 @@ def test_cycles_that_were_not_byte_exact_are_not_lent(tmp_path):
     _validated(tmp_path, "other", Parking(), park=False, at="2026-11-26T04:00:00Z")
     with pytest.raises(hold_runs.RunUnvalidated, match="counted no park cycles"):
         _check(tmp_path, "other", codex, run_id, parks=True)
+    # ...but a collection that holds a byte copy of that SAME statement takes them with it
+    (tmp_path / "copy").mkdir()
+    _check(tmp_path, "copy", codex, run_id, parks=True)
+    assert hold_runs.statements(tmp_path, "copy", codex, "document", signer=_who())[run_id] == near
+    assert hold_runs.parks_measured(tmp_path, "copy", "document", run_id)["closest"] < 1
+
+
+def test_a_later_refusal_withdraws_the_cycles_an_earlier_gate_counted(tmp_path):
+    """The fourth read of 2026-11-26, reproduced: a statement with its 64
+    cycles, then the SAME run refused by a later gate (a failed return, a bit
+    off, a NaN) — and `check` still admitted it on the older record, which a
+    sibling could still borrow. The newest evidence about the run is the bad
+    return: every record of that run and role in the space is marked."""
+    codex, a = _validated(tmp_path, "a", Parking())
+    run_id = a["run"]
+    _codex, b_old = _validated(tmp_path, "b", Parking(), park=False, at="2026-11-26T04:00:00Z")
+    _check(tmp_path, "b", codex, run_id, parks=True)             # B borrowed A's exact cycles
+    _validated(tmp_path, "c", Parking(), park=False, at="2026-11-26T04:30:00Z")
+    marked = hold_runs.refuse_parks(tmp_path, "a", codex, "document", run_id, signer=_who(),
+                                    why="park cycle 3: the weights did not come back", at="2026-11-26T08:00:00Z")
+    assert sorted(marked) == ["a", "b"], "the counted record and the borrowed one; C had none"
+    for name in ("a", "b", "c"):
+        with pytest.raises(hold_runs.RunUnvalidated, match="counted no park cycles"):
+            _check(tmp_path, name, codex, run_id, parks=True)
+    got = hold_runs.parks_measured(tmp_path, "a", "document", run_id)
+    assert got["cycles"] == 64 and "did not come back" in got["refused"]["why"], "kept, and said why it no longer counts"
+    _check(tmp_path, "a", codex, run_id), "without parking the run is the run it was"
+    # a later gate that counts its cycles writes a fresh record over the mark
+    _validated(tmp_path, "a", Parking(), at="2026-11-26T09:00:00Z")
+    _check(tmp_path, "a", codex, run_id, parks=True)
+    _check(tmp_path, "c", codex, run_id, parks=True)
+
+
+def test_the_gates_refusal_marks_the_records_before_it_reaches_the_caller(tmp_path, monkeypatch):
+    marked = []
+
+    def gate(root, name, codex_, recipe, **kw):
+        run_check._last_stated[(S, M, kw["role"])] = RUN
+        raise emb.ParkRefused("park cycle 3: the weights did not come back")
+    monkeypatch.setattr(run_check, "_validate_on_twin_or_shared", gate)
+    monkeypatch.setattr(run_check, "_park_refused", {})
+    monkeypatch.setattr(run_check, "signer", lambda key=None: "who")
+    monkeypatch.setattr(run_check.runs_mod, "refuse_parks",
+                        lambda root, name, codex, role, run_id, **kw: marked.append((name, role, run_id, kw["why"])) or [name])
+    with pytest.raises(emb.ParkRefused):
+        run_check.validate(tmp_path, "c", SimpleNamespace(), _recipe(), now="2026-11-26T08:00:00Z")
+    assert marked == [("c", "document", RUN, "park cycle 3: the weights did not come back")]
 
 
 def test_eight_threads_borrowing_at_once_write_one_whole_record(tmp_path):
@@ -985,6 +1032,8 @@ def test_a_refusal_is_remembered_for_the_same_run_and_another_run_is_gated_at_on
     monkeypatch.setattr(run_check, "probe_for", lambda codex_, role="document": "probe")
     monkeypatch.setattr(run_check, "parks_now", lambda recipe, query=False: state["parks"])
     monkeypatch.setattr(run_check, "_park_refused", {})
+    monkeypatch.setattr(run_check, "signer", lambda key=None: "who")
+    monkeypatch.setattr(run_check.runs_mod, "refuse_parks", lambda *a, **k: [])
 
     def look(name: str = "c"):
         with pytest.raises(emb.ParkRefused, match="the weights did not come back") as e:

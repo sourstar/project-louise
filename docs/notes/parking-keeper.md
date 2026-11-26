@@ -236,9 +236,15 @@ counted cycles whose every answer was the same bytes, under a passing
 statement of that run the sibling still holds and its record names. The
 borrower keeps its own statement (its sample, its batching, its CPU
 comparison) and writes its own record for it, saying where the cycles were
-counted. Cycles that were not byte-exact are not lent (what a near-exact
-run's returns differ by is in the one statement that measured them), nor is
-a borrowed record lent on. For one round of review the sibling's STATEMENT
+counted. Cycles that were not byte-exact are lent only to a collection that
+holds a byte copy of the SAME statement (what a near-exact run's returns
+differ by is in the one statement that measured them); a borrowed record is
+not lent on. AND A REFUSAL WITHDRAWS WHAT WAS COUNTED BEFORE
+(`runs.refuse_parks`, the fourth read): when a later gate refuses the run as
+one that parks, every record of that run and role in the space — counted or
+borrowed — is marked refused and neither counts nor lends, until a gate that
+counts its cycles again writes a fresh one. The newest evidence about the
+run decides. For one round of review the sibling's STATEMENT
 was copied instead: read against the borrower's own, stale, batching record
 it admitted batched writes on a verdict made at one text a request — the
 fault of the 714 books — and a sibling whose batches differed locked a
