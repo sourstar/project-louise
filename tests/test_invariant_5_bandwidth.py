@@ -38,7 +38,9 @@ EXEMPT: dict[str, str] = {
     "app/retrieval.py": f"{MODEL_CALLS} — the reranker and the encoder's tokenizer",
     "app/llm.py": f"{MODEL_CALLS} — the chat model",
     "app/translate.py": f"{MODEL_CALLS} — the translation model",
-    "app/model_load.py": f"{MODEL_CALLS} — the runner's /system and backend shutdown",
+    "app/model_load.py": f"{MODEL_CALLS} — the runner's /system, a model's config (/api/models/config-json, "
+                         f"its backend read without a load) and its backend (/backend/shutdown, /backend/park, "
+                         f"/backend/monitor)",
     "app/localai_reclaimer.py": f"{MODEL_CALLS} — the runner's own settings, read and written back to turn its "
                                 f"memory reclaimer on or off with the node's rule: a few kB, at a change of mode",
     "app/model_pins.py": f"{MODEL_CALLS} — LocalAI's pin API",
@@ -239,3 +241,15 @@ def test_the_detector_sees_each_way_of_drawing():
     assert draws_from_budget("with get_manager().rsync_lease(None) as bps:\n    pass\n")
     assert not draws_from_budget("get_manager().rates()\n")
     assert not draws_from_budget("# budget.acquire_bytes(5)\nx = 'acquire_bytes'\n")
+
+
+def test_the_runner_exemption_names_every_route_it_asks():
+    """An exemption's reason says what the module asks of the model server:
+    a route added to app/model_load.py (2026-11-26: the model's config, read
+    for its engine) is named there, or this fails."""
+    import re
+    src = (APP / "model_load.py").read_text(encoding="utf-8")
+    routes = {m.rstrip("/") for m in re.findall(r'f"\{[^}]+\}(/[a-z/-]+)', src)}
+    assert routes >= {"/system", "/api/models/config-json"}, routes
+    missing = sorted(r for r in routes if r not in EXEMPT["app/model_load.py"])
+    assert not missing, f"app/model_load.py asks {missing} of the runner and its exemption does not say so"
