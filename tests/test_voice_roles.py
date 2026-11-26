@@ -274,6 +274,28 @@ def test_a_segmented_sentence_keeps_keep_and_background(node, monkeypatch):
     assert seen == [False, False, False] and len(put) == 3, "a reader's sentence: kept, as a question"
 
 
+
+def test_the_one_request_fallback_keeps_keep_and_background(node, monkeypatch):
+    """Architecture's final read of 9460b920 (should-fix): segments that do
+    not join send the sentence again as ONE request — and that request is
+    made as its sentence asks too: keep=False reads and writes no kept clip,
+    background=True takes no question's claim and marks no reading."""
+    seen, put, got = [], [], []
+    monkeypatch.setattr(speech, "_synthesize_call",
+                        lambda url, model, out, last=False, background=False:
+                        seen.append(background) or (200, b"ID3 not a wav", "audio/wav", [("synth", 10.0)]))
+    monkeypatch.setattr(speech, "_clip_put", lambda key, data, ctype: put.append(key))
+    monkeypatch.setattr(speech, "_clip_get", lambda key: got.append(key))
+    monkeypatch.setattr(speech.model_load, "backend_of", lambda url, model, *a, **k: "engine-1")
+    monkeypatch.setattr(speech, "_READINGS", speech.Readings())   # no other test's reading
+    s = 'Il motto dei moschettieri era "Un pour tous, tous pour un", scritto da Dumas nel romanzo.'
+    status, *_ = speech.synthesize_timed({"input": s, "language": "it"}, url="http://ai",
+                                         keep=False, background=True)
+    assert status == 200
+    assert seen == [True] * 4, "three segments, then the fallback: every one as background work"
+    assert put == [] and got == [], "keep=False: the fallback reads and keeps no clip either"
+    assert speech.reading_quiet_s() == float("inf"), "background work marks no reading"
+
 def test_a_quotation_the_node_cannot_join_goes_as_one_sentence(node, monkeypatch):
     calls, _, _ = node
 
