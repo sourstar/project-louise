@@ -495,8 +495,10 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     lang_text = ",".join(languages) if len(languages) <= 4 else f"{len(languages)} languages"
     counted_at = time.time()                # what the window is known whole as of (review of 7eb82ba1, 3a)
     try:
+        t_q = time.monotonic()
         counted = sparql(client, base, fingerprint_query(year, languages),
                          what=f"the count of {year} ({lang_text})", charge=charge)
+        _took(learned, f"the count of {year} ({lang_text})", t_q)
     except TransportError as e:
         if len(languages) > 1 and _timed_out(e):
             half = len(languages) // 2
@@ -526,8 +528,10 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     listed: list = []
     got = 0
     while got < want:
+        t_q = time.monotonic()
         rows = sparql(client, base, page_query(year, languages, got, force),
                       what=f"the {year} page at offset {got} ({lang_text})", charge=charge)
+        _took(learned, f"the {year} page at offset {got} ({lang_text}): {len(rows)} rows", t_q)
         if not rows:
             break
         for row in rows:
@@ -943,6 +947,40 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
 def _say_cellar(name: str) -> Callable[[str], None]:
     """A log line naming the collection (its corpus's name, as TreeInventory's)."""
     return lambda message: print(f"{time.strftime('%H:%M:%S')} [{name} info:cellar] {message}", flush=True)
+
+
+#: the listing phase's windows at once (Cellar's endpoint allows 4 connections)
+LISTING_SLOTS = 4
+#: languages a listing-phase window starts with (see `_prepare_bulk`)
+LISTING_START_GROUP = 1
+
+
+def _took(learned, what: str, t0: float) -> None:
+    """Each listing query's time, said where the caller asked for it (the
+    listing phase: architecture, 2026-11-26, "measure first": whether a page
+    costs a whole evaluation of its window)."""
+    say = getattr(learned, "say", None)
+    if say is not None:
+        say(f"cellar: {what} in {time.monotonic() - t0:.1f} s")
+
+
+class _Learned(dict):
+    """`_window_files`' `learned`, shared by the listing phase's threads: the
+    group only ever narrows, under a lock (a halving one thread learned is
+    never undone by another's write)."""
+
+    def __init__(self, group: int, say=None) -> None:
+        super().__init__(group=max(1, group))
+        self._guard = __import__("threading").Lock()
+        self.say = say
+
+    @property
+    def group(self) -> int:
+        return max(1, int(self["group"]))
+
+    def __setitem__(self, k, v) -> None:
+        with self._guard:
+            super().__setitem__(k, min(int(v), int(self.get(k, v))) if k == "group" else v)
 
 
 #: a covered window's fingerprint is asked again after this (once a day)
@@ -1575,26 +1613,62 @@ class TreeUnits(CellarUnits):
             say(f"listing what changed since the dump: {sum(len(v) for v in missing.values())} "
                 f"(year, language) window(s) of {len(missing)} year(s), {stale} of them known whole more "
                 f"than a day ago, before any unit is built from it")
-            # THE SPLIT, LEARNED across the years, as `listing` does (review of
-            # a783fd1c, 3: a 24-language count ran past 900 s on 11-14)
-            learned = {"group": max(len(v) for v in missing.values())}
-            with httpx.Client(timeout=TIMEOUT_S) as client:
-                for year in sorted(missing):
-                    _stop_check()
-                    langs_y = sorted(missing[year])
-                    group = max(1, learned["group"])
-                    for window in (tuple(langs_y[i:i + group]) for i in range(0, len(langs_y), group)):
-                        try:
-                            for _ in _window_files(client, base_url, year, window, code_of, budget.acquire_bytes,
-                                                   place=lambda *a: False, learned=learned):
-                                pass
-                            asked += 1
-                        except TransportError as e:
-                            if isinstance(e, TransferAborted):
-                                raise
-                            unlisted |= {(year, l) for l in window}
-                            say(f"cellar: the {year} window ({', '.join(window)}) is not listed "
-                                f"({str(e)[:200]}): its units wait")
+            # THE LISTING PHASE IN PARALLEL (architecture, 2026-11-26, on the
+            # live pass: one query at a time on one connection, py-spy reading
+            # "the 1993 page at offset 5000 (6 languages)" — a 13-language
+            # count had timed out and been halved — while Cellar's endpoint
+            # allows LISTING_SLOTS; CLAUDE.md "Multi-threading is a must").
+            # Windows start ONE language wide (LISTING_START_GROUP: a grouped
+            # count is what times out, 900 s, before it is split; a single
+            # language answered in 26-235 s, 11-14), up to LISTING_SLOTS at
+            # once, each on its own client, in the pass's context (its stop,
+            # keyless as before); the split, should one still be needed, is
+            # learned once for all (`_Learned`, under a lock)
+            import contextvars
+            from concurrent.futures import ThreadPoolExecutor
+            learned = _Learned(LISTING_START_GROUP, say=say)
+            windows = [(year, tuple(langs_y[i:i + learned.group]))
+                       for year in sorted(missing) for langs_y in [sorted(missing[year])]
+                       for i in range(0, len(langs_y), learned.group)]
+            failed: list[tuple[int, tuple[str, ...], str]] = []
+            guard = __import__("threading").Lock()
+
+            def one(year: int, window: tuple[str, ...]) -> bool:
+                _stop_check()
+                t1 = time.monotonic()
+                try:
+                    with httpx.Client(timeout=TIMEOUT_S) as client:
+                        n = sum(1 for _ in _window_files(client, base_url, year, window, code_of,
+                                                         budget.acquire_bytes, place=lambda *a: False,
+                                                         learned=learned))
+                except TransferAborted:
+                    raise
+                except TransportError as e:            # the origin's: this window's units wait
+                    with guard:
+                        failed.append((year, window, f"{type(e).__name__}: {str(e)[:200]}"))
+                    return False
+                say(f"cellar: listed {year} ({', '.join(window)}): {n} units in {time.monotonic() - t1:.0f} s")
+                return True
+            with ThreadPoolExecutor(max_workers=LISTING_SLOTS, thread_name_prefix="cellar-listing") as pool:
+                futures = [pool.submit(contextvars.copy_context().run, one, y, w) for y, w in windows]
+                # a stop, or a LOCAL fault (an OSError writing a window: ENOSPC
+                # on the cache drive), ends the phase: the windows not begun
+                # are cancelled, those in flight end at their next request,
+                # and it is raised — a local fault holds the pass back
+                # (_prepare_bulk_held), never leaves the trees to Cellar
+                ended = None
+                for fut in futures:
+                    try:
+                        asked += bool(fut.result())
+                    except BaseException as e:  # noqa: BLE001 — raised once every window has ended
+                        ended = ended or e
+                        for other in futures:
+                            other.cancel()
+                if ended is not None:
+                    raise ended
+            for year, window, why in failed:
+                unlisted |= {(year, l) for l in window}
+                say(f"cellar: the {year} window ({', '.join(window)}) is not listed ({why}): its units wait")
             dates, cover = cellar_listing.coverage(due, after, base_url)
             # only the windows LISTED this pass end their units' wait (review
             # of d863230c, Y1: a re-listing that failed reset it; Y2: every

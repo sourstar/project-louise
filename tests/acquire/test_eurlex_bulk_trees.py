@@ -282,7 +282,7 @@ def test_prepare_lists_the_missing_windows_first_and_an_unlisted_one_leaves_its_
     due = [RemoteFile(rel_path=cellar.rel_path("it", c), mtime=None, remote=cellar.encode(c, "it"))
            for c in (CELEX, "31973R0002")]
     units._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
-    assert listed == [(1972, ("it",)), (1973, ("it",))], "listed first, one window a year"
+    assert sorted(listed) == [(1972, ("it",)), (1973, ("it",))], "listed first, one window a (year, language)"
     unit = {"celex": CELEX, "lang": "it"}
     assert units._bulk_of(corpus, unit, due[0], corpus / due[0].rel_path)[1] == 100
     with pytest.raises(cellar.WindowNotListed):
@@ -348,7 +348,43 @@ def test_the_split_a_year_learned_is_kept_for_the_years_after(tmp_path, monkeypa
     due = [RemoteFile(rel_path=cellar.rel_path(l, c), mtime=None, remote=cellar.encode(c, l))
            for c in ("31972R0001", "31973R0002") for l in ("it", "fr")]
     cellar.TreeUnits()._prepare_bulk(base, corpus, ["fr", "it"], due, "eu", "https://cellar.test")
-    assert calls == [(1972, ("fr", "it")), (1973, ("fr",)), (1973, ("it",))]
+    assert sorted(calls) == [(1972, ("fr",)), (1972, ("it",)), (1973, ("fr",)), (1973, ("it",))], \
+        "one language a window from the start (LISTING_START_GROUP)"
+
+
+def test_learned_only_narrows_whichever_thread_writes_last():
+    learned = cellar._Learned(8)
+    learned["group"] = 2
+    learned["group"] = 4                                          # another thread's older halving
+    assert learned.group == 2
+
+
+def test_the_listing_phase_runs_windows_in_parallel_and_stops_between_them(tmp_path, monkeypatch):
+    import threading
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    monkeypatch.setattr(work_trees, "_BULK", {})
+    base, corpus = tmp_path / "datadump", tmp_path / "corpus"
+    _statement(base / "datadump-it", "it")
+    _zip(base / "datadump-it" / "LEG_MTD.zip", {MEMBER: (FX / MTD).read_bytes()})
+    eurlex_dump._stamp(corpus, {"it": CREATED})
+    live, peak, gate = [0], [0], threading.Barrier(cellar.LISTING_SLOTS, timeout=5)
+    lock = threading.Lock()
+
+    def window(client, url, year, langs, code_of, charge, place=None, learned=None):
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        try:
+            gate.wait()                                           # all slots at once, or it times out
+        finally:
+            with lock:
+                live[0] -= 1
+        return iter(())
+    monkeypatch.setattr(cellar, "_window_files", window)
+    due = [RemoteFile(rel_path=cellar.rel_path("it", f"3{1970 + i}R0001"), mtime=None,
+                      remote=cellar.encode(f"3{1970 + i}R0001", "it")) for i in range(cellar.LISTING_SLOTS)]
+    cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
+    assert peak[0] == cellar.LISTING_SLOTS
 
 
 def test_an_unset_dump_folder_with_a_stamped_language_holds_the_pass_back(tmp_path, monkeypatch):
