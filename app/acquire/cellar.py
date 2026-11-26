@@ -512,7 +512,7 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     force = place is not None
     kept = cellar_listing.held(base, year, languages, want, latest, force=force)
     if kept is not None:
-        cellar_listing.vouched(base, year, languages, force=force)     # known whole now
+        cellar_listing.vouched(base, year, languages, want, latest, force=force)     # known whole now
         # the window as the last pass listed it: its count and its latest
         # modification are the same, so no row moved (cellar_listing.py)
         for row in kept:
@@ -1289,7 +1289,15 @@ class TreeUnits(CellarUnits):
                 return 0
         root = _corpus_of(dest, remote)
         from . import work_trees
-        bulk, not_before = self._bulk_of(root, unit, remote, dest)      # WindowNotListed: it waits
+        try:
+            bulk, not_before = self._bulk_of(root, unit, remote, dest)
+        except WindowNotListed as e:
+            # it waits (nothing asked); marked so the asked-first list lets the
+            # complete listing have its turn (review of 13743848, 3)
+            if root is not None and remote.mtime is None:
+                from . import eurlex_dump
+                eurlex_dump.mark_deferred(root, unit["lang"], unit["celex"], str(e))
+            raise
         try:
             got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent,
                                        trees=work_trees.recent_for(root) if root is not None else None,
@@ -1352,7 +1360,10 @@ class TreeUnits(CellarUnits):
                                   f"known whole since the dump was cut; nothing asked, it waits for the listing")
         when = dates.get((unit["celex"], unit["lang"]))
         if when is None:
-            return None, None                   # absent from the listing: Cellar's tree
+            # absent from the listing, or listed with no modification date (58
+            # of the node's 240,392 rows): nothing says it is unchanged since
+            # the dump, so Cellar's tree — never the bulk's on silence
+            return None, None
         if when > after:
             return None, when                   # changed since the dump: Cellar's tree, no older than this
         return bulk, when
@@ -1381,9 +1392,15 @@ class TreeUnits(CellarUnits):
         from . import datadump, eurlex_dump
         from .spec import HeldBack
         dumps = datadump.dumps()
-        if dumps.base is None:
-            return []
         langs = sorted({unit_of(f)["lang"] for f in pending if is_unit(f)})
+        if dumps.base is None:
+            # no dump folder named: nothing newer to build, but a language
+            # whose dump is stamped into the corpus holds the pass back
+            # (review of 13743848, 1: an unset EURLEX_DATADUMP_DIR sent every
+            # tree to Cellar)
+            self._prepare_bulk(None, Path(collection.corpus_dir), langs, pending,
+                               getattr(collection, "name", "eurlex"), getattr(endpoint, "url", None))
+            return []
         try:
             eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs, stop=_stop_requested)
         except (TransferAborted, HeldBack):

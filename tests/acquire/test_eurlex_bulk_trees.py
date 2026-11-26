@@ -238,7 +238,9 @@ def test_the_kept_listing_vouches_only_for_windows_known_whole_after_the_dump(tm
     dates, cover = cellar_listing.coverage({(CELEX, "it")}, after, url)
     assert dates == {} and cover == {(1973, "fr")}, "an empty window still covers its languages"
     monkeypatch.setattr(time, "time", lambda: after["it"] + 1)
-    cellar_listing.vouched(url, 1972, ("it",))                   # its fingerprint asked now, and holding
+    cellar_listing.vouched(url, 1972, ("it",), 3, None)          # another fingerprint: nothing vouched
+    assert cellar_listing.coverage({(CELEX, "it")}, after, url)[0] == {}
+    cellar_listing.vouched(url, 1972, ("it",), 2, None)          # its fingerprint asked now, and holding
     dates, cover = cellar_listing.coverage({(CELEX, "it")}, after, url)
     assert dates == {(CELEX, "it"): 100} and (1972, "it") in cover
     assert cellar_listing.coverage({(CELEX, "it")}, after, "https://other.test") == ({}, set()), \
@@ -345,3 +347,43 @@ def test_the_split_a_year_learned_is_kept_for_the_years_after(tmp_path, monkeypa
            for c in ("31972R0001", "31973R0002") for l in ("it", "fr")]
     cellar.TreeUnits()._prepare_bulk(base, corpus, ["fr", "it"], due, "eu", "https://cellar.test")
     assert calls == [(1972, ("fr", "it")), (1973, ("fr",)), (1973, ("it",))]
+
+
+def test_an_unset_dump_folder_with_a_stamped_language_holds_the_pass_back(tmp_path, monkeypatch):
+    """Review of 13743848, 1: `prepare` returned before the bulk when
+    EURLEX_DATADUMP_DIR was unset, every tree to Cellar."""
+    from app.acquire import datadump
+    from app.acquire.spec import HeldBack
+    monkeypatch.setattr(datadump, "dumps", lambda: datadump.Dumps(None))
+    corpus = tmp_path / "corpus"
+    eurlex_dump._stamp(corpus, {"it": CREATED})
+    due = [RemoteFile(rel_path=cellar.rel_path("it", CELEX), mtime=None, remote=cellar.encode(CELEX, "it"))]
+    with pytest.raises(HeldBack):
+        cellar.TreeUnits().prepare(due, due, SimpleNamespace(name="eu", corpus_dir=corpus),
+                                   SimpleNamespace(url="https://cellar.test"))
+    other = tmp_path / "unstamped"
+    assert cellar.TreeUnits().prepare(due, due, SimpleNamespace(name="eu", corpus_dir=other),
+                                      SimpleNamespace(url="https://cellar.test")) == []
+
+
+def test_a_window_kept_in_the_older_format_is_paged_once_and_kept_anew(tmp_path, monkeypatch):
+    """Review of 13743848, 2: the node's 112 windows have no `shape`; `held`
+    returned their rows, so they were never rewritten and never vouched."""
+    import gzip
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    p = cellar_listing._path("https://cellar.test", 1972, ("it",))
+    p.parent.mkdir(parents=True)
+    p.write_bytes(gzip.compress(json.dumps({"n": 1, "last": "x", "rows": [[CELEX, "it", 100]]}).encode()))
+    assert cellar_listing.held("https://cellar.test", 1972, ("it",), 1, "x") is None
+    cellar_listing.keep("https://cellar.test", 1972, ("it",), 1, "x", [[CELEX, "it", 100]])
+    assert cellar_listing.held("https://cellar.test", 1972, ("it",), 1, "x") == [[CELEX, "it", 100]]
+
+
+def test_a_waiting_unit_is_marked_so_the_complete_listing_has_its_turn(tmp_path, monkeypatch):
+    marked = []
+    monkeypatch.setattr(eurlex_dump, "mark_deferred", lambda root, lang, celex, why: marked.append((lang, celex)))
+    units, corpus, remote, dest = _due_units(tmp_path, dates={}, cover=set())
+    with pytest.raises(cellar.WindowNotListed):
+        units.fetch(SimpleNamespace(url="https://cellar.test"), remote, dest)
+    assert marked == [("it", CELEX)]
+

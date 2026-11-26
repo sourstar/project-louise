@@ -26,6 +26,7 @@ asked.
 """
 from __future__ import annotations
 
+import contextlib
 import gzip
 import hashlib
 import json
@@ -66,15 +67,37 @@ def held(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str
         data = json.loads(gzip.decompress(_path(endpoint, year, languages, force).read_bytes()))
     except (OSError, ValueError, EOFError):
         return None
+    if data.get("shape") != SHAPE:
+        return None             # an older format (review of 13743848, 2): paged once, kept anew
     if data.get("n") != n or data.get("last") != last or len(data.get("rows") or []) > n:
         return None
     return data["rows"]
 
 
+@contextlib.contextmanager
+def _locked(path: Path):
+    """One writer of a window at a time across processes (`keep`, `vouched`):
+    `vouched`'s read-modify-write must not put old rows back under a fresh
+    `at` (review of 13743848, 4)."""
+    import fcntl
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(f".{path.name}.lock"), "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
 def keep(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str | None, rows: list, *,
          force: bool = False) -> None:
     path = _path(endpoint, year, languages, force)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    with _locked(path):
+        _keep(path, year, languages, n, last, rows, force=force, endpoint=endpoint)
+
+
+def _keep(path: Path, year: int, languages: tuple[str, ...], n: int, last: str | None, rows: list, *,
+          force: bool, endpoint: str) -> None:
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
     import time
     tmp.write_bytes(gzip.compress(json.dumps({"n": n, "last": last, "rows": rows, "year": year,
@@ -86,7 +109,8 @@ def keep(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str
 
 
 
-def vouched(endpoint: str, year: int, languages: tuple[str, ...], *, force: bool = False) -> None:
+def vouched(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str | None, *,
+            force: bool = False) -> None:
     """The window's fingerprint was asked NOW and still holds (cellar
     `_window_files`): its `at` — when it was last known whole, which
     `coverage` reads — is set to now, the file rewritten whole (review of
@@ -94,16 +118,17 @@ def vouched(endpoint: str, year: int, languages: tuple[str, ...], *, force: bool
     `at` was stored is left as it is: it vouches for nothing, and is listed."""
     import time
     path = _path(endpoint, year, languages, force)
-    try:
-        data = json.loads(gzip.decompress(path.read_bytes()))
-    except (OSError, ValueError, EOFError):
-        return
-    if data.get("shape") != SHAPE:
-        return
-    data["at"] = time.time()
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
-    tmp.write_bytes(gzip.compress(json.dumps(data, separators=(",", ":")).encode(), 6))
-    os.replace(tmp, path)
+    with _locked(path):
+        try:
+            data = json.loads(gzip.decompress(path.read_bytes()))
+        except (OSError, ValueError, EOFError):
+            return
+        if data.get("shape") != SHAPE or data.get("n") != n or data.get("last") != last:
+            return              # another format, or another pass kept other rows meanwhile
+        data["at"] = time.time()
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
+        tmp.write_bytes(gzip.compress(json.dumps(data, separators=(",", ":")).encode(), 6))
+        os.replace(tmp, path)
 
 
 def coverage(wanted: set[tuple[str, str]], after: dict[str, float],
