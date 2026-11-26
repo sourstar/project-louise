@@ -385,6 +385,8 @@ def park_admitted(server: str, model: str, proc: tuple | list | None) -> bool | 
     answer: bool | None = None
     try:
         served, unreadable = collections_mod.load_all(skip_unreadable=True)
+        if unreadable:
+            return False            # a file not read may name it, under stricter cycles: a stop, never a park
         for c in served:
             if not applies(c):
                 continue
@@ -405,8 +407,6 @@ def park_admitted(server: str, model: str, proc: tuple | list | None) -> bool | 
                         _root(), c.name, c.codex, role, run_id, held, signer=signer()):
                     return False
                 answer = True
-        if answer is None and unreadable:
-            return False            # a file not read may name it: a stop, never a park
     except Exception:                                   # noqa: BLE001 — unreadable: a stop, never a park
         return False
     return answer
@@ -1479,7 +1479,7 @@ def _where(collection) -> str:
 
 #: place -> (allowed, reason, fresh until, the run the verdict is about,
 #: the kept statements as they were when it was given — `_kept_stamp`)
-_verdicts: dict[str, tuple[bool, str, float, str | None, tuple, str | None]] = {}
+_verdicts: dict[str, tuple[bool, str, float, str | None, tuple, Any]] = {}
 
 
 def _kept_stamp(collection) -> tuple:
@@ -1522,23 +1522,35 @@ def heard(recipe, answered: set, *, role: str = "document") -> None:
     key = (_who(recipe, role == "query"), role)
     run = sorted(named)[-1]
     # bound to a process only when the answer can only be that process's: ONE
-    # run in it, from a process this process has known longer than any request
-    # can last (`BIND_AFTER_S`) — an answer of the process before could not
-    # still be in flight (the second read: a slice answered by two runs, an old
-    # process's answer read after the listing moved on, each bound the wrong run)
-    proc = _process_of(key) if len(set(named)) == 1 else None
+    # run in it and no answer that named none (`answered` as it came: an
+    # answer naming no run may be the other process's), heard from a process
+    # this process has known for `BIND_AFTER_S` — an answer of the process
+    # before could not still be on its way (the second read: a slice answered
+    # by two runs, an old process's answer read after the listing moved on)
+    proc = _process_of(key) if len(set(answered)) == 1 else None
     said = _shared().get(_heard_key(key)) or {}
-    news = (_answering.get(key) != run or said.get("run") != run or said.get("proc") != proc)
+    # NEWS: another run, or a binding where there was none or another. A
+    # process that cannot bind (yet) never ERASES a binding another made for
+    # the same run (the third read: the web and the worker unbound and bound
+    # it in turn, and every restart of either unbound it for good)
+    rebind = proc is not None and said.get("proc") != proc
+    news = _answering.get(key) != run or said.get("run") != run or rebind
     now = time.time()
     _answering[key] = run
     _answering_at[key] = now
     if news:
-        _tell(key, run, now, proc)
+        _tell(key, run, now, proc if (proc is not None or said.get("run") != run) else said.get("proc"))
 
 
 #: how long this process must have known a backend process before a run it
-#: hears is bound to it: longer than any request to an encoder can take
-BIND_AFTER_S = 900.0
+#: hears is bound to it. What it must exceed is the gap between an answer and
+#: its `heard()`, never a request's length: a binding is wrong only if EVERY
+#: answer in the set came from the process before, i.e. the last of them
+#: before this process first saw the new one; every caller hears right after
+#: its last answer and its receipts (`embeddings.RECEIPTS_TIMEOUT_S`, 10 s —
+#: the third read). Twelve times that: a model loaded for a burst of questions
+#: is bound two minutes into it, not fifteen
+BIND_AFTER_S = 120.0
 
 
 def _process_of(key: tuple[tuple[str, str], str]) -> list | None:
@@ -2133,6 +2145,26 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
         return None
 
 
+#: a verdict's query side whose look failed: (QUERY_UNSETTLED, when)
+QUERY_UNSETTLED = "unsettled"
+
+
+def _asymmetric(collection) -> bool:
+    """Has this collection's space a query encoder of its own? Only then is a
+    verdict held to a query run: a symmetric space's "query" key is its
+    document model's, which another space may use as ITS query model (the
+    third read: that collection would have looked again at every step)."""
+    return getattr(getattr(getattr(collection.codex, "space", None), "query", None), "encoder", None) is not None
+
+
+def _query_settled(kept, heard: str | None, now: float) -> bool:
+    """Is a verdict's query side (`kept`, `_verdicts[...][5]`) about the query
+    run last heard — or a look that failed less than FAIL_TTL_S ago?"""
+    if isinstance(kept, tuple) and kept and kept[0] == QUERY_UNSETTLED:
+        return now - kept[1] < FAIL_TTL_S
+    return heard is None or kept == heard
+
+
 def verdict_outdated(collection) -> bool:
     """Is this process's verdict for `collection` about other runs than the
     ones last heard (any process)? The worker's idle round looks again when
@@ -2144,9 +2176,9 @@ def verdict_outdated(collection) -> bool:
     if cached is None:
         return False
     heard_now = answering(collection)
-    doc, query = heard_now.get("document"), heard_now.get("query")
+    doc = heard_now.get("document")
     return (doc is not None and cached[3] is not None and cached[3] != doc) or \
-        (query is not None and cached[5] != query)
+        not _query_settled(cached[5], heard_now.get("query") if _asymmetric(collection) else None, time.time())
 
 
 def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) -> bool:
@@ -2184,7 +2216,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
     # to this, and a query run a question heard would have waited the TTL out)
     if cached is not None and cached[2] > now and cached[4] == stamp and (
             now_answering is None or cached[3] is None or cached[3] == now_answering) \
-            and (heard_now.get("query") is None or cached[5] == heard_now.get("query")) \
+            and _query_settled(cached[5], heard_now.get("query") if _asymmetric(collection) else None, now) \
             and not _suspect(collection) and not _suspect(collection, "query"):
         return cached[0]
     with _guard:
@@ -2212,9 +2244,13 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
                          f"[{collection.name}] {message}"[:500])
 
         allowed, reason, run_id = _look(collection, stop, log)
-        # the query run THIS look settled — None where it could not: the
-        # verdict is then about no query run, and the next round looks again
+        # the query run THIS look settled; where it could not, the time of the
+        # failure: looked at again after FAIL_TTL_S, as a paused verdict is —
+        # never at every step (the third read: twenty looks in ten rounds, a
+        # twin load and stop on each, for a query model in LocalAI's cooldown)
         query_run = _look_at_the_query_side(collection, stop, log)
+        if query_run is None and _asymmetric(collection):
+            query_run = (QUERY_UNSETTLED, now)
         # stamped AFTER looking: a statement the look itself wrote (a gate)
         # is not a reason to look again
         _verdicts[where] = (allowed, reason,

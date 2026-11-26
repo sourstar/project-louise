@@ -362,13 +362,16 @@ counted for EVERY collection that uses it, document side and query side
 to the backend PROCESS it was heard from — its pid AND its start, as the
 runner's listing names them (a pid alone is LocalAI's container's count,
 which starts again at each restart of that container) — and only where the
-answer can only be that process's: one run in it, from a process this
-process has known for longer than any request lasts (`BIND_AFTER_S`, 15
-min). A model name is not a process: a restart with another env is another
+answer can only be that process's: one run in it and none that named no
+run, from a process this process has known for `BIND_AFTER_S` (2 min: what
+it must exceed is the gap from an answer to its hearing, ≤ the 10 s of the
+receipts, never a request's length). A process that cannot bind (yet) never
+erases a binding another made for the same run. A model name is not a process: a restart with another env is another
 run under the same name, and a process nothing of Louise has asked yet (the
 keeper's warm reads no run) is not admitted. Asked afresh each time (~0.3 ms
-a collection): a refusal and a new run count at once; a collection file
-that cannot be read makes no model parkable. Otherwise — a process nobody heard, a
+a collection): a refusal and a new run count at once; while any collection
+file cannot be read, no model is parked (one not read may name it, under
+stricter cycles). Otherwise — a process nobody heard, a
 run not gated, one the gate refused, anything unreadable — it gives its room
 by a stop, as before parking existed, and the line says "its file says it
 parks and its run is not admitted to: stopped". A model that is no
@@ -391,5 +394,8 @@ back — is re-checked by the worker's idle round by itself
 **For whoever puts `park: true` into the next encoder's file:** the env
 takes effect in a NEW process — stop the model, do not reload it; the first
 answer of the new process is heard and gated by itself from this release
-on; until its cycles are counted the model is stopped for room, not parked.
+on; until its cycles are counted, and for the first two minutes of every new
+process (after any restart of the model or of LocalAI), the model is stopped
+for room, not parked. A failed look at a query side is looked at again after
+FAIL_TTL_S (5 min), never at every step.
 

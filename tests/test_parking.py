@@ -294,7 +294,8 @@ def test_an_encoder_whose_run_is_not_admitted_to_park_is_stopped_for_its_room(no
     assert out.fits is True and out.unloaded == ("vega-bge-m3",) and out.parked == ()
     assert _verbs(r, "park") == [] and "vega-bge-m3" not in r.models, "stopped: nothing of it was parked"
     line, = [t for t in node.said if t.startswith("card: unloaded")]
-    assert "vega-bge-m3 (last used 30.0 h ago, 2,000 MiB, its file says it parks and its run is not admitted to: stopped)" in line
+    assert ("vega-bge-m3 (last used 30.0 h ago, 2,000 MiB, its file says it parks and its run is not admitted to "
+            "(not gated with its park cycles, or not yet bound to this process): stopped)") in line
     assert sorted(asked) == ["omnivoice-cpp", "vega-bge-m3"], "asked of each loaded model that says it parks, and of no other"
     # its cycles counted: parked, as LocalAI lists it
     verdict["vega-bge-m3"] = True

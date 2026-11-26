@@ -536,7 +536,7 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
                      f"for {for_what} — {said}; its process stays and its next request brings the weights "
                      f"back in the time of a copy (operator, 2026-11-25: \"Do parking.\")")
     if gone:
-        _say("info", f"card: unloaded {', '.join(f'{v.model} ({_ago(now, v.last_used)}, {v.size // MIB:,} MiB' + (', it was parked: what its process still held' if v.parked else '') + (', its file says it parks and its run is not admitted to: stopped' if v.unadmitted else '') + ')' for v in gone)} "
+        _say("info", f"card: unloaded {', '.join(f'{v.model} ({_ago(now, v.last_used)}, {v.size // MIB:,} MiB' + (', it was parked: what its process still held' if v.parked else '') + (', its file says it parks and its run is not admitted to (not gated with its park cycles, or not yet bound to this process): stopped' if v.unadmitted else '') + ')' for v in gone)} "
                      f"for {for_what} — {said}; the oldest real use goes first (operator, 2026-11-16)")
     if free + freed < need:
         return Outcome(False, need, free, tuple(v.model for v in gone),

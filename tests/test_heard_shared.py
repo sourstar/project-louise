@@ -27,6 +27,7 @@ import pytest
 from app import collections as collections_mod, copy_state, db, model_evict, run_check, worker
 from app.hold import runs as hold_runs
 from app.verify import backend_gate
+from tests.test_model_load import REAL_FETCH  # taken before conftest's stand-in replaces it
 from tests.test_run_check import (DOC_URL, ENDPOINT, QUERY_URL, R1, R2, endpoint, node,  # noqa: F401
                                   statements_kept)
 
@@ -294,14 +295,17 @@ def test_a_collection_file_that_cannot_be_read_makes_no_model_parkable(node, end
     monkeypatch.setattr(collections_mod, "load_all", lambda **k: ([], [("gutenberg", "a typo")]))
     assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is False
     assert run_check.park_admitted(ENDPOINT, "louise-chat", (7, "x")) is False, "even what may be no encoder: a stop"
+    # a READABLE collection that admits it, and another file not read: still a stop (it may be stricter)
     monkeypatch.setattr(collections_mod, "load_all", lambda **k: ([], []))
     assert run_check.park_admitted(ENDPOINT, "louise-chat", (7, "x")) is None
 
 
-def test_a_query_look_that_failed_leaves_the_verdict_about_no_query_run(node, endpoint, monkeypatch):
-    """THE SECOND READ: the verdict stored the query run the WEB heard, as if
-    the worker's look had settled it, after that look had failed — and two
-    idle rounds re-checked nothing for half an hour."""
+def test_a_query_look_that_failed_is_looked_at_again_after_its_bound_not_at_every_step(node, endpoint, monkeypatch):
+    """THE SECOND READ: the verdict recorded the query run the WEB heard after
+    the worker's look had failed. THE THIRD: storing "none" instead made every
+    document step look again — twenty looks in ten rounds, a twin load and
+    stop on each, for a query model LocalAI held in its cooldown. A failed
+    look is looked at again after FAIL_TTL_S, as a paused verdict is."""
     root, collection, codex = node
     con = db.connect(collection)
     assert backend_gate.embed_allowed(con, collection) is True
@@ -309,16 +313,97 @@ def test_a_query_look_that_failed_leaves_the_verdict_about_no_query_run(node, en
     time.sleep(0.01)
     _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}, role="query"))
     real = run_check.answering_run
-    monkeypatch.setattr(run_check, "answering_run", lambda recipe, query=False, **k: (
-        (_ for _ in ()).throw(OSError("the query model did not answer")) if query else real(recipe, query=query, **k)))
+    looks = []
+
+    def failing(recipe, query=False, **k):
+        if query:
+            looks.append(1)
+            raise OSError("the query model did not answer")
+        return real(recipe, query=query, **k)
+    monkeypatch.setattr(run_check, "answering_run", failing)
     run_check._verdicts.clear()
     assert backend_gate.embed_allowed(con, collection) is True
-    assert run_check._verdicts[run_check._where(collection)][5] is None
-    assert run_check.verdict_outdated(collection), "so the next round looks again"
+    kept = run_check._verdicts[run_check._where(collection)][5]
+    assert kept[0] == run_check.QUERY_UNSETTLED and looks == [1]
+    for _ in range(10):                                   # ten idle rounds, ten document steps
+        worker._settle_the_run(con, collection)
+        assert backend_gate.embed_allowed(con, collection) is True
+    assert looks == [1], "not looked at again within its bound"
+    assert not run_check.verdict_outdated(collection)
+    # the bound passed: looked at again — and this time it answers
+    w = run_check._where(collection)
+    v = run_check._verdicts[w]
+    run_check._verdicts[w] = (*v[:5], (run_check.QUERY_UNSETTLED, v[5][1] - run_check.FAIL_TTL_S - 1))
+    assert run_check.verdict_outdated(collection)
     monkeypatch.setattr(run_check, "answering_run", real)
     worker._settle_the_run(con, collection)
-    assert run_check._verdicts[run_check._where(collection)][5] == R2
-    assert not run_check.verdict_outdated(collection)
+    assert run_check._verdicts[w][5] == R2 and not run_check.verdict_outdated(collection)
+
+
+def test_a_process_that_cannot_bind_never_erases_a_binding(node, endpoint, pids):
+    """THE THIRD READ: the web (which had known the process a minute) and the
+    worker (which had known it longer) unbound and bound the run in turn at
+    every answer, and every restart of either unbound it: a binding is only
+    ever replaced by another binding, or by another run."""
+    now, seen = pids
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    key = f"{DOC_URL}\nmedcpt-article\ndocument"
+    assert json.loads(run_check.heard_path().read_text())["heard"][key]["proc"] == [101, "2026-11-26T08:00:00Z"]
+    stamp = run_check.heard_path().stat().st_mtime_ns
+    seen["medcpt-article"] = time.monotonic()             # this process has only just seen it
+    for _ in range(5):
+        run_check.heard(_recipe(collection), {R1})
+    assert json.loads(run_check.heard_path().read_text())["heard"][key]["proc"] == [101, "2026-11-26T08:00:00Z"]
+    assert run_check.heard_path().stat().st_mtime_ns == stamp, "and nothing written"
+    # ANOTHER RUN, unbindable yet: its record is unbound (the old binding is the old run's)
+    time.sleep(0.01)
+    run_check.heard(_recipe(collection), {R2})
+    said = json.loads(run_check.heard_path().read_text())["heard"][key]
+    assert said["run"] == R2 and said["proc"] is None
+
+
+def test_an_answer_that_named_no_run_binds_nothing(node, endpoint, pids):
+    """THE THIRD READ: {R1, None} bound R1 — and the answer that named none may
+    be the other process's."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    key = f"{DOC_URL}\nmedcpt-article\ndocument"
+    now, seen = pids
+    now["medcpt-article"] = (303, "2026-11-26T10:00:00Z")
+    time.sleep(0.01)
+    run_check.heard(_recipe(collection), {R1, None})
+    said = json.loads(run_check.heard_path().read_text())["heard"][key]
+    assert said["proc"] == [101, "2026-11-26T08:00:00Z"], "not rebound to 303 on an answer that may not be its"
+    run_check.heard(_recipe(collection), {R1})
+    assert json.loads(run_check.heard_path().read_text())["heard"][key]["proc"] == [303, "2026-11-26T10:00:00Z"]
+
+
+def test_the_runners_listing_names_a_process_by_its_pid_and_its_start(monkeypatch):
+    """THE THIRD READ: every test faked `known_process`; the listing's own
+    reading of it, here."""
+    import httpx
+    from app import httpc, model_load
+    rows = {"loaded_models": [{"id": "vega-bge-m3", "backend": "vega", "size_vram": 900 << 20,
+                               "process": {"pid": 57, "started_at": "2026-11-26T08:06:22Z", "cpu_percent": 0.0}},
+                              {"id": "louise-chat", "size_vram": 7 << 30, "process": {"pid": 58}}]}
+    monkeypatch.setattr(model_load, "_fetch_system", REAL_FETCH)
+    monkeypatch.setattr(httpc, "get", lambda url, **k: httpx.Response(200, request=httpx.Request("GET", url), json=rows))
+    model_load.reset()
+    assert model_load.loaded_models("http://localai:8080", max_age_s=0.0) == {"vega-bge-m3", "louise-chat"}
+    (proc, first) = model_load.known_process("http://localai:8080/v1/embeddings", "vega-bge-m3")
+    assert proc == (57, "2026-11-26T08:06:22Z")
+    assert model_load.known_process("http://localai:8080", "louise-chat") is None, "no start named: no process"
+    time.sleep(0.01)
+    model_load.loaded_models("http://localai:8080", max_age_s=0.0)
+    assert model_load.known_process("http://localai:8080", "vega-bge-m3")[1] == first, "first seen is kept"
+    rows["loaded_models"][0]["process"]["started_at"] = "2026-11-26T09:00:20Z"     # the same pid, restarted
+    model_load.loaded_models("http://localai:8080", max_age_s=0.0)
+    proc2, first2 = model_load.known_process("http://localai:8080", "vega-bge-m3")
+    assert proc2 == (57, "2026-11-26T09:00:20Z") and first2 > first, "another process, seen from now"
+    model_load.reset()
 
 
 def test_cycles_refused_are_not_admitted_from_that_moment(node, endpoint, pids):
