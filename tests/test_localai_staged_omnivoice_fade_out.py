@@ -139,5 +139,8 @@ def test_the_candidate_is_the_live_engine_plus_this_patch_and_its_name_is_held()
 def test_the_note_says_what_was_measured_and_what_was_not():
     section = NOTE[NOTE.index("## 15. A clip's last word is kept"):]
     for said in ("30 of 40", "f2ff332553", "MEASURED", "sample for sample", "-27.6 dBFS", "NOT measured", NAME,
-                 "engine-fade.series", "audio-joined.bin", "the operator's word", "(b)"):
+                 "engine-fade.series", "audio-joined.bin", "the operator's word", "(b)",
+                 # the card, after the swap: no fade on speech, and the model's own length cutting 2 of 3
+                 "every clip ends in sound with NO FADE ON SPEECH", "last 5 ms -36.5",
+                 "THE MODEL'S OWN LENGTH ENDS INSIDE THE LAST WORD IN\n2 OF 3."):
         assert said in section, said

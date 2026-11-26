@@ -76,7 +76,8 @@ def test_a_refusal_is_logged_with_every_figure_and_its_answer_ends_with_the_read
 def test_the_notes_give_the_tree_and_say_what_was_shown_and_what_was_not():
     section = NOTE[NOTE.index("## 14. A refusal for the host's floor says what it read (2026-11-26)"):]
     for said in (TREE, "21:57:32Z", "12,884,901,888", "**What it does not do: count the ARC.**", "Pros of counting it",
-                 "Cons:", "| the log line on the node | NOT measured", "279 of 279", "695 of 742"):
+                 "Cons:", "| the log line on the node | NOT measured", "279 of 279", "695 of 742",
+                 "the ARC IS NOT IN MemAvailable, as suspected", "stayed where it was for 24 s", "It stays uncounted."):
         assert said in section, said
     readme = (PATCHES / "staged" / "README.md").read_text(encoding="utf-8")
     assert f"**`ab5de7ad…` after it** (`{TREE}`)" in readme

@@ -1511,6 +1511,14 @@ answer ends with the reading:
 **What it does not do: count the ARC.** Whether the floor should count the
 ARC's reclaimable part is a decision on numbers nobody has yet; the log
 gives them at the next refusal, and München's quiet-node reading before it.
+
+**München's reading on a quiet node (2026-11-26, after the fade pass):**
+under a 10 GiB allocation MemAvailable fell by the full 10.7 GiB while the
+ARC (16.4 GiB, its floor `c_min` 2.0 GiB) stayed where it was for 24 s, and
+then gave back 2.3 GiB. So the ARC IS NOT IN MemAvailable, as suspected —
+and it returns memory SLOWLY: the cons below are measured, not supposed.
+Counting the ARC as available would have let a park copy into memory that
+was not there for half a minute. It stays uncounted.
 Pros of counting it: the floor would not refuse for memory the kernel gives
 back on demand. Cons: the ARC shrinks at its own pace and not below `c_min`,
 and a park copies hundreds of MB at once; an ARC that gives back too late is

@@ -1266,7 +1266,7 @@ measured (published figures disagree).
 
 ### 2026-11-24
 
-- **LIVE since 2026-11-25 23:45:20Z: engine `ed93e3c1b2e2`** (`engine-park.series`: `792f050e318e`'s series + 0023, parking when told;
+- **Live 2026-11-25 23:45:20Z to 2026-11-26 23:32Z, and the engine a rollback puts back: engine `ed93e3c1b2e2`** (`engine-park.series`: `792f050e318e`'s series + 0023, parking when told;
   the operator: "Do parking."), on LocalAI's server `v5.0.1-6-gffb10fdf3` (the node's tree + staged 0024, 0027, 0029), swapped first
   in the same pass (started 22:46Z, the node paused). München: the server's settings check clean, `/system` unchanged for every model,
   the seven run ids the same; the readiness poll's row, three cold loads of one model: 4.84 / 4.48 / 4.45 s before, 2.98 / 2.83 /
@@ -1331,7 +1331,14 @@ measured (published figures disagree).
   after 0029 (tree `ab5de7ad…`): one reading — MemAvailable, each cgroup's limit, working set and room, the ZFS ARC where present —
   the park decided on it as before, a refusal logged with every figure and its answer ending with them. The ARC is said, NOT
   counted: that is for München's quiet-node reading and the next refusal's numbers.
-- **A CLIP'S LAST WORD IS KEPT — STAGED, NOT BUILT (2026-11-26; omnivoice-on-our-backend.md §15):** the operator hears the last
+- **LIVE since 2026-11-26 23:32Z: engine `aea955022a8f` (`engine-fade.series`: the live park series + 0030), A CLIP'S LAST WORD IS KEPT.**
+  München: the byte check identical, five gates exact with every fingerprint unchanged, twenty unloads clean, step 5 as before; the
+  rollback engine is `ed93e3c1b2e2` (it parks, so a rollback keeps parking). ON THE CARD: three sentences through the web all end
+  in sound with NO FADE ON SPEECH (the cut one: the last 5 ms -36.5 dBFS). And (b): the model's OWN length ends inside the last word
+  in 2 of 3 (its raw audio ends in sound, the clip the same) — what still sounds cut is the model's, which no post-processing fixes.
+  The ZFS ARC: under a 10 GiB allocation MemAvailable fell 10.7 GiB while the ARC (16.4 GiB) held 24 s, then gave back 2.3 GiB — it
+  is not in MemAvailable and returns slowly, so the park's floor keeps not counting it (parking-step-2.md §14).
+- **A CLIP'S LAST WORD IS KEPT — STAGED (2026-11-26; omnivoice-on-our-backend.md §15):** the operator hears the last
   word cut at full stops; München measured 30 of 40 clips fading speech, one losing a syllable. The speech port's fade-out (the
   reference's, ported 1:1) took the last 100 ms whatever they held. Staged 0030: it lasts as long as the trailing silence the trim
   kept, at most 100 ms, never under 5 ms; a clip with 100 ms of its own silence is the same bytes. MEASURED on a CPU build: the
@@ -1345,7 +1352,7 @@ measured (published figures disagree).
   process), B19 (`exit()` in the signal handler), B25 (a lost log line, a flaky spec), B22 (a repeated load answered by name
   alone), B17 as a feature request — and B18 in `upstream-reports/ggml-llama-cpp-sycl.md` (llama.cpp's). Each read in v5.0.1's own
   source, the trackers searched (README there), nothing of the project in an issue's text. NOTHING IS FILED: the operator files.
-- **Live 2026-11-25 15:18:30Z to 23:45:20Z, and the engine a rollback puts back: engine `619655e5833b`** (`engine-canary.series`: `792f050e318e`'s series + 0028; the operator:
+- **Live 2026-11-25 15:18:30Z to 23:45:20Z, and the rollback engine until 2026-11-26 23:32Z: engine `619655e5833b`** (`engine-canary.series`: `792f050e318e`'s series + 0028; the operator:
   "Deploy and engine swap"). München: byte check VEGA/1 against VEGA/2 all identical (bge-m3, nemotron, qwen3-4b); five gates passed,
   each "exact, 3 fresh load(s)", every fingerprint identical to before — wikipedia (bge-m3) 109 s, gutenberg (qwen3-embedding-4b)
   2,046 s, worst 0.999226, pubmed query (medcpt-query) 92 s, NeuRIS (nemotron) 530 s, worst 1.000000, 0 of 512 below 0.995, wikidata (nemotron) 534 s,

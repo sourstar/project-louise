@@ -1,4 +1,4 @@
-"""The engine a rollback puts back, 619655e5833b (live 2026-11-25 15:18:30Z to
+"""The engine a rollback put back until 2026-11-26 23:32Z, 619655e5833b (live 2026-11-25 15:18:30Z to
 23:45:20Z, München; it stays installed; the operator:
 "Build 619655e5833b now, swap it after the drain, if it still applies", then
 "Deploy and engine swap"): 792f050e318e's series - built, never gated, not
@@ -53,13 +53,15 @@ def test_one_swap_carried_these_five_patches_over_the_engine_a_rollback_puts_bac
 
 def test_the_readme_and_the_status_say_what_is_live_and_what_a_rollback_puts_back():
     readme = (PATCHES / "staged" / "README.md").read_text(encoding="utf-8")
-    assert (f"Live 2026-11-25 15:18:30Z to 23:45:20Z, engine `{LIVE}`, and the engine a rollback puts back: "
-            "`engine-canary.series`") in readme
+    # the rollback engine until 2026-11-26 23:32Z; since then the park engine is (tests/test_localai_engine_park_series.py)
+    assert (f"Live 2026-11-25 15:18:30Z to 23:45:20Z, engine `{LIVE}`: `engine-canary.series`** "
+            "(the rollback engine until 2026-11-26 23:32Z)") in readme
     assert readme.count("and the engine a rollback puts back") == 1, "one engine is the rollback engine"
+    assert "engine `ed93e3c1b2e2`, and the engine a rollback puts back: `engine-park.series`" in readme
     assert "`792f050e318e`, built 09:58:24Z, never gated, not swapped" in readme
     assert readme.count("LIVE since ") == 1, "one engine is live"
     status = (ROOT / "docs" / "notes" / "STATUS.md").read_text(encoding="utf-8")
-    assert f"Live 2026-11-25 15:18:30Z to 23:45:20Z, and the engine a rollback puts back: engine `{LIVE}`" in status
+    assert f"Live 2026-11-25 15:18:30Z to 23:45:20Z, and the rollback engine until 2026-11-26 23:32Z: engine `{LIVE}`" in status
     assert status.count("and the engine a rollback puts back") == 1
     assert "every fingerprint identical to before" in status and "20 × exit 0" in status
     # the keeper's side is the mode's, not a node-wide default: the operator's decision of the same evening
