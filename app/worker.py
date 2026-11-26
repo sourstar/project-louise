@@ -6759,9 +6759,23 @@ def _live_call() -> bool:
     claim stopped the switch for a keeper's warm and for a linger; read off
     marks of its own, it missed overlapping questions and every route outside
     the Ask page. A call running is all the switch must not stand beside.)"""
-    c = dispatch.claim_until()
     now = time.time()
-    return c is not None and now < c <= now + config.INTERACTIVE_CLAIM_TTL_S + 1.0
+    # ANY PROCESS's row (`dispatch.claims`: one a process): with one row for
+    # all, one process's end wrote 0 over another's call still running, and a
+    # linger hid a call (the fifth read, run)
+    return any(now < c <= now + config.INTERACTIVE_CLAIM_TTL_S + 1.0 for c in dispatch.claims())
+
+
+def _keeper_loading() -> bool:
+    """The keeper's loads in this process (`resident._warm_all`): they make
+    their room before they take the claim, and a switch's room made beside one
+    would count the card twice (the fifth read)."""
+    t = getattr(resident, "_warm_thread", None)
+    return t is not None and t.is_alive()
+
+
+def _busy_for_room() -> bool:
+    return _live_call() or _keeper_loading()
 
 
 def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
@@ -6787,8 +6801,11 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
         log(f"{mode} mode: both modes name {new}: nothing unloaded "
             f"(set [models] chat_large and chat_small on the System page)")
         return out
-    question = question or resident._question_now
-    busy = busy or _live_call
+    # AN ANSWER IN FLIGHT holds a refreshed claim (`dispatch.call`); a linger
+    # holds no model, and waited for it cost every switch within five minutes
+    # of a question its whole 120 s (the fifth read)
+    question = question or _live_call
+    busy = busy or _busy_for_room
     sleep = sleep or _stop.wait
     server = model_load.server_of(config.CHAT_URL)
 
@@ -6806,6 +6823,9 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
             return "a newer switch owns the models"
         if expect is not None:
             now_mode = node_mode.current()
+            if now_mode != expect:
+                node_mode.forget()          # read once more: a misread is not a switch back
+                now_mode = node_mode.current()
             if now_mode != expect:
                 return f"the node switched again (now {now_mode}, chat model {config.chat_model_for(now_mode)})"
         return None
@@ -6867,18 +6887,22 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
     # in flight or the model there already: nothing to make
     room = None
     waited_busy = False
+    there = False
     until = clock() + room_wait_s
     while not _stop.is_set() and not newer():
         if not resident.node_embeds():
             # INTO A MODE THAT DOES NOT EMBED the old mode's pins hold nothing
             # back: the idle ones go now, a batch's as it ends (RULE 1) — not
             # PIN_IDLE_S and a beat later. Read at each ask (unread: embedding)
-            _release_idle_pins(time.time() + PIN_IDLE_S)
+            try:
+                _release_idle_pins(time.time() + PIN_IDLE_S)
+            except Exception:   # noqa: BLE001 — they go by themselves at the beat
+                pass
         try:
             ids = model_load.loaded_models(server)
             if (ids is not None and new in ids and new not in model_load.parked(server)) \
                     or model_load.in_flight(server, new):
-                room, waited_busy = None, False
+                room, waited_busy, there = None, False, True
                 break
             if busy():
                 waited_busy = True
@@ -6887,13 +6911,24 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
                 sleep(MODE_ROOM_POLL_S)
                 continue
             waited_busy = False
-            room = model_evict.make_room_for(config.CHAT_URL, new, horizon=time.time(), page=True)
+            if room is None or room.fits is False:
+                room = model_evict.make_room_for(config.CHAT_URL, new, horizon=time.time(), page=True)
         except Exception:   # noqa: BLE001 — not told: the load goes as before
             room = None
             break
+        if room.fits is not False:
+            # THE ROOM MADE, AND STILL NOBODY BESIDE IT right before the load (the
+            # fifth read, run: a question begun while the room was made took it, and
+            # the load still went): a call begun meanwhile sends it round again —
+            # the room stays made
+            if busy() and clock() < until:
+                waited_busy = True
+                sleep(MODE_ROOM_POLL_S)
+                continue
+            break
         # a refusal that unloaded or parked something has made what room it can:
         # asked again, it would stop again what the keeper loads back between asks
-        if room.fits is not False or room.unloaded or room.parked or clock() >= until:
+        if room.unloaded or room.parked or clock() >= until:
             break
         sleep(MODE_ROOM_POLL_S)
     if _stop.is_set():
@@ -6914,7 +6949,10 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
                     llm.warm()
             else:
                 llm.warm()                        # nothing made or told: the hook asks, as before
-            out["loaded"] = True
+            # LOADED IS WHAT THE RUNNER LISTS: a load that failed (HTTP 500, out of
+            # device memory) raises nothing from the warm (the fifth read, run)
+            ids = model_load.loaded_models(server, 0.0)
+            out["loaded"] = True if ids is None else new in ids
         except Exception as e:   # noqa: BLE001 — it loads at the first question
             log(f"{mode} mode: {new} did not load now ({type(e).__name__}: {str(e)[:200]}); "
                 f"it loads at the first question")

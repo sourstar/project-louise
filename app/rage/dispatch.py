@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import contextvars
 import itertools
+import os
 import sqlite3
 import threading
 import time
@@ -410,19 +411,68 @@ def _node_con() -> sqlite3.Connection | None:
     return sqlite3.connect(p, timeout=1.0, isolation_level=None)
 
 
+def _claim_key() -> str:
+    """THIS PROCESS'S claim row: `interactive_until:<pid>@<pid namespace>`. One
+    row a process (2026-11-26, the mode switch's reads, run): written by every
+    process, one row let a keeper's warm in the worker write 0 over the web's
+    question still running, and the web's linger hide the worker's call —
+    every reader of the claim was wrong for up to half a TTL. Readers take
+    every process's row (`claims`)."""
+    try:
+        ns = os.stat("/proc/self/ns/pid").st_ino
+    except OSError:
+        ns = 0
+    return f"{CLAIM_KEY}:{os.getpid()}@{ns}"
+
+
+#: a row of a process gone this long is removed by the next writer
+CLAIM_ROW_GONE_S = 3600.0
+
+
 def _write_claim(until: float) -> None:
-    """Never raises: an interactive request is answered even when the node
-    store cannot be written — losing a claim costs one request's wait."""
+    """THIS PROCESS's claim (`_claim_key`). Never raises: an interactive
+    request is answered even when the node store cannot be written — losing a
+    claim costs one request's wait."""
     try:
         con = _node_con()
         if con is None:
             return
         with closing(con):
+            key = _claim_key()
             con.execute("INSERT INTO control(key, value) VALUES(?, ?) "
                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                        (CLAIM_KEY, repr(until)))
+                        (key, repr(until)))
+            con.execute("DELETE FROM control WHERE key LIKE ? AND key != ? AND CAST(value AS REAL) < ?",
+                        (CLAIM_KEY + ":%", key, time.time() - CLAIM_ROW_GONE_S))
     except Exception:   # noqa: BLE001
         pass
+
+
+def _claims_of(con) -> list[float]:
+    out: list[float] = []
+    for (value,) in con.execute("SELECT value FROM control WHERE key = ? OR key LIKE ?",
+                                (CLAIM_KEY, CLAIM_KEY + ":%")).fetchall():
+        try:
+            out.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def claims() -> list[float]:
+    """Every process's claim as written — until when each holds (epoch s) —
+    read now, not memoised (the one row of before, a process not yet
+    restarted, among them); [] where none or unreadable. A process's value
+    is refreshed to at most INTERACTIVE_CLAIM_TTL_S ahead while a call runs
+    in it, and written further ahead for a question's linger."""
+    try:
+        con = _node_con()
+        if con is None:
+            return []
+        with closing(con):
+            return _claims_of(con)
+    except Exception:   # noqa: BLE001 — unread: no claim
+        return []
 
 
 _claim_seen: dict[str, tuple[float, bool]] = {}
@@ -430,19 +480,10 @@ _claim_lock = threading.Lock()
 
 
 def claim_until() -> float | None:
-    """The node's interactive claim as written — until when it holds (epoch
-    s) — read now, not memoised; None where none is written or it cannot be
-    read. Its VALUE changes while a call runs (the refresher) and when one
-    ends (its linger): a claim that only lingers keeps it."""
-    try:
-        con = _node_con()
-        if con is None:
-            return None
-        with closing(con):
-            row = con.execute("SELECT value FROM control WHERE key=?", (CLAIM_KEY,)).fetchone()
-        return None if row is None else float(row[0])
-    except Exception:   # noqa: BLE001 — unread: no claim
-        return None
+    """The node's interactive claim — the latest of every process's
+    (`claims`) — read now; None where none is written or it cannot be read."""
+    got = claims()
+    return max(got) if got else None
 
 
 def interactive_active() -> bool:
@@ -459,9 +500,8 @@ def interactive_active() -> bool:
         con = _node_con()
         if con is not None:
             with closing(con):
-                row = con.execute("SELECT value FROM control WHERE key=?",
-                                  (CLAIM_KEY,)).fetchone()
-            active = row is not None and float(row[0]) > time.time()
+                at = time.time()
+                active = any(v > at for v in _claims_of(con))      # any process's (`_claim_key`)
     except Exception:   # noqa: BLE001 — an unreadable claim holds nothing back
         active = False
     with _claim_lock:

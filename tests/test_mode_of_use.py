@@ -672,14 +672,28 @@ def test_a_call_that_holds_the_card_for_the_whole_wait_leaves_the_load_to_the_fi
 def test_a_call_is_running_while_its_claim_is_refreshed_and_a_linger_is_none(monkeypatch):
     from app.rage import dispatch
     now = time.time()
-    monkeypatch.setattr(dispatch, "claim_until", lambda: now + 4.0)
-    assert worker._live_call() is True, "refreshed to a TTL ahead: a call runs"
-    monkeypatch.setattr(dispatch, "claim_until", lambda: now + 240.0)
-    assert worker._live_call() is False, "a question's linger holds no model"
-    monkeypatch.setattr(dispatch, "claim_until", lambda: now - 1.0)
-    assert worker._live_call() is False
-    monkeypatch.setattr(dispatch, "claim_until", lambda: None)
-    assert worker._live_call() is False
+    for rows, running in (([now + 4.0], True), ([now + 240.0], False), ([now - 1.0], False), ([], False),
+                          # THE FIFTH READ, run: the web's linger beside the worker's call running —
+                          # one row for both hid the call; one a process, the call is seen
+                          ([now + 240.0, now + 4.0], True)):
+        monkeypatch.setattr(dispatch, "claims", lambda rows=rows: list(rows))
+        assert worker._live_call() is running, rows
+
+
+def test_one_processs_end_never_erases_anothers_claim(isolated_config, monkeypatch):
+    """THE FIFTH READ, run (and the third's #76): one claim row written by every
+    process — a keeper's warm in the worker ended and wrote 0 over the web's
+    question still running. A row a process; every process's is read."""
+    from app import node_state
+    from app.rage import dispatch
+    node_state.connect().close()
+    monkeypatch.setattr(dispatch, "_claim_key", lambda: "interactive_until:web")
+    dispatch._write_claim(time.time() + 4.0)                 # the web's call runs
+    monkeypatch.setattr(dispatch, "_claim_key", lambda: "interactive_until:worker")
+    dispatch._write_claim(0.0)                               # the worker's warm ends
+    dispatch._claim_seen.clear()
+    assert dispatch.interactive_active() and worker._live_call(), "the web's call is still seen"
+    assert len(dispatch.claims()) == 2
 
 
 def test_a_real_interactive_call_pauses_the_switch_and_a_linger_does_not(platform, isolated_config, monkeypatch):

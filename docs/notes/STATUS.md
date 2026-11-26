@@ -40,7 +40,13 @@ measured (published figures disagree).
   mode its round read; a partial room is made once. (Four reads on: a question told by the claim stopped
   the switch for a keeper's warm and for a linger; told by marks of its own, it missed overlapping
   questions and every route outside the Ask page — a call running is all the switch must not stand
-  beside, and the answer's wait is main's again.) A room refused before ANY load is now said, once a minute a reason
+  beside.) The fifth read, run: every process wrote ONE claim row, so a keeper's warm in the worker
+  ending wrote 0 over the web's question still running, and the web's linger hid the worker's call —
+  now one row a process, every process's read (also the pre-existing #76: a person's 5-minute linger
+  no longer ended by another process's call); the keeper's own loads count as busy; a call begun while
+  the room was made sends it round again before the load; the answer's wait waits for a call running,
+  not a linger (it cost every switch within 5 min of a question its 120 s); "loaded" is what the runner
+  lists after the warm. A room refused before ANY load is now said, once a minute a reason
   ("card: no room could be made for … — … pinned by work in flight"). The query-mode paging rule is
   unchanged: the first read's idea that the driver cannot page pinned models was unmeasured — a pin is
   the reclaimer's word, not the driver's — and refusing to page on it unloaded a question's own query
