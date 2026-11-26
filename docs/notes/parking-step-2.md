@@ -10,8 +10,9 @@ with what step 1 measured on the card (`parking-prototype.md` §4a) and what
 LocalAI v5.0.1's source already holds.*
 
 *WHERE IT STANDS (2026-11-26): the engine part and the server part are LIVE on
-the node and parking has RUN ON THE CARD, on copies (§9). No real model
-parks: the floor is 0 and no model's file says `park: true`.*
+the node, parking has RUN ON THE CARD on copies (§9–§12), and THE FIRST REAL
+MODEL PARKS since 08:18Z: vega-bge-m3, admitted by the gate with 64 counted
+park cycles (§13).*
 
 ## 1. What step 1 settled
 
@@ -1126,7 +1127,8 @@ this computation, try again later.","type":"no_room_on_device"}}` and
 
 No real model parks: no model file but the two copies ever carried `park:
 true` or `GGML_SYCL_PARKABLE`, and both copies are removed. Which models
-park is the keeper's half and the operator's, a gated run each.
+park is the keeper's half and the operator's, a gated run each. (Since
+2026-11-26 08:18Z one does: §13.)
 
 **The gates of the swap, to the second** (each exit 0, "exact, 3 fresh
 load(s)", fingerprints as before): wikipedia (bge-m3) 98 s; gutenberg
@@ -1438,7 +1440,44 @@ parks — its log: "resident: LocalAI's park floor set to 12,288 MiB … (it was
 8,192) — qual-nx-pin, qual-nx-pin--gate can be parked". Neither the import
 nor the pin touched it. So on this node a floor set by hand lasts until the
 keeper's next beat, and PARKING IS ON, by the keeper, for as long as a model
-that says it parks is loaded: none real does.
+that says it parks is loaded: none real does. (Since 08:18Z that day one
+does: §13.)
 
 **NOT shown:** three cycles in a row for a pinned model or a twin on the
 card; a failed return there.
+
+## 13. The first real model parks: vega-bge-m3 (2026-11-26 08:18Z)
+
+The operator's word, typed to München; the staged file on main since #926
+(`deploy/vega/stage/models/vega-bge-m3.yaml`): `park: true`, and in its env
+`GGML_SYCL_PARKABLE=1` and `GGML_SYCL_PARK_VERIFY=1` — the three lines
+together or not at all (main's tests/test_staged_parking.py; the engine's
+side of such a file, tests/test_localai_engine_park_series.py). München:
+
+- its engine process was restarted with them; the run is
+  `sha256:0211255556cfb743…1dde` — THE SAME RUN ID AS THE COPIES of §11 and
+  §12, as the architecture session had said: the same engine, env and
+  weights;
+- THE GATE ADMITTED IT, with the clause of §3.3 as main built it (508cb06):
+  "parking 64 park cycles, each counted by the engine; closest 1.0000000; a
+  park 0.14 s, a return 0.25 s at the median", exact over 3 fresh loads, 300
+  fresh contexts. So the gate's own texts have now gone through park cycles
+  — what §9 and §11 could not claim from the tool's sixteen sentences;
+- with the byte check on at every return, those medians sit inside the
+  scatter of the night's rows without it;
+- no park by the keeper yet: the engine's counts read 0, 0, 0 after the
+  gate's fresh load.
+
+**A ROLLBACK NOW HAS ONE STEP MORE.** The engine a rollback puts back,
+`619655e5833b`, does not park: it has no 0023 and does not read the switch.
+With vega-bge-m3's three lines in place it would be listed `"parks": true`
+(the file's word), every park would be 412 `cannot_park` "its backend does
+not park" (§12) — the keeper stops it instead, as before parking — and the
+gate, which reads the switch in the run's stated env and asks for its
+cycles, REFUSES the run: "the model's file says `park: true` and the runner
+will not park it". Safe and loud, and it leaves the model unadmitted: a
+rollback takes the three lines out of every parking model's file first, or
+meets that refusal.
+
+**NOT shown, still:** the keeper's first park of a real model; a failed
+return on a card; a quantized model, buffers above 1 GiB, the 35B.

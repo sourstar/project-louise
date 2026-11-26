@@ -29,7 +29,9 @@ nothing in them changes without a new build and every gate again; tests/test_loc
 `engine-stream.series` line for line, then 0023 — parking when told, which carries 0028's fix in its own form (the series does not list
 0028 and must not). PARKING IS OFF until a model's file says `park: true` with `GGML_SYCL_PARKABLE=1` AND the host's floor is above 0:
 no model file does, and a test holds the staged ones to it. THE FLOOR IS THE KEEPER'S since main a2b5935b: Louise's worker holds it to
-`[models] page_floor_gib` while a loaded model says it parks, so the first such model file turns parking on by itself. ON THE CARD, ON COPIES (München, the same pass, ended 2026-11-26
+`[models] page_floor_gib` while a loaded model says it parks, so the first such model file turns parking on by itself. THE FIRST DOES since 2026-11-26
+08:18Z: vega-bge-m3 (main #926; its gate with 64 counted park cycles passed). A ROLLBACK to `619655e5833b`, which does not park,
+takes the three lines out of every parking model's file first: left in, the gate refuses that model's run (parking-step-2.md §13). ON THE CARD, ON COPIES (München, the same pass, ended 2026-11-26
 00:19:39Z): 20 of 20 park cycles the same bytes by a request and 20 of 20 by `/backend/load`, a park 142 ms, a return with sixteen
 sentences 228 ms, 996 of 1,315 MiB of the card given back for 577 MiB of host memory; a model at work refused 409 `model_busy`; a
 refused return 503 `no_room_on_device`, still parked, then served; the copies removed. docs/notes/parking-step-2.md §6, §8, §9.

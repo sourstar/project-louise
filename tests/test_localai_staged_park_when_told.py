@@ -91,17 +91,23 @@ def test_one_series_carries_it_after_the_stream_candidate_and_its_engine_s_name_
     assert "## 6. The engine part, as built" in NOTE and NAME in NOTE
 
 
-def test_no_model_file_can_park_before_the_server_part_is_live():
+def test_the_measuring_and_refusal_switches_are_never_a_staged_model_s():
     """An UNPATCHED LocalAI calls Free before it stops a process, so from this engine on every stop of a model that
-    CAN park first copies its weights to the host (0.4 s and 6 GiB for MADLAD) - acceptable only while no model's file
-    says it can (the architecture session, 2026-11-25). And the measuring switch is never a live model's."""
+    CAN park would first copy its weights to the host (0.4 s and 6 GiB for MADLAD) - acceptable only while no
+    model's file said it could (the architecture session, 2026-11-25). THE SERVER PART IS LIVE since that night
+    (it stops a parking model's process without that Free), so a model's file may say it parks: vega-bge-m3 does
+    since 2026-11-26, and which files do, with the three lines together, is held by tests/test_staged_parking.py.
+    What stays forbidden in any staged model: the prototype's measuring switch and the switch that refuses returns."""
     files = [f for d in sorted((ROOT / "deploy").glob("*/models")) + [ROOT / "deploy" / "vega" / "stage" / "models"]
              for f in sorted(d.glob("*.yaml"))]
     assert len(files) > 40, "the staged model files were not found"
     for f in files:
-        text = f.read_text(encoding="utf-8")
-        for switch in ("GGML_SYCL_PARKABLE", "LLAMA_SERVER_PARK_WEIGHTS", "GGML_SYCL_PARK_REFUSE", "GGML_SYCL_PARK_VERIFY"):
-            assert switch not in text, f"{f.relative_to(ROOT)} sets {switch}: no live model parks before the server part"
+        body = "\n".join(line for line in f.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#"))
+        for switch in ("LLAMA_SERVER_PARK_WEIGHTS", "GGML_SYCL_PARK_REFUSE"):
+            assert switch not in body, f"{f.relative_to(ROOT)} sets {switch}: a switch for copies and measurements"
+        if "GGML_SYCL_PARK_VERIFY" in body:
+            assert '"GGML_SYCL_PARKABLE": "1"' in body, f"{f.name}: the byte check without the switch it checks"
+    # the rule as it stood until the server part was live, still said where it was decided
     assert "no live model sets `GGML_SYCL_PARKABLE=1` before the server part is live" in NOTE
     assert "never set in a live model's file" in NOTE
 

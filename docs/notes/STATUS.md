@@ -1087,6 +1087,12 @@ measured (published figures disagree).
   LocalAI's own defect B26). THE FLOOR IS THE KEEPER'S NOW: while a loaded model says it parks the worker holds LocalAI's floor to
   `[models] page_floor_gib` (main a2b5935b) — a floor set by hand lasts seconds, and parking is on for such a model without anyone
   setting it. No real model says it parks.
+- **THE FIRST REAL MODEL PARKS: vega-bge-m3, since 2026-11-26 08:18Z (the operator's word to München; staged on main, #926;
+  parking-step-2.md §13):** `park: true` with the engine's switch and its byte check. The same run id as the night's copies; THE
+  GATE ADMITTED IT with 64 park cycles, each counted by the engine, closest 1.0000000, a park 0.14 s and a return 0.25 s at the
+  median, exact over 3 fresh loads and 300 fresh contexts. No park by the keeper yet. A ROLLBACK HAS ONE STEP MORE: `619655e5833b`
+  does not park, and with the three lines left in a model's file the gate refuses its run ("the runner will not park it") — take
+  them out first.
 - **THE UPSTREAM DEFECTS SINCE B14 ARE WRITTEN OUT TO BE FILED (2026-11-26; the operator: "Write the defects for filing"):**
   [upstream-reports/mudler-localai.md](upstream-reports/mudler-localai.md) — B21 (a stream that fails after its first chunk ends
   as a complete answer), B24 (a settings write that never answers), B26 (`/backend/monitor` 500), B20 (a voice lease outliving its

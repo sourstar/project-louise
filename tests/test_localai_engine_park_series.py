@@ -74,14 +74,42 @@ def test_the_readme_and_the_status_say_what_is_live_and_what_a_rollback_puts_bac
     assert "docs/notes/parking-step-2.md §6, §8, §9." in readme
 
 
-def test_being_able_to_park_is_not_parking_no_staged_model_asks_for_it():
+def test_a_staged_model_that_parks_is_one_the_engine_can_park():
+    """Which staged models park, and that the three lines go together, is held by tests/test_staged_parking.py
+    (main, with the first of them: vega-bge-m3, 2026-11-26). What is held HERE is the engine's side of such a
+    file: the park engine parks only a model that takes its context on demand (staged 0023: "this model cannot
+    park: it takes context on demand and weights that can leave the device"), and the switch is read by the
+    live engine's series and no other."""
     files = [f for d in sorted((ROOT / "deploy").glob("*/models")) + [ROOT / "deploy" / "vega" / "stage" / "models"]
              for f in sorted(d.glob("*.yaml"))]
     assert len(files) > 40
+    parking = []
     for f in files:
-        text = f.read_text(encoding="utf-8")
-        assert "GGML_SYCL_PARKABLE" not in text and "\"park\": true" not in text and "\npark: true" not in text, \
-            f"{f.relative_to(ROOT)}: which models park is the keeper's half and the operator's, and a gated run each"
+        body = "\n".join(line for line in f.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#"))
+        if "GGML_SYCL_PARKABLE" not in body and '"park": true' not in body and "\npark: true" not in body:
+            continue
+        parking.append(f.name)
+        assert '"GGML_SYCL_PARKABLE": "1"' in body and '"park": true' in body, f.name
+        assert '"context_on_demand"' in body or '"context_on_demand:true"' in body, \
+            f"{f.name}: the engine parks only a model on context on demand"
+        assert '"context_canary:true"' in body, f"{f.name}: a return's context is held to the canary"
+        assert "GGML_SYCL_PARK_REFUSE" not in body, f"{f.name}: the refusal switch is for copies, never a staged model"
+    assert parking == ["vega-bge-m3.yaml"], parking
+    patch = (PATCHES / "staged" / "0023-llama-cpp-park-when-told.patch").read_text(encoding="utf-8")
+    assert "GGML_SYCL_PARKABLE" in patch
+    assert "this model cannot park: it takes context on demand and weights that can leave the device" in patch
+    assert PARK in _lines(SERIES) and PARK not in _lines(ROLLBACK), "a rollback puts back an engine that does not park"
+    # ... which is why a rollback has a step more since a real model parks: said where a rollback is read
+    readme = (PATCHES / "staged" / "README.md").read_text(encoding="utf-8")
+    assert "A ROLLBACK to `619655e5833b`, which does not park,\ntakes the three lines out of every parking model's file first" in readme
+    note = (ROOT / "docs" / "notes" / "parking-step-2.md").read_text(encoding="utf-8")
+    section = note[note.index("## 13. The first real model parks: vega-bge-m3 (2026-11-26 08:18Z)"):]
+    for said in ("THE SAME RUN ID AS THE COPIES", "parking 64 park cycles, each counted by the engine; closest 1.0000000",
+                 "**A ROLLBACK NOW HAS ONE STEP MORE.**", "REFUSES the run", "**NOT shown, still:** the keeper's first park of a real model"):
+        assert said in section, said
+    # the gate's own words for that refusal, on main
+    gate = (ROOT / "app" / "hold" / "embedder.py").read_text(encoding="utf-8")
+    assert "the model's file says `park: true` and the runner will not park it" in gate
 
 
 def test_the_staged_speech_model_names_the_live_engine():
