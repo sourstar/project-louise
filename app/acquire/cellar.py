@@ -1130,6 +1130,9 @@ class CellarUnits:
         self._dates: dict[str, dict] = {}           # corpus root → {(celex, lang): listed mtime}
         self._cover: dict[str, dict] = {}           # corpus root → {(year, lang): at}, known whole since the dump
         self._after: dict[str, dict] = {}           # corpus root → {lang: the stamped dump's created, epoch}
+        self._due: dict[str, set] = {}              # corpus root → the units asked first this pass
+        self._base_url: dict[str, str | None] = {}  # corpus root → Cellar's base, for a window asked again
+        self._window_locks: dict[tuple, Any] = {}   # (root, year, lang) → one refresher at a time
 
     def _count(self, got: "Fetched") -> None:
         with self._lock:
@@ -1367,13 +1370,6 @@ class TreeUnits(CellarUnits):
         if at is None:
             raise WindowNotListed(f"cellar: {unit['celex']} ({unit['lang']}): its {year} window is not "
                                   f"known whole since the dump was cut; nothing asked, it waits for the listing")
-        if time.time() - at > WINDOW_REFRESH_S:
-            # THE BOUND, ENFORCED AT FETCH TIME (architecture's decision on
-            # d863230c, Y3): a window counted more than a day ago no longer
-            # vouches, whenever in the pass the unit is reached; it waits for
-            # the next prepare to ask the window again
-            raise WindowNotListed(f"cellar: {unit['celex']} ({unit['lang']}): its {year} window was known "
-                                  f"whole more than a day ago; nothing asked, it waits for the listing")
         when = dates.get((unit["celex"], unit["lang"]))
         if when is None:
             # absent from the listing, or listed with no modification date (58
@@ -1382,7 +1378,58 @@ class TreeUnits(CellarUnits):
             return None, None
         if when > after:
             return None, when                   # changed since the dump: Cellar's tree, no older than this
+        if time.time() - at > WINDOW_REFRESH_S:
+            # THE BOUND, ENFORCED AT FETCH TIME, on the one path that takes the
+            # bulk's tree (architecture's decisions on d863230c, Y3, and on
+            # 6f6e72ab, 2): a window counted more than a day ago is asked
+            # again HERE, once (its fingerprint, under its lock), and the unit
+            # is judged on the fresh count; a window that cannot be asked
+            # leaves the unit waiting
+            self._refresh_window(key, year, unit["lang"])
+            with self._lock:
+                when = (self._dates.get(key) or {}).get((unit["celex"], unit["lang"]))
+                at = (self._cover.get(key) or {}).get((year, unit["lang"]))
+            if at is None or time.time() - at > WINDOW_REFRESH_S:
+                raise WindowNotListed(f"cellar: {unit['celex']} ({unit['lang']}): its {year} window was known "
+                                      f"whole more than a day ago and could not be asked again; it waits")
+            if when is None:
+                return None, None
+            if when > after:
+                return None, when
         return bulk, when
+
+    def _refresh_window(self, key: str, year: int, lang: str) -> None:
+        """The (year, language) window asked again — its fingerprint, its
+        pages where it moved — by ONE fetch thread (a lock per window; the
+        others wait for it and find it fresh), and `_cover`/`_dates` refreshed
+        from what it now vouches. An episode leaves both as they were."""
+        from . import cellar_listing
+        from ..plugins.eurlex.source import LANGUAGES
+        with self._lock:
+            lock = self._window_locks.setdefault((key, year, lang), __import__("threading").Lock())
+            base_url = self._base_url.get(key)
+        with lock:
+            with self._lock:
+                at = (self._cover.get(key) or {}).get((year, lang))
+                due, after = set(self._due.get(key) or ()), dict(self._after.get(key) or {})
+            if base_url is None or (at is not None and time.time() - at <= WINDOW_REFRESH_S):
+                return                                  # another thread refreshed it meanwhile
+            code_of = {v: k for k, v in LANGUAGES.items()}
+            try:
+                with httpx.Client(timeout=TIMEOUT_S) as client:
+                    for _ in _window_files(client, base_url, year, (lang,), code_of, budget.acquire_bytes,
+                                           place=lambda *a: False, learned={"group": 1}):
+                        pass
+            except TransferAborted:
+                raise
+            except TransportError:
+                return
+            dates, cover = cellar_listing.coverage({u for u in due if u[1] == lang and window_year(u[0]) == year},
+                                                   after, base_url)
+            with self._lock:
+                if (year, lang) in cover:
+                    self._cover.setdefault(key, {})[(year, lang)] = cover[(year, lang)]
+                    self._dates.setdefault(key, {}).update(dates)
 
     def _reform(self, dest: Path, remote: RemoteFile, note) -> bool:
         """A held unit lacking the Formex package its tree lists is asked
@@ -1525,7 +1572,10 @@ class TreeUnits(CellarUnits):
             # of d863230c, Y1: a re-listing that failed reset it; Y2: every
             # covered window's units were marked, ~122k marks a pass)
             now_listed = {(y, l) for y, ls in missing.items() for l in ls} - unlisted
-            back = [(l, c) for c, l in due if (window_year(c), l) in now_listed and (window_year(c), l) in cover]
+            waiting = {(l, c) for l, units_ in eurlex_dump.incomplete(corpus).items()
+                       for c, e in units_.items() if isinstance(e, dict) and e.get("waiting")}
+            back = [(l, c) for c, l in due if (window_year(c), l) in now_listed and (window_year(c), l) in cover
+                    and (l, c) in waiting]          # only a unit that waits (review of 6f6e72ab, 3)
             if back:
                 eurlex_dump.mark_listed(corpus, back)       # their wait is over: n from 0
             say(f"listed {asked} window(s) in {time.monotonic() - t0:.0f} s")
@@ -1538,6 +1588,8 @@ class TreeUnits(CellarUnits):
             self._dates[key] = dates
             self._cover[key] = cover
             self._after[key] = after
+            self._due[key] = due
+            self._base_url[key] = base_url
         changed = sum(1 for k, d in dates.items() if d > after.get(k[1], float("inf")))
         unchanged = len(dates) - changed
         say(f"trees from the bulk: {', '.join(sorted(bulk)) or 'no language'}; of {len(due)} unit(s) asked first, "
