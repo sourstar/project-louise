@@ -466,3 +466,20 @@ def test_a_cut_answers_marks_are_in_time_order(traced, monkeypatch):
     (got,) = _lines(traced)
     times = [m[1] for m in got["marks"]]
     assert times == sorted(times) and {"first_word", "last_word", "cut"} <= {m[0] for m in got["marks"]}
+
+
+def test_an_answers_trace_carries_the_servers_own_timings(traced, monkeypatch):
+    """Architecture, 2026-11-26: the trace takes `StreamEnd.timings` (#932),
+    never a count of its own."""
+    from app import llm
+    t = {"load_s": 0.0, "gate_s": 0.1, "before_s": 0.2, "first_s": 0.9, "prompt_tokens": 3412,
+         "prompt_ms": 4610.5, "out_tokens": 2, "out_ms": 40.0}
+
+    def stream(messages, temperature=0.3):
+        yield "Ciao."
+        return llm.StreamEnd(finish_reason="stop", done=True, error=None, timings=t)
+    chat = _answer_setup(monkeypatch, stream)
+    web._relay_answer_job(relay.Job(id="a9", kind="answer", owner="admin:admin"), chat)
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    assert got["answer_timings"] == t

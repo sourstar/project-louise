@@ -1509,6 +1509,8 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
                     yield chunk(f"\n[answer cut: {value}]")
                 elif kind == "read" and trace is not None:
                     trace.note(read=value)
+                elif kind == "timings" and trace is not None:
+                    trace.note(answer_timings=value)
                 elif kind == "pdf":
                     # after the last word, as the sources came before the first
                     yield "data: " + json.dumps({
@@ -1680,6 +1682,10 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     # the request to its first token, and the server's own count of the prompt
     spent = llm.timings_said(getattr(ended, "timings", None))
     spent = f" [{spent}]" if spent else ""
+    if getattr(ended, "timings", None):
+        # the same counts, as numbers, for a caller that keeps them (an
+        # admin's query trace, app/query_trace.py): never counted twice
+        yield ("timings", dict(ended.timings))
     if why is not None:
         yield ("cut", why)
         db.log_event(con, "warn", "chat",

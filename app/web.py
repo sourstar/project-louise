@@ -1410,6 +1410,10 @@ def _relay_answer(job: relay.Job, chat, trace=None) -> None:
                 job.emit("read", count=value)
                 if trace is not None:
                     trace.note(read=value)
+            elif kind == "timings":
+                # where the answer's time went, the server's own counts (llm.StreamEnd.timings)
+                if trace is not None:
+                    trace.note(answer_timings=value)
             elif kind == "cut":
                 if trace is not None:
                     trace.mark("cut")
