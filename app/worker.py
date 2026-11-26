@@ -8199,8 +8199,13 @@ def _hold_locks(collections, paused: set[str], cons=None) -> list:
                                          "the node (worker)")
             # a fresh event for what starts now; one still unwinding keeps its own,
             # set — cleared, a resume before its next poll read the retirement the
-            # pause caused instead, and no re-arm (D7 again: the sixth read, run)
-            _own_pauses.pop(name, None)
+            # pause caused instead, and no re-arm (D7 again: the sixth read, run).
+            # Only a SET one is dropped: an unset one is a fetch's that runs now —
+            # one the startup discovery began before the first take — and a pause
+            # must still reach it (the seventh read, run)
+            ev = _own_pauses.get(name)
+            if ev is not None and ev.is_set():
+                _own_pauses.pop(name, None)
             _runs_again(name)
             _lock_nagged.pop(name, None)
         except lock_mod.Held as e:

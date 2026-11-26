@@ -1017,7 +1017,9 @@ def test_two_asks_at_once_start_one_fetch(tmp_path, monkeypatch):
         return real_log(c, level, stage, msg, *a, **k)
     monkeypatch.setattr(worker.db, "log_event", slow_log)
     try:
-        ts = [threading.Thread(target=worker._acquire, args=(db.connect(collection), collection, why))
+        # each thread's own connection, made in it (the seventh read: made here,
+        # the courtesy line raised ProgrammingError inside both threads)
+        ts = [threading.Thread(target=lambda why=why: worker._acquire(db.connect(collection), collection, why))
               for why in ("retry", "discovery")]
         for t in ts:
             t.start()
@@ -1051,3 +1053,29 @@ def test_files_landed_before_a_busy_write_are_scanned(tmp_path, monkeypatch):
         _forget_more(collection.name)
         worker._retry_reason.pop(collection.name, None)
         _forget(collection)
+
+
+def test_a_fetch_begun_before_the_first_take_keeps_its_pause(tmp_path, monkeypatch):
+    """THE SEVENTH READ, run (`WORKER_PIPELINE_THREADS=0`): the startup
+    discovery starts the fetch before the first `_hold_locks`, which dropped
+    the event the fetch watched — a `node pause` then set a new one the fetch
+    never saw, and no re-arm followed. Only a SET event is dropped at a take."""
+    from app.hold import lock as lock_mod
+    collection = _collection(tmp_path, acquire_enabled=True)
+
+    class Lock:
+        def release(self):
+            pass
+    monkeypatch.setattr(lock_mod, "take", lambda *a, **k: Lock())
+    try:
+        watched = worker._own_pause_event(collection.name)         # the running fetch's
+        assert worker._hold_locks([collection], set()) == [collection]
+        assert worker._own_pause_event(collection.name) is watched, "kept: a pause must reach it"
+        watched.set()
+        worker._locks.pop(collection.name, None)
+        worker._hold_locks([collection], set())                    # taken again after a pause
+        assert worker._own_pause_event(collection.name) is not watched, "a set one is dropped"
+    finally:
+        worker._locks.pop(collection.name, None)
+        worker._own_pauses.pop(collection.name, None)
+        _forget_more(collection.name)

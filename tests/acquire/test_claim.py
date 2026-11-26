@@ -21,6 +21,13 @@ def _collection(tmp_path):
         fts_dir=tmp_path / "fts", lance_dir=tmp_path / "lancedb")
 
 
+def _collection_for(con, tmp_path):
+    return collections_mod.Collection(
+        name="test", plugin="gutenberg", profile=None, embed_mode_default=None,
+        corpus_dir=tmp_path / "corpus", manifest_path=tmp_path / "manifest.db",
+        fts_dir=tmp_path / "fts", lance_dir=tmp_path / "lancedb")
+
+
 @pytest.fixture
 def con(tmp_path):
     return db.connect(_collection(tmp_path))
@@ -350,3 +357,147 @@ def test_the_claim_is_a_lock_a_live_holder_keeps_and_a_dead_one_drops(con):
         _fcntl.flock(probe, _fcntl.LOCK_EX | _fcntl.LOCK_NB)            # and let go after
     finally:
         os.close(probe)
+
+
+def test_a_dead_holder_that_said_it_locked_is_taken_over_at_once(con):
+    """THE SEVENTH READ, run: a holder SIGKILLed in the same boot — the kernel
+    dropped its lock, its row young — refused its successor for 305 s. A row
+    whose writer held the lock is dead once the lock is ours; a row that says
+    nothing of a lock (a process from before it) keeps the age rule."""
+    other = {"pid": 8, "holder": "8@4026533985", "source_id": "eurlex", "ts": time.time(),
+             "boot": claim_mod.boot_id(), "up": claim_mod.uptime()}
+    db.set_control(con, claim_mod.CLAIM_KEY, json.dumps({**other, "lock": True}))
+    with claim_mod.acquisition_claim(con, "eurlex"):
+        mine = claim_mod.read_claim(con)
+        assert mine["pid"] == os.getpid() and mine["lock"] is True, "taken at once, and said locked"
+    db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(other))
+    with pytest.raises(claim_mod.AcquisitionBusy):
+        with claim_mod.acquisition_claim(con, "eurlex"):
+            pass
+
+
+def test_a_renewal_keeps_saying_the_lock_is_held(con):
+    with claim_mod.acquisition_claim(con, "eurlex"):
+        claim_mod.refresh_claim(con, "eurlex", 0.0)
+        assert claim_mod.read_claim(con)["lock"] is True
+    db.set_control(con, claim_mod.CLAIM_KEY, "")
+    claim_mod.refresh_claim(con, "eurlex", 0.0)          # nothing of ours: nothing written
+    assert claim_mod.read_claim(con) is None
+
+
+def test_the_lock_is_let_go_whatever_the_give_back_raises(con, monkeypatch):
+    """THE SEVENTH READ, run: an error but OperationalError in the give-back
+    skipped the unlock, and every later fetch of the process was refused."""
+    import fcntl as _fcntl
+    import sqlite3
+
+    def broken(con_, value):
+        raise sqlite3.DatabaseError("database disk image is malformed")
+    monkeypatch.setattr(claim_mod, "_set_if_mine", broken)
+    with claim_mod.acquisition_claim(con, "eurlex"):
+        pass
+    probe = os.open(claim_mod.lock_path(con), os.O_RDWR)
+    try:
+        _fcntl.flock(probe, _fcntl.LOCK_EX | _fcntl.LOCK_NB)      # free
+    finally:
+        os.close(probe)
+    assert not claim_mod._held_fds
+
+    def interrupted(con_, value):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(claim_mod, "_set_if_mine", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        with claim_mod.acquisition_claim(con, "eurlex"):
+            pass
+    probe = os.open(claim_mod.lock_path(con), os.O_RDWR)
+    try:
+        _fcntl.flock(probe, _fcntl.LOCK_EX | _fcntl.LOCK_NB)      # free even then
+    finally:
+        os.close(probe)
+
+
+def test_another_process_fetching_is_a_deferral_for_the_command_line():
+    """THE SEVENTH READ: `hold records fetch` refused by the worker's pass fell
+    through to a traceback and exit 1, and `supervise-pass.sh` stopped it as a
+    defect."""
+    from app import louise
+    assert louise._is_deferral(claim_mod.AcquisitionBusy("eurlex: acquisition already running in 8@1"))
+
+
+def test_a_busy_write_in_a_later_torrent_tells_what_the_earlier_ones_landed(con, tmp_path, monkeypatch):
+    """THE SEVENTH READ: a pass over several torrents named in `e.fetched` only
+    the torrent that hit the busy write; what the earlier ones landed got no scan."""
+    import sqlite3
+    from app.acquire import engine
+    from app.acquire.spec import AcquisitionSpec, Endpoint, Filter, Transport
+    spec = AcquisitionSpec(source_id="t", transport=Transport.TORRENT,
+                           endpoints=(Endpoint(transport=Transport.TORRENT, url="magnet:?a"),
+                                      Endpoint(transport=Transport.TORRENT, url="magnet:?b")),
+                           layout="single-file", profiles={"demo": Filter()}, estimated_bytes={"demo": 1})
+    monkeypatch.setattr(engine, "effective_spec", lambda c, s, p=None, stop=None: s)
+    parts = iter([{"fetched": 4}, "busy"])
+
+    def claimed(con_, c, sp, profile, stop, priority, until):
+        got = next(parts)
+        if got == "busy":
+            e = sqlite3.OperationalError("database is locked")
+            e.fetched = 1
+            raise e
+        return got
+    monkeypatch.setattr(engine, "_run_acquisition_claimed", claimed)
+    with pytest.raises(sqlite3.OperationalError) as e:
+        engine._run_acquisition(con, _collection_for(con, tmp_path), spec, "demo", None, engine.Priority.BACKFILL)
+    assert e.value.fetched == 5
+
+
+def test_a_writer_child_keeps_the_lock_after_its_holder_is_killed(con):
+    """THE SEVENTH READ, run: a holder SIGKILLed while its rsync wrote a
+    `.part` in place left the lock free, and a successor could start a second
+    rsync on the same file. The writer is handed the lock (`passing_locks`):
+    it lives as long as the last writer."""
+    import fcntl as _fcntl
+    import signal
+    import subprocess
+    import sys
+    import textwrap
+    from pathlib import Path
+    manifest = con.execute("PRAGMA database_list").fetchone()[2]
+    script = textwrap.dedent(f"""
+        import sqlite3, subprocess, sys, time
+        from app.acquire import claim
+        con = sqlite3.connect({manifest!r}, isolation_level=None)
+        with claim.acquisition_claim(con, "eurlex"):
+            with claim.passing_locks() as fds:
+                child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
+                                         pass_fds=fds, start_new_session=True)
+            print(child.pid, flush=True)
+            time.sleep(60)
+    """)
+    holder = subprocess.Popen([sys.executable, "-c", script], stdout=subprocess.PIPE, text=True,
+                              cwd=Path(__file__).resolve().parents[2])
+    child = None
+    probe = os.open(claim_mod.lock_path(con), os.O_RDWR | os.O_CREAT)
+    try:
+        child = int(holder.stdout.readline())
+        holder.kill()                                       # the holder dies, its writer lives
+        holder.wait(10)
+        with pytest.raises(BlockingIOError):
+            _fcntl.flock(probe, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        os.kill(child, signal.SIGKILL)                       # the last writer ends: the lock with it
+        child, deadline = None, time.time() + 10
+        while True:
+            try:
+                _fcntl.flock(probe, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                assert time.time() < deadline, "the lock outlived its last writer"
+                time.sleep(0.05)
+    finally:
+        os.close(probe)
+        if holder.poll() is None:
+            holder.kill()
+        if child is not None:
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass

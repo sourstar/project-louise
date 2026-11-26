@@ -502,3 +502,20 @@ def test_the_pass_runs_a_collection_at_parser_6(node):
     assert not update.origin_names_run(collections_mod.by_name("wikipedia").codex)
     node.publish(NEW, NEW_PAGES)
     assert node.pass_(dry_run=True).state == "dry-run"
+
+
+def test_another_process_fetching_makes_the_pass_wait_not_fail(node, monkeypatch):
+    """THE SEVENTH READ: the worker's long fetch refused the update's fetch step
+    and the refusal was counted as a try — three nights beside it and the
+    update waited for a human."""
+    from app.acquire import claim as claim_mod, engine
+    node.publish(NEW, NEW_PAGES)
+
+    def busy(*a, **k):
+        raise claim_mod.AcquisitionBusy("wikipedia: acquisition already running in 8@1 (its lock is held)",
+                                        holder="8@1")
+    monkeypatch.setattr(engine, "run_acquisition", busy)
+    got = node.pass_()
+    assert got.state == "waiting" and got.exit == update.EXIT_WAITING and got.step == "fetch", got.says
+    assert "another process is fetching wikipedia now (8@1)" in got.says
+    assert node.marker()["failure"] is None, "waiting is not failing"

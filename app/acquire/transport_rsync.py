@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Callable, Iterator, NamedTuple
 
 from . import budget
+from . import claim as acquire_claim
 from .spec import AcquisitionSpec, Endpoint, RemoteFile, TransferAborted, TransportError
 
 # rsync ≥3.1 prints sizes with COMMA GROUPING ("2,417,305"). The old
@@ -226,8 +227,12 @@ class RsyncTransport:
     def _run(self, argv: list[str], endpoint: Endpoint, remote: RemoteFile,
              stop=None, progress_path: Path | None = None) -> None:
         try:
-            proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     text=True, start_new_session=True)
+            # THE WRITER INHERITS THE CLAIM'S LOCK (`claim.passing_locks`): its
+            # holder killed, the lock lives as long as this rsync writes the
+            # `.part` in place
+            with acquire_claim.passing_locks() as fds:
+                proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                         text=True, start_new_session=True, pass_fds=fds)
         except FileNotFoundError as e:
             raise TransportError(f"rsync {endpoint.url}/{remote.rel_path}: {e}") from e
 

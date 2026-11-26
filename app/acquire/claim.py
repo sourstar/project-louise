@@ -44,6 +44,7 @@ import fcntl
 import json
 import os
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 
@@ -125,9 +126,36 @@ def _mine(claim: dict | None) -> bool:
     return claim.get("holder", f"pid {claim.get('pid')}") == _me()
 
 
-def _record(source_id: str, now: float) -> str:
+def _record(source_id: str, now: float, locked: bool = False) -> str:
+    """The claim's row. `locked`: its writer holds `acquire.lock` — a row that
+    says so is dead the moment another process takes the lock, whatever its
+    age (the seventh read, run: a holder SIGKILLed in the same boot refused
+    its successor for 305 s with the lock already free)."""
     return json.dumps({"pid": os.getpid(), "holder": _me(), "ts": now, "source_id": source_id,
-                       "boot": boot_id(), "up": uptime()})
+                       "boot": boot_id(), "up": uptime(), **({"lock": True} if locked else {})})
+
+
+#: the lock files this process holds now (`acquisition_claim`), by path, with
+#: their descriptors: a renewal keeps saying so (`refresh_claim`), and a
+#: fetch's rsync is handed them (`passing_locks`)
+_held_fds: dict[str, int] = {}
+_fds_lock = threading.Lock()
+
+
+@contextmanager
+def passing_locks():
+    """The descriptors of the locks this process holds, for a child that
+    WRITES the corpus to inherit (`subprocess.Popen(pass_fds=...)`): an flock
+    belongs to its open file description, so the lock then lives as long as
+    the last writer — a holder SIGKILLed while its rsync writes a `.part`
+    `--inplace` leaves the lock held until that rsync ends, and no successor
+    starts a second one on the same file (the seventh read, run). Held while
+    the child is started, so no descriptor is closed under it. Every lock the
+    process holds goes to the child; another collection's pass still lets go
+    of its own at its end (`LOCK_UN` on the shared description), so a child
+    keeps nobody else's lock past its holder."""
+    with _fds_lock:
+        yield tuple(_held_fds.values())
 
 
 def _age(claim: dict, now: float) -> float:
@@ -222,7 +250,9 @@ def acquisition_claim(con, source_id: str, force: bool = False):
     that takes no lock, from before this), and it says who holds it — the
     Library's "in progress", a refusal's words, the retry's timing
     (`busy_for`). Where the manifest has no file the row alone decides, as
-    before. `force` takes the row without the lock, as before.
+    before. `force` takes the row without the lock, as before — and over a
+    live holder's: its renewals then match no row, and the Library shows the
+    forcing process (no caller in app/ passes it; kept for the command line).
 
     Released on the way out even if the body raises."""
     path = lock_path(con)
@@ -239,38 +269,58 @@ def acquisition_claim(con, source_id: str, force: bool = False):
                 now = time.time()
                 raise _busy(source_id, existing, now, "its lock is held: the kernel drops it with its holder",
                             busy_for(con, now) or float(STALE_AFTER_SECONDS))
+        except OSError:
+            # a filesystem that will not lock (never /data, invariant 6): the
+            # row alone decides, as before, and the descriptor is not leaked
+            os.close(fd)
+            fd = None
     try:
         now = time.time()
-        # ...AND A FRESH ROW OF ANOTHER PROCESS refuses too, the lock free or not:
-        # a process that takes no lock (one from before this, during a deploy)
-        # is told by its row alone, aged as before (`_is_live`: the boot's clock,
-        # another boot dead). Read without the write lock: a refusal on a busy
-        # manifest is said at once (the fourth read)
+        # ...AND A FRESH ROW OF ANOTHER PROCESS refuses too: a process that
+        # takes no lock (one from before this, during a deploy) is told by its
+        # row alone, aged as before (`_is_live`: the boot's clock, another boot
+        # dead). A row whose writer said it held the lock is dead once the lock
+        # is ours. Read without the write lock: a refusal on a busy manifest is
+        # said at once (the fourth read)
         existing = read_claim(con)
-        if not force and _is_live(existing, now):
+        dead_holder = fd is not None and bool((existing or {}).get("lock"))
+        if not force and not dead_holder and _is_live(existing, now):
             raise _busy(source_id, existing, now, f"claimed {int(_age(existing, now))}s ago",
                         STALE_AFTER_SECONDS - _age(existing, now) + 5)
         # the lock ours, the row no other's: written (one statement; no other
         # process that locks writes it meanwhile)
-        db.set_control(con, CLAIM_KEY, _record(source_id, now))
+        db.set_control(con, CLAIM_KEY, _record(source_id, now, locked=fd is not None))
     except BaseException:
         if fd is not None:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
         raise
+    if fd is not None:
+        with _fds_lock:
+            _held_fds[str(path)] = fd
     try:
         yield
     finally:
         try:
             _set_if_mine(con, "")
-        except sqlite3.OperationalError:
-            # the manifest busy past its timeout: the row goes stale by itself;
-            # the lock below is let go all the same, and the pass's own result
-            # or error stands (the fourth read, run)
+        except sqlite3.Error:
+            # the manifest busy past its timeout, or worse: the row goes stale by
+            # itself; the lock below is let go all the same, and the pass's own
+            # result or error stands (the fourth read, run)
             pass
-        if fd is not None:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
+        finally:
+            # LET GO WHATEVER THE ROW'S WRITE DID (the seventh read, run: any
+            # other error there kept the lock for the process's life, and every
+            # later fetch of it was refused)
+            if fd is not None:
+                with _fds_lock:
+                    _held_fds.pop(str(path), None)
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                    finally:
+                        os.close(fd)
 
 
 def refresh_claim(con, source_id: str, last_refresh: float) -> float:
@@ -280,5 +330,6 @@ def refresh_claim(con, source_id: str, last_refresh: float) -> float:
     now = time.time()
     if 0 <= now - last_refresh < _REFRESH_EVERY:
         return last_refresh           # a clock stepped back refreshes at once
-    _set_if_mine(con, _record(source_id, now))
+    path = lock_path(con)
+    _set_if_mine(con, _record(source_id, now, locked=path is not None and str(path) in _held_fds))
     return now

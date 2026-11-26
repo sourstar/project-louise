@@ -57,6 +57,15 @@ measured (published figures disagree).
   its manifest refuses every write for 300 s, and then its own writes fail first; only a BUSY manifest is
   a deferral retried (a read-only or full one is an error, left to discovery); a retried fetch starts on
   a thread and connection of its own (on the main loop it waited out the busy timeout) and says why.
+  THE CLAIM IS NOW THAT FLOCK (the sixth read: every staleness rule had its own way to be wrong):
+  `acquire.lock` beside the manifest, held for the pass, dropped by the kernel with its holder; the row is
+  kept for the Library and the refusal's words. The seventh read, run: a row whose writer said it held the
+  lock (`"lock": true`) is dead once the lock is taken (a holder SIGKILLed in the same boot refused 305 s);
+  the lock is let go whatever the row's give-back raises; a fetch's rsync inherits the lock (`pass_fds`), so
+  it lives as long as the last writer of a `.part`; `hold records fetch` and `hold update` read another
+  process's fetch as a deferral (exit 3; waiting, never a try); the pause of a fetch begun before the first
+  lock take reaches it. Not changed: the retry deadlines stay on the wall clock — a clock stepped back
+  delays a retry at most to the collection's next discovery, which asks the fetch itself.
 
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
   `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"

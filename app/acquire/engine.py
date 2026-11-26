@@ -1241,6 +1241,17 @@ def _run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
                         # worker's post-fetch rescan keys on "fetched"
                         total["stopped"] = str(e)
                         break
+                    except Exception as e:
+                        # ...AND TOLD on any other way out: a mid-pass busy
+                        # manifest names what landed (`e.fetched`), and the
+                        # torrents before this one landed files too (the
+                        # seventh read)
+                        if total.get("fetched"):
+                            try:
+                                e.fetched = int(getattr(e, "fetched", 0) or 0) + int(total["fetched"])
+                            except (AttributeError, TypeError, ValueError):
+                                pass
+                        raise
                     for k, v in part.items():
                         total[k] = total.get(k, 0) + v if isinstance(v, (int, float)) else v
                 return total
