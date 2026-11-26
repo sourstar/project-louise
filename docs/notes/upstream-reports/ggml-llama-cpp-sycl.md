@@ -102,3 +102,68 @@ patch, SYCL F16, oneAPI 2025.3.0, `GGML_SYCL_ENABLE_DNN=0`): `-o MUL_MAT -p
 before; the three new cases included), the exhaustive decoder sweep 272 / 0
 (34 / 238 before), the whole `-o MUL_MAT` suite 2276 OK / 0 FAIL / 592 not
 supported.
+
+---
+
+# A device-memory refusal at the pool's commit aborts the process (2026-11-26)
+
+*For the filer: localai-bugs.md B18. Upstream has the abort in
+ggml-org/llama.cpp #27595 (open, "bug-unconfirmed"), where it is read as a
+usage problem ("the typical out of memory in running"); nobody there asks
+that it cost the request instead of the process, and we have that fix:
+`deploy/localai/patches/staged/0013-llama-cpp-sycl-pool-refusal.patch`
+completed by `0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch`
+(the inner patches are against llama.cpp), live in our engine since
+2026-11-25. File as a new issue that names #27595, or as the PR. What lies
+between the two markers is the issue; its first line is the title.*
+
+<!-- issue:B18 -->
+SYCL: an out-of-device-memory at the VMM pool's commit aborts the process; it should fail the graph
+
+**Version.** llama.cpp at `78e0529`, SYCL backend (`GGML_SYCL_F16`), oneAPI
+2025.3, Intel Arc Pro B70.
+
+**What happens.** While a graph runs, `ggml_sycl_pool_vmm::alloc` commits
+device memory for the ops' temporaries. The commit is wrapped in
+`SYCL_CHECK(CHECK_TRY_ERROR(...))`, so a refusal by the driver ends the
+process:
+
+```
+level_zero backend failed with error: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)
+SYCL error: CHECK_TRY_ERROR(phys.emplace(dev, ctx, reserve_size)): Exception caught in this line of code.
+  in function alloc at ggml-sycl.cpp
+```
+
+(#27595 shows the same abort at the pool's `phys->map(...)`.) The model's
+own buffers fail softly — a device allocation that returns null fails the
+load or the context. The pool's commit is the one path where being short of
+memory for a moment costs the whole process: the weights, every slot, the
+request in flight. On a card that several processes share, another model's
+load is enough to trigger it.
+
+**Expected.** The graph fails (`GGML_STATUS_ALLOC_FAILED`), which llama.cpp
+already turns into `-2` from decode/encode and its server into an error for
+that request; the process and the model stay, and the next request is
+served.
+
+**Fix we run.** The pool throws a dedicated type before it has changed
+anything; `ggml_backend_sycl_graph_compute` catches it, waits for the queue
+and returns `GGML_STATUS_ALLOC_FAILED`. Two things a first attempt got
+wrong, for whoever writes the upstream change:
+
+- the type must be neither a `sycl::exception` nor a `std::exception`: every
+  op is itself called under `SYCL_CHECK(CHECK_TRY_ERROR(op(...)))`, whose
+  catch aborts, so an exception of either kind never reaches the graph;
+- what an abandoned op leaves behind is safe as it stands: its temporaries
+  are the pool's and are released in reverse order as the stack unwinds, and
+  the one thing ops change for good (the layout of quantized weights) takes
+  its scratch memory from the device allocator, not the pool.
+
+**Verified** on the B70 with a test switch that refuses the pool's next N
+commits (a card cannot be made to refuse by filling it: the driver pages a
+neighbour out first). Before: the first request that grew the pool ended the
+process — the client saw "error reading from server: EOF" — and so did each
+reload. After: the request fails with "Compute error", the process stays,
+and the same model answers the next request. A patch is available.
+<!-- /issue -->
+

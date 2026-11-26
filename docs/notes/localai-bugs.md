@@ -2,7 +2,9 @@
 
 *One place for everything this project owes or asks `mudler/LocalAI`: the
 defects found (B1–B26), the patches we carry (P1–P8, more staged), and the requests (R1–R6).
-The operator files them upstream. Started 2026-10-02 while mapping LocalAI
+The operator files them upstream: B1–B14 are condensed, and B17–B26 written out to
+be filed as they are, in [`upstream-reports/mudler-localai.md`](upstream-reports/mudler-localai.md)
+(B18 in `upstream-reports/ggml-llama-cpp-sycl.md`; nothing filed yet). Started 2026-10-02 while mapping LocalAI
 against the model pool (`model-pool-prior-art.md`@c572c3b); the patches and
 requests come from `model-pool-over-localai.md`@c572c3b, accepted
 2026-10-03.*

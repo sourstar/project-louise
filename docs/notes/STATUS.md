@@ -976,6 +976,12 @@ measured (published figures disagree).
   LocalAI's own defect B26). THE FLOOR IS THE KEEPER'S NOW: while a loaded model says it parks the worker holds LocalAI's floor to
   `[models] page_floor_gib` (main a2b5935b) — a floor set by hand lasts seconds, and parking is on for such a model without anyone
   setting it. No real model says it parks.
+- **THE UPSTREAM DEFECTS SINCE B14 ARE WRITTEN OUT TO BE FILED (2026-11-26; the operator: "Write the defects for filing"):**
+  [upstream-reports/mudler-localai.md](upstream-reports/mudler-localai.md) — B21 (a stream that fails after its first chunk ends
+  as a complete answer), B24 (a settings write that never answers), B26 (`/backend/monitor` 500), B20 (a voice lease outliving its
+  process), B19 (`exit()` in the signal handler), B25 (a lost log line, a flaky spec), B22 (a repeated load answered by name
+  alone), B17 as a feature request — and B18 in `upstream-reports/ggml-llama-cpp-sycl.md` (llama.cpp's). Each read in v5.0.1's own
+  source, the trackers searched (README there), nothing of the project in an issue's text. NOTHING IS FILED: the operator files.
 - **Live 2026-11-25 15:18:30Z to 23:45:20Z, and the engine a rollback puts back: engine `619655e5833b`** (`engine-canary.series`: `792f050e318e`'s series + 0028; the operator:
   "Deploy and engine swap"). München: byte check VEGA/1 against VEGA/2 all identical (bge-m3, nemotron, qwen3-4b); five gates passed,
   each "exact, 3 fresh load(s)", every fingerprint identical to before — wikipedia (bge-m3) 109 s, gutenberg (qwen3-embedding-4b)
