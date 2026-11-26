@@ -1349,7 +1349,10 @@ function rememberPaper(){try{localStorage.setItem('louise-paper',paperChoice())}
 function pdfPlates(h){
   return [...h.querySelectorAll('.figures > *')].slice(0,24).map(f=>{
     if(f.matches('figure.plate')){
-      const img=f.querySelector('img'), cap=f.querySelector('figcaption');
+      const img=f.querySelector('img');
+      // the caption's own words: a preview's "the original" link beside them is the page's, not the plate's
+      let cap=f.querySelector('figcaption');
+      if(cap){cap=cap.cloneNode(true); cap.querySelectorAll('.plate-original').forEach(a=>a.remove());}
       const u=new URL(img.getAttribute('src'),location.href);
       return {kind:'img', collection:u.searchParams.get('collection'), uid:u.searchParams.get('uid'),
               hash:u.searchParams.get('hash'), caption:cap?cap.textContent.trim():''};

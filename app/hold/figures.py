@@ -273,6 +273,91 @@ def read_figure(path: Path, sha256: str) -> bytes:
     return data
 
 
+#: a plate is streamed in pieces of this size
+STREAM_CHUNK = 1 << 20
+
+
+class _Extent:
+    """`size` bytes of a file from `offset`, as the file-like object pyarrow
+    reads a compressed stream from."""
+
+    def __init__(self, f, offset: int, size: int) -> None:
+        self._f, self._left = f, size
+        f.seek(offset)
+
+    def read(self, n: int = -1) -> bytes:
+        if self._left <= 0:
+            return b""
+        got = self._f.read(self._left if n is None or n < 0 else min(n, self._left))
+        self._left -= len(got)
+        return got
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
+    def writable(self) -> bool:
+        return False
+
+    def close(self) -> None:
+        """Nothing: the file is its opener's, and is closed by it."""
+
+    @property
+    def closed(self) -> bool:
+        return self._f.closed
+
+
+def stream_figure(path: Path, sha256: str, chunk: int = STREAM_CHUNK) -> Iterator[bytes]:
+    """One plate's bytes, by hash, IN PIECES — for a plate too large to hold
+    (EUR-Lex's largest is 565 MB; `read_figure` would hold it whole, twice
+    while it decompresses). The container's frame is read through zstd's
+    streaming decoder (pyarrow's `CompressedInputStream`: the library's own
+    call), hashed as it goes. THE LAST PIECE IS HELD BACK until the whole
+    hashes to its key and has the length its index states; where it does not,
+    `FigureError` is raised in its place — so a receiver never holds a whole
+    file that is not the plate: it is at least that piece short, and its
+    transfer fails (an HTTP answer that declared the length is cut before
+    it; the first cut handed every piece on and raised after the last, and a
+    damaged plate of the right length arrived whole with status 200). One
+    that decompresses PAST its length raises at the piece that passes it."""
+    want = bare(sha256)
+    entry = read_index(path).get(want)
+    if entry is None:
+        raise FigureError(f"{Path(path).name}: holds no figure {want[:12]}…")
+    sha, sent = hashlib.sha256(), 0
+    last: bytes | None = None
+    with open(path, "rb") as f:
+        with pa.CompressedInputStream(pa.PythonFile(_Extent(f, entry.offset, entry.frame_bytes), mode="r"),
+                                      "zstd") as plain:
+            while True:
+                try:
+                    piece = plain.read(chunk)
+                except (pa.ArrowException, OSError) as e:
+                    # zstd's own error names no plate (as in `walk`)
+                    raise FigureError(f"{Path(path).name}: figure {want[:12]}… does not decompress "
+                                      f"({str(e)[:120]})") from None
+                if not piece:
+                    break
+                sent += len(piece)
+                if sent > entry.bytes:
+                    # a frame that decompresses to more than its index states is
+                    # stopped HERE, not at its end: a few bytes of zstd can state
+                    # gigabytes, and the receiver writes what it is handed
+                    raise FigureError(f"{Path(path).name}: figure {want[:12]}… decompresses past the "
+                                      f"{entry.bytes} bytes its index states")
+                sha.update(piece)
+                if last is not None:
+                    yield last
+                last = piece
+    if sent != entry.bytes or sha.hexdigest() != want:
+        raise FigureError(f"{Path(path).name}: figure {want[:12]}… streamed {sent} bytes hashing to "
+                          f"{sha.hexdigest()[:12]}… (its index states {entry.bytes})")
+    if last is not None:
+        yield last
+
+
 def walk(path: Path) -> Iterator[tuple[str, bytes]]:
     """Every plate in the container, in hash order. One open, one pass —
     the shape a check wants, where `read_figure` is the shape a reader
