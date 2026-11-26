@@ -894,6 +894,13 @@ measured (published figures disagree).
   gate's clause with the fingerprint texts (the cycles compared the tool's own sixteen sentences), a quantized model, buffers above
   1 GiB, the 35B. NO REAL MODEL PARKS: both copies are removed; which models park is the keeper's half and the operator's, a gated
   run each.
+- **A PARK CYCLE IS COUNTED BY THE ENGINE, NEVER ASSUMED (2026-11-26; parking-step-2.md §10):** for the gate's clause the
+  architecture session builds. A return that FAILS is paid by LocalAI as a load and answered HTTP 200 with the same vectors — seen
+  on the real server with the CPU stand-in — so the same bytes are not a cycle. The engine counts weights that left and came back
+  (`Status`, since `ed93e3c1b2e2`) and LocalAI's own `GET /backend/monitor?model=` serves the counts: read without bringing a
+  parked model back, 7 and 7 after seven cycles, started again at 0 after a failed return. `tools/measure/park_http.py cycles` took
+  a failed return for a cycle until today and now counts each one. Tonight's forty cycles on the card were not counted; they stand
+  on their times (226–246 ms a return, 4.17 s a load). NOT shown: the route behind the VeGa wrapper, the counts on a card.
 - **Live 2026-11-25 15:18:30Z to 23:45:20Z, and the engine a rollback puts back: engine `619655e5833b`** (`engine-canary.series`: `792f050e318e`'s series + 0028; the operator:
   "Deploy and engine swap"). München: byte check VEGA/1 against VEGA/2 all identical (bge-m3, nemotron, qwen3-4b); five gates passed,
   each "exact, 3 fresh load(s)", every fingerprint identical to before — wikipedia (bge-m3) 109 s, gutenberg (qwen3-embedding-4b)

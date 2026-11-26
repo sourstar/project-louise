@@ -47,6 +47,11 @@ class StandIn:
         self.last_request = 0.0
         self.running = 0
         self.returns = 0
+        # the ENGINE's own counts, as LocalAI's /backend/monitor gives its backend's Status
+        self.n_parks = self.n_unparks = self.n_no_room = 0
+        self.monitor = "counts"         # "sampled": LocalAI's fallback for a backend without Status; "none": no route
+        self.reload_at = None           # this return FAILS and is paid as a load: a new process, the counts at 0
+        self.uncounted_park = False     # the server says parked, the engine counted nothing
         self.calls: list[str] = []
         self.headers: list[dict] = []
         self.lock = threading.Lock()
@@ -96,6 +101,16 @@ def localai():
                 self._answer(200, {"backends": [], "loaded_models": [stand_in.row(), {"id": "another", "size_vram": 5}]})
             elif self.path == "/api/settings":
                 self._answer(200, stand_in.settings)
+            elif self.path == "/backend/monitor?model=copy" and stand_in.monitor == "counts":
+                parked = stand_in.state == "parked"
+                self._answer(200, {"state": 2, "memory": {"total": 1208184832, "breakdown": {
+                    "no_room": stand_in.n_no_room, "park_size": stand_in.park_size, "parked": int(parked),
+                    "parked_host": stand_in.park_size if parked else 0, "parks": stand_in.n_parks,
+                    "rss": 110960640, "unparks": stand_in.n_unparks}}})
+            elif self.path == "/backend/monitor?model=copy" and stand_in.monitor == "sampled":
+                self._answer(200, {"state": -1, "memory": {"total": 1208184832, "breakdown": {"gopsutil-RSS": 110960640}}})
+            elif self.path.startswith("/backend/monitor?model=") and stand_in.monitor != "none":
+                self._answer(500, {"error": {"code": 500, "message": "backend nobody is not currently loaded", "type": ""}})
             else:
                 self._answer(404, {"error": {"code": 404, "message": "Resource not found"}})
 
@@ -115,6 +130,8 @@ def localai():
                     return self._error(409, "model_busy", "its last request was a moment ago")
                 if stand_in.floor == 0:
                     return self._error(412, "parking_off", "parking is off: no host memory floor is set")
+                if stand_in.state != "parked" and not stand_in.uncounted_park:
+                    stand_in.n_parks += 1
                 stand_in.state = "parked"
                 return self._answer(200, {"message": "model parked", "parked": stand_in.row()["parked"]})
             if self.path in ("/backend/load", "/v1/embeddings"):
@@ -122,9 +139,14 @@ def localai():
                     with stand_in.lock:
                         if stand_in.refuse_returns > 0:
                             stand_in.refuse_returns -= 1
+                            stand_in.n_no_room += 1
                             return self._error(stand_in.refusal_status, "no_room_on_device",
                                                "the weights cannot come back to the device now", {"Retry-After": "2"})
                         stand_in.returns += 1
+                        if stand_in.returns == stand_in.reload_at:
+                            stand_in.n_parks = stand_in.n_unparks = stand_in.n_no_room = 0
+                        else:
+                            stand_in.n_unparks += 1
                         if not stand_in.stuck_parked:
                             stand_in.state = "loaded"
                 if self.path == "/backend/load":
@@ -159,7 +181,11 @@ def test_cycles_that_park_and_return_the_same_bytes_pass_and_say_what_each_took(
     assert lines[0].startswith("before: parks, state 'loaded', size_vram 896 MiB")
     assert lines[-1].startswith("5 of 5 cycles: the same bytes; a park ")
     assert stand_in.calls.count("POST /backend/park") == 5 and "POST /backend/load" not in stand_in.calls
-    cycle = lines[1]
+    assert lines[1] == "the engine's counts before: 0 parked, 0 back, 0 refused for room, on the device"
+    assert lines[-3] == ("the engine's counts after: 5 parked, 5 back, 0 refused for room, on the device - "
+                         "5 parks and 5 returns COUNTED, in the one process")
+    assert stand_in.calls.count("GET /backend/monitor?model=copy") == 1 + 5 * 3 + 1
+    cycle = lines[2]
     assert "575 MiB to the host" in cycle and "the process holds 321 MiB of the device, 575 MiB given back" in cycle
     assert "back by the request in" in cycle and cycle.endswith("vectors identical")
 
@@ -183,7 +209,7 @@ def test_a_return_by_backend_load_is_asked_for_each_cycle(localai):
     stand_in, server = localai
     passed, lines = tool.cycles(server, "copy", 3, "load")
     assert passed, "\n".join(lines)
-    assert stand_in.calls.count("POST /backend/load") == 3 and "back by /backend/load and a request" in lines[1]
+    assert stand_in.calls.count("POST /backend/load") == 3 and "back by /backend/load and a request" in lines[2]
 
 
 def test_vectors_that_move_after_a_return_fail_the_run_at_that_cycle(localai):
@@ -200,6 +226,41 @@ def test_a_record_that_stays_parked_after_the_return_fails(localai):
     stand_in.stuck_parked = True
     passed, lines = tool.cycles(server, "copy", 3, "request")
     assert not passed and lines[-1] == "FAIL: cycle 1: the model is not listed loaded after its return"
+
+
+def test_a_return_that_failed_and_was_paid_as_a_load_is_not_a_cycle(localai):
+    """The hole the counts close: LocalAI answers the request that met a FAILED return from a new process, HTTP
+    200, the same vectors, the model listed loaded. Without the engine's counts that read as a cycle (seen on
+    LocalAI's real server with the CPU stand-in's failing return, 2026-11-26: 200 in 0.45 s, the counts at 0)."""
+    stand_in, server = localai
+    stand_in.reload_at = 3
+    passed, lines = tool.cycles(server, "copy", 5, "request")
+    assert not passed
+    assert lines[-2].endswith("vectors identical"), "everything a caller sees says it worked"
+    assert lines[-1] == ("FAIL: cycle 3: answered with the same bytes, but the engine's counts started again "
+                         "(0 parked, 0 back, 0 refused for room, on the device; they were 3 parked, 2 back, "
+                         "0 refused for room, away): another process answers - a return that FAILED and "
+                         "was paid as a load is not a cycle")
+    assert stand_in.calls.count("POST /backend/park") == 3, "it stops at the cycle that was not one"
+    # and at the FIRST cycle, where the counts before it were 0 too (the case the real server showed)
+    stand_in.reload_at, stand_in.state = stand_in.returns + 1, "loaded"
+    passed, lines = tool.cycles(server, "copy", 5, "request")
+    assert not passed and "FAIL: cycle 1: answered with the same bytes, but the engine's counts started again" in lines[-1]
+
+
+def test_a_park_the_engine_did_not_count_fails_and_counts_that_cannot_be_read_are_not_run(localai):
+    stand_in, server = localai
+    stand_in.uncounted_park = True
+    passed, lines = tool.cycles(server, "copy", 3, "request")
+    assert not passed and lines[-1].startswith("FAIL: cycle 1: parked by its answer, but the engine counts 0 parked")
+    # LocalAI's fallback for a backend that has no Status (a model that cannot park), and a server without the route
+    for monitor in ("sampled", "none"):
+        stand_in.uncounted_park, stand_in.state, stand_in.monitor = False, "loaded", monitor
+        parks = stand_in.calls.count("POST /backend/park")
+        passed, lines = tool.cycles(server, "copy", 3, "request")
+        assert not passed and lines[-1].startswith("NOT RUN: the engine's counts cannot be read"), lines[-1]
+        assert stand_in.calls.count("POST /backend/park") == parks, "nothing is parked where nothing can be counted"
+    assert server.counts("nobody") is None
 
 
 def test_a_park_that_is_refused_is_said_with_its_reason(localai):
@@ -231,6 +292,9 @@ def test_a_refused_return_is_a_deferral_that_leaves_the_model_parked(localai):
     assert lines[1].startswith("request 1: HTTP 503 'no_room_on_device' Retry-After '2'") and "state 'parked'" in lines[1]
     assert lines[3].startswith("request 3: served, vectors identical") and "state 'loaded'" in lines[3]
     assert lines[-1] == "ok: 2 return(s) refused as a deferral, then served"
+    # the engine counted them: two refusals for room, one return, in the process that parked
+    assert lines[0].endswith("the engine's counts: 1 parked, 0 back, 0 refused for room, away")
+    assert lines[-2] == "the engine's counts: 1 parked, 1 back, 2 refused for room, on the device"
 
 
 def test_a_refusal_answered_as_a_fault_fails_and_none_refused_is_not_run(localai):
@@ -308,6 +372,24 @@ def test_the_shapes_are_the_real_server_s_as_they_were_read_off_it():
     # the two answers that move with the park engine, seen on the real server before the node's pass
     assert "BOTH SEEN HERE FIRST" in section and '"code":"no_room_on_device","message":"Compute error:' in section
     assert "ended after 4 with NO `finish_reason`" in section
+
+
+def test_the_counts_are_read_as_the_real_server_gave_them():
+    """docs/notes/parking-step-2.md §10: GET /backend/monitor on LocalAI's real server, a real backend behind it."""
+    assert tool.COUNT_KEYS == ("parks", "unparks", "no_room", "parked")
+    note = (ROOT / "docs" / "notes" / "parking-step-2.md").read_text(encoding="utf-8")
+    section = note[note.index("## 10. "):]
+    for shape in ('{"state":2,"memory":{"total":1274732544,"breakdown":{"no_room":0,"park_size":66547200,"parked":1,'
+                  '"parked_host":66547200,"parks":1,"rss":177532928,"unparks":0}}}',
+                  "`GET /backend/monitor?model=<name>`", "| a FAILED return |"):
+        assert shape in section, shape
+    # the engine's words for them, in the live engine's patch
+    patch = (ROOT / "deploy" / "localai" / "patches" / "staged" / "0023-llama-cpp-park-when-told.patch").read_text(encoding="utf-8")
+    for line in ('(*memory->mutable_breakdown())["parks"]       = m.n_weights_park;',
+                 '(*memory->mutable_breakdown())["unparks"]     = m.n_weights_unpark;',
+                 '(*memory->mutable_breakdown())["no_room"]     = m.n_no_room;',
+                 "The counts are of weights that LEFT and that came BACK, never of attempts"):
+        assert line in patch, line
 
 
 def test_what_it_reads_of_an_answer():

@@ -1121,6 +1121,8 @@ this computation, try again later.","type":"no_room_on_device"}}` and
 | a failed return (`failed`) | no switch on a card | shown on the CPU server only (§8) |
 | the gate's clause with the FINGERPRINT texts (§3.3) | the forty cycles compared the tool's own sixteen sentences, not the gate's sixteen; München confirms the fingerprint texts were NOT run on the copy | at the gated run of the first real model that parks — it is part of that gate |
 | a quantized model, buffers above 1 GiB, the 35B, OmniVoice | §3.1's rows; only bge-m3 F16 (one 577 MiB buffer) has parked | before any of them is switched to parking |
+| parking BEHIND THE VEGA WRAPPER (LocalAI, the wrapper, the engine) | both copies were on the engine directly; the wrapper's part for a return (#882) is tested against a scripted backend, and `Free` and `Status` pass through it as any call it does not intercept | at the gated run of the first real model that parks: the first time the three meet |
+| the engine's own COUNT of the forty cycles | the tool did not read it yet (§10); the forty stand on their times — every return 226–246 ms, where a load is 4.17 s | from the next row on, the tool counts each cycle |
 
 No real model parks: no model file but the two copies ever carried `park:
 true` or `GGML_SYCL_PARKABLE`, and both copies are removed. Which models
@@ -1148,3 +1150,88 @@ keeper half counts a parked model at what its process keeps on the card,
 not its whole size (its `parking-keeper.md` §4). ITS ORDER FOR THE NODE: the
 app deploy that carries the keeper's half first, then a model file with
 `park: true` — the operator's, a gated run each.
+
+## 10. A park cycle is counted by the engine, never assumed (2026-11-26)
+
+The architecture session builds the gate's clause of §3.3 (after the
+operator has chosen which models park, and whether the signed statement says
+the cycles). Its two questions, relayed by München: how a gate should ASK
+for a cycle, and whether the engine counts its parks and returns anywhere a
+caller can read — "a pass that asked for 20 parks and got 409 every time
+must not certify 20 cycles".
+
+**The engine counts, since `ed93e3c1b2e2`, and LocalAI already serves the
+counts.** The backend's `Status` (staged 0023) carries, in its memory
+breakdown: `parks` — weights that LEFT; `unparks` — weights that came BACK;
+`no_room` — requests answered that the device was full; `parked`, 0 or 1;
+`park_size`; `parked_host`. Of weights, never of attempts; per process.
+LocalAI's own route `GET /backend/monitor?model=<name>` returns a backend's
+`Status` as JSON. Read off the real server of §8 (the park engine's CPU
+build behind it), a model parked once:
+
+    {"state":2,"memory":{"total":1274732544,"breakdown":{"no_room":0,"park_size":66547200,"parked":1,"parked_host":66547200,"parks":1,"rss":177532928,"unparks":0}}}
+
+| asked of the real server | answered |
+|---|---|
+| the route for a model not loaded | 500 "backend copy is not currently loaded" |
+| three reads of a PARKED model | the same counts three times; `/system` still says parked — a read brings nothing back |
+| a park asked right after two reads, 1.2 s after the last request | 200: a read is not a request for the idle second |
+| seven cycles | `parks` 7, `unparks` 7 |
+| a return refused twice, then served | `no_room` 1, then 2, `unparks` 0, `parked` 1; then `unparks` 1, `parked` 0 |
+| a FAILED return | the request answered **HTTP 200** in 0.45 s, the same vectors, the model listed loaded — by a NEW process, whose counts read `parks` 0, `unparks` 0 |
+
+**The last row is the hole.** LocalAI pays a failed return as an ordinary
+load (§7), so everything a caller sees says the cycle worked. Only the
+counts differ: they started again. `tools/measure/park_http.py cycles` took
+such a return for a cycle until today; it now reads the counts before each
+park, while parked, and after the return, and a cycle is one where `parks`
+and `unparks` each went up by exactly one in the one process. On the real
+server: twenty cycles by a request and twenty by `/backend/load`, "20 parks
+and 20 returns COUNTED, in the one process"; with the stand-in failing each
+process's first return:
+
+    FAIL: cycle 1: answered with the same bytes, but the engine's counts started again (0 parked, 0 back, 0 refused for room, on the device; they were 1 parked, 0 back, 0 refused for room, away): another process answers - a return that FAILED and was paid as a load is not a cycle
+
+**How a gate asks for one cycle**, through LocalAI alone:
+
+1. Read the counts (`/backend/monitor`). None — a model that cannot park
+   has no `Status`, and LocalAI answers with a sample of the process instead
+   — means the clause cannot be checked: said in plain words, not passed.
+2. `POST /backend/park {"model"}` once the model has been a second without
+   a request. 409 `model_busy`: wait and ask again, bounded, and a model
+   still busy at the bound is NOT a cycle. 412 `parking_off`, `cannot_park`,
+   `host_memory_floor`: the clause cannot run here; say which. Anything
+   else: a failure.
+3. Read the counts: `parks` one more, `parked` 1.
+4. The next probe IS the return. 503 `no_room_on_device` is a deferral:
+   wait its `Retry-After`, ask again, bounded; it is not a cycle and not a
+   failure. 200: its vectors against the first answers, as for a fresh
+   context — which it also is: a park frees the context whatever its keep,
+   so the return's request creates one, canary and all, and the wrapper's
+   `created` count goes up by one with it.
+5. Read the counts: `unparks` one more, `parked` 0, `parks` as at step 3.
+   Counts that started again: the return FAILED and a load answered — the
+   run fails. Counts that moved by more: someone else parked or brought it
+   back meanwhile (the keeper); that cycle is asked again, it proves nothing
+   either way.
+
+On the card a cycle of bge-m3 costs about 1.4 s: the idle second, 142 ms,
+228 ms (§9).
+
+**Where the count is read from** — the architecture session's to choose,
+with the operator's choice on the statement:
+
+| | pros | cons |
+|---|---|---|
+| A. the gate reads `/backend/monitor` itself | nothing new on the node: no engine, no wrapper, no gate of the other runs; the route is LocalAI's own; what the tool does | the count is the gate's word, not in the wrapper's receipts: a signed statement cannot carry it |
+| B. the wrapper reads `Status` after a call whose context was created, and tells VeGa with its other counts | the count is in the receipts, so a statement can say it (a version 7: the operator's decision) | a changed wrapper is a new run for every model of its package — 3,168 s of gates on 2026-11-25 — whether or not the model parks |
+| C. count the HTTP 200s (the tool until today) | nothing to build | certifies a failed return paid as a load, and twenty 409s if the caller does not look |
+
+A is enough for the gate's own verdict; B is what "the statement says the
+cycles" needs, and nothing less does.
+
+**NOT shown:** the route against a backend behind the VeGa wrapper (it
+forwards every call but `LoadModel` and `Embedding` untouched — read from
+`Proxy.handler`, not run); the counts on a card (the card's rows of §9 did
+not ask for them; the engine's `Status` did answer there — it is where
+`/system`'s parked sizes came from).

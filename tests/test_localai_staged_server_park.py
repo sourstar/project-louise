@@ -315,7 +315,9 @@ def test_the_card_s_rows_are_recorded_with_what_they_did_not_measure():
     for row in ("| the card's own counter WHILE parked |", "| a card refusing a return for its own reasons |",
                 "| a failed return (`failed`) | no switch on a card |",
                 "| the gate's clause with the FINGERPRINT texts (§3.3) |",
-                "| a quantized model, buffers above 1 GiB, the 35B, OmniVoice |"):
+                "| a quantized model, buffers above 1 GiB, the 35B, OmniVoice |",
+                "| parking BEHIND THE VEGA WRAPPER (LocalAI, the wrapper, the engine) | both copies were on the engine directly;",
+                "| the engine's own COUNT of the forty cycles | the tool did not read it yet (§10); the forty stand on their times"):
         assert row in still, row
     assert "No real model parks" in still and "both copies are removed" in still
     assert "München confirms the fingerprint texts were NOT run on the copy" in still
@@ -336,6 +338,29 @@ def test_the_card_s_rows_are_recorded_with_what_they_did_not_measure():
     assert "NOT measured: a card that refuses for its own reasons" in row and "any model but bge-m3 F16" in row
     row = next(line for line in bugs.splitlines() if line.startswith("| **P21 (staged)** |"))
     assert "**ON THE CARD: IT HOLDS**" in row and "40 of 40 park cycles the same bytes" in row
+
+
+def test_a_cycle_is_counted_by_the_engine_and_the_note_says_how_a_gate_asks_for_one():
+    """§10, for the architecture session's gate clause: the engine's counts, LocalAI's own route for them, the
+    failed return that is answered 200, and the three ways to carry the count with their costs."""
+    section = NOTE[NOTE.index("## 10. A park cycle is counted by the engine, never assumed (2026-11-26)"):]
+    for said in ("`GET /backend/monitor?model=<name>`", "Of weights, never of attempts; per process.",
+                 "| three reads of a PARKED model | the same counts three times; `/system` still says parked",
+                 "| a FAILED return | the request answered **HTTP 200** in 0.45 s",
+                 "20 parks\nand 20 returns COUNTED, in the one process",
+                 "FAIL: cycle 1: answered with the same bytes, but the engine's counts started again",
+                 "| A. the gate reads `/backend/monitor` itself |", "| B. the wrapper reads `Status`",
+                 "| C. count the HTTP 200s (the tool until today) |", "3,168 s of gates",
+                 "**NOT shown:** the route against a backend behind the VeGa wrapper"):
+        assert said in section, said
+    assert 98 + 1983 + 70 + 509 + 508 == 3168
+    # every row of the choice has its pros and its cons
+    rows = [line for line in section.splitlines() if line.startswith(("| A. ", "| B. ", "| C. "))]
+    assert len(rows) == 3 and all(len([c for c in row.split("|")[2:4] if c.strip()]) == 2 for row in rows)
+    # the wrapper forwards what it does not intercept: the two calls it does are these and no other
+    wrapper = (ROOT / "deploy" / "vega" / "vega_wrapper.py").read_text(encoding="utf-8")
+    assert "intercepted = {LOAD: proxy._unary(LOAD, proxy.gate.load_model),\n" in wrapper
+    assert "return intercepted.get(details.method) or proxy._stream(details.method)" in wrapper
 
 
 def test_the_tool_s_sixteen_sentences_are_not_the_gate_s_fingerprints():

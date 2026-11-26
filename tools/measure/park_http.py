@@ -36,6 +36,18 @@ device), brings it back - by the next request, or by `/backend/load` - reads
 BIT FOR BIT with the first. It prints what each park and each return took.
 Exit 0: every cycle parked, came back, and gave the same bytes.
 
+A CYCLE IS COUNTED BY THE ENGINE, NEVER ASSUMED. The same bytes after an HTTP
+200 are not a cycle: a return that FAILS is paid by LocalAI as an ordinary load
+in a new process, answered 200 with the same vectors. So `cycles` reads the
+engine's own counts before and after each step - `GET /backend/monitor?model=`,
+LocalAI's own route, which gives the backend's `Status`: `parks` (weights that
+LEFT), `unparks` (that came BACK), `no_room` (requests refused for room),
+`parked`; of weights, never of attempts; per process, so a model loaded afresh
+reads 0 - and a cycle is one where `parks` and `unparks` each went up by
+exactly one. Reading them brings nothing back and is not a request. A
+Louise gate that certifies park cycles counts them the same way
+(docs/notes/parking-step-2.md §10).
+
 `refused` parks once and asks again until it is served: with
 `GGML_SYCL_PARK_REFUSE=N` in the copy's env the first N returns are refused,
 and each must be HTTP 503, type `no_room_on_device`, with a `Retry-After`, the
@@ -60,6 +72,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -112,6 +125,15 @@ class Server:
             raise SystemExit(f"GET /system answered {status}: {str(body)[:200]}")
         return next((m for m in body.get(MODELS_KEY) or [] if m.get("id") == model), None)
 
+    def counts(self, model: str) -> dict[str, int] | None:
+        """the ENGINE's own counts for the model's process, through LocalAI's /backend/monitor (the backend's
+        `Status`): None where there are none - a model that cannot park, one not loaded, a server without them"""
+        status, body, _ = self.call("GET", "/backend/monitor?model=" + urllib.parse.quote(model, safe=""))
+        breakdown = (body.get("memory") or {}).get("breakdown") if status == 200 and isinstance(body, dict) else None
+        if not isinstance(breakdown, dict) or any(k not in breakdown for k in COUNT_KEYS):
+            return None
+        return {k: int(breakdown[k]) for k in COUNT_KEYS}
+
     def rows(self) -> list[dict]:
         status, body, _ = self.call("GET", "/system")
         if status != 200 or not isinstance(body, dict):
@@ -162,6 +184,29 @@ def describe(row: dict | None) -> str:
     return f"parks, state {row.get('state')!r}, size_vram {mib(row.get('size_vram'))}{extra}"
 
 
+#: what the engine counts, as its `Status` names them (staged 0023, grpc-server.cpp)
+COUNT_KEYS = ("parks", "unparks", "no_room", "parked")
+
+
+def said(counts: dict[str, int] | None) -> str:
+    if counts is None:
+        return "no counts"
+    return (f"{counts['parks']} parked, {counts['unparks']} back, {counts['no_room']} refused for room, "
+            f"{'away' if counts['parked'] else 'on the device'}")
+
+
+def miscounted(before: dict[str, int], after: dict[str, int] | None, parks: int, unparks: int, parked: int) -> str:
+    """the empty string where the engine's counts moved from `before` by exactly this much; else what to say of it"""
+    if after is None:
+        return "the engine's counts cannot be read any more"
+    if after["parks"] < before["parks"] or after["unparks"] < before["unparks"]:
+        return (f"the engine's counts started again ({said(after)}; they were {said(before)}): another process "
+                f"answers - a return that FAILED and was paid as a load is not a cycle")
+    if (after["parks"], after["unparks"], after["parked"]) != (before["parks"] + parks, before["unparks"] + unparks, parked):
+        return f"the engine counts {said(after)}; it counted {said(before)} before"
+    return ""
+
+
 def park_when_idle(server: Server, model: str, patience: float = 5.0) -> tuple[int, object, float, int]:
     """One park, asked again while the answer is 409 model_busy: LocalAI takes a model that answered a request
     under a second ago for busy (one HTTP request is several calls to its backend), so a park asked right after
@@ -189,8 +234,16 @@ def cycles(server: Server, model: str, n: int, back: str) -> tuple[bool, list[st
         return False, lines + ["NOT RUN: /system does not list it as a model that parks, loaded - "
                                "its file needs `park: true`, and the server staged 0027"]
     held = row.get("size_vram")
+    first = server.counts(model)
+    if first is None:
+        return False, lines + ["NOT RUN: the engine's counts cannot be read (GET /backend/monitor?model=...): "
+                               "a cycle is counted by the engine, never taken from an HTTP 200"]
+    lines.append(f"the engine's counts before: {said(first)}")
     parks, returns, passed, settled = [], [], True, 0
     for i in range(1, n + 1):
+        counted = server.counts(model)
+        if counted is None:
+            return False, lines + [f"FAIL: cycle {i}: the engine's counts cannot be read any more"]
         status, answer, took_park, busy_first = park_when_idle(server, model)
         settled += busy_first
         if status != 200:
@@ -199,6 +252,10 @@ def cycles(server: Server, model: str, n: int, back: str) -> tuple[bool, list[st
         parked = server.row(model)
         if parked is None or parked.get("state") != "parked":
             return False, lines + [f"FAIL: cycle {i}: parked by its answer, but /system says: {describe(parked)}"]
+        away = server.counts(model)
+        wrong = miscounted(counted, away, 1, 0, 1)
+        if wrong or away is None:
+            return False, lines + [f"FAIL: cycle {i}: parked by its answer, but {wrong}"]
         moved = (answer.get("parked") or {}).get("size_host") if isinstance(answer, dict) else None
         freed = (held - parked["size_vram"]) if isinstance(held, int) and isinstance(parked.get("size_vram"), int) else None
         t = time.monotonic()
@@ -215,7 +272,8 @@ def cycles(server: Server, model: str, n: int, back: str) -> tuple[bool, list[st
         after = server.row(model)
         same = got == base
         state_ok = after is not None and after.get("state") == "loaded"
-        passed = passed and same and state_ok
+        wrong = miscounted(away, server.counts(model), 0, 1, 0)   # against the reading taken while it was away
+        passed = passed and same and state_ok and not wrong
         parks.append(took_park)
         returns.append(took_return)
         lines.append(f"cycle {i:2d}: parked in {took_park * 1000:7.1f} ms ({mib(moved)} to the host, the process holds "
@@ -227,6 +285,10 @@ def cycles(server: Server, model: str, n: int, back: str) -> tuple[bool, list[st
         if not same or not state_ok:
             return False, lines + [f"FAIL: cycle {i}: " + ("the vectors are not the first ones" if not same
                                                              else "the model is not listed loaded after its return")]
+        if wrong:
+            return False, lines + [f"FAIL: cycle {i}: answered with the same bytes, but {wrong}"]
+    last = server.counts(model)
+    lines.append(f"the engine's counts after: {said(last)} - {n} parks and {n} returns COUNTED, in the one process")
     lines.append(f"each park was asked right after a request: answered 409 model_busy {settled} times in all before "
                  f"the model had been idle for its second")
     lines.append(f"{n} of {n} cycles: the same bytes; a park {statistics.median(parks) * 1000:.1f} ms (median, "
@@ -243,7 +305,8 @@ def refused(server: Server, model: str, tries: int = 6) -> tuple[bool, list[str]
     status, answer, _, _ = park_when_idle(server, model)
     if status != 200:
         return False, [f"NOT RUN: the park answered HTTP {status} {error_of(answer)}"]
-    lines, n, passed = [f"parked; the sixteen vectors {digest(base)}"], 0, True
+    counted = server.counts(model)
+    lines, n, passed = [f"parked; the sixteen vectors {digest(base)}; the engine's counts: {said(counted)}"], 0, True
     for attempt in range(1, tries + 1):
         status, got, headers = server.embed(model)
         if status == 200:
@@ -252,6 +315,13 @@ def refused(server: Server, model: str, tries: int = 6) -> tuple[bool, list[str]
             lines.append(f"request {attempt}: served, vectors {'identical' if same else 'DIFFERENT'}; {describe(row)}")
             if n == 0:
                 return False, lines + ["NOT RUN: no return was refused - is GGML_SYCL_PARK_REFUSE in the copy's env?"]
+            after = server.counts(model)
+            lines.append(f"the engine's counts: {said(after)}")
+            wrong = "" if counted is None else miscounted(counted, after, 0, 1, 0)
+            if not wrong and counted is not None and after is not None and after["no_room"] != counted["no_room"] + n:
+                wrong = f"the engine counts {after['no_room'] - counted['no_room']} refusal(s) for room, {n} were answered"
+            if wrong:
+                return False, lines + [f"FAIL: served, but {wrong}"]
             ok = passed and same and row is not None and row.get("state") == "loaded"
             return ok, lines + [("ok" if ok else "FAIL") + f": {n} return(s) refused as a deferral, then served"]
         kind, message = error_of(got)
@@ -309,11 +379,12 @@ def failed_return(server: Server, model: str) -> tuple[bool, list[str]]:
     status, answer, _, _ = park_when_idle(server, model)
     if status != 200:
         return False, [f"NOT RUN: the park answered HTTP {status} {error_of(answer)}"]
+    counted = server.counts(model)
     t = time.monotonic()
     status, got, _ = server.embed(model)
     took = time.monotonic() - t
     after = server.row(model)
-    lines = [f"parked; its process {pid_of(before)}",
+    lines = [f"parked; its process {pid_of(before)}; the engine's counts: {said(counted)}",
              f"the request to it: HTTP {status} in {took:.2f} s, vectors "
              f"{'identical' if got == base else ('DIFFERENT' if status == 200 else error_of(got))}; {describe(after)}; "
              f"its process {pid_of(after)}"]
@@ -321,6 +392,10 @@ def failed_return(server: Server, model: str) -> tuple[bool, list[str]]:
         return False, lines + ["NOT RUN: the same process answered - the return did not fail (the backend's test switch "
                                "for a failing return is not in its env)"]
     ok = status == 200 and got == base and after is not None and after.get("state") == "loaded"
+    recount = server.counts(model)
+    lines.append(f"the engine's counts afterwards: {said(recount)}")
+    if ok and counted is not None and recount is not None and recount["parks"] >= counted["parks"]:
+        return False, lines + ["FAIL: another process answers, and the counts did not start again"]
     return ok, lines + [("ok: the failed return cost a load, not an error" if ok
                          else "FAIL: the request that met a failed return was not served by an ordinary load")]
 
