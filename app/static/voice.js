@@ -702,7 +702,12 @@
   // a WAV of 16-bit PCM with the silence the model left at the cut trimmed
   // (at its start, its end or both), TRIM_KEEP_MS of it kept; anything else,
   // or a clip that would be left almost empty, as it came
-  const TRIM_LEVEL = 0.02 * 32768, TRIM_KEEP_MS = 15;
+  // THE ENGINE'S OWN SILENCE THRESHOLD, -50 dBFS (OmniVoice's remove_silence,
+  // deploy/localai/patches/staged/0009): a fading last syllable is speech
+  // well below -34 dBFS, and a higher threshold cut it (operator, 2026-11-26:
+  // "the last word is cut ... the volume is fading out but while there is
+  // still speech"); 40 ms kept beyond the last sample above it
+  const TRIM_LEVEL = 32768 * Math.pow(10, -50 / 20), TRIM_KEEP_MS = 40;
   function trimWav(buf, start, end) {
     try {
       const v = new DataView(buf);

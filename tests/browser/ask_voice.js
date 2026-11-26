@@ -555,8 +555,17 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
     const w = louiseVoice.wavBytes(x), cut = louiseVoice.trimWav(w, true, true), keep = louiseVoice.trimWav(w, false, true);
     return [w.byteLength, cut.byteLength, keep.byteLength];
   });
-  check(trimmed[1] < 44 + 2 * 16000 * 0.25 && trimmed[2] > 44 + 2 * 16000 * 0.69 && trimmed[2] < trimmed[0],
+  check(trimmed[1] < 44 + 2 * 16000 * 0.3 && trimmed[2] > 44 + 2 * 16000 * 0.69 && trimmed[2] < trimmed[0],
         '24. the silence the model left at a cut is trimmed, at the side cut', trimmed);
+  // a fading tail, -40 dBFS, is speech: never trimmed (operator, 2026-11-26: the last word cut while fading)
+  const fade24 = await page.evaluate(() => {
+    const n = 16000, x = new Float32Array(n);
+    for (let i = 0; i < 4000; i++) x[i] = 0.5 * Math.sin(i / 3);        // a word, 250 ms
+    for (let i = 4000; i < 8000; i++) x[i] = 0.01 * Math.sin(i / 3);    // its fading end, -40 dBFS, 250 ms
+    const w = louiseVoice.wavBytes(x);
+    return [louiseVoice.trimWav(w, false, true).byteLength, 44 + 2 * 8000];
+  });
+  check(fade24[0] >= fade24[1], '24. a fading word\'s end, quiet but speech, is kept', fade24);
   // THE SAME ANSWER READ AGAIN IS CUT IN THE SAME PIECES, whatever was
   // learned meanwhile (its rates are taken once, when it was asked): the
   // node's kept clips serve it (operator, 2026-11-09)
