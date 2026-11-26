@@ -66,6 +66,7 @@ and language, the busiest start day and the inventory's time are OWED.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -946,6 +947,9 @@ def _say_cellar(name: str) -> Callable[[str], None]:
 
 #: a covered window's fingerprint is asked again after this (once a day)
 WINDOW_REFRESH_S = 24 * 3600.0
+#: a window whose re-ask failed is not asked again before this, nor before
+#: the next prepare (review of 4076ab4c, Z1: 50 units, 50 counts of 900 s)
+WINDOW_FAILED_HOLD_S = 15 * 60.0
 
 
 class WindowNotListed(Waiting):
@@ -1133,6 +1137,7 @@ class CellarUnits:
         self._due: dict[str, set] = {}              # corpus root → the units asked first this pass
         self._base_url: dict[str, str | None] = {}  # corpus root → Cellar's base, for a window asked again
         self._window_locks: dict[tuple, Any] = {}   # (root, year, lang) → one refresher at a time
+        self._window_failed: dict[tuple, float] = {}  # (root, year, lang) → when its re-ask failed
 
     def _count(self, got: "Fetched") -> None:
         with self._lock:
@@ -1409,27 +1414,45 @@ class TreeUnits(CellarUnits):
             lock = self._window_locks.setdefault((key, year, lang), __import__("threading").Lock())
             base_url = self._base_url.get(key)
         with lock:
+            _stop_check()                               # a stop while queued on the lock asks nothing
             with self._lock:
                 at = (self._cover.get(key) or {}).get((year, lang))
                 due, after = set(self._due.get(key) or ()), dict(self._after.get(key) or {})
+                failed = self._window_failed.get((key, year, lang))
             if base_url is None or (at is not None and time.time() - at <= WINDOW_REFRESH_S):
                 return                                  # another thread refreshed it meanwhile
+            if failed is not None and time.time() - failed < WINDOW_FAILED_HOLD_S:
+                return                                  # failed a moment ago: its units wait, nothing asked
             code_of = {v: k for k, v in LANGUAGES.items()}
             try:
-                with httpx.Client(timeout=TIMEOUT_S) as client:
+                # bound WITHOUT the endpoint's key, as the engine's listings are
+                # (engine._listing_bound; review of 4076ab4c, Z2): a count that
+                # times out must not cool Cellar for every fetch thread
+                from ..transfer.manager import Direction, get_manager
+                handle = current_handle()
+                bound = get_manager().bind(handle.priority, Direction.DOWN, stop=handle.stop) \
+                    if handle is not None else contextlib.nullcontext()
+                with bound, httpx.Client(timeout=TIMEOUT_S) as client:
                     for _ in _window_files(client, base_url, year, (lang,), code_of, budget.acquire_bytes,
                                            place=lambda *a: False, learned={"group": 1}):
                         pass
             except TransferAborted:
                 raise
-            except TransportError:
+            except (TransportError, OSError) as e:
+                # an episode, a window that moved between its count and its
+                # pages, or the listing not written (ENOSPC): remembered, so the
+                # window's other units wait at once (Z1, Z5, Z3); said once
+                with self._lock:
+                    self._window_failed[(key, year, lang)] = time.time()
+                _say_cellar(Path(key).name)(f"the {year} window ({lang}) was not asked again "
+                                            f"({type(e).__name__}: {str(e)[:200]}): its units wait")
                 return
             dates, cover = cellar_listing.coverage({u for u in due if u[1] == lang and window_year(u[0]) == year},
                                                    after, base_url)
             with self._lock:
                 if (year, lang) in cover:
+                    self._dates.setdefault(key, {}).update(dates)       # the dates before the cover
                     self._cover.setdefault(key, {})[(year, lang)] = cover[(year, lang)]
-                    self._dates.setdefault(key, {}).update(dates)
 
     def _reform(self, dest: Path, remote: RemoteFile, note) -> bool:
         """A held unit lacking the Formex package its tree lists is asked
@@ -1590,6 +1613,8 @@ class TreeUnits(CellarUnits):
             self._after[key] = after
             self._due[key] = due
             self._base_url[key] = base_url
+            for k in [k for k in self._window_failed if k[0] == key]:
+                del self._window_failed[k]              # a new prepare asks every window afresh
         changed = sum(1 for k, d in dates.items() if d > after.get(k[1], float("inf")))
         unchanged = len(dates) - changed
         say(f"trees from the bulk: {', '.join(sorted(bulk)) or 'no language'}; of {len(due)} unit(s) asked first, "
