@@ -2922,6 +2922,11 @@ def _is_deferral(e: BaseException) -> bool:
         return False                                     # the stop, said as 130 elsewhere
     if isinstance(e, backoff.Deferred):
         return True
+    from app.acquire.claim import AcquisitionBusy
+    if isinstance(e, AcquisitionBusy):
+        # ANOTHER PROCESS FETCHES THIS COLLECTION NOW (the worker's pass): asked
+        # again later, never a defect for `supervise-pass.sh` (the seventh read)
+        return True
     if isinstance(e, TransportError):
         return engine.transient(str(e))
     return isinstance(e, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError))

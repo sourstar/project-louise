@@ -49,9 +49,11 @@ from __future__ import annotations
 
 import contextvars
 import itertools
+import os
 import sqlite3
 import threading
 import time
+import uuid
 from collections import Counter
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
@@ -410,19 +412,92 @@ def _node_con() -> sqlite3.Connection | None:
     return sqlite3.connect(p, timeout=1.0, isolation_level=None)
 
 
+def _claim_key() -> str:
+    """THIS PROCESS'S claim row: `interactive_until:<pid>@<pid namespace>`. One
+    row a process (2026-11-26, the mode switch's reads, run): written by every
+    process, one row let a keeper's warm in the worker write 0 over the web's
+    question still running, and the web's linger hide the worker's call —
+    every reader of the claim was wrong for up to half a TTL. Readers take
+    every process's row (`claims`). Where the pid namespace cannot be read,
+    a token drawn once for the process stands for it: two containers' pid 7
+    (`init: true`) must never share a row (the sixth read)."""
+    try:
+        ns = str(os.stat("/proc/self/ns/pid").st_ino)
+    except OSError:
+        ns = _PROCESS_TOKEN
+    return f"{CLAIM_KEY}:{os.getpid()}@{ns}"
+
+
+_PROCESS_TOKEN = "t" + uuid.uuid4().hex[:12]
+
+#: a row of a process gone this long is removed by a writer; each process
+#: prunes at its first write and then at most this often, so a person's
+#: request pays one write and not two (the sixth read)
+CLAIM_ROW_GONE_S = 3600.0
+_pruned_at: list[float] = []
+
+#: the per-process rows, as a range on the key — `key` is BINARY, and LIKE
+#: (case-insensitive, `_` a wildcard) matched other keys and used no index
+#: (the sixth read, run: `SCAN control`); ';' follows ':' in every collation
+_ROWS = "(key >= ? AND key < ?)"
+_ROW_BOUNDS = (CLAIM_KEY + ":", CLAIM_KEY + ";")
+
+
 def _write_claim(until: float) -> None:
-    """Never raises: an interactive request is answered even when the node
-    store cannot be written — losing a claim costs one request's wait."""
+    """THIS PROCESS's claim (`_claim_key`). Never raises: an interactive
+    request is answered even when the node store cannot be written — losing a
+    claim costs one request's wait."""
     try:
         con = _node_con()
         if con is None:
             return
         with closing(con):
-            con.execute("INSERT INTO control(key, value) VALUES(?, ?) "
+            key = _claim_key()
+            # ...AND THE ROW OF BEFORE, in the same statement, for a reader of the
+            # code before (the GPU governor until its container is made again:
+            # deploy stage 8; the seventh read, run — it saw no claim, and held
+            # no clock for chat). Every reader of this code reads it too, as one
+            # more process's row: it says nothing a process's own row does not
+            con.execute("INSERT INTO control(key, value) VALUES(?, ?), (?, ?) "
                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                        (CLAIM_KEY, repr(until)))
+                        (key, repr(until), CLAIM_KEY, repr(until)))
+            now = time.time()
+            if not _pruned_at or now - _pruned_at[0] >= CLAIM_ROW_GONE_S:
+                # rows of processes gone, and the one row of before (expired
+                # an hour: no process of the old code still writes it)
+                con.execute(f"DELETE FROM control WHERE ({_ROWS} OR key = ?) AND key != ? "
+                            "AND CAST(value AS REAL) < ?",
+                            (*_ROW_BOUNDS, CLAIM_KEY, key, now - CLAIM_ROW_GONE_S))
+                _pruned_at[:] = [now]
     except Exception:   # noqa: BLE001
         pass
+
+
+def _claims_of(con) -> list[float]:
+    out: list[float] = []
+    for (value,) in con.execute(f"SELECT value FROM control WHERE key = ? OR {_ROWS}",
+                                (CLAIM_KEY, *_ROW_BOUNDS)).fetchall():
+        try:
+            out.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def claims() -> list[float]:
+    """Every process's claim as written — until when each holds (epoch s) —
+    read now, not memoised (the one row of before, a process not yet
+    restarted, among them); [] where none or unreadable. A process's value
+    is refreshed to at most INTERACTIVE_CLAIM_TTL_S ahead while a call runs
+    in it, and written further ahead for a question's linger."""
+    try:
+        con = _node_con()
+        if con is None:
+            return []
+        with closing(con):
+            return _claims_of(con)
+    except Exception:   # noqa: BLE001 — unread: no claim
+        return []
 
 
 _claim_seen: dict[str, tuple[float, bool]] = {}
@@ -443,9 +518,8 @@ def interactive_active() -> bool:
         con = _node_con()
         if con is not None:
             with closing(con):
-                row = con.execute("SELECT value FROM control WHERE key=?",
-                                  (CLAIM_KEY,)).fetchone()
-            active = row is not None and float(row[0]) > time.time()
+                at = time.time()
+                active = any(v > at for v in _claims_of(con))      # any process's (`_claim_key`)
     except Exception:   # noqa: BLE001 — an unreadable claim holds nothing back
         active = False
     with _claim_lock:

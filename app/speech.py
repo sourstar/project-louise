@@ -63,7 +63,7 @@ import wave
 from contextlib import contextmanager
 from typing import Any, Iterable, Iterator
 
-from app import config, httpc, model_pins, platform_config
+from app import config, httpc, model_load, model_pins, platform_config
 
 #: the pin is released this long after the last sentence: a client sends the
 #: next sentence well within it, and a reader who stopped frees the card
@@ -492,11 +492,17 @@ def _clip_dir():
     return derived.place("speech-clips", Path(config.louise_root()))
 
 
-def _clip_key(url: str, out: dict) -> str:
+def _clip_key(url: str, out: dict, engine: str) -> str:
+    """The kept clip's name: the request (model, voice, language, words,
+    steps) AND the engine that made it — LocalAI's backend for the model, as
+    `/system` names it (`model_load.backend_of`), whose package name carries
+    the engine's id. Another engine's clip is another clip (2026-11-26: the
+    fade that cut the last word at a full stop was the engine's; once fixed,
+    no clip of the old engine may be answered for it)."""
     import hashlib
     import json
-    return hashlib.sha256(json.dumps({"url": url, **out}, sort_keys=True, ensure_ascii=False,
-                                     default=str).encode("utf-8")).hexdigest()
+    return hashlib.sha256(json.dumps({"request": {"url": url, **out}, "engine": engine}, sort_keys=True,
+                                     ensure_ascii=False, default=str).encode("utf-8")).hexdigest()
 
 
 def _clip_get(key: str) -> tuple[bytes, str] | None:
@@ -756,8 +762,12 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     # THE CLIP KEPT (operator, 2026-11-09: "keep the buffering available even
     # when I stop/start the speech"): the same request — model, voice,
     # language, words — answered from the fast drive, at once and in any order
-    key = _clip_key(url, out)
-    kept = _clip_get(key)
+    # — and only one the SAME ENGINE made (`_clip_key`). Not known, the model
+    # not loaded yet, nothing is read from the drive: whatever is kept could be
+    # another engine's; what the model makes is kept under the engine that
+    # answered, read once it has.
+    engine = model_load.backend_of(url, model or None)
+    kept = _clip_get(_clip_key(url, out, engine)) if engine else None
     if kept is not None:
         # a kept clip still TAKES ITS TURN: the next sentence of the reading
         # waits for n to be DONE, and a hit that skipped `turn` left it
@@ -772,7 +782,9 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     with _TURNS.turn(reading, n) as waited:
         status, content, ctype, timing = _synthesize_call(url, model, out, last=last)
     if status == 200 and str(ctype).startswith("audio/"):
-        _clip_put(key, content, ctype)
+        made_by = engine or model_load.backend_of(url, model or None)
+        if made_by:
+            _clip_put(_clip_key(url, out, made_by), content, ctype)
     return status, content, ctype, (([("turn", waited)] if reading is not None else []) + timing
                                     + _steps_timing(steps))
 

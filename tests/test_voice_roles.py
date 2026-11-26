@@ -153,9 +153,9 @@ def test_the_clip_key_tells_half_steps_from_full():
     """The kept clip's key holds the steps: a half-step first sentence is
     never served for the same words at full steps."""
     out = {"model": "m", "voice": "v", "input": IT}
-    half = speech._clip_key("http://ai", {**out, "params": {"flow_steps": "16"}})
-    full = speech._clip_key("http://ai", {**out, "params": {"flow_steps": "32"}})
-    assert half != full and full == speech._clip_key("http://ai", {**out, "params": {"flow_steps": "32"}})
+    half = speech._clip_key("http://ai", {**out, "params": {"flow_steps": "16"}}, "engine-1")
+    full = speech._clip_key("http://ai", {**out, "params": {"flow_steps": "32"}}, "engine-1")
+    assert half != full and full == speech._clip_key("http://ai", {**out, "params": {"flow_steps": "32"}}, "engine-1")
 
 
 def _wav(ms: int, rate: int = 24000) -> bytes:

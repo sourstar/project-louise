@@ -599,3 +599,483 @@ def test_an_idle_round_does_not_walk_the_collection_list(monkeypatch):
         worker._paused_aborts.clear()
     assert worker._rearm_paused_aborts(Unwalkable(), {}, True) == []
     assert touched == []
+
+
+# ---- a fetch another writer's claim refused, and a collection's resume (2026-11-26, D6 / D7) ----
+
+def _retries_ended(timeout=5.0):
+    """The retried fetches run on threads of their own (`_acquire_retried`)."""
+    deadline = time.monotonic() + timeout
+    for t in [t for t in threading.enumerate() if t.name.startswith("acquire-retry-")]:
+        t.join(max(0.0, deadline - time.monotonic()))
+
+
+def _forget_more(*names):
+    with worker._acquire_lock:
+        for n in names:
+            worker._claim_retries.pop(n, None)
+            worker._paused_waiting.discard(n)
+            worker._rearm_reason.pop(n, None)
+            worker._paused_aborts.discard(n)
+    for n in names:
+        worker._own_pauses.pop(n, None)
+
+
+def test_a_fetch_refused_by_anothers_claim_is_asked_again_once_and_only_when_it_is_no_longer_held(
+        tmp_path, monkeypatch):
+    """München, 2026-11-26 (D6): "corpus fetch (startup) failed: AcquisitionBusy
+    … re-run once the claim goes stale after 300s" — an ERROR, and nothing
+    re-ran it. THE READS OF THE FIX: re-armed blindly when the claim's age ran
+    out, a holder renewing every 60 s cost a full discovery every five
+    minutes; and a discovery queues behind the scan running and walks the
+    corpus again. The claim is read first; once it is free, the FETCH."""
+    import json
+    from app.acquire import claim as claim_mod
+    clock = [time.time()]
+    monkeypatch.setattr(worker.time, "time", lambda: clock[0])   # the claim's clock too: one module
+    collection, con = _wired(tmp_path, monkeypatch, None)
+    holder = {"pid": 8, "holder": "8@4026533985", "source_id": "gutenberg", "boot": claim_mod.boot_id()}
+
+    def renewed():
+        db.set_control(con, claim_mod.CLAIM_KEY, json.dumps({**holder, "ts": clock[0]}))
+
+    def run(con_, collection_, spec, profile, stop=None):
+        with claim_mod.acquisition_claim(con_, spec.source_id):
+            raise AssertionError("fetched beside a live holder")
+    monkeypatch.setattr(worker.acquire_engine, "run_acquisition", run)
+    renewed()
+    clock[0] += 179
+    try:
+        worker._acquire_worker(collection, _SPEC, "demo", "startup")
+        rows = con.execute("SELECT level, message FROM events WHERE stage = 'acquire' ORDER BY id").fetchall()
+        assert rows[-1][0] == "warn" and "deferred — another writer holds the acquisition claim " \
+            "(8@4026533985, claimed 179 s ago); asked again in 126 s" in rows[-1][1]
+        assert not [r for r in rows if r[0] == "error"], "a refusal is a deferral, never a failure"
+        assert worker._claim_retries[collection.name] == clock[0] + 126
+        fetched, asked = [], []
+        monkeypatch.setattr(worker, "_acquire", lambda c, coll, why: fetched.append((coll.name, why)))
+        monkeypatch.setattr(worker, "_request_discovery", lambda n, why, acquire=False: asked.append(n))
+        cons = {collection.name: con}
+        # THE COST: the holder renews for an hour; the retry falls due a dozen times
+        for _ in range(12):
+            renewed()
+            clock[0] += 310
+            renewed()                                   # renewed just before the retry reads it
+            assert worker._rearm_paused_aborts([collection], {}, True, cons=cons, known=[collection]) == []
+        assert fetched == [] and asked == [], "nothing asked while a live holder renews: no fetch, no scan"
+        assert worker._claim_retries[collection.name] > clock[0], "put off to the claim's next staleness"
+        db.set_control(con, claim_mod.CLAIM_KEY, "")    # the holder ends
+        clock[0] += 310
+        worker._rearm_paused_aborts([collection], {}, True, cons=cons, known=[collection])
+        _retries_ended()
+        assert fetched == [(collection.name, "the claim that refused it is no longer held")], "THE FETCH, once"
+        assert asked == [], "never a discovery: it queues behind the running scan and walks the corpus"
+        assert collection.name not in worker._claim_retries
+        worker._rearm_paused_aborts([collection], {}, True, cons=cons, known=[collection])
+        assert len(fetched) == 1
+    finally:
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_a_claim_that_cannot_be_read_is_read_again_later_not_every_round(tmp_path, monkeypatch):
+    from app.acquire import claim as claim_mod
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, **k: _DONE)
+    reads = []
+    monkeypatch.setattr(claim_mod, "busy_for", lambda c: reads.append(1) or (_ for _ in ()).throw(
+        __import__("sqlite3").OperationalError("database is locked")))
+    try:
+        with worker._acquire_lock:
+            worker._claim_retries[collection.name] = time.time() - 1
+        for _ in range(10):
+            worker._rearm_paused_aborts([collection], {}, True, cons={collection.name: con}, known=[collection])
+        assert reads == [1], "put off CLAIM_READ_AGAIN_S"
+        assert worker._claim_retries[collection.name] > time.time() + worker.CLAIM_READ_AGAIN_S - 5
+    finally:
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_a_fetch_started_forgets_the_retry_a_claim_left(tmp_path, monkeypatch):
+    """THE SECOND READ, run: a fetch started inside the retry window (the
+    `acquire_enabled` toggle, an unfreeze) then met the retry, read its own
+    claim as free and paid a full discovery after a fetch that had run."""
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, stop=None, **k: _DONE)
+    try:
+        with worker._acquire_lock:
+            worker._claim_retries[collection.name] = time.time() + 100
+        worker._acquire(con, collection, "toggle")
+        worker._acquire_threads[collection.name].join(timeout=10)
+        assert collection.name not in worker._claim_retries
+    finally:
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_the_stop_keeps_the_first_event_that_stopped_it():
+    a, b = threading.Event(), threading.Event()
+    stop = worker._AnyStop(a, b)
+    b.set()
+    assert stop.is_set() and stop.fired is b
+    a.set()
+    assert stop.is_set() and stop.fired is b, "a later event never rewrites why it stopped"
+
+
+def test_a_fetch_its_collections_own_pause_stopped_is_asked_again_by_its_resume(tmp_path, monkeypatch):
+    """München, 2026-11-26 (D7): `node pause` / `node resume EUR-Lex5.next`
+    asked no fetch: the pause retired the fetch in flight (`_hold_locks` →
+    `retire_collection` sets its gone event), and only the NODE's pause was
+    re-armed. THE SECOND READ, run: a resume while the fetch still unwinds
+    cleared the pause before its next poll, which read the retirement — no
+    re-arm. Only what a pause cut is asked again."""
+    def run(con, collection, spec, profile, stop=None):
+        worker._own_pause_event(collection.name).set()     # `node pause <collection>`: `_hold_locks`
+        worker._gone_event(collection.name).set()          # then `retire_collection`
+        assert stop.is_set()
+        worker._own_pauses.pop(collection.name, None)      # resumed while it unwinds (`_hold_locks` takes it)
+        assert stop.is_set(), "rsync's grace: polled again"
+        return _DONE
+    collection, con = _wired(tmp_path, monkeypatch, run)
+    asked = []
+    monkeypatch.setattr(worker, "_request_discovery", lambda n, why, acquire=False: asked.append((n, why, acquire)))
+    try:
+        worker._acquire_worker(collection, _SPEC, "demo", "startup")
+        worker._gone.pop(collection.name, None)            # as `retire_collection` ends
+        assert collection.name in worker._paused_aborts
+        assert worker._rearm_paused_aborts([], {}, True, known=[collection]) == [], "paused: not run"
+        assert collection.name in worker._paused_waiting and asked == []
+        worker._runs_again(collection.name)                # `_hold_locks` holds it again
+        assert worker._rearm_paused_aborts([collection], {}, True, known=[collection]) == [collection.name]
+        assert asked == [(collection.name, "the collection resumed", True)], "a FETCH, said as what it is"
+        assert worker._rearm_paused_aborts([collection], {}, True, known=[collection]) == [], "once"
+        assert len(asked) == 1, "a resume with nothing cut: nothing asked"
+    finally:
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_a_re_arm_for_a_collection_not_run_waits_and_one_retired_is_dropped(tmp_path, monkeypatch):
+    """Paused on its own, or another writer's lock: the round's list leaves it
+    out, and the name was dropped as if retired — its fetch lost for good.
+    While it waits, the round walks no list."""
+    collection = _collection(tmp_path, acquire_enabled=True)
+    gone = "retired-meanwhile"
+    with worker._acquire_lock:
+        worker._paused_aborts.update({collection.name, gone})
+        worker._rearm_reason[gone] = "the collection resumed"
+
+    class Unwalkable:
+        def __iter__(self):
+            raise AssertionError("walked a collection list with nothing pending")
+    try:
+        assert worker._rearm_paused_aborts([], {}, True, known=[collection]) == []
+        assert collection.name in worker._paused_waiting, "waits while not run"
+        assert gone not in worker._paused_waiting and gone not in worker._rearm_reason, "retired: dropped"
+        assert worker._rearm_paused_aborts(Unwalkable(), {}, True, known=Unwalkable()) == [], \
+            "the idle round, a name waiting: no list walked"
+        worker._runs_again(collection.name)
+        assert worker._rearm_paused_aborts([collection], {}, True, known=[collection]) == [collection.name]
+        assert worker._take_discovery_request(collection.name) == ("resume after pause", True)
+        assert not worker._paused_waiting
+    finally:
+        _forget_more(collection.name, gone)
+        _forget(collection)
+
+
+def test_a_claim_retry_for_a_collection_not_run_waits_and_says_why_when_it_comes_back(tmp_path, monkeypatch):
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, **k: _DONE)
+    try:
+        with worker._acquire_lock:
+            worker._claim_retries[collection.name] = time.time() - 1
+        worker._rearm_paused_aborts([], {}, True, cons={collection.name: con}, known=[collection])
+        assert collection.name in worker._paused_waiting and collection.name not in worker._claim_retries
+        worker._runs_again(collection.name)
+        assert collection.name not in worker._paused_aborts, "never a discovery (the third read)"
+        assert worker._claim_retries[collection.name] <= time.time(), "the FETCH again, due now"
+        fetched = []
+        monkeypatch.setattr(worker, "_acquire", lambda c, coll, why: fetched.append(why))
+        worker._rearm_paused_aborts([collection], {}, True, cons={collection.name: con}, known=[collection])
+        _retries_ended()
+        assert fetched == ["the claim that refused it is no longer held"]
+    finally:
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_a_collection_removed_forgets_what_waited_to_fetch_it(tmp_path, monkeypatch):
+    """THE SECOND READ, run: a name waiting for a collection removed while
+    paused stayed for ever — and a collection made again under its name got a
+    discovery labelled "the collection resumed"."""
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, **k: _DONE)
+    monkeypatch.setattr(worker, "_sweep_unheld_embedders", lambda *a, **k: None)
+    name = collection.name
+    with worker._acquire_lock:
+        worker._claim_retries[name] = time.time() + 100
+        worker._paused_waiting.add(name)
+        worker._rearm_reason[name] = "the collection resumed"
+        worker._paused_aborts.add(name)
+    worker._own_pause_event(name).set()
+    try:
+        worker._leave(name, {name: con}, [], {}, {}, "removed")
+        assert name not in worker._claim_retries and name not in worker._paused_waiting
+        assert name not in worker._rearm_reason and name not in worker._paused_aborts
+        assert name not in worker._own_pauses
+    finally:
+        _forget_more(name)
+        worker._gone.pop(name, None)
+        _forget(collection)
+
+
+def test_a_collections_own_pause_is_told_before_its_retirement_and_forgotten_once_held_again(
+        tmp_path, monkeypatch):
+    from app.hold import lock as lock_mod
+    collection = _collection(tmp_path, acquire_enabled=True)
+    seen = []
+
+    class Lock:
+        def release(self):
+            pass
+    monkeypatch.setattr(worker, "retire_collection",
+                        lambda name, **k: seen.append((name, worker._own_pause_event(name).is_set())))
+    monkeypatch.setattr(lock_mod, "take", lambda *a, **k: Lock())
+    monkeypatch.setitem(worker._locks, collection.name, Lock())
+    try:
+        assert worker._hold_locks([collection], {collection.name}) == []
+        assert seen == [(collection.name, True)], "told BEFORE its threads are retired"
+        with worker._acquire_lock:
+            worker._paused_waiting.add(collection.name)
+        assert worker._hold_locks([collection], set()) == [collection]
+        assert not worker._own_pause_event(collection.name).is_set(), "held again: forgotten"
+        assert collection.name in worker._paused_aborts and not worker._paused_waiting, "its re-arm is back"
+        worker._hold_locks([], set())                      # removed: a retirement, not a pause
+        assert seen[-1] == (collection.name, False)
+    finally:
+        worker._locks.pop(collection.name, None)
+        _forget_more(collection.name)
+
+
+
+def test_a_claim_retry_due_while_the_refused_thread_still_ends_is_kept(tmp_path, monkeypatch):
+    """THE THIRD READ, run: the retry fell due while the refused thread's log
+    write waited out the busy timeout; `_acquire` returned silently beside the
+    live thread, and nothing was left to ask the fetch again."""
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, **k: _DONE)
+    alive = threading.Event()
+    thread = threading.Thread(target=alive.wait, args=(10,), daemon=True)
+    thread.start()
+    fetched = []
+    monkeypatch.setattr(worker, "_acquire", lambda c, coll, why: fetched.append(why))
+    try:
+        with worker._acquire_lock:
+            worker._acquire_threads[collection.name] = thread
+            worker._claim_retries[collection.name] = time.time() - 1
+        worker._rearm_paused_aborts([collection], {}, True, cons={collection.name: con}, known=[collection])
+        assert fetched == [] and worker._claim_retries[collection.name] > time.time() + 20, "kept"
+    finally:
+        alive.set()
+        thread.join(5)
+        with worker._acquire_lock:
+            worker._acquire_threads.pop(collection.name, None)
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_acquisition_turned_on_again_while_the_stopped_fetch_unwinds_asks_it_again(tmp_path, monkeypatch):
+    """THE THIRD READ, run, in the production order (the "on" edit applied
+    first): `_acquire` found the old thread alive and the event clear, and
+    returned — the fetch was lost."""
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, **k: _DONE)
+    import dataclasses
+    off = dataclasses.replace(collection, acquire_enabled=False)
+    alive = threading.Event()
+    thread = threading.Thread(target=alive.wait, args=(10,), daemon=True)
+    thread.start()
+    try:
+        with worker._acquire_lock:
+            worker._acquire_threads[collection.name] = thread
+        worker._apply_acquire_switch(con, off, collection)
+        assert collection.name in worker._paused_aborts, "asked again once that thread is gone"
+    finally:
+        alive.set()
+        thread.join(5)
+        with worker._acquire_lock:
+            worker._acquire_threads.pop(collection.name, None)
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+
+def test_a_fetch_deferred_for_a_busy_manifest_is_asked_again(tmp_path, monkeypatch):
+    """THE FOURTH READ, run: the completion flag asks nothing for a fetch that
+    fetched nothing, and the busy deferral was lost until the interval's
+    discovery (360 min, or never)."""
+    import sqlite3
+
+    def busy(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    collection, con = _wired(tmp_path, monkeypatch, busy)
+    try:
+        worker._acquire_worker(collection, _SPEC, "demo", "startup")
+        assert worker._claim_retries[collection.name] > time.time()
+        rows = con.execute("SELECT message FROM events WHERE stage = 'acquire' ORDER BY id").fetchall()
+        assert "manifest busy" in rows[-1][0] and "retrying in 30 s" in rows[-1][0]
+    finally:
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_the_re_arm_acquisition_turned_on_left_is_forgotten_when_a_fresh_fetch_starts(tmp_path, monkeypatch):
+    """THE FOURTH READ, run: the old thread ended before the change's
+    discovery came, a fresh fetch ran — and the re-arm asked one more
+    discovery and one more fetch after it."""
+    import dataclasses
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, stop=None, **k: _DONE)
+    off = dataclasses.replace(collection, acquire_enabled=False)
+    alive = threading.Event()
+    old = threading.Thread(target=alive.wait, args=(10,), daemon=True)
+    old.start()
+    try:
+        with worker._acquire_lock:
+            worker._acquire_threads[collection.name] = old
+        worker._apply_acquire_switch(con, off, collection)
+        assert collection.name in worker._paused_aborts
+        alive.set()
+        old.join(5)                                        # it ends before the change's discovery comes
+        worker._acquire(con, collection, "config changed")
+        worker._acquire_threads[collection.name].join(timeout=10)
+        assert collection.name not in worker._paused_aborts, "the fresh fetch owes it nothing"
+    finally:
+        alive.set()
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+
+def test_only_a_busy_manifest_is_a_deferral_retried_and_said_so(tmp_path, monkeypatch):
+    """THE FIFTH READ, run: a read-only manifest was retried every 30 s, for
+    ever, listing the origin each time, and said "manifest busy"."""
+    import sqlite3
+    for err, retried in ((sqlite3.OperationalError("database is locked"), True),
+                         (sqlite3.OperationalError("attempt to write a readonly database"), False)):
+        def run(*a, _e=err, **k):
+            raise _e
+        sub = tmp_path / ("busy" if retried else "readonly")
+        sub.mkdir()
+        collection, con = _wired(sub, monkeypatch, run)
+        try:
+            worker._acquire_worker(collection, _SPEC, "demo", "startup")
+            rows = con.execute("SELECT level, message FROM events WHERE stage = 'acquire' ORDER BY id").fetchall()
+            assert (collection.name in worker._claim_retries) is retried, str(err)
+            if retried:
+                assert rows[-1][0] == "warn" and worker._retry_reason[collection.name] == "the manifest was busy"
+            else:
+                assert rows[-1][0] == "error" and "the manifest refused it" in rows[-1][1]
+        finally:
+            _forget_more(collection.name)
+            worker._retry_reason.pop(collection.name, None)
+            _forget(collection)
+
+
+def test_a_retried_fetch_never_holds_the_main_loop_on_a_busy_manifest(tmp_path, monkeypatch):
+    """THE FIFTH READ, run: `_acquire` wrote its line on the main loop's
+    connection to the manifest a scan starved, and the round waited the busy
+    timeout (60 s deployed)."""
+    started = []
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, **k: _DONE)
+    monkeypatch.setattr(worker, "_acquire", lambda c, coll, why: (time.sleep(1.0), started.append(why)))
+    try:
+        with worker._acquire_lock:
+            worker._claim_retries[collection.name] = time.time() - 1
+            worker._retry_reason[collection.name] = "the manifest was busy"
+        t0 = time.monotonic()
+        worker._rearm_paused_aborts([collection], {}, True, cons={collection.name: con}, known=[collection])
+        assert time.monotonic() - t0 < 0.5, "the round does not wait for it"
+        _retries_ended()
+        assert started == ["the manifest was busy"], "and the fetch says why it is asked"
+    finally:
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_two_asks_at_once_start_one_fetch(tmp_path, monkeypatch):
+    """THE SIXTH READ, run: registered before it was started, the fetch thread
+    read as not alive, and a retry beside a discovery started two passes on one
+    pending list — the claim, the same process's, refused neither."""
+    gate = threading.Event()
+    runs = []
+
+    def run(con, collection, spec, profile, stop=None):
+        runs.append(1)
+        gate.wait(5)
+        return _DONE
+    collection, con = _wired(tmp_path, monkeypatch, run)
+    real_log = worker.db.log_event
+
+    def slow_log(c, level, stage, msg, *a, **k):
+        if "started in the background" in msg:
+            time.sleep(0.3)                                # the courtesy line on a busy manifest
+        return real_log(c, level, stage, msg, *a, **k)
+    monkeypatch.setattr(worker.db, "log_event", slow_log)
+    try:
+        # each thread's own connection, made in it (the seventh read: made here,
+        # the courtesy line raised ProgrammingError inside both threads)
+        ts = [threading.Thread(target=lambda why=why: worker._acquire(db.connect(collection), collection, why))
+              for why in ("retry", "discovery")]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(5)
+        time.sleep(0.2)
+        assert runs == [1], "one pass"
+    finally:
+        gate.set()
+        t = worker._acquire_threads.get(collection.name)
+        if t is not None:
+            t.join(5)
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_files_landed_before_a_busy_write_are_scanned(tmp_path, monkeypatch):
+    """THE SIXTH READ, run: the busy write after the last rows committed; the
+    retried fetch found nothing pending and asked no scan."""
+    import sqlite3
+
+    def busy_after_three(*a, **k):
+        e = sqlite3.OperationalError("database is locked")
+        e.fetched = 3
+        raise e
+    collection, con = _wired(tmp_path, monkeypatch, busy_after_three)
+    try:
+        worker._acquire_worker(collection, _SPEC, "demo", "startup")
+        assert worker._acquire_done[collection.name] is True, "what landed asks its scan"
+    finally:
+        _forget_more(collection.name)
+        worker._retry_reason.pop(collection.name, None)
+        _forget(collection)
+
+
+def test_a_fetch_begun_before_the_first_take_keeps_its_pause(tmp_path, monkeypatch):
+    """THE SEVENTH READ, run (`WORKER_PIPELINE_THREADS=0`): the startup
+    discovery starts the fetch before the first `_hold_locks`, which dropped
+    the event the fetch watched — a `node pause` then set a new one the fetch
+    never saw, and no re-arm followed. Only a SET event is dropped at a take."""
+    from app.hold import lock as lock_mod
+    collection = _collection(tmp_path, acquire_enabled=True)
+
+    class Lock:
+        def release(self):
+            pass
+    monkeypatch.setattr(lock_mod, "take", lambda *a, **k: Lock())
+    try:
+        watched = worker._own_pause_event(collection.name)         # the running fetch's
+        assert worker._hold_locks([collection], set()) == [collection]
+        assert worker._own_pause_event(collection.name) is watched, "kept: a pause must reach it"
+        watched.set()
+        worker._locks.pop(collection.name, None)
+        worker._hold_locks([collection], set())                    # taken again after a pause
+        assert worker._own_pause_event(collection.name) is not watched, "a set one is dropped"
+    finally:
+        worker._locks.pop(collection.name, None)
+        worker._own_pauses.pop(collection.name, None)
+        _forget_more(collection.name)

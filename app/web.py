@@ -2773,10 +2773,7 @@ def _collection_shelf(collection: collections_mod.Collection,
         # "1414/1414" with 33 files unlisted). The acquisition claim
         # (refreshed every 60 s by the running pass) says whether one is
         # active, so the card can say "in progress" instead.
-        acquire_claim = claim.read_claim(con)
-        active = bool(acquire_claim
-                      and time.time() - float(acquire_claim.get("ts", 0))
-                      <= claim.STALE_AFTER_SECONDS)
+        active = claim.held(claim.read_claim(con))    # stale, or of another boot: not running
         # the SOURCE's own file count, recorded by the engine at pass start
         # (acquire_engine.LISTING_KEY): the honest denominator while the
         # pass streams — without it, done==total at every instant mid-pass

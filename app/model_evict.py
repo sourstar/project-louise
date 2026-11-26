@@ -247,12 +247,31 @@ def _say(level: str, text: str) -> None:
         pass
 
 
+#: (what, about) -> when it was last said (`_say_once`)
+_said_at: dict[tuple[str, str], float] = {}
+SAY_AGAIN_S = 60.0
+
+
+def _say_once(what: str, about: str, level: str, text: str) -> None:
+    """`_say`, once a SAY_AGAIN_S for one thing about one model FOR ONE
+    REASON (`about` names it): a switch asks a room every few seconds while it
+    waits, and a refusal said at every ask is twenty-five lines for one fact
+    (the read of 2026-11-26); another reason within the minute is said."""
+    now = time.monotonic()
+    key = (what, about)
+    if now - _said_at.get(key, float("-inf")) < SAY_AGAIN_S:
+        return
+    _said_at[key] = now
+    _say(level, text)
+
+
 def reset() -> None:
     """Forget which loads were paged and which failed (tests)."""
     _paged.clear()
     _no_page.clear()
     _left_at.clear()
     _park_took.clear()
+    _said_at.clear()
 
 
 def host_available() -> int | None:
@@ -356,16 +375,32 @@ def _page(server: str, *, need: int, free: int, total: int, used: int, t: float,
            f"the host has {avail // MIB:,} MiB available and would be under its floor of {floor // MIB:,} MiB "
            f"plus a context's {reserve // MIB:,}" if avail - short - reserve < floor else None)
     if why is not None:
-        _say("info", f"card: {for_what} is {short // MIB:,} MiB over the {t:.2f} line and is not paged — "
-                     f"{why}: room is made by unloading, as before")
+        _say_once("not paged", f"{server}\n{for_what}\n{why.split(' ', 3)[:3]}", "info",
+                  f"card: {for_what} is {short // MIB:,} MiB over the {t:.2f} line and is not paged — "
+                  f"{why}: room is made by unloading, as before")
         return None
     _paged.update(keys)
-    _say("info", f"card: nothing unloaded for {for_what} — {need // MIB:,} MiB needed, {max(0, free) // MIB:,} "
+    # once a minute: a switch waiting for a call asks this at each poll (the
+    # mode switch's seventh read: seven lines for seven asks, nothing paged yet)
+    _say_once("paged", f"{server}\n{for_what}", "info",
+              f"card: nothing unloaded for {for_what} — {need // MIB:,} MiB needed, {max(0, free) // MIB:,} "
                  f"MiB free under the {t:.2f} line; the driver pages {short // MIB:,} MiB of idle models' memory "
                  f"to the host ({avail // MIB:,} MiB available, floor {floor // MIB:,}) "
                  + ("(query mode: nothing is unloaded while the host has memory — operator, 2026-11-25)"
                     if over_max is None else "(operator, 2026-11-24)"))
     return Outcome(True, need, free, why="paged", paged=short)
+
+
+def room_unused(server: str, model: str) -> None:
+    """A room made for `model` that no load will use (the mode switch gave
+    up): not left marked as paged, or the model's next cold load — the first
+    question's — would be told it went over the line by paging and lose paging
+    for PAGE_AGAIN_S (the mode switch's seventh read, run)."""
+    try:
+        from app import model_load
+        _paged.discard((model_load.server_of(server), model))
+    except Exception:   # noqa: BLE001
+        pass
 
 
 def load_ended(server: str, model: str, loaded: bool) -> None:
@@ -446,6 +481,7 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
         known = {r.key for r in resident.current()} | set(use)
         mem = resident._memory_now()
         keep = {tuple(k) for k in protect} | {(server, m) for m in exclude}
+        pinned = sorted(m for m in held if (server, m) in pins and (server, m) in known and (server, m) not in keep)
         parks, away = model_load.parks(server), model_load.parked(server)     # the same answer: no request
         loaded = [Loaded(m, int(size or 0), use.get((server, m)), cpu.get(m, 0.0) > BUSY_CPU_PERCENT,
                          parks=m in parks, parked=m in away)
@@ -463,7 +499,8 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
             f"{t:.2f} line, and the models that may give way to it hold "
             f"{sum(v.size for v in order) // MIB:,} MiB"
             + (f" — {', '.join(v.model for v in newer)} were used more recently, are busy, or hold none"
-               if newer else "")))
+               if newer else "")
+            + (f" — {', '.join(pinned)} pinned by work in flight" if pinned else "")))
     gone: list[Loaded] = []
     away_now: list[tuple[Loaded, int]] = []
     freed = 0
@@ -785,7 +822,22 @@ def horizon_for(server: str, model: str) -> float | None:
 def before_load(server: str, model: str) -> Outcome | None:
     """The cold-load hook (`model_load.ensure_loaded`): room made for
     `model` before its load, unless the keeper made it already or the
-    node's mode unloads nothing. Never raises."""
+    node's mode unloads nothing — and a room that could NOT be made SAID
+    (München, 2026-11-26: the query-mode switch's 35B was "10,172 MiB over
+    the line … room is made by unloading", nothing was unloaded and no line
+    said why; the load went into the full card and died for device memory
+    75 s later). Never raises."""
+    got = room_before_load(server, model)
+    if got is not None and got.fits is False:
+        _say_once("no room", f"{server}\n{model}\n{got.why.split(' — ')[-1][:40]}", "info",
+                  f"card: no room could be made for {model} before its load — {got.why}; the load goes "
+                  f"as before")
+    return got
+
+
+def room_before_load(server: str, model: str) -> Outcome | None:
+    """`before_load`'s room, unsaid: None where none is made (the keeper made
+    it, the size is not known, the node's mode unloads nothing)."""
     if _room_made.get():
         return None
     from app import resident
