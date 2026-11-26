@@ -8,11 +8,29 @@
 # /models/weights/<name> (deploy/vega/stage/mounts.py), so the model path is
 # the model pool's too. Only the backend, the env (caches under /data/louise-cache) and
 # `pinned` differ. JSON, which is YAML.
+#
+# IT PARKS (operator, 2026-11-25: "Do parking."; 2026-11-26: "1. A then B 2. On
+# but monitor if it creates overhead" — bge-m3 first, the engine's byte check
+# on). Three lines make it so, and they go TOGETHER or not at all:
+#   `park: true`                — LocalAI may move its weights to host memory
+#                                 where it would stop it to make room;
+#   `GGML_SYCL_PARKABLE: "1"`   — the engine is started so that they can leave
+#                                 the card (without it the park is 412 and the
+#                                 gate asks nothing: app/hold/embedder.py
+#                                 `can_park`);
+#   `GGML_SYCL_PARK_VERIFY: "1"` — the engine reads the card's bytes back at
+#                                 every return.
+# The env lines make it ANOTHER RUN: gated once, with the gate's 64 counted
+# park cycles (docs/notes/parking-keeper.md §6), before anything is written
+# from it. `context_on_demand` and `context_canary:true` are the node's live
+# options since 2026-11 (München read the live file 2026-11-26 05:40Z; this
+# staged copy was behind it): only a model on context on demand parks.
 {
   "name": "vega-bge-m3",
   "backend": "vega-louise-llama-cpp",
   "embeddings": true,
   "pinned": false,
+  "park": true,
   "context_size": 8192,
   "threads": 6,
   "gpu_layers": 999,
@@ -25,6 +43,8 @@
   },
   "options": [
     "fit:off",
+    "context_on_demand",
+    "context_canary:true",
     "parallel:1",
     "pooling:cls",
     "ubatch:8192"
@@ -32,6 +52,8 @@
   "env": {
     "NEO_CACHE_DIR": "/data/louise-cache/neo-cache",
     "GGML_SYCL_ENABLE_DNN": "0",
-    "GGML_SYCL_FA_ONEDNN": "0"
+    "GGML_SYCL_FA_ONEDNN": "0",
+    "GGML_SYCL_PARKABLE": "1",
+    "GGML_SYCL_PARK_VERIFY": "1"
   }
 }
