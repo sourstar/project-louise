@@ -374,7 +374,8 @@ file cannot be read, no model is parked (one not read may name it, under
 stricter cycles). Otherwise — a process nobody heard, a
 run not gated, one the gate refused, anything unreadable — it gives its room
 by a stop, as before parking existed, and the line says "its file says it
-parks and its run is not admitted to: stopped". A model that is no
+parks and its run is not admitted to (not gated with its park cycles, not
+yet bound to this process, or a collection file not read): stopped". A model that is no
 collection's encoder has no gate and parks as LocalAI says.
 
 **Every path that gives a model's room back asks it:** the evictor
@@ -397,5 +398,6 @@ answer of the new process is heard and gated by itself from this release
 on; until its cycles are counted, and for the first two minutes of every new
 process (after any restart of the model or of LocalAI), the model is stopped
 for room, not parked. A failed look at a query side is looked at again after
-FAIL_TTL_S (5 min), never at every step.
+FAIL_TTL_S (5 min), never at every step — and at once where another query
+run is heard meanwhile.
 

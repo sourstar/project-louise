@@ -292,10 +292,19 @@ def test_a_collection_file_that_cannot_be_read_makes_no_model_parkable(node, end
     """THE SECOND READ: with an unreadable collection file skipped, its
     encoder was taken for "no collection's encoder" and parked."""
     root, collection, codex = node
+    real = collections_mod.load_all
     monkeypatch.setattr(collections_mod, "load_all", lambda **k: ([], [("gutenberg", "a typo")]))
     assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is False
     assert run_check.park_admitted(ENDPOINT, "louise-chat", (7, "x")) is False, "even what may be no encoder: a stop"
-    # a READABLE collection that admits it, and another file not read: still a stop (it may be stricter)
+    # a READABLE collection that ADMITS it, and another file not read: still a stop (it may be stricter)
+    monkeypatch.setattr(collections_mod, "load_all", lambda **k: (real(**k)[0], [("another", "a typo")]))
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    _counted(root, collection, codex)
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is False
+    monkeypatch.setattr(collections_mod, "load_all", lambda **k: (real(**k)[0], []))
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is True, \
+        "the same, every file read: admitted"
     monkeypatch.setattr(collections_mod, "load_all", lambda **k: ([], []))
     assert run_check.park_admitted(ENDPOINT, "louise-chat", (7, "x")) is None
 
@@ -330,14 +339,44 @@ def test_a_query_look_that_failed_is_looked_at_again_after_its_bound_not_at_ever
         assert backend_gate.embed_allowed(con, collection) is True
     assert looks == [1], "not looked at again within its bound"
     assert not run_check.verdict_outdated(collection)
-    # the bound passed: looked at again — and this time it answers
+    # ANOTHER QUERY RUN heard meanwhile (the model came back with another env):
+    # looked at at once, not after the bound (the fourth read)
     w = run_check._where(collection)
+    assert run_check._verdicts[w][5][2] == R2
+    time.sleep(0.01)
+    _as_another_process(lambda: run_check.heard(_recipe(collection), {R1}, role="query"))
+    assert run_check.verdict_outdated(collection), "a run heard since the failure is looked at now"
+    _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}, role="query"))
+    # the bound passed: looked at again — and this time it answers
     v = run_check._verdicts[w]
-    run_check._verdicts[w] = (*v[:5], (run_check.QUERY_UNSETTLED, v[5][1] - run_check.FAIL_TTL_S - 1))
+    run_check._verdicts[w] = (*v[:5], (run_check.QUERY_UNSETTLED, v[5][1] - run_check.FAIL_TTL_S - 1, v[5][2]))
     assert run_check.verdict_outdated(collection)
     monkeypatch.setattr(run_check, "answering_run", real)
     worker._settle_the_run(con, collection)
     assert run_check._verdicts[w][5] == R2 and not run_check.verdict_outdated(collection)
+
+
+def test_a_look_that_failed_slowly_is_marked_when_it_ended(node, endpoint, monkeypatch):
+    """THE FOURTH READ: the mark was stamped before the look, and a probe that
+    took its whole timeout (300 s, as FAIL_TTL_S) was stored expired — every
+    step looked again."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    real, clock = run_check.answering_run, [1_000_000.0]
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+
+    def slow(recipe, query=False, **k):
+        if query:
+            clock[0] += run_check.FAIL_TTL_S + 1          # the probe ran out its timeout
+            raise OSError("timed out")
+        return real(recipe, query=query, **k)
+    monkeypatch.setattr(run_check, "answering_run", slow)
+    run_check._verdicts.clear()
+    backend_gate.embed_allowed(con, collection)
+    kept = run_check._verdicts[run_check._where(collection)][5]
+    assert kept[0] == run_check.QUERY_UNSETTLED and kept[1] == clock[0], "stamped when the look ENDED"
+    assert not run_check.verdict_outdated(collection)
 
 
 def test_a_process_that_cannot_bind_never_erases_a_binding(node, endpoint, pids):

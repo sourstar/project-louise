@@ -1539,17 +1539,19 @@ def heard(recipe, answered: set, *, role: str = "document") -> None:
     _answering[key] = run
     _answering_at[key] = now
     if news:
-        _tell(key, run, now, proc if (proc is not None or said.get("run") != run) else said.get("proc"))
+        _tell(key, run, now, proc)
 
 
 #: how long this process must have known a backend process before a run it
 #: hears is bound to it. What it must exceed is the gap between an answer and
 #: its `heard()`, never a request's length: a binding is wrong only if EVERY
 #: answer in the set came from the process before, i.e. the last of them
-#: before this process first saw the new one; every caller hears right after
-#: its last answer and its receipts (`embeddings.RECEIPTS_TIMEOUT_S`, 10 s —
-#: the third read). Twelve times that: a model loaded for a burst of questions
-#: is bound two minutes into it, not fifteen
+#: before this process first saw the new one. Every caller hears right after
+#: its last answer: its receipts (a 10 s timeout a phase), a pin's touch (a
+#: file lock) — seconds, not a bound (the fourth read: a frozen process is
+#: not bounded at all). Two minutes is a margin over what is seen, and a
+#: wrong binding also needs another env and an eviction before anyone hears
+#: the new process; a model loaded for a burst of questions is bound in it
 BIND_AFTER_S = 120.0
 
 
@@ -1658,7 +1660,10 @@ def _tell(key: tuple[tuple[str, str], str], run: str, at: float, proc: list | No
             try:
                 rows = _read_heard(path)
                 k = _heard_key(key)
-                if (rows.get(k) or {}).get("run") == run and (rows.get(k) or {}).get("proc") == proc:
+                row = rows.get(k) or {}
+                if proc is None and row.get("run") == run:
+                    proc = row.get("proc")   # a binding for this run is kept, as read UNDER the lock
+                if row.get("run") == run and row.get("proc") == proc:
                     return
                 rows[k] = {"run": run, "at": round(at, 3), "proc": proc}
                 tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
@@ -2145,7 +2150,7 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
         return None
 
 
-#: a verdict's query side whose look failed: (QUERY_UNSETTLED, when)
+#: a verdict's query side whose look failed: (QUERY_UNSETTLED, when, the query run heard then)
 QUERY_UNSETTLED = "unsettled"
 
 
@@ -2159,9 +2164,10 @@ def _asymmetric(collection) -> bool:
 
 def _query_settled(kept, heard: str | None, now: float) -> bool:
     """Is a verdict's query side (`kept`, `_verdicts[...][5]`) about the query
-    run last heard — or a look that failed less than FAIL_TTL_S ago?"""
+    run last heard — or a look that failed less than FAIL_TTL_S ago, with no
+    other run heard since?"""
     if isinstance(kept, tuple) and kept and kept[0] == QUERY_UNSETTLED:
-        return now - kept[1] < FAIL_TTL_S
+        return now - kept[1] < FAIL_TTL_S and (heard is None or heard == kept[2])
     return heard is None or kept == heard
 
 
@@ -2250,7 +2256,11 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         # twin load and stop on each, for a query model in LocalAI's cooldown)
         query_run = _look_at_the_query_side(collection, stop, log)
         if query_run is None and _asymmetric(collection):
-            query_run = (QUERY_UNSETTLED, now)
+            # WHEN it failed — after the look, which may have taken its whole
+            # timeout (the fourth read: stamped before it, a probe that timed
+            # out was stored expired) — and the run heard then: another heard
+            # since is looked at at once, not after the bound (the fourth read)
+            query_run = (QUERY_UNSETTLED, time.time(), answering(collection).get("query"))
         # stamped AFTER looking: a statement the look itself wrote (a gate)
         # is not a reason to look again
         _verdicts[where] = (allowed, reason,
