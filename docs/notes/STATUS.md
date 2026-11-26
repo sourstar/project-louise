@@ -85,7 +85,9 @@ measured (published figures disagree).
   44 %); siblings on R1 passed R2's gate backoff at an engine switch and hung one after another; a sibling
   held only by the backoff gave the encoder's frozen reason. Fixed; and the QUERY gate is the gate's backoff
   too, keyed the same way. Measured against main by the reader, 3 h: every case no worse than main but the
-  recovery after a hang ends (≤ one backoff step, by design). And the
+  recovery after a hang ends (≤ one backoff step, by design). The fourteenth read: nothing blocking; at a
+  worker start or a query engine switch, siblings now share the query gate's backoff too, and a held
+  sibling's reason follows the gate's backoff instead of freezing. And the
   manual door, `hold embedder check`, is
   shut on a running node — the worker holds every collection's lock — so its hint now says to pause
   the collection first; that is how today's gate was run. I had told München the record was shared

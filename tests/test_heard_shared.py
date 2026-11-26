@@ -1204,3 +1204,81 @@ def test_a_query_gate_that_defers_late_backs_off_and_is_the_gates(node, endpoint
     assert share <= 0.21, (len(gates), round(share, 3))
     q_key = run_check._flights_query(collection)
     assert any(k[0] == q_key for k in run_check._gate_slow), "the query gate's backoff is the gate's"
+
+
+# ---- the fourteenth read (2026-11-26) ---------------------------------------------------
+
+import httpx  # noqa: E402
+
+
+def _hang_the_query_gate_14(monkeypatch, clock, mono, gates):
+    from app.hold import embedder as hold_emb
+    real = run_check.validate
+
+    def gate(*a, role="document", **k):
+        if role != "query":
+            return real(*a, role=role, **k)
+        gates.append(clock[0])
+        mono[0] += 300.0
+        clock[0] += 300.0
+        try:
+            raise httpx.ReadTimeout("timed out")
+        except httpx.ReadTimeout as e:
+            raise hold_emb.GateDeferred("the encoder could not embed: timed out") from e
+    monkeypatch.setattr(run_check, "validate", gate)
+
+
+@pytest.mark.parametrize("sibling", ["no verdict yet", "validated on the old query run"])
+def test_a_sibling_honours_the_query_gates_backoff(node, endpoint, monkeypatch, sibling):
+    """The query gate's backoff is "the gate's, shared by the space" — but
+    `q_slow` needs `q_same`, so a sibling with no verdict (or one about the old
+    query run, at an engine switch) runs the hung query gate again."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True       # both sides on R1, validated
+    where = run_check._where(collection)
+    old = run_check._verdicts[where]
+    mono = _hung_clock(monkeypatch)
+    clock = [time.time()]
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+    # the query encoder now answers R2 — a query run new to this peer; its gate hangs
+    monkeypatch.setattr(run_check, "answering_run", lambda recipe, query=False, **k: R2 if query else R1)
+    gates = []
+    _hang_the_query_gate_14(monkeypatch, clock, mono, gates)
+    run_check._verdicts.clear()
+    backend_gate.embed_allowed(con, collection)                       # the first collection's look: hangs
+    assert len(gates) == 1
+    assert any(k[0] == run_check._flights_query(collection) for k in run_check._gate_slow)
+    clock[0] += 60
+    if sibling == "no verdict yet":
+        run_check._verdicts.clear()
+    else:
+        run_check._verdicts[where] = (old[0], old[1], clock[0] - 1) + old[3:]    # about query run R1
+    backend_gate.embed_allowed(con, collection)                       # a sibling of the space
+    assert len(gates) == 1, f"the hung query gate asked again {len(gates) - 1} time(s) within its backoff"
+
+
+def test_a_held_siblings_reason_follows_the_gates_backoff(node, endpoint, monkeypatch):
+    """A sibling held by the gate's backoff names it once, then keeps that text
+    — "(1 in a row); asked again at <the first expiry>" — while the backoff
+    doubles (the Library card and `hold collection show` read it)."""
+    from app.hold import embedder as hold_emb
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    _hung_clock(monkeypatch)
+    clock = [time.time()]
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+    heard = run_check.answering(collection)["document"]
+    key = run_check._gate_key(collection, run_check._flight(collection), heard)   # a sibling's gate of it hung
+    run_check._gate_slow[key] = (1, clock[0] + 300)
+    run_check._verdicts.clear()
+    assert backend_gate.embed_allowed(con, collection) is False
+    where = run_check._where(collection)
+    assert "(1 in a row)" in run_check._verdicts[where][1]
+    clock[0] += 301
+    run_check._gate_slow[key] = (4, clock[0] + 1800)                 # the sibling's gate hung three more times
+    run_check._verdicts[where] = run_check._verdicts[where][:2] + (clock[0] - 1,) + run_check._verdicts[where][3:]
+    assert backend_gate.embed_allowed(con, collection) is False
+    reason = run_check._verdicts[where][1]
+    assert "(4 in a row)" in reason, reason

@@ -2492,7 +2492,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             # write, invariant 1), one paused stays paused — until then
             with _slow_lock:
                 enc_n = _slow.get(doc_key, (0, 0.0))[0]
-            if same_run:
+            if same_run and (cached[0] or (cached[6] if len(cached) > 6 else True)):
                 allowed, reason, settled = cached[0], cached[1], (cached[6] if len(cached) > 6 else True)
             else:
                 allowed, settled = False, False
@@ -2540,12 +2540,12 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         was_q = cached[5] if cached is not None else None
         q_key = _flights_query(collection)
         q_heard = answering(collection).get("query") if q_key is not None else None
-        q_same = q_heard is None or was_q == q_heard or (
+        q_same = q_heard is None or was_q is None or was_q == q_heard or (
             isinstance(was_q, tuple) and len(was_q) > 2 and was_q[0] == QUERY_UNSETTLED and was_q[2] == q_heard)
         # (a query run heard since — some process had an answer — is looked at)
-        q_slow = (q_key is not None and q_same and not _suspect_since(collection, cached, "query")
-                  and (_slow_until(q_key, time.time(), q_heard) is not None
-                       or _gate_until(_gate_key(collection, q_key, q_heard), time.time()) is not None))
+        q_gate = q_key is not None and _gate_until(_gate_key(collection, q_key, q_heard), time.time()) is not None
+        q_slow = (q_key is not None and not _suspect_since(collection, cached, "query")
+                  and ((q_same and _slow_until(q_key, time.time(), q_heard) is not None) or q_gate))
         q_took = 0.0
         if (isinstance(was_q, tuple) and was_q and was_q[0] == QUERY_UNSETTLED and _asymmetric(collection)
                 and not _suspect_since(collection, cached, "query")
@@ -2561,13 +2561,12 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             # keeps the verdict fresh and the document side is not probed at
             # every step meanwhile (the tenth read, run: 30 probes in 30 steps) —
             # or unsettled from now
-            query_run = was_q if was_q is not None else (QUERY_UNSETTLED, time.time(), heard_now.get("query"), 0)
+            query_run = was_q if (was_q is not None and q_same) else (QUERY_UNSETTLED, time.time(), q_heard, 0)
         else:
             t_q = _look_clock()
             _look_state.timed_out = False
             query_run = _look_at_the_query_side(collection, stop, log, heard_by=query_heard)
             q_took = _look_clock() - t_q
-            q_hung = bool(getattr(_look_state, "timed_out", False))
             if q_key is not None:
                 # the encoder's mark only where the query probe was not answered;
                 # a query gate that held its caller after it is the GATE's backoff,
