@@ -19,3 +19,17 @@ def test_a_held_name_or_two_doubled_members_resolve_nothing():
     files = {"A.xml": b"1", "A.xml---x.xml": b"2", "E.xml---1.xml": b"3", "E.xml---2.xml": b"4"}
     got, aliases = formex.doubled_names(files, ["A.xml", "E.xml"])
     assert got["A.xml"] == b"1" and "E.xml" not in got and aliases == {}
+
+
+def test_the_doubled_member_is_read_as_the_body_and_not_kept_again():
+    """Architecture's review of 023245a0: the member read as the body was
+    also kept whole under `other_items` — the act's text held twice."""
+    from tests.acquire.test_eurlex_dump import FORMEX, _items
+    files = _items(FORMEX[2])
+    body = "L_1972160IT.01000101.xml"
+    doubled = body + "---L_1972160IT.01000102.tif.xml"
+    files[doubled] = files.pop(body)
+    act = formex.parse(files)
+    assert act.meta["doubled_names"] == {body: doubled}
+    assert doubled not in act.meta.get("other_items", {}) and body not in act.meta.get("other_items", {})
+    assert act.body_file == body and act.title

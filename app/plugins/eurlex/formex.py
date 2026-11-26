@@ -36,6 +36,8 @@ comments are the OJ's page chrome and are not read (invariant 11 (b)).
 
 A change to anything that reaches `sections` or `extra` bumps the plugin's
 PARSER_VERSION.
+A change that only turns a refused parse into a parse moves no record that
+exists (an error is not an output): no bump.
 """
 from __future__ import annotations
 
@@ -1251,6 +1253,7 @@ def parse(files: dict[str, bytes], celex: str | None = None, listed=None, adopte
     markup.update(found["markup"])
     missing += [n for n in dict.fromkeys(found["missing"]) if n not in missing]
     read = {wname, *mains, *annex_names(wrapper), *(i["file"] for i in found["included"])}
+    read |= set(aliases.values())     # a doubled member IS the body or annex it stands for, read once
     for name in sorted(files):
         if name not in read and name.lower().endswith(".xml"):
             meta.setdefault("other_items", {})[name] = tree(_parse(files[name], name))
