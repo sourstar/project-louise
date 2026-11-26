@@ -358,12 +358,17 @@ copies: same engine, env and weights), `/system` `parks: true`. Then:
 "Either a model is validated or it does not embed"): a collection's encoder
 is PARKED only when the run last heard from ITS PROCESS has its park cycles
 counted for EVERY collection that uses it, document side and query side
-(`run_check.park_admitted(server, model, pid)`). The run heard is bound to
-the backend pid the runner's listing named when it was heard: a model name
-is not a process — a restart with another env is another run under the same
-name, and a process nothing of Louise has asked yet (the keeper's warm reads
-no run) is not admitted. Asked afresh each time (~0.2 ms a collection): a
-refusal and a new run count at once. Otherwise — a process nobody heard, a
+(`run_check.park_admitted(server, model, process)`). The run heard is bound
+to the backend PROCESS it was heard from — its pid AND its start, as the
+runner's listing names them (a pid alone is LocalAI's container's count,
+which starts again at each restart of that container) — and only where the
+answer can only be that process's: one run in it, from a process this
+process has known for longer than any request lasts (`BIND_AFTER_S`, 15
+min). A model name is not a process: a restart with another env is another
+run under the same name, and a process nothing of Louise has asked yet (the
+keeper's warm reads no run) is not admitted. Asked afresh each time (~0.3 ms
+a collection): a refusal and a new run count at once; a collection file
+that cannot be read makes no model parkable. Otherwise — a process nobody heard, a
 run not gated, one the gate refused, anything unreadable — it gives its room
 by a stop, as before parking existed, and the line says "its file says it
 parks and its run is not admitted to: stopped". A model that is no

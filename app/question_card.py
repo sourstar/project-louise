@@ -144,12 +144,12 @@ def _give_back(server: str, model: str) -> bool:
     asked again by the caller."""
     from app import model_evict
     held = model_load.held_sizes(server) or {}
-    pid, size = held.get(model, (None, 0))
+    _pid, size = held.get(model, (None, 0))
     parked = model in model_load.parked(server)
     says = model in model_load.parks(server)
     # PARKED ONLY AS A RUN ADMITTED TO PARK, as the evictor parks (the second
     # review, 2026-11-26: this path parked every corpus encoder that says it parks)
-    admitted = says and not parked and model_evict._may_park(server, model, pid)
+    admitted = says and not parked and model_evict._may_park(server, model)
     v = model_evict.Loaded(model, int(size or 0), None, parks=admitted, parked=parked,
                            unadmitted=says and not parked and not admitted)
     return model_evict.give_back(server, v)[0] != model_evict.KEPT

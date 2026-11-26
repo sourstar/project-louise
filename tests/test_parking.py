@@ -280,7 +280,7 @@ def test_an_encoder_whose_run_is_not_admitted_to_park_is_stopped_for_its_room(no
     asked = []
     verdict = {"vega-bge-m3": False}
     monkeypatch.setattr(run_check, "park_admitted",
-                        lambda server, model, pid: asked.append(model) or verdict.get(model))
+                        lambda server, model, proc: asked.append(model) or verdict.get(model))
 
     def room():
         r = node({"vega-bge-m3": 2_000, "omnivoice-cpp": 1_700, "louise-chat": 7_000}, extra_mib=20_000,
@@ -306,7 +306,7 @@ def test_an_encoder_whose_run_is_not_admitted_to_park_is_stopped_for_its_room(no
     assert out.parked == ("vega-bge-m3",)
     # an answer that cannot be had is a stop, never a park
     monkeypatch.setattr(run_check, "park_admitted",
-                        lambda server, model, pid: (_ for _ in ()).throw(OSError("unreadable")))
+                        lambda server, model, proc: (_ for _ in ()).throw(OSError("unreadable")))
     r, out = room()
     assert out.unloaded == ("vega-bge-m3",) and out.parked == () and _verbs(r, "park") == []
 

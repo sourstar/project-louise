@@ -142,6 +142,11 @@ class _Flight:
 _lock = threading.Lock()
 _systems: dict[str, tuple[float, frozenset[str] | None, float]] = {}   # server -> (at, ids, ttl)
 _pids: dict[str, dict[str, int]] = {}                                    # server -> {model: backend pid}
+#: server -> {model: (pid, started_at)}: a backend PROCESS as the listing names it — the pid alone is
+#: LocalAI's container's count, which starts again at every restart of that container
+_procs: dict[str, dict[str, tuple]] = {}
+#: (server, model, pid, started_at) -> time.monotonic() this process first read it
+_proc_first_seen: dict[tuple, float] = {}
 #: (server, model) -> the most bytes `/system` gave as the model's `size_vram`
 #: (the driver's per-process count, as app/gpu_models.py reads it), KEPT after
 #: the model goes: what the resident keeper's room check needs is the size of
@@ -248,6 +253,8 @@ def reset() -> None:
     with _lock:
         _systems.clear()
         _pids.clear()
+        _procs.clear()
+        _proc_first_seen.clear()
         _sizes.clear()
         _held.clear()
         _cpu.clear()
@@ -294,7 +301,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
     if not isinstance(rows, list):
         raise _NoRoute()
     held = [m for m in rows if isinstance(m, dict) and isinstance(m.get("id"), str)]
-    pids, sizes, now, cpu = {}, {}, {}, {}
+    pids, sizes, now, cpu, procs = {}, {}, {}, {}, {}
     # the backend each loaded model runs on, where the listing names it (our P1)
     backends = {m["id"]: m["backend"] for m in held if isinstance(m.get("backend"), str) and m["backend"]}
     # only a row that LISTS its options says whether it was loaded on demand
@@ -306,6 +313,9 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         pid = (m.get("process") or {}).get("pid") if isinstance(m.get("process"), dict) else None
         if isinstance(pid, int):
             pids[m["id"]] = pid
+            started = (m.get("process") or {}).get("started_at")
+            if isinstance(started, (str, int, float)) and not isinstance(started, bool) and started != "":
+                procs[m["id"]] = (pid, started)
         proc = m.get("process") if isinstance(m.get("process"), dict) else {}
         try:
             cpu[m["id"]] = float(proc.get("cpu_percent") or 0.0)
@@ -323,6 +333,10 @@ def _fetch_system(server: str) -> frozenset[str] | None:
     with _lock:
         before = _pids.get(server)          # None: this process's first reading of the server
         _pids[server] = pids
+        _procs[server] = procs
+        stamp = time.monotonic()
+        for m, (pid, started) in procs.items():
+            _proc_first_seen.setdefault((server, m, pid, started), stamp)
         _held[server] = now
         _cpu[server] = cpu
         _backends[server] = backends
@@ -529,11 +543,17 @@ def held_sizes(server: str, max_age_s: float | None = None) -> dict[str, tuple[i
         return {m: (pids.get(m), now.get(m, 0)) for m in ids}
 
 
-def known_pid(server: str, model: str) -> int | None:
-    """The backend pid of `model` as the LAST `/system` answer this process
-    read gave it — no request (app/run_check.py binds a heard run to it)."""
+def known_process(server: str, model: str) -> tuple[tuple, float] | None:
+    """`model`'s backend PROCESS as the LAST `/system` answer this process
+    read gave it — (pid, started_at) — and when this process first saw that
+    process (time.monotonic()); no request. None where the listing names no
+    pid and start (app/run_check.py binds a heard run to it)."""
+    server = server_of(server)
     with _lock:
-        return _pids.get(server_of(server), {}).get(model)
+        proc = _procs.get(server, {}).get(model)
+        if proc is None:
+            return None
+        return proc, _proc_first_seen.get((server, model, *proc), time.monotonic())
 
 
 def held_cpu(server: str) -> dict[str, float]:

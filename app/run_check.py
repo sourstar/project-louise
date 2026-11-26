@@ -354,34 +354,37 @@ def parks_now(recipe, query: bool = False) -> bool:
 PARK_IDLE_S = 1.2
 
 
-def park_admitted(server: str, model: str, pid: int | None) -> bool | None:
-    """MAY THE NODE PARK THIS MODEL'S PROCESS `pid` NOW? The operator,
-    2026-11-26: "Either a model is validated or it does not embed" — and a
-    model that parks is validated AS ONE THAT PARKS by its counted cycles
-    (`embedder.park_cycles`), which a write was held to (`runs.check`) and a
-    park was not: the keeper counted bge-m3 as parkable the minute its new
-    process answered, its gate not yet run (München, the same day).
+def park_admitted(server: str, model: str, proc: tuple | list | None) -> bool | None:
+    """MAY THE NODE PARK THIS MODEL'S PROCESS `proc` — (pid, started_at), as
+    the runner's listing names it — NOW? The operator, 2026-11-26: "Either a
+    model is validated or it does not embed" — and a model that parks is
+    validated AS ONE THAT PARKS by its counted cycles (`embedder.park_cycles`),
+    which a write was held to (`runs.check`) and a park was not: the keeper
+    counted bge-m3 as parkable the minute its new process answered, its gate
+    not yet run (München, the same day).
 
       None   no collection whose run is checked uses it (a chat model, a
-             reranker, an encoder of version-2 collections only): no gate
-             speaks of it, and LocalAI's own word stands;
+             reranker, an encoder of version-2 collections only), and every
+             collection file was read: no gate speaks of it, and LocalAI's
+             own word stands;
       True   for EVERY collection whose document or query encoder it is, the
-             run last heard from it was heard FROM THIS PROCESS (`pid`, as
-             the runner's listing gives it: a model name is not a process —
-             a restart with another env is another run under the same name)
-             and has its cycles counted against the statement this peer holds;
-      False  otherwise — a process nobody has heard, a run not gated, one
-             whose cycles were refused, anything that cannot be read. The
-             evictor then STOPS it for its room, as before parking existed: a
-             stop is always right, a park is right only for an admitted run.
+             run last heard was heard FROM THIS PROCESS — bound to its pid AND
+             its start (a pid alone is LocalAI's container's count, which
+             starts again at each restart of that container) — and has its
+             cycles counted against the statement this peer holds;
+      False  otherwise — a process nobody bound a run to, a run not gated,
+             one whose cycles were refused, a collection file that cannot be
+             read, anything that cannot be read. The evictor then STOPS it
+             for its room, as before parking existed: a stop is always right,
+             a park only for an admitted run.
 
-    Asked afresh each time (~0.2 ms a collection): a cached answer outlived
-    a refusal and a new run by up to its lifetime (the second review)."""
+    Asked afresh each time (~0.3 ms a collection)."""
     from . import model_load
     key = (model_load.server_of(server), model)
+    want = list(proc) if proc is not None else None
     answer: bool | None = None
     try:
-        served, _unreadable = collections_mod.load_all(skip_unreadable=True)   # one bad file stops no other's park
+        served, unreadable = collections_mod.load_all(skip_unreadable=True)
         for c in served:
             if not applies(c):
                 continue
@@ -394,7 +397,7 @@ def park_admitted(server: str, model: str, pid: int | None) -> bool | None:
                 heard_key = ((endpoint, named), role)
                 run_id = _last_heard(heard_key)
                 said = _shared().get(_heard_key(heard_key)) or {}
-                if pid is None or said.get("run") != run_id or said.get("pid") != pid:
+                if want is None or said.get("run") != run_id or said.get("proc") != want:
                     return False
                 held = (runs_mod.statements_for_space(_root(), c.name, c.codex, role, signer=signer())
                         .get(run_id) if run_id else None)
@@ -402,6 +405,8 @@ def park_admitted(server: str, model: str, pid: int | None) -> bool | None:
                         _root(), c.name, c.codex, role, run_id, held, signer=signer()):
                     return False
                 answer = True
+        if answer is None and unreadable:
+            return False            # a file not read may name it: a stop, never a park
     except Exception:                                   # noqa: BLE001 — unreadable: a stop, never a park
         return False
     return answer
@@ -1474,7 +1479,6 @@ def _where(collection) -> str:
 
 #: place -> (allowed, reason, fresh until, the run the verdict is about,
 #: the kept statements as they were when it was given — `_kept_stamp`)
-#: where -> (allowed, reason, until, the document run, the kept stamp, the query run)
 _verdicts: dict[str, tuple[bool, str, float, str | None, tuple, str | None]] = {}
 
 
@@ -1517,27 +1521,41 @@ def heard(recipe, answered: set, *, role: str = "document") -> None:
         return
     key = (_who(recipe, role == "query"), role)
     run = sorted(named)[-1]
-    pid = _pid_of(key)
+    # bound to a process only when the answer can only be that process's: ONE
+    # run in it, from a process this process has known longer than any request
+    # can last (`BIND_AFTER_S`) — an answer of the process before could not
+    # still be in flight (the second read: a slice answered by two runs, an old
+    # process's answer read after the listing moved on, each bound the wrong run)
+    proc = _process_of(key) if len(set(named)) == 1 else None
     said = _shared().get(_heard_key(key)) or {}
-    news = (_answering.get(key) != run or said.get("run") != run
-            or (pid is not None and said.get("pid") != pid))
+    news = (_answering.get(key) != run or said.get("run") != run or said.get("proc") != proc)
     now = time.time()
     _answering[key] = run
     _answering_at[key] = now
     if news:
-        _tell(key, run, now, pid)
+        _tell(key, run, now, proc)
 
 
-def _pid_of(key: tuple[tuple[str, str], str]) -> int | None:
-    """The backend process that answers `key`, as this process last read the
-    runner's listing (no request): what a heard run is BOUND to. None where
-    the runner names no pids."""
+#: how long this process must have known a backend process before a run it
+#: hears is bound to it: longer than any request to an encoder can take
+BIND_AFTER_S = 900.0
+
+
+def _process_of(key: tuple[tuple[str, str], str]) -> list | None:
+    """The backend process that answers `key` — [pid, started_at] as the
+    runner's listing names it, read by this process (no request) — once this
+    process has known it `BIND_AFTER_S`; None otherwise, or where the runner
+    names none. A heard run is BOUND to it."""
     try:
         from . import model_load
         (endpoint, model), _role = key
-        return model_load.known_pid(endpoint, model)
+        got = model_load.known_process(endpoint, model)
     except Exception:                                   # noqa: BLE001
         return None
+    if got is None:
+        return None
+    proc, first_seen = got
+    return list(proc) if time.monotonic() - first_seen >= BIND_AFTER_S else None
 
 
 # ---- WHO HEARS A RUN (2026-11-26) ---------------------------------------------------
@@ -1564,7 +1582,7 @@ HEARD_KIND = "louise-heard"
 #: untold (the next answer tells it): a search waits on it only for news
 HEARD_WAIT_S = 0.5
 _answering_at: dict[tuple[tuple[str, str], str], float] = {}
-_heard_read: dict[str, tuple[tuple[int, int], dict[str, dict[str, Any]]]] = {}
+_heard_read: dict[str, tuple[tuple[int, int, int], dict[str, dict[str, Any]]]] = {}
 
 
 def heard_path() -> Path:
@@ -1588,7 +1606,8 @@ def _read_heard(path: Path) -> dict[str, dict[str, Any]]:
 
 def _shared() -> dict[str, dict[str, Any]]:
     """What every process has told, read again when the file changes (keyed
-    on its path, CLAUDE.md). One stat a call; {} where there is no record."""
+    on its path, CLAUDE.md). One stat a call — and a read too within two
+    seconds of a write; {} where there is no record."""
     path = heard_path()
     try:
         st = path.stat()
@@ -1605,8 +1624,8 @@ def _shared() -> dict[str, dict[str, Any]]:
     return cached[1]
 
 
-def _tell(key: tuple[tuple[str, str], str], run: str, at: float, pid: int | None = None) -> None:
-    """Write `run` — and the backend `pid` it was heard from, where known —
+def _tell(key: tuple[tuple[str, str], str], run: str, at: float, proc: list | None = None) -> None:
+    """Write `run` — and the backend process it was heard from, where bound —
     as the last heard for `key`, unless the record says it already. Never
     raises and waits at most `HEARD_WAIT_S`, and only for news: untold news
     is told by the next answer."""
@@ -1627,9 +1646,9 @@ def _tell(key: tuple[tuple[str, str], str], run: str, at: float, pid: int | None
             try:
                 rows = _read_heard(path)
                 k = _heard_key(key)
-                if (rows.get(k) or {}).get("run") == run and (rows.get(k) or {}).get("pid") == pid:
+                if (rows.get(k) or {}).get("run") == run and (rows.get(k) or {}).get("proc") == proc:
                     return
-                rows[k] = {"run": run, "at": round(at, 3), "pid": pid}
+                rows[k] = {"run": run, "at": round(at, 3), "proc": proc}
                 tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
                 try:
                     tmp.write_text(json.dumps({"kind": HEARD_KIND, "heard": rows}, sort_keys=True),
@@ -2070,7 +2089,7 @@ def _look(collection, stop: Callable[[], bool] | None,
 
 
 def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
-                            log: Callable[[str], None]) -> None:
+                            log: Callable[[str], None]) -> str | None:
     """AN ASYMMETRIC SPACE'S QUERY ENCODER IS A RUN OF ITS OWN (03 §3.3),
     gated "at once, and by itself" like the document one: until it is tested
     the space's collections answer no query (§3.6). Nobody embeds a document
@@ -2078,7 +2097,7 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
     sees to it that the statement exists. Never raises."""
     name, codex = collection.name, collection.codex
     if codex.space.query.encoder is None:
-        return
+        return None
     try:
         recipe = collections_mod.recipe_for(collection)
         run_id = answering_run(recipe, query=True)
@@ -2101,15 +2120,17 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
         if held is not None and not cycles_owed:
             if recheck(_root(), name, codex, recipe, run_id, role="query", stop=stop,
                        log=log):
-                return
+                return run_id
         log(f"query run {run_id[:23]}… is {'gated again' if suspect else 'new to this peer'}; "
             f"running the gate against it")
         told = _told(validate(_root(), name, codex, recipe, role="query", stop=stop))
         if suspect:
             _gated_again(collection, "query")
         log("query " + told)
+        return run_id
     except Exception as e:                              # noqa: BLE001
         log(f"the query encoder's run could not be settled: {type(e).__name__}: {e}")
+        return None
 
 
 def verdict_outdated(collection) -> bool:
@@ -2191,12 +2212,14 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
                          f"[{collection.name}] {message}"[:500])
 
         allowed, reason, run_id = _look(collection, stop, log)
-        _look_at_the_query_side(collection, stop, log)
+        # the query run THIS look settled — None where it could not: the
+        # verdict is then about no query run, and the next round looks again
+        query_run = _look_at_the_query_side(collection, stop, log)
         # stamped AFTER looking: a statement the look itself wrote (a gate)
         # is not a reason to look again
         _verdicts[where] = (allowed, reason,
                             now + (PASS_TTL_S if allowed else FAIL_TTL_S), run_id,
-                            _kept_stamp(collection), answering(collection).get("query"))
+                            _kept_stamp(collection), query_run)
         if cached is None or cached[0] != allowed or cached[1] != reason:
             db.log_event(con, "info" if allowed else "error", "run-check",
                          (f"[{collection.name}] embedding "

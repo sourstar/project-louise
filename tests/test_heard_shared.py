@@ -188,11 +188,18 @@ def _counted(root, collection, codex, run_id=R1, role="document", **more):
 
 @pytest.fixture
 def pids(monkeypatch):
-    """The backend processes the runner's listing names, as model_load last read them."""
+    """The backend processes the runner's listing names — (pid, started_at)
+    — as model_load last read them, and since when this process knows each
+    (long enough, unless a test says otherwise)."""
     from app import model_load
-    now = {"medcpt-article": 101, "medcpt-query": 102}
-    monkeypatch.setattr(model_load, "known_pid", lambda server, model: now.get(model))
-    return now
+    now = {"medcpt-article": (101, "2026-11-26T08:00:00Z"), "medcpt-query": (102, "2026-11-26T08:00:00Z")}
+    seen = {}
+
+    def known(server, model):
+        proc = now.get(model)
+        return None if proc is None else (proc, seen.get(model, time.monotonic() - 2 * run_check.BIND_AFTER_S))
+    monkeypatch.setattr(model_load, "known_process", known)
+    return now, seen
 
 
 def test_an_encoder_may_be_parked_only_as_a_run_whose_cycles_are_counted(node, endpoint, pids, monkeypatch):
@@ -200,48 +207,118 @@ def test_an_encoder_may_be_parked_only_as_a_run_whose_cycles_are_counted(node, e
     embed." A write was held to the counted cycles; a park was not."""
     root, collection, codex = node
     con = db.connect(collection)
-    assert run_check.park_admitted(ENDPOINT, "louise-chat", 7) is None, "no collection's encoder: LocalAI's word stands"
-    assert run_check.park_admitted(ENDPOINT, "medcpt-article", 101) is False, "nobody has heard its run yet"
+    assert run_check.park_admitted(ENDPOINT, "louise-chat", (7, "x")) is None, "no collection's encoder: LocalAI's word stands"
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is False, "nobody has heard its run yet"
     assert backend_gate.embed_allowed(con, collection) is True
-    assert run_check.park_admitted(ENDPOINT, "medcpt-article", 101) is False, "gated, its cycles never counted"
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is False, "gated, its cycles never counted"
     _counted(root, collection, codex)
-    assert run_check.park_admitted(ENDPOINT, "medcpt-article", 101) is True, "asked afresh: no cache to outlive"
-    assert run_check.park_admitted(ENDPOINT, "medcpt-query", 102) is False, "the query model has cycles of its own"
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is True, "asked afresh: no cache to outlive"
+    assert run_check.park_admitted(ENDPOINT, "medcpt-query", (102, "2026-11-26T08:00:00Z")) is False, "the query model has cycles of its own"
     _counted(root, collection, codex, role="query")
-    assert run_check.park_admitted(ENDPOINT, "medcpt-query", 102) is True
+    assert run_check.park_admitted(ENDPOINT, "medcpt-query", (102, "2026-11-26T08:00:00Z")) is True
     # ANOTHER RUN ANSWERS (the model started again): not admitted until ITS cycles are counted — at once
     time.sleep(0.01)
     run_check.heard(_recipe(collection), {R2})
-    assert run_check.park_admitted(ENDPOINT, "medcpt-article", 101) is False
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is False
     # what cannot be read is a stop, never a park
     monkeypatch.setattr(collections_mod, "load_all", lambda **k: (_ for _ in ()).throw(OSError("unreadable")))
-    assert run_check.park_admitted(ENDPOINT, "medcpt-article", 101) is False
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is False
 
 
 def test_a_run_admitted_for_one_process_is_not_for_the_next(node, endpoint, pids):
-    """THE SECOND REVIEW: a model NAME stood for a process. Admitted R1, then
-    the model started again — a new env, a new run R2 — and nothing of Louise
-    asked it yet (the keeper's warm reads no run): the record still said R1,
-    and the evictor would have parked R2. The heard run is bound to the
-    process it was heard from, as the runner's listing names it."""
+    """THE REVIEWS: a model NAME stood for a process, then a PID did. Admitted
+    R1; the model started again — a new env, a new run R2 — and nothing of
+    Louise asked it yet (the keeper's warm reads no run). A heard run is
+    bound to the process it was heard from: its pid AND its start, since
+    LocalAI's container counts pids again from small numbers at each restart."""
+    now, seen = pids
     root, collection, codex = node
     con = db.connect(collection)
     assert backend_gate.embed_allowed(con, collection) is True
     _counted(root, collection, codex)
-    assert run_check.park_admitted(ENDPOINT, "medcpt-article", 101) is True
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is True
     said = json.loads(run_check.heard_path().read_text())["heard"][f"{DOC_URL}\nmedcpt-article\ndocument"]
-    assert said["run"] == R1 and said["pid"] == 101
-    # a new process under the same name, not heard yet: stopped, not parked
-    assert run_check.park_admitted(ENDPOINT, "medcpt-article", 202) is False
-    # a NEW PROCESS of THIS process's own memory: the web's record from yesterday is not enough either
-    run_check.reset_cache()
-    pids["medcpt-article"] = 202
-    assert run_check.park_admitted(ENDPOINT, "medcpt-article", 202) is False
-    # heard from it — same run R1 (a restart with the same env): news, by its pid, and admitted again
+    assert said["run"] == R1 and said["proc"] == [101, "2026-11-26T08:00:00Z"]
+    # another process under the same name: stopped, not parked
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (202, "2026-11-26T09:00:00Z")) is False
+    # THE SAME PID after LocalAI's container restarted — another start: not admitted either
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T09:00:20Z")) is False
+    # the new process is heard (a restart with the same env: R1 again), once this process has known it
+    # long enough for no answer of the old one to be in flight: bound to it, admitted again
+    now["medcpt-article"] = (101, "2026-11-26T09:00:20Z")
     run_check.heard(_recipe(collection), {R1})
-    assert json.loads(run_check.heard_path().read_text())["heard"][f"{DOC_URL}\nmedcpt-article\ndocument"]["pid"] == 202
-    assert run_check.park_admitted(ENDPOINT, "medcpt-article", 202) is True
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T09:00:20Z")) is True
     assert run_check.park_admitted(ENDPOINT, "medcpt-article", None) is False, "no process named: no park"
+
+
+def test_a_run_is_bound_only_where_the_answer_can_only_be_that_processs(node, endpoint, pids):
+    """THE SECOND READ, run: a slice answered by two runs across a restart
+    bound the newer process to whichever run sorted last; an old process's
+    answer read after the listing had moved on bound the old run to the new
+    process. Neither binds now: one run in the answer, from a process this
+    process has known longer than any request lasts."""
+    now, seen = pids
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    endpoint.run = R2
+    run_check._verdicts.clear()
+    assert backend_gate.embed_allowed(con, collection) is True        # R2 gated too
+    for run in (R1, R2):
+        _counted(root, collection, codex, run_id=run)
+    key = f"{DOC_URL}\nmedcpt-article\ndocument"
+    # a NEW process, seen a moment ago: whatever it is heard answering is not bound to it
+    now["medcpt-article"] = (202, "2026-11-26T09:30:00Z")
+    seen["medcpt-article"] = time.monotonic()
+    time.sleep(0.01)
+    run_check.heard(_recipe(collection), {R1})
+    assert json.loads(run_check.heard_path().read_text())["heard"][key]["proc"] is None
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (202, "2026-11-26T09:30:00Z")) is False
+    # known long enough — but the answer named TWO runs: bound to neither
+    seen.pop("medcpt-article")
+    time.sleep(0.01)
+    run_check.heard(_recipe(collection), {R1, R2})
+    assert json.loads(run_check.heard_path().read_text())["heard"][key]["proc"] is None
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (202, "2026-11-26T09:30:00Z")) is False
+    # one run, a process known long enough: bound, admitted
+    time.sleep(0.01)
+    run_check.heard(_recipe(collection), {R2})
+    assert json.loads(run_check.heard_path().read_text())["heard"][key]["proc"] == [202, "2026-11-26T09:30:00Z"]
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (202, "2026-11-26T09:30:00Z")) is True
+
+
+def test_a_collection_file_that_cannot_be_read_makes_no_model_parkable(node, endpoint, pids, monkeypatch):
+    """THE SECOND READ: with an unreadable collection file skipped, its
+    encoder was taken for "no collection's encoder" and parked."""
+    root, collection, codex = node
+    monkeypatch.setattr(collections_mod, "load_all", lambda **k: ([], [("gutenberg", "a typo")]))
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is False
+    assert run_check.park_admitted(ENDPOINT, "louise-chat", (7, "x")) is False, "even what may be no encoder: a stop"
+    monkeypatch.setattr(collections_mod, "load_all", lambda **k: ([], []))
+    assert run_check.park_admitted(ENDPOINT, "louise-chat", (7, "x")) is None
+
+
+def test_a_query_look_that_failed_leaves_the_verdict_about_no_query_run(node, endpoint, monkeypatch):
+    """THE SECOND READ: the verdict stored the query run the WEB heard, as if
+    the worker's look had settled it, after that look had failed — and two
+    idle rounds re-checked nothing for half an hour."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    endpoint.by_url[QUERY_URL] = R2
+    time.sleep(0.01)
+    _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}, role="query"))
+    real = run_check.answering_run
+    monkeypatch.setattr(run_check, "answering_run", lambda recipe, query=False, **k: (
+        (_ for _ in ()).throw(OSError("the query model did not answer")) if query else real(recipe, query=query, **k)))
+    run_check._verdicts.clear()
+    assert backend_gate.embed_allowed(con, collection) is True
+    assert run_check._verdicts[run_check._where(collection)][5] is None
+    assert run_check.verdict_outdated(collection), "so the next round looks again"
+    monkeypatch.setattr(run_check, "answering_run", real)
+    worker._settle_the_run(con, collection)
+    assert run_check._verdicts[run_check._where(collection)][5] == R2
+    assert not run_check.verdict_outdated(collection)
 
 
 def test_cycles_refused_are_not_admitted_from_that_moment(node, endpoint, pids):
@@ -249,10 +326,10 @@ def test_cycles_refused_are_not_admitted_from_that_moment(node, endpoint, pids):
     con = db.connect(collection)
     assert backend_gate.embed_allowed(con, collection) is True
     _counted(root, collection, codex)
-    assert run_check.park_admitted(ENDPOINT, "medcpt-article", 101) is True
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is True
     hold_runs.refuse_parks(root, collection.name, codex, "document", R1, why="a return that failed",
                            at="2026-11-26T08:30:00Z", signer=run_check.signer())
-    assert run_check.park_admitted(ENDPOINT, "medcpt-article", 101) is False, "not half a minute later: now"
+    assert run_check.park_admitted(ENDPOINT, "medcpt-article", (101, "2026-11-26T08:00:00Z")) is False, "not half a minute later: now"
 
 
 def test_the_question_card_parks_only_an_admitted_run_too(node, endpoint, monkeypatch):
@@ -264,12 +341,13 @@ def test_the_question_card_parks_only_an_admitted_run_too(node, endpoint, monkey
     monkeypatch.setattr(model_load, "held_sizes", lambda server, max_age_s=None: {"vega-nemotron": (55, 2 << 30)})
     monkeypatch.setattr(model_load, "parks", lambda server: {"vega-nemotron"})
     monkeypatch.setattr(model_load, "parked", lambda server: {})
-    monkeypatch.setattr(run_check, "park_admitted", lambda server, model, pid: asked.append((model, pid)) or False)
+    monkeypatch.setattr(model_load, "known_process", lambda server, model: ((55, "t0"), 0.0))
+    monkeypatch.setattr(run_check, "park_admitted", lambda server, model, proc: asked.append((model, proc)) or False)
     monkeypatch.setattr(model_evict, "give_back", lambda server, v: verbs.append(
         ("park" if v.parks else "stop", v.unadmitted)) or (model_evict.UNLOADED, v.size))
     assert question_card._give_back("http://localai:8080", "vega-nemotron") is True
-    assert asked == [("vega-nemotron", 55)] and verbs == [("stop", True)]
-    monkeypatch.setattr(run_check, "park_admitted", lambda server, model, pid: True)
+    assert asked == [("vega-nemotron", (55, "t0"))] and verbs == [("stop", True)]
+    monkeypatch.setattr(run_check, "park_admitted", lambda server, model, proc: True)
     question_card._give_back("http://localai:8080", "vega-nemotron")
     assert verbs[-1] == ("park", False)
 
