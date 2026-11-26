@@ -286,6 +286,7 @@ def test_a_sentence_made_once_is_answered_from_the_fast_drive_after_a_stop(serve
     model; without a fast drive nothing is kept."""
     calls, _ = server
     body = {"model": "omnivoice-cpp", "input": "Dante wrote it in 1321.", "voice": VOICE_A}
+    monkeypatch.setattr(speech.model_load, "backend_of", lambda url, model, max_age_s=None: "louise-engine-aaaa")
     monkeypatch.setattr(speech.config, "CACHE_DIR", None)
     speech.synthesize(dict(body), url="http://ai:8080")
     speech.synthesize(dict(body), url="http://ai:8080")
@@ -298,6 +299,39 @@ def test_a_sentence_made_once_is_answered_from_the_fast_drive_after_a_stop(serve
     other = speech.synthesize_timed({**body, "input": "Another sentence entirely."}, url="http://ai:8080")
     assert len(calls) == 4 and ("cache", 1.0) not in other[3]
     assert len(list((tmp_path / "cache" / "speech-clips").rglob("*.wav"))) == 2
+
+
+def test_a_kept_clip_is_answered_only_for_the_engine_that_made_it(server, monkeypatch, tmp_path):
+    """2026-11-26: the last word of a sentence was faded away at a full stop, by the ENGINE (its fade-out ran
+    over the word). The kept clips are keyed on the request alone; a fixed engine would have been answered with
+    the old one's clips for every sentence already read. Now the key is the request and the engine, as LocalAI
+    names the model's backend; where it cannot be known, nothing kept is served."""
+    calls, _ = server
+    body = {"model": "omnivoice-cpp", "input": "Dante wrote it in 1321.", "voice": VOICE_A}
+    monkeypatch.setattr(speech.config, "CACHE_DIR", str(tmp_path / "cache"))
+    engine = ["louise-sycl-f16-llama-cpp-ed93e3c1b2e2-stack-7c301a7ba437"]
+    monkeypatch.setattr(speech.model_load, "backend_of", lambda url, model, max_age_s=None: engine[0])
+    speech.synthesize(dict(body), url="http://ai:8080")
+    assert ("cache", 1.0) in speech.synthesize_timed(dict(body), url="http://ai:8080")[3]
+    assert len(calls) == 1
+    engine[0] = "louise-sycl-f16-llama-cpp-0123456789ab-stack-7c301a7ba437"     # the engine swapped
+    again = speech.synthesize_timed(dict(body), url="http://ai:8080")
+    assert len(calls) == 2 and ("cache", 1.0) not in again[3], "the new engine makes the sentence again"
+    assert ("cache", 1.0) in speech.synthesize_timed(dict(body), url="http://ai:8080")[3], "and keeps it"
+    # the model not loaded: the engine unknown before the call, nothing read; kept under the one that answered
+    seen = iter([None, engine[0]])
+    monkeypatch.setattr(speech.model_load, "backend_of", lambda url, model, max_age_s=None: next(seen))
+    cold = speech.synthesize_timed({**body, "input": "A sentence asked of a model not loaded."}, url="http://ai:8080")
+    assert len(calls) == 3 and ("cache", 1.0) not in cold[3]
+    monkeypatch.setattr(speech.model_load, "backend_of", lambda url, model, max_age_s=None: engine[0])
+    assert ("cache", 1.0) in speech.synthesize_timed({**body, "input": "A sentence asked of a model not loaded."},
+                                                     url="http://ai:8080")[3]
+    # never known: nothing kept, nothing served
+    monkeypatch.setattr(speech.model_load, "backend_of", lambda url, model, max_age_s=None: None)
+    for _ in range(2):
+        assert ("cache", 1.0) not in speech.synthesize_timed(dict(body), url="http://ai:8080")[3]
+    assert len(calls) == 5
+    assert len(list((tmp_path / "cache" / "speech-clips").rglob("*.wav"))) == 3
 
 
 def test_every_sentence_the_last_included_keeps_the_question_open_five_minutes(server, monkeypatch):

@@ -33,6 +33,7 @@ no conditional request documented. The notice's dates are the validator.
 from __future__ import annotations
 
 import gzip
+import re
 import json
 import os
 import threading
@@ -197,6 +198,19 @@ class RecentTrees:
         with self._guard:
             return self._locks.setdefault(celex, threading.Lock())
 
+    def peek(self, celex: str) -> bytes | None:
+        """The tree kept for `celex` within the window, or None; asks nothing
+        (architecture's review of 9870a240: a tree Cellar served this pass
+        that dates the unit later than the bulk's is taken over it)."""
+        import zlib
+        path = self._path(celex)
+        try:
+            if self.clock() - path.stat().st_mtime <= self.window_s:
+                return gzip.decompress(path.read_bytes())
+        except (OSError, EOFError, zlib.error):
+            pass
+        return None
+
     def get(self, celex: str, ask: Callable[[], bytes],
             current: Callable[[bytes], bool] | None = None) -> tuple[bytes, str]:
         """The work's tree as Cellar served it, and where it came from:
@@ -236,3 +250,238 @@ def recent_for(corpus_root: Path) -> RecentTrees:
             got = _RECENT[key] = RecentTrees.under(Path(corpus_root))
         return got
 
+
+
+# ---- parser 4: the tree from the bulk, by CELEX ------------------------------------------
+#
+# 2026-11-26, EUR-Lex5.next step 8: parser 4 asked Cellar for the tree of
+# every one of the 124,511 units the Data Dump lacks whole (~1,180 s of every
+# 300 s of the pass, items ~20 s) while the dump's MTD held each of those
+# works' trees, byte for byte the one Cellar served (München's proof on 20
+# units). Bulk first: the tree is taken from the MTD of the dump BUILT INTO
+# the corpus for the unit's language (eurlex_dump.stamp), found by CELEX
+# through an index of that MTD, and checked as the work's own.
+# Architecture's review of 1be767f6 (2026-11-26) shaped the rules below.
+
+#: the MTD's CELEX → work uuid index: derived from one MTD zip, kept by its
+#: physical identity under `place_kept(INDEX_KIND, <the zip>)`, re-creatable
+INDEX_KIND = "eurlex-mtd-celex"
+#: every CELEX literal a tree states (`cdm:resource_legal_id_celex`): a
+#: candidate only — a wrong one can only send a unit to Cellar, since the
+#: tree taken is checked to state the CELEX as its work's own
+_CELEX = re.compile(rb"resource_legal_id_celex[^>]*>\s*([^<\s]+)\s*<")
+_MTD_TREE = re.compile(r"^([0-9a-f-]{36})/" + re.escape(datadump.MTD_MEMBER) + r"$")
+INDEX_CHUNK = 2000
+
+
+def _index_chunk(path: str, members: list[str]) -> tuple[list[tuple[str, str]], int]:
+    """(CELEX, uuid) of every CELEX each member's tree states, and how many
+    members did not read (counted, never the whole index lost for one)."""
+    import zipfile
+    import zlib
+    out: list[tuple[str, str]] = []
+    bad = 0
+    with zipfile.ZipFile(path) as z:
+        for m in members:
+            try:
+                data = z.read(m)
+            except (zipfile.BadZipFile, zlib.error, OSError, KeyError, EOFError):
+                bad += 1
+                continue
+            uuid = m.split("/", 1)[0]
+            out.extend((c.decode("ascii", "replace"), uuid) for c in set(_CELEX.findall(data)))
+    return out, bad
+
+
+def _identity(path: Path) -> str:
+    import hashlib
+    st = path.stat()
+    return hashlib.sha256(f"{path.resolve()}\0{st.st_size}\0{st.st_mtime_ns}".encode()).hexdigest()[:24]
+
+
+class Stopped(Exception):
+    """The index build ended at a chunk boundary by the pass's stop."""
+
+
+def mtd_index(path: Path, place: Path, *, threads: int, stop: Callable[[], bool] = lambda: False,
+              log: Callable[[str], None] = print) -> dict[str, str]:
+    """`{CELEX: work uuid}` of one MTD zip, built once and kept at
+    `place/<its identity>.json.gz` (an older identity's file removed). A
+    CELEX two works' trees state is left out: Cellar answers it. Threads,
+    not processes: the cost is the zip's inflate, which releases the GIL.
+    `stop` is asked between chunks (Stopped). Raises zipfile.BadZipFile /
+    OSError where the zip itself does not open."""
+    from concurrent.futures import ThreadPoolExecutor
+    import time
+    import zipfile
+    import zlib
+    dest = place / f"{_identity(path)}.json.gz"
+    try:
+        return json.loads(gzip.decompress(dest.read_bytes()))
+    except (OSError, EOFError, ValueError, zlib.error):
+        pass
+    t0 = time.monotonic()
+    with zipfile.ZipFile(path) as z:
+        names = sorted(n for n in z.namelist() if _MTD_TREE.match(n))
+    tasks = [(str(path), names[i:i + INDEX_CHUNK]) for i in range(0, len(names), INDEX_CHUNK)]
+    log(f"[work-trees] indexing the CELEX of {path} ({len(names)} trees, {threads} threads)")
+    seen: dict[str, str] = {}
+    twice: set[str] = set()
+    bad = 0
+    with ThreadPoolExecutor(max_workers=max(1, threads)) as pool:
+        for k in range(0, len(tasks), max(1, threads)):
+            if stop():
+                raise Stopped(f"the MTD index of {path}: stopped at chunk {k}/{len(tasks)}, not kept")
+            for got, b in pool.map(lambda t: _index_chunk(*t), tasks[k:k + max(1, threads)]):
+                bad += b
+                for celex, uuid in got:
+                    if seen.setdefault(celex, uuid) != uuid:
+                        twice.add(celex)
+    for c in twice:
+        seen.pop(c, None)
+    place.mkdir(parents=True, exist_ok=True)
+    for old in place.glob("*.json.gz"):
+        old.unlink(missing_ok=True)
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.{threading.get_ident()}")
+    tmp.write_bytes(gzip.compress(json.dumps(seen, sort_keys=True).encode(), 6))
+    os.replace(tmp, dest)
+    log(f"[work-trees] MTD index of {path}: {len(seen)} CELEX in {time.monotonic() - t0:.1f} s, "
+        f"{dest.stat().st_size >> 10} KiB; {len(twice)} stated by two works and {bad} member(s) that "
+        f"do not read left to Cellar")
+    return seen
+
+
+class BulkTrees:
+    """A unit's work tree from ONE MTD zip by its CELEX
+    (cellar.fetch_unit_from_tree `bulk`): None where the MTD holds no work of
+    that CELEX, its member does not read, or the tree does not state the
+    CELEX as its work's own."""
+
+    def __init__(self, path: Path, index: dict[str, str], *, created: str | None = None,
+                 log: Callable[[str], None] = print) -> None:
+        import zipfile
+        self.path = path
+        self.created = created              # the stamped dump's `created`: the unit's provenance
+        self.index = index
+        self._zip = zipfile.ZipFile(datadump._staged(path, log))
+        self._lock = threading.Lock()
+
+    def __call__(self, celex: str) -> dict | None:
+        import zipfile
+        import zlib
+        from ..plugins.eurlex import rdf
+        from .eurlex_dump import _work_celex
+        uuid = self.index.get(celex)
+        if uuid is None:
+            return None
+        try:
+            with self._lock:
+                data = self._zip.read(f"{uuid}/{datadump.MTD_MEMBER}")
+            tree = rdf.read(data)
+        except (zipfile.BadZipFile, zlib.error, OSError, KeyError, EOFError, rdf.RdfError):
+            return None
+        return tree if _work_celex(tree, uuid) == celex else None
+
+
+def stamped_mtd(dump_base: Path | None, corpus_root: Path, lang: str, *,
+                log: Callable[[str], None] = print) -> Path | None:
+    """The MTD zip of the dump stamped into the corpus for `lang`
+    (eurlex_dump.stamp: the dump whose build recorded what this language
+    lacks), resolved through its links; None where no dump is stamped for
+    it. A STAMPED dump that cannot be found — the folder absent (an unmounted
+    drive, a container without the bind), the dump or its MTD not under it —
+    raises OSError, which holds the pass back (architecture's review of
+    a783fd1c, blocking: a quiet None sent every tree to Cellar, F4 again).
+    Dated layout (`dump-…/datadump-<lang>/LEG_MTD.zip` → `../datadump-mtd/`)
+    and flat layout alike: the language folder's MTD."""
+    from . import eurlex_dump
+    when = eurlex_dump.stamp(corpus_root).get(lang)
+    if when is None:
+        return None
+    if dump_base is None or not Path(dump_base).is_dir():
+        raise OSError(f"the Data Dump folder {dump_base} (EURLEX_DATADUMP_DIR) is not there, and the dump "
+                      f"of {when} is stamped into the corpus for {lang}")
+    want = datadump._stamp(when)
+    for folder in datadump.dump_folders(dump_base):
+        got = datadump.statement(folder)
+        if isinstance(got, str) or got[0] != lang or got[1] != want:
+            continue
+        zips = eurlex_dump.mtd_zips([folder])
+        if zips:
+            return zips[0].resolve()
+        raise OSError(f"{folder}: the dump stamped for {lang} ({when}) holds no MTD zip")
+    raise OSError(f"the dump stamped for {lang} ({when}) is not under {dump_base}")
+
+
+_BULK: dict[str, BulkTrees] = {}
+_BULK_LOCK = threading.Lock()
+
+
+def prepare_bulk(dump_base: Path | None, corpus_root: Path, langs: list[str], *, threads: int,
+                 stop: Callable[[], bool] = lambda: False,
+                 log: Callable[[str], None] = print) -> dict[str, BulkTrees]:
+    """`{lang: BulkTrees}` for the languages a pass fetches, each on the MTD
+    stamped for it, its index built here — BEFORE the pass (TreeUnits.prepare),
+    the stop asked between chunks — and kept per MTD identity for the
+    process. Raises what an MTD that does not open raises (the caller holds
+    the pass back: bulk first)."""
+    import zipfile
+    from . import eurlex_dump
+    out: dict[str, BulkTrees] = {}
+    for lang in langs:
+        path = stamped_mtd(dump_base, corpus_root, lang, log=log)
+        if path is None:
+            continue
+        key = f"{path}|{_identity(path)}"
+        with _BULK_LOCK:
+            got = _BULK.get(key)
+        if got is None:
+            place = derived.place_kept(INDEX_KIND, path) or (path.parent / derived.BESIDE / INDEX_KIND)
+            try:
+                index = mtd_index(path, place, threads=threads, stop=stop, log=log)
+            except zipfile.BadZipFile as e:
+                raise OSError(f"{path}: the MTD does not open ({e})") from e
+            got = BulkTrees(path, index, created=eurlex_dump.stamp(corpus_root).get(lang), log=log)
+            with _BULK_LOCK:
+                got = _BULK.setdefault(key, got)
+        out[lang] = got
+    return out
+
+
+#: THE TREE'S SOURCE, per unit (architecture's review of 9870a240, invariant 11:
+#: "the form is part of what a verifier needs"): one JSON line a unit fetched,
+#: `{"l", "c", "from": dump|cellar|kept, "dump": <created>, "at"}`, appended
+#: beside the corpus, never rewritten by a dump build (the ledger's marks are).
+#: Not a record field: `extra`'s keys are fixed for a collection's life.
+SOURCES = ".eurlex-tree-sources.jsonl"
+_SOURCES_LOCK = threading.Lock()
+
+
+def record_source(corpus_root: Path, lang: str, celex: str, tree_from: str, created: str | None) -> None:
+    import time
+    line = json.dumps({"l": lang, "c": celex, "from": tree_from,
+                       **({"dump": created} if tree_from == "dump" and created else {}),
+                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                      sort_keys=True, separators=(",", ":")) + "\n"
+    with _SOURCES_LOCK:
+        with open(Path(corpus_root) / SOURCES, "a", encoding="utf-8") as f:
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
+
+
+def source_of(corpus_root: Path, lang: str, celex: str) -> dict | None:
+    """The last source recorded for a unit, or None."""
+    got = None
+    try:
+        with open(Path(corpus_root) / SOURCES, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("l") == lang and row.get("c") == celex:
+                    got = row
+    except OSError:
+        return None
+    return got

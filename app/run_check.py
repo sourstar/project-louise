@@ -354,6 +354,64 @@ def parks_now(recipe, query: bool = False) -> bool:
 PARK_IDLE_S = 1.2
 
 
+def park_admitted(server: str, model: str, proc: tuple | list | None) -> bool | None:
+    """MAY THE NODE PARK THIS MODEL'S PROCESS `proc` — (pid, started_at), as
+    the runner's listing names it — NOW? The operator, 2026-11-26: "Either a
+    model is validated or it does not embed" — and a model that parks is
+    validated AS ONE THAT PARKS by its counted cycles (`embedder.park_cycles`),
+    which a write was held to (`runs.check`) and a park was not: the keeper
+    counted bge-m3 as parkable the minute its new process answered, its gate
+    not yet run (München, the same day).
+
+      None   no collection whose run is checked uses it (a chat model, a
+             reranker, an encoder of version-2 collections only), and every
+             collection file was read: no gate speaks of it, and LocalAI's
+             own word stands;
+      True   for EVERY collection whose document or query encoder it is, the
+             run last heard was heard FROM THIS PROCESS — bound to its pid AND
+             its start (a pid alone is LocalAI's container's count, which
+             starts again at each restart of that container) — and has its
+             cycles counted against the statement this peer holds;
+      False  otherwise — a process nobody bound a run to, a run not gated,
+             one whose cycles were refused, a collection file that cannot be
+             read, anything that cannot be read. The evictor then STOPS it
+             for its room, as before parking existed: a stop is always right,
+             a park only for an admitted run.
+
+    Asked afresh each time (~0.3 ms a collection)."""
+    from . import model_load
+    key = (model_load.server_of(server), model)
+    want = list(proc) if proc is not None else None
+    answer: bool | None = None
+    try:
+        served, unreadable = collections_mod.load_all(skip_unreadable=True)
+        if unreadable:
+            return False            # a file not read may name it, under stricter cycles: a stop, never a park
+        for c in served:
+            if not applies(c):
+                continue
+            recipe = collections_mod.recipe_for(c)
+            roles = ["document"] + (["query"] if c.codex.space.query.encoder is not None else [])
+            for role in roles:
+                endpoint, named = _who(recipe, role == "query")
+                if (model_load.server_of(endpoint), named) != key:
+                    continue
+                heard_key = ((endpoint, named), role)
+                run_id = _last_heard(heard_key)
+                said = _shared().get(_heard_key(heard_key)) or {}
+                if want is None or said.get("run") != run_id or said.get("proc") != want:
+                    return False
+                held = (runs_mod.statements_for_space(_root(), c.name, c.codex, role, signer=signer())
+                        .get(run_id) if run_id else None)
+                if held is None or not runs_mod.passing(held, c.codex) or not runs_mod.parks_counted(
+                        _root(), c.name, c.codex, role, run_id, held, signer=signer()):
+                    return False
+                answer = True
+    except Exception:                                   # noqa: BLE001 — unreadable: a stop, never a park
+        return False
+    return answer
+
+
 class Parker:
     """The model's park cycles as the gate asks them (`embedder.park_cycles`):
     whether it parks, the engine's own counts, the park itself.
@@ -918,7 +976,7 @@ def _claim_twin(server: str, twin: str, name: str) -> _TwinClaim:
     leaves the process's lock alone, said."""
     import fcntl
     busy = (f"{name}: another collection's gate measures on {twin} now; this one is asked "
-            f"again at the next round")
+            f"again within {FAIL_TTL_S} s")
     with _guard:
         lock = _looking.setdefault(f"{server} {twin}", threading.Lock())
     if not lock.acquire(blocking=False):
@@ -1419,9 +1477,13 @@ def _where(collection) -> str:
     return str(runs_mod.directory(_root(), collection.name))
 
 
-#: place -> (allowed, reason, fresh until, the run the verdict is about,
-#: the kept statements as they were when it was given — `_kept_stamp`)
-_verdicts: dict[str, tuple[bool, str, float, str | None, tuple]] = {}
+#: place -> (allowed, reason, fresh until, the run the verdict is about — the
+#: one its look heard, or the one heard before it where the look heard none —,
+#: the kept statements as they were when it was given — `_kept_stamp` —, the
+#: query side: its run, or (QUERY_UNSETTLED, when, the run heard then, failures before),
+#: whether the look settled it (False: the encoder could not be asked, the gate deferred),
+#: how many unsettled looks in a row before this one, for that run (its backoff))
+_verdicts: dict[str, tuple[bool, str, float, str | None, tuple, Any, bool, int, tuple]] = {}
 
 
 def _kept_stamp(collection) -> tuple:
@@ -1454,10 +1516,182 @@ _noted: set[tuple[tuple[str, str], str, str]] = set()
 
 
 def heard(recipe, answered: set, *, role: str = "document") -> None:
-    """Remember which run this endpoint's answers named."""
+    """Remember which run this endpoint's answers named — and TELL THE OTHER
+    PROCESSES when it is news (`_tell`): a run a question heard first is
+    gated by the worker, which never asks a model it has nothing to embed
+    with (the module's "WHO HEARS A RUN")."""
     named = [r for r in answered if r]
-    if named:
-        _answering[(_who(recipe, role == "query"), role)] = sorted(named)[-1]
+    if not named:
+        return
+    key = (_who(recipe, role == "query"), role)
+    run = sorted(named)[-1]
+    # bound to a process only when the answer can only be that process's: ONE
+    # run in it and no answer that named none (`answered` as it came: an
+    # answer naming no run may be the other process's), heard from a process
+    # this process has known for `BIND_AFTER_S` — an answer of the process
+    # before could not still be on its way (the second read: a slice answered
+    # by two runs, an old process's answer read after the listing moved on)
+    proc = _process_of(key) if len(set(answered)) == 1 else None
+    said = _shared().get(_heard_key(key)) or {}
+    # NEWS: another run, or a binding where there was none or another. A
+    # process that cannot bind (yet) never ERASES a binding another made for
+    # the same run (the third read: the web and the worker unbound and bound
+    # it in turn, and every restart of either unbound it for good)
+    rebind = proc is not None and said.get("proc") != proc
+    news = _answering.get(key) != run or said.get("run") != run or rebind
+    now = time.time()
+    _answering[key] = run
+    _answering_at[key] = now
+    if news:
+        _tell(key, run, now, proc)
+
+
+#: how long this process must have known a backend process before a run it
+#: hears is bound to it. What it must exceed is the gap between an answer and
+#: its `heard()`, never a request's length: a binding is wrong only if EVERY
+#: answer in the set came from the process before, i.e. the last of them
+#: before this process first saw the new one. Every caller hears right after
+#: its last answer: its receipts (a 10 s timeout a phase), a pin's touch (a
+#: file lock) — seconds, not a bound (the fourth read: a frozen process is
+#: not bounded at all). Two minutes is a margin over what is seen, and a
+#: wrong binding also needs another env and an eviction before anyone hears
+#: the new process; a model loaded for a burst of questions is bound in it
+BIND_AFTER_S = 120.0
+
+
+def _process_of(key: tuple[tuple[str, str], str]) -> list | None:
+    """The backend process that answers `key` — [pid, started_at] as the
+    runner's listing names it, read by this process (no request) — once this
+    process has known it `BIND_AFTER_S`; None otherwise, or where the runner
+    names none. A heard run is BOUND to it."""
+    try:
+        from . import model_load
+        (endpoint, model), _role = key
+        got = model_load.known_process(endpoint, model)
+    except Exception:                                   # noqa: BLE001
+        return None
+    if got is None:
+        return None
+    proc, first_seen = got
+    return list(proc) if time.monotonic() - first_seen >= BIND_AFTER_S else None
+
+
+# ---- WHO HEARS A RUN (2026-11-26) ---------------------------------------------------
+#
+# `_answering` is this process's own. Until this day it was the only record:
+# the WEB heard a model's new run from a question's answer, and the WORKER —
+# which gates — heard a run only from its own embed stage. München, bge-m3
+# restarted with another env (its three parking lines): one question
+# answered from run 0211…, and four minutes later the worker had said
+# nothing — wikipedia had nothing to embed, `_settle_the_run` read the
+# worker's own record (the old run, validated) and looked no further. "Gated
+# at once, whether or not it has anything to embed" (03 §3.3) held only for
+# a run the worker itself heard. On a node that withholds, the vector leg
+# would have waited for a gate that never came.
+#
+# So what any process hears is written where every process reads it:
+# `state/heard.json`, beside the worker's re-check record — per (endpoint,
+# model, role) the run and when, replaced under a file lock, read again when
+# the file changes. `answering` takes the later of what this process heard
+# and what another told.
+
+HEARD_KIND = "louise-heard"
+#: how long a process waits for the record's lock before it leaves the news
+#: untold (the next answer tells it): a search waits on it only for news
+HEARD_WAIT_S = 0.5
+_answering_at: dict[tuple[tuple[str, str], str], float] = {}
+_heard_read: dict[str, tuple[tuple[int, int, int], dict[str, dict[str, Any]]]] = {}
+
+
+def heard_path() -> Path:
+    return collections_mod.louise_root() / "state" / "heard.json"
+
+
+def _heard_key(key: tuple[tuple[str, str], str]) -> str:
+    (endpoint, model), role = key
+    return f"{endpoint}\n{model}\n{role}"
+
+
+def _read_heard(path: Path) -> dict[str, dict[str, Any]]:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        rows = doc.get("heard") if doc.get("kind") == HEARD_KIND else None
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {k: v for k, v in (rows or {}).items()
+            if isinstance(v, dict) and isinstance(v.get("run"), str) and isinstance(v.get("at"), (int, float))}
+
+
+def _shared() -> dict[str, dict[str, Any]]:
+    """What every process has told, read again when the file changes (keyed
+    on its path, CLAUDE.md). One stat a call — and a read too within two
+    seconds of a write; {} where there is no record."""
+    path = heard_path()
+    try:
+        st = path.stat()
+        stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        return {}
+    cached = _heard_read.get(str(path))
+    # A STAMP MADE IN THE LAST TWO SECONDS IS NOT TRUSTED (git's "racy" index
+    # rule): two writes of the same size within one tick of a coarse clock
+    # leave the same stamp, and the second would never be read
+    racy = time.time() - st.st_mtime_ns / 1e9 < 2.0
+    if cached is None or cached[0] != stamp or racy:
+        cached = _heard_read[str(path)] = (stamp, _read_heard(path))
+    return cached[1]
+
+
+def _tell(key: tuple[tuple[str, str], str], run: str, at: float, proc: list | None = None) -> None:
+    """Write `run` — and the backend process it was heard from, where bound —
+    as the last heard for `key`, unless the record says it already. Never
+    raises and waits at most `HEARD_WAIT_S`, and only for news: untold news
+    is told by the next answer."""
+    import fcntl
+    path = heard_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path.with_name(path.name + ".lock"), "a+b") as lock:
+            deadline = time.monotonic() + HEARD_WAIT_S
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        return
+                    time.sleep(0.01)
+            try:
+                rows = _read_heard(path)
+                k = _heard_key(key)
+                row = rows.get(k) or {}
+                if proc is None and row.get("run") == run:
+                    proc = row.get("proc")   # a binding for this run is kept, as read UNDER the lock
+                if row.get("run") == run and row.get("proc") == proc:
+                    return
+                rows[k] = {"run": run, "at": round(at, 3), "proc": proc}
+                tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+                try:
+                    tmp.write_text(json.dumps({"kind": HEARD_KIND, "heard": rows}, sort_keys=True),
+                                   encoding="utf-8")
+                    os.replace(tmp, path)
+                finally:
+                    tmp.unlink(missing_ok=True)
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+def _last_heard(key: tuple[tuple[str, str], str]) -> str | None:
+    """The run last heard for `key` by ANY process: this one's own, unless
+    another told a different one later."""
+    said = _shared().get(_heard_key(key))
+    if said is not None and said["run"] != _answering.get(key) \
+            and float(said["at"]) > _answering_at.get(key, 0.0):
+        _answering[key] = said["run"]
+        _answering_at[key] = float(said["at"])
+    return _answering.get(key)
 
 
 def _note_options(recipe, answered: set, known: dict[str, dict[str, Any]], *,
@@ -1501,15 +1735,17 @@ def engine_counts(get=httpx.get) -> dict[tuple[str, str], dict[str, Any]]:
 
 
 def answering(collection) -> dict[str, str | None]:
-    """role -> the run this collection's encoder last stated, as far as THIS
-    process has heard. Empty for a collection older than version 3."""
+    """role -> the run this collection's encoder last stated, as far as ANY
+    process of the node has heard (`_last_heard`: the web hears a new run
+    from a question, the worker from its embed stage — and the worker gates).
+    Empty for a collection older than version 3."""
     if not applies(collection):
         return {}
     try:
         recipe = collections_mod.recipe_for(collection)
     except Exception:                                   # noqa: BLE001
         return {}
-    return {role: _answering.get((_who(recipe, role == "query"), role))
+    return {role: _last_heard((_who(recipe, role == "query"), role))
             for role in runs_mod.ROLES}
 
 
@@ -1545,6 +1781,13 @@ def _flight(collection) -> str:
     (`gating_elsewhere`)."""
     url, model = _models(collection)[0]
     return f"{url} {model}"
+
+
+def _flights_query(collection) -> str | None:
+    """The query side's key in `_flights`, where the space has a query encoder
+    of its own; None otherwise."""
+    models = _models(collection)
+    return f"{models[1][0]} {models[1][1]}" if len(models) > 1 else None
 
 
 def _flights(collection) -> list[str]:
@@ -1643,6 +1886,35 @@ def _suspect(collection, role: str = "document") -> bool:
     return _canary.get(who, 0) > _canary_gated.get((_where(collection), role), 0)
 
 
+def _canary_counts(collection) -> tuple[int, int]:
+    """The canary failures seen so far of the runs this collection's document
+    and query sides reach — kept in a verdict, so that only a NEW one sends a
+    verdict back (`_suspect_since`)."""
+    if not _canary:
+        return (0, 0)
+    try:
+        recipe = collections_mod.recipe_for(collection)
+    except Exception:                                   # noqa: BLE001
+        return (0, 0)
+    return (_canary.get(_who(recipe, False), 0), _canary.get(_who(recipe, True), 0))
+
+
+def _suspect_since(collection, cached, role: str = "document") -> bool:
+    """Is the run of `role` suspect (`_suspect`) by a canary failure the
+    verdict `cached` did not see? A look that could not finish its re-gate
+    stored what it saw: looked at again only when it expires, not at every
+    step (the ninth read, run: twenty steps, twenty probes of each side, for a
+    re-gate the card had no room for). The run stays suspect meanwhile, and
+    `check_write` refuses what it would write."""
+    if not _suspect(collection, role):
+        return False
+    seen = cached[8] if cached is not None and len(cached) > 8 else None
+    if not seen:
+        return True
+    i = 1 if role == "query" else 0
+    return _canary_counts(collection)[i] > seen[i]
+
+
 def _send_back(collection, run_id: str, role: str,
                log: Callable[[str], None] | None) -> None:
     """Set aside what this peer keeps for the suspect run in this space, and
@@ -1703,6 +1975,8 @@ def _gated_again(collection, role: str = "document") -> None:
 def reset_cache() -> None:
     _verdicts.clear()
     _answering.clear()
+    _answering_at.clear()
+    _heard_read.clear()
     _canary.clear()
     _canary_unconfirmed.clear()
     _canary_gated.clear()
@@ -1715,6 +1989,9 @@ def reset_cache() -> None:
     _entries.clear()
     _record_read.clear()
     _aside_said.clear()
+    with _slow_lock:
+        _slow.clear()
+        _gate_slow.clear()
 
 
 def check_write(collection, recipe, answered: set) -> None:
@@ -1824,11 +2101,13 @@ def check_query(collection, recipe, answered: set) -> None:
 
 
 def _look(collection, stop: Callable[[], bool] | None,
-          log: Callable[[str], None]) -> tuple[bool, str, str | None]:
+          log: Callable[[str], None]) -> tuple[bool, str, str | None, bool]:
     """Ask the endpoint which run answers, and settle it: (may it embed, why,
-    the run that answered). Never raises."""
+    the run that answered, whether the look SETTLED it — False where the
+    encoder could not be asked or the gate deferred). Never raises."""
     name, codex = collection.name, collection.codex
     run_id = None
+    recipe = None
     try:
         recipe = collections_mod.recipe_for(collection)
         run_id = answering_run(recipe, probe_item=probe_for(codex))
@@ -1863,27 +2142,57 @@ def _look(collection, stop: Callable[[], bool] | None,
                            batched=batched(recipe), contributes=contributing(recipe),
                            parks=parks_now(recipe))
         return True, (f"run {run_id[:23]}… is validated for this space"
-                      + _canary_note(collection, run_id)), run_id
+                      + _canary_note(collection, run_id)), run_id, True
     except (runs_mod.RunRefused, runs_mod.RunUnvalidated, emb.GateError) as e:
-        return False, str(e), run_id
+        # a refused RECEIPT refuses one answer, not the run: not settled (the
+        # seventh read), as a deferred gate is not
+        _look_state.timed_out = _timed_out(e)
+        return False, str(e), run_id, not isinstance(e, (emb.GateDeferred, embeddings.ReceiptRefused))
     except Exception as e:                              # noqa: BLE001
-        # the endpoint away: a deferral, retried; nothing is flagged
-        return False, f"the encoder could not be asked: {type(e).__name__}: {e}", run_id
+        # the endpoint away: a deferral, retried — less often each time it
+        # fails again (`embed_allowed`'s backoff); nothing is flagged
+        _look_state.timed_out = _timed_out(e)
+        return False, f"the encoder could not be asked: {type(e).__name__}: {e}", run_id, False
+
+
+#: whether the last look on THIS thread ended on a request that timed out
+#: (`_timed_out`): read by `embed_allowed` right after it, to tell a hung
+#: encoder from one that answered and deferred (the delta read, run: a gate
+#: whose first request timed out after 300 s counted as answered, and the
+#: main loop was held half the time again)
+_look_state = threading.local()
+
+
+def _timed_out(e: BaseException | None) -> bool:
+    """Is a timeout anywhere in `e`'s chain (`__cause__`, `__context__`) — an
+    encoder request that waited its whole bound?"""
+    seen: set[int] = set()
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if isinstance(e, (httpx.TimeoutException, TimeoutError)):
+            return True
+        # `raise … from None` cut the chain on purpose (the eleventh read, run:
+        # VeGa's receipts read timing out, not the encoder, marked it)
+        e = e.__cause__ if e.__cause__ is not None else (None if e.__suppress_context__ else e.__context__)
+    return False
 
 
 def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
-                            log: Callable[[str], None]) -> None:
+                            log: Callable[[str], None], heard_by: list | None = None) -> str | None:
     """AN ASYMMETRIC SPACE'S QUERY ENCODER IS A RUN OF ITS OWN (03 §3.3),
     gated "at once, and by itself" like the document one: until it is tested
     the space's collections answer no query (§3.6). Nobody embeds a document
     with it, so nothing here decides whether embedding may go on — it only
-    sees to it that the statement exists. Never raises."""
+    sees to it that the statement exists. Never raises. `heard_by` gets the
+    run the look heard, if it heard one, even where it then fails."""
     name, codex = collection.name, collection.codex
     if codex.space.query.encoder is None:
-        return
+        return None
     try:
         recipe = collections_mod.recipe_for(collection)
         run_id = answering_run(recipe, query=True)
+        if heard_by is not None:
+            heard_by.append(run_id)
         heard(recipe, {run_id}, role="query")
         suspect = _suspect(collection, "query")
         if suspect:
@@ -1903,15 +2212,203 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
         if held is not None and not cycles_owed:
             if recheck(_root(), name, codex, recipe, run_id, role="query", stop=stop,
                        log=log):
-                return
+                return run_id
         log(f"query run {run_id[:23]}… is {'gated again' if suspect else 'new to this peer'}; "
             f"running the gate against it")
         told = _told(validate(_root(), name, codex, recipe, role="query", stop=stop))
         if suspect:
             _gated_again(collection, "query")
         log("query " + told)
+        return run_id
     except Exception as e:                              # noqa: BLE001
+        _look_state.timed_out = _timed_out(e)
         log(f"the query encoder's run could not be settled: {type(e).__name__}: {e}")
+        return None
+
+
+#: a verdict's query side whose look failed: (QUERY_UNSETTLED, when, the query run heard then,
+#: how many looks in a row failed for that run before this one)
+QUERY_UNSETTLED = "unsettled"
+#: the longest a query look that keeps failing for one run is put off (`_query_settled`):
+#: FAIL_TTL_S doubled at each failure in a row up to this — a probe that times out holds the
+#: worker's main loop for its timeout, and at FAIL_TTL_S each it held it half the time (the
+#: sixth read, run: 1,800 s hung in a simulated hour)
+QUERY_FAIL_CAP_S = 1800.0
+#: the document side's the same (`embed_allowed`)
+FAIL_CAP_S = QUERY_FAIL_CAP_S
+
+#: ONLY A LOOK THAT HELD ITS CALLER this long is backed off (the ninth read,
+#: run): a refused connection (LocalAI restarting), a twin busy, a room short
+#: cost nothing to ask again, and backed off with the hung ones they kept
+#: embedding paused up to 25 min after the encoder was back. A hung probe holds
+#: its caller for its timeout, and only that is worth not repeating
+SLOW_LOOK_S = 30.0
+#: ONE BACKOFF PER ENCODER MODEL (`_flights`' key) -> (slow looks in a row,
+#: until when no collection's look asks it again): with it held per collection,
+#: six collections on one hung encoder probed it six times a period on one
+#: thread, 98 % of it held (the ninth read, run). Read only BEFORE A LOOK — a
+#: valid verdict and the embed stage never read it — and cleared by the first
+#: look that settles, or that comes back quickly
+_slow: dict[str, tuple[int, float, str | None]] = {}
+_slow_lock = threading.Lock()
+
+
+def _look_clock() -> float:
+    """How long a look took is read on this clock (its own, so a test can move it)."""
+    return time.monotonic()
+
+
+def _slow_until(key: str, now: float, heard: str | None = None) -> float | None:
+    """Until when no look asks this encoder model again, or None — None too
+    where a run other than the one heard when it was marked has been heard
+    since (`heard`): some process had an answer, and the new run is gated at
+    once (the tenth read, run: a verdict dropped by `check_write` for R2 took
+    the backoff's path, and R2 waited up to 30 min for its gate)."""
+    with _slow_lock:
+        got = _slow.get(key)
+    if got is None or got[1] <= now:
+        return None
+    marked = got[2] if len(got) > 2 else None
+    if heard is not None and heard != marked:
+        return None                     # (marked with nothing heard: anything heard came after)
+    return got[1]
+
+
+def _note_look(key: str, took: float, answered: bool, heard: str | None = None) -> tuple[int, float | None]:
+    """A look at this encoder model ended after `took` s: (slow looks in a row,
+    until when the next is put off — None where it is not). A look the encoder
+    ANSWERED (it named a run, or the look settled) clears it, however long its
+    gate ran (the tenth read, run: a 240 s gate that deferred backed the whole
+    encoder off to 30 min); so does a quick one; a slow look the encoder never
+    answered doubles it (FAIL_TTL_S, 600, 1,200, then FAIL_CAP_S). `heard`:
+    the run heard before it, which a run heard since passes over."""
+    with _slow_lock:
+        if answered or took < SLOW_LOOK_S:
+            _slow.pop(key, None)
+            return 0, None
+        n = _slow[key][0] + 1 if key in _slow else 1
+        until = time.time() + min(FAIL_TTL_S * 2 ** min(n - 1, 3), FAIL_CAP_S)
+        _slow[key] = (n, until, heard)
+        return n, until
+
+
+def _asymmetric(collection) -> bool:
+    """Has this collection's space a query encoder of its own? Only then is a
+    verdict held to a query run: a symmetric space's "query" key is its
+    document model's, which another space may use as ITS query model (the
+    third read: that collection would have looked again at every step)."""
+    return getattr(getattr(getattr(collection.codex, "space", None), "query", None), "encoder", None) is not None
+
+
+def _query_settled(kept, heard: str | None, now: float) -> bool:
+    """Is a verdict's query side (`kept`, `_verdicts[...][5]`) about the query
+    run last heard — or a look that failed within its bound (FAIL_TTL_S,
+    doubled at each failure in a row for that run, up to QUERY_FAIL_CAP_S),
+    with no other run heard since?"""
+    if isinstance(kept, tuple) and kept and kept[0] == QUERY_UNSETTLED:
+        n = min(int(kept[3]) if len(kept) > 3 else 0, 3)          # 300, 600, 1,200, then the cap
+        bound = min(FAIL_TTL_S * 2 ** n, QUERY_FAIL_CAP_S)
+        return now - kept[1] < bound and (heard is None or heard == kept[2])
+    return heard is None or kept == heard
+
+
+#: ONE GATE'S BACKOFF — (encoder model, space, run) -> (slow looks in a row,
+#: until when): where a look's probe was answered but the look then held its
+#: caller (its gate ran 30 s or more and did not settle — a request timed out,
+#: or it deferred late). Every collection of that space shares the one gate, and
+#: no other is held (the twelfth read, run: kept in a verdict's expiry only, a
+#: query side's shorter bound let the document gate through every 600 s, 50 %
+#: of the main loop for one collection, 91 % for two; per collection, six
+#: siblings of one space hung six times a period). Read before a look, like
+#: the encoder's mark; cleared by a look of that gate that settles
+_gate_slow: dict[tuple, tuple[int, float]] = {}
+
+
+def _gate_key(collection, model_key: str, run_id: str | None) -> tuple | None:
+    """The gate a look of `collection` runs against `run_id`: the model, the
+    space, the run, and how this peer contributes (`contributing`: its batch
+    and concurrency are measured by the gate's contribute pass, so two
+    collections of a space that contribute differently run different gates)."""
+    space = getattr(getattr(collection, "codex", None), "space_id", None)
+    if not run_id or not space:
+        return None
+    try:
+        how = contributing(collections_mod.recipe_for(collection))
+    except Exception:                                   # noqa: BLE001
+        how = None
+    return (model_key, str(space), run_id, tuple(sorted((how or {}).items())))
+
+
+def _gate_until(key, now: float) -> tuple[int, float] | None:
+    if key is None:
+        return None
+    with _slow_lock:
+        got = _gate_slow.get(key)
+    return got if got is not None and got[1] > now else None
+
+
+def _note_gate(key, took: float, answered_ok: bool) -> tuple[int, float] | None:
+    """A look of this gate ended: settled → its backoff gone; slow and not
+    settled → doubled (FAIL_TTL_S, 600, 1,200, then FAIL_CAP_S); quick and not
+    settled → left as it is (a sibling's quick deferral is no news about the
+    gate's hang)."""
+    if key is None:
+        return None
+    with _slow_lock:
+        if answered_ok:
+            _gate_slow.pop(key, None)
+            return None
+        if took < SLOW_LOOK_S:
+            got = _gate_slow.get(key)
+            return got if got is not None and got[1] > time.time() else None
+        n = _gate_slow[key][0] + 1 if key in _gate_slow else 1
+        got = _gate_slow[key] = (n, time.time() + min(FAIL_TTL_S * 2 ** min(n - 1, 3), FAIL_CAP_S))
+        return got
+
+
+def _query_kept(collection, kept, heard: str | None, now: float) -> bool:
+    """`_query_settled` — or an unsettled query side about the run heard while
+    the query encoder's backoff (`_slow`) runs: kept as long as the mark, and
+    no longer (the delta read, run: re-stamped from now, it outlived a mark
+    cleared by an answer by its own bound, up to 28 min). Kept, the verdict is
+    fresh and the document side is not probed at every step meanwhile."""
+    if _query_settled(kept, heard, now):
+        return True
+    if not (isinstance(kept, tuple) and len(kept) > 2 and kept[0] == QUERY_UNSETTLED):
+        return False
+    if heard is not None and kept[2] != heard:
+        return False
+    q_key = _flights_query(collection)
+    if q_key is None:
+        return False
+    # ...or while the QUERY GATE's backoff runs for that run (`_gate_slow`,
+    # the thirteenth read: per collection, siblings of one space each hung it)
+    return _slow_until(q_key, now, heard) is not None or \
+        _gate_until(_gate_key(collection, q_key, heard or kept[2]), now) is not None
+
+
+def verdict_outdated(collection) -> bool:
+    """Is this process's verdict for `collection` about other runs than the
+    ones last heard (any process)? The worker's idle round looks again when
+    it is (`worker._settle_the_run`): a run gated before, heard again after a
+    restart, is re-checked there — not only a run never tested (the second
+    review: three idle rounds left a kept statement unchecked while the
+    web's vector leg waited for it)."""
+    cached = _verdicts.get(_where(collection))
+    if cached is None:
+        return False
+    if not cached[0] and len(cached) > 6 and not cached[6] and cached[2] <= time.time():
+        # A LOOK THAT DID NOT SETTLE (the encoder could not be asked, the gate
+        # deferred), its bound passed: looked at again on the idle round too —
+        # a collection with nothing to embed never reaches `embed_allowed`, and
+        # a tested run whose re-check was deferred once was never re-checked
+        # (the sixth read, run). A run its gate REFUSED is not asked again here
+        return True
+    heard_now = answering(collection)
+    doc = heard_now.get("document")
+    return (doc is not None and cached[3] != doc) or \
+        not _query_kept(collection, cached[5], heard_now.get("query") if _asymmetric(collection) else None,
+                        time.time())
 
 
 def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) -> bool:
@@ -1939,13 +2436,18 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
     # has since heard another run from it, the verdict is about a run that no
     # longer answers, however fresh it is: look again — for every collection
     # of the encoder, not only the one that noticed.
-    now_answering = answering(collection).get("document")
+    heard_now = answering(collection)
+    now_answering = heard_now.get("document")
     stamp = _kept_stamp(collection)
     # ...and a verdict given before a context of the run failed its canary is
     # about a run that has to be gated again (`_suspect`)
+    # ...and one given before the QUERY encoder was heard from another run is
+    # about that side's old run (2026-11-26: only the document side was held
+    # to this, and a query run a question heard would have waited the TTL out)
     if cached is not None and cached[2] > now and cached[4] == stamp and (
-            now_answering is None or cached[3] is None or cached[3] == now_answering) \
-            and not _suspect(collection) and not _suspect(collection, "query"):
+            now_answering is None or cached[3] == now_answering) \
+            and _query_kept(collection, cached[5], heard_now.get("query") if _asymmetric(collection) else None, now) \
+            and not _suspect_since(collection, cached) and not _suspect_since(collection, cached, "query"):
         return cached[0]
     with _guard:
         keys = _flights(collection)
@@ -1971,13 +2473,142 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             db.log_event(con, "error" if message.startswith("CANARY") else "info", "run-check",
                          f"[{collection.name}] {message}"[:500])
 
-        allowed, reason, run_id = _look(collection, stop, log)
-        _look_at_the_query_side(collection, stop, log)
+        doc_key = _flight(collection)
+        slow_until = _slow_until(doc_key, now, now_answering)
+        # ...and THIS GATE'S backoff (`_gate_slow`) for the run heard: honoured
+        # here too, not only by the cache check a query side's bound fails
+        gate_was = _gate_until(_gate_key(collection, doc_key, now_answering), now)
+        if gate_was is not None:
+            slow_until = max(slow_until or 0.0, gate_was[1])
+        slow_n = gate_was[0] if gate_was is not None else 0
+        same_run = cached is not None and (now_answering is None or cached[3] == now_answering)
+        if slow_until is not None and not _suspect_since(collection, cached) and (
+                cached is None or same_run or gate_was is not None):
+            # (a run heard since — some process had an answer — is looked at: the
+            # encoder answers again)
+            # THE ENCODER HELD A LOOK, AND ITS BACKOFF RUNS (`_slow`): not asked
+            # again by this collection either. Its verdict stands as it was —
+            # one validated stays so (every answer is still checked before its
+            # write, invariant 1), one paused stays paused — until then
+            with _slow_lock:
+                enc_n = _slow.get(doc_key, (0, 0.0))[0]
+            if same_run and (cached[0] or (cached[6] if len(cached) > 6 else True)):
+                allowed, reason, settled = cached[0], cached[1], (cached[6] if len(cached) > 6 else True)
+            else:
+                allowed, settled = False, False
+                who = (f"the gate of run {str(now_answering)[:23]}…" if gate_was is not None
+                       and gate_was[1] >= slow_until else "the encoder")
+                reason = (f"{who} held its last look {SLOW_LOOK_S:.0f} s or more "
+                          f"({slow_n if gate_was is not None and gate_was[1] >= slow_until else enc_n} in a row); "
+                          f"asked again at {time.strftime('%H:%M:%S', time.localtime(slow_until))}")
+            run_id = cached[3] if same_run else now_answering
+        else:
+            t_look = _look_clock()
+            _look_state.timed_out = False
+            allowed, reason, run_id, settled = _look(collection, stop, log)
+            took = _look_clock() - t_look
+            # THE ENCODER'S BACKOFF only where it did not answer its probe (no run
+            # heard): it holds every collection on the model. A probe answered
+            # clears it — the encoder is not hung (the eleventh read, run: a mark
+            # set by one collection's own gate timeouts held another whose gate
+            # would pass, for as long as the first kept timing out)
+            enc_n, slow_until = _note_look(doc_key, took, settled or allowed or run_id is not None,
+                                           now_answering)
+            slow_n = enc_n
+            if run_id is not None:
+                # ...AND THE GATE'S where its probe answered but the look held its
+                # caller and did not settle — a request timed out, or the gate
+                # deferred late (the twelfth read: a 240 s deferral asked again
+                # every 300 s held the main loop 44 %): that gate put off longer
+                # each time, every collection of its space with it, no other held
+                got = _note_gate(_gate_key(collection, doc_key, run_id), took, settled or allowed)
+                if got is not None and not (settled or allowed):
+                    slow_n, slow_until = got
+        # THE RUN A VERDICT IS ABOUT: the one its look heard; where it heard
+        # none (the encoder could not be asked), the one heard BEFORE it — so
+        # a run heard since, by any process, is looked at at once, and one
+        # heard during the look too (the fifth read: a failed look stored
+        # "none", and "none" matched every run heard after it, so a run the
+        # web heard waited FAIL_TTL_S for its gate)
+        if run_id is None:
+            run_id = now_answering
+        # the query run THIS look settled; where it could not, the time of the
+        # failure: looked at again after FAIL_TTL_S, as a paused verdict is —
+        # never at every step (the third read: twenty looks in ten rounds, a
+        # twin load and stop on each, for a query model in LocalAI's cooldown)
+        query_heard: list = []
+        was_q = cached[5] if cached is not None else None
+        q_key = _flights_query(collection)
+        q_heard = answering(collection).get("query") if q_key is not None else None
+        q_same = q_heard is None or was_q is None or was_q == q_heard or (
+            isinstance(was_q, tuple) and len(was_q) > 2 and was_q[0] == QUERY_UNSETTLED and was_q[2] == q_heard)
+        # (a query run heard since — some process had an answer — is looked at)
+        q_gate = q_key is not None and _gate_until(_gate_key(collection, q_key, q_heard), time.time()) is not None
+        q_slow = (q_key is not None and not _suspect_since(collection, cached, "query")
+                  and ((q_same and _slow_until(q_key, time.time(), q_heard) is not None) or q_gate))
+        q_took = 0.0
+        if (isinstance(was_q, tuple) and was_q and was_q[0] == QUERY_UNSETTLED and _asymmetric(collection)
+                and not _suspect_since(collection, cached, "query")
+                and _query_kept(collection, was_q, answering(collection).get("query"), time.time())):
+            # ITS OWN BOUND STILL RUNS: not asked again because the DOCUMENT side
+            # is looked at (the seventh read, run: a document side failing too
+            # took the query probe along every FAIL_TTL_S, and the backoff
+            # counted 35 failures and held none of them)
+            query_run = was_q
+        elif q_slow:
+            # the query encoder held a look and its backoff runs (`_slow`): kept
+            # as it was — an unsettled one stamped from now, so its own bound
+            # keeps the verdict fresh and the document side is not probed at
+            # every step meanwhile (the tenth read, run: 30 probes in 30 steps) —
+            # or unsettled from now
+            query_run = was_q if (was_q is not None and q_same) else (QUERY_UNSETTLED, time.time(), q_heard, 0)
+        else:
+            t_q = _look_clock()
+            _look_state.timed_out = False
+            query_run = _look_at_the_query_side(collection, stop, log, heard_by=query_heard)
+            q_took = _look_clock() - t_q
+            if q_key is not None:
+                # the encoder's mark only where the query probe was not answered;
+                # a query gate that held its caller after it is the GATE's backoff,
+                # shared by the collections that run it (the thirteenth read)
+                _note_look(q_key, q_took, query_run is not None or bool(query_heard), q_heard)
+                if query_heard:
+                    _note_gate(_gate_key(collection, q_key, query_heard[-1]), q_took, query_run is not None)
+        if query_run is None and _asymmetric(collection):
+            # WHEN it failed — after the look, which may have taken its whole
+            # timeout (the fourth read: stamped before it, a probe that timed
+            # out was stored expired) — and the run the look heard, or the one
+            # heard before it: never one heard DURING it (the fifth read: a
+            # probe hanging while the web heard R2 recorded R2 as looked at)
+            heard_then = query_heard[-1] if query_heard else heard_now.get("query")
+            was = cached[5] if cached is not None else None
+            # BACKED OFF ONLY WHERE THE LOOK HELD ITS CALLER (the ninth read):
+            # a quick failure is asked again at FAIL_TTL_S
+            again = (isinstance(was, tuple) and was and was[0] == QUERY_UNSETTLED and was[2] == heard_then
+                     and q_took >= SLOW_LOOK_S)
+            query_run = (QUERY_UNSETTLED, time.time(), heard_then,
+                         ((was[3] if len(was) > 3 else 0) + 1) if again else 0)
         # stamped AFTER looking: a statement the look itself wrote (a gate)
-        # is not a reason to look again
-        _verdicts[where] = (allowed, reason,
-                            now + (PASS_TTL_S if allowed else FAIL_TTL_S), run_id,
-                            _kept_stamp(collection))
+        # is not a reason to look again — and FRESH FROM THEN: a look that took
+        # its whole timeout (300 s, as FAIL_TTL_S) was stored expired, and
+        # every step looked again, each a 300 s hang (the fifth read). A look
+        # that does not settle AGAIN, for the same run, is put off longer each
+        # time — FAIL_TTL_S doubled, up to FAIL_CAP_S — as the query side's is:
+        # a hung encoder's probe holds its caller for its timeout, and at
+        # FAIL_TTL_S each it held the main loop half the time (the seventh read,
+        # run). The collection's own verdict alone: no other collection, and
+        # none of its embedding, is held by it (the eighth read: a hold shared
+        # by the encoder paused every collection on it, for deferrals the embed
+        # stage does not hold for, and no look's answer released it)
+        # ...THE ENCODER'S, not the collection's, and only for a look that held
+        # its caller (`_slow`, `_note_look`; the ninth read: a backoff of every
+        # unsettled look kept embedding paused 25 min after a LocalAI restart)
+        if slow_until is not None:
+            expires = max(slow_until, time.time() + 1.0)
+        else:
+            expires = time.time() + (PASS_TTL_S if allowed else FAIL_TTL_S)
+        _verdicts[where] = (allowed, reason, expires, run_id,
+                            _kept_stamp(collection), query_run, settled, slow_n, _canary_counts(collection))
         if cached is None or cached[0] != allowed or cached[1] != reason:
             db.log_event(con, "info" if allowed else "error", "run-check",
                          (f"[{collection.name}] embedding "

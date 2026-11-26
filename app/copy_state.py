@@ -444,8 +444,12 @@ def _gate(root: Path, name: str, codex: Codex,
         known = runs_mod.statements(root, name, codex, role, signer=own_key())
         if not known or (run_id is not None and run_id not in known):
             known = space_statements(root, name, codex, role)
-        clears = ("the gate, which runs by itself the moment the encoder answers; or "
-                  f"`louise hold embedder check {name}`")
+        # the worker holds a collection's lock while it runs it (07 §7.7): the
+        # manual door is open only for a paused collection (München, 2026-11-26:
+        # "held by the node (worker) … retry when it is done", which never comes)
+        clears = ("the gate, which runs by itself the moment the encoder answers; or, by hand, "
+                  f"`louise node pause {name}`, `louise hold embedder check {name}`, "
+                  f"`louise node resume {name}`")
         if run_id is not None and run_id not in known:
             return (Test("gate", OPEN, f"the {role} encoder states run {run_id[:23]}…, "
                                        f"which this peer has not tested", clears), leg, why)

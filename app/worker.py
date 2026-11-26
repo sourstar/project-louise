@@ -4655,12 +4655,27 @@ def _integrity_halts(con, collection) -> bool:
     return bool(found)
 
 
+def _settle_wanted(collection) -> bool:
+    """Would `_settle_the_run` look at `collection` now (its gate test OPEN,
+    or its verdict outdated)? No manifest opened. Never raises."""
+    from . import copy_state, run_check
+    try:
+        if not run_check.applies(collection):
+            return False
+        gate = copy_state.of(collection).test("gate")
+        return (gate is not None and gate.status == copy_state.OPEN) or run_check.verdict_outdated(collection)
+    except Exception:   # noqa: BLE001
+        return False
+
+
 def _settle_the_run(con, collection) -> None:
     """A version-3 copy whose encoder's run is not yet tested is gated AT
     ONCE (03 §3.3), whether or not it has anything to embed: a collection
     that arrived whole from its peers has no embed work to reach the gate
-    through, and would wait in quarantine for ever. Costs a dictionary
-    lookup a round — `embed_allowed` caches its verdict."""
+    through, and would wait in quarantine for ever. So is one whose verdict
+    is about another run than any process last heard (`run_check.
+    verdict_outdated`): a run tested before is RE-CHECKED by itself too. Costs
+    a dictionary lookup a round — `embed_allowed` caches its verdict."""
     from . import copy_state, run_check
     if not run_check.applies(collection):
         return
@@ -4668,7 +4683,9 @@ def _settle_the_run(con, collection) -> None:
         gate = copy_state.of(collection).test("gate")
     except Exception:   # noqa: BLE001
         return
-    if gate is not None and gate.status == copy_state.OPEN:
+    if (gate is not None and gate.status == copy_state.OPEN) or run_check.verdict_outdated(collection):
+        if _endpoint_busy_holds(collection):
+            return              # held as busy after a timeout: asked when the hold ends (encoder_timeouts)
         if _preload_holds(con, collection):
             return              # not beside the keeper's loads after a start: the next round
         backend_gate.embed_allowed(con, collection, stop=_stop.is_set)
@@ -7529,9 +7546,30 @@ def _settle_runs_for_search() -> None:
             if _stop.is_set():
                 return
             key = str(getattr(c, "manifest_path", c.name))
-            if c.name in paused or key in _settled_for_search \
-                    or not run_check.applies(c) or not holds_vectors(c):
+            if c.name in paused or not run_check.applies(c) or not holds_vectors(c):
                 continue
+            if key in _settled_for_search:
+                # SETTLED ONCE, AND STILL HELD TO THE RUNS HEARD SINCE (the seventh
+                # read, run): with embed producers — the node's setting — the
+                # round's `_settle_the_run` never runs, so a run a question heard
+                # first, or a look that did not settle, was never looked at again
+                # for a collection with nothing to embed (one on `off`). Looked
+                # at here when its verdict is outdated or its gate test OPEN: a
+                # dictionary lookup each beat otherwise, no connection opened
+                if not _settle_wanted(c):
+                    continue
+                con = None
+                try:
+                    con = db.connect(c)
+                    _settle_the_run(con, c)
+                except Exception:   # noqa: BLE001 — one collection, not the thread
+                    pass
+                finally:
+                    if con is not None:
+                        con.close()
+                continue
+            if _endpoint_busy_holds(c):
+                continue            # held as busy by the embed stage: asked when the hold ends
             con = None
             try:
                 con = db.connect(c)

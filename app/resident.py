@@ -790,9 +790,10 @@ def _parked_follow(servers: Iterable[str]) -> dict[str, list]:
             out["floor"].append(s)
             _say("info", f"resident: LocalAI's park floor set to {floor // MIB:,} MiB at {s}"
                          + (f" (it was {seen // MIB:,})" if seen else "")
-                         + f" — {', '.join(sorted(model_load.parks(s)))} can be parked: a model gives its room "
-                           f"back by moving its weights to host memory while the host keeps that much "
-                           f"available, and is stopped where it would not ([models] page_floor_gib)")
+                         + f" — LocalAI lists {', '.join(sorted(model_load.parks(s)))} as able to park: a "
+                           f"model gives its room back by moving its weights to host memory while the host "
+                           f"keeps that much available, and is stopped where it would not ([models] "
+                           f"page_floor_gib) — a collection's encoder only once its run is admitted to park")
         except Exception as e:   # noqa: BLE001 — never the keeper's beat
             _say("warn", f"resident: LocalAI's park floor at {s} was not set ({type(e).__name__})")
     try:
