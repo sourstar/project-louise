@@ -6743,7 +6743,7 @@ def _start_mode_models(before: str, mode: str) -> None:
 
 def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
                  question=None, sleep=None, room_wait_s: float = MODE_ROOM_WAIT_S,
-                 clock=time.monotonic) -> dict:
+                 clock=time.monotonic, question_meanwhile=None) -> dict:
     """A switch's models, off the round's thread: the chat model of the mode
     left is unloaded (LocalAI's `/backend/shutdown`, `model_load.unload` —
     its memory is what the switch is for), after any answer in flight has
@@ -6766,9 +6766,12 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
     until = time.monotonic() + wait_s
     while question() and time.monotonic() < until and not _stop.is_set():
         sleep(1.0)
-    from . import model_evict
+    from . import model_evict, node_mode
+    server = model_load.server_of(config.CHAT_URL)
     try:
-        gives = model_evict.need_of(config.CHAT_URL, old) or 0
+        # what it holds NOW (a model at rest holds far under its largest), else its largest
+        now_held = (model_load.held_sizes(server, max_age_s=0.0) or {}).get(old)
+        gives = (now_held[1] if now_held and now_held[1] else model_evict.need_of(config.CHAT_URL, old)) or 0
         card_before = resident._card() if gives else None
     except Exception:   # noqa: BLE001 — unread: nothing waited for
         gives, card_before = 0, None
@@ -6798,24 +6801,50 @@ def _mode_models(before: str, mode: str, *, wait_s: float = MODE_ANSWER_WAIT_S,
     # and the reload (48.9 s to its first word). Asked again until the room is
     # there, bounded; a room still not there is said, and no load is sent that
     # the card cannot hold: the keeper's beats or the first question load it
-    room = None
+    # ...and it is the SWITCH's only while nothing else has taken it (the read
+    # of 2026-11-26, run): a question that comes meanwhile releases the corpus
+    # pins and loads its own models, the chat model first — a room asked beside
+    # it could unload what it just loaded; a switch back makes this one stale;
+    # a load in flight (the keeper's beat) holds part of the model already
+    meanwhile = question_meanwhile or resident._question_now
+    chat_then = config.chat_model_for(node_mode.current())
+
+    def ours() -> str | None:
+        if meanwhile():
+            return "a person's question holds the card: it loads its models itself"
+        now_chat = config.chat_model_for(node_mode.current())
+        if now_chat != chat_then:
+            return f"the node switched again (now {now_chat})"
+        return None
+    room, gone = None, None
     until = clock() + room_wait_s
     while not _stop.is_set():
+        gone = ours()
+        if gone is not None:
+            break
         try:
-            # loaded meanwhile (the keeper's beat, a question): nothing to make room for
-            ids = model_load.loaded_models(model_load.server_of(config.CHAT_URL))
-            room = None if ids is not None and new in ids else \
+            ids = model_load.loaded_models(server)
+            there = ids is not None and new in ids and new not in model_load.parked(server)
+            room = None if there or model_load.in_flight(server, new) else \
                 model_evict.room_before_load(config.CHAT_URL, new)
         except Exception:   # noqa: BLE001 — not told: the load goes as before
             room = None
-        if room is None or room.fits is not False or clock() >= until:
+        # a refusal that unloaded or parked something has made what room it can:
+        # asked again, it would stop again what the keeper loads back between asks
+        if room is None or room.fits is not False or room.unloaded or room.parked or clock() >= until:
             break
         sleep(MODE_ROOM_POLL_S)
     if _stop.is_set():
         return out                        # the worker stops: the model loads at the first question
+    gone = gone or ours()
+    if gone is not None:
+        log(f"{mode} mode: {old} {'unloaded' if out['unloaded'] else 'was not loaded'}; {new} not loaded "
+            f"by the switch — {gone}")
+        return out
     if room is not None and room.fits is False:
-        log(f"{mode} mode: {new} not loaded now — no room on the card after {room_wait_s:.0f} s "
-            f"({room.why}); it loads when there is room, or at the first question")
+        log(f"{mode} mode: {new} not loaded now — no room on the card"
+            + ("" if room.unloaded or room.parked else f" after {room_wait_s:.0f} s")
+            + f" ({room.why}); it loads when there is room, or at the first question")
     else:
         try:
             with model_evict.room_made():     # made above: the cold-load hook does not make it again

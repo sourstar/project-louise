@@ -529,6 +529,14 @@ def held_sizes(server: str, max_age_s: float | None = None) -> dict[str, tuple[i
         return {m: (pids.get(m), now.get(m, 0)) for m in ids}
 
 
+def in_flight(server: str, model: str) -> bool:
+    """Is a load of `model` on `server` running in THIS process now
+    (`ensure_loaded`'s flight)? A model still loading is not listed loaded:
+    counted then, its own bytes read as a card with no room."""
+    with _lock:
+        return (server_of(server), model) in _flights
+
+
 def held_cpu(server: str) -> dict[str, float]:
     """`{model: cpu_percent}` of the backends as the LAST `/system` answer
     gave them — no request: read right after `held_sizes`, it is the same

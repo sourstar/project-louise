@@ -371,5 +371,5 @@ def test_a_room_refused_names_the_models_pinned_by_work_and_the_load_hook_says_i
     monkeypatch.setattr(model_evict, "_say", lambda level, m: said.append(m))
     monkeypatch.setattr(model_evict, "room_before_load", lambda server, model: got)
     assert model_evict.before_load(S, "chat-35b") is got
-    assert said and said[0].startswith("card: no room made for chat-35b before its load — ") \
+    assert said and said[0].startswith("card: no room could be made for chat-35b before its load — ") \
         and "pinned by work in flight" in said[0]

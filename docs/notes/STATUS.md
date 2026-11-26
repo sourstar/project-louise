@@ -31,10 +31,13 @@ measured (published figures disagree).
   full card and died for device memory 75.2 s later ("UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY"), and the
   keeper's reload took 87.5 s more. FIXED (branch mode-switch-room): the switch waits for the driver to
   show the old chat model gone, makes the new one's room FIRST and asks again until it is there (5 s,
-  within 120 s — the old mode's batches let their encoders go in seconds), never sends a load the card
-  cannot hold (said, and loaded by the keeper or the first question), and stops waiting if it was loaded
-  meanwhile; a room refused before ANY load is now said ("card: no room made for … — … pinned by work in
-  flight"). Not yet read: the five `/v1/detokenize` 500s at 10:47:53 (the gutenberg rerank's cut, by
+  within 120 s — the old mode's batches let their encoders go in seconds), sends no load whose room was
+  refused (said; the keeper or the first question loads it), and leaves the load to a question that comes
+  meanwhile, to a switch back, to a load already in flight; a partial room is made once. The independent
+  read found the same death on another path, fixed with it: in query mode a load was "paged" over
+  encoders pinned by work — the driver pages IDLE models only, so a shortfall larger than the idle models
+  hold is now made by unloading (which the pins refuse too). A room refused before ANY load is now said,
+  once a minute ("card: no room could be made for … — … pinned by work in flight"). Not yet read: the five `/v1/detokenize` 500s at 10:47:53 (the gutenberg rerank's cut, by
   their time; LocalAI logs no body).
 
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
