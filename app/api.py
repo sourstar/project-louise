@@ -1629,6 +1629,7 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     chars = 0
     first: float | None = None
     why: str | None = None
+    ended = None                     # the stream's end (`llm.StreamEnd`), with where its time went
     written: list[str] = []          # the answer, for its PDF link (sources asked)
     used = prompt.used
     if reads:
@@ -1664,23 +1665,30 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
                 continue
             if kind == "error":
                 why = f"the endpoint failed ({type(value).__name__}: {value})"
-            elif value is None or not value.whole:
-                why = value.why() if value is not None else "the stream said no end"
+            else:
+                ended = value
+                if value is None or not value.whole:
+                    why = value.why() if value is not None else "the stream said no end"
             break
     except GeneratorExit:
         stop.set()
         raise
     _log_reads(con, reads)
     secs = time.time() - t0
+    # WHERE THE SECONDS BEFORE ITS FIRST WORD WENT (the Bug session, 2026-11-26:
+    # "first word at 5.2 s" and nothing said why): the model's load, the gate,
+    # the request to its first token, and the server's own count of the prompt
+    spent = llm.timings_said(getattr(ended, "timings", None))
+    spent = f" [{spent}]" if spent else ""
     if why is not None:
         yield ("cut", why)
         db.log_event(con, "warn", "chat",
-                     f"answer cut after {chars} chars, {secs:.1f} s: {why}")
+                     f"answer cut after {chars} chars, {secs:.1f} s: {why}{spent}"[:900])
     elif first is None:
-        db.log_event(con, "info", "chat", f"answer: empty, {secs:.1f} s")
+        db.log_event(con, "info", "chat", f"answer: empty, {secs:.1f} s{spent}"[:900])
     else:
         db.log_event(con, "info", "chat",
-                     f"answer: {chars} chars in {secs:.1f} s, first word at {first:.1f} s")
+                     f"answer: {chars} chars in {secs:.1f} s, first word at {first:.1f} s{spent}"[:900])
     timings = dict(result["timings"])
     timings["total"] = round((time.time() - t0) * 1000, 1)
     db.log_query(con, "chat", query, "hybrid", body.limit, timings,

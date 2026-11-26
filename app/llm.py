@@ -26,7 +26,8 @@ another OpenAI-style service is sent nothing it did not ask for.
 """
 import json
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 import httpx
 from . import config, httpc, model_load, model_use
@@ -163,6 +164,63 @@ class Piece:
     over: bool = False
     finish_reason: str | None = None
     error: str | None = None
+    #: what the server said of its own work on this request (`_server_said`), where a line says it
+    usage: dict | None = None
+
+
+def _server_said(obj: dict) -> dict | None:
+    """The server's own count of a request, in one vocabulary — `prompt_tokens`,
+    `prompt_ms`, `out_tokens`, `out_ms` — from whichever form its line uses:
+    llama.cpp's `timings` (prompt_n, prompt_ms, predicted_n, predicted_ms),
+    LocalAI's `usage` (prompt_tokens, completion_tokens, and with the
+    `Extra-Usage` header timing_prompt_processing, timing_token_generation, in
+    ms), Ollama's last line (prompt_eval_count, prompt_eval_duration in ns,
+    eval_count, eval_duration). None when the line says none of it."""
+    out: dict = {}
+
+    def num(v):
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    t = obj.get("timings")
+    if isinstance(t, dict):
+        for k, to in (("prompt_n", "prompt_tokens"), ("prompt_ms", "prompt_ms"),
+                      ("predicted_n", "out_tokens"), ("predicted_ms", "out_ms")):
+            if num(t.get(k)) is not None:
+                out[to] = num(t[k])
+    u = obj.get("usage")
+    if isinstance(u, dict):
+        for k, to in (("prompt_tokens", "prompt_tokens"), ("completion_tokens", "out_tokens"),
+                      ("timing_prompt_processing", "prompt_ms"), ("timing_token_generation", "out_ms")):
+            if num(u.get(k)) is not None and (to not in out or not out[to]):
+                out[to] = num(u[k])
+    for k, to, scale in (("prompt_eval_count", "prompt_tokens", 1), ("prompt_eval_duration", "prompt_ms", 1e-6),
+                         ("eval_count", "out_tokens", 1), ("eval_duration", "out_ms", 1e-6)):
+        if num(obj.get(k)) is not None:
+            out[to] = num(obj[k]) * scale
+    return out or None
+
+
+def timings_said(t: dict | None) -> str:
+    """An answer's times in words, for its log line (`chat_stream`'s
+    `StreamEnd.timings`): where the seconds before its first word went —
+    the chat model's load, the wait for the card's gate, the request to its
+    first token — and the server's own count of the prompt and the answer.
+    The Bug session's ask, 2026-11-26: "first word at 5.2 s" and nothing
+    said why."""
+    if not t:
+        return ""
+    parts = [f"before the request {t.get('before_s', 0.0):.1f} s (the model's load {t.get('load_s', 0.0):.1f}, "
+             f"the gate {t.get('gate_s', 0.0):.1f})"]
+    if t.get("first_s") is not None:
+        parts.append(f"first token {t['first_s']:.1f} s after it")
+    if t.get("prompt_tokens") is not None:
+        parts.append(f"prompt {int(t['prompt_tokens']):,} tokens"
+                     + (f" in {t['prompt_ms'] / 1000:.1f} s" if t.get("prompt_ms") is not None else ""))
+    if t.get("out_tokens") is not None:
+        parts.append(f"{int(t['out_tokens']):,} tokens written"
+                     + (f" in {t['out_ms'] / 1000:.1f} s" if t.get("out_ms") is not None else ""))
+    if t.get("prompt_tokens") is None and t.get("out_tokens") is None:
+        parts.append("the server counted nothing")
+    return "; ".join(parts)
 
 
 @dataclass(frozen=True)
@@ -175,6 +233,9 @@ class StreamEnd:
     finish_reason: str | None      # "stop" is the only whole answer; "length" a cap
     done: bool                     # the end marker came ([DONE], Ollama's done)
     error: str | None              # an error payload the stream carried
+    #: where its time went (`timings_said`): kept out of the comparison, a
+    #: stream's end is how it ended
+    timings: dict | None = field(default=None, compare=False)
 
     @property
     def whole(self) -> bool:
@@ -212,7 +273,7 @@ def _piece(line: str) -> Piece:
             return Piece(error=str(msg)[:300])
         choice = (obj.get("choices") or [{}])[0]
         return Piece(text=(choice.get("delta") or {}).get("content") or "",
-                     finish_reason=choice.get("finish_reason") or None)
+                     finish_reason=choice.get("finish_reason") or None, usage=_server_said(obj))
     try:
         obj = json.loads(line)
     except json.JSONDecodeError:
@@ -223,7 +284,8 @@ def _piece(line: str) -> Piece:
         return Piece(error=str(obj["error"])[:300])
     done = bool(obj.get("done"))
     return Piece(text=obj.get("message", {}).get("content", ""), over=done,
-                 finish_reason=(obj.get("done_reason") or None) if done else None)
+                 finish_reason=(obj.get("done_reason") or None) if done else None,
+                 usage=_server_said(obj) if done else None)
 
 
 def _delta(line: str) -> tuple[str, bool]:
@@ -327,31 +389,49 @@ def chat_stream(messages: list[dict], temperature: float = 0.3,
     answer can tell a whole one from one the endpoint capped, failed or
     closed early. The claim and the gate are held for the whole stream:
     the model is working until the last token."""
+    t_call = time.monotonic()
     warm(level)
+    t_warm = time.monotonic()
     url, body = _request(messages, stream=True, temperature=temperature,
                          max_tokens=max_tokens, num_ctx=num_ctx)
     finish: str | None = None
+    said: dict = {}
+    clock: dict = {}
+
+    def times() -> dict:
+        """Where the answer's time went (`timings_said`)."""
+        sent = clock.get("sent", time.monotonic())
+        out = {"load_s": t_warm - t_call, "gate_s": sent - t_warm, "before_s": sent - t_call,
+               "first_s": (clock["first"] - sent) if "first" in clock else None}
+        out.update(said)
+        return out
+    headers = dispatch.level_headers()
+    if config.CHAT_API == "openai" and model_load.speaks_localai(model_load.server_of(config.CHAT_URL)):
+        headers = {**headers, "Extra-Usage": "true"}    # LocalAI then gives its prompt's and answer's times
     with dispatch.call(config.CHAT_URL, level, timeout=config.LLM_TIMEOUT), \
             httpx.Client(timeout=config.LLM_TIMEOUT) as client:
+        clock["sent"] = time.monotonic()
         # the header is read HERE, in the step that makes the request: a
         # generator's later steps run in another copy of the context
-        with client.stream("POST", url, json=body,
-                           headers=dispatch.level_headers()) as r:
+        with client.stream("POST", url, json=body, headers=headers) as r:
             refuse_on_error(r)
             model_use.touch(config.CHAT_URL, config.CHAT_MODEL)   # a real answer (app/model_use.py)
             for line in r.iter_lines():
                 if not line:
                     continue
                 piece = _piece(line)
+                if piece.usage:
+                    said.update(piece.usage)
                 if piece.error is not None:
-                    return StreamEnd(finish, False, piece.error)
+                    return StreamEnd(finish, False, piece.error, times())
                 if piece.finish_reason:
                     finish = piece.finish_reason
                 if piece.text:
+                    clock.setdefault("first", time.monotonic())
                     yield piece.text
                 if piece.over:
-                    return StreamEnd(finish, True, None)
-    return StreamEnd(finish, False, None)
+                    return StreamEnd(finish, True, None, times())
+    return StreamEnd(finish, False, None, times())
 
 def translate_query(query: str, target_langs: list[str]) -> dict[str, str]:
     """One prompt, N translations, JSON out. Failure degrades to no fan-out.
