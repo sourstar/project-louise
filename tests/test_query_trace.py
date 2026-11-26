@@ -546,3 +546,21 @@ def test_a_trace_that_cannot_be_written_says_so_on_stderr_never_stdout(tmp_path,
     t.end(); t.join(5)
     out, err = capsys.readouterr()
     assert "query trace of e1 not written" in err and "query trace" not in out
+
+
+def test_a_chat_completions_trace_carries_the_servers_own_timings(traced, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import api, llm
+    t = {"load_s": 0.0, "gate_s": 0.0, "before_s": 0.1, "first_s": 0.7, "prompt_tokens": 900,
+         "prompt_ms": 610.0, "out_tokens": 3, "out_ms": 50.0}
+
+    def stream(messages, temperature=0.3):
+        yield "Ciao."
+        return llm.StreamEnd(finish_reason="stop", done=True, error=None, timings=t)
+    chat = _answer_setup(monkeypatch, stream)
+    monkeypatch.setattr(query_trace, "viewer_of", lambda request: ("admin:admin", True))
+    body = {"messages": [{"role": "user", "content": "whales"}], "search_id": chat.search_id, "stream": True}
+    assert "Ciao" in TestClient(api.app).post("/v1/chat/completions", json=body).text
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    assert got["kind"] == "chat" and got["answer_timings"] == t
