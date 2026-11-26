@@ -1480,8 +1480,9 @@ def _where(collection) -> str:
 #: place -> (allowed, reason, fresh until, the run the verdict is about — the
 #: one its look heard, or the one heard before it where the look heard none —,
 #: the kept statements as they were when it was given — `_kept_stamp` —, the
-#: query side: its run, or (QUERY_UNSETTLED, when, the run heard then))
-_verdicts: dict[str, tuple[bool, str, float, str | None, tuple, Any]] = {}
+#: query side: its run, or (QUERY_UNSETTLED, when, the run heard then, failures before),
+#: whether the look settled it (False: the encoder could not be asked, the gate deferred))
+_verdicts: dict[str, tuple[bool, str, float, str | None, tuple, Any, bool]] = {}
 
 
 def _kept_stamp(collection) -> tuple:
@@ -2060,9 +2061,10 @@ def check_query(collection, recipe, answered: set) -> None:
 
 
 def _look(collection, stop: Callable[[], bool] | None,
-          log: Callable[[str], None]) -> tuple[bool, str, str | None]:
+          log: Callable[[str], None]) -> tuple[bool, str, str | None, bool]:
     """Ask the endpoint which run answers, and settle it: (may it embed, why,
-    the run that answered). Never raises."""
+    the run that answered, whether the look SETTLED it — False where the
+    encoder could not be asked or the gate deferred). Never raises."""
     name, codex = collection.name, collection.codex
     run_id = None
     try:
@@ -2099,12 +2101,12 @@ def _look(collection, stop: Callable[[], bool] | None,
                            batched=batched(recipe), contributes=contributing(recipe),
                            parks=parks_now(recipe))
         return True, (f"run {run_id[:23]}… is validated for this space"
-                      + _canary_note(collection, run_id)), run_id
+                      + _canary_note(collection, run_id)), run_id, True
     except (runs_mod.RunRefused, runs_mod.RunUnvalidated, emb.GateError) as e:
-        return False, str(e), run_id
+        return False, str(e), run_id, not isinstance(e, emb.GateDeferred)
     except Exception as e:                              # noqa: BLE001
         # the endpoint away: a deferral, retried; nothing is flagged
-        return False, f"the encoder could not be asked: {type(e).__name__}: {e}", run_id
+        return False, f"the encoder could not be asked: {type(e).__name__}: {e}", run_id, False
 
 
 def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
@@ -2155,8 +2157,14 @@ def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
         return None
 
 
-#: a verdict's query side whose look failed: (QUERY_UNSETTLED, when, the query run heard then)
+#: a verdict's query side whose look failed: (QUERY_UNSETTLED, when, the query run heard then,
+#: how many looks in a row failed for that run before this one)
 QUERY_UNSETTLED = "unsettled"
+#: the longest a query look that keeps failing for one run is put off (`_query_settled`):
+#: FAIL_TTL_S doubled at each failure in a row up to this — a probe that times out holds the
+#: worker's main loop for its timeout, and at FAIL_TTL_S each it held it half the time (the
+#: sixth read, run: 1,800 s hung in a simulated hour)
+QUERY_FAIL_CAP_S = 1800.0
 
 
 def _asymmetric(collection) -> bool:
@@ -2172,7 +2180,8 @@ def _query_settled(kept, heard: str | None, now: float) -> bool:
     run last heard — or a look that failed less than FAIL_TTL_S ago, with no
     other run heard since?"""
     if isinstance(kept, tuple) and kept and kept[0] == QUERY_UNSETTLED:
-        return now - kept[1] < FAIL_TTL_S and (heard is None or heard == kept[2])
+        bound = min(FAIL_TTL_S * 2 ** (kept[3] if len(kept) > 3 else 0), QUERY_FAIL_CAP_S)
+        return now - kept[1] < bound and (heard is None or heard == kept[2])
     return heard is None or kept == heard
 
 
@@ -2186,6 +2195,13 @@ def verdict_outdated(collection) -> bool:
     cached = _verdicts.get(_where(collection))
     if cached is None:
         return False
+    if not cached[0] and len(cached) > 6 and not cached[6] and cached[2] <= time.time():
+        # A LOOK THAT DID NOT SETTLE (the encoder could not be asked, the gate
+        # deferred), its bound passed: looked at again on the idle round too —
+        # a collection with nothing to embed never reaches `embed_allowed`, and
+        # a tested run whose re-check was deferred once was never re-checked
+        # (the sixth read, run). A run its gate REFUSED is not asked again here
+        return True
     heard_now = answering(collection)
     doc = heard_now.get("document")
     return (doc is not None and cached[3] != doc) or \
@@ -2254,7 +2270,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             db.log_event(con, "error" if message.startswith("CANARY") else "info", "run-check",
                          f"[{collection.name}] {message}"[:500])
 
-        allowed, reason, run_id = _look(collection, stop, log)
+        allowed, reason, run_id, settled = _look(collection, stop, log)
         # THE RUN A VERDICT IS ABOUT: the one its look heard; where it heard
         # none (the encoder could not be asked), the one heard BEFORE it — so
         # a run heard since, by any process, is looked at at once, and one
@@ -2275,15 +2291,18 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             # out was stored expired) — and the run the look heard, or the one
             # heard before it: never one heard DURING it (the fifth read: a
             # probe hanging while the web heard R2 recorded R2 as looked at)
-            query_run = (QUERY_UNSETTLED, time.time(),
-                         query_heard[-1] if query_heard else heard_now.get("query"))
+            heard_then = query_heard[-1] if query_heard else heard_now.get("query")
+            was = cached[5] if cached is not None else None
+            again = (isinstance(was, tuple) and was and was[0] == QUERY_UNSETTLED and was[2] == heard_then)
+            query_run = (QUERY_UNSETTLED, time.time(), heard_then,
+                         ((was[3] if len(was) > 3 else 0) + 1) if again else 0)
         # stamped AFTER looking: a statement the look itself wrote (a gate)
         # is not a reason to look again — and FRESH FROM THEN: a look that took
         # its whole timeout (300 s, as FAIL_TTL_S) was stored expired, and
         # every step looked again, each a 300 s hang (the fifth read)
         _verdicts[where] = (allowed, reason,
                             time.time() + (PASS_TTL_S if allowed else FAIL_TTL_S), run_id,
-                            _kept_stamp(collection), query_run)
+                            _kept_stamp(collection), query_run, settled)
         if cached is None or cached[0] != allowed or cached[1] != reason:
             db.log_event(con, "info" if allowed else "error", "run-check",
                          (f"[{collection.name}] embedding "

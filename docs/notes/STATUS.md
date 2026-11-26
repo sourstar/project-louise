@@ -43,7 +43,11 @@ measured (published figures disagree).
   look looked at again at every step; the fourth, a failed look stamped before it ended; the fifth, a
   verdict stored already expired after a look that took its whole timeout (each step a 300 s hang), a run
   heard DURING a failed look counted as looked at, a failed document look's "no run" matching every run
-  heard after it, and the keep rule without a test — all fixed with tests; a sixth read follows. And the
+  heard after it, and the keep rule without a test — all fixed with tests; the sixth, a tested run whose
+  look did not settle once (the encoder busy, the re-check deferred) never looked at again on a collection
+  with nothing to embed, and a query probe that times out holding the main loop half the time — an
+  unsettled look now expires on the idle round too, and a query look failing for one run backs off
+  (300 → 600 → 1,200 → 1,800 s; another run heard is looked at at once); a seventh read follows. And the
   manual door, `hold embedder check`, is
   shut on a running node — the worker holds every collection's lock — so its hint now says to pause
   the collection first; that is how today's gate was run. I had told München the record was shared

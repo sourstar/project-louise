@@ -625,3 +625,93 @@ def test_a_binding_survives_a_restart_and_a_stale_read(node, endpoint, pids, mon
     monkeypatch.setattr(run_check, "_shared", lambda: {})  # the record read stale: "nothing said"
     run_check.heard(_recipe(collection), {R1})
     assert json.loads(run_check.heard_path().read_text())["heard"][key]["proc"] == bound, "a stale read"
+
+
+# ---- the sixth read (2026-11-26) -------------------------------------------------------
+
+def test_a_look_that_did_not_settle_is_looked_at_again_on_the_idle_round(node, endpoint, monkeypatch):
+    """THE SIXTH READ, run: a tested run heard again (R2, by the web) on a
+    collection with nothing to embed: the idle round looked, the encoder was
+    busy (or the re-check deferred), and the verdict held R2 — never looked at
+    again, the vector leg held back until a restart. A look that did not
+    settle expires on the idle round too; a run its gate REFUSED does not."""
+    from app.hold import embedder as hold_emb
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    real, clock = run_check.answering_run, [time.time()]
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+    for failure, settles in ((OSError("busy"), False), (hold_emb.GateDeferred("no room on the card"), False),
+                             (hold_emb.GateError("refused"), True)):
+        def failing(recipe, query=False, _e=failure, **k):
+            if not query:
+                raise _e
+            return real(recipe, query=query, **k)
+        monkeypatch.setattr(run_check, "answering_run", failing)
+        run_check._verdicts.clear()
+        assert backend_gate.embed_allowed(con, collection) is False
+        assert not run_check.verdict_outdated(collection), "within its bound"
+        clock[0] += run_check.FAIL_TTL_S + 1
+        assert run_check.verdict_outdated(collection) is (not settles), type(failure).__name__
+
+
+def test_a_query_look_that_keeps_failing_for_one_run_is_put_off_longer_each_time(node, endpoint, monkeypatch):
+    """THE SIXTH READ, run: the bound (300 s) equals the probe's timeout, so a
+    query model that times out held the worker's main loop half the time."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    real, clock, looks = run_check.answering_run, [time.time()], []
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+
+    def failing(recipe, query=False, **k):
+        if query:
+            looks.append(clock[0])
+            raise OSError("timed out")
+        return real(recipe, query=query, **k)
+    monkeypatch.setattr(run_check, "answering_run", failing)
+    run_check._verdicts.clear()
+    start = clock[0]
+    for _ in range(80):                                  # 80 steps a minute apart
+        backend_gate.embed_allowed(con, collection)
+        clock[0] += 60
+    gaps = [round(b - a) for a, b in zip(looks, looks[1:])]
+    assert gaps[:4] == [360, 600, 1200, 1800] or gaps[:4] == [300, 600, 1200, 1800] or \
+        all(g >= 300 for g in gaps), gaps
+    assert gaps[1] >= 600 and gaps[2] >= 1200 and max(gaps) <= run_check.QUERY_FAIL_CAP_S + 60, gaps
+    # ANOTHER run heard: looked at at once, whatever the count
+    n = len(looks)
+    time.sleep(0.01)
+    _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}, role="query"))
+    backend_gate.embed_allowed(con, collection)
+    assert len(looks) == n + 1
+
+
+def test_a_run_heard_after_a_look_that_heard_nothing_is_looked_at_at_once(node, endpoint, monkeypatch):
+    """THE SIXTH READ: a failed look on a fresh worker or a model never asked
+    holds no run; a run heard after it must not pass the cache."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    real, looks = run_check.answering_run, []
+
+    def away(recipe, query=False, **k):
+        looks.append("q" if query else "d")
+        raise OSError("not answering")
+    monkeypatch.setattr(run_check, "answering_run", away)
+    run_check._answering.clear()
+    run_check._answering_at.clear()
+    run_check._heard_read.clear()
+    run_check.heard_path().unlink(missing_ok=True)
+    run_check._verdicts.clear()
+    assert backend_gate.embed_allowed(con, collection) is False and looks == ["d", "q"]
+    v = run_check._verdicts[run_check._where(collection)]
+    assert v[3] is None and v[5][2] is None, "nothing heard before it, nothing by it"
+    assert backend_gate.embed_allowed(con, collection) is False and looks == ["d", "q"], "within its bound"
+    time.sleep(0.01)
+    _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}))
+    assert run_check.verdict_outdated(collection), "the idle round looks"
+    backend_gate.embed_allowed(con, collection)
+    assert looks == ["d", "q", "d", "q"], "the embed path looks"
+    time.sleep(0.01)
+    _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}, role="query"))
+    assert run_check.verdict_outdated(collection), "and a query run heard since"
