@@ -207,6 +207,10 @@ async def facets(collection: str, field: str | None = None, under: str | None = 
     return JSONResponse(out)
 
 
+#: a plate over this many bytes is sent in pieces (`figures.stream_figure`), never held whole
+STREAMED_OVER = 32 << 20
+
+
 @router.get("/figure")
 async def figure(collection: str, uid: str, hash: str, download: bool = False):
     """07 §7.4's one route that is not JSON: a plate's bytes and its
@@ -220,18 +224,66 @@ async def figure(collection: str, uid: str, hash: str, download: bool = False):
     unless `download=1` asks for the file: then, and for any plate asked
     that way, `application/octet-stream` with `Content-Disposition:
     attachment` — never inline, never `image/svg+xml` — so a browser saves
-    it and never renders it. `nosniff` on both, so neither is re-typed."""
-    from fastapi.responses import Response
+    it and never renders it. `nosniff` on both, so neither is re-typed.
+
+    A PREVIEW (08 §8.7, amended 2026-11-26; operator: "we must show pictures
+    in the results as it is done for gutenberg collection", "Option A"): a
+    plate whose record names a type a preview is rendered for — TIFF — is
+    answered inline as the PNG this node renders from it (app/ask/preview.py:
+    a child process, the header's caps before any pixel), with
+    `X-Louise-Preview` saying so; where none can be rendered, 415 with the
+    reason, as for any plate that is not displayable — 503 with
+    `Retry-After` where it is the moment's (every renderer busy, not done in
+    time). Its own bytes are `download=1`'s. NO plate's bytes are read here
+    before its type and its length — the container's word — say it will be
+    shown, and a download over `STREAMED_OVER` is sent in pieces, its last
+    held back until the whole is its hash: EUR-Lex's largest is 565 MB and
+    the web's budget is under 1 GB."""
+    from fastapi.responses import Response, StreamingResponse
     from starlette.concurrency import run_in_threadpool
-    from app.ask import figures as figures_mod
+    from app.ask import figures as figures_mod, preview as preview_mod
+    from app.hold import figures as fig
+    nosniff = {"X-Content-Type-Options": "nosniff"}
     try:
-        data, media = await run_in_threadpool(figures_mod.figure_bytes, collection, uid, hash)
+        path, want, entry, _tree = await run_in_threadpool(figures_mod.figure_place, collection, uid, hash)
+        media = str(entry.get("media_type") or "")
+        if not download and media in preview_mod.PREVIEW_OF:
+            try:
+                png = await run_in_threadpool(preview_mod.png, collection, uid, hash)
+            except preview_mod.NotPreviewableNow as e:
+                # the moment's — every renderer busy, not done in time: asked again, it may be made
+                return JSONResponse({"exit": 3, "error": f"no preview just now: {e}; ask with download=1 "
+                                                         f"for the file"},
+                                    status_code=503, headers={**nosniff, "Retry-After": str(e.after_s)})
+            except preview_mod.NotPreviewable as e:
+                return JSONResponse({"exit": 2, "error": f"not displayable: {e}; ask with download=1 for the file"},
+                                    status_code=415, headers=nosniff)
+            return Response(content=png, media_type="image/png", headers={
+                **nosniff, "X-Louise-Preview": f"a preview rendered by this node from the plate's {media}; "
+                                               f"download=1 answers the plate itself"})
+        # its length by the CONTAINER's word, before any of its bytes: 404 where it is not held
+        size = await run_in_threadpool(figures_mod.held_size, path, want)
+        if download and size > STREAMED_OVER:
+            # in pieces, hashed as it goes and held to that length: a plate that
+            # is not its hash fails the transfer
+            name = figures_mod.download_name(hash, media)
+            return StreamingResponse(fig.stream_figure(path, want), media_type="application/octet-stream",
+                                     headers={**nosniff, "Content-Length": str(size),
+                                              "Content-Disposition": f'attachment; filename="{name}"',
+                                              "Content-Security-Policy": "sandbox"})
+        if not download:
+            # refused on what the record and the container say, BEFORE its bytes
+            # are read: a plate that will not be shown is not held to find that out
+            why = figures_mod.placed_not_displayable(media, size)
+            if why is not None:
+                return JSONResponse({"exit": 2, "error": f"not displayable: {why}; ask with download=1 for "
+                                                         f"the file"}, status_code=415, headers=nosniff)
+        data = await run_in_threadpool(figures_mod.placed_bytes, path, want)
     except figures_mod.FigureNotServed as e:
         return JSONResponse({"exit": 2, "error": str(e)}, status_code=e.status)
     except CodexError as e:
         code = int(getattr(e, "exit_code", 2))
         return JSONResponse({"exit": code, "error": str(e)}, status_code=STATUS.get(code, 500))
-    nosniff = {"X-Content-Type-Options": "nosniff"}
     if download:
         name = figures_mod.download_name(hash, media)
         return Response(content=data, media_type="application/octet-stream",

@@ -56,3 +56,29 @@ def test_the_page_posts_what_the_reader_sees(tmp_path, isolated_config):
     assert two["title"] == "Lighthouse of Alexandria" and two["title_original"] == "Faro di Alessandria"
     assert two["passage"] == "Commissioned by Ptolemy I." and two["translated_to"] == "en"
     assert two["lang"] == "it" and two["origin_url"] is None
+
+
+def test_a_preview_plates_caption_is_the_plates_own_words(tmp_path, isolated_config):
+    """A TIFF plate is drawn as this node's preview with a link beside its
+    caption, "preview — the original (281.2 KB)" (08 §8.7, amended
+    2026-11-26). That link is the PAGE's: the saved PDF's caption was
+    "ANNEX II, the form preview — the original (281.2 KB)" (the review of
+    2026-11-26) — it is the plate's own words, and the plate is named by the
+    route's own collection, uid and hash."""
+    plate = {"kind": "img", "hash": "sha256:" + "ab" * 32, "caption": "ANNEX II, the form",
+             "preview": True, "media_type": "image/tiff", "size": "281.2 KB"}
+    bare = {"kind": "img", "hash": "sha256:" + "cd" * 32, "caption": "", "preview": True,
+            "media_type": "image/tiff", "size": "1.2 MB"}
+    hits = [dict(HITS[0], uid="eurlex:32006R1907", source_collection="eurlex", plates=[plate, bare]), HITS[1]]
+    (tmp_path / "ask.html").write_text(TestClient(app).get("/ask").text, encoding="utf-8")
+    page = web.TEMPLATES.env.get_template("_ask_results.html").render(result={"hits": hits})
+    assert page.count("preview — the original (") == 2 and "download=1" in page
+    (tmp_path / "results.html").write_text(page, encoding="utf-8")
+    run = subprocess.run([browser_support.NODE, str(SCRIPT), str(tmp_path), str(STATIC)],
+                         capture_output=True, text=True, timeout=120, env=browser_support.env())
+    assert run.returncode == 0, run.stderr[-2000:]
+    (body,) = json.loads(run.stdout.strip().splitlines()[-1])["posted"]
+    one, two = body["references"][0]["plates"]
+    assert one == {"kind": "img", "collection": "eurlex", "uid": "eurlex:32006R1907",
+                   "hash": "sha256:" + "ab" * 32, "caption": "ANNEX II, the form"}
+    assert two["caption"] == "" and two["hash"] == "sha256:" + "cd" * 32

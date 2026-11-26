@@ -1650,6 +1650,21 @@ attachment; filename="<hash prefix>.<ext>"` — never inline, never
 `image/svg+xml` — for a displayable plate as for any other. Every answer
 carries `X-Content-Type-Options: nosniff`.
 
+*Amended 2026-11-26 (08 §8.7, "A preview"):* a plate whose record names
+`image/tiff` is answered inline as the PNG PREVIEW this node renders from
+it (at most 1,600 px wide), with `X-Louise-Preview` saying so. Where none
+can be rendered: `415` with the reason when it is the file's (a cap, a
+coding outside the list, a decoder that fails on it), `503` with
+`Retry-After` when it is the moment's (every renderer busy, not done in
+time). `&download=1` answers the plate itself, as for any other. A plate
+that will not be shown is refused on its type and its length BEFORE its
+bytes are read, and a download over 32 MiB is sent in pieces, hashed as it
+goes, its LAST piece held back until the whole is its hash — a plate that
+is not its hash arrives short of the length declared, never whole:
+EUR-Lex's largest plate is 565 MB and the web holds none whole. A result's
+plate entry for such a figure reads `kind: "img"` with `preview: true`,
+its `media_type` and its `size`.
+
 **Two routes are not under `/api` at all** (*added 2026-10-07*): the
 documents 09 §9.11 fixes at a certifier's domain, served by the node for
 whatever domain fronts it —
