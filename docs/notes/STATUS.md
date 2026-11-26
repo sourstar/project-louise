@@ -20,6 +20,18 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **PARKING BEHIND THE LIVE WRAPPER, ON THE CARD, ON A COPY (München, 01:22–01:25Z, the node embedding
+  beside it): every junction has now run together — the patched server, main's wrapper (47bf02ea…), the
+  park engine and the B70.** One load stated, "the load in force asked again … run … stands" at each
+  return, ONE run id on the receipts through 43 returns and again after a stop and a load afresh in a new
+  process; the engine's parks and unparks +1 a cycle, the wrapper's `created` +1 (its `calls` go up by one
+  a sentence asked, not one a cycle — the clause holds a cycle to `created`); a refused return 503 twice,
+  still parked, then served with the same vectors; 2,716 parks asked during one request, every one 409; a
+  parked model stopped in 1.3 s and loaded afresh in 10.58 s. A park 135–138 ms, a return 377–392 ms with
+  the node at work (parking-keeper.md §4). Not a gate: the copy's run was gated by nobody and is gone. What
+  is left before a real model parks is the operator's two choices and, after them, the gate's clause.
+  The app's sha for the deploy is main a2b5935b (#921 on #882 and #918), prepared by München in place of
+  b1e83cf; it waits for his word.
 - **PARKING BEHIND THE WRAPPER, SHOWN OFF THE NODE: 25 of 25 (Tensor, parking-step-2.md §11 on its branch;
   LocalAI's real server, main's wrapper started by LocalAI, a receipts service, the park engine's CPU build
   with a stand-in device).** Nothing is other than #882's tests assume: a park passes the wrapper and the
