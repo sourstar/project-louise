@@ -44,6 +44,38 @@ cache, reclaimable, never in the web's heap (the operator, 2026-11-22: ssd5
 for what would otherwise be held in RAM). A part's index was kept decoded
 before: +485 MiB a question (München, the same day).
 
+THE WORK COMPONENTS (2026-11-26, München's `tools/measure/works_walk.py` on
+the node): a question's grouping of fifty wikipedia records into works took
+4.89 s cold, 4.19 of them reading frames — 618 MB decompressed for 456
+claims — because each claim's record is read out of a zstd frame of a
+thousand: the walk opened ~one frame a claim, and every one of
+wikipedia-articles' 12,326,519 claims is a work claim. So the WORK CLAIMS
+are read once more, at build, into what the walk wants of them: each record
+named by a work claim, the work (connected component) it is in, that work's
+members, and for each member its length (`subject_tokens` / `object_tokens`)
+and whether a claim's object is drawn around it (the centre):
+
+- `work_uid_hash` (int64, sorted), `work_uid_check` (int64, a second hash of
+  the same uid), `work_uid_off` (int64, n+1) and `work_uid_bytes` (uint8):
+  each such record's uid, found by its hash, checked by the second and by
+  its own bytes;
+- `work_uid_comp` (int32), `work_uid_tokens` (int32, -1 none),
+  `work_uid_centre` (int8);
+- `work_comp_start` (int64, components+1) and `work_comp_member` (int32):
+  each component's members, in uid-hash order;
+- `works.json` last (its version, the counts, the largest component).
+
+A lookup is two binary searches on memory-mapped arrays and a slice: no
+frame is opened. Where the table is not built yet the walk reads the claims
+as before. Added BESIDE an existing index (`add_works`, the maintainer), as
+the seek table was: the claims' arrays are kept (RULE 1). The components are
+the connected components of the claims' graph (union by min label with
+pointer jumping, NumPy, in a process of its own); a record's length where two
+claims state two is the larger. MEASURED (synthetic stars of nine editions,
+this session's machine): 2 M claims merged in 3.8 s, 0.8 GB peak, a 122 MiB
+table; 6 M in 14.1 s, 2.16 GB, 367 MiB — so ~30 s, ~4.4 GB and ~750 MiB for
+wikipedia-articles' 12.3 M, besides the parse pool's pass over its parts.
+
 STANDARD NOT ADOPTED, written down (CLAUDE.md): a key-value store (LMDB,
 RocksDB) would serve the same lookups; sorted NumPy arrays memory-mapped are
 what this code base already uses for its derived maps (app/embed_select.py,
@@ -74,6 +106,10 @@ SEEK = ("frame_offset", "frame_csize", "frame_rsize", "frame_lines", "part_frame
 SEEK_VERSION = 1
 #: how often an index without its seek table looks for the worker's, seconds
 SEEK_LOOK_S = 60.0
+#: the work components' arrays (module docstring); `works.json` says they are whole
+WORKS = ("work_uid_hash", "work_uid_check", "work_uid_off", "work_uid_bytes", "work_uid_comp",
+         "work_uid_tokens", "work_uid_centre", "work_comp_start", "work_comp_member")
+WORKS_VERSION = 1
 #: FRAMES KEPT DECOMPRESSED, per process, by the bytes their lines hold: 256
 #: frames of 1,000 claims each held ~88 MiB in the web (München, 2026-11-22,
 #: tracemalloc between two questions; operator: the web "should be less than
@@ -87,6 +123,13 @@ INDEX_CACHE = 1024
 def uid_hash(uid: str) -> int:
     return int.from_bytes(hashlib.blake2b(uid.encode("utf-8"), digest_size=8).digest(), "little",
                           signed=True)
+
+
+def uid_check(uid: str) -> int:
+    """A second, independent hash of a uid: two uids that share `uid_hash`
+    are told apart by it before their bytes are compared."""
+    return int.from_bytes(hashlib.blake2b(uid.encode("utf-8"), digest_size=8, person=b"louise-uid-2").digest(),
+                          "little", signed=True)
 
 
 def place(shard_tree: Path, snapshot_hash: str) -> Path:
@@ -199,6 +242,230 @@ def add_seek(shard_tree: Path, dest: Path, *, stop=None) -> dict[str, Any]:
         if not has_seek(dest):
             _write_seek(dest, seeks)
     return {"seek": len(parts), "place": str(dest)}
+
+
+def part_works(path: str, gone: frozenset) -> dict[str, Any]:
+    """A task of `add_works`: one part's WORK claims — each end's two hashes
+    and the lengths the claim states — and the part's uids named by them,
+    once each, with their two hashes and bytes; `gone`'s claims left out."""
+    from array import array
+    from app.hold import annotations as ann
+    from app.pack import records as pack_records
+    p = Path(path)
+    index = pack_records.read_index(p)
+    sh, sc, oh, oc = array("q"), array("q"), array("q"), array("q")
+    st, ot = array("i"), array("i")
+    seen: dict[str, None] = {}
+    for f in range(len(index.frames)):
+        for raw in pack_records.read_frame(p, index, f):
+            r = json.loads(raw)
+            if r["uid"] in gone:
+                continue
+            c = ann.claim_of(r)
+            if c["type"] not in ann.WORK_TYPES:
+                continue
+            ev = c.get("evidence") or {}
+            for end, key, h, k, t in ((c["subject"], "subject_tokens", sh, sc, st),
+                                      (c["object"], "object_tokens", oh, oc, ot)):
+                h.append(uid_hash(end))
+                k.append(uid_check(end))
+                v = ev.get(key)
+                t.append(v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else -1)
+                seen[end] = None
+    uids = list(seen)
+    data = [u.encode("utf-8") for u in uids]
+    off = np.zeros(len(data) + 1, dtype=np.int64)
+    if data:
+        off[1:] = np.cumsum([len(b) for b in data])
+    return {"s_hash": sh.tobytes(), "s_check": sc.tobytes(), "o_hash": oh.tobytes(), "o_check": oc.tobytes(),
+            "s_tokens": st.tobytes(), "o_tokens": ot.tobytes(),
+            "uid_hash": np.asarray([uid_hash(u) for u in uids], dtype=np.int64).tobytes(),
+            "uid_check": np.asarray([uid_check(u) for u in uids], dtype=np.int64).tobytes(),
+            "uid_off": off.tobytes(), "uid_bytes": b"".join(data)}
+
+
+def _components(n: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """The connected components of the graph of `n` nodes and the edges
+    (a[i], b[i]): each node's label, the smallest node of its component.
+    Min-label propagation with pointer jumping (Shiloach and Vishkin's
+    hooking and shortcutting), whole arrays at a time: a star — a work's
+    editions around its centre — settles in two or three rounds."""
+    label = np.arange(n, dtype=np.int64)
+    if not len(a):
+        return label
+    while True:
+        la, lb = label[a], label[b]
+        low = np.minimum(la, lb)
+        before = label.copy()
+        np.minimum.at(label, la, low)          # hook each root under the smaller label
+        np.minimum.at(label, lb, low)
+        while True:                            # shortcut: every node to its root
+            nxt = label[label]
+            if np.array_equal(nxt, label):
+                break
+            label = nxt
+        if np.array_equal(label, before):
+            return label
+
+
+def works_from(parts: list[dict[str, Any]]) -> dict[str, np.ndarray]:
+    """The work components' arrays (module docstring) from `part_works`'
+    results, in parts order."""
+    cat = (lambda key, t: np.concatenate([np.frombuffer(p[key], dtype=t) for p in parts])
+           if parts else np.zeros(0, dtype=t))
+    # every uid once: the parts' tables put together, ordered by (hash, check),
+    # a uid that two parts named kept once
+    h, k = cat("uid_hash", np.int64), cat("uid_check", np.int64)
+    sizes = [len(p["uid_hash"]) // 8 for p in parts]
+    base = np.concatenate([[0], np.cumsum(sizes, dtype=np.int64)])
+    order = np.lexsort((k, h))
+    hs, ks = h[order], k[order]
+    keep = np.ones(len(hs), dtype=bool)
+    keep[1:] = (hs[1:] != hs[:-1]) | (ks[1:] != ks[:-1])
+    first = order[keep]                        # positions in the concatenation, uid-hash order
+    u_hash, u_check = h[first], k[first]
+    n = len(first)
+    # each kept uid's bytes, from the part that named it first in this order
+    which = np.searchsorted(base, first, side="right") - 1
+    offs = [np.frombuffer(p["uid_off"], dtype=np.int64) for p in parts]
+    blob = bytearray()
+    u_off = np.zeros(n + 1, dtype=np.int64)
+    for i, (part, pos) in enumerate(zip(which.tolist(), (first - base[which]).tolist())):
+        o = offs[part]
+        blob += parts[part]["uid_bytes"][o[pos]:o[pos + 1]]
+        u_off[i + 1] = len(blob)
+
+    def ids(hash_: np.ndarray, check: np.ndarray) -> np.ndarray:
+        at = np.searchsorted(u_hash, hash_, side="left")
+        at = np.minimum(at, max(n - 1, 0))
+        wrong = np.nonzero((u_hash[at] != hash_) | (u_check[at] != check))[0]
+        for i in wrong.tolist():               # two uids of one first hash: the check tells them apart
+            j = int(at[i])
+            while j < n and u_hash[j] == hash_[i] and u_check[j] != check[i]:
+                j += 1
+            if j >= n or u_hash[j] != hash_[i]:
+                raise ValueError("a work claim's end is missing from the table of its own part")
+            at[i] = j
+        return at.astype(np.int64)
+    s = ids(cat("s_hash", np.int64), cat("s_check", np.int64))
+    o = ids(cat("o_hash", np.int64), cat("o_check", np.int64))
+    label = _components(n, s, o)
+    roots, comp = np.unique(label, return_inverse=True)
+    comp = comp.astype(np.int32)
+    tokens = np.full(n, -1, dtype=np.int32)
+    np.maximum.at(tokens, s, cat("s_tokens", np.int32))
+    o_tok = cat("o_tokens", np.int32)
+    np.maximum.at(tokens, o, o_tok)
+    centre = np.zeros(n, dtype=np.int8)
+    centre[o[o_tok >= 0]] = 1
+    member = np.argsort(comp, kind="stable").astype(np.int32)
+    start = np.zeros(len(roots) + 1, dtype=np.int64)
+    start[1:] = np.cumsum(np.bincount(comp, minlength=len(roots)))
+    return {"work_uid_hash": u_hash, "work_uid_check": u_check, "work_uid_off": u_off,
+            "work_uid_bytes": np.frombuffer(blob, dtype=np.uint8), "work_uid_comp": comp,
+            "work_uid_tokens": tokens, "work_uid_centre": centre, "work_comp_start": start,
+            "work_comp_member": member}
+
+
+def has_works(dest: Path) -> bool:
+    try:
+        return json.loads((Path(dest) / "works.json").read_text()).get("version") == WORKS_VERSION
+    except (OSError, ValueError):
+        return False
+
+
+def _write_works(dest: Path, got: dict[str, np.ndarray]) -> dict[str, Any]:
+    for name in WORKS:
+        tmp = dest / f"{name}.tmp.npy"
+        np.save(tmp, got[name])
+        tmp.replace(dest / f"{name}.npy")
+    sizes = np.diff(got["work_comp_start"])
+    meta = {"version": WORKS_VERSION, "uids": int(len(got["work_uid_hash"])), "works": int(len(sizes)),
+            "largest": int(sizes.max()) if len(sizes) else 0}
+    tmp = dest / "works.json.tmp"
+    tmp.write_text(json.dumps(meta))
+    tmp.replace(dest / "works.json")
+    return meta
+
+
+def add_works(shard_tree: Path, dest: Path, snap=None, *, stop=None) -> dict[str, Any]:
+    """The work components for a built index (module docstring): the parts
+    read once more, a part a task on the parse pool (CLAUDE.md: every pass
+    uses the cores), the claims' arrays untouched. `stop()` between parts
+    ends it with nothing written."""
+    from app import parallel
+    from app.hold import snapshot as sn
+    from app.share import seeder
+    dest = Path(dest)
+    if has_works(dest):
+        return {"skipped": "has its work components", "place": str(dest)}
+    snap = snap if snap is not None else seeder.cached_snapshot(Path(shard_tree))
+    gone: frozenset = frozenset()
+    if snap is not None and snap.previous is not None:
+        delta = snap.delta.fresh() if isinstance(snap.delta, sn.LazyDelta) else snap.delta
+        gone = frozenset(t.uid for t in delta.tombstoned)
+        del delta
+    parts_of = json.loads((dest / "parts.json").read_text())
+    got: list[dict[str, Any]] = []
+    results = parallel.each_part(part_works, [(str(Path(shard_tree) / p), gone) for p in parts_of])
+    for i, one in enumerate(results):
+        if stop is not None and stop():
+            results.close()
+            return {"stopped": f"after {i} of {len(parts_of)} part(s)", "place": str(dest)}
+        got.append(one)
+    arrays = works_from(got)
+    del got
+    with derived.building(dest / "works"):
+        if has_works(dest):
+            return {"skipped": "has its work components", "place": str(dest)}
+        meta = _write_works(dest, arrays)
+    return {**meta, "place": str(dest)}
+
+
+#: the work components' process may hold this much past what it holds at start
+#: (measured 2026-11-26: 2.16 GB peak at 6 M claims, linear — ~4.4 GB for
+#: wikipedia-articles' 12.3 M): past it, it fails alone and says so
+WORKS_CHILD_DATA_BYTES = 8 << 30
+
+
+def _works_child(tree: str, dest: str) -> None:
+    """`add_works_isolated`'s process: first for the kernel should the
+    cgroup run short, a data limit of its own, its parent watched."""
+    import resource
+    import sys
+    from app import parallel
+    parallel.watch_parent()
+    parallel._first_for_the_oom_killer()
+    vm = parallel._vm_data()
+    if vm is not None:
+        _soft, hard = resource.getrlimit(resource.RLIMIT_DATA)
+        want = vm + WORKS_CHILD_DATA_BYTES
+        resource.setrlimit(resource.RLIMIT_DATA, (want if hard == resource.RLIM_INFINITY else min(want, hard), hard))
+    got = add_works(Path(tree), Path(dest))
+    sys.exit(0 if ("works" in got or "skipped" in got) else 3)
+
+
+def add_works_isolated(shard_tree: Path, dest: Path, *, stop=None, poll_s: float = 1.0) -> dict[str, Any]:
+    """`add_works` in a PROCESS OF ITS OWN, as `build_isolated`: its peak —
+    every uid named by a work claim and every claim's ends, as arrays, ~2–3
+    GB for wikipedia-articles' 12.3 M — lives and dies with the child."""
+    import multiprocessing
+    if has_works(dest):
+        return {"skipped": "has its work components", "place": str(dest)}
+    p = multiprocessing.get_context("spawn").Process(target=_works_child, args=(str(shard_tree), str(dest)),
+                                                     name="claim-index-works", daemon=False)
+    p.start()
+    while True:
+        p.join(poll_s)
+        if p.exitcode is not None:
+            break
+        if stop is not None and stop():
+            p.terminate()
+            p.join(10)
+            return {"stopped": "the worker stopped while the work components were built", "place": str(dest)}
+    if p.exitcode != 0 or not has_works(dest):
+        raise RuntimeError(f"the work components' process exited {p.exitcode} and wrote none")
+    return {**json.loads((Path(dest) / "works.json").read_text()), "place": str(dest)}
 
 
 def build(shard_tree: Path, snap=None, *, stop=None, dest: Path | None = None) -> dict[str, Any]:
@@ -356,6 +623,22 @@ def maintain(root: Path, *, stop=None, log=print, failed: dict[str, str] | None 
                 if "seek" in got:
                     log(f"[annotations] {c.name}: the claim index's seek table written ({got['seek']} parts): "
                         f"no part's index is decoded at search")
+            # and its work components (2026-11-26): a question's grouping reads no frame
+            if not has_works(dest) and f"{tree}@{snap.hash}#works" not in failed:
+                try:
+                    got = (add_works_isolated(tree, dest, stop=stop) if isolated
+                           else add_works(tree, dest, snap, stop=stop))
+                except Exception as e:   # noqa: BLE001 — said once; the walk reads the claims meanwhile
+                    failed[f"{tree}@{snap.hash}#works"] = f"{type(e).__name__}: {e}"
+                    log(f"[annotations] {c.name}: the claim index's work components could not be written "
+                        f"({e}); a question's grouping reads the claims")
+                    continue
+                if "stopped" in got:
+                    break
+                if "works" in got:
+                    log(f"[annotations] {c.name}: the claim index's work components written ({got['uids']:,} "
+                        f"records in {got['works']:,} works, the largest of {got['largest']:,}): a question's "
+                        f"grouping opens no frame")
             continue
         key = f"{tree}@{snap.hash}"
         if key in failed:
@@ -407,6 +690,9 @@ class DiskClaimIndex:
         self._seek_looked = 0.0
         self.by_target = _Ends(self, WORK)
         self.graph = _Ends(self, GRAPH)
+        #: the work components, mmapped, where the index has them (`work_component`)
+        self.works = self._load_works() if has_works(dest) else None
+        self._works_looked = 0.0
         self._lock = threading.Lock()
         #: (part, frame) -> (its lines, their bytes), within FRAME_CACHE_BYTES
         self._frames: OrderedDict = OrderedDict()
@@ -494,6 +780,53 @@ class DiskClaimIndex:
         except (OSError, ValueError):
             return None
         return self.seek
+
+    def _load_works(self):
+        try:
+            return {name: np.load(self.dest / f"{name}.npy", mmap_mode="r") for name in WORKS}
+        except (OSError, ValueError):
+            return None
+
+    def _works_now(self):
+        """The work components once the worker has added them: looked for at
+        most every SEEK_LOOK_S, then kept."""
+        import time
+        if self.works is not None:
+            return self.works
+        now = time.monotonic()
+        if now - self._works_looked < SEEK_LOOK_S:
+            return None
+        self._works_looked = now
+        if has_works(self.dest):
+            self.works = self._load_works()
+        return self.works
+
+    def _work_uid(self, w, i: int) -> str:
+        off = w["work_uid_off"]
+        return bytes(w["work_uid_bytes"][int(off[i]):int(off[i + 1])]).decode("utf-8")
+
+    def work_component(self, uid: str) -> tuple[int, list[tuple[str, int | None, bool]]] | None:
+        """The work `uid` is in, from the work components — (its number, its
+        members as (uid, length or None, centre)) — or (-1, []) where no work
+        claim names it; None where the index has no components yet (the
+        caller reads the claims, as before). No frame is opened."""
+        w = self._works_now()
+        if w is None:
+            return None
+        h, k = uid_hash(uid), uid_check(uid)
+        hashes = w["work_uid_hash"]
+        lo = int(np.searchsorted(hashes, h, side="left"))
+        hi = int(np.searchsorted(hashes, h, side="right"))
+        at = next((i for i in range(lo, hi)
+                   if int(w["work_uid_check"][i]) == k and self._work_uid(w, i) == uid), None)
+        if at is None:
+            return -1, []
+        comp = int(w["work_uid_comp"][at])
+        start = w["work_comp_start"]
+        members = w["work_comp_member"][int(start[comp]):int(start[comp + 1])]
+        tokens, centre = w["work_uid_tokens"], w["work_uid_centre"]
+        return comp, [(self._work_uid(w, int(j)), int(tokens[j]) if int(tokens[j]) >= 0 else None,
+                       bool(centre[j])) for j in members]
 
     def claims_of(self, uid: str, kind: int) -> list:
         from app.hold import annotations as ann
