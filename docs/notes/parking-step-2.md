@@ -1155,7 +1155,9 @@ app deploy that carries the keeper's half first, then a model file with
 
 The architecture session builds the gate's clause of §3.3 (after the
 operator has chosen which models park, and whether the signed statement says
-the cycles). Its two questions, relayed by München: how a gate should ASK
+the cycles). BUILT SINCE, on main (508cb06, 2026-11-26: "The gate parks a model
+that parks, 64 counted cycles, before it admits its run";
+tests/hold/test_park_cycles.py) — on the counts and the answers below. Its two questions, relayed by München: how a gate should ASK
 for a cycle, and whether the engine counts its parks and returns anywhere a
 caller can read — "a pass that asked for 20 parks and got 409 every time
 must not certify 20 cycles".
