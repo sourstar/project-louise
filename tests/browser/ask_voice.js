@@ -582,7 +582,7 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   const cuts24 = await page.evaluate(() => {
     const v = louiseVoice, cutsOf = (s, max) => { const out = []; let x = s; for (let n = 0; x && n < 20; n++) {
       const g = x.length > max ? v.split(x, max) : null; if (!g) { out.push(x); break; } out.push(g[0]); x = g[1]; } return out; };
-    return [cutsOf("Ai sensi dell'art. 5 del decreto legislativo n. 196 del 2003 il titolare risponde [1].", 20),
+    return [cutsOf("Ai sensi dell'art. 5 del decreto legislativo n. 196 del 2003 il titolare risponde [1].", 18),
             cutsOf('Lo storico G. Cesare scrisse che il prof. Bianchi aveva torto sul punto [2].', 20),
             cutsOf('东京是日本的首都和最大的城市，人口超过一千三百万；它也是世界上最大的都市圈之一。', 20)];
   });
@@ -591,6 +591,22 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(cuts24[2].length >= 2 && /[，；]$/.test(cuts24[2][0])
         && cuts24[2].join('') === '东京是日本的首都和最大的城市，人口超过一千三百万；它也是世界上最大的都市圈之一。',
         '24. a language without spaces is cut at its own comma or semicolon', cuts24[2]);
+  // A SENTENCE'S END INSIDE THE STREAM'S OPEN TEXT is a cut, a sentence's
+  // own (architecture, 2026-11-26: three streamed answers cut "… di cinque"
+  // | "anni. Per …"); an abbreviation's stop never is
+  const ends24 = await page.evaluate(() => ['Il termine è di cinque anni. Per i danni il termine è diverso',
+    'La legge lo vieta. Il divieto vale per tutti', 'Sì, il contratto è nullo. La nullità può essere fatta valere']
+    .map(s => louiseVoice.split(s, 30, true)));
+  check(JSON.stringify(ends24.map(g => g && [g[0], g[2]])) === JSON.stringify([
+          ['Il termine è di cinque anni.', 'sentence'], ['La legge lo vieta.', 'sentence'],
+          ['Sì, il contratto è nullo.', 'sentence']]),
+        '24. a finished sentence in the stream\'s open text is cut at its full stop', ends24);
+  const abbr24 = await page.evaluate(() => [
+    louiseVoice.sentences('Nach § 3 Abs. 1 BGB gilt das z. B. auch für Hrn. Meier und andere. Das ist klar und gut so.'),
+    louiseVoice.sentences('As e.g. the U.S. Supreme Court held in Smith v. Jones, it is so. The next sentence is here.')]);
+  check(abbr24.every(x => x.length === 2), '24. "Abs.", "z. B.", "Hrn.", "e.g.", "U.S.", "v." end no sentence', abbr24);
+  const none24 = await page.evaluate(() => louiseVoice.split('Abcdefghijklmnopqrstuvwxyz abcdefghij klmno pqrst', 18));
+  check(none24 && none24[0] === 'Abcdefghijklmnopqrstuvwxyz', '24. no gap within the budget: the first one past it', none24);
   // the lead: once a long piece is playing, the next sentence is not cut to
   // the floor (architecture's case: pieces of 24, 51, 89 and 19, then a
   // sentence of 175 that went in 9). At 32 steps a character is made in
@@ -609,10 +625,18 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
     v.learn({ chars: 30, steps: 16, synth: 14000, audio: 2000, n: 0 });
     const afterLoad = v.rates().per_step_char;
     v.learn({ chars: 30, steps: 16, synth: 1110, audio: 2100, n: 0 });
-    return [afterLoad, v.rates().per_step_char];
+    const ordinary = v.rates().per_step_char;
+    // a node now steadily slower: the second slow clip in a row is its speed
+    v.learn({ chars: 30, steps: 16, synth: 14000, audio: 2100, n: 0 });
+    const once = v.rates().per_step_char;
+    v.learn({ chars: 30, steps: 16, synth: 14000, audio: 2100, n: 0 });
+    return [afterLoad, ordinary, once, v.rates().per_step_char, v.rates().audio_char];
   });
   check(learned[0] === 1.5 && learned[1] > 1.5 && learned[1] < 1.7,
         '24. a cold load is not learned as speed, an ordinary clip is', learned);
+  check(learned[2] === learned[1] && learned[3] > 3 * learned[1],
+        '24. one slow clip is an outlier; a second in a row is the node\'s speed now', learned);
+  check(learned[4] !== 71, '24. the sound\'s rate is learned from every clip, an outlier\'s too', learned);
   await page.evaluate(k => louiseVoice.setRates(JSON.parse(k)), FAST);
   answerJob = 'a1';
 

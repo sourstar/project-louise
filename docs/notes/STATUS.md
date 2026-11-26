@@ -1001,6 +1001,11 @@ measured (published figures disagree).
   "Cesare"); each budget from the predicted lead of the pieces queued, not the one piece before (a 175-char
   sentence had gone in 9 pieces); a clip over 3x the prediction (a cold load) is not learned; one answer's rates
   fixed when it is asked, so a re-read finds the kept clips; ，、；： cut a language without spaces.
+  Second read (2026-11-26): a full stop where the segmenter starts a sentence, after no abbreviation, is a
+  sentence's cut even inside the stream's open text ("La legge lo vieta." | "Il divieto…"); "Abs.", "Hrn.",
+  "z. B.", "e.g.", "U.S.", "v." and every single letter end no sentence; one slow clip is an outlier, a second in
+  a row is the node's speed; a page restored after a reload takes its answer's rates; a re-read REPLAYS the last
+  reading's pieces (the stream's cut and the ended text's differ); no gap within the budget: the first past it.
   MEASURED: nothing on the node yet; the next reading's line says each piece's budget, steps and boundary.
 - **The voice: the first sentence whole and at half the steps; a ping when the microphone is ready (operator,
   2026-11-26).** (1) A reading's sentence 0 is made at half `[speech] tts_steps` (the model's 32 when unset: 16),

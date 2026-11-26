@@ -79,12 +79,18 @@
   // and ICU's abbreviation list (`ss=standard`) is not offered by
   // Intl.Segmenter. One letter, or a title before a name, is read with the
   // next piece; the node drops its stop (app/speech.py `_STOP_BEFORE_NAME`).
+  // and the abbreviations a citation or a legal text writes before what it
+  // names (architecture, 2026-11-26: "Abs." | "1 BGB", "Hrn." | "Meier",
+  // "Smith v." | "Jones"): never a sentence's end
   const TITLES = new Set(('dr mr mrs ms prof st jr sr sig sigg dott ing avv arch geom rag on '
-                          + 'mme mlle mgr pr hr fr frl sra srta').split(' '));
+                          + 'mme mlle mgr pr hr fr frl sra srta '
+                          + 'abs art artt nr no hrn vgl cfr pag pp cap v vs cit ca').split(' '));
   const endsInName = p => {
+    // a dotted acronym or abbreviation ("U.S.", "e.g.", "z.B.", "i.e.")
+    if (/(?:^|[\s(«"'“‘])(?:\p{L}\.){2,}$/u.test(p)) return true;
     const m = /(?:^|[\s(«"'“‘])([\p{L}]{1,5})\.$/u.exec(p);
-    return !!m && ((m[1].length === 1 && m[1] === m[1].toUpperCase() && m[1] !== m[1].toLowerCase())
-                   || TITLES.has(m[1].toLowerCase()));
+    // one letter of either case ("G.", "z.", "B."), or a title
+    return !!m && (m[1].length === 1 || TITLES.has(m[1].toLowerCase()));
   };
   // sentences being synthesized at once (pump)
   const IN_FLIGHT = 2;
@@ -623,15 +629,22 @@
   // the rate from 1.5 to 11.9 and a dozen later pieces to the floor); one over
   // OUTLIER_X times the prediction is not learned from
   const OUTLIER_X = 3;
+  // — an ISOLATED one: a second in a row is the node's speed now, and is
+  // learned (architecture, 2026-11-26: a node steadily 3x slower was never
+  // learned). The sound's rate is learned from every clip.
+  let outlier = false;
   function learn(t) {
     if (rates.fixed || !t || !(t.chars > 0)) return;
+    if (t.audio > 0) rates.audio_char = 0.7 * rates.audio_char + 0.3 * (t.audio / t.chars);
     if (t.steps > 0 && t.synth > 0 && !t.cache) {
       const one = Math.max(0.05, (t.synth - rates.overhead) / (t.chars * t.steps));
-      if (one > OUTLIER_X * rates.per_step_char) return;
-      rates.per_step_char = 0.7 * rates.per_step_char + 0.3 * one;
-      rates.full = Math.max(rates.full === RATES0.full ? 0 : rates.full, t.steps, 2 * (t.steps - RAMP * (t.n || 0)));
+      const far = one > OUTLIER_X * rates.per_step_char;
+      if (!far || outlier) {
+        rates.per_step_char = 0.7 * rates.per_step_char + 0.3 * one;
+        rates.full = Math.max(rates.full === RATES0.full ? 0 : rates.full, t.steps, 2 * (t.steps - RAMP * (t.n || 0)));
+      }
+      outlier = far && !outlier;
     }
-    if (t.audio > 0) rates.audio_char = 0.7 * rates.audio_char + 0.3 * (t.audio / t.chars);
     try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {}
   }
   // THE RATES OF ONE ANSWER: taken once when it is asked (`asking`), so every
@@ -682,9 +695,26 @@
   // restAt], or null where none is final yet. A strong boundary in the last
   // two thirds of the budget is taken before a weaker later one; only a gap
   // with a word after it counts (the stream may not have written it yet).
+  // where sentences start in s, as the segmenter tells them: a stop there,
+  // after no abbreviation, ENDS a sentence — the stream's open text holds a
+  // finished sentence and the first words of the next (architecture,
+  // 2026-11-26: "La legge lo vieta. Il" | "divieto vale…")
+  function starts(s) {
+    const out = new Set();
+    try {
+      if (window.Intl && Intl.Segmenter) {
+        for (const g of new Intl.Segmenter(undefined, { granularity: 'sentence' }).segment(s)) out.add(g.index);
+        return out;
+      }
+    } catch (e) { /* the regex below */ }
+    for (const m of s.matchAll(/[.!?…]["'»”)\]]*\s+(?=\S)/g)) out.add(m.index + m[0].length);
+    return out;
+  }
   function split(s, max, open = false) {
-    let best = null;
-    for (let i = MIN_PIECE; i < Math.min(s.length - 1, max + 1); i++) {
+    let best = null, first = null;
+    const begin = starts(s);
+    for (let i = MIN_PIECE; i < s.length - 1; i++) {
+      if (best && i > max) break;
       // a gap between two words, or the place after wide punctuation
       const wide = (WIDE_CLAUSE + WIDE_COMMA).includes(s[i - 1]) && s[i] !== ' ';
       if (s[i] !== ' ' && !wide) continue;
@@ -692,12 +722,24 @@
       // a rest too short to be a piece of its own ("[1].") is read with this
       // one — of text that is final: the stream's open sentence has more coming
       if (!open && s.slice(restAt).replace(/\[\d+\]/g, '').trim().length < MIN_PIECE) continue;
-      if (INNER_STOP.test(s.slice(0, i)) || endsInName(s.slice(0, i))) continue;
-      const kind = kindAt(s, i), key = [i >= max / 3 ? RANK[kind] : 0, i];
+      const head = s.slice(0, i);
+      let kind;
+      if (INNER_STOP.test(head)) {
+        // a stop: a sentence's end where the segmenter starts one after it,
+        // and no abbreviation or initial precedes it; else never a cut
+        if (endsInName(head) || !begin.has(restAt)) continue;
+        kind = 'sentence';
+      } else {
+        if (endsInName(head)) continue;
+        kind = kindAt(s, i);
+      }
+      if (i > max) { first = { i, kind, restAt }; break; }   // none fits: the first allowed past the budget
+      const key = [i >= max / 3 ? RANK[kind] : 0, i];
       if (!best || key[0] > best.key[0] || (key[0] === best.key[0] && key[1] > best.key[1])) best = { i, kind, key, restAt };
     }
-    if (!best) return null;
-    return [s.slice(0, best.i).trim(), s.slice(best.restAt).trim(), best.kind, best.i, best.restAt];
+    const at = best || first;
+    if (!at) return null;
+    return [s.slice(0, at.i).trim(), s.slice(at.restAt).trim(), at.kind, at.i, at.restAt];
   }
   // a WAV of 16-bit PCM with the silence the model left at the cut trimmed
   // (at its start, its end or both), TRIM_KEEP_MS of it kept; anything else,
@@ -930,6 +972,7 @@
       push(r, got[0], got[2]);
       r.off += got[4];                           // the reading's place: past the piece (and its space)
     }
+    remember(r);
     pump(r);
     if (r.more) { const f = r.more; r.more = null; f(); }
   }
@@ -946,7 +989,31 @@
     stopReading(); startReading();
   }
 
+  // A READING OF THE SAME ANSWER REPLAYS THE PIECES ALREADY CUT (operator,
+  // 2026-11-09: "keep the buffering available even when I stop/start the
+  // speech"): the text cut while it streamed is not cut the same way once it
+  // has ended — a sentence closes, a short tail joins it — so a re-read cut
+  // afresh missed the node's kept clips (architecture, 2026-11-26: 2 of 10).
+  // `memo` is the last reading's cut — its pieces and its place in the text —
+  // and a new reading of that text in that language and voice starts from it.
+  let memo = null;
+  function remember(r) {
+    memo = { lang: r.lang, voice: r.voice, text: r.text, at: r.at, off: r.off, queue: [...r.queue],
+             plan: { ...r.plan }, rates: r.rates,
+             pieces: r.items.map(it => ({ text: it.text, gap: it.gap, budget: it.t.budget })) };
+  }
+  function replay(r) {
+    if (!memo || memo.lang !== r.lang || memo.voice !== r.voice || !answerText().startsWith(memo.text)) return r;
+    r.rates = memo.rates; r.text = memo.text; r.at = memo.at; r.off = memo.off; r.queue = [...memo.queue];
+    for (const p of memo.pieces) { r.budget = p.budget; push(r, p.text, p.gap); }
+    r.plan = { ...memo.plan };
+    return r;
+  }
   function newReading() {
+    if (!answerRates) answerRates = { ...rates };   // a page restored after a reload: its answer's rates, from now
+    return replay(newReadingFresh());
+  }
+  function newReadingFresh() {
     return { id: Math.random().toString(36).slice(2, 12) || 'r', ctl: new AbortController(), lang: answerLang, text: '', at: 0, off: 0, ended: false,
              items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false, voice: chosenVoice(),
              queue: [], budget: null, plan: { made: 0, free: 0 }, rates: { ...(answerRates || rates) } };
@@ -1018,6 +1085,7 @@
       const q = document.getElementById('q');
       stopReading(); dropAhead();
       answerRates = { ...rates };            // this answer's rates, for every reading of it
+      memo = null;                           // and its cut is its own
       times = { asked: now(), first: null, last: null, started: [], taps: [], items: [] };
       auto = !!speak && dictated !== null && !!q && q.value.trim() === dictated;
       if (auto) unlock();
@@ -1038,6 +1106,7 @@
     },
     answerCleared() {
       writing = false; stopReading(); dropAhead(); if (speak) speak.hidden = true;
+      answerRates = null; memo = null;
       const q = document.getElementById('q'); if (q) lastAsked = q.value.trim();
     },
     // a question of the page started (true) or ended (false): the
