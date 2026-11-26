@@ -307,6 +307,26 @@ The louise-python packages are renamed by what they run, `vega-louise-openvino`
 (was `-20261030`) and `vega-pytorch` (was `-20261021a`); their inner trees
 keep their names, so no run changes; `vega-llama-cpp-cpu` stays the CPU build.
 
+**THE WRAPPER EACH PACKAGE RUNS (München, the node, 2026-11-26 00:19Z, after
+the parking pass).** "Each package is what its gate saw" (invariant 12): a
+package is rebuilt, and its runs gated again, for a change that does
+something in it — never to make the four wrappers equal (RULE 1).
+
+| package | wrapper sha256 | REVISION | backend | |
+|---|---|---|---|---|
+| `vega-louise-llama-cpp` | 47bf02eaae7c01e4 | 1ac1ecc | `louise-sycl-f16-llama-cpp-ed93e3c1b2e2-stack-7c301a7ba437` | rebuilt and gated 2026-11-25, live since 23:45:20Z: main's wrapper (#882 — a repeated `LoadModel` answered "Model already loaded" is the same run) |
+| `vega-louise-llama-cpp-cpu` | 10833aab79818132 | 15e84e9 | `louise-cpu-llama-cpp-ea2417d91dcc` | untouched: the wrapper of its own build |
+| `vega-louise-openvino` | 10833aab79818132 | 15e84e9 | `louise-python-20261030` | untouched |
+| `vega-louise-pytorch` | 10833aab79818132 | 15e84e9 | `louise-python-20261021a` | untouched |
+
+The difference between the two wrappers is #882 alone, and it acts only on a
+`LoadModel` repeated for a model the process already holds — which only the
+park engine's return sends; no OpenVINO, PyTorch or CPU model parks. The
+three untouched packages take main's wrapper the next time they are rebuilt
+for a reason of their own, and are gated then. No deploy stage and no build
+check compares an installed package's wrapper with main's file (München read
+the tree for it).
+
 **Names (operator, 2026-11-03).** Our backends begin with `vega-louise-` when VeGa
 wraps them and with `louise-` when it does not.
 - The wrappers are `vega-louise-llama-cpp`, `vega-louise-llama-cpp-cpu`,

@@ -81,7 +81,26 @@ host memory, nothing new to go wrong. Cons: 6–34 s to come back, each time
 - **`/v1/messages` and `/v1/responses`** answer a refusal 500 (the server's
   stated limit): Louise calls neither.
 
-## 4. Rows owed from the node (none exists yet: nothing parks until the park engine and a `park: true` file)
+## 4. Measured on the card, on a COPY (München, the parking pass, 2026-11-25 22:46Z – 2026-11-26 00:19Z)
+
+Server v5.0.1-6-gffb10fdf3 (0024 + the amended 0027 + 0029), engine
+ed93e3c1b2e2, through LocalAI's HTTP alone, on a copy of bge-m3; the floor
+set to 12 GiB by the tool and back to 0 after. No real model parks.
+
+| | measured |
+|---|---|
+| a park | 142 ms |
+| a return, with sixteen sentences asked | 228 ms; 20 of 20 cycles the same bytes, by a request and by `/backend/load` alike |
+| what a park gives back | 996 of 1,315 MiB (76 %): 577 MiB are in host memory, and the process still holds 319 MiB of the card — the reason `make_room` counts a park at what the answer says moved, never at the model's whole size |
+| a busy model | 1,084 parks asked during one 2,048-sentence request: every one 409 `model_busy`, the request served |
+| a parked model stopped (`/backend/shutdown`) | 200 in 202 ms, not listed after; its next request loads it afresh in 4.17 s — what `host_claims` and the last-resort stop of a parked model do |
+| a return the card refuses | HTTP 503 `no_room_on_device`, `Retry-After: 2`, still parked, then served |
+| `/system` for a model that parks | "parks, state loaded, size_vram 1,315 MiB" → "state parked, size_vram 320 MiB, 577 MiB on the host since …"; a model that does not park carries neither `parks` nor `state` |
+
+So a give-way that today costs its model 4.2 s to come back (bge-m3's own
+fresh load in that pass) costs 0.14 s to make and 0.23 s to undo.
+
+## 5. Rows owed from the node (none exists yet: nothing parks until a model's file says `park: true`)
 
 1. `louise node resident show`: `"parks": true` for a model loaded from a
    file with `park: true` (the server's own first row).
