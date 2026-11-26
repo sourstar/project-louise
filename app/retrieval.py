@@ -1957,7 +1957,14 @@ OPINION_SHELVES = frozenset(s.casefold() for s in (
 #: of a literature, a travel account, sources, scripture: they veto a shelf
 #: and a bare genre heading (a form subdivision "-- Fiction" still stands)
 NONFICTION_SUBDIVISIONS = frozenset(("biography", "history and criticism", "criticism and interpretation",
+                                     "criticism, interpretation, etc", "commentaries",
                                      "technique", "description and travel", "sources"))
+#: a record that states it is a study of a work — its criticism, its
+#: commentary — is no work of that genre itself, whatever genre heading it
+#: also carries ("Gnomic poetry, Hebrew" on Cheyne's criticism, #65866;
+#: "Expositor's Bible: The Psalms" on a Poetry shelf, #44027, #30252)
+CRITICISM_SUBDIVISIONS = frozenset(("history and criticism", "criticism and interpretation",
+                                    "criticism, interpretation, etc", "commentaries"))
 #: SCRIPTURE, as its record writes it (architecture, 2026-11-26, over PG's
 #: 78,518 texts): a heading that IS a scripture — its title alone, or with
 #: "-- Selections" / "-- Paraphrases" ("Bible", "Qur'an", "Mishnah. Avot",
@@ -1968,7 +1975,9 @@ NONFICTION_SUBDIVISIONS = frozenset(("biography", "history and criticism", "crit
 #: criticism, its sermons, "Bible and science" follow the rule of any work,
 #: and its events retold with a literary form ("Bible. Genesis -- History of
 #: Biblical events -- Poetry", Ben-Hur's "-- Fiction", "Bible plays") are
-#: literature like any other. Scripture gets no verdict at all: one work on
+#: literature like any other — but a scripture's own stories stay scripture
+#: whatever form they take ("Bible stories -- Juvenile fiction", #11083,
+#: #49643), as the Jataka's do. Scripture gets no verdict at all: one work on
 #: two shelves must not be framed two ways (invariant 4).
 SCRIPTURE_TITLES = ("bible", "qur'an", "quran", "koran", "talmud", "mishnah", "midrash", "vedas", "upanishads",
                     "tipitaka", "book of mormon", "bhagavadgita", "puranas")
@@ -2028,9 +2037,14 @@ def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -
     cats = {c.casefold() for c in categories}
     if any(scripture(x) for x in subjects):
         return None
-    if any(literary(x) and _main_heading(x).casefold() not in BARE_GENRES or
-           (len(x.split("--")) > 1 and x.split("--")[-1].strip().casefold() in LITERARY_FORMS)
-           for x in subjects):
+    studied = any(p.strip().rstrip(".").casefold() in CRITICISM_SUBDIVISIONS
+                  for x in subjects for p in x.split("--")[1:])
+    # a FORM subdivision ("-- Fiction", "-- Poetry") is the record saying what
+    # it is; a genre heading ("Gnomic poetry, Hebrew") is, unless the record
+    # also says it is a study of such works
+    if any(len(x.split("--")) > 1 and x.split("--")[-1].strip().rstrip(".").casefold() in LITERARY_FORMS
+           for x in subjects) or (not studied and any(
+               literary(x) and _main_heading(x).casefold() not in BARE_GENRES for x in subjects)):
         return ("a literary work", "by its subject headings")
     vetoed = any(p.strip().rstrip(".").casefold() in NONFICTION_SUBDIVISIONS
                  for x in subjects for p in x.split("--")[1:])
@@ -2042,7 +2056,10 @@ def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -
         if any(_main_heading(x).casefold() in BARE_GENRES and len(x.split("--")) == 1 for x in subjects) \
                 and not (cats & OPINION_SHELVES) and not any(c.startswith("PN") for c in classes):
             return ("a literary work", "by its subject headings")
-    if cats & OPINION_SHELVES and not any(SATIRE.search(x) for x in subjects):
+    # a satire is its author's invention; a study OF satire is not one
+    if cats & OPINION_SHELVES and not any(
+            SATIRE.search(_main_heading(x)) and not x.rstrip(". ").casefold().endswith("history and criticism")
+            for x in subjects):
         return ("a work of opinion or belief", "by its Gutenberg category")
     return None
 

@@ -29,7 +29,10 @@ TOOLS: list[dict[str, Any]] = [
                     "record, chunk, trust level and producer (05 §5.3); facts from reference "
                     "sources beside the lists, never in them. Search the reader's own words first; when "
                     "what is asked for is not in the results, search again with the work's title and "
-                    "author, a name, or other key terms.",
+                    "author, a name, or other key terms. A result's `work_said` says what its own record "
+                    "states the work is: a literary work's events are what it narrates, never historical "
+                    "fact; a work of opinion or belief states its author's view, to be attributed; a "
+                    "source's 'now' counts from its first publication, never from today.",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string"},
          "collections": {"type": "array", "items": {"type": "string"},

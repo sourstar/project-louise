@@ -255,13 +255,29 @@ def test_the_reader_sees_the_verdict_beside_the_source_as_the_model_was_told_it(
     assert "a literary work · by its subject headings" in pdf
 
 
-def test_the_other_answer_path_frames_a_source_alike():
+def test_the_other_answer_path_frames_a_source_alike(monkeypatch):
     """/ask/chat, MCP and the PDF built from a question: the same header and
-    the same rule as /v1/chat/completions and the Ask tab."""
-    from app.ask import chat, results
-    hit = {**WAR_AND_PEACE, "work_said": retrieval._work_said(WAR_AND_PEACE)}
-    shown = chat.shown_search("Napoleon", {"lists": [{"hits": [hit]}]}, chat.Sources(), translated=False)
+    the same rule as /v1/chat/completions and the Ask tab — run, not read."""
+    from types import SimpleNamespace
+    from app.ask import chat, mcp, results
+    hit = {**WAR_AND_PEACE, "work": retrieval.work_verdict(WAR_AND_PEACE)}
+    ctx = {"collection_id": "c", "lineage_id": "l", "snapshot_id": "s", "trust_level": "local",
+           "certification": None, "figures": [], "red": False}
+    out = results.result_of(SimpleNamespace(plugin="gutenberg"), ctx, hit, 1, own_key=None, reranked=True)
+    assert out["work"] == {"kind": "a literary work", "basis": "by its subject headings"}
+    assert "a literary work (by its subject headings)" in out["work_said"]
+    shown = chat.shown_search("Napoleon", {"lists": [{"hits": [out]}]}, chat.Sources(), translated=False)
     assert "a literary work (by its subject headings)" in shown
-    import inspect
-    assert "retrieval.WORK_RULE" in inspect.getsource(chat._ask)
-    assert "\"work_said\": _work_said(hit)" in inspect.getsource(results.result_of)
+    seen = {}
+
+    def model(messages, tools=None, **kw):
+        seen["system"] = messages[0]["content"]
+        return {"role": "assistant", "content": "Nel romanzo [1]."}
+    from app import config
+    monkeypatch.setattr(config, "CHAT_URL", "http://chat")
+    try:
+        chat.ask("Napoleone?", model=model, call=lambda name, args: {"lists": [{"hits": [out]}]}, speed=True)
+    except Exception:   # noqa: BLE001 — the system prompt is built before any reply is read
+        pass
+    assert retrieval.WORK_RULE in seen.get("system", ""), "the rule goes to the model on this path too"
+    assert "work_said" in mcp.TOOLS[0]["description"], "an MCP client is told how to read it"
