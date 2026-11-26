@@ -198,6 +198,19 @@ class RecentTrees:
         with self._guard:
             return self._locks.setdefault(celex, threading.Lock())
 
+    def peek(self, celex: str) -> bytes | None:
+        """The tree kept for `celex` within the window, or None; asks nothing
+        (architecture's review of 9870a240: a tree Cellar served this pass
+        that dates the unit later than the bulk's is taken over it)."""
+        import zlib
+        path = self._path(celex)
+        try:
+            if self.clock() - path.stat().st_mtime <= self.window_s:
+                return gzip.decompress(path.read_bytes())
+        except (OSError, EOFError, zlib.error):
+            pass
+        return None
+
     def get(self, celex: str, ask: Callable[[], bytes],
             current: Callable[[bytes], bool] | None = None) -> tuple[bytes, str]:
         """The work's tree as Cellar served it, and where it came from:
@@ -344,9 +357,11 @@ class BulkTrees:
     that CELEX, its member does not read, or the tree does not state the
     CELEX as its work's own."""
 
-    def __init__(self, path: Path, index: dict[str, str], *, log: Callable[[str], None] = print) -> None:
+    def __init__(self, path: Path, index: dict[str, str], *, created: str | None = None,
+                 log: Callable[[str], None] = print) -> None:
         import zipfile
         self.path = path
+        self.created = created              # the stamped dump's `created`: the unit's provenance
         self.index = index
         self._zip = zipfile.ZipFile(datadump._staged(path, log))
         self._lock = threading.Lock()
@@ -379,6 +394,10 @@ def stamped_mtd(dump_base: Path | None, corpus_root: Path, lang: str, *,
     when = eurlex_dump.stamp(corpus_root).get(lang)
     if dump_base is None or when is None:
         return None
+    if not Path(dump_base).is_dir():
+        log(f"[work-trees] the Data Dump folder {dump_base} (EURLEX_DATADUMP_DIR) is not there; "
+            f"{lang}'s trees come from Cellar")
+        return None
     want = datadump._stamp(when)
     for folder in datadump.dump_folders(dump_base):
         got = datadump.statement(folder)
@@ -406,6 +425,7 @@ def prepare_bulk(dump_base: Path | None, corpus_root: Path, langs: list[str], *,
     process. Raises what an MTD that does not open raises (the caller holds
     the pass back: bulk first)."""
     import zipfile
+    from . import eurlex_dump
     out: dict[str, BulkTrees] = {}
     for lang in langs:
         path = stamped_mtd(dump_base, corpus_root, lang, log=log)
@@ -420,8 +440,47 @@ def prepare_bulk(dump_base: Path | None, corpus_root: Path, langs: list[str], *,
                 index = mtd_index(path, place, threads=threads, stop=stop, log=log)
             except zipfile.BadZipFile as e:
                 raise OSError(f"{path}: the MTD does not open ({e})") from e
-            got = BulkTrees(path, index, log=log)
+            got = BulkTrees(path, index, created=eurlex_dump.stamp(corpus_root).get(lang), log=log)
             with _BULK_LOCK:
                 got = _BULK.setdefault(key, got)
         out[lang] = got
     return out
+
+
+#: THE TREE'S SOURCE, per unit (architecture's review of 9870a240, invariant 11:
+#: "the form is part of what a verifier needs"): one JSON line a unit fetched,
+#: `{"l", "c", "from": dump|cellar|kept, "dump": <created>, "at"}`, appended
+#: beside the corpus, never rewritten by a dump build (the ledger's marks are).
+#: Not a record field: `extra`'s keys are fixed for a collection's life.
+SOURCES = ".eurlex-tree-sources.jsonl"
+_SOURCES_LOCK = threading.Lock()
+
+
+def record_source(corpus_root: Path, lang: str, celex: str, tree_from: str, created: str | None) -> None:
+    import time
+    line = json.dumps({"l": lang, "c": celex, "from": tree_from,
+                       **({"dump": created} if tree_from == "dump" and created else {}),
+                       "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                      sort_keys=True, separators=(",", ":")) + "\n"
+    with _SOURCES_LOCK:
+        with open(Path(corpus_root) / SOURCES, "a", encoding="utf-8") as f:
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
+
+
+def source_of(corpus_root: Path, lang: str, celex: str) -> dict | None:
+    """The last source recorded for a unit, or None."""
+    got = None
+    try:
+        with open(Path(corpus_root) / SOURCES, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("l") == lang and row.get("c") == celex:
+                    got = row
+    except OSError:
+        return None
+    return got

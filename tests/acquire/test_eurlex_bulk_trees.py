@@ -137,7 +137,37 @@ def test_a_held_unit_on_the_due_path_never_takes_the_bulk_tree(tmp_path, monkeyp
     assert units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, remote, corpus / rel)[0] is None, \
         "the unit's folder is there: held, whatever it holds"
     os.rmdir((corpus / rel).parent)
-    assert units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, remote, corpus / rel)[0] is bulk
+    key = str(corpus.resolve())
+    units._after[key] = {"it": 1000.0}
+    units._cover[key] = {(1972, "it")}
+    units._dates[key] = {(CELEX, "it"): 900}
+    assert units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, remote, corpus / rel) == (bulk, 900), \
+        "not held, listed unchanged since the dump: the bulk's tree"
+
+
+def _due_units(tmp_path, *, dates, cover, after=1000.0):
+    units = cellar.TreeUnits()
+    corpus = tmp_path / "corpus"
+    key = str(corpus.resolve())
+    units._bulk[key] = {"it": object()}
+    units._after[key], units._cover[key], units._dates[key] = {"it": after}, cover, dates
+    rel = cellar.rel_path("it", CELEX)
+    remote = RemoteFile(rel_path=rel, mtime=None, remote=cellar.encode(CELEX, "it"))
+    return units, corpus, remote, corpus / rel
+
+
+def test_a_unit_changed_since_the_dump_or_absent_from_its_window_takes_cellar_s_tree(tmp_path):
+    units, corpus, remote, dest = _due_units(tmp_path, dates={(CELEX, "it"): 2000}, cover={(1972, "it")})
+    assert units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, remote, dest) == (None, None)
+    units, corpus, remote, dest = _due_units(tmp_path, dates={}, cover={(1972, "it")})
+    assert units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, remote, dest) == (None, None)
+
+
+def test_a_unit_whose_window_is_not_known_whole_since_the_dump_waits(tmp_path):
+    units, corpus, remote, dest = _due_units(tmp_path, dates={(CELEX, "it"): 900}, cover=set())
+    with pytest.raises(cellar.WindowNotListed) as e:
+        units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, remote, dest)
+    assert cellar._episode(e.value), "deferred, never marked tried"
 
 
 def _statement(folder, lang="it", created=CREATED):
@@ -164,11 +194,64 @@ def test_the_mtd_read_is_the_one_of_the_dump_stamped_into_the_corpus(tmp_path, l
     assert work_trees.stamped_mtd(base, corpus, "fr", log=said.append) is None, "fr has no dump stamped"
 
 
-def test_the_kept_listing_dates_a_unit_asked_first(tmp_path, monkeypatch):
+def test_the_kept_listing_vouches_only_for_windows_known_whole_after_the_dump(tmp_path, monkeypatch):
     monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
     cellar_listing.keep("https://cellar.test", 1972, ("it",), 2, None, [[CELEX, "it", 100], ["31972R0001", "it", 7]])
-    cellar_listing.keep("https://cellar.test", 1972, ("it", "fr"), 1, None, [[CELEX, "it", 300, True]])
-    assert cellar_listing.dates_of({(CELEX, "it"), ("39999R0000", "it")}) == {(CELEX, "it"): 300}
+    cellar_listing.keep("https://cellar.test", 1973, ("it", "fr"), 0, None, [])
+    old = cellar_listing._path("https://cellar.test", 1972, ("it",))
+    os.utime(old, (10, 10))                                       # known whole before the dump
+    dates, cover = cellar_listing.coverage({(CELEX, "it")}, {"it": 50.0, "fr": 50.0})
+    assert dates == {} and cover == {(1973, "it"), (1973, "fr")}, "an empty window still covers its languages"
+    cellar_listing.vouched("https://cellar.test", 1972, ("it",))  # its fingerprint asked now, and holding
+    dates, cover = cellar_listing.coverage({(CELEX, "it")}, {"it": 50.0, "fr": 50.0})
+    assert dates == {(CELEX, "it"): 100} and (1972, "it") in cover
+
+
+def test_prepare_lists_the_missing_windows_first_and_an_unlisted_one_leaves_its_units_waiting(tmp_path, monkeypatch):
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    monkeypatch.setattr(work_trees, "_BULK", {})
+    base, corpus = tmp_path / "datadump", tmp_path / "corpus"
+    _statement(base / "datadump-it", "it")
+    _zip(base / "datadump-it" / "LEG_MTD.zip", {MEMBER: (FX / MTD).read_bytes()})
+    eurlex_dump._stamp(corpus, {"it": CREATED})
+    listed = []
+
+    def window(client, url, year, langs, code_of, charge, place=None, learned=None):
+        listed.append((year, langs))
+        if year == 1973:
+            raise cellar.TransportError("cellar: 503 to the count of 1973")
+        cellar_listing.keep(url, year, langs, 1, None, [[CELEX, "it", 100, None]], force=True)
+        return iter(())
+    monkeypatch.setattr(cellar, "_window_files", window)
+    units = cellar.TreeUnits()
+    due = [RemoteFile(rel_path=cellar.rel_path("it", c), mtime=None, remote=cellar.encode(c, "it"))
+           for c in (CELEX, "31973R0002")]
+    units._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
+    assert listed == [(1972, ("it",)), (1973, ("it",))]
+    unit = {"celex": CELEX, "lang": "it"}
+    assert units._bulk_of(corpus, unit, due[0], corpus / due[0].rel_path)[1] == 100
+    with pytest.raises(cellar.WindowNotListed):
+        units._bulk_of(corpus, {"celex": "31973R0002", "lang": "it"}, due[1], corpus / due[1].rel_path)
+
+
+def test_a_tree_cellar_served_this_pass_newer_than_the_bulk_s_wins_without_a_request(tmp_path, monkeypatch):
+    old, new = _trees()
+    asked = _served(monkeypatch, new)
+    bulk, _ = _bulk(tmp_path, {MEMBER: old})
+    recent = work_trees.RecentTrees(tmp_path / "recent")
+    recent.get(CELEX, lambda: new)
+    got = cellar.fetch_unit_from_tree("https://cellar.test", CELEX, "it", tmp_path / "u", client=object(),
+                                      trees=recent, bulk=bulk)
+    assert got.tree_from == "kept" and not any("non-inferred tree" in w for w in asked)
+    held = from_tree.notice(rdf.loads((tmp_path / "u" / rdf.TREE_FILE).read_bytes()), "ITA", CELEX)
+    assert held.modified.startswith("2026-11-19")
+
+
+def test_where_each_tree_came_from_is_written_beside_the_corpus(tmp_path):
+    work_trees.record_source(tmp_path, "it", CELEX, "dump", CREATED)
+    work_trees.record_source(tmp_path, "it", "31972R0001", "cellar", CREATED)
+    assert work_trees.source_of(tmp_path, "it", CELEX)["dump"] == CREATED
+    assert "dump" not in work_trees.source_of(tmp_path, "it", "31972R0001")
 
 
 def test_prepare_readies_the_bulk_before_the_pass_and_an_mtd_that_does_not_open_holds_it_back(tmp_path, monkeypatch):
@@ -181,9 +264,10 @@ def test_prepare_readies_the_bulk_before_the_pass_and_an_mtd_that_does_not_open_
     eurlex_dump._stamp(corpus, {"it": CREATED})
     units = cellar.TreeUnits()
     due = [RemoteFile(rel_path=cellar.rel_path("it", CELEX), mtime=None, remote=cellar.encode(CELEX, "it"))]
-    units._prepare_bulk(base, corpus, ["it"], due, "eu")
+    monkeypatch.setattr(cellar, "_window_files", lambda *a, **k: iter(()))
+    units._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
     assert units._bulk[str(corpus.resolve())]["it"](CELEX) is not None
     (base / "datadump-it" / "LEG_MTD.zip").write_bytes(b"not a zip")
     monkeypatch.setattr(work_trees, "_BULK", {})
     with pytest.raises(HeldBack):
-        units._prepare_bulk(base, corpus, ["it"], due, "eu")
+        units._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")

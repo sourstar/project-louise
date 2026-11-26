@@ -512,6 +512,7 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     force = place is not None
     kept = cellar_listing.held(base, year, languages, want, latest, force=force)
     if kept is not None:
+        cellar_listing.vouched(base, year, languages, force=force)     # known whole now
         # the window as the last pass listed it: its count and its latest
         # modification are the same, so no row moved (cellar_listing.py)
         for row in kept:
@@ -863,8 +864,22 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
         # `trees` (work_trees.RecentTrees) serves one Cellar served for the
         # work's other languages within the pass
         taken = _bulk_tree(bulk, celex, code, bulk_not_before)
+        kept = trees.peek(celex) if taken is not None and hasattr(trees, "peek") else None
+        if kept is not None:
+            # a tree Cellar served this pass that dates the unit LATER than
+            # the bulk's wins, with no request (review of 9870a240)
+            try:
+                k_note = parse(kept)[1]
+            except TransportError:
+                k_note = None
+            k_when = _epoch(k_note.modified or k_note.last_modified) if k_note is not None else None
+            b_when = _epoch(taken[1].modified or taken[1].last_modified)
+            if k_when is not None and (b_when is None or k_when > b_when):
+                taken, data, tree_from = None, kept, "kept"
         if taken is not None:
             (scoped, note), tree_from = taken, "dump"
+        elif kept is not None and tree_from == "kept":
+            scoped, note = parse(data)
         else:
             if trees is not None:
                 data, tree_from = trees.get(celex, lambda: _tree(client, url, celex, count), current)
@@ -905,8 +920,8 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
                 # a text in another language under this one's expression lands as
                 # the origin files it; the parser labels it (operator, 2026-11-16, B)
         except TransportError as e:
-            if tree_from != "dump" or isinstance(e, TransferAborted):
-                raise
+            if tree_from != "dump" or isinstance(e, TransferAborted) or _episode(e):
+                raise                       # the endpoint going away says nothing of the bulk's tree
             # the bulk's tree and what Cellar serves now are not of one
             # moment: the unit is asked again with Cellar's own tree, once
             return fetch_unit_from_tree(base, celex, lang, dest, client=client, charge=charge, trees=trees,
@@ -926,6 +941,19 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
 def _say_cellar(name: str) -> Callable[[str], None]:
     """A log line naming the collection (its corpus's name, as TreeInventory's)."""
     return lambda message: print(f"{time.strftime('%H:%M:%S')} [{name} info:cellar] {message}", flush=True)
+
+
+class WindowNotListed(TransportError):
+    """A unit asked first whose listing window is not known whole since the
+    dump was cut: it waits (worded as an episode, so the unit is deferred,
+    never marked tried)."""
+
+
+def window_year(celex: str) -> int | None:
+    """The CELEX year of the listing window a CELEX falls in (`_window`:
+    sector 3 acts and 0 consolidations), or None."""
+    m = re.match(r"^[03](\d{4})", celex)
+    return int(m.group(1)) if m else None
 
 
 def _bulk_tree(bulk, celex: str, code: str, listed_mtime: int | None):
@@ -1091,6 +1119,8 @@ class CellarUnits:
         self._since = time.monotonic()
         self._bulk: dict[str, dict] = {}            # corpus root → {lang: work_trees.BulkTrees}
         self._dates: dict[str, dict] = {}           # corpus root → {(celex, lang): listed mtime}
+        self._cover: dict[str, set] = {}            # corpus root → {(year, lang)} known whole since the dump
+        self._after: dict[str, dict] = {}           # corpus root → {lang: the stamped dump's created, epoch}
 
     def _count(self, got: "Fetched") -> None:
         with self._lock:
@@ -1279,6 +1309,9 @@ class TreeUnits(CellarUnits):
                 elif remote.mtime is None:
                     eurlex_dump.mark_deferred(root, unit["lang"], unit["celex"], str(e))
             raise
+        if root is not None:
+            work_trees.record_source(root, unit["lang"], unit["celex"], got.tree_from,
+                                     getattr(bulk, "created", None))
         if remote.mtime is None and root is not None:
             from . import eurlex_dump
             eurlex_dump.mark_fetched(root, unit["lang"], unit["celex"])   # asked first once
@@ -1286,19 +1319,38 @@ class TreeUnits(CellarUnits):
         return got.moved
 
     def _bulk_of(self, root: Path | None, unit: dict, remote: RemoteFile, dest: Path):
-        """The bulk's tree source for this unit and the date it must reach:
-        none for a unit HELD already (architecture's review of 1be767f6,
-        blocking: the dump build leaves to the API exactly the held units
-        NEWER than the dump, and the MTD's older tree landed over them) or
-        where `prepare` readied none; the listing's date, else the kept
-        listing's, else none."""
+        """The bulk's tree source for this unit and the date it must reach
+        (architecture's decision, 2026-11-26):
+          - a unit HELD already: none (review of 1be767f6: the dump build
+            leaves to the API exactly the held units newer than the dump);
+          - a unit with a listing date: the bulk, not older than it;
+          - a unit asked first, its window known whole since the dump: the
+            bulk where the listing shows it unchanged since `created`,
+            Cellar's tree (or a newer kept one) where changed or absent;
+          - its window not known whole since the dump: it WAITS
+            (`WindowNotListed`), never taken from the bulk on silence;
+          - a CELEX no window lists (another sector): Cellar's tree."""
         if root is None or dest.exists() or dest.parent.exists():
             return None, None
         key = str(root.resolve())
         with self._lock:
             bulk = (self._bulk.get(key) or {}).get(unit["lang"])
-            when = remote.mtime if remote.mtime is not None else \
-                (self._dates.get(key) or {}).get((unit["celex"], unit["lang"]))
+            dates = self._dates.get(key) or {}
+            cover = self._cover.get(key) or set()
+            after = (self._after.get(key) or {}).get(unit["lang"])
+        if bulk is None:
+            return None, None
+        if remote.mtime is not None:
+            return bulk, remote.mtime
+        year = window_year(unit["celex"])
+        if year is None or after is None:
+            return None, None
+        if (year, unit["lang"]) not in cover:
+            raise WindowNotListed(f"cellar: {unit['celex']} ({unit['lang']}): its {year} window is not "
+                                  f"listed since the dump was cut (connection timed out: it waits for the listing)")
+        when = dates.get((unit["celex"], unit["lang"]))
+        if when is None or when > after:
+            return None, None                   # absent from the listing, or changed since the dump
         return bulk, when
 
     def _reform(self, dest: Path, remote: RemoteFile, note) -> bool:
@@ -1337,20 +1389,25 @@ class TreeUnits(CellarUnits):
                            f"was not built ({type(e).__name__}: {str(e)[:300]}); bulk first, so Cellar is "
                            f"not asked for its units until it is") from e
         self._prepare_bulk(dumps.base, Path(collection.corpus_dir), langs, pending,
-                           getattr(collection, "name", "eurlex"))
+                           getattr(collection, "name", "eurlex"), getattr(endpoint, "url", None))
         return []
 
     def _prepare_bulk(self, dump_base: Path, corpus: Path, langs: list[str], pending: list[RemoteFile],
-                      name: str) -> None:
+                      name: str, base_url: str | None = None) -> None:
         """The trees the bulk holds, ready BEFORE the pass (bulk first,
         2026-11-26): each language's MTD — the one of the dump stamped into
-        the corpus — indexed by CELEX, the stop asked between chunks; and the
-        due units' dates from the kept listing (a unit asked first has none
-        of its own: a bulk tree older than the date the listing last gave it
-        is not taken). An MTD that does not open holds the pass back."""
+        the corpus — indexed by CELEX, the stop asked between chunks. Then
+        WHAT CHANGED SINCE THE DUMP WAS CUT, from the listing (architecture's
+        decision, 2026-11-26): a (CELEX year, language) of a unit asked first
+        whose window was not known whole after the stamped dump's `created`
+        is listed FIRST — a windowed listing, a count and its pages, kept and
+        re-used — the stop asked between windows; a window that cannot be
+        listed leaves its units waiting. An MTD that does not open holds the
+        pass back."""
         from app import parallel
-        from . import work_trees
+        from . import cellar_listing, datadump, eurlex_dump, work_trees
         from .spec import HeldBack
+        from ..plugins.eurlex.source import LANGUAGES
         say = _say_cellar(name)
         try:
             bulk = work_trees.prepare_bulk(dump_base, corpus, langs, threads=parallel.processes(),
@@ -1360,15 +1417,55 @@ class TreeUnits(CellarUnits):
         except OSError as e:
             raise HeldBack(f"{name}: the Data Dump's MTD does not read ({str(e)[:300]}); bulk first, so "
                            f"Cellar is not asked for the trees it holds until it does") from e
-        due = {(unit_of(f)["celex"], unit_of(f)["lang"]) for f in pending if is_unit(f) and f.mtime is None}
-        from . import cellar_listing
-        dates = cellar_listing.dates_of(due) if bulk and due else {}
+        due = {(unit_of(f)["celex"], unit_of(f)["lang"]) for f in pending
+               if is_unit(f) and f.mtime is None and unit_of(f)["lang"] in bulk}
+        after: dict[str, float] = {}
+        for lang, when in eurlex_dump.stamp(corpus).items():
+            got = datadump._stamp(when)
+            if got is not None:
+                after[lang] = got.timestamp()
+        dates, cover = cellar_listing.coverage(due, after) if due else ({}, set())
+        missing: dict[int, set[str]] = {}
+        for celex, lang in due:
+            year = window_year(celex)
+            if year is not None and (year, lang) not in cover:
+                missing.setdefault(year, set()).add(lang)
+        unlisted: set[tuple[int, str]] = set()
+        if missing and base_url:
+            t0, asked = time.monotonic(), 0
+            code_of = {v: k for k, v in LANGUAGES.items()}
+            say(f"listing what changed since the dump: {sum(len(v) for v in missing.values())} "
+                f"(year, language) window(s) of {len(missing)} year(s), before any unit is built from it")
+            with httpx.Client(timeout=TIMEOUT_S) as client:
+                for year in sorted(missing):
+                    _stop_check()
+                    window = tuple(sorted(missing[year]))
+                    try:
+                        for _ in _window_files(client, base_url, year, window, code_of, budget.acquire_bytes,
+                                               place=lambda *a: False, learned={"group": len(window)}):
+                            pass
+                        asked += 1
+                    except TransportError as e:
+                        if isinstance(e, TransferAborted):
+                            raise
+                        unlisted |= {(year, l) for l in window}
+                        say(f"cellar: the {year} window ({', '.join(window)}) is not listed ({str(e)[:200]}): "
+                            f"its units wait")
+            dates, cover = cellar_listing.coverage(due, after)
+            say(f"listed {asked} year window(s) in {time.monotonic() - t0:.0f} s")
+        elif missing:
+            unlisted = {(y, l) for y, ls in missing.items() for l in ls}
         key = str(corpus.resolve())
         with self._lock:
             self._bulk[key] = bulk
             self._dates[key] = dates
-        say(f"trees from the bulk: {', '.join(sorted(bulk)) or 'no language'}; "
-            f"{len(dates)} of {len(due)} unit(s) asked first dated by the kept listing")
+            self._cover[key] = cover
+            self._after[key] = after
+        changed = sum(1 for k, d in dates.items() if d > after.get(k[1], float("inf")))
+        unchanged = len(dates) - changed
+        say(f"trees from the bulk: {', '.join(sorted(bulk)) or 'no language'}; of {len(due)} unit(s) asked first, "
+            f"{unchanged} unchanged since the dump (its tree), {changed} changed (Cellar's), "
+            f"{len(due) - len(dates)} not vouched for (Cellar's, or waiting: {len(unlisted)} window(s) unlisted)")
 
 
 def _corpus_of(dest: Path, remote: RemoteFile) -> Path | None:
