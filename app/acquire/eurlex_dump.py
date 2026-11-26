@@ -275,8 +275,8 @@ def unread_statements(dump_dir: Path, corpus: Path, *, now: float | None = None)
     if not base.is_dir():
         return []
     now = _time.time() if now is None else now
-    folders = [p for p in sorted(base.iterdir()) if p.is_dir()
-               and ((p / STATEMENT).is_file() or next(p.rglob("*.zip"), None) is not None)]
+    from .datadump import dump_folders
+    folders = dump_folders(base)
     read = {p: statement(p) for p in folders}
     newest_read = max((_latest(p) for p, got in read.items() if not isinstance(got, str)), default=None)
     out = []

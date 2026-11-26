@@ -90,7 +90,7 @@ set to 12 GiB by the tool and back to 0 after. No real model parks.
 | | measured |
 |---|---|
 | a park | 142 ms |
-| a return, with sixteen sentences asked | 228 ms; 20 of 20 cycles the same bytes, by a request and by `/backend/load` alike |
+| a return, with sixteen sentences asked | 228 ms; 20 of 20 cycles the same bytes, by a request and by `/backend/load` alike — the TOOL's own sentences: the gate's clause (the sixteen FINGERPRINT texts after park cycles) was not run, and is owed to the gated run of the first real model that parks |
 | what a park gives back | 996 of 1,315 MiB (76 %): 577 MiB are in host memory, and the process still holds 319 MiB of the card — the reason `make_room` counts a park at what the answer says moved, never at the model's whole size |
 | a busy model | 1,084 parks asked during one 2,048-sentence request: every one 409 `model_busy`, the request served |
 | a parked model stopped (`/backend/shutdown`) | 200 in 202 ms, not listed after; its next request loads it afresh in 4.17 s — what `host_claims` and the last-resort stop of a parked model do |
@@ -100,7 +100,39 @@ set to 12 GiB by the tool and back to 0 after. No real model parks.
 So a give-way that today costs its model 4.2 s to come back (bge-m3's own
 fresh load in that pass) costs 0.14 s to make and 0.23 s to undo.
 
+**Behind the LIVE wrapper, on the card, the node embedding beside it**
+(München, 2026-11-26 01:22–01:25Z; copies of vega-bge-m3's file whole plus
+`park: true`, `GGML_SYCL_PARKABLE=1`, `GGML_SYCL_PARK_VERIFY=1`, through
+vega-louise-llama-cpp — wrapper 47bf02ea…, engine ed93e3c1b2e2; inputs
+tagged, each return held to the receipts' run id, to the wrapper's
+`/vega/keeps` and to the engine's counts; another run id than
+vega-bge-m3's, gated by nobody, removed after):
+
+| | measured |
+|---|---|
+| the load | ONE "loaded on Intel(R) Arc(TM) Pro B70 Graphics, run sha256:02112555…" line through all the cycles; no refusal to state the run |
+| a return | "the load in force asked again (the same options, the same process …; the backend: 'Model already loaded'): run … stands" — one a return, never a second "loaded on" |
+| the run id on the receipts | the same before the first park and after each of 43 returns; and the SAME after a stop of the parked model and its load afresh in a new process |
+| the counts, a cycle | the engine: parks +1, unparks +1; the wrapper: `created` +1 (1 → 44 over 43 returns), `calls` + one per sentence asked (not +1), `canary_failed` 0 throughout |
+| a return the card refuses | 503 `no_room_on_device`, `Retry-After: 2`, twice, still parked (319 MiB on the card, 577 on the host); the third request served, the same vectors |
+| a busy model | 2,716 parks asked during one 2,048-sentence request, every one 409 |
+| a parked model stopped | 200 in 1,314 ms through the wrapper; its next request loads afresh in 10.58 s |
+| times, the node at work | a park 135–138 ms; a return with sixteen tagged sentences 377–392 ms (881–1,378 ms in the first three cycles after the load) |
+
+With Tensor's off-node run (25 of 25, parking-step-2.md §11) this is every
+junction: the server, the wrapper, the engine and the card together, on a
+copy. What it is NOT: a gate. The run that parks a real model is gated with
+the park-cycles clause, which holds a cycle to the engine's parks and
+unparks AND the wrapper's `created` — a return that fails is answered 200 by
+a new process under the same run id, and only those counts starting again
+say so.
+
 ## 5. Rows owed from the node (none exists yet: nothing parks until a model's file says `park: true`)
+
+A model parks when its file says `park: true` AND its `env` carries
+`GGML_SYCL_PARKABLE=1` — a new run, gated once, with the gate's park-cycles
+clause (not built yet: STATUS.md, 2026-11-26). Which models, and whether the
+signed statement says the cycles, is the operator's.
 
 1. `louise node resident show`: `"parks": true` for a model loaded from a
    file with `park: true` (the server's own first row).

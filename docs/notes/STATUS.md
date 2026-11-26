@@ -20,14 +20,69 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **PARKING BEHIND THE LIVE WRAPPER, ON THE CARD, ON A COPY (München, 01:22–01:25Z, the node embedding
+  beside it): every junction has now run together — the patched server, main's wrapper (47bf02ea…), the
+  park engine and the B70.** One load stated, "the load in force asked again … run … stands" at each
+  return, ONE run id on the receipts through 43 returns and again after a stop and a load afresh in a new
+  process; the engine's parks and unparks +1 a cycle, the wrapper's `created` +1 (its `calls` go up by one
+  a sentence asked, not one a cycle — the clause holds a cycle to `created`); a refused return 503 twice,
+  still parked, then served with the same vectors; 2,716 parks asked during one request, every one 409; a
+  parked model stopped in 1.3 s and loaded afresh in 10.58 s. A park 135–138 ms, a return 377–392 ms with
+  the node at work (parking-keeper.md §4). Not a gate: the copy's run was gated by nobody and is gone. What
+  is left before a real model parks is the operator's two choices and, after them, the gate's clause.
+  The app's sha for the deploy is main a2b5935b (#921 on #882 and #918), prepared by München in place of
+  b1e83cf; it waits for his word.
+- **PARKING BEHIND THE WRAPPER, SHOWN OFF THE NODE: 25 of 25 (Tensor, parking-step-2.md §11 on its branch;
+  LocalAI's real server, main's wrapper started by LocalAI, a receipts service, the park engine's CPU build
+  with a stand-in device).** Nothing is other than #882's tests assume: a park passes the wrapper and the
+  engine's counts read through `/backend/monitor` as on the engine directly; the return's `LoadModel` is
+  answered "Model already loaded" and the wrapper states NO second run — one load stated across 41 repeated
+  loads, the first receipt after a return naming the run id of before the park; `created` up by exactly one
+  a return; a park inside the idle second 409 through the wrapper. AND THE CASE THE GATE MUST CATCH: a
+  return that FAILS is answered 200 with the same vectors by a NEW wrapper process under the SAME run id
+  with valid receipts — nothing in a receipt tells it from a cycle; only the counts do (the engine's parks
+  and unparks, the wrapper's calls and created, each starting again). ON THE CARD (München, 00:56Z, a copy
+  of bge-m3 on the engine directly, the node embedding beside it): three cycles counted in one process
+  (parks 1/2/3, unparks 1/2/3, the same vector), a read bringing nothing back, a park 182–234 ms and a
+  return 312–341 ms, the 409 23 ms after a request; `memory.total` is the process's VIRTUAL size (38.85 GB
+  loaded, 4.73 parked) and nothing is built on it. Not shown yet: a card behind the wrapper with a model
+  that parks — München's row, on a copy, when Tensor's tagged tool is cut. Tensor withdrew "only the
+  wrapper's receipts can put the count in a statement": both forms are with the operator.
+- **A MODEL FILE WITH NO PINNED SEED IS ANOTHER RUN AT EVERY LOAD (Tensor's finding in its harness; the
+  node counted by München, 01:10Z): 59 model files behind a vega package, 58 with seed 0, ONE with none —
+  index-translate-9b, a translation model outside Louise's set, no collection's encoder.** LocalAI draws a
+  seed at each load where the file pins none, and the seed is in the options the wrapper states. For an
+  encoder that would be a gate asked again after every reload and no vector until it passes — nothing
+  wrong written, the time lost and the reason said nowhere. No such encoder exists on the node. CLOSED
+  WHERE IT GATES NOTHING: `deploy/vega/stage/seed_pinned.py` reads the node's own model files at each
+  deploy (stage 6a'+, read-only; JSON, YAML, or a line scan where the host has no YAML library) — an
+  EMBEDDER behind VeGa with no seed is named with the line to add, any other is listed and refused
+  nothing; a NOTE, never a stop, since the fault is a file of the node's and not the tree being deployed.
+  The wrapper's own refusal ("no run can be stated: the model's file pins no seed") is written down to
+  ride its next rebuild for a reason of its own: a changed wrapper is a new run for every model of its
+  package. The one file is the operator's to pin or leave (München told him).
+- **WHAT A REAL MODEL NEEDS BEFORE IT PARKS — and what the pass did NOT measure (Tensor and München,
+  00:40Z).** (1) Two lines in the model's file: `park: true` (the server's) AND `GGML_SYCL_PARKABLE=1` in
+  its `env` (the engine allocates the weights so that they can leave the card). The env is inside the
+  run's statement, so EACH MODEL THAT PARKS IS A NEW RUN, GATED ONCE (bge-m3's gate is 98 s, gutenberg's
+  33 min, NeuRIS and wikidata 8.5 min each). (2) THE GATE'S OWN CLAUSE FOR A PARKING RUN WAS NOT RUN: the
+  design gives the gate "the sixteen fingerprints after N park cycles, as after 300 context creations"
+  (parking-step-2.md §3.3, models-beyond-the-card.md §4). The pass's "20 of 20 cycles the same bytes" are
+  the measuring tool's own sentences on a copy — evidence, not the gate; the clause is owed to the gated
+  run of the first real model that parks, and it is NOT BUILT (app/hold/embedder.py has `fresh_contexts`,
+  no park cycles). Whether the signed statement says the cycles — as it says the contexts since the
+  operator's choice of 2026-11-11, statement version 6 — is a wire-format question, put to him with the
+  choice of which models park. (3) On the card a park is refused 409 until the model has been without a
+  request for a second (ten refusals a cycle when asked right after one): the evictor's "next candidate"
+  already covers it. (4) No model file changes until he chooses; nothing parks.
 - **THE PARKING PASS ENDED 00:19:39Z, COMPLETED (München; the node paused 5,620 s, back in embed mode):
   the park server and the park engine are LIVE, nothing parks, and #882 is merged (main 7547fcd1).** Server
   v5.0.1-6-gffb10fdf3 (0024 the readiness poll, the amended 0027, 0029 the watchdog's settings fix) — a
   server swap gates nothing, the seven run ids the same. Engine ed93e3c1b2e2 with ONE package rebuilt,
   vega-louise-llama-cpp at 1ac1ecc (wrapper sha256 47bf02eaae7c01e4 = main's file), live since 23:45:20Z:
   the five llama.cpp gates all exact, three fresh loads each, every fingerprint identical to before
-  (wikipedia 98 s, gutenberg 1,983 s, pubmed query 70 s, NeuRIS about 509 s, wikidata about 502 s); 20
-  unloads through the rebuilt wrapper, none slow. The other three packages keep the wrapper of their own
+  (wikipedia 98 s, gutenberg 1,983 s, pubmed query 70 s, NeuRIS 509 s, wikidata 508 s — München's
+  correction of "about 502"); 20 unloads through the rebuilt wrapper, none slow. The other three packages keep the wrapper of their own
   build (10833aab79818132, REVISION 15e84e9): the table is in approved-encoders.md ("The wrapper each
   package runs"). PARKING ON THE CARD, on a copy of bge-m3 (parking-keeper.md §4): a park 142 ms, a return
   228 ms, 20 of 20 cycles the same bytes; a park gives back 996 of 1,315 MiB — 76 %, the process keeps 319
