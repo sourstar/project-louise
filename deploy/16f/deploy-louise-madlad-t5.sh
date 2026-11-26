@@ -571,6 +571,14 @@ PLATFORM_ARG=""; [ -r "$ROOT/config/platform.toml" ] && PLATFORM_ARG="--platform
 python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" $PLATFORM_ARG "${LOCALAI_URL:-http://127.0.0.1:30286}" \
   || { echo "LocalAI did not take the settings Louise depends on (above)"; exit 1; }
 python3 "$ROOT/src/deploy/vega/stage/localai_settings.py" $PLATFORM_ARG --check "${LOCALAI_URL:-http://127.0.0.1:30286}"
+say "6a'+. every model behind VeGa pins its seed (deploy/vega/stage/seed_pinned.py, read-only)"
+# Tensor, 2026-11-26: a model file that pins no seed gets one drawn by LocalAI at each load, and the
+# wrapper states it — every load is another run, for an encoder one nobody validated (its gate asked
+# again after each reload, no vector written until it passes). A NOTE, never a stop: the fault is a
+# file of the node's, not the tree being deployed. The node's count that night: 59 files, 58 pinned,
+# the one without a translation model outside Louise's set
+python3 "$ROOT/src/deploy/vega/stage/seed_pinned.py" --models "${LOCALAI_MODELS:-/mnt/ssd5/apps/localai/models}" \
+  || echo "NOTE: a model file behind VeGa pins no seed, or could not be read (above): an EMBEDDER among them is another run at every load, never validated — add \`seed: 0\` under \`parameters:\` in its file"
 say "6a''. the CPU references collections kept before the node's store, held to it (read-only)"
 # operator, 2026-11-22: "The CPU reference is per model, not per collection" — RAGE resolves it by
 # its key from the node's store alone (app/rage/reference.py). A collection's own copy names no

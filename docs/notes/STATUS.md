@@ -20,6 +20,35 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **PARKING BEHIND THE WRAPPER, SHOWN OFF THE NODE: 25 of 25 (Tensor, parking-step-2.md §11 on its branch;
+  LocalAI's real server, main's wrapper started by LocalAI, a receipts service, the park engine's CPU build
+  with a stand-in device).** Nothing is other than #882's tests assume: a park passes the wrapper and the
+  engine's counts read through `/backend/monitor` as on the engine directly; the return's `LoadModel` is
+  answered "Model already loaded" and the wrapper states NO second run — one load stated across 41 repeated
+  loads, the first receipt after a return naming the run id of before the park; `created` up by exactly one
+  a return; a park inside the idle second 409 through the wrapper. AND THE CASE THE GATE MUST CATCH: a
+  return that FAILS is answered 200 with the same vectors by a NEW wrapper process under the SAME run id
+  with valid receipts — nothing in a receipt tells it from a cycle; only the counts do (the engine's parks
+  and unparks, the wrapper's calls and created, each starting again). ON THE CARD (München, 00:56Z, a copy
+  of bge-m3 on the engine directly, the node embedding beside it): three cycles counted in one process
+  (parks 1/2/3, unparks 1/2/3, the same vector), a read bringing nothing back, a park 182–234 ms and a
+  return 312–341 ms, the 409 23 ms after a request; `memory.total` is the process's VIRTUAL size (38.85 GB
+  loaded, 4.73 parked) and nothing is built on it. Not shown yet: a card behind the wrapper with a model
+  that parks — München's row, on a copy, when Tensor's tagged tool is cut. Tensor withdrew "only the
+  wrapper's receipts can put the count in a statement": both forms are with the operator.
+- **A MODEL FILE WITH NO PINNED SEED IS ANOTHER RUN AT EVERY LOAD (Tensor's finding in its harness; the
+  node counted by München, 01:10Z): 59 model files behind a vega package, 58 with seed 0, ONE with none —
+  index-translate-9b, a translation model outside Louise's set, no collection's encoder.** LocalAI draws a
+  seed at each load where the file pins none, and the seed is in the options the wrapper states. For an
+  encoder that would be a gate asked again after every reload and no vector until it passes — nothing
+  wrong written, the time lost and the reason said nowhere. No such encoder exists on the node. CLOSED
+  WHERE IT GATES NOTHING: `deploy/vega/stage/seed_pinned.py` reads the node's own model files at each
+  deploy (stage 6a'+, read-only; JSON, YAML, or a line scan where the host has no YAML library) — an
+  EMBEDDER behind VeGa with no seed is named with the line to add, any other is listed and refused
+  nothing; a NOTE, never a stop, since the fault is a file of the node's and not the tree being deployed.
+  The wrapper's own refusal ("no run can be stated: the model's file pins no seed") is written down to
+  ride its next rebuild for a reason of its own: a changed wrapper is a new run for every model of its
+  package. The one file is the operator's to pin or leave (München told him).
 - **WHAT A REAL MODEL NEEDS BEFORE IT PARKS — and what the pass did NOT measure (Tensor and München,
   00:40Z).** (1) Two lines in the model's file: `park: true` (the server's) AND `GGML_SYCL_PARKABLE=1` in
   its `env` (the engine allocates the weights so that they can leave the card). The env is inside the
