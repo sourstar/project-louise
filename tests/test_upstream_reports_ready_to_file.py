@@ -110,3 +110,22 @@ def test_the_index_says_what_is_written_and_what_upstream_already_has():
     # an issue that leans on an upstream thread names it
     assert "#11970" in ISSUES["B26"] and "#12425" in ISSUES["B21"] and "#12204" in ISSUES["B21"]
     assert "ggml-org/llama.cpp #29581" in ISSUES["B19"] and "#27595" in ISSUES["B18"]
+
+
+def test_the_omnivoice_fade_is_a_comment_on_the_issue_upstream_already_has():
+    """Upstream knows the cut last word (#116, #245) without a fix: what is written is a comment for #245, the same
+    care for names, and the same figures as the note's."""
+    text = (REPORTS / "k2-fsa-omnivoice.md").read_text(encoding="utf-8")
+    found = re.findall(r"<!-- comment:(k2-fsa/OmniVoice#\d+) -->\n(.*?)\n<!-- /comment -->", text, re.S)
+    assert [where for where, _ in found] == ["k2-fsa/OmniVoice#245"]
+    body = found[0][1]
+    for word in PRIVATE:
+        assert word not in body, word
+    for said in ("max(min(kept, fade_duration), 5 ms)", "to the byte", "30 the fade attenuated speech",
+                 "-27.6 dBFS", "It does not touch the other part of #116"):
+        assert said in body, said
+    note = (ROOT / "docs" / "notes" / "omnivoice-on-our-backend.md").read_text(encoding="utf-8")
+    assert "**Upstream knows it** (searched 2026-11-26)" in note and "upstream-reports/k2-fsa-omnivoice.md" in note
+    readme = (REPORTS / "README.md").read_text(encoding="utf-8")
+    assert "| [k2-fsa-omnivoice.md](k2-fsa-omnivoice.md) | k2-fsa/OmniVoice |" in readme
+

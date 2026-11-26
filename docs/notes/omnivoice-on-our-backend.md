@@ -1087,10 +1087,22 @@ known (the model not loaded) nothing is served from the drive; what is made
 is kept under the engine that answered. A test holds it
 (tests/test_speech.py).
 
+**Upstream knows it** (searched 2026-11-26): k2-fsa/OmniVoice #116 (closed)
+and #245 (open). Its maintainer names this fade as one cause ("this last 0.1
+seconds may also contain meaningful verbal segments") and the training data
+as the root ("some samples in the training data that are truncated at the
+end … no real solution"); the workaround offered is `fade_duration=0.0`,
+which he says makes a clip end "with a sudden stop". No fix there, and
+nobody proposes ending the fade with the kept silence: written as a comment
+for #245, ready to post (upstream-reports/k2-fsa-omnivoice.md); posting it
+is the operator's.
+
 **(b), still open: does the model's own predicted length cut words?** The
 third sentence above says it can END IN SPEECH: its audio as the model gave
 it, before any trim, has -27.6 dBFS in its last 100 ms. Whether that is a
-word cut or a word's natural tail is for the ear. The probe on the card,
+word cut or a word's natural tail is for the ear. Upstream's maintainer says the model
+does learn cut endings from its training data (#116), so (b) is expected to
+be real for some sentences; this fix does not reach it. The probe on the card,
 after the fix and on the same sentences: `MTMD_DEBUG_OMNIVOICE=<dir>` in a
 COPY's env, then `audio-joined.bin` is the audio with `finish()` bypassed.
 

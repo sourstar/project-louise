@@ -28,6 +28,7 @@ ggml-org/llama.cpp and mudler/LocalAI. The near hits, and why they differ:
 | [wmde-wikidata-embedding-project.md](wmde-wikidata-embedding-project.md) | philippesaade-wmde (WikidataTextEmbedding and the HF datasets) | stale vectors kept as current (~14 %); text depends on a live wiki page; the corpus drops entity data; the card's counts |
 | [ggml-llama-cpp-sycl.md](ggml-llama-cpp-sycl.md) | ggml-org/llama.cpp | SYCL embeddings non-reproducible through oneDNN's GEMM; F16×F32 batched matmul wrong for a non-contiguous `a` on the Arc Pro B70 (upstream-bugs.md S1; the same on runtimes 26.27 and 26.35, added 2026-10-28); **a refused pool commit aborts the process (localai-bugs.md B18), written out 2026-11-26** |
 | [mudler-localai.md](mudler-localai.md) | mudler/LocalAI | B1–B14 of localai-bugs.md, condensed; **B17, B19, B20, B21, B22, B24, B25, B26 written out to be filed as they are** (2026-11-26; B17 as a feature request) |
+| [k2-fsa-omnivoice.md](k2-fsa-omnivoice.md) | k2-fsa/OmniVoice | the fade-out that cuts a sentence's last word: known upstream (#116, #245) without a fix, so a COMMENT on #245 with ours (2026-11-26) |
 | [wikidata.md](wikidata.md) | the Wikidata team (WMDE) | STANDING (operator, 2026-10-24): every improvement to Wikidata the build finds — data defects, missing labels as a worklist, and an index of the two WMDE code files |
 
 **Checked again on 2026-11-26, for the issues written out that day** (a web
@@ -42,6 +43,9 @@ search of both trackers, and the threads read). None is known with its cause:
 - llama.cpp #27595 (open, unconfirmed) shows B18's abort and is read there as
   a usage problem; the cause as a defect, and the fix, are ours to give.
 - Nothing found for B20, B22, B24, B25, or B17's request.
+- k2-fsa/OmniVoice #116 (closed) and #245 (open, stale) know the cut last
+  word, with the fade named as one cause and no fix; written as a comment
+  on #245, not a new issue (k2-fsa-omnivoice.md).
 
 Not included, because there is no reproducer yet:
 - jina-v3's batched `encode` failing in `torch.unique` on the B70; a plain
