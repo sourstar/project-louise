@@ -1319,19 +1319,15 @@ def _relay_search_traced(job: relay.Job, body: AskQueryBody, trace) -> dict:
     return result
 
 
-def _relay_answer(job: relay.Job, chat) -> None:
-    """The answer as /v1/chat/completions writes it (`api.answer_parts`), its
-    words relayed as `delta` events. Each word is progress; a keepalive is
-    not (a model that writes nothing for STUCK_S is stuck)."""
+def _relay_answer_job(job: relay.Job, chat) -> None:
+    """`_relay_answer`, an admin's traced (app/query_trace.py) and joined to
+    its search by `search_id`."""
     from . import api, query_trace
     user = [m for m in chat.messages if m.get("role") == "user"]
-    if not user:
-        raise ValueError("no user message")
-    query = api._text_of(user[-1].get("content", ""))
-    # an admin's answer, traced (app/query_trace.py), joined to its search by search_id
+    query = api._text_of(user[-1].get("content", "")) if user else ""
     trace = query_trace.start("answer", job.id, job.owner, query, search_id=chat.search_id)
     try:
-        _relay_answer_traced(job, chat, query, trace)
+        _relay_answer(job, chat, trace)
     except BaseException as e:
         if trace is not None:
             trace.end(error=f"{type(e).__name__}: {e}")
@@ -1340,8 +1336,15 @@ def _relay_answer(job: relay.Job, chat) -> None:
         trace.end()
 
 
-def _relay_answer_traced(job: relay.Job, chat, query: str, trace) -> None:
+def _relay_answer(job: relay.Job, chat, trace=None) -> None:
+    """The answer as /v1/chat/completions writes it (`api.answer_parts`), its
+    words relayed as `delta` events. Each word is progress; a keepalive is
+    not (a model that writes nothing for STUCK_S is stuck)."""
     from . import api, query_trace
+    user = [m for m in chat.messages if m.get("role") == "user"]
+    if not user:
+        raise ValueError("no user message")
+    query = api._text_of(user[-1].get("content", ""))
     t0 = time.time()
     kept = kept_search(chat.search_id, query)
     if kept is not None:
@@ -1417,7 +1420,7 @@ def relay_start(request: Request, body: RelayBody):
             chat = ChatBody(**{**(body.answer or {}), "stream": True})
         except Exception as e:   # noqa: BLE001 — pydantic's message, to the page
             raise HTTPException(422, f"an answer job needs /v1/chat/completions' body: {e}")
-        job = relay.start("answer", owner, lambda j: _as_question(_relay_answer, j, chat),
+        job = relay.start("answer", owner, lambda j: _as_question(_relay_answer_job, j, chat),
                           label=str((chat.messages or [{}])[-1].get("content", ""))[:80],
                           replaces=body.replaces)
     return {"id": job.id}

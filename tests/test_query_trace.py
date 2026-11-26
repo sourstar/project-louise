@@ -149,3 +149,28 @@ def test_model_events_are_the_nodes_models_lines_in_the_window(isolated_config):
         con.commit()
     got = query_trace._model_events(now - 5, now + 1)
     assert [m for _t, _l, m in got] == ["park: x"]
+
+
+def test_an_admins_answer_job_writes_its_words_and_the_search_it_reused(traced, monkeypatch):
+    from app import api, llm
+
+    class End:
+        whole = True
+    def stream(messages, temperature=0.3):
+        yield "The whale "
+        yield "rose [1]."
+        return End()
+    monkeypatch.setattr(llm, "chat_stream", stream)
+    hits = [{"chunk_id": "gutenberg:1:0:1", "book_id": 1, "uid": "u1", "text": "w", "source_collection": "gutenberg"}]
+    monkeypatch.setattr(api.retrieval, "build_answer_messages",
+                        lambda q, r, answer_lang=None, **kw: [{"role": "system", "content": "s"},
+                                                               {"role": "user", "content": q}])
+    sid = web.keep_search("whales", {"hits": hits, "timings": {"total": 1.0}})
+    chat = api.ChatBody(messages=[{"role": "user", "content": "whales"}], search_id=sid, stream=True)
+    web._relay_answer_job(relay.Job(id="a2", kind="answer", owner="admin:admin"), chat)
+    _wait(lambda: _lines(traced))
+    (got,) = _lines(traced)
+    assert got["kind"] == "answer" and got["search_id"] == sid and got["search_reused"] is True
+    assert got["answer"] == "The whale rose [1]."
+    assert [m[0] for m in got["marks"]] == ["search_done", "first_word", "last_word"]
+    assert got["results"][0]["uid"] == "u1"
