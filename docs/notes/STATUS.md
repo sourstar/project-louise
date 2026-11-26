@@ -20,6 +20,56 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **A DEAD WORKER'S ACQUISITION CLAIM REFUSED ITS SUCCESSOR'S FETCH, AND NOTHING ASKED AGAIN; A
+  COLLECTION'S RESUME ASKED NO FETCH (München, D6/D7, after the 09:00:20Z hardware reset).** The claim
+  the killed worker held was 179 s old; the new worker's startup fetch got `AcquisitionBusy` ("re-run
+  once the claim goes stale after 300s"), logged it as an ERROR, and nothing re-ran it — EUR-Lex5.next's
+  fetch stood still until a hand toggle of `acquire_enabled`; `node pause` / `node resume
+  EUR-Lex5.next` in between asked no fetch either (the gap, München: 1 h 48 min without a fetch). FIXED
+  (app/acquire/claim.py, app/worker.py): a claim names the BOOT it was made in (`boot_id`, the same in
+  every container of the host) and one of another boot is dead whatever its age; a refusal is a deferral
+  (warn, "asked again in N s") and, when that time comes, the claim is READ first — while its holder
+  renews it nothing is asked, once it is not held ONE discovery (re-armed blindly, a `hold records fetch`
+  beside the worker would have cost a full discovery every five minutes; the independent read, run); a
+  fetch the collection's OWN pause stopped is asked again by its resume (its pause is told before its
+  threads are retired, so a retirement is not mistaken for it), and a resume with nothing cut costs
+  nothing; a re-arm for a collection the round does not run (paused, another writer's lock) waits for it,
+  one retired is dropped. The standard alternative written down in claim.py: an flock per collection,
+  dropped by the kernel with its holder. The second read, run: a free claim's retry now asks the FETCH
+  (`_acquire`), never a discovery that queues behind the running scan and walks the corpus again; a fetch
+  started meanwhile forgets the retry; the stop keeps the FIRST event that stopped it (a resume while the
+  fetch unwound read the retirement instead, and D7 came back); a waiting re-arm comes back when the
+  node holds the collection again, O(1), and a removed collection forgets it; an unreadable claim is read
+  again in 30 s, not every round. The third read, run: a wall clock stepped back made a LIVE claim read
+  as stale and another process took it — within one boot a claim's age is now the boot's own clock
+  (CLOCK_BOOTTIME, never stepped); a claim is taken under BEGIN IMMEDIATE and renewed and given back by
+  compare-and-set (read then written apart, a holder could overwrite another's fresh claim); the
+  keepalive thread outlives a busy manifest (one locked write ended it for the pass); a retry due while
+  the refused thread still ends is kept; acquisition turned on again while the stopped fetch unwinds asks
+  it again; a free claim's retry for a paused collection comes back as the fetch, not a discovery. The
+  fourth read, run: under BEGIN IMMEDIATE first, a refusal on a busy manifest came back as
+  OperationalError and armed no retry (D6 again) — a live claim now refuses before the lock, and a busy
+  deferral is asked again in 30 s; a busy give-back no longer replaces the pass's result; a boot clock
+  that reads a claim in the future gives way to the wall clock; the re-arm "acquisition turned on again"
+  is forgotten when a fresh fetch starts. The fifth read, run: the fourth round's stop for a claim taken
+  over reported a stopped pass as a complete fetch — WITHDRAWN: with the keepalive kept alive (a renewal
+  or a connection that fails is asked again at the next tick), a live pass's claim goes stale only where
+  its manifest refuses every write for 300 s, and then its own writes fail first; only a BUSY manifest is
+  a deferral retried (a read-only or full one is an error, left to discovery); a retried fetch starts on
+  a thread and connection of its own (on the main loop it waited out the busy timeout) and says why.
+  THE CLAIM IS NOW THAT FLOCK (the sixth read: every staleness rule had its own way to be wrong):
+  `acquire.lock` beside the manifest, held for the pass, dropped by the kernel with its holder; the row is
+  kept for the Library and the refusal's words. The seventh read, run: a row whose writer said it held the
+  lock (`"lock": true`) is dead once the lock is taken (a holder SIGKILLed in the same boot refused 305 s);
+  the lock is let go whatever the row's give-back raises; a fetch's rsync inherits the lock (`pass_fds`), so
+  it lives as long as the last writer of a `.part`; `hold records fetch` and `hold update` read another
+  process's fetch as a deferral (exit 3; waiting, never a try); the pause of a fetch begun before the first
+  lock take reaches it. Not changed: the retry deadlines stay on the wall clock — a clock stepped back
+  delays a retry at most to the collection's next discovery, which asks the fetch itself. The eighth read
+  (safe to merge): a writer is handed its OWN pass's lock only (`scope`, the corpus it writes) — handed
+  every lock, an orphaned rsync of one collection kept another's after the worker died. Recorded, not
+  changed: a dead holder's row still reads "in progress" on the Library card, and puts a refused retry off,
+  for up to 305 s where no lock is taken to tell; a lock probe would refuse a real taker instead.
 - **OCR AND A PDF TEXT LAYER THROUGH RAGE — PROPOSED, NOT BUILT** (operator, 2026-11-26: "the RAGE ingestion API
   to be extended for image OCR and adding of text layer to pdf (if pdf form is preserved in the parsed corpus). This
   is architecture's call"). The design and the operator's question: [ocr-in-rage.md](ocr-in-rage.md) — recommended,
