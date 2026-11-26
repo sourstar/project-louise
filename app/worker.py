@@ -2652,6 +2652,17 @@ _gone: dict[str, threading.Event] = {}
 def _gone_event(name: str) -> threading.Event:
     return _gone.setdefault(name, threading.Event())
 
+
+#: name -> set while the collection is paused on its own (`node pause
+#: <collection>`): set by `_hold_locks` BEFORE it retires the collection's
+#: threads, cleared when it holds the collection again — so a fetch its pause
+#: stopped tells that from a retirement (`_acquire_worker`)
+_own_pauses: dict[str, threading.Event] = {}
+
+
+def _own_pause_event(name: str) -> threading.Event:
+    return _own_pauses.setdefault(name, threading.Event())
+
 _acquire_threads: dict[str, threading.Thread] = {}
 _acquire_done: dict[str, bool] = {}      # collection -> did it fetch anything
 #: collections whose corpus fetch the node's PAUSE stopped or refused — not
@@ -2662,6 +2673,13 @@ _paused_aborts: set[str] = set()
 #: name -> when to ask again a fetch another writer's claim refused (`_acquire_worker`,
 #: `_rearm_paused_aborts`). Guarded by `_acquire_lock`.
 _claim_retries: dict[str, float] = {}
+#: re-arms whose collection the node holds and does not run this round (paused
+#: on its own, another writer's lock): asked once it runs again. Guarded by
+#: `_acquire_lock`.
+_paused_waiting: set[str] = set()
+#: name -> why it is re-armed, where that is not the node's resume. Guarded by
+#: `_acquire_lock`.
+_rearm_reason: dict[str, str] = {}
 _acquire_lock = threading.Lock()
 
 
@@ -2725,6 +2743,7 @@ def _acquire_worker(collection, spec, profile: str, reason: str) -> None:
     con = db.connect(collection)
     fetched_any = False
     stop: _AnyStop | None = None
+    own_pause: threading.Event | None = None
     try:
         # `_paused` IS PART OF THE STOP, and for ten hours it was not.
         #
@@ -2752,8 +2771,10 @@ def _acquire_worker(collection, spec, profile: str, reason: str) -> None:
         # already running when the collection is frozen ends at its unit, its
         # `.part` kept and the offset committed; the unfreeze asks it again
         # ...AND SO IS ITS FILE TURNING ACQUISITION OFF (`_acquire_off_event`)
-        stop = _AnyStop(_stop, _gone_event(collection.name), _paused, _frozen_event(collection.name),
-                        _acquire_off_event(collection.name))
+        # its own pause BEFORE the retirement it causes: `fired` names the first set
+        own_pause = _own_pause_event(collection.name)
+        stop = _AnyStop(_stop, own_pause, _gone_event(collection.name), _paused,
+                        _frozen_event(collection.name), _acquire_off_event(collection.name))
         result = acquire_engine.run_acquisition(
             con, collection, spec, profile, stop=stop)
         fetched_any = bool(result.get("fetched"))
@@ -2820,6 +2841,16 @@ def _acquire_worker(collection, spec, profile: str, reason: str) -> None:
             # resumed while rsync's terminate grace ran.
             if stop is not None and stop.fired is _paused and not _stop.is_set():
                 _paused_aborts.add(collection.name)
+            # ...AND ONE ITS COLLECTION'S OWN PAUSE STOPPED (`node pause
+            # <collection>`: `_hold_locks` retires it) — by the collection's
+            # resume: the re-arm keeps it while the collection is not run and
+            # drops it if the collection is gone (München, 2026-11-26, D7: the
+            # resume asked no fetch, which stood still until a hand toggle).
+            # A retirement alone (`hold collection forget`) is not a pause
+            elif stop is not None and own_pause is not None and stop.fired is own_pause \
+                    and not _stop.is_set():
+                _paused_aborts.add(collection.name)
+                _rearm_reason[collection.name] = "the collection resumed"
 
 
 # ---- frozen collections (07 §7.3 `node freeze`; docs/notes/collection-freeze.md) ----
@@ -4014,31 +4045,6 @@ def _finish_completed_acquires(cons, all_collections, last_discover,
             last_discover[collection.name] = time.time()
 
 
-#: the collections paused on their own at the last round (`_rearm_resumed`); None before the first
-_paused_last: set[str] | None = None
-
-
-def _rearm_resumed(all_collections, paused_now) -> list[str]:
-    """A COLLECTION RESUMED (`node resume <collection>`) asks its fetch again,
-    as the node's resume does (`_rearm_paused_aborts`): its pause retired the
-    fetch in flight, or a fetch had been refused before it, and nothing else
-    asks — a resume asked no scan and no fetch (München, 2026-11-26, D7: the
-    fetch stood still until a hand toggle of `acquire_enabled`). Only one that
-    fetches (`acquire_enabled`); one that does not owes the scan its pause cut
-    short, which `_request_owed_scans` asks. Returns the names re-armed."""
-    global _paused_last
-    now = set(paused_now or ())
-    before, _paused_last = _paused_last, now
-    if before is None or not (before - now):
-        return []                                     # the idle round costs nothing
-    names = [c.name for c in all_collections
-             if c.name in before - now and getattr(c, "acquire_enabled", False)]
-    if names:
-        with _acquire_lock:
-            _paused_aborts.update(names)
-    return names
-
-
 def _rearm_paused_aborts(all_collections, last_discover, pipeline: bool,
                          cons=None, known=None) -> list[str]:
     """Restart the corpus fetches the node's pause stopped or refused.
@@ -4066,18 +4072,43 @@ def _rearm_paused_aborts(all_collections, last_discover, pipeline: bool,
 
     `known`: every collection the node holds. One of them not run this round
     (`all_collections` is the round's: one paused on its own, or another
-    writer's lock) is KEPT pending, not dropped as retired — its fetch was
-    lost so (2026-11-26).
+    writer's lock) WAITS for it (`_paused_waiting`), not dropped as retired —
+    its fetch was lost so (2026-11-26).
+
+    A FETCH ANOTHER WRITER'S CLAIM REFUSED (`_claim_retries`) is asked again
+    when the claim it met is no longer held — read first, one control row:
+    while its holder renews it, it is put off to the claim's next staleness
+    and nothing is asked (the read of 2026-11-26: re-armed blindly, a holder
+    renewing every 60 s cost a full discovery every five minutes, longer than
+    EUR-Lex5.next's 18-minute walk).
     """
+    due: list[str] = []
     with _acquire_lock:
-        # A FETCH ANOTHER'S CLAIM REFUSED is asked again once that claim is
-        # stale: its name joins the pause's re-arms when its time comes
         if _claim_retries:
             now = time.time()
             due = [n for n, at in _claim_retries.items() if at <= now]
-            for n in due:
-                del _claim_retries[n]
-                _paused_aborts.add(n)
+    for n in due:
+        try:
+            busy = (acquire_claim.busy_for(cons[n])
+                    if cons is not None and n in cons else None)
+        except Exception:   # noqa: BLE001 — the manifest busy: read again next round
+            continue
+        with _acquire_lock:
+            if n not in _claim_retries:
+                continue
+            if busy is not None:
+                _claim_retries[n] = time.time() + busy
+                continue
+            del _claim_retries[n]
+            _paused_aborts.add(n)
+            _rearm_reason.setdefault(n, "the claim that refused it is no longer held")
+    with _acquire_lock:
+        if _paused_waiting:
+            # a waiting name whose collection runs again (an O(collections)
+            # look, only while one waits)
+            back = _paused_waiting & {c.name for c in all_collections}
+            _paused_waiting.difference_update(back)
+            _paused_aborts.update(back)
         if not _paused_aborts:
             # THE IDLE ROUND COSTS NOTHING. This runs every round the node
             # is not paused and almost always has nothing to do; it must not
@@ -4087,15 +4118,20 @@ def _rearm_paused_aborts(all_collections, last_discover, pipeline: bool,
             return []
         pending = set(_paused_aborts)
         live = {c.name: c for c in all_collections}
-        waiting = {c.name for c in (known or ())} - live.keys()
+        held = {c.name for c in (known or ())}
         still_running = set()
         for name in pending:
             thread = _acquire_threads.get(name)
             if thread is not None and thread.is_alive():
                 still_running.add(name)
         _paused_aborts.clear()
-        _paused_aborts.update(still_running | (pending & waiting))
+        _paused_aborts.update(still_running)
+        not_run = pending - still_running - live.keys()
+        _paused_waiting.update(not_run & held)
+        for name in not_run - held:
+            _rearm_reason.pop(name, None)            # retired: dropped
         rearmed = sorted((pending - still_running) & live.keys())
+        reasons = {name: _rearm_reason.pop(name, "resume after pause") for name in rearmed}
         # Forget "done" for what this re-arms, under the SAME lock. Third
         # review, 2026-09-13: `_finish_completed_acquires` and this function
         # read the mark at different moments of one round, so a fetch whose
@@ -4121,12 +4157,13 @@ def _rearm_paused_aborts(all_collections, last_discover, pipeline: bool,
         # with DISCOVER_INTERVAL_MIN=0. A regression against the version
         # before, which only popped stamps and so retried by itself. A name
         # that fails is kept for the next round instead.
+        why = reasons[name]
         try:
             if pipeline:
-                _request_discovery(name, "resume after pause", acquire=True)
+                _request_discovery(name, why, acquire=True)
                 last_discover[name] = time.time()
             elif cons is not None and name in cons:
-                _discover(cons[name], live[name], "resume after pause")
+                _discover(cons[name], live[name], why)
                 last_discover[name] = time.time()
             else:
                 last_discover.pop(name, None)
@@ -4134,13 +4171,16 @@ def _rearm_paused_aborts(all_collections, last_discover, pipeline: bool,
             failed.append(name)
             try:
                 db.log_event(cons[name], "warn", "acquire",
-                             f"resume after pause: discovery failed, retrying next "
+                             f"{why}: discovery failed, retrying next "
                              f"round: {type(e).__name__}: {e}"[:400])
             except Exception:   # noqa: BLE001 — the log is a courtesy
                 pass
     if failed:
         with _acquire_lock:
             _paused_aborts.update(failed)
+            for name in failed:
+                if reasons[name] != "resume after pause":
+                    _rearm_reason.setdefault(name, reasons[name])
     return [n for n in rearmed if n not in failed]
 
 def _drain_bundle_inbox(con, collection) -> int:
@@ -7693,9 +7733,8 @@ def run_forever():
                                                  pipeline=pipeline)
             # 07 §7.7: the lock of every collection the node runs; one the operator
             # paused or another writer holds is not run this round
-            paused_now = node_state.paused_collections(node_con)
-            active = _hold_locks(all_collections, paused_now, cons)
-            _rearm_resumed(all_collections, paused_now)
+            active = _hold_locks(all_collections,
+                                 node_state.paused_collections(node_con), cons)
             # the frozen set, once a round, as the pause is (07 §7.3 `node freeze`)
             _sync_frozen(node_con)
             _finish_completed_acquires(cons, all_collections, last_discover,
@@ -7994,6 +8033,8 @@ def _hold_locks(collections, paused: set[str], cons=None) -> list:
     live = {c.name: c for c in collections}
     for name in list(_locks):
         if name not in live or name in paused:
+            if name in live:
+                _own_pause_event(name).set()   # told before the retirement: a fetch re-armed by the resume
             retire_collection(name)          # the end of its current unit first
             lock = _locks.pop(name, None)
             if lock is not None:
@@ -8004,6 +8045,7 @@ def _hold_locks(collections, paused: set[str], cons=None) -> list:
         try:
             _locks[name] = lock_mod.take(Path(c.manifest_path).parent, name,
                                          "the node (worker)")
+            _own_pause_event(name).clear()
             _lock_nagged.pop(name, None)
         except lock_mod.Held as e:
             if _lock_nagged.get(name) != str(e) and cons and name in cons:

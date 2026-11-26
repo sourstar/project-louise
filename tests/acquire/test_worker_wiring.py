@@ -603,71 +603,147 @@ def test_an_idle_round_does_not_walk_the_collection_list(monkeypatch):
 
 # ---- a fetch another writer's claim refused, and a collection's resume (2026-11-26, D6 / D7) ----
 
-def test_a_fetch_refused_by_anothers_claim_is_a_deferral_asked_again_when_it_goes_stale(tmp_path, monkeypatch):
-    """München, 2026-11-26: "corpus fetch (startup) failed: AcquisitionBusy …
-    re-run once the claim goes stale after 300s" — logged as an ERROR, and
-    nothing re-ran it: the fetch stood still 101 minutes until a hand toggle."""
-    from app.acquire import claim as claim_mod
+def _forget_more(*names):
+    with worker._acquire_lock:
+        for n in names:
+            worker._claim_retries.pop(n, None)
+            worker._paused_waiting.discard(n)
+            worker._rearm_reason.pop(n, None)
+            worker._paused_aborts.discard(n)
 
-    def run(con, collection, spec, profile, stop=None):
-        raise claim_mod.AcquisitionBusy("eurlex: acquisition already running in 8@4026533985 (claimed 179s ago).",
-                                        retry_in=126)
-    collection, con = _wired(tmp_path, monkeypatch, run)
-    clock = [1_000_000.0]
-    monkeypatch.setattr(worker.time, "time", lambda: clock[0])
+
+def test_a_fetch_refused_by_anothers_claim_is_asked_again_once_and_only_when_it_is_no_longer_held(
+        tmp_path, monkeypatch):
+    """München, 2026-11-26 (D6): "corpus fetch (startup) failed: AcquisitionBusy
+    … re-run once the claim goes stale after 300s" — an ERROR, and nothing
+    re-ran it. THE READ OF THE FIX: re-armed blindly when the claim's age ran
+    out, a holder renewing every 60 s (`hold records fetch`) cost a full
+    discovery every five minutes. A refused fetch reads the claim first: while
+    it is held, nothing is asked; once it is not, ONE discovery."""
+    import json
+    from app.acquire import claim as claim_mod
+    clock = [time.time()]
+    monkeypatch.setattr(worker.time, "time", lambda: clock[0])   # the claim's clock too: one module
+    collection, con = _wired(tmp_path, monkeypatch, None)
+    holder = {"pid": 8, "holder": "8@4026533985", "source_id": "gutenberg", "boot": claim_mod.boot_id()}
+
+    def renewed():
+        db.set_control(con, claim_mod.CLAIM_KEY, json.dumps({**holder, "ts": clock[0]}))
+
+    def run(con_, collection_, spec, profile, stop=None):
+        with claim_mod.acquisition_claim(con_, spec.source_id):
+            raise AssertionError("fetched beside a live holder")
+    monkeypatch.setattr(worker.acquire_engine, "run_acquisition", run)
+    renewed()
+    clock[0] += 179
     try:
         worker._acquire_worker(collection, _SPEC, "demo", "startup")
         rows = con.execute("SELECT level, message FROM events WHERE stage = 'acquire' ORDER BY id").fetchall()
         assert rows[-1][0] == "warn" and "deferred" in rows[-1][1] and "Asked again in 126 s" in rows[-1][1]
         assert not [r for r in rows if r[0] == "error"], "a refusal is a deferral, never a failure"
         assert worker._claim_retries[collection.name] == clock[0] + 126
-        assert worker._rearm_paused_aborts([collection], {}, True) == [], "not before the claim goes stale"
-        assert worker._take_discovery_request(collection.name) is None
-        clock[0] += 127
-        assert worker._rearm_paused_aborts([collection], {}, True) == [collection.name]
-        assert worker._take_discovery_request(collection.name) == ("resume after pause", True), "a FETCH"
+        asked = []
+        monkeypatch.setattr(worker, "_request_discovery", lambda n, why, acquire=False: asked.append((n, why)))
+        cons = {collection.name: con}
+        # THE COST: the holder renews for an hour; the retry falls due a dozen times
+        for _ in range(12):
+            renewed()
+            clock[0] += 310
+            renewed()                                   # renewed just before the retry reads it
+            assert worker._rearm_paused_aborts([collection], {}, True, cons=cons, known=[collection]) == []
+        assert asked == [], "nothing asked while a live holder renews: no fetch, no scan"
+        assert worker._claim_retries[collection.name] > clock[0], "put off to the claim's next staleness"
+        # the holder ends (it clears its claim)
+        db.set_control(con, claim_mod.CLAIM_KEY, "")
+        clock[0] += 310
+        assert worker._rearm_paused_aborts([collection], {}, True, cons=cons, known=[collection]) \
+            == [collection.name]
+        assert asked == [(collection.name, "the claim that refused it is no longer held")], "ONE discovery"
         assert collection.name not in worker._claim_retries
+        assert worker._rearm_paused_aborts([collection], {}, True, cons=cons, known=[collection]) == []
+        assert len(asked) == 1
     finally:
-        with worker._acquire_lock:
-            worker._claim_retries.pop(collection.name, None)
+        _forget_more(collection.name)
         _forget(collection)
 
 
-def test_a_collection_resumed_asks_its_fetch_again(tmp_path, monkeypatch):
-    """München, 2026-11-26, D7: `node resume EUR-Lex5.next` asked no scan and no
-    fetch — the fetch its pause retired, or one refused before it, stood still."""
-    fetching = _collection(tmp_path, acquire_enabled=True)
-    other = collections_mod.Collection(
-        name="hand", plugin="gutenberg", profile="demo", embed_mode_default=None,
-        corpus_dir=tmp_path / "corpus", manifest_path=tmp_path / "m2.db",
-        fts_dir=tmp_path / "fts2", lance_dir=tmp_path / "l2", acquire_enabled=False, license_ack=None)
-    monkeypatch.setattr(worker, "_paused_last", None)
+def test_a_fetch_its_collections_own_pause_stopped_is_asked_again_by_its_resume(tmp_path, monkeypatch):
+    """München, 2026-11-26 (D7): `node pause` / `node resume EUR-Lex5.next`
+    asked no fetch: the pause retired the fetch in flight (`_hold_locks` →
+    `retire_collection` sets its gone event), and only the NODE's pause was
+    re-armed. Only what a pause cut is asked again: a resume with nothing cut
+    costs nothing."""
+    def run(con, collection, spec, profile, stop=None):
+        worker._own_pause_event(collection.name).set()     # `node pause <collection>`: `_hold_locks`
+        worker._gone_event(collection.name).set()          # then `retire_collection`
+        assert stop.is_set()
+        return _DONE
+    collection, con = _wired(tmp_path, monkeypatch, run)
+    asked = []
+    monkeypatch.setattr(worker, "_request_discovery", lambda n, why, acquire=False: asked.append((n, why, acquire)))
     try:
-        assert worker._rearm_resumed([fetching, other], {"test", "hand"}) == [], "the first round only reads"
-        assert worker._rearm_resumed([fetching, other], {"test", "hand"}) == [], "still paused: nothing"
-        assert worker._rearm_resumed([fetching, other], set()) == ["test"], "resumed: the one that fetches"
-        assert "test" in worker._paused_aborts and "hand" not in worker._paused_aborts
-        assert worker._rearm_resumed([fetching, other], set()) == [], "once"
+        worker._acquire_worker(collection, _SPEC, "demo", "startup")
+        worker._gone.pop(collection.name, None)            # as `retire_collection` ends
+        worker._own_pause_event(collection.name).clear()   # as `_hold_locks` does once it holds it again
+        assert collection.name in worker._paused_aborts
+        assert worker._rearm_paused_aborts([], {}, True, known=[collection]) == [], "paused: not run"
+        assert collection.name in worker._paused_waiting and asked == []
+        assert worker._rearm_paused_aborts([collection], {}, True, known=[collection]) == [collection.name]
+        assert asked == [(collection.name, "the collection resumed", True)], "a FETCH, said as what it is"
+        assert worker._rearm_paused_aborts([collection], {}, True, known=[collection]) == [], "once"
+        # a resume with nothing cut: nothing asked
+        assert len(asked) == 1
     finally:
-        with worker._acquire_lock:
-            worker._paused_aborts.discard("test")
+        _forget_more(collection.name)
+        _forget(collection)
 
 
-def test_a_fetch_pending_for_a_collection_not_run_this_round_waits_for_it(tmp_path, monkeypatch):
+def test_a_re_arm_for_a_collection_not_run_waits_and_one_retired_is_dropped(tmp_path, monkeypatch):
     """Paused on its own, or another writer's lock: the round's list leaves it
-    out, and the name was dropped as if retired — its fetch lost for good."""
+    out, and the name was dropped as if retired — its fetch lost for good.
+    While it waits, the round walks no list but the round's own."""
     collection = _collection(tmp_path, acquire_enabled=True)
     gone = "retired-meanwhile"
     with worker._acquire_lock:
         worker._paused_aborts.update({collection.name, gone})
+        worker._rearm_reason[gone] = "the collection resumed"
+
+    class Unwalkable:
+        def __iter__(self):
+            raise AssertionError("walked the held collections with nothing pending")
     try:
         assert worker._rearm_paused_aborts([], {}, True, known=[collection]) == []
-        assert collection.name in worker._paused_aborts, "waits while not run"
-        assert gone not in worker._paused_aborts, "one the node no longer holds is dropped"
+        assert collection.name in worker._paused_waiting, "waits while not run"
+        assert gone not in worker._paused_waiting and gone not in worker._rearm_reason, "retired: dropped"
+        assert worker._rearm_paused_aborts([], {}, True, known=Unwalkable()) == [], "the idle round, waiting"
         assert worker._rearm_paused_aborts([collection], {}, True, known=[collection]) == [collection.name]
         assert worker._take_discovery_request(collection.name) == ("resume after pause", True)
+        assert not worker._paused_waiting
     finally:
-        with worker._acquire_lock:
-            worker._paused_aborts.discard(collection.name)
-            worker._paused_aborts.discard(gone)
+        _forget_more(collection.name, gone)
         _forget(collection)
+
+
+def test_a_collections_own_pause_is_told_before_its_retirement_and_forgotten_once_held_again(
+        tmp_path, monkeypatch):
+    from app.hold import lock as lock_mod
+    collection = _collection(tmp_path, acquire_enabled=True)
+    seen = []
+
+    class Lock:
+        def release(self):
+            pass
+    monkeypatch.setattr(worker, "retire_collection",
+                        lambda name, **k: seen.append((name, worker._own_pause_event(name).is_set())))
+    monkeypatch.setattr(lock_mod, "take", lambda *a, **k: Lock())
+    monkeypatch.setitem(worker._locks, collection.name, Lock())
+    try:
+        assert worker._hold_locks([collection], {collection.name}) == []
+        assert seen == [(collection.name, True)], "told BEFORE its threads are retired"
+        assert worker._hold_locks([collection], set()) == [collection]
+        assert not worker._own_pause_event(collection.name).is_set(), "held again: forgotten"
+        worker._hold_locks([], set())                      # removed: a retirement, not a pause
+        assert seen[-1] == (collection.name, False)
+    finally:
+        worker._locks.pop(collection.name, None)
+        worker._own_pauses.pop(collection.name, None)

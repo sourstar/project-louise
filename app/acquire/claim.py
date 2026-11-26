@@ -17,6 +17,22 @@ pid + timestamp, and goes stale on its own so a hard-killed process cannot
 wedge acquisition forever. A stale claim is simply taken over. This is the same
 posture as the coordinator leases in architecture-v2.md §7: collisions are made
 harmless rather than impossible.
+
+A CLAIM NAMES THE BOOT IT WAS MADE IN (2026-11-26, München's D6): the worker
+a hardware reset killed held the claim, 179 s old, and its successor's
+startup fetch was refused for the rest of the 300 s. A claim of another boot
+of the host's kernel (`boot_id`) has a dead holder for certain, whatever its
+age; one that names no boot (made before this) is judged by its age alone.
+No clock is read for it: a clock stepped after a boot moves `btime`, never
+the boot's id.
+
+THE STANDARD ALTERNATIVE, written down: an flock on a per-collection lock
+file, as the collection's write lock is (app/hold/lock.py) — the kernel drops
+it with its holder, so a dead holder is known at once, a reset or an OOM kill
+alike, with no staleness to wait out. It would replace this row and its
+refresh, and the Library card's "in progress" would read the lock instead.
+It pays the next time a dead holder's claim costs a wait that matters: an
+OOM-killed fetch (no reset) still waits up to STALE_AFTER_SECONDS here.
 """
 import json
 import os
@@ -42,17 +58,20 @@ class AcquisitionBusy(RuntimeError):
         self.retry_in = max(1.0, float(retry_in))
 
 
-def host_boot_time() -> float | None:
-    """The HOST's boot, from the kernel (`btime` in /proc/stat: the same in
-    every container on the host). None where it cannot be read."""
+def boot_id() -> str | None:
+    """THIS BOOT of the host's kernel (`/proc/sys/kernel/random/boot_id`): the
+    same in every container a runc runtime (Docker, the node's) starts on the
+    host, another after every boot. None where it cannot be read. Under a
+    runtime with a kernel of its own (gVisor, Kata) each sandbox has its own:
+    every writer of a manifest is on one kernel already (invariant 6, /data is
+    a local filesystem), and a node that ran its passes in such sandboxes
+    would have to drop this rule."""
     try:
-        with open("/proc/stat", encoding="ascii") as f:
-            for line in f:
-                if line.startswith("btime "):
-                    return float(line.split()[1])
-    except (OSError, ValueError, IndexError):
-        pass
-    return None
+        with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as f:
+            got = f.read().strip()
+    except OSError:
+        return None
+    return got or None
 
 
 def read_claim(con) -> dict | None:
@@ -85,23 +104,42 @@ def _mine(claim: dict | None) -> bool:
 
 
 def _record(source_id: str, now: float) -> str:
-    return json.dumps({"pid": os.getpid(), "holder": _me(), "ts": now, "source_id": source_id})
+    return json.dumps({"pid": os.getpid(), "holder": _me(), "ts": now, "source_id": source_id,
+                       "boot": boot_id()})
+
+
+def held(claim: dict | None, now: float | None = None) -> bool:
+    """Is `claim` held — by any process, this one included: not stale, and
+    made in this boot of the host where it names one? THE one reading of a
+    claim's life (the Library card's "in progress" reads it too)."""
+    if not claim:
+        return False
+    now = time.time() if now is None else now
+    if now - float(claim.get("ts", 0)) > STALE_AFTER_SECONDS:
+        return False          # stale: the holder died or hung; take it over
+    made_in, this = claim.get("boot"), boot_id()
+    if made_in and this and made_in != this:
+        # MADE IN ANOTHER BOOT: its holder is dead for certain, whatever its age
+        return False
+    return True
 
 
 def _is_live(claim: dict | None, now: float) -> bool:
-    if not claim:
-        return False
-    ts = float(claim.get("ts", 0))
-    if now - ts > STALE_AFTER_SECONDS:
-        return False          # stale: the holder died or hung; take it over
-    boot = host_boot_time()
-    if boot is not None and ts < boot:
-        # CLAIMED BEFORE THE HOST LAST BOOTED: its holder is dead for certain,
-        # whatever its age (München, 2026-11-26: the worker a hardware reset
-        # killed at 09:00:20Z held the claim, 179 s old, and its successor's
-        # startup fetch was refused for the 300 s and then never asked again)
-        return False
-    return not _mine(claim)
+    """Held by ANOTHER process: what refuses this one."""
+    return held(claim, now) and not _mine(claim)
+
+
+def busy_for(con, now: float | None = None) -> float | None:
+    """The seconds until another process's live claim goes stale if it is not
+    renewed (a little more), or None when no other process holds one: what a
+    refused fetch reads before it is asked again — never a fetch, never a scan,
+    while a live holder renews (the read of 2026-11-26: a holder renewing
+    every 60 s cost a full discovery every five minutes)."""
+    now = time.time() if now is None else now
+    claim = read_claim(con)
+    if not _is_live(claim, now):
+        return None
+    return max(1.0, STALE_AFTER_SECONDS - (now - float(claim.get("ts", now))) + 5)
 
 
 @contextmanager
@@ -120,7 +158,7 @@ def acquisition_claim(con, source_id: str, force: bool = False):
             f"{existing.get('holder') or 'pid ' + str(existing.get('pid'))} "
             f"(claimed {held_for}s ago). Wait for it to finish, or re-run once the "
             f"claim goes stale after {STALE_AFTER_SECONDS}s.",
-            retry_in=STALE_AFTER_SECONDS - held_for + 5)
+            retry_in=STALE_AFTER_SECONDS - (now - float(existing.get("ts", now))) + 5)
     db.set_control(con, CLAIM_KEY, _record(source_id, now))
     try:
         yield
