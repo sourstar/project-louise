@@ -312,6 +312,8 @@ ISSUES = {
                     "no text and in no alternative (operator, 2026-11-26)",
     "item-not-its-form": "an item the origin lists under a manifestation is not of that form (a TIFF "
                          "page image declared application/pdf): held in the unit, not read as that form",
+    "title-only": "the act's source holds no text but its title (an empty PREAMBLE and ENACTING.TERMS, no "
+                  "annex): the record is held with its title and has no chunk",
     "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
                      "unit, its text is what the other pages give",
     "start-from-document-date": "no publication and no entry into force is stated: the act's own date "
@@ -808,6 +810,8 @@ class EurlexSource:
             return
         guard = eli.CollisionGuard()
         held: dict[int, tuple[str, int, int]] = {}
+        say = state.say if callable(getattr(state, "say", None)) else None
+        walked = 0
         for ld in self._lang_dirs(root):
             m = _LANG_DIR.match(ld.name)
             if m is None or m["lang"] not in LANGUAGES:
@@ -819,7 +823,12 @@ class EurlexSource:
                 with os.scandir(yd.path) as units:
                     unit_dirs = sorted((e for e in units if e.is_dir() and not e.name.startswith(".")),
                                        key=lambda e: e.name)
+                if say is not None:
+                    # WHERE THE WALK IS (lesson C3: the scan was silent 28-55 min,
+                    # its position read with py-spy); the platform keeps a line a minute
+                    say(f"walking {ld.name}/{yd.name}: {walked} units walked, {len(held)} held so far")
                 for ud in unit_dirs:
+                    walked += 1
                     unit, celex = Path(ud.path), ud.name
                     try:
                         entries = unit_files(unit)
@@ -1274,6 +1283,14 @@ class EurlexSource:
             keys.add(PROFILE.key(work_eli))
         if own_eli and own_eli != work_eli:
             keys.add(PROFILE.key(own_eli))
+        sections = formex.sections(act)
+        if not any(text.strip() for _, text in sections) and not any(i.code == "no-text-layer" for i in found):
+            # A CHUNKLESS DOCUMENT STATES WHY (lesson E1, 2026-11-25: 41 Formex
+            # acts whose source holds only a title, an empty PREAMBLE and
+            # ENACTING.TERMS; app/build_check.py refuses a chunkless document
+            # that states none): said, never refused — the record is its title
+            found.append(Issue("title-only", f"the {form or 'source'} body holds no text but the act's title: "
+                                             f"no recital, article or annex"))
         return CanonicalDoc(
             uid=f"{self.source_id}:{raw.ref.native_id}",
             title=act.title or note.expression_title or celex,
@@ -1286,7 +1303,7 @@ class EurlexSource:
             # sorted by bytes (09 §9.5)
             keys=sorted(keys),
             extra={k: v for k, v in extra.items() if v not in (None, "", [], {})},
-            sections=formex.sections(act),
+            sections=sections,
             raw_hash=raw.raw_hash,
             issues=found,
         )

@@ -203,3 +203,27 @@ def test_N2_a_unit_the_reasked_window_lacks_takes_cellars_tree_not_the_bulks(tmp
     f = _unit(listed)
     bulk, _ = units._bulk_of(corpus, {"celex": listed, "lang": "it"}, f, corpus / f.rel_path)
     assert bulk is not None                                    # the listed one still takes the bulk
+
+
+def test_N1_a_local_fault_holds_the_window_until_the_next_prepare(tmp_path, monkeypatch):
+    units, corpus, celexes = _aged(tmp_path, monkeypatch)
+    asked = []
+
+    def sparql(client, base, query, *, what="", charge=None):
+        asked.append(what)
+        if "COUNT(" in query:
+            return [{"n": {"value": "1"}, "max": {"value": "2026-11-20T00:00:00Z"}}]
+        return [{"celex": {"value": CELEX}, "language": {"value": "http://x/ITA"},
+                 "last": {"value": "2026-11-20T00:00:00Z"}, "force": {"value": "true"}}]
+    monkeypatch.setattr(cellar, "sparql", sparql)
+    monkeypatch.setattr(cellar_listing, "_keep",
+                        lambda *a, **k: (_ for _ in ()).throw(PermissionError(errno.EACCES, "Permission denied")))
+    f = _unit()
+    with pytest.raises(cellar.WindowNotListed):
+        units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, f, corpus / f.rel_path)
+    n = len(asked)
+    t = time.time()
+    monkeypatch.setattr(time, "time", lambda: t + cellar.WINDOW_FAILED_HOLD_S + 60)
+    with pytest.raises(cellar.WindowNotListed):
+        units._bulk_of(corpus, {"celex": CELEX, "lang": "it"}, f, corpus / f.rel_path)
+    assert len(asked) == n, "a local fault is not asked again after the 15-min hold"

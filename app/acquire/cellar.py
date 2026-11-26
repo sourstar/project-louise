@@ -1504,9 +1504,12 @@ class TreeUnits(CellarUnits):
             except (TransportError, OSError) as e:
                 # an episode, a window that moved between its count and its
                 # pages, or the listing not written (ENOSPC): remembered, so the
-                # window's other units wait at once (Z1, Z5, Z3); said once
+                # window's other units wait at once (Z1, Z5, Z3); said once. A
+                # LOCAL fault (OSError) holds the window until the next prepare,
+                # which holds the pass back if it lasts (review of 556d3a15, N1:
+                # it read as a Cellar episode and was re-paged every 15 min)
                 with self._lock:
-                    self._window_failed[(key, year, lang)] = time.time()
+                    self._window_failed[(key, year, lang)] = float("inf") if isinstance(e, OSError) else time.time()
                 _say_cellar(Path(key).name)(f"the {year} window ({lang}) was not asked again "
                                             f"({type(e).__name__}: {str(e)[:200]}): its units wait")
                 return
@@ -1767,7 +1770,7 @@ class TreeUnits(CellarUnits):
             if cooled_out:
                 for year, window in cooled_out:
                     unlisted |= {(year, l) for l in window}
-                say(f"cellar: Cellar asked the listing to wait {gave_up_why[0] if gave_up_why else '?'} s more: "
+                say(f"cellar: the listing is cooled {gave_up_why[0] if gave_up_why else '?'} s more after Cellar's overload answers: "
                     f"the {len(cooled_out)} window(s) left wait for the next pass")
             dates, cover = cellar_listing.coverage(due, after, base_url)
             # only the windows LISTED this pass end their units' wait (review

@@ -172,6 +172,8 @@ def dump_folders(base: Path) -> list[Path]:
     among them passed over unless it states itself."""
     out: list[Path] = []
     for p in sorted(q for q in Path(base).iterdir() if q.is_dir()):
+        if _reference_source(p):
+            continue                        # EuroVoc's release, laid beside the dumps: not a dump
         if (p / STATEMENT).is_file():
             out.append(p)
             continue
@@ -181,6 +183,18 @@ def dump_folders(base: Path) -> list[Path]:
         elif next(p.rglob("*.zip"), None) is not None:
             out.append(p)                   # zips and no statement: said, as before
     return out
+
+
+def _reference_source(folder: Path) -> bool:
+    """A folder that holds a REFERENCE SOURCE's release and states no dump
+    (2026-11-26: /datadump/euvoc-2026-11-16, EuroVoc and the authority
+    tables, app/refs/eurovoc.py, was said every pass as "the newest Data
+    Dump folder is not used"): EuroVoc's own files, no `datadump.json`."""
+    if (folder / STATEMENT).is_file():
+        return False
+    from ..refs import eurovoc
+    return any((folder / name).is_file() for name in eurovoc.FILES) or \
+        any(next(folder.rglob(name), None) is not None for name in eurovoc.FILES[:1])
 
 
 class Dumps:

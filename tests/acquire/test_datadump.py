@@ -183,3 +183,17 @@ def test_a_dated_dump_a_level_down_is_read_and_each_language_takes_its_newest(tm
     assert not any("datadump-mtd" in s or "euvoc" in s for s in said), said
     from app.acquire import eurlex_dump
     assert not eurlex_dump.unread_statements(root, tmp_path / "corpus"), "nothing left unread"
+
+
+def test_a_reference_source_beside_the_dumps_is_not_taken_for_a_dump(tmp_path):
+    """2026-11-26: /datadump/euvoc-2026-11-16 (EuroVoc's release) was said
+    every pass as "the newest Data Dump folder is not used"."""
+    from app.acquire import datadump
+    from app.refs import eurovoc
+    ev = tmp_path / "euvoc-2026-11-16"
+    ev.mkdir()
+    (ev / eurovoc.FILES[0]).write_bytes(b"<rdf/>")
+    import zipfile
+    with zipfile.ZipFile(ev / "x.zip", "w") as z:
+        z.writestr("a", b"a")
+    assert ev not in datadump.dump_folders(tmp_path)
