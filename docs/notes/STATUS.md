@@ -20,6 +20,49 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **THE FIRST QUESTION AFTER THE SWITCH TO QUERY MODE WAITED 48.9 s FOR ITS FIRST WORD: THE SWITCH LOADED
+  THE 35B INTO A FULL CARD (the operator's microphone and read-aloud, ~10:47Z; München counted every
+  part from the node's lines).** The voice itself was fine (first sound 5.1 s after the first word, no
+  gap). The search took 43.2 s, of which `languages` 22.0 — the query's language step asks the CHAT
+  model, which was still loading (LocalAI received no other request until it was up) — and the rerank
+  12.5; the answer's first word 5.2 s after. The load: at the switch (10:44:41Z) the room for the 35B
+  was asked while the embed mode's batches still pinned their six encoders: "10,172 MiB over the 0.98
+  line … room is made by unloading", nothing could give way, and NO LINE SAID SO; the load went into the
+  full card and died for device memory 75.2 s later ("UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY"), and the
+  keeper's reload took 87.5 s more. FIXED (branch mode-switch-room): the switch waits for the driver to
+  show the old chat model gone, makes the new one's room FIRST and asks again until it is there (5 s,
+  within PIN_IDLE_S + a beat + a batch, 240 s); into a mode that does not embed the old mode's idle pins
+  go at once and a batch's as it ends (RULE 1); it sends no load whose room was refused (said; the keeper
+  or the first question loads it), asks no room beside a call RUNNING (a question's step, a keeper's warm —
+  the claim refreshed to a TTL ahead; a question's linger holds no model) and goes on after it, joins a
+  load already in flight, waits for a load of the OLD model to end before it unloads it, makes its room
+  whatever the run mode (the operator's own act), and stops for a newer switch or a store no longer on the
+  mode its round read; a partial room is made once. (Four reads on: a question told by the claim stopped
+  the switch for a keeper's warm and for a linger; told by marks of its own, it missed overlapping
+  questions and every route outside the Ask page — a call running is all the switch must not stand
+  beside.) The fifth read, run: every process wrote ONE claim row, so a keeper's warm in the worker
+  ending wrote 0 over the web's question still running, and the web's linger hid the worker's call —
+  now one row a process, every process's read (also the pre-existing #76: a person's 5-minute linger
+  no longer ended by another process's call); the keeper's own loads count as busy; a call begun while
+  the room was made sends it round again before the load; the answer's wait waits for a call running,
+  not a linger (it cost every switch within 5 min of a question its 120 s); "loaded" is what the runner
+  lists after the warm. The sixth read, run: a room made before a call was trusted after it — the call's
+  own cold load could take it, and the load then went with the hook off, the incident's path — and a call
+  begun at the bound was loaded beside; now a call seen sends the room round again (made again after it),
+  and one still running at the bound means no load. The claim rows' prune is a range on the key (LIKE
+  matched other keys and used no index), runs at a process's first write and then hourly, and takes the
+  one row of before; a process whose pid namespace cannot be read has a row of its own (a token). The
+  seventh read: a cold load running in the worker itself (an embed producer's encoder warmed behind its
+  batch, 5–24 s) is a call beside the room too — the switch to embed mode counted the 9B's room on a card
+  that did not yet show those bytes (pre-existing on main, the same kind as the incident); a room made by
+  paging that no load uses is forgotten; the paging line is said once a minute; and the row of before is
+  written beside each process's own, in one statement, for the GPU governor of the code before until deploy
+  stage 8 makes its container again. A room refused before ANY load is now said, once a minute a reason
+  ("card: no room could be made for … — … pinned by work in flight"). The query-mode paging rule is
+  unchanged: the first read's idea that the driver cannot page pinned models was unmeasured — a pin is
+  the reclaimer's word, not the driver's — and refusing to page on it unloaded a question's own query
+  encoder where main paged (the second read, run): withdrawn. Not yet read: the five `/v1/detokenize` 500s at 10:47:53 (the gutenberg rerank's cut, by
+  their time; LocalAI logs no body).
 - **A DEAD WORKER'S ACQUISITION CLAIM REFUSED ITS SUCCESSOR'S FETCH, AND NOTHING ASKED AGAIN; A
   COLLECTION'S RESUME ASKED NO FETCH (München, D6/D7, after the 09:00:20Z hardware reset).** The claim
   the killed worker held was 179 s old; the new worker's startup fetch got `AcquisitionBusy` ("re-run
