@@ -37,6 +37,7 @@ that writes it to the event log — never by the thread doing the work
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import math
 import queue
@@ -45,7 +46,8 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from contextlib import contextmanager
+from typing import Callable, Iterator
 from urllib.parse import urlsplit
 
 import httpx
@@ -259,6 +261,7 @@ def reset() -> None:
         _run_on_demand.clear()
         _parks.clear()
         _parked.clear()
+        _unread.clear()
         _probe_locks.clear()
         _flights.clear()
         _recent.clear()
@@ -325,6 +328,7 @@ def _fetch_system(server: str) -> frozenset[str] | None:
         _backends[server] = backends
         _parks[server] = parks
         _parked[server] = parked
+        _unread.difference_update({k for k in _unread if k[0] == server})
         for m in parked:
             # its present state on the card begins again when it is back: what
             # a park leaves is never "the model at rest" (`steady_vram`)
@@ -689,13 +693,14 @@ def unload(url: str, model: str | None) -> bool:
     return r.status_code == 200
 
 
-def _note_own(server: str, model: str) -> None:
+def _note_own(server: str, model: str, why: str = "stopped") -> None:
     """Louise stopped or parked this model itself: said where the keeper's
     process reads it, so the stop is not taken for an eviction of the
-    reclaimer's (app/own_unloads.py). Never raises."""
+    reclaimer's (app/own_unloads.py), with `why` in a word for whoever reads
+    the file (München, 2026-11-26: `"why": ""`). Never raises."""
     try:
         from app import own_unloads
-        own_unloads.note(server, model)
+        own_unloads.note(server, model, why)
     except Exception:   # noqa: BLE001
         pass
 
@@ -726,8 +731,19 @@ def park(url: str, model: str | None) -> tuple[str, int]:
 
     Never raises: a runner that cannot be reached is PARK_STOP, and `unload`
     then meets the same runner."""
+    how, moved, _kind = park_asked(url, model)
+    return how, moved
+
+
+def park_asked(url: str, model: str | None) -> tuple[str, int, str]:
+    """`park`, with the runner's own word for a refusal as a third value: the
+    error's `type` (`model_busy`, `cannot_park`, `parking_off`,
+    `host_memory_floor`, `model_not_loaded`, `model_stopped`), "" for a park
+    that was made, "unreachable" where the runner did not answer, else
+    "HTTP <status>". For a caller that must say WHY a model was not parked
+    (the gate's park cycles, app/hold/embedder.py)."""
     if not url or not model:
-        return PARK_STOP, 0
+        return PARK_STOP, 0, "unreachable"
     server = server_of(url)
     try:
         r = httpc.post(f"{server}/backend/park", json={"model": model}, timeout=PARK_TIMEOUT_S)
@@ -737,24 +753,93 @@ def park(url: str, model: str | None) -> tuple[str, int]:
         except Exception:   # noqa: BLE001 — an answer that is not JSON: only its status speaks
             body = None
     except Exception:   # noqa: BLE001
-        return PARK_STOP, 0
+        return PARK_STOP, 0, "unreachable"
     body = body if isinstance(body, dict) else {}
     kind = (body.get("error") or {}).get("type") if isinstance(body.get("error"), dict) else None
+    said = kind if isinstance(kind, str) and kind else f"HTTP {status}"
     with _lock:
         _systems.pop(server, None)           # what it holds may have changed
     if status == 200:
-        _note_own(server, model)
+        _note_own(server, model, "parked")
         got = body.get("parked") if isinstance(body.get("parked"), dict) else {}
         moved = got.get("size_vram_needed")
-        return PARKED, moved if isinstance(moved, int) and not isinstance(moved, bool) and moved > 0 else 0
+        return PARKED, (moved if isinstance(moved, int) and not isinstance(moved, bool) and moved > 0 else 0), ""
     if status == 409 and kind == "model_busy":
-        return PARK_BUSY, 0
+        return PARK_BUSY, 0, said
     if status == 500 and kind == "model_stopped":
-        _note_own(server, model)             # our park broke its backend and LocalAI stopped it: Louise's doing
-        return PARK_GONE, 0
+        _note_own(server, model, "stopped by a park that broke its backend")   # LocalAI stopped it: Louise's doing
+        return PARK_GONE, 0, said
     if status == 404 and kind == "model_not_loaded":
-        return PARK_GONE, 0                  # gone before the park: not ours
-    return PARK_STOP, 0
+        return PARK_GONE, 0, said            # gone before the park: not ours
+    return PARK_STOP, 0, said
+
+
+#: the engine's own counts are read in a moment, or not at all
+COUNTS_TIMEOUT_S = 10.0
+
+
+def park_counts(url: str, model: str | None) -> tuple[int, int, int] | None:
+    """THE ENGINE'S OWN COUNT OF ITS PARKS AND RETURNS, since its load:
+    (parks, unparks, parked) from `GET <server>/backend/monitor?model=…`
+    (`memory.breakdown`; the park engine's `Status`, served by LocalAI) — "of
+    weights that LEFT and that came BACK, never of attempts" (the engine's
+    patch). A fresh process reads 0, 0, 0: counts that go DOWN are a new
+    process, and that is how a return that failed and was answered by a load
+    is told from a cycle — the answer is 200, the vectors the same, the run id
+    the same (Tensor, parking-step-2.md §10–§11). A read is not a request: it
+    brings nothing back and does not restart the idle second. NEVER built on
+    `memory.total`, the process's virtual size (38.85 GB loaded and 4.73
+    parked for a 0.6 GB model on the node). None where the runner gives no
+    such counts: a model that cannot park, a server before the patch, a model
+    not loaded, a runner that does not answer."""
+    if not url or not model:
+        return None
+    try:
+        r = httpc.get(f"{server_of(url)}/backend/monitor", params={"model": model}, timeout=COUNTS_TIMEOUT_S)
+        if r.status_code != 200:
+            return None
+        got = (r.json().get("memory") or {}).get("breakdown")
+    except Exception:   # noqa: BLE001 — unread
+        return None
+    if not isinstance(got, dict):
+        return None
+    out = []
+    for key in ("parks", "unparks", "parked"):
+        v = got.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        out.append(int(v))
+    return out[0], out[1], out[2]
+
+
+#: (server, model) noted loaded by a warm (`_note_loaded`) whose `/system` row
+#: this process has not read yet: the cached answer lists it and says nothing
+#: of it — not its size, not whether it parks (`row_read`)
+_unread: set[tuple[str, str]] = set()
+
+
+def row_read(server: str, model: str) -> bool:
+    """Whether what this process knows of `model` at `server` comes from a
+    `/system` row READ since the model was last noted loaded. False right
+    after a warm: `parks` then says nothing of it either way."""
+    with _lock:
+        return (server_of(server), model) not in _unread
+
+
+def refresh_row(server: str, model: str) -> None:
+    """Read `/system` once, now, where `model`'s row is unread (`row_read`) —
+    and not again while the runner's last answer, under SYSTEM_TTL_S old, was
+    silence: twenty checks of a batch asked a silent runner twenty times,
+    each bounded at 2 s, on the embed stage's threads (the second read of
+    2026-11-26)."""
+    server = server_of(server)
+    with _lock:
+        if (server, model) not in _unread:
+            return
+        got = _systems.get(server)
+        silent_lately = got is not None and got[1] is None and time.monotonic() - got[0] < SYSTEM_TTL_S
+    if not silent_lately:
+        loaded_models(server, 0.0)
 
 
 def _note_loaded(server: str, model: str) -> None:
@@ -762,6 +847,10 @@ def _note_loaded(server: str, model: str) -> None:
         got = _systems.get(server)
         if got is not None and got[1] is not None:
             _systems[server] = (got[0], got[1] | {model}, got[2])
+        # unread WHATEVER the cache holds: a load whose room was made by a
+        # park or a stop finds the cached answer dropped, and what this
+        # process last read of the model is from before it loaded
+        _unread.add((server, model))
         # one that came back from a park is on the card from here on; the
         # next reading says what it holds
         _parked.get(server, {}).pop(model, None)
@@ -791,6 +880,26 @@ def load_timeout_s(model: str) -> float:
         return float(platform_config.load().models.load_timeout_s)
     except Exception:   # noqa: BLE001 — a broken platform.toml must not break a request
         return float(platform_config.ModelsConfig().load_timeout_s)
+
+
+#: set inside `returns_on_request`
+_return_on_request: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "model_load_return_on_request", default=False)
+
+
+@contextmanager
+def returns_on_request() -> Iterator[None]:
+    """Inside, a PARKED model is not warmed first (`ensure_loaded`): room is
+    made for it as for its load and the caller's OWN request brings the
+    weights back. For the gate's park cycles (app/hold/embedder.py
+    `park_cycles`): the answer held to the bytes must be the first one
+    computed on the weights that came back, not the one after a warm whose
+    vector nobody read. This thread only."""
+    token = _return_on_request.set(True)
+    try:
+        yield
+    finally:
+        _return_on_request.reset(token)
 
 
 def ensure_loaded(url: str, model: str | None, warm: Callable[[float], object], *,
@@ -825,6 +934,13 @@ def ensure_loaded(url: str, model: str | None, warm: Callable[[float], object], 
     # the request that follows is refused the same way and deferred
     back = model in ids and model in parked(server)
     if model in ids and not back:
+        return None
+    if back and _return_on_request.get():
+        _make_room(server, model)
+        from app import model_evict
+        model_evict.load_ended(server, model, True)   # no warm of ours to end it: a paged room is not kept
+        with _lock:
+            _systems.pop(server, None)       # the request that follows changes what it says
         return None
     key = (server, model)
     with _lock:

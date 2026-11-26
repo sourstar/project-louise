@@ -252,6 +252,7 @@ def reset() -> None:
     _paged.clear()
     _no_page.clear()
     _left_at.clear()
+    _park_took.clear()
 
 
 def host_available() -> int | None:
@@ -518,7 +519,7 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
                 continue
     said = f"{need // MIB:,} MiB needed, {max(0, free) // MIB:,} MiB were free under the {t:.2f} line"
     if away_now:
-        _say("info", f"card: parked {', '.join(f'{v.model} ({_ago(now, v.last_used)}, {moved // MIB:,} MiB to host memory)' for v, moved in away_now)} "
+        _say("info", f"card: parked {', '.join(f'{v.model} ({_ago(now, v.last_used)}, {moved // MIB:,} MiB to host memory{_in_s(server, v.model)})' for v, moved in away_now)} "
                      f"for {for_what} — {said}; its process stays and its next request brings the weights "
                      f"back in the time of a copy (operator, 2026-11-25: \"Do parking.\")")
     if gone:
@@ -545,6 +546,26 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
 PARKED, UNLOADED, KEPT = "parked", "unloaded", "kept"
 
 
+def _in_s(server: str, model: str) -> str:
+    took = park_took(server, model)
+    return "" if took is None else f" in {took:.2f} s"
+
+
+#: (server, model) -> the seconds its last park took, as this process asked
+#: it — said on the "card: parked" line. WHAT THE BYTE CHECK COSTS IS READ
+#: THERE (operator, 2026-11-26: "On but monitor if it creates overhead" —
+#: `GGML_SYCL_PARK_VERIFY=1` reads the card's bytes back at every return):
+#: a park beside 0.14–0.23 s and a return ("parked: … came back from host
+#: memory in N s") beside 0.23–0.39 s, measured on the card's copies without
+#: the check (docs/notes/parking-keeper.md §4)
+_park_took: dict[tuple[str, str], float] = {}
+
+
+def park_took(server: str, model: str) -> float | None:
+    from app import model_load
+    return _park_took.get((model_load.server_of(server), model))
+
+
 def give_back(server: str, v: Loaded) -> tuple[str, int]:
     """ONE MODEL GIVES ITS ROOM BACK: parked where LocalAI says it parks and
     it is not parked already, stopped otherwise (the module's docstring).
@@ -555,8 +576,10 @@ def give_back(server: str, v: Loaded) -> tuple[str, int]:
     nothing was sent after it."""
     from app import model_load
     if v.parks and not v.parked:
+        t0 = time.monotonic()
         how, moved = model_load.park(server, v.model)
         if how == model_load.PARKED:
+            _park_took[(model_load.server_of(server), v.model)] = time.monotonic() - t0
             return PARKED, min(moved, v.size) if moved else v.size
         if how == model_load.PARK_BUSY:
             return KEPT, 0

@@ -16,6 +16,7 @@ import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -354,6 +355,10 @@ def reload_model(recipe: "collections_mod.EmbedRecipe", *, query: bool = False,
     if r.status_code >= 400 and r.status_code != 404:
         raise RuntimeError(f"{base}: the model runner refused to stop {model}: "
                            f"HTTP {r.status_code}")
+    # Louise's own stop, said where every process reads it (app/own_unloads.py):
+    # a gate's reload of a shared load is not a reclaimer's eviction to the
+    # keeper, nor a failed return to another gate's park cycles
+    model_load._note_own(model_load.server_of(base), model, "stopped for a gate's fresh load")
 
 
 def _post(recipe: "collections_mod.EmbedRecipe", url: str, *, timeout: float, **kw):
@@ -750,6 +755,25 @@ def _cut(item: Item, budget: int) -> Item:
     return (first[:budget], second[:max(0, budget - len(first))])
 
 
+#: set inside `unhealed`
+_unhealed: contextvars.ContextVar[bool] = contextvars.ContextVar("embeddings_unhealed", default=False)
+
+
+@contextmanager
+def unhealed() -> Iterator[None]:
+    """Inside, a RAW answer is handed as the engine gave it: a null or NaN
+    vector is NOT asked again (`_embed_batch`'s first self-healing). For the
+    gate's park cycles (app/hold/embedder.py `park_cycles`): the first answer
+    computed on weights that came back from host memory is the one judged,
+    and a retry would hide exactly the answer that says the return went
+    wrong. This thread only; nothing a collection stores goes through it."""
+    token = _unhealed.set(True)
+    try:
+        yield
+    finally:
+        _unhealed.reset(token)
+
+
 def _embed_batch(batch: list[Item], timeout: float,
                  recipe: "collections_mod.EmbedRecipe", *,
                  raw: bool = False, runs: set | None = None) -> list[list[float]]:
@@ -852,6 +876,8 @@ def _embed_batch(batch: list[Item], timeout: float,
             # documents' (CLAUDE.md: deferral is not failure)
             raise _endpoint_error(recipe, e.response) from e
         n_bad = sum(1 for v in vecs if _invalid(v))
+        if raw and _unhealed.get() and len(vecs) == len(batch):
+            return vecs                  # as the engine gave them, a NaN among them (`unhealed`)
         if n_bad == 0 and len(vecs) == len(batch):
             if raw:
                 return vecs

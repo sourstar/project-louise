@@ -305,6 +305,12 @@ def test_the_keeper_counts_such_a_model_at_its_weights_and_its_context_apart(nod
     the weights and never handed to another preload. (Until then it counted
     4,263, by the review of 2026-11-12.)"""
     qwen, other = "vega-qwen3-embedding-4b", "vega-medcpt-article"
+    # a reading BEFORE either is loaded: a model that keeps its context rests at
+    # what its load left, and only a load this process saw begin says that
+    # (`model_load.rest_of_load`, the rule since 2026-11-25). Without it this
+    # test read the model at its largest and failed wherever it ran alone —
+    # it is in no deploy list, so nothing showed it until 2026-11-26.
+    _look(node)
     node.loaded |= {qwen, other}
     node.options[qwen] = ["context_on_demand", "ubatch:2048"]
     node.options[other] = ["ubatch:512"]
