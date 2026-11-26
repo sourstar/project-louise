@@ -384,6 +384,114 @@ in a figure is not followed. This is 01's "never anything executable",
 which figures bind harder than any other member — and it is why carrying
 an SVG is safe where showing one is not.
 
+**A preview: the one decoder a node runs** (*amended 2026-11-26; operator,
+of EUR-Lex's pictures: "we must show pictures in the results as it is done
+for gutenberg collection", and of the three ways to do it, "Option A"*).
+The Publications Office gives its pictures as TIFF — 335,166 of them in
+EUR-Lex — which is not on the closed list and which no browser renders. So
+a node that holds a TIFF plate may render a PNG PREVIEW of it, at most
+1,600 pixels wide, and show that; the plate's own bytes stay what they
+were, carried and offered as a download beside it. Nothing published,
+hashed or exchanged changes: the preview is derived data (invariant 6),
+made on the node that shows it, never signed, never sent to a peer, made
+again on a miss. The browser still receives only PNG, checked by the
+display rule above like any plate.
+
+This is the first time a node itself decodes a figure, and the sentence
+above — "only a peer that DISPLAYS one decodes it" — now reads: a browser,
+or this renderer. Three lines bound it, in this order, and the order is the
+point: an estimate is not a bound (app/ask/preview.py).
+
+1. **The header first, by a reader of our own**: the first image directory
+   of a classic TIFF. What the file DECLARES is held to caps before the
+   decoder is handed it — its pixels, its sides, what rendering it would
+   hold (a model by kind of image: a palette page is held five bytes a
+   pixel), its tiles, the bytes its tags point at — and its coding, a
+   **closed list**: the ones that corpus holds and no other (uncompressed,
+   LZW, CCITT Group 3, PackBits, CCITT Group 4). JPEG-in-TIFF, Deflate and
+   BigTIFF are refused until a corpus shows them.
+   **A directory two readers would read differently is refused**: a tag
+   twice, a count or a type the standard does not give a tag. libtiff takes
+   the FIRST of two entries, Pillow and our reader the LAST: the first cut
+   of this renderer decoded a Deflate plate that declared LZW in a second
+   `Compression` entry (found by the independent review, 2026-11-26, before
+   anything was merged). Tags merely out of ascending order are read: the
+   count over the corpus found 39 honest plates so written (two acts, every
+   language), and each reader reads each tag once. The TWICE rule and the
+   values rule are general on purpose — every entry, whichever its tag:
+   its values lie in the file and all of them together within 16 MiB. The
+   COUNT and TYPE rule binds the tags the reader acts on; for any other, an
+   error the decoder raises on it is the file's (below), never the node's.
+   A strip table may not name more strips than the image has rows (one a
+   plane where the planes are apart): a table that names the same bytes a
+   hundred thousand times passed every other cap from a 3 KB file and was
+   never done (the second review).
+2. **The child's own limits.** One child process per preview, at most three
+   at once across processes — on the node where a fast drive is named, for
+   each collection's store where none is; the web never holds the plate's
+   bytes and never runs the decoder. The child reads the plate in pieces,
+   hashed as they go; from the moment the decoder is handed the file it
+   has a data limit (RLIMIT_DATA) of the model's cap and 768 MiB; an alarm;
+   it ends when its parent does; and the kernel takes it before the web
+   should memory run out. A plate that passes the header and needs more
+   than that fails in the child alone.
+3. **The parent's watch**: the child's resident memory and its seconds
+   (180), read every 50 ms.
+
+**THE RULES AFTER THE COUNT ARE COUNTED TOO.** Every rule above that was
+added after München's header count — the directory's tags and types, the
+tag values, the side, the strips, the per-kind model — was run over the
+same corpus with the renderer's own reader (`tools/measure/
+preview_refusals.py`, no pixel decoded; München, 2026-11-26, 822 s): of
+295,579 TIFFs, 40 refused — 39 honest plates for tags out of ascending
+order, so that rule was dropped (above), and one member whose directory
+declares no entry, not an image. No memory, side, strip or size rule
+refused anything; the 34,362 packaged TIFFs whose directory lies past
+their first MiB were all read and admitted, the largest held at 719 MiB by
+the model (9,954 × 18,942 RGB, 32019R1390 et). A rule that refuses an
+honest plate is the rule's defect.
+
+**Caps from the corpus**, as this section's were (München's header count
+over its 335,166 images, 2026-11-26, no pixel decoded — 300,775 read, of
+which 250,220 TIFF and 50,555 JPEG that the page shows itself; 34,362
+packaged TIFFs whose directory lies past their first MiB were not: declared
+pixels p50 0.137 MP, p99 27.7 MP, max 324.7 MP; decoded bytes p99 40 MiB,
+max 539 MiB; the largest file 565.7 MB): 400 megapixels declared, 65,535 a
+side, 1 GiB held by the model, 1 GiB of file, 16 MiB of tag values. Over a
+cap the plate is "not displayable — download", as before. Measured on the
+corpus's largest shapes under all three lines: 0.7 s and 404 MiB resident
+for 15,794 × 20,561 at 8 bits, 1.4 s and 917 MiB for the 565 MB file of
+9,954 × 18,942 RGB, 0.25 s and 71 MiB for a 2,400 × 3,200 fax page
+(synthetic pages, the session's machine; the table is in the module).
+
+**The preview is the pixels.** The PNG carries nothing of the plate's
+metadata — a colour profile, a description are the publisher's bytes, and
+the PNG writer would copy them in whole — and is held to the display rule
+above and to its size before the web reads it.
+
+**A refusal is remembered** with its reason, so a plate that cannot be
+previewed costs one attempt: for good where the reason is the FILE's (a
+cap, a coding, a decoder that fails or crashes on it — any error it raises
+but the system's own: the drive, the store, the process's file limits), for
+an hour where it may be the MOMENT's (not done in time, killed by another,
+the store full, the held copy damaged) — and a moment's refusal answers
+`503` with how long to wait, not `415`. A plate not done in time three
+times, an hour apart, is the file's.
+What is kept and what is refused carry the renderer's version and the
+pinned Pillow in their name: another cap, coding or decoder asks afresh.
+A kept preview is never an answer by itself: the licence class, the
+acknowledgement and "is the plate held" are asked first, at every request.
+
+The decoder is Pillow's (libtiff), declared and pinned. A sandbox proper —
+seccomp or landlock around the child, or a decoder compiled to WebAssembly
+— is the stronger isolation and is written down for the day a preview is
+rendered for a publisher that is not an institution's official journal; it
+costs a system dependency in the image.
+
+Extending `PREVIEW_OF` beyond TIFF is an amendment to this section, exactly
+as extending the display list is. SVG is not a candidate: rendering it is
+what runs it.
+
 **What is out of scope, and stated so nobody assumes otherwise.** A plate
 whose hash is right, whose type is right and whose bytes decode, but
 which is not the picture the caption describes, is not detectable here —
