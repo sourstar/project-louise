@@ -144,6 +144,8 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(await page.evaluate(() => document.getElementById('voice-choice').hidden), '1. one voice or none: nothing to choose');
 
   // 2. tap, speak, quiet: it stops by itself, posts the WAV, fills the box
+  await page.evaluate(() => { window.__toneRed = [];
+    addEventListener('louise-ready-tone', () => __toneRed.push(document.getElementById('mic').classList.contains('rec'))); });
   await page.click('#mic');
   check(await until(() => document.getElementById('mic').classList.contains('rec')
                        && /recording/.test(document.getElementById('mic-status').textContent), 4000),
@@ -159,8 +161,8 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(w1.samples > 16000 * 1.5 && w1.samples < 16000 * 12, '2. the recording, speech and the quiet after it', w1.samples);
   check(w1.peak > 3000, '2. the speech is in it', w1.peak);
   // THE READY PING (operator, 2026-11-26): one soft tone when the microphone turns red
-  check(await page.evaluate(() => louiseVoice.pings()) === 1, '2. one ping when the microphone was ready',
-        await page.evaluate(() => louiseVoice.pings()));
+  check(await page.evaluate(() => louiseVoice.tones()) === 1 && (await page.evaluate(() => __toneRed)).join() === 'true',
+        '2. one ready tone, once the microphone is red', await page.evaluate(() => ({ n: louiseVoice.tones(), red: __toneRed })));
   check(p1.type === 'audio/wav' && p1.fields.response_format === 'json' && !('model' in p1.fields)
         && !('language' in p1.fields), '2. no model named, and no language while results show in their own', p1.fields);
   // HANDS-FREE (operator, 2026-11-11): asked at once, as Ask asks, and the answer read by itself
@@ -470,7 +472,9 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   //     ~90 deltas of a few words; tapped at the first word
   await reset(); answerJob = 'live';
   await asked(() => page.evaluate(() => { document.getElementById('q').value = 'Chi scrisse la Commedia?'; ask(); }));
-  const LONG = 'La Divina Commedia fu scritta da Dante Alighieri tra il 1304 e il 1321 [1]. '
+  // its FIRST sentence over 90 characters, with commas: read whole (operator, 2026-11-26)
+  const LONGFIRST = 'Il poema, composto in terzine incatenate di endecasillabi, si divide in tre cantiche e cento canti complessivi [1].';
+  const LONG = LONGFIRST + ' La Divina Commedia fu scritta da Dante Alighieri tra il 1304 e il 1321 [1]. '
     + 'È considerata il capolavoro della letteratura italiana [2][3].\n\n'
     + 'Il poema si divide in tre cantiche: Inferno, Purgatorio e Paradiso [1]. '
     + 'Ognuna conta trentatré canti, più il proemio [4]. Dante vi narra un viaggio nell\'aldilà [2].\n'
@@ -485,11 +489,9 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await until(() => __speech.length >= 4, 8000);
   const t18 = await page.evaluate(() => louiseVoice.timeline());
   // a long first sentence goes WHOLE, up to its full stop (operator, 2026-11-26)
-  const LONGFIRST = 'Il poema, composto in terzine incatenate di endecasillabi, si divide in tre cantiche e cento canti complessivi [1].';
-  const pieces = await page.evaluate(t => louiseVoice.sentences(t), LONGFIRST + ' Il secondo libro segue la stessa forma.');
-  check(pieces[0] === LONGFIRST && (await page.evaluate(() => typeof louiseVoice.firstPieces)) === 'undefined',
-        '18. a long first sentence is read whole, not cut at a comma', pieces);
-  check(t18.sentences.every(t => t.chars > 0) && t18.sentences.length >= 1, '18. every piece read is a whole sentence', t18.sentences);
+  const sent18 = await page.evaluate(() => __speech.map(b => b.input));
+  check(sent18[0] === LONGFIRST && t18.sentences[0].chars === LONGFIRST.length,
+        '18. the first sentence asked for is the whole first sentence, not cut at a comma', sent18.slice(0, 2));
   check(Array.isArray(t18.started) && t18.started.length === 1, '18. the reading\'s start is kept', t18.started);
   check(Array.isArray(t18.taps) && t18.taps.length === 1 && t18.taps[0] < lastWordAt && t18.started[0] >= t18.taps[0],
         '18. the tap is kept, beside the start it made', { taps: t18.taps, started: t18.started, lastWordAt });
@@ -624,6 +626,37 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(r22.mode === 'recorder' && r22.parts > 0 && /webm|ogg|mp4/.test(r22.mime || '') && r22.stop === 'speech',
         '22. reported: the second way, what it recorded, how it ended', r22);
   await until(() => !document.getElementById('speak').classList.contains('on'), 15000);
+
+  // 23. THE READY TONE HEARD BY THE MICROPHONE (architecture's read, 2026-11-26:
+  //     a loopback at coupling 0.5 stopped the recording as "speech" at 2.2 s).
+  //     A microphone that hears only a faint hum and, after `delay`, the tone
+  //     itself: not speech — the recording runs until its quiet bound. Both
+  //     ways of recording: the worklet's windows, and the recorder's
+  for (const [mode, delay] of [['webaudio', 300], ['recorder', 0]]) {
+    posted.reports = [];
+    await page.goto('http://localhost/ask');
+    await page.evaluate(([mode, delay]) => {
+      const c = new AudioContext(), d = c.createMediaStreamDestination();
+      const hum = c.createConstantSource(); hum.offset.value = 0.002; hum.connect(d); hum.start();
+      addEventListener('louise-ready-tone', () => setTimeout(() => {
+        const o = c.createOscillator(), g = c.createGain();
+        o.frequency.value = 880; g.gain.value = 0.06;                 // the tone's 0.12 at coupling 0.5
+        o.connect(g); g.connect(d); o.start(); o.stop(c.currentTime + 0.16);
+      }, delay));
+      navigator.mediaDevices.getUserMedia = async () => d.stream;
+      if (mode === 'recorder')
+        window.AudioWorkletNode = function (ctx) { const g = ctx.createGain(); g.port = { onmessage: null }; return g; };
+      document.getElementById('q').value = '';
+    }, [mode, delay]);
+    await page.click('#mic');
+    const t23 = Date.now();
+    while (!(posted.reports || []).length && Date.now() - t23 < 20000) await sleep(50);
+    const r23 = (posted.reports || [])[0] || {};
+    check(r23.tone && r23.tone.played === true && r23.deaf_end_ms > 0 && r23.heard === false && r23.stop === 'quiet'
+          && r23.ms >= 7500 && (mode === 'webaudio' ? r23.mode === 'webaudio' : r23.mode === 'recorder'),
+          `23. ${mode}: the tone the microphone heard ${delay} ms later is not taken for speech`, r23);
+    await until(() => !document.getElementById('speak').classList.contains('on'), 15000);
+  }
 
   check(errors.length === 0, 'no page errors', errors);
   console.log(failures ? `${failures} FAILED` : 'ALL PASSED');

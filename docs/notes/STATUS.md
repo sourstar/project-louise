@@ -966,7 +966,11 @@ measured (published figures disagree).
   every later one at full (`speech.first_steps`; the steps are in the kept clip's key). (2) The first sentence is
   no longer cut at its last , ; : past 90 characters (`firstPieces` removed): its second half waited for its own
   synthesis, a gap longer than a full stop's. (3) One soft 880 Hz tone of 160 ms when the microphone turns red,
-  phone and car alike, from its own context opened in the tap; the microphone's energy check ignores it.
+  phone and car alike, once it gives sound, from its own context opened in the tap (the "ready tone"); the
+  microphone's energy check skips the windows that may hold its echo, on the audio's own clock (~700 ms: the
+  output latency, 400 ms for a Bluetooth route and the buffering, the tone and its tail), proven by a loopback
+  at coupling 0.5 in both ways of recording (tests/browser/ask_voice.js 23). Half steps only where `tts_steps` is
+  set; a kept clip now marks its turn (it left the next sentence waiting TURN_ARRIVE_S, 5 s).
   Measured before: 11-26's reading, sentence 1 (114 chars) made in 4.6 s at 32 steps; the first word 48.9 s after
   Ask is the larger part, and is architecture's (mode-switch-room). After: owed, from the next voice-timeline line.
 - **The Ask button is Abort while a question is being answered (operator, 2026-11-25: "while a query is in

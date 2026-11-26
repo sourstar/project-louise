@@ -495,7 +495,10 @@ VOICE_REPORT_KEYS = ("label", "ready", "muted", "mutes", "rate", "channels", "ec
                      # how long the microphone took to give sound once opened (a car's Bluetooth
                      # switching profile): the first window, the first sample that is not zero,
                      # the zeros before it, and whether sound or WAKE_MAX_MS showed it recording
-                     "first_ms", "wake_ms", "zero_ms", "woke")
+                     "first_ms", "wake_ms", "zero_ms", "woke",
+                     # the ready tone (operator, 2026-11-26): its context's state and output
+                     # latency, whether it played, and where on the audio's clock its echo ends
+                     "tone", "deaf_end_ms")
 VOICE_REPORT_MAX = 4096
 
 

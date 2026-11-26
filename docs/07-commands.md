@@ -1867,9 +1867,19 @@ written. `/v1/audio/speech` answers with
 clip's length, ms), and the page keeps the reading's times
 (`louiseVoice.timeline()`: the answer's first and last word, each start of
 the reading, each sentence cut, sent, received, played and ended, ms from the Ask press).
-A first sentence over 90 characters is read in two, cut at its last clause mark (, ; :) past
-the 30th, so the first sound waits for a shorter clip (*amended 2026-11-08*: OmniVoice takes
-1.5–2 times a clip's length to make it).
+THE FIRST SENTENCE IS READ WHOLE, up to its full stop, and made at half the node's steps (*amended
+2026-11-26*, operator: "the first sentence must be provided up to the first full stop"; "process the first
+sentence at the half of the samples ... after the first sentence, we can switch to the full steps"). It
+replaces 2026-11-08's cut of a first sentence over 90 characters at its last clause mark, whose second half
+waited for its own clip: a gap longer than a full stop's. Sentence 0 of a reading (`Louise-Reading: <id>/0`)
+is synthesized at half `[speech] tts_steps`, every later one at full; unset, every sentence at the model's
+own. A kept clip still takes its turn, so the next sentence does not wait for it. THE READY TONE (*added
+2026-11-26*, operator: "Send a gentle ping when the microphone is ready (both car and no car) so the user
+knows when to talk without watching the screen"): one soft 160 ms tone at 880 Hz when the microphone turns
+red — only once it gives sound — from the page's own audio context; the microphone's energy check does not
+count the windows that may hold its echo (on the recording's own clock: the audio captured when it played,
+the output's latency, 400 ms for the route and the buffering, and the tone with its tail), and the
+recording's report says its context's state and latency.
 - the LocalAGI routes below require the token read from
   `DEPOSIT_TOKEN_FILE`, reads included, and that token opens nothing
   else: an agent that can write its memory cannot pause the node.
@@ -2381,6 +2391,8 @@ variable, a file, a log line or a message.
              # has none), chooses none, and with none set is not read to (`node speech show` says so)
              # `tts_steps` (added 2026-11-25, operator): the steps of one synthesis, 4 to 64, sent with every
              # request to the text-to-speech model; fewer are faster and coarser; unset, the model's own (32).
+             # A reading's FIRST sentence is made at half of it (amended 2026-11-26, operator; 7.4); unset,
+             # nothing is sent for any sentence.
              # The node's choice, never a reader's: `node speech set --steps N`, or the System page's Models panel
 [certifier]  valid_from = "2026-10-07T00:00:00Z"        # this node as a certifier (09 §9.11): from when its own key certifies, and
              # revoked_at = "…"                          # when it was revoked — the anchor document it serves at

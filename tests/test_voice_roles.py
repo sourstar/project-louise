@@ -119,13 +119,11 @@ def test_the_steps_of_a_synthesis_are_the_nodes_and_go_in_every_request(node, co
 
 def test_a_readings_first_sentence_is_made_at_half_the_steps(node, config_dir):
     """Operator, 2026-11-26: the first sentence at half the steps, the rest
-    at full. Sentence 0 of a reading only; a request outside a reading, and
-    every later sentence, keep the node's steps — or the model's own, unset."""
+    at full. Sentence 0 of a reading only, and only where the node sets its
+    steps; a request outside a reading, and every later sentence, keep them."""
     calls, _, _ = node
-    speech.synthesize_timed({"input": IT}, url="http://ai", reading="r1", n=0, admin=False)
-    assert calls[-1]["params"] == {"flow_steps": "16"}, "unset: half the model's 32"
-    speech.synthesize_timed({"input": IT + " Poi."}, url="http://ai", reading="r1", n=1, admin=False)
-    assert "params" not in calls[-1], "the second sentence: the model's own steps"
+    speech.synthesize_timed({"input": IT}, url="http://ai", reading="r0", n=0, admin=False)
+    assert "params" not in calls[-1], "unset: nothing sent, the model's own default for every sentence"
     (config_dir / "platform.toml").write_text(TABLE + 'tts_steps = "24"\n', encoding="utf-8")
     speech.synthesize_timed({"input": IT + " Tre."}, url="http://ai", reading="r2", n=0, admin=False)
     assert calls[-1]["params"] == {"flow_steps": "12"}
@@ -134,6 +132,27 @@ def test_a_readings_first_sentence_is_made_at_half_the_steps(node, config_dir):
     speech.synthesize({"input": IT + " Quattro."}, url="http://ai", admin=False)
     assert calls[-1]["params"] == {"flow_steps": "24"}, "outside a reading: full"
     assert speech.first_steps(4) == 4 and speech.first_steps(5) == 4, "never under the lowest accepted"
+
+
+def test_the_clip_key_tells_half_steps_from_full():
+    """The kept clip's key holds the steps: a half-step first sentence is
+    never served for the same words at full steps."""
+    out = {"model": "m", "voice": "v", "input": IT}
+    half = speech._clip_key("http://ai", {**out, "params": {"flow_steps": "16"}})
+    full = speech._clip_key("http://ai", {**out, "params": {"flow_steps": "32"}})
+    assert half != full and full == speech._clip_key("http://ai", {**out, "params": {"flow_steps": "32"}})
+
+
+def test_a_kept_clip_takes_its_turn_so_the_next_sentence_does_not_wait():
+    """A cache hit returns before `Turns.turn`; unmarked, sentence n+1 waited
+    TURN_ARRIVE_S for an n that never arrived."""
+    turns = speech.Turns()
+    turns.served("rk", 0)
+    import time
+    t0 = time.monotonic()
+    with turns.turn("rk", 1) as waited:
+        pass
+    assert time.monotonic() - t0 < 0.5 and waited < 500.0
 
 
 def test_steps_that_are_not_a_number_in_range_are_refused_at_load(node, config_dir):

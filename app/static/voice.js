@@ -175,8 +175,9 @@
     // microphone's route is up, and the page says so (`wake`)
     if (r.first_ms === null) r.first_ms = Math.round(performance.now() - r.opened);
     if (!r.live) { if (top > 0) { r.live = true; wake(r, 'sound'); } else r.zero_ms += ms; }
-    // the ready ping as the microphone hears it: neither speech nor the floor
-    if (r.deaf_until && performance.now() < r.deaf_until) { r.ms += ms; return false; }
+    // the ready tone as the microphone hears it, on the AUDIO's own clock
+    // (`r.ms`, where this window starts): neither speech nor the floor
+    if (r.deaf_end_ms != null && r.ms < r.deaf_end_ms) { r.ms += ms; return false; }
     const loud = rms > Math.max(FLOOR_MIN, FLOOR_X * (r.floor === null ? 0 : r.floor));
     r.floor = r.floor === null ? rms : Math.min(r.floor, rms);
     r.ms += ms;
@@ -222,6 +223,7 @@
     r.decoding = true;
     try {
       const pcm = await decoded(r);
+      r.decoded_ms = pcm.length * 1000 / RATE;
       while (rec === r && r.done + WINDOW <= pcm.length) {
         const w = pcm.subarray(r.done, r.done + WINDOW); r.done += WINDOW;
         if (hear(r, w, RATE)) break;
@@ -252,6 +254,7 @@
              first_ms: r.first_ms, wake_ms: r.wake_ms, zero_ms: Math.round(r.zero_ms), woke: r.woke,
              mode: r.mode || 'webaudio', ctx_was: r.ctxWas ?? null, parts: r.parts ? r.parts.length : null,
              decode_fails: r.decodeFails ?? null, mime: r.mr ? r.mr.mimeType : null,
+             tone: toneLast, deaf_end_ms: r.deaf_end_ms ?? null,
              inputs: r.inputs, ua: navigator.userAgent };
   }
   function report(outcome, info) {
@@ -271,7 +274,7 @@
   async function start() {
     stopReading(); auto = false;         // the microphone would hear the answer
     unlock();                            // inside the tap: the answer may be read later
-    pingUnlock();                        // inside the tap: the ready ping may sound
+    toneUnlock();                        // inside the tap: the ready tone may sound
     busy = true; micState('busy', 'opening the microphone…'); active();
     let stream;
     try {
@@ -359,42 +362,69 @@
     r.shown = true; r.woke = how;
     r.wake_ms = Math.round(performance.now() - r.opened);
     clearTimeout(r.waking);
-    if (rec !== r && !busy) return;            // ended meanwhile
-    // the ping says it without the screen; the microphone hears it, so its
-    // energy is not counted as speech (`hear`)
-    if (ping()) r.deaf_until = performance.now() + PING_MS + PING_TAIL_MS;
+    if (rec !== r) return;                     // ended meanwhile (a tap-stop too)
     const t0 = performance.now();
     const show = () => { if (rec === r) micState('rec', 'recording ' + clock(performance.now() - t0) + ' — tap the microphone to stop'); };
     show(); r.tick = setInterval(show, 250);
+    // the ready tone says it without the screen, once the microphone is red —
+    // and only for a microphone that gives sound: not after WAKE_MAX_MS of
+    // nothing. The microphone hears it: its windows are not counted (`hear`)
+    if (how === 'sound' && readyTone()) r.deaf_end_ms = deafEnd(r);
   }
 
-  // THE READY PING (operator, 2026-11-26: "Send a gentle ping when the
+  // THE READY TONE (operator, 2026-11-26: "Send a gentle ping when the
   // microphone is ready (both car and no car) so the user knows when to talk
   // without watching the screen"): one short soft tone when the microphone
   // turns red (`wake`), on the phone and on a car's hands-free alike. Its own
   // context, opened in the tap — the capture's is clocked by the output and
   // may run no callback on a car (THE SECOND WAY TO RECORD). Web Audio's
-  // OscillatorNode, nothing fetched. False where the browser gives no sound.
-  const PING_MS = 160, PING_TAIL_MS = 120, PING_HZ = 880, PING_GAIN = 0.12;
-  let pingCtx = null, pingCount = 0;
-  function pingUnlock() {
+  // OscillatorNode, nothing fetched. False where the browser gives no sound
+  // (a context that is not running: suspended, interrupted, closed). Named a
+  // TONE: "ping" is the voice ping (app/voice_ping.py) and /ask/active's.
+  const TONE_MS = 160, TONE_HZ = 880, TONE_GAIN = 0.12;
+  // the microphone hears the tone after the output's latency and the route's
+  // (Bluetooth: 100-300 ms) and the capture's own buffering (a worklet window
+  // of 2048 samples, ~46 ms); its windows are not counted until the audio
+  // captured when it was played, plus that latency, the margin for the route
+  // and the buffering, and the tone with its tail, have passed (`deafEnd`:
+  // ~700 ms, before the reader has begun to speak). Measured in a loopback at
+  // coupling 0.5 (tests/browser/ask_voice.js 23): 150 ms of margin let a tone
+  // heard 300 ms late through as speech.
+  const TONE_MARGIN_MS = 400, TONE_TAIL_MS = 280;
+  let toneCtx = null, toneCount = 0, toneLast = null;
+  function toneUnlock() {
     if (!AC) return;
-    try { if (!pingCtx || pingCtx.state === 'closed') pingCtx = new AC(); pingCtx.resume().catch(() => {}); }
-    catch (e) { pingCtx = null; }
+    try { if (!toneCtx || toneCtx.state === 'closed') toneCtx = new AC(); toneCtx.resume().catch(() => {}); }
+    catch (e) { toneCtx = null; }
   }
-  function ping() {
-    if (!pingCtx || pingCtx.state === 'closed') return false;
+  function toneLatencyMs() {
+    if (!toneCtx) return 0;
+    const l = toneCtx.outputLatency || toneCtx.baseLatency || 0;
+    return Math.round(l * 1000);
+  }
+  function readyTone() {
+    toneLast = { state: toneCtx ? toneCtx.state : null, latency_ms: toneLatencyMs(), played: false };
+    if (!toneCtx || toneCtx.state !== 'running') return false;
     try {
-      const t = pingCtx.currentTime, osc = pingCtx.createOscillator(), g = pingCtx.createGain();
-      osc.type = 'sine'; osc.frequency.value = PING_HZ;
+      const t = toneCtx.currentTime, osc = toneCtx.createOscillator(), g = toneCtx.createGain();
+      osc.type = 'sine'; osc.frequency.value = TONE_HZ;
       g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(PING_GAIN, t + 0.02);           // no click at the start
-      g.gain.exponentialRampToValueAtTime(0.0001, t + PING_MS / 1000); // a soft end
-      osc.connect(g); g.connect(pingCtx.destination);
-      osc.start(t); osc.stop(t + PING_MS / 1000 + 0.02);
-      pingCount++;
+      g.gain.linearRampToValueAtTime(TONE_GAIN, t + 0.02);            // no click at the start
+      g.gain.exponentialRampToValueAtTime(0.0001, t + TONE_MS / 1000);  // a soft end
+      osc.connect(g); g.connect(toneCtx.destination);
+      osc.start(t); osc.stop(t + TONE_MS / 1000 + 0.02);
+      toneCount++; toneLast.played = true;
+      try { window.dispatchEvent(new CustomEvent('louise-ready-tone')); } catch (e) { /* none */ }
       return true;
     } catch (e) { return false; }
+  }
+  // where, on the recording's own clock (ms of audio), the tone as heard ends:
+  // the audio captured so far — the worklet's windows as they come; the
+  // recorder's decoded length and the slice still being recorded — plus the
+  // output's latency, a margin, and the tone with its tail
+  function deafEnd(r) {
+    const captured = r.mode === 'recorder' ? Math.max(r.ms, r.decoded_ms || 0) + RECORDER_SLICE_MS : r.ms;
+    return captured + toneLatencyMs() + TONE_MARGIN_MS + TONE_TAIL_MS;
   }
 
   function release(r) {
@@ -843,8 +873,8 @@
                  turn: t.turn ?? null, node: t.node ?? null, cache: t.cache ?? null,
                  play: rel(t.play), end: rel(t.end) })) };
     },
-    // how many ready pings sounded on this page
-    pings: () => pingCount,
+    // how many ready tones sounded on this page, and the last one's context
+    tones: () => toneCount, toneLast: () => toneLast, deafEnd,
     sentences, cut, downsample, wavBytes,
   };
 })();
