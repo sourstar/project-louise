@@ -18,6 +18,32 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-26
+
+- **THE PARKING PASS ENDED 00:19:39Z, COMPLETED (München; the node paused 5,620 s, back in embed mode):
+  the park server and the park engine are LIVE, nothing parks, and #882 is merged (main 7547fcd1).** Server
+  v5.0.1-6-gffb10fdf3 (0024 the readiness poll, the amended 0027, 0029 the watchdog's settings fix) — a
+  server swap gates nothing, the seven run ids the same. Engine ed93e3c1b2e2 with ONE package rebuilt,
+  vega-louise-llama-cpp at 1ac1ecc (wrapper sha256 47bf02eaae7c01e4 = main's file), live since 23:45:20Z:
+  the five llama.cpp gates all exact, three fresh loads each, every fingerprint identical to before
+  (wikipedia 98 s, gutenberg 1,983 s, pubmed query 70 s, NeuRIS about 509 s, wikidata about 502 s); 20
+  unloads through the rebuilt wrapper, none slow. The other three packages keep the wrapper of their own
+  build (10833aab79818132, REVISION 15e84e9): the table is in approved-encoders.md ("The wrapper each
+  package runs"). PARKING ON THE CARD, on a copy of bge-m3 (parking-keeper.md §4): a park 142 ms, a return
+  228 ms, 20 of 20 cycles the same bytes; a park gives back 996 of 1,315 MiB — 76 %, the process keeps 319
+  MiB on the card (what the review's second finding was about, now seen on the card); 1,084 parks asked
+  during one request, every one 409 and the request served; a parked model stopped in 202 ms and loaded
+  afresh in 4.17 s; a refused return 503 with `Retry-After: 2`, still parked, then served. THE SERVER'S
+  OTHER ROWS: a cold load's first request 4.5–4.8 s → 2.7–3.0 s (the readiness poll); a canary refused
+  for memory is HTTP 503 `no_room_on_device` where it was 500; a stream cut mid-way ends with an error
+  event of that type. AT THE RESUME: "embedding waits: the keeper has not made a beat since the node's
+  resume (1 s ago)" for wikipedia and "…the keeper is still loading the models of Ask after the node's
+  resume" for legi_F, Normattiva-DAR and Normattiva — the preload hold of #896 at a resume, on a card the
+  pass had emptied, no CANARY line: THAT ROW WAS OWED and is in. MemAvailable 20.3 GiB at 00:29Z.
+- **THE APP: main f5f1e97c prepared on the node as deploy b1e83cf, not armed — it waits for the operator's
+  word; 759322e7's files are discarded there.** bcdf0dc stays live, in embed mode; at each query → embed
+  switch until the deploy, München's four shutdowns by hand.
+
 ### 2026-11-25
 
 - **AN INDEPENDENT READING OF THE NIGHT'S KEEPER AND EVICTION CODE, BEFORE IT REACHED THE NODE: EIGHT
@@ -278,7 +304,7 @@ measured (published figures disagree).
   as an input's refusal), a question's calls keep their fallback and can tell it from a fault
   (`httpc.no_room`, `ModelRefused.retry_after_s`). 39 tests (tests/test_parking.py), the first of each
   part: WITHOUT THE PATCH NOTHING CHANGES. NOT measured — nothing parks yet; six rows owed from the node
-  are in the note, §4. Spec: docs/07 §7.8 `[models]`, amended 2026-11-25 ("PARKED, WHERE A MODEL CAN").
+  are in the note, §5 (§4 since 2026-11-26 holds what was measured on the card). Spec: docs/07 §7.8 `[models]`, amended 2026-11-25 ("PARKED, WHERE A MODEL CAN").
   The node is DOWN for the ssd3 port swap (operator, 20:54Z "Shut down now"; München stopped Louise
   cleanly and sent a last snapshot).
 - **"DO PARKING." (operator, to München, 2026-11-25 20:46Z) — the order of it, and what is mine.** Tensor's
