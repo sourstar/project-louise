@@ -260,6 +260,24 @@ def test_the_search_line_says_the_reranks_parts_slowest_list_first(isolated_conf
     assert web._say_search_timings(body, {"hits": [], "timings": {"total": 1.0, "rerank": 1.0}}).endswith("rerank 1")
 
 
+def test_the_search_line_says_what_the_works_were_made_of(isolated_config):
+    """The first question after the deploy of 2026-11-26: "wikipedia 21,071 (…
+    answers 1,802, works 18,792)" — eighteen seconds, and nothing to tell the
+    work claims walked from the passages looked up in the text index."""
+    from app import web
+    body = web.AskQueryBody(query="balene")
+    t = {"total": 108_434.0, "rerank": 39_324.0, "rerank_parts": {
+        "wikipedia": {"rerank": 21_071.0, "records": 50, "texts": 70, "chars": 36_000, "calls": 8,
+                      "call_ms": 1_802.0, "works_ms": 18_792.0, "works_claims_ms": 312.0,
+                      "works_facts_ms": 4.0, "works_passages_ms": 18_400.0, "works_passages_n": 23},
+        "Normattiva": {"rerank": 3_037.0, "records": 50, "texts": 69, "chars": 74_000, "calls": 1,
+                       "call_ms": 1_889.0, "works_ms": 512.0, "works_claims_ms": 20.0}}}
+    line = web._say_search_timings(body, {"hits": [], "timings": t})
+    assert ("wikipedia 21,071 (50 records, 70 texts, 36k chars, 8 call(s): answers 1,802, "
+            "works 18,792 [claims 312, passages 18,400 for 23 edition(s)])") in line
+    assert "answers 1,889, works 512)" in line, "parts under 50 ms are not said"
+
+
 # ---------------- how many, before and after (operator, 2026-09-18) ----------------
 
 
