@@ -89,7 +89,8 @@ def make_node(tmp_path, stubs, vega):
 
     def make(*, pairs=False, receipt_timeout_s=2.0, socket=None, tokenizer=False,
              cuts=None, token_ids=False, extra: dict[str, Any] | None = None,
-             canary_fail: str = "") -> Node:
+             canary_fail: str = "", repeat_noop: bool | str = False,
+             repeat_refuse: Path | None = None) -> Node:
         backends = tmp_path / "backends"
         real = backends / "fake-llama-cpp"
         real.mkdir(parents=True)
@@ -112,6 +113,11 @@ def make_node(tmp_path, stubs, vega):
                    **({"FAKE_TOKENIZER": "1"} if tokenizer else {}),
                    **({"FAKE_TOKEN_IDS": "1"} if token_ids else {}),
                    **({"FAKE_CANARY_FAIL": canary_fail} if canary_fail else {}),
+                   # the backend answers a repeated LoadModel as llama.cpp does: "already loaded"
+                   **({"FAKE_REPEAT_NOOP": repeat_noop if isinstance(repeat_noop, str) else "1"}
+                      if repeat_noop else {}),
+                   # ...and refuses it while this file exists: no room on the card for the weights
+                   **({"FAKE_REPEAT_REFUSE": str(repeat_refuse)} if repeat_refuse else {}),
                    PYTHONPATH=os.pathsep.join([str(stubs.dir), os.environ.get("PYTHONPATH", "")]))
         cfg = vw.load_config(pkg / "vega.json", backends)
         running = vw.serve(cfg, "127.0.0.1:0", pb=stubs.pb, environ=env,
@@ -384,6 +390,110 @@ def test_an_upgraded_backend_is_a_new_run_from_its_next_load(make_node):
     d = trees.diff(a, b)
     assert set(d["added"]) == {"lib", "lib/libnew.so.1"} and not d["removed"] and not d["changed"]
     assert d["added"]["lib/libnew.so.1"]["size"] == len(b"an upgrade")
+
+
+def test_the_load_in_force_asked_again_is_the_same_run_and_nothing_is_stated_twice(make_node):
+    """Parking step 2 (docs/notes/parking-step-2.md §3.3): LocalAI brings a
+    parked model's weights back with a repeated LoadModel, which the backend
+    answers "already loaded". The same process, weights, engine and options are
+    the same run: the wrapper forwards it and moves nothing. Before, it dropped
+    the run while it hashed the weights and the tree again, refused every vector
+    meanwhile, restarted its counts and probed the tokenizer again."""
+    node = make_node(repeat_noop=True)
+    pb = node.stubs.pb
+    batch, r = node.embed(["before"])
+    _vectors, (first,) = node.verify(batch, r)
+    gate = node.running.gate
+    state, passes, keeps = gate.loaded, gate.passes, gate.keeps
+    gate.files.reads.clear()
+    calls_before = len(node.calls("LoadModel"))
+    raw = pb.ModelOptions(**node.models["vega-fake"].options).SerializeToString()
+    result = pb.Result.FromString(node.channel().unary_unary(vw.LOAD)(raw, timeout=10))
+    assert result.success, result.message
+    assert len(node.calls("LoadModel")) == calls_before + 1, "the backend IS asked: it is what brings weights back"
+    assert gate.loaded is state and gate.passes is passes and gate.keeps is keeps, "the run and its counts stand"
+    assert gate.files.reads == [], "no file is hashed again"
+    batch, r = node.embed(["after"])
+    _vectors, (second,) = node.verify(batch, r)
+    assert second == first, "the same run on the next vector's receipt"
+
+
+def test_a_repeated_load_the_card_refuses_goes_through_as_it_is_and_the_run_stays_stated(make_node, tmp_path):
+    """The Tensor session, 2026-11-25: a parked model whose weights cannot come
+    back answers gRPC RESOURCE_EXHAUSTED. It is still the same run — the same
+    process, the same weights, still parked — so the status goes to LocalAI as
+    it is and the wrapper keeps the run: the next load or vector brings it back."""
+    full = tmp_path / "card-full"
+    node = make_node(repeat_noop=True, repeat_refuse=full)
+    pb = node.stubs.pb
+    batch, r = node.embed(["before"])
+    _vectors, (first,) = node.verify(batch, r)
+    gate = node.running.gate
+    state = gate.loaded
+    raw = pb.ModelOptions(**node.models["vega-fake"].options).SerializeToString()
+    full.touch()
+    with pytest.raises(grpc.RpcError) as e:
+        node.channel().unary_unary(vw.LOAD)(raw, timeout=10)
+    assert e.value.code() == grpc.StatusCode.RESOURCE_EXHAUSTED and "cannot come back" in e.value.details()
+    assert gate.loaded is state, "refused: nothing changed, the run stands"
+    full.unlink()                                          # room again: the same load is the return
+    assert pb.Result.FromString(node.channel().unary_unary(vw.LOAD)(raw, timeout=10)).success
+    batch, r = node.embed(["after"])
+    _vectors, (second,) = node.verify(batch, r)
+    assert gate.loaded is state and second == first
+
+
+def test_no_run_is_stated_for_options_the_backend_did_not_load(make_node):
+    """The independent reading of the park engine, 2026-11-25: the backend's
+    "already loaded" compares the model's NAME only, so a load under OTHER
+    options is answered success while the old options go on computing. A run
+    stated then would name options that are not the ones in force. The
+    wrapper states none: LocalAI is told the load failed (it then stops the
+    backend and loads afresh), and the run in force stands meanwhile."""
+    node = make_node(repeat_noop="by-name")
+    pb = node.stubs.pb
+    batch, r = node.embed(["before"])
+    _vectors, (first,) = node.verify(batch, r)
+    gate = node.running.gate
+    state = gate.loaded
+    other = {**node.models["vega-fake"].options, "ContextSize": 1024}
+    result = pb.Result.FromString(node.channel().unary_unary(vw.LOAD)(
+        pb.ModelOptions(**other).SerializeToString(), timeout=30))
+    assert not result.success and "other options" in result.message and "did not load again" in result.message
+    assert gate.loaded is state, "the run in force is the one that computes: it stands"
+    batch, r = node.embed(["after"])
+    _vectors, (second,) = node.verify(batch, r)
+    assert second == first
+
+
+def test_a_backend_that_loads_again_at_a_repeated_load_is_stated_again(make_node):
+    # the backend's own answer decides: one that does not say "already loaded" has read its files
+    # again, and files changed on disk are then another run (the test below holds that rule)
+    node = make_node()
+    pb = node.stubs.pb
+    node.embed(["before"])
+    gate = node.running.gate
+    state = gate.loaded
+    raw = pb.ModelOptions(**node.models["vega-fake"].options).SerializeToString()
+    assert pb.Result.FromString(node.channel().unary_unary(vw.LOAD)(raw, timeout=30)).success
+    assert gate.loaded is not state and gate.loaded.run_id == state.run_id, \
+        "stated again (a new statement, the same run id: nothing changed on disk)"
+    assert len(node.calls("LoadModel")) == 2, "forwarded once, not twice"
+
+
+def test_a_load_with_other_options_is_another_load_and_is_stated(make_node):
+    node = make_node()
+    pb = node.stubs.pb
+    batch, r = node.embed(["before"])
+    _vectors, (first,) = node.verify(batch, r)
+    gate = node.running.gate
+    state = gate.loaded
+    other = {**node.models["vega-fake"].options, "ContextSize": 1024}
+    assert other != node.models["vega-fake"].options
+    result = pb.Result.FromString(node.channel().unary_unary(vw.LOAD)(
+        pb.ModelOptions(**other).SerializeToString(), timeout=30))
+    assert result.success, result.message
+    assert gate.loaded is not state and gate.loaded.run_id != first, "other options: another run, stated"
 
 
 def test_no_vector_before_a_stated_load(make_node):
