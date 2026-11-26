@@ -144,17 +144,45 @@ def test_a_directory_two_readers_would_read_differently_is_refused(entries, why)
         preview.tiff_header(io.BytesIO(header_only(entries=entries)))
 
 
+def _with_values(entries_of, n_bytes: int) -> bytes:
+    """A header whose entries point at `n_bytes` of values that ARE in the
+    file, right after the directory: `entries_of(offset)` gives the entries."""
+    count = len(entries_of(0))
+    at = 8 + 2 + 12 * count + 4
+    return header_only(entries=entries_of(at)) + b"\0" * n_bytes
+
+
 def test_what_a_decoder_would_read_before_any_pixel_is_counted():
     """150 private tags each pointing at the same 2 MiB held 303 MiB at
-    `Image.open` (the review): the values the entries DECLARE are summed."""
-    many = [(256, 4, 1, 16), (257, 4, 1, 16)] + [(40_000 + i, 7, 2 << 20, 8) for i in range(150)]
+    `Image.open` (the review): the values the entries DECLARE are summed,
+    and every entry's values lie in the file — whichever tag it is."""
+    def many(n):
+        return lambda at: [(256, 4, 1, 16), (257, 4, 1, 16)] + [(40_000 + i, 7, 2 << 20, at) for i in range(n)]
     with pytest.raises(preview.NotPreviewable, match="point at over 16 MiB of values"):
-        preview.tiff_header(io.BytesIO(header_only(entries=many)))
-    some = [(256, 4, 1, 16), (257, 4, 1, 16)] + [(40_000 + i, 7, 2 << 20, 8) for i in range(7)]
-    assert preview.tiff_header(io.BytesIO(header_only(entries=some))).tag_bytes == 7 * (2 << 20)
+        preview.tiff_header(io.BytesIO(_with_values(many(150), 2 << 20)))
+    assert preview.tiff_header(io.BytesIO(_with_values(many(7), 2 << 20))).tag_bytes == 7 * (2 << 20)
+    # a tag this reader does not act on, pointing outside the file: refused all the same
+    with pytest.raises(preview.NotPreviewable, match="tag 40000 points outside the file"):
+        preview.tiff_header(io.BytesIO(header_only(entries=[(256, 4, 1, 16), (257, 4, 1, 16),
+                                                            (40_000, 7, 2 << 20, 8)])))
     with pytest.raises(preview.NotPreviewable, match="declares 513 entries"):
         preview.tiff_header(io.BytesIO(header_only(
             entries=[(256, 4, 1, 16), (257, 4, 1, 16)] + [(1000 + i, 3, 1, 0) for i in range(511)]) + b"\0" * 8192))
+
+
+def test_more_strips_than_rows_is_a_table_that_names_the_same_bytes_again():
+    """THE SECOND REVIEW: an uncompressed page whose strip table named the
+    same bytes a hundred thousand times passed every cap from a 3 KB
+    container and was killed at 180 s — every hour, for ever."""
+    H = preview.TiffHeader
+    table = _with_values(lambda at: [(256, 4, 1, 64), (257, 4, 1, 48), (258, 3, 1, 8), (273, 4, 100_000, at)],
+                         400_000)
+    head = preview.tiff_header(io.BytesIO(table))
+    assert head.strips == 100_000
+    assert "in 100,000 strips: more strips than an image of that height has rows" in preview.refused(head, len(table))
+    assert preview.refused(H(15_794, 20_561, 8, 1, 1, 1, strips=20_561), 324_800_000) is None, "a strip a row: honest"
+    assert preview.refused(H(600, 800, 24, 1, 3, 2, strips=2_400), 1_440_000) is None, "a strip a row a plane"
+    assert "more strips" in preview.refused(H(600, 800, 24, 1, 3, 2, strips=2_401), 1_440_000)
 
 
 def test_a_bomb_is_refused_on_what_it_declares():
@@ -322,6 +350,49 @@ def test_what_the_decoder_says_of_the_file_is_the_files(tmp_path, capsys):
     assert code == 1 and out["failed"], out
 
 
+def test_an_error_the_file_makes_the_decoder_raise_is_the_files_whatever_its_errno(tmp_path, capsys, monkeypatch):
+    """THE SECOND REVIEW, run: a directory entry in a signed type with a
+    negative value made Pillow seek before the file's start — `OSError`
+    with EINVAL — and "an OSError with an errno is the system's" called it
+    the node's: exit 4, tried again every hour, for ever, answered 503 with
+    a reason that was false. Only the system's own errnos are the system's."""
+    import errno
+    plate = tiff((600, 800), "L", "tiff_lzw")
+    path = _container(tmp_path, {sha(plate): plate})
+
+    def raising(e):
+        def render(*a, **k):
+            raise e
+        return render
+    for e, code, key in ((OSError(errno.EINVAL, "Invalid argument"), 1, "failed"),
+                         (OSError(errno.EOVERFLOW, "Value too large"), 1, "failed"),
+                         (OSError("image file is truncated"), 1, "failed"),
+                         (OSError(errno.EIO, "Input/output error"), preview.NOT_NOW, "now"),
+                         (OSError(errno.ENOSPC, "No space left on device"), preview.NOT_NOW, "now")):
+        monkeypatch.setattr(preview_child, "render", raising(e))
+        assert _child(path, plate, tmp_path / "x.png") == code, e
+        assert key in json.loads(capsys.readouterr().out), e
+
+
+def test_a_page_turned_a_quarter_is_rendered(tmp_path):
+    """An honest plate with Orientation 6: Pillow gives it with its sides
+    swapped, and "the decoder reads 200×300 where the header declares
+    300×200" refused it for good (the second review)."""
+    out = io.BytesIO()
+    im = Image.new("L", (300, 200), 255)
+    im.paste(0, (20, 20, 280, 30))
+    exif = Image.Exif()
+    exif[274] = 6
+    im.save(out, "TIFF", compression="tiff_lzw", exif=exif)
+    plate = out.getvalue()
+    head = preview.tiff_header(io.BytesIO(plate))
+    assert (head.width, head.height) == (300, 200)
+    path, dest = _container(tmp_path, {sha(plate): plate}), tmp_path / "out.png"
+    assert _child(path, plate, dest) == 0
+    with Image.open(dest) as got:
+        assert got.size in ((200, 300), (300, 200)) and got.getextrema() == (0, 255)
+
+
 def test_calling_the_child_in_this_process_changes_nothing_of_this_process(tmp_path):
     """THE REVIEW: these tests called `main`, and `main` wrote 1000 into
     /proc/self/oom_score_adj — the whole pytest run became the kernel's first
@@ -366,6 +437,7 @@ def test_a_real_child_sets_its_own_limits_and_one_past_its_memory_fails_alone(tm
     (1, "", r"the renderer did not run \(exit 1\)", 3600),          # it never reached the figure: an import, a crash at start
     (-9, "", r"killed on it \(signal 9\)", 3600),                   # the kernel for memory, a stop of the container
     (-14, "", r"killed on it \(signal 14\)", 3600),                 # its own alarm
+    (-7, "", r"killed on it \(signal 7\)", 3600),                   # SIGBUS: an I/O error under the mapped copy — the drive's
     (-11, "", r"the decoder crashed on it \(signal 11\)", None),    # the decoder's own, on this file: not every hour for ever
     (-6, "", r"the decoder crashed on it \(signal 6\)", None),
 ])
@@ -571,15 +643,63 @@ def test_three_are_rendered_at_once_on_a_node_and_the_fourth_waits_its_bound(tmp
 
 
 def test_what_a_killed_renderer_left_is_swept_once_no_renderer_could_still_own_it(copy):
+    """ONE folder for what is being made: a plate's copy a dead renderer left
+    (up to 1 GiB) is found by the next render of ANY plate — beside the kept
+    previews it waited for a plate of the same hash prefix, 1 in 256."""
     name, d, page, bomb, entries = copy
     kept, no = preview._files(d, fig.bare(sha(page)))
-    kept.parent.mkdir(parents=True)
-    old, fresh = kept.parent / ".abc.tmp.src", kept.parent / ".def.tmp"
+    making = preview._tmp_dir(d)
+    assert making == preview.store(d) / ".tmp" and making != kept.parent
+    making.mkdir(parents=True)
+    old, fresh = making / "abc.tmp.src", making / "def.tmp"
     old.write_bytes(b"a gigabyte, once")
     fresh.write_bytes(b"being written now")
     os.utime(old, (time.time() - 2 * preview.RETRY_S,) * 2)
     preview.png(name, "pubmed:10", sha(page))
     assert not old.exists() and fresh.exists() and kept.exists()
+    assert sorted(p.name for p in making.iterdir()) == ["def.tmp"], "and nothing of this render is left there"
+
+
+def test_an_older_renderers_answer_for_a_plate_goes_when_this_one_has_its_own(copy, monkeypatch):
+    name, d, page, bomb, entries = copy
+    h, hb = fig.bare(sha(page)), fig.bare(sha(bomb))
+    preview.png(name, "pubmed:10", sha(page))
+    with pytest.raises(preview.NotPreviewable):
+        preview.png(name, "pubmed:10", sha(bomb))
+    old_kept, _ = preview._files(d, h)
+    _, old_no = preview._files(d, hb)
+    monkeypatch.setattr(preview, "RENDERER", preview.RENDERER + 1)
+    assert old_kept.exists() and old_no.exists(), "not swept wholesale: gone as each plate is asked again"
+    preview.png(name, "pubmed:10", sha(page))
+    with pytest.raises(preview.NotPreviewable):
+        preview.png(name, "pubmed:10", sha(bomb))
+    assert not old_kept.exists() and not old_no.exists()
+    assert preview._files(d, h)[0].exists() and preview._files(d, hb)[1].exists()
+
+
+def test_a_plate_never_done_in_time_is_the_files_after_three_tries_an_hour_apart(copy, monkeypatch):
+    """THE SECOND REVIEW: "tried again in an hour" had no end — a plate that
+    never finishes held a renderer for 180 s every hour, for ever, and three
+    of them held all three."""
+    name, d, page, bomb, entries = copy
+    real, started = subprocess.Popen, []
+    monkeypatch.setattr(preview.subprocess, "Popen", lambda cmd, **kw: started.append(
+        real([sys.executable, "-c", "import time; time.sleep(60)"], **kw)) or started[-1])
+    monkeypatch.setattr(preview, "RENDER_TIMEOUT_S", 0.2)
+    kept, no = preview._files(d, fig.bare(sha(page)))
+    for tries in (1, 2):
+        with pytest.raises(preview.NotPreviewableNow, match="not rendered within") as e:
+            preview.png(name, "pubmed:10", sha(page))
+        said = json.loads(no.read_text())
+        assert said["tries"] == tries and said["until"] == said["at"] + preview.RETRY_S
+        assert preview.RETRY_S - 5 <= e.value.after_s <= preview.RETRY_S
+        no.write_text(json.dumps({**said, "until": said["at"] - 1}))        # the hour over
+    with pytest.raises(preview.NotPreviewable, match="3 times an hour apart: not tried again") as e:
+        preview.png(name, "pubmed:10", sha(page))
+    assert not isinstance(e.value, preview.NotPreviewableNow) and "until" not in json.loads(no.read_text())
+    with pytest.raises(preview.NotPreviewable, match="not tried again"):
+        preview.png(name, "pubmed:10", sha(page))
+    assert len(started) == 3, "and it is not"
 
 
 def test_a_store_that_cannot_be_written_is_the_moments_and_not_an_error(copy, monkeypatch):
@@ -672,6 +792,14 @@ def test_every_renderer_busy_is_a_503_to_ask_again_and_not_a_plate_that_cannot_b
             h.__exit__(None, None, None)
     assert r.status_code == 503 and r.headers["retry-after"] == "30" and r.json()["exit"] == 3
     assert "3 previews are being rendered" in r.json()["error"]
+    # a refusal remembered for the hour says the hour, not thirty seconds
+    _kept, no = preview._files(d, fig.bare(sha(page)))
+    no.parent.mkdir(parents=True, exist_ok=True)
+    now = int(time.time())
+    no.write_text(json.dumps({"why": "it was not rendered within 180 s", "at": now, "until": now + 1800}))
+    r = TestClient(app).get("/api/ask/figure", params=q)
+    assert r.status_code == 503 and 1700 <= int(r.headers["retry-after"]) <= 1800
+    no.unlink()
     assert not preview._files(d, fig.bare(sha(page)))[1].exists(), "busy is not remembered"
     assert TestClient(app).get("/api/ask/figure", params=q).status_code == 200
 
@@ -728,11 +856,13 @@ def test_a_streamed_plate_that_is_not_its_hash_or_its_length_fails_the_transfer(
 
 
 def test_a_download_that_is_not_its_hash_is_cut_short_and_never_arrives_whole(copy, monkeypatch):
-    """THE REVIEW, over real HTTP: a plate over the streaming threshold, of
-    the right length and not its hash, arrived COMPLETE with status 200 —
+    """THE REVIEW ran it over real HTTP: a plate over the streaming threshold,
+    of the right length and not its hash, arrived COMPLETE with status 200 —
     where main answered 404 — because the hash was compared after the last
-    byte was sent. The last piece is now held back: the body is short of the
-    length it declared, which no HTTP client takes for a whole file."""
+    byte was sent. The last piece is now held back. HERE, through the route
+    in this process: what it hands the server is short of the length it
+    declared (the second review read the wire itself, uvicorn under h11 and
+    httptools: `http.client` raises IncompleteRead, curl exits 18)."""
     name, d, page, bomb, entries = copy
     monkeypatch.setattr(api, "STREAMED_OVER", 1_000)
     path = fig.path_for(d, "year=2023", 2)
@@ -848,6 +978,11 @@ def test_one_pdf_makes_previews_only_while_its_seconds_for_it_last(copy, monkeyp
     assert shown["kind"] == "img" and len(made) == 1 and 0 < clock[0] < ask_pdf.RENDER_S, "made, and its seconds counted"
     shown = ask_pdf.plate_shown(plate, [ask_pdf.MAX_PLATE_BYTES], [0.0])
     assert shown["kind"] == "img" and len(made) == 1, "kept: drawn with the clock spent, and nothing made"
+    # reading a kept one costs the clock NOTHING (the second review: 24 x 200 kept plates spent it)
+    left = [ask_pdf.RENDER_S]
+    for _ in range(20):
+        assert ask_pdf.plate_shown(plate, [ask_pdf.MAX_PLATE_BYTES], left)["kind"] == "img"
+    assert left == [ask_pdf.RENDER_S]
     # the whole PDF sets one clock for all its plates
     html = ask_pdf.build_html(
         ask_pdf.AskPdf(question="q", answer="See [1].", references=[ask_pdf.PdfReference(

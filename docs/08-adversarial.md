@@ -415,10 +415,18 @@ point: an estimate is not a bound (app/ask/preview.py).
    give a tag. libtiff takes the FIRST of two entries, Pillow and our reader
    the LAST: the first cut of this renderer decoded a Deflate plate that
    declared LZW in a second `Compression` entry (found by the independent
-   review, 2026-11-26, before anything was merged). The rule is general on
-   purpose: it is not a list of the tags we thought of.
+   review, 2026-11-26, before anything was merged). The ORDER rule and the
+   values rule are general on purpose — every entry, whichever its tag:
+   its values lie in the file and all of them together within 16 MiB. The
+   COUNT and TYPE rule binds the tags the reader acts on; for any other, an
+   error the decoder raises on it is the file's (below), never the node's.
+   A strip table may not name more strips than the image has rows (one a
+   plane where the planes are apart): a table that names the same bytes a
+   hundred thousand times passed every other cap from a 3 KB file and was
+   never done (the second review).
 2. **The child's own limits.** One child process per preview, at most three
-   at once on a node across processes; the web never holds the plate's
+   at once across processes — on the node where a fast drive is named, for
+   each collection's store where none is; the web never holds the plate's
    bytes and never runs the decoder. The child reads the plate in pieces,
    hashed as they go; from the moment the decoder is handed the file it
    has a data limit (RLIMIT_DATA) of the model's cap and 768 MiB; an alarm;
@@ -427,6 +435,13 @@ point: an estimate is not a bound (app/ask/preview.py).
    than that fails in the child alone.
 3. **The parent's watch**: the child's resident memory and its seconds
    (180), read every 50 ms.
+
+**THE RULES AFTER THE COUNT ARE COUNTED TOO.** Every rule above that was
+added after München's header count — the directory's order and types, the
+tag values, the side, the strips, the per-kind model — is run over the
+same corpus with the renderer's own reader (`tools/measure/
+preview_refusals.py`, no pixel decoded) before this section is in force;
+a rule that refuses an honest plate is the rule's defect.
 
 **Caps from the corpus**, as this section's were (München's header count
 over its 335,166 images, 2026-11-26, no pixel decoded — 300,775 read, of
@@ -448,9 +463,12 @@ above and to its size before the web reads it.
 
 **A refusal is remembered** with its reason, so a plate that cannot be
 previewed costs one attempt: for good where the reason is the FILE's (a
-cap, a coding, a decoder that fails or crashes on it), for an hour where it
-may be the MOMENT's (not done in time, killed by another, the store full,
-the held copy damaged) — and a moment's refusal answers `503`, not `415`.
+cap, a coding, a decoder that fails or crashes on it — any error it raises
+but the system's own: the drive, the store, the process's file limits), for
+an hour where it may be the MOMENT's (not done in time, killed by another,
+the store full, the held copy damaged) — and a moment's refusal answers
+`503` with how long to wait, not `415`. A plate not done in time three
+times, an hour apart, is the file's.
 What is kept and what is refused carry the renderer's version and the
 pinned Pillow in their name: another cap, coding or decoder asks afresh.
 A kept preview is never an answer by itself: the licence class, the

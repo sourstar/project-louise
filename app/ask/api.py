@@ -254,7 +254,7 @@ async def figure(collection: str, uid: str, hash: str, download: bool = False):
                 # the moment's — every renderer busy, not done in time: asked again, it may be made
                 return JSONResponse({"exit": 3, "error": f"no preview just now: {e}; ask with download=1 "
                                                          f"for the file"},
-                                    status_code=503, headers={**nosniff, "Retry-After": "30"})
+                                    status_code=503, headers={**nosniff, "Retry-After": str(e.after_s)})
             except preview_mod.NotPreviewable as e:
                 return JSONResponse({"exit": 2, "error": f"not displayable: {e}; ask with download=1 for the file"},
                                     status_code=415, headers=nosniff)

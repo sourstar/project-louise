@@ -37,13 +37,15 @@ last.
   3. THE PARENT'S WATCH: the child's resident memory and its seconds, read
      every 50 ms; killed past either.
 
-And around them: at most `CONCURRENT` previews are rendered at once on a
-node, across processes (the web, `louise ask pdf`); the PNG a child makes
+And around them: at most `CONCURRENT` previews are rendered at once across
+processes (the web, `louise ask pdf`) — on a NODE where a fast drive is
+named, for each collection's own store where none is; the PNG a child makes
 is held to the display rule (`figures.not_displayable`) and to its size
 before it is read, and carries nothing of the plate's metadata; a refusal is
 REMEMBERED beside the cache with its reason — for good where the reason is
 the FILE's, for an hour where it may be the MOMENT's (`NotPreviewableNow`:
-busy, not done in time, the store or the container not readable just now).
+busy, not done in time, the store or the container not readable just now);
+a plate not done in time `TIMEOUT_TRIES` times, an hour apart, is the file's.
 What is kept and what is refused carry the renderer's version in their name
 (`RENDERER`, and the pinned Pillow): a raised cap, an added coding or
 another decoder is asked afresh.
@@ -151,10 +153,16 @@ WAIT_S = 60.0
 #: how long a refusal that may be the MOMENT's is remembered before the next
 #: view tries again; what a killed renderer left is swept after this long too
 RETRY_S = 3600
+#: a plate not rendered within its seconds this many times, an hour apart, is
+#: not tried again: it is the file's after all (a strip table that names the
+#: same bytes a hundred thousand times passes every cap and never finishes)
+TIMEOUT_TRIES = 3
+#: how long "every renderer is busy" asks a reader to wait before asking again
+BUSY_RETRY_S = 30
 #: a signal that is the DECODER's own on this file — remembered for good; any
-#: other (a kill, a stop of the container) is the moment's
-_CRASHES = frozenset(int(s) for s in (signal.SIGSEGV, signal.SIGBUS, signal.SIGABRT, signal.SIGFPE,
-                                      signal.SIGILL))
+#: other (a kill, a stop of the container, SIGBUS: an I/O error under the
+#: mapped copy, which is the node's disk) is the moment's
+_CRASHES = frozenset(int(s) for s in (signal.SIGSEGV, signal.SIGABRT, signal.SIGFPE, signal.SIGILL))
 
 
 class NotPreviewable(Exception):
@@ -163,7 +171,12 @@ class NotPreviewable(Exception):
 
 class NotPreviewableNow(NotPreviewable):
     """No preview can be shown for it JUST NOW — every renderer busy, not
-    done within its seconds, the store not writable: asked later, it may be."""
+    done within its seconds, the store not writable: asked later, it may be.
+    `after_s`: how many seconds later is worth asking."""
+
+    def __init__(self, why: str, after_s: float = BUSY_RETRY_S) -> None:
+        super().__init__(why)
+        self.after_s = max(1, int(after_s))
 
 
 @dataclass(frozen=True)
@@ -177,6 +190,7 @@ class TiffHeader:
     photometric: int | None = None
     tile: tuple[int, int] = (0, 0)
     tag_bytes: int = 0
+    strips: int = 0
 
     @property
     def pixels(self) -> int:
@@ -218,6 +232,8 @@ class TiffHeader:
 _WIDTH, _HEIGHT, _BITS, _COMPRESSION, _PHOTOMETRIC, _SAMPLES = 256, 257, 258, 259, 262, 277
 _TILE_WIDTH, _TILE_LENGTH = 322, 323
 _READ = (_WIDTH, _HEIGHT, _BITS, _COMPRESSION, _PHOTOMETRIC, _SAMPLES, _TILE_WIDTH, _TILE_LENGTH)
+#: StripOffsets: only its COUNT is read — how many strips the decoder will walk
+_STRIP_OFFSETS = 273
 #: BYTE, ASCII, SHORT, LONG, RATIONAL, SBYTE, UNDEFINED, SSHORT, SLONG, SRATIONAL, FLOAT, DOUBLE, IFD
 _TYPE_SIZE = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 13: 4}
 #: a directory with more entries than this is not an image's (TIFF 6.0 has ~70 baseline tags)
@@ -256,7 +272,7 @@ def tiff_header(f: BinaryIO) -> TiffHeader:
         raise NotPreviewable(f"its image directory declares {count} entries")
     entries = f.read(count * 12)
     got: dict[int, list[int]] = {}
-    last, tag_bytes = -1, 0
+    last, tag_bytes, strips = -1, 0, 0
     for i in range(count):
         tag, kind, n, raw = struct.unpack(order + "HHI4s", entries[i * 12:(i + 1) * 12])
         if tag <= last:
@@ -266,21 +282,26 @@ def tiff_header(f: BinaryIO) -> TiffHeader:
         width = _TYPE_SIZE.get(kind)
         if width is None:
             raise NotPreviewable(f"its tag {tag} is of a field type ({kind}) TIFF 6.0 does not define")
+        at = None
         if n * width > 4:
+            # EVERY entry, read by this reader or not: its values lie in the file,
+            # and all of them together within what a decoder may read at open
             tag_bytes += n * width
             if tag_bytes > MAX_TAG_BYTES:
                 raise NotPreviewable(f"its directory's entries point at over {MAX_TAG_BYTES >> 20} MiB of "
                                      f"values, which a decoder reads before any pixel")
+            (at,) = struct.unpack(order + "I", raw)
+            if not 8 <= at <= size - n * width:
+                raise NotPreviewable(f"its tag {tag} points outside the file")
+        if tag == _STRIP_OFFSETS:
+            strips = n
         if tag not in _READ:
             continue
         if kind not in (3, 4) or not (n == 1 or (tag == _BITS and 1 <= n <= 8)):
             raise NotPreviewable(f"its tag {tag} is of a type or count ({kind}, {n}) no image declares")
-        if n * width <= 4:
+        if at is None:
             data = raw[:n * width]
         else:
-            (at,) = struct.unpack(order + "I", raw)
-            if not 8 <= at <= size - n * width:
-                raise NotPreviewable(f"its tag {tag} points outside the file")
             f.seek(at)
             data = f.read(n * width)
         got[tag] = list(struct.unpack(order + ("H" if width == 2 else "I") * n, data))
@@ -301,7 +322,7 @@ def tiff_header(f: BinaryIO) -> TiffHeader:
         raise NotPreviewable("its header declares one side of a tile and not the other")
     tile = (got[_TILE_WIDTH][0], got[_TILE_LENGTH][0]) if _TILE_WIDTH in got else (0, 0)
     return TiffHeader(w, h, bpp, got.get(_COMPRESSION, [1])[0], samples,
-                      got[_PHOTOMETRIC][0] if _PHOTOMETRIC in got else None, tile, tag_bytes)
+                      got[_PHOTOMETRIC][0] if _PHOTOMETRIC in got else None, tile, tag_bytes, strips)
 
 
 def refused(header: TiffHeader, size: int) -> str | None:
@@ -320,6 +341,11 @@ def refused(header: TiffHeader, size: int) -> str | None:
     if header.tile != (0, 0) and (min(header.tile) <= 0 or tile > header.pixels + MAX_TILE_SLACK_PIXELS):
         return (f"image/tiff, {dims} in tiles of {header.tile[0]}×{header.tile[1]}: a tile no image of that "
                 f"size is cut into")
+    if header.strips > header.height * max(1, header.samples):
+        # a strip holds a row at least (one a sample where the planes are apart):
+        # more of them than that is a table that names the same bytes again
+        return (f"image/tiff, {dims} in {header.strips:,} strips: more strips than an image of that "
+                f"height has rows")
     if header.held_bytes > MAX_HELD_BYTES:
         return (f"image/tiff, {dims} at {header.bits_per_pixel} bits a pixel: rendering it would hold "
                 f"{mib(header.held_bytes)}, over the {mib(MAX_HELD_BYTES)} cap")
@@ -361,11 +387,14 @@ def _files(shard_tree: Path, want: str) -> tuple[Path, Path]:
     return base / f"{stem}.png", base / f"{stem}.no"
 
 
-def _remember_refusal(no: Path, why: str, for_s: int | None = None) -> None:
-    """Keep why no preview is shown, for good or — `for_s` — until then."""
+def _remember_refusal(no: Path, why: str, for_s: int | None = None, tries: int = 0) -> None:
+    """Keep why no preview is shown, for good or — `for_s` — until then;
+    `tries`: how many times in a row it was not done within its seconds."""
     said: dict = {"why": why, "at": int(time.time())}
     if for_s is not None:
         said["until"] = said["at"] + for_s
+    if tries:
+        said["tries"] = tries
     try:
         no.parent.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(dir=no.parent, prefix=".", suffix=".no.tmp")
@@ -376,41 +405,70 @@ def _remember_refusal(no: Path, why: str, for_s: int | None = None) -> None:
         pass                                # not remembered: the next view tries again
 
 
-def _remembered(no: Path) -> tuple[str, bool] | None:
-    """(the refusal kept for this figure, whether it is the moment's) while
-    it holds, else None. One that names an end holds until then — and not
-    past `RETRY_S` from now, whatever a clock set back wrote."""
+def _record(no: Path) -> dict:
+    """What is kept for this figure, whether it still holds or not; {} for none."""
     try:
         said = json.loads(no.read_text(encoding="utf-8"))
-        why, until = str(said["why"]), said.get("until")
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError):
+        return {}
+    return said if isinstance(said, dict) and isinstance(said.get("why"), str) else {}
+
+
+def _remembered(no: Path) -> tuple[str, float | None] | None:
+    """(the refusal kept for this figure, the seconds it still holds — None:
+    for good) while it holds, else None. One that names an end holds until
+    then — and not past `RETRY_S` from now, whatever a clock set back wrote."""
+    said = _record(no)
+    if not said:
         return None
+    until = said.get("until")
     if until is None:
-        return why, False
+        return said["why"], None
     now = time.time()
     if not isinstance(until, (int, float)) or now >= until or until - now > RETRY_S:
         return None
-    return why, True
+    return said["why"], until - now
 
 
 def _raise_remembered(no: Path) -> None:
     got = _remembered(no)
     if got is not None:
-        raise (NotPreviewableNow if got[1] else NotPreviewable)(got[0])
+        raise (NotPreviewable(got[0]) if got[1] is None else NotPreviewableNow(got[0], got[1]))
+
+
+def _tmp_dir(shard_tree: Path) -> Path:
+    """Where a collection's renderers put what they are making: ONE folder
+    on the store's own drive (a preview is moved into place from it), so
+    what a killed renderer left — a plate's copy can be 1 GiB — is found by
+    the next render of any plate, not only one of the same hash prefix."""
+    return store(shard_tree) / ".tmp"
 
 
 def _sweep(where: Path) -> None:
-    """What a renderer that was killed left in `where`: its temporary files
-    (a plate's copy can be 1 GiB), once older than any renderer still
-    running could be."""
+    """What a renderer that was killed left in `where`, once older than any
+    renderer still running could be."""
     old = time.time() - RETRY_S
     try:
         with os.scandir(where) as entries:
             for e in entries:
-                if e.name.startswith(".") and ".tmp" in e.name:
+                try:
+                    if e.is_file(follow_symlinks=False) and e.stat().st_mtime < old:
+                        os.unlink(e.path)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def _drop_other_versions(kept: Path, no: Path, want: str) -> None:
+    """What an OLDER renderer kept or refused for this figure: gone once
+    this one has an answer of its own for it (the names carry the version)."""
+    try:
+        with os.scandir(kept.parent) as entries:
+            for e in entries:
+                if e.name.startswith(want + ".") and e.name not in (kept.name, no.name):
                     try:
-                        if e.stat().st_mtime < old:
-                            os.unlink(e.path)
+                        os.unlink(e.path)
                     except OSError:
                         pass
     except OSError:
@@ -443,7 +501,8 @@ def _slot(where: Path) -> Iterator[None]:
                     f.close()
             return
         if time.monotonic() >= deadline:
-            raise NotPreviewableNow(f"{CONCURRENT} previews are being rendered; asked again, this one is made")
+            raise NotPreviewableNow(f"{CONCURRENT} previews are being rendered; asked again, this one is made",
+                                    BUSY_RETRY_S)
         time.sleep(0.05)
 
 
@@ -529,15 +588,18 @@ def _judge(code: int | str, out: str) -> tuple[str, int | None]:
     return f"the renderer did not run (exit {code}); asked again within the hour, it is tried again", RETRY_S
 
 
-def _make(collection: str, container: Path, want: str, size: int, kept: Path, no: Path) -> bytes:
+def _make(collection: str, container: Path, want: str, size: int, kept: Path, no: Path,
+          tmp_dir: Path) -> bytes:
     """Render one figure's preview, keep it and return it — or remember why
     not and raise. The caller holds a renderer's slot."""
     from app.ask import figures as figures_mod
     kept.parent.mkdir(parents=True, exist_ok=True)
-    _sweep(kept.parent)
-    fd, name = tempfile.mkstemp(dir=kept.parent, prefix=".", suffix=".tmp")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    _sweep(tmp_dir)
+    fd, name = tempfile.mkstemp(dir=tmp_dir, prefix=f"{want[:12]}.", suffix=".tmp")
     os.close(fd)
     tmp = Path(name)
+    tries = 0
     try:
         code, out = _render(container, want, size, tmp)
         if code == 0:
@@ -551,10 +613,17 @@ def _make(collection: str, container: Path, want: str, size: int, kept: Path, no
                 if bad is None:
                     os.chmod(tmp, 0o644)
                     os.replace(tmp, kept)
+                    _drop_other_versions(kept, no, want)
                     return data
                 why, for_s = f"the preview made of it is itself not displayable ({bad})", None
         else:
             why, for_s = _judge(code, out)
+            if code == TIMED_OUT:
+                # the node's load once, perhaps twice; the third time it is the file
+                tries = int(_record(no).get("tries") or 0) + 1
+                if tries >= TIMEOUT_TRIES:
+                    why, for_s = (f"it was not rendered within {RENDER_TIMEOUT_S:.0f} s, {tries} times "
+                                  f"an hour apart: not tried again"), None
     finally:
         # the child's own temporary copy too: a child that was killed left it
         for left in (tmp, tmp.with_name(tmp.name + ".src")):
@@ -563,8 +632,9 @@ def _make(collection: str, container: Path, want: str, size: int, kept: Path, no
             except OSError:
                 pass
     print(f"[{collection}] no preview of figure {want[:12]}…: {why}", flush=True)
-    _remember_refusal(no, why, for_s)
-    raise (NotPreviewable if for_s is None else NotPreviewableNow)(why)
+    _remember_refusal(no, why, for_s, tries)
+    _drop_other_versions(kept, no, want)
+    raise (NotPreviewable(why) if for_s is None else NotPreviewableNow(why, for_s))
 
 
 def png(collection: str, uid: str, hash_: str, *, root: Path | None = None, render: bool = True) -> bytes:
@@ -594,7 +664,7 @@ def png(collection: str, uid: str, hash_: str, *, root: Path | None = None, rend
         _remember_refusal(no, why)
         raise NotPreviewable(why)
     if not render:
-        raise NotPreviewableNow("its preview is not made yet")
+        raise NotPreviewableNow("its preview is not made yet", 1)
     try:
         with _slot(_slots_dir(shard_tree)):
             try:
@@ -602,8 +672,8 @@ def png(collection: str, uid: str, hash_: str, *, root: Path | None = None, rend
             except OSError:
                 pass
             _raise_remembered(no)               # or refused
-            return _make(collection, container, want, size, kept, no)
+            return _make(collection, container, want, size, kept, no, _tmp_dir(shard_tree))
     except OSError as e:
         # the store cannot be written, the child cannot be started: the node's, and the moment's
         raise NotPreviewableNow(f"a preview cannot be made here just now ({type(e).__name__}: "
-                                f"{e.strerror or e})") from None
+                                f"{e.strerror or e})", BUSY_RETRY_S) from None

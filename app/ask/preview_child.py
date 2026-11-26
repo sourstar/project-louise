@@ -39,6 +39,7 @@ and offered as a download beside its preview.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sys
@@ -54,7 +55,9 @@ def render(source: Path, width: int, max_height: int, declared: tuple[int, int])
     Image.MAX_IMAGE_PIXELS = preview.MAX_SOURCE_PIXELS
     with Image.open(source, formats=["TIFF"]) as im:
         im.seek(0)
-        if im.size != declared:
+        # the same pixels the header was held to — as declared, or turned a
+        # quarter (Pillow gives a page with Orientation 5–8 its sides swapped)
+        if im.size not in (declared, declared[::-1]):
             raise ValueError(f"the decoder reads {im.size[0]}×{im.size[1]} where the header declares "
                              f"{declared[0]}×{declared[1]}")
         im.load()
@@ -85,6 +88,13 @@ def write(im, dest: Path) -> None:
     (an 8 MiB profile gave an 8 MiB preview that passed the display rule)."""
     im.info = {}
     im.save(dest, "PNG")
+
+
+#: the errors of the SYSTEM under the decoder — the drive, the store, the
+#: process's own limits on files — and no other: an errno the file itself can
+#: cause (EINVAL, EOVERFLOW) is the file's
+_THE_SYSTEMS = frozenset({errno.EIO, errno.ENOSPC, errno.EDQUOT, errno.EROFS, errno.EMFILE, errno.ENFILE,
+                          errno.ESTALE, errno.ENOENT, errno.EACCES})
 
 
 def _say(key: str, why: object) -> None:
@@ -143,7 +153,7 @@ def main(argv: list[str], before_decoding=None) -> int:
         if before_decoding is not None:
             before_decoding()
         # DECODING: what fails here is the file's, but for an error of the
-        # system under it (Pillow's own decoding errors carry no errno)
+        # system under it (`_THE_SYSTEMS`)
         try:
             im = render(source, width, max_height, (header.width, header.height))
         except ImportError as e:
@@ -153,9 +163,12 @@ def main(argv: list[str], before_decoding=None) -> int:
             _say("failed", "it needs more memory than a preview is given")
             return 1
         except OSError as e:
-            if e.errno is not None:
+            if e.errno in _THE_SYSTEMS:
                 _say("now", f"its copy could not be read back ({e.strerror or e})")
                 return preview.NOT_NOW
+            # anything else is what the FILE made the decoder do — a seek to a
+            # negative offset it names is EINVAL, and was taken for the node's
+            # (the second review: such a plate was tried again every hour, for ever)
             _say("failed", f"{type(e).__name__}: {e}")
             return 1
         except Exception as e:              # noqa: BLE001 — whatever the decoder raises on the file, said

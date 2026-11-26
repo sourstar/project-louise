@@ -432,16 +432,22 @@ def _plate_bytes(collection: str, uid: str, hash_: str) -> tuple[bytes, str]:
     media = str(entry.get("media_type") or "")
     if media in preview_mod.PREVIEW_OF:
         clock = _render_clock.get()
-        began = time.monotonic()
         try:
-            return preview_mod.png(collection, uid, hash_, render=clock is None or clock[0] > 0), "image/png"
+            try:
+                return preview_mod.png(collection, uid, hash_, render=False), "image/png"   # kept: free
+            except preview_mod.NotPreviewableNow:
+                if clock is not None and clock[0] <= 0:
+                    raise
+            began = time.monotonic()                 # only MAKING one spends the PDF's seconds
+            try:
+                return preview_mod.png(collection, uid, hash_), "image/png"
+            finally:
+                if clock is not None:
+                    clock[0] -= time.monotonic() - began
         except preview_mod.NotPreviewableNow as e:
             raise PlateNotDrawn(f"not drawn: {e}; it is on the page") from None
         except preview_mod.NotPreviewable as e:
             raise PlateNotDrawn(f"not displayable: {e}") from None
-        finally:
-            if clock is not None:
-                clock[0] -= time.monotonic() - began
     why = figures_mod.placed_not_displayable(media, figures_mod.held_size(path, want))
     if why is not None:
         raise PlateNotDrawn(f"not displayable: {why}")
