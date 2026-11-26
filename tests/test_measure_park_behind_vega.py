@@ -86,9 +86,28 @@ def test_the_note_says_what_was_seen_and_what_was_not():
                  "| 5 | a park inside the idle second | 409 `model_busy`",
                  "41 repeated loads let through, ONE load stated; created 1 -> 42, canary_failed 0",
                  "nothing in a receipt tells it from a\ncycle", "six loads,\nsix run ids, differing in `Seed` alone",
-                 "**NOT shown:** a card.",
                  # the node's row: the tool's own mode, and what the copy's file keeps
                  "`park_http.py --receipts`", "calls 18, created 2, canary_failed 0 -> calls 339, created 22, canary_failed 0",
                  "**THE NODE'S ROW (München's):**", "`GGML_SYCL_ENABLE_DNN=0` stays"):
         assert said in section, said
     assert 1 + 20 + 20 == 41
+
+
+def test_the_card_s_row_behind_the_live_wrapper_is_recorded_with_its_counts():
+    """München, 2026-11-26 01:22-01:25Z: the tool's --receipts mode against a copy of vega-bge-m3."""
+    section = NOTE[NOTE.index("**ON THE CARD, BEHIND THE LIVE WRAPPER (München, 2026-11-26"):]
+    for said in ("loaded on Intel(R) Arc(TM) Pro B70 Graphics, run\nsha256:0211255556cfb743",
+                 'no "VRAM before the load not read", no "no run\ncan be stated"',
+                 "the wrapper: calls 1, created 1, canary_failed 0 -> calls 17, created 2, canary_failed 0",
+                 "calls 49, created 4, canary_failed 0 -> calls 385, created 24, canary_failed 0",
+                 "calls 385, created 24 -> calls 721, created 44, canary_failed 0",
+                 "{(409, 'model_busy'): 2716}", "HTTP 200 in 1314 ms", "HTTP 200 in 10.58 s",
+                 "**43 cycles: one run id throughout, `created` 1 → 44 — one a return —,",
+                 "| a return with sixteen sentences | 228 ms | 312–341 ms | 377–392 ms;",
+                 "**NOT shown, still:** a failed return on a card"):
+        assert said in section, said
+    # the figures hang together: three rows of cycles, a context a return, sixteen calls a request
+    assert 3 + 20 + 20 == 43 == 44 - 1
+    assert (17 - 1, 385 - 49, 721 - 385) == (16, 21 * 16, 21 * 16), "a row embeds its sixteen once before its cycles"
+    status = (ROOT / "docs" / "notes" / "STATUS.md").read_text(encoding="utf-8")
+    assert "ON THE CARD, BEHIND THE LIVE WRAPPER (München, 01:22–01:25Z" in status and "`created` 1 → 44, one a return" in status

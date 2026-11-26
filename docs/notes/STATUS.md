@@ -907,7 +907,12 @@ measured (published figures disagree).
   25 of 25. A park passes the wrapper; the return's `LoadModel` is "the load in force", ONE load stated over 41 returns, the receipts
   naming one run; the wrapper's `created` goes up by one a return, no canary failure; a refused return keeps the run; a FAILED
   return is answered by a new wrapper process with THE SAME run id and valid receipts — only the engine's and the wrapper's counts
-  starting again tell it from a cycle. NOT shown: a card (München's next row: a copy of a vega model behind the wrapper).
+  starting again tell it from a cycle. ON THE CARD, BEHIND THE LIVE WRAPPER (München, 01:22–01:25Z, a copy of vega-bge-m3, the node
+  at work beside it; `park_http.py --receipts`): the wrapper stated the copy's run on the card with weights that can park ("loaded
+  on Intel(R) Arc(TM) Pro B70 Graphics", one line); 43 cycles the same bytes, each counted by the engine, ONE run id, the wrapper's
+  `created` 1 → 44, one a return, no canary failure; a park 135–138 ms, a return with sixteen sentences 377–392 ms; 2,716 parks
+  during one request all 409; a refused return 503 twice, then served; a parked model shut down in 1.3 s, its load afresh 10.6 s
+  with the same run id. NOT shown: a failed return on a card, any model but bge-m3 F16, the gate's fingerprint texts.
 - **Live 2026-11-25 15:18:30Z to 23:45:20Z, and the engine a rollback puts back: engine `619655e5833b`** (`engine-canary.series`: `792f050e318e`'s series + 0028; the operator:
   "Deploy and engine swap"). München: byte check VEGA/1 against VEGA/2 all identical (bge-m3, nemotron, qwen3-4b); five gates passed,
   each "exact, 3 fresh load(s)", every fingerprint identical to before — wikipedia (bge-m3) 109 s, gutenberg (qwen3-embedding-4b)

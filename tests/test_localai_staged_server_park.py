@@ -316,7 +316,7 @@ def test_the_card_s_rows_are_recorded_with_what_they_did_not_measure():
                 "| a failed return (`failed`) | no switch on a card |",
                 "| the gate's clause with the FINGERPRINT texts (§3.3) |",
                 "| a quantized model, buffers above 1 GiB, the 35B, OmniVoice |",
-                "| parking BEHIND THE VEGA WRAPPER (LocalAI, the wrapper, the engine) ON THE CARD | both copies were on the engine directly.",
+                "| parking BEHIND THE VEGA WRAPPER (LocalAI, the wrapper, the engine) | both copies of this pass were on the engine directly. SHOWN SINCE:",
                 "| the engine's own COUNT of the forty cycles | the tool did not read it yet (§10); the forty stand on their times"):
         assert row in still, row
     assert "No real model parks" in still and "both copies are removed" in still

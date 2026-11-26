@@ -1121,7 +1121,7 @@ this computation, try again later.","type":"no_room_on_device"}}` and
 | a failed return (`failed`) | no switch on a card | shown on the CPU server only (§8) |
 | the gate's clause with the FINGERPRINT texts (§3.3) | the forty cycles compared the tool's own sixteen sentences, not the gate's sixteen; München confirms the fingerprint texts were NOT run on the copy | at the gated run of the first real model that parks — it is part of that gate |
 | a quantized model, buffers above 1 GiB, the 35B, OmniVoice | §3.1's rows; only bge-m3 F16 (one 577 MiB buffer) has parked | before any of them is switched to parking |
-| parking BEHIND THE VEGA WRAPPER (LocalAI, the wrapper, the engine) ON THE CARD | both copies were on the engine directly. Since: the three parts together on the CPU stand-in, 25 of 25 (§11) | a copy of a vega model behind the wrapper on the node (München's, after §11), then the gated run of the first real model that parks |
+| parking BEHIND THE VEGA WRAPPER (LocalAI, the wrapper, the engine) | both copies of this pass were on the engine directly. SHOWN SINCE: the three parts together on the CPU stand-in, 25 of 25, then a copy of vega-bge-m3 behind the live wrapper on the card, 43 cycles (§11) | — |
 | the engine's own COUNT of the forty cycles | the tool did not read it yet (§10); the forty stand on their times — every return 226–246 ms, where a load is 4.17 s. Since: three cycles counted on the card (§10) | from the next row on, the tool counts each cycle |
 
 No real model parks: no model file but the two copies ever carried `park:
@@ -1336,6 +1336,44 @@ on <the card>, run …" (and any "VRAM before the load not read"); at each
 return "the load in force asked again (… the backend: 'Model already
 loaded'): run … stands", and no second "loaded on".
 
-**NOT shown:** a card. The stand-in parks a CPU buffer; the times are not
-the card's, and the wrapper's reading of the device (which card the backend
-holds, how much moved) was not exercised — the run is a CPU run and says so.
+**ON THE CARD, BEHIND THE LIVE WRAPPER (München, 2026-11-26
+01:22:55–01:25:45Z;** the tool at 3c9d99f with `--receipts`, the node
+embedding beside it, no pause). Copies of vega-bge-m3's file whole + `park:
+true` and the two env lines, behind `vega-louise-llama-cpp` (wrapper
+47bf02ea…, engine `ed93e3c1b2e2`); the floor at 12 GiB and back to 0, both
+copies removed after. Every command exit 0.
+
+**The wrapper stated the copy's run on the card, with weights that can
+park** — the one thing the stand-in could not show. ONE load line: "…
+bge-m3-FP16.gguf loaded on Intel(R) Arc(TM) Pro B70 Graphics, run
+sha256:0211255556cfb743…"; no "VRAM before the load not read", no "no run
+can be stated". The engine at that load: "parking: this model can park,
+577.23 MiB of weights leave the device when it is told to".
+
+| row | on the card, behind the wrapper |
+|---|---|
+| `cycles -n 3 --return request` | "cycle 1: parked in 171.5 ms (577 MiB to the host, the process holds 319 MiB of the device, 996 MiB given back); back by the request in 1378.3 ms; vectors identical; the engine: 1 parked, 0 back, 0 refused for room, away -> 1 parked, 1 back, 0 refused for room, on the device; receipts of run sha256:0211255556cfb743...; the wrapper: calls 1, created 1, canary_failed 0 -> calls 17, created 2, canary_failed 0"; "3 of 3 cycles: the same bytes; a park 199.5 ms (median, 171.5-396.2), a return with its sixteen sentences 1004.6 ms (880.9-1378.3)" |
+| the copy's log after the three | "loaded on" 1; "the load in force asked again (the same options, the same process 42002; the backend: 'Model already loaded'): run sha256:0211255556cfb743… stands" 3; "weights parked in" 3; "weights unparked in" 3 |
+| `cycles -n 20 --return request` | "VeGa: ONE run through 20 returns …; the wrapper's count: calls 49, created 4, canary_failed 0 -> calls 385, created 24, canary_failed 0"; "20 of 20 cycles: the same bytes; a park 138.0 ms (median, 133.1-161.9), a return with its sixteen sentences 392.2 ms (242.9-735.9)" |
+| `cycles -n 20 --return load` | "… calls 385, created 24 -> calls 721, created 44, canary_failed 0"; "20 of 20 cycles: the same bytes; a park 134.9 ms (median, 127.5-140.5), a return with its sixteen sentences 376.6 ms (338.5-460.6)" |
+| `busy` | "2048 sentences in one request; while it ran, 2716 parks answered: {(409, 'model_busy'): 2716}" |
+| `stop` | parked at 320 MiB, 577 MiB on the host; "/backend/shutdown of the parked model: HTTP 200 in 1314 ms"; "the next request: HTTP 200 in 10.58 s, vectors identical", loaded at 1,315 MiB, another process; the receipts name the same run before and after the load afresh |
+| `refused` (a second copy, + `GGML_SYCL_PARK_REFUSE=2`) | 503 `no_room_on_device`, `Retry-After: 2`, twice, parked at 319 MiB; "request 3: served, vectors identical"; "ok: 2 return(s) refused as a deferral, then served" |
+
+**43 cycles: one run id throughout, `created` 1 → 44 — one a return —,
+`canary_failed` 0, every cycle counted by the engine.** As on the stand-in.
+
+What the wrapper and a working node cost, as München reports them (not
+analysed further here):
+
+| | on the engine directly, the node paused (§9) | directly, the node at work (§10) | behind the wrapper, the node at work |
+|---|---|---|---|
+| a park | 142 ms | 182–234 ms | 135–138 ms |
+| a return with sixteen sentences | 228 ms | 312–341 ms | 377–392 ms; 881–1,378 ms in the three cycles right after the load |
+| a parked model shut down | 202 ms | — | 1,314 ms |
+| the load afresh | 4.17 s | — | 10.58 s |
+
+**NOT shown, still:** a failed return on a card (no switch for it there);
+any model but bge-m3 F16; the gate's sixteen fingerprint texts (the tool's
+sixteen sentences again, now with receipts) — the gated run of the first
+real model that parks.
