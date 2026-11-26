@@ -1020,22 +1020,29 @@ def test_another_collections_query_mark_does_not_send_every_step_to_the_document
     assert looks.count(True) == n + 1, "the mark gone: the query side looked at at once"
 
 
-def test_a_gate_whose_request_timed_out_marks_the_encoder_slow(node, endpoint, monkeypatch):
-    """THE DELTA READ, run (BLOCKING): a look that heard a run counted as
-    answered, so a gate whose first request then waited its 300 s timeout set
-    no mark, and the main loop was held half the time again (91 % with two
-    collections). A timeout anywhere in the look's chain is a hang."""
+def test_a_gate_whose_request_timed_out_backs_its_own_collection_off_and_holds_no_other(
+        node, endpoint, monkeypatch):
+    """THE DELTA READ, run (BLOCKING): a gate whose first request waited its
+    300 s timeout counted as answered and was asked again every 600 s — the
+    main loop held half the time. THE ELEVENTH, run: marked on the ENCODER, one
+    collection's own gate timeouts held another whose gate would pass, for as
+    long as the first kept timing out. A probe the encoder answered marks no
+    encoder; the hung gate backs ITS collection off, longer each time."""
     import httpx
     from app.hold import embedder as hold_emb
     root, collection, codex = node
     con = db.connect(collection)
     assert backend_gate.embed_allowed(con, collection) is True
     mono = _hung_clock(monkeypatch)
+    clock = [time.time()]
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
     real = run_check.answering_run
     monkeypatch.setattr(run_check, "answering_run",
                         lambda recipe, query=False, **k: real(recipe, query=query, **k) if query else R2)
+    gates = []
 
     def hung_gate(*a, **k):
+        gates.append(clock[0])
         mono[0] += 300.0
         try:
             raise httpx.ReadTimeout("timed out")
@@ -1043,6 +1050,32 @@ def test_a_gate_whose_request_timed_out_marks_the_encoder_slow(node, endpoint, m
             raise hold_emb.GateDeferred("the encoder could not embed: timed out") from e
     monkeypatch.setattr(run_check, "validate", hung_gate)
     run_check._verdicts.clear()
-    assert backend_gate.embed_allowed(con, collection) is False
-    assert run_check._flight(collection) in run_check._slow, "the encoder is marked: its gate hung"
-    assert run_check._timed_out(hold_emb.GateDeferred("x")) is False
+    for _ in range(120):                                   # 2 h, a step a minute
+        backend_gate.embed_allowed(con, collection)
+        clock[0] += 60
+    assert run_check._slow == {}, "the encoder answered its probe: no other collection is held"
+    gaps = [round(b - a) for a, b in zip(gates, gates[1:])]
+    assert 300 <= gaps[0] <= 360 and 600 <= gaps[1] <= 660 and 1200 <= gaps[2] <= 1260, gaps
+    assert all(g <= run_check.FAIL_CAP_S + 60 for g in gaps), gaps
+
+
+def test_a_chain_cut_on_purpose_is_not_read_for_a_timeout():
+    """THE ELEVENTH READ, run: `raise … from None` cut the chain (VeGa's
+    receipts read timing out, not the encoder) and `_timed_out` followed
+    `__context__` past it — the encoder marked for another service's wait."""
+    import httpx
+    from app.hold import embedder as hold_emb
+    try:
+        try:
+            raise httpx.ReadTimeout("vega receipts")
+        except httpx.ReadTimeout:
+            raise hold_emb.GateDeferred("receipts deferred") from None
+    except hold_emb.GateDeferred as e:
+        assert run_check._timed_out(e) is False
+    try:
+        try:
+            raise httpx.ReadTimeout("the encoder")
+        except httpx.ReadTimeout as inner:
+            raise hold_emb.GateDeferred("could not embed") from inner
+    except hold_emb.GateDeferred as e:
+        assert run_check._timed_out(e) is True

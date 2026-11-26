@@ -2170,7 +2170,9 @@ def _timed_out(e: BaseException | None) -> bool:
         seen.add(id(e))
         if isinstance(e, (httpx.TimeoutException, TimeoutError)):
             return True
-        e = e.__cause__ or e.__context__
+        # `raise … from None` cut the chain on purpose (the eleventh read, run:
+        # VeGa's receipts read timing out, not the encoder, marked it)
+        e = e.__cause__ if e.__cause__ is not None else (None if e.__suppress_context__ else e.__context__)
     return False
 
 
@@ -2439,9 +2441,22 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             # unless a request of it timed out (the delta read: a gate whose first
             # request waited its 300 s held the main loop half the time again)
             hung = bool(getattr(_look_state, "timed_out", False))
-            slow_n, slow_until = _note_look(doc_key, _look_clock() - t_look,
-                                            settled or allowed or (run_id is not None and not hung),
+            took = _look_clock() - t_look
+            # THE ENCODER'S BACKOFF only where it did not answer its probe (no run
+            # heard): it holds every collection on the model. A probe answered
+            # clears it — the encoder is not hung (the eleventh read, run: a mark
+            # set by one collection's own gate timeouts held another whose gate
+            # would pass, for as long as the first kept timing out)
+            slow_n, slow_until = _note_look(doc_key, took, settled or allowed or run_id is not None,
                                             now_answering)
+            if run_id is not None and hung and took >= SLOW_LOOK_S and not (settled or allowed):
+                # ...AND THIS COLLECTION'S OWN where its gate hung after the probe
+                # answered (a request timed out, `_timed_out`): its own verdict put
+                # off longer each time for that run, no other collection held
+                prev = cached[7] if (cached is not None and len(cached) > 7 and not cached[0]
+                                     and cached[3] == run_id and not (len(cached) > 6 and cached[6])) else 0
+                slow_n = int(prev or 0) + 1
+                slow_until = time.time() + min(FAIL_TTL_S * 2 ** min(slow_n - 1, 3), FAIL_CAP_S)
         # THE RUN A VERDICT IS ABOUT: the one its look heard; where it heard
         # none (the encoder could not be asked), the one heard BEFORE it — so
         # a run heard since, by any process, is looked at at once, and one
@@ -2486,7 +2501,10 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             q_took = _look_clock() - t_q
             q_hung = bool(getattr(_look_state, "timed_out", False))
             if q_key is not None:
-                _note_look(q_key, q_took, query_run is not None or (bool(query_heard) and not q_hung), q_heard)
+                # the encoder's mark only where the query probe was not answered;
+                # a query gate that hung after it backs off this collection's
+                # query side alone (`again` below)
+                _note_look(q_key, q_took, query_run is not None or bool(query_heard), q_heard)
         if query_run is None and _asymmetric(collection):
             # WHEN it failed — after the look, which may have taken its whole
             # timeout (the fourth read: stamped before it, a probe that timed

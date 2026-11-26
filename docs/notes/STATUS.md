@@ -68,7 +68,12 @@ measured (published figures disagree).
   `check_write` dropped for R2 waited for the mark); a look the encoder answered does not set it — unless a
   request of it timed out (`_timed_out` along the exception chain: a gate whose first request waited its
   300 s, counted as answered, held the main loop half the time again); and an unsettled query side is kept
-  by the mark itself, as long as it and no longer (`_query_kept`; re-stamped, it outlived the mark). And the
+  by the mark itself, as long as it and no longer (`_query_kept`; re-stamped, it outlived the mark). The
+  eleventh read, run: a mark set by ONE collection's own gate timeouts held another on the model whose gate
+  would pass, for as long as the first kept timing out — so the encoder's mark is now set only where the
+  encoder did not answer its PROBE (it is hung for everyone), and a gate that hung after the probe answered
+  backs off its own collection alone (300, 600, 1,200, 1,800 s); `_timed_out` stops where a chain was cut
+  on purpose (`from None`: VeGa's receipts read timing out is not the encoder). And the
   manual door, `hold embedder check`, is
   shut on a running node — the worker holds every collection's lock — so its hint now says to pause
   the collection first; that is how today's gate was run. I had told München the record was shared
