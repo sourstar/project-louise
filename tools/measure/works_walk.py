@@ -27,11 +27,22 @@ WHAT IT RUNS. The text leg's first `k` records for the query (`retrieval.
 federated_search`, mode "fts", the reranker replaced by "kept the fused
 order", the grouping left out) — the candidates a real question groups —
 then `works.work_groups` over them, `--times` times: the first is the cold
-one. Around it, counters: lookups and the claims they returned; frames read
-(a frame not in the index's cache: one pread and one decompress), their
-compressed and decompressed bytes and their seconds; distinct frames; the
+one. Around it, counters: lookups and the claims they returned; frames the
+claim index read (`frames_read`: a frame not in its cache, one pread and one
+decompress), their compressed and decompressed bytes; distinct frames;
+frames another reader read meanwhile, apart (`frames_read_by_others`); the
 relations' and the rows' queries and seconds; the works found and their
-members.
+members. `seconds.frame_read` is every frame read of the process, the
+others' included.
+
+THE FIRST RUN ON THE NODE (München, 2026-11-26 08:24Z, "Chi era Giulio
+Cesare?", k 50): 50 candidates, 38 works of 266 records; 269 lookups
+returning 456 claims; COLD 4.89 s, of which 4.19 s reading frames — 618 MB
+decompressed (512,000 lines) for those 456 claims — rows 0.31 s, relations
+0; WARM 0.34 s, still 450 frames and 358 MB decompressed (the index's cache
+holds ~26 frames of this size). A claim's frame is read whole for its one
+line: that is the cost, and an index the walk reads without opening a frame
+is the fix.
 
 WHAT IT LEAVES OUT, and says so: the vector leg, the reranker and the query's
 translation (models: a question takes the card from the corpus); the search's
@@ -103,17 +114,40 @@ def walk_once(collection, uids: list[str], *, root=None, annotations=None) -> di
     from app.pack import records as pack_records
     clock = _Clock()
     frames: set[tuple[str, int]] = set()
+    # A FRAME READ IS THE CLAIM INDEX'S only while the index is asking for it
+    # (`_lines`): the records of the collection itself are read through the
+    # same two functions (the members' facts, a part's own lines), and the
+    # first run on the node counted 512 reads for 456 frames asked — 56 of
+    # another reader's — as "-56 from the cache" (München, 2026-11-26)
+    asking = [0]
 
     def read_at(c, lines, path, offset, csize, rsize, n, k=None):
+        if not asking[0]:
+            c.add("frames_read_by_others", 1)
+            return
+        c.add("frames_read", 1)
         c.add("frame_compressed_bytes", csize)
         c.add("frame_bytes", rsize)
         c.add("frame_lines", n)
         frames.add((str(path), int(offset)))
 
-    def read_by_index(c, lines, path, index, k):
+    def read_parquet(c, lines, path, index, k):
+        if not asking[0]:
+            c.add("frames_read_by_others", 1)
+            return
+        c.add("frames_read", 1)
         c.add("frame_bytes", sum(len(x) for x in lines))
         c.add("frame_lines", len(lines))
         frames.add((str(path), int(k)))
+
+    def asked(fn):
+        def lines(*a, **kw):
+            asking[0] += 1
+            try:
+                return fn(*a, **kw)
+            finally:
+                asking[0] -= 1
+        return lines
 
     def looked(c, claims, self, uid, kind):
         c.add("claims_returned", len(claims))
@@ -126,12 +160,14 @@ def walk_once(collection, uids: list[str], *, root=None, annotations=None) -> di
         c.add("relation_uids", len(set(uids)))
         c.add("relation_edges", len(got))
 
-    kept = (pack_records.read_frame_at, pack_records.read_frame, claim_index.DiskClaimIndex.claims_of,
+    # `read_frame` reads a zstd part through `read_frame_at` and a Parquet one
+    # through `_parquet_frame`: those two are wrapped, each frame counted once
+    kept = (pack_records.read_frame_at, pack_records._parquet_frame, claim_index.DiskClaimIndex.claims_of,
             claim_index.DiskClaimIndex._lines, ask_annotations._target_rows, works._Edges.__call__, works._walk)
     pack_records.read_frame_at = clock.wrap("frame_read", kept[0], read_at)
-    pack_records.read_frame = clock.wrap("frame_read", kept[1], read_by_index)
+    pack_records._parquet_frame = clock.wrap("frame_read", kept[1], read_parquet)
     claim_index.DiskClaimIndex.claims_of = clock.wrap("lookup", kept[2], looked)
-    claim_index.DiskClaimIndex._lines = clock.wrap("frame_asked", kept[3])
+    claim_index.DiskClaimIndex._lines = clock.wrap("frame_asked", asked(kept[3]))
     ask_annotations._target_rows = clock.wrap("rows", kept[4], rows)
     works._Edges.__call__ = clock.wrap("relations", kept[5], edges)
     works._walk = clock.wrap("walk", kept[6])
@@ -143,7 +179,7 @@ def walk_once(collection, uids: list[str], *, root=None, annotations=None) -> di
         except Exception as e:   # noqa: BLE001 — said: the parts counted so far still are
             work_of, members, error = {}, {}, f"{type(e).__name__}: {str(e)[:300]}"
     finally:
-        (pack_records.read_frame_at, pack_records.read_frame, claim_index.DiskClaimIndex.claims_of,
+        (pack_records.read_frame_at, pack_records._parquet_frame, claim_index.DiskClaimIndex.claims_of,
          claim_index.DiskClaimIndex._lines, ask_annotations._target_rows, works._Edges.__call__,
          works._walk) = kept
     told = clock.told()
@@ -152,8 +188,8 @@ def walk_once(collection, uids: list[str], *, root=None, annotations=None) -> di
             "candidates": len(uids), "candidates_in_a_work": sum(1 for u in uids if u in work_of),
             "works": len(members), "members": sum(sizes), "largest_works": sizes[:5],
             "distinct_frames_read": len(frames),
-            # a frame asked that was not read was in the index's cache
-            "frames_from_cache": told["calls"].get("frame_asked", 0) - told["calls"].get("frame_read", 0),
+            # a frame the index asked for and did not read was in its cache
+            "frames_from_cache": told["calls"].get("frame_asked", 0) - told.get("frames_read", 0),
             **told}
 
 

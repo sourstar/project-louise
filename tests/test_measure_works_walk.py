@@ -38,7 +38,7 @@ def test_a_walk_says_its_lookups_its_frames_its_relations_and_its_rows(on_disk):
     assert cold["largest_works"] == [3]
     # every record reached is looked up once: the two candidates, and the two the claims named
     assert cold["calls"]["lookup"] == 4 and cold["claims_returned"] == 4, cold
-    assert cold["calls"]["frame_read"] == cold["distinct_frames_read"] == 1, "two claims, one frame: read once"
+    assert cold["frames_read"] == cold["distinct_frames_read"] == 1, "two claims, one frame: read once"
     assert cold["frames_from_cache"] == cold["calls"]["frame_asked"] - 1 >= 1
     assert cold["frame_lines"] == 2 and cold["frame_bytes"] > cold["frame_compressed_bytes"] > 0
     assert cold["calls"]["walk"] == 1 and cold["calls"]["rows"] == 1
@@ -46,10 +46,26 @@ def test_a_walk_says_its_lookups_its_frames_its_relations_and_its_rows(on_disk):
     assert set(cold["seconds"]) >= {"lookup", "frame_read", "frame_asked", "rows", "walk"}
     assert cold["seconds"]["walk"] <= cold["seconds"]["lookup"] + cold["seconds"]["rows"] + 1.0
     warm = works_walk.walk_once(tcoll, ["pubmed:2", "pubmed:4"], root=root, annotations=[held])
-    assert "frame_read" not in warm["calls"] and warm["distinct_frames_read"] == 0, "the frame is the index's own now"
+    assert "frames_read" not in warm and warm["distinct_frames_read"] == 0, "the frame is the index's own now"
     assert warm["frames_from_cache"] == warm["calls"]["frame_asked"] and warm["works"] == 1
-    # the tool put back what it wrapped
+    # A FRAME ANOTHER READER READS meanwhile is counted apart, never as the index's (the node's first run
+    # said "-56 from the cache": 512 reads against 456 frames asked)
+    from app.ask import annotations as ask_annotations
     from app.pack import records as pack_records
+    real_rows = ask_annotations._target_rows
+    part = next(p for p in (root / held.name / "shard").rglob("*.zst"))
+
+    def rows_and_a_read(collection, uids):
+        index = pack_records.read_index(part)
+        pack_records.read_frame(part, index, 0)
+        return real_rows(collection, uids)
+    ask_annotations._target_rows = rows_and_a_read
+    try:
+        other = works_walk.walk_once(tcoll, ["pubmed:2", "pubmed:4"], root=root, annotations=[held])
+    finally:
+        ask_annotations._target_rows = real_rows
+    assert other["frames_read_by_others"] == 1 and "frames_read" not in other and other["frames_from_cache"] >= 1
+    # the tool put back what it wrapped
     assert pack_records.read_frame_at.__module__ == "app.pack.records"
     assert claim_index.DiskClaimIndex.claims_of.__qualname__ == "DiskClaimIndex.claims_of"
 
