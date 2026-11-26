@@ -295,3 +295,43 @@ def test_the_condition_on_the_server_build_is_recorded_with_its_counts_and_its_o
     bugs = (ROOT / "docs" / "notes" / "localai-bugs.md").read_text(encoding="utf-8")
     row = next(line for line in bugs.splitlines() if line.startswith("| B25 | defect |"))
     assert "only THEN subscribes" in row and "ran the two one after the other while the load ran out: not a comparison" in row
+
+
+def test_the_card_s_rows_are_recorded_with_what_they_did_not_measure():
+    """München's pass, ended 2026-11-26 00:19:39Z: parking through the server on a copy of bge-m3 (§9). The rows are
+    the tool's own lines; what no row measured is said beside them, and nothing of it is claimed elsewhere."""
+    section = NOTE[NOTE.index("## 9. On the card (München, the pass of 2026-11-25 22:46Z to 2026-11-26 00:19:39Z)"):]
+    for said in ("`GGML_SYCL_PARKABLE=1` and\n`GGML_SYCL_PARK_VERIFY=1`", "park_host_floor_bytes: 0 -> 12884901888",
+                 "20 of 20 cycles: the same bytes; a park 142.4 ms (median, 141.7-147.1)",
+                 "20 of 20 cycles: the same bytes; a park 142.4 ms (median, 141.2-143.8)",
+                 "the process holds 319 MiB of the device, 996 MiB given back",
+                 "{(409, 'model_busy'): 1084}", "HTTP 503 'no_room_on_device' Retry-After '2'",
+                 "/backend/shutdown of the parked model: HTTP 200 in 202 ms", "HTTP 200 in 4.17 s",
+                 "**A park gives the card back 996 of 1,315 MiB**", "ran together on a\n  card for the first time"):
+        assert said in section, said
+    # 996 is the loaded size less what the parked process keeps, and the floor is 12 GiB
+    assert 1315 - 319 == 996 and 12884901888 == 12 << 30 == 12288 << 20
+    still = section[section.index("**NOT measured, still:**"):]
+    for row in ("| the card's own counter WHILE parked |", "| a card refusing a return for its own reasons |",
+                "| a failed return (`failed`) | no switch on a card |",
+                "| the gate's clause with the FINGERPRINT texts (§3.3) |",
+                "| a quantized model, buffers above 1 GiB, the 35B, OmniVoice |"):
+        assert row in still, row
+    assert "No real model parks" in still and "both copies are removed" in still
+    # the two answers that move with this engine and server, as the CPU server showed them
+    for said in ('"type":\n"no_room_on_device"}}`; the ring: 2 graphs refused', '"context canary failed" 0',
+                 "then 7 chunks, NO `finish_reason`"):
+        assert said in section, said
+    bugs = (ROOT / "docs" / "notes" / "localai-bugs.md").read_text(encoding="utf-8")
+    row = next(line for line in bugs.splitlines() if line.startswith("| **P26 (staged)** |"))
+    assert "**ON THE CARD (München, 2026-11-26, a copy of bge-m3): IT HOLDS**" in row
+    assert "NOT measured: a card that refuses for its own reasons" in row and "any model but bge-m3 F16" in row
+    row = next(line for line in bugs.splitlines() if line.startswith("| **P21 (staged)** |"))
+    assert "**ON THE CARD: IT HOLDS**" in row and "40 of 40 park cycles the same bytes" in row
+
+
+def test_the_tool_s_sixteen_sentences_are_not_the_gate_s_fingerprints():
+    """Why the gate's clause is not claimed from the cycles: the tool embeds its own sentences."""
+    tool = (ROOT / "tools" / "measure" / "park_http.py").read_text(encoding="utf-8")
+    assert 'TEXTS = [f"sentence number {i}: the quick brown fox' in tool and "for i in range(16)]" in tool
+    assert "fingerprint" not in tool.lower()

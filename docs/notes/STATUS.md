@@ -561,11 +561,27 @@ measured (published figures disagree).
   the seven run ids the same; the readiness poll's row, three cold loads of one model: 4.84 / 4.48 / 4.45 s before, 2.98 / 2.83 /
   2.67 s after; ONE vega package rebuilt (`vega-louise-llama-cpp`, with the wrapper's part for a return through it, #882), the byte
   check identical; five gates passed, each "exact, 3 fresh load(s)", every fingerprint identical to before — wikipedia (bge-m3) 98 s,
-  gutenberg (qwen3-embedding-4b) 1,983 s, pubmed query (medcpt-query) 70 s, NeuRIS and wikidata (nemotron) about 8.5 min each;
+  gutenberg (qwen3-embedding-4b) 1,983 s, pubmed query (medcpt-query) 70 s, NeuRIS (nemotron) ~509 s, wikidata (nemotron) ~502 s;
   twenty unloads through the rebuilt wrapper, 20 × exit 0, none of a second or more. LocalAI's two Postgres suites had run whole on
   the new server's builder first (the architecture session's condition, met). PARKING IS OFF: no model's file says `park: true`, the
-  floor is 0. The acceptance checks, the two rows whose answers move and PARKING'S ROWS ON COPIES are being taken in the same pass
-  and are not claimed here.
+  floor is 0. THE PASS ENDED 2026-11-26 00:19:39Z, the node paused 5,620 s and back in embed mode. ACCEPTANCE (München): MADLAD T4
+  379/379 identical to the rebuilt-engine run of 11-22, its byte record the same sha256 as on `619655e5833b` (6ae3e651d9f9a51c…);
+  the reranker's 20 lists equal to phase 0's, max |delta| 0.0, 2,438 ms a list; the 9B p128 ttft 0.113 s, 78.1 tok/s, p2048 0.61 s,
+  75.9 tok/s; an OCR smoke answered; no xe or OOM line. THE TWO ROWS WHOSE ANSWERS MOVE, as seen here on the CPU server, to the byte:
+  a canary refused for memory is HTTP 503 `no_room_on_device` with `Retry-After: 2` (it was 500), the requests before and after
+  served with the same vector; a stream that fails ends with an error object typed `no_room_on_device` (it was `server_error`), no
+  `finish_reason`, then `[DONE]`.
+- **PARKING ON THE CARD, for the first time through the server (München, the same pass; parking-step-2.md §9):** a copy of bge-m3
+  with `park: true`, the floor at 12 GiB for the rows and back to 0. 20 of 20 cycles the same bytes by a request and 20 of 20 by
+  `/backend/load`, the card's bytes read back at every return; a park 142 ms, a return with its sixteen sentences 228 ms, flat over
+  forty cycles (a stopped model: 4.17 s). A PARK GIVES THE CARD BACK 996 OF 1,315 MiB for 577 MiB of host memory; the process keeps
+  319 MiB. A model at work is never parked: 1,084 parks asked during one request of 2,048 sentences, 1,084 × 409 `model_busy`, the
+  request whole. A refused return (the switch at 2): 503 `no_room_on_device`, `Retry-After: 2`, twice, still parked, then served
+  with the same vectors. A parked model shut down: 200 in 202 ms. Parkable buffers under the paging default (0021) together on a
+  card for the first time: nothing odd. NOT MEASURED: the card's counter while parked, a card refusing for its own reasons, the
+  gate's clause with the fingerprint texts (the cycles compared the tool's own sixteen sentences), a quantized model, buffers above
+  1 GiB, the 35B. NO REAL MODEL PARKS: both copies are removed; which models park is the keeper's half and the operator's, a gated
+  run each.
 - **Live 2026-11-25 15:18:30Z to 23:45:20Z, and the engine a rollback puts back: engine `619655e5833b`** (`engine-canary.series`: `792f050e318e`'s series + 0028; the operator:
   "Deploy and engine swap"). München: byte check VEGA/1 against VEGA/2 all identical (bge-m3, nemotron, qwen3-4b); five gates passed,
   each "exact, 3 fresh load(s)", every fingerprint identical to before — wikipedia (bge-m3) 109 s, gutenberg (qwen3-embedding-4b)

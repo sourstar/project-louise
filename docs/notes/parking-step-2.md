@@ -9,6 +9,10 @@ two calls, the RAM budget; the wrapper; the health-check poll at ~50 ms" —
 with what step 1 measured on the card (`parking-prototype.md` §4a) and what
 LocalAI v5.0.1's source already holds.*
 
+*WHERE IT STANDS (2026-11-26): the engine part and the server part are LIVE on
+the node and parking has RUN ON THE CARD, on copies (§9). No real model
+parks: the floor is 0 and no model's file says `park: true`.*
+
 ## 1. What step 1 settled
 
 | question of the design note | answer, measured on the B70 (bge-m3, F16) |
@@ -87,6 +91,10 @@ back and compared at every cycle):
 | a refused un-park | a card cannot be made to refuse by filling it; the CPU stand-in showed the path above the device only | a switch like 0016's, `GGML_SYCL_PARK_REFUSE=N`: the request answered 503, the model still parked, the next one served |
 | the 35B (experts on the host, a cache on the card) | its card part is the dense layers and the expert cache; its context is not on demand today | after the three above; the cache's own state is the context's and goes with it |
 | OmniVoice (two model files) | context on demand refuses a model with a second file today | last, or it keeps today's unload |
+
+Since (§9, 2026-11-26): the refused un-park is TRIED, on a copy of bge-m3
+with the switch at 2. The quantized model, the buffers above 1 GiB, the 35B
+and OmniVoice are still not.
 
 ### 3.2 LocalAI's server (ours to carry; proposed upstream)
 
@@ -469,6 +477,8 @@ address:
     # two cycles REFUSED (RESOURCE_EXHAUSTED, still parked), the rest served
 
 and the gate's clause (§3.3): the sixteen fingerprints after N cycles.
+
+Since: taken through LocalAI's HTTP instead (§8 says why, §9 has the rows).
 
 ## 6a. The stream fix goes first: the candidate built next (2026-11-25)
 
@@ -958,7 +968,8 @@ against 0027's text; these are its bytes):
 **NOT shown here, and only the card can:** the device's memory given back by
 a park and taken by a return (`size_vram` is not read on a CPU), a card that
 refuses a return for its own reasons, parkable buffers under the paging
-default (0021) — the two have never run together on a card — and the times.
+default (0021) — the two had never run together on a card — and the times.
+§9 has them, but for the card refusing for its own reasons.
 
 **THE PASS ON THE NODE** (München; the order and its reasons):
 
@@ -1049,3 +1060,68 @@ pubmed query (medcpt-query) 70 s; NeuRIS and wikidata, the twenty unloads,
 the acceptance checks, the two rows whose answers move and parking's rows
 on copies were still to come.
 
+## 9. On the card (München, the pass of 2026-11-25 22:46Z to 2026-11-26 00:19:39Z)
+
+The pass completed: the node paused 5,620 s and back in embed mode; live
+are the server `v5.0.1-6-gffb10fdf3`, the engine `ed93e3c1b2e2` and
+`vega-louise-llama-cpp` at 1ac1ecc. Every `park_http.py` command exit 0.
+The node's files: `/root/measure/engine-park/rows/rows.txt`,
+`rows-park.txt` (83 lines), `pass/log.txt`.
+
+**The copy:** `qual-nx-park` — bge-m3 on the engine directly, context on
+demand, `park: true`, env `GGML_SYCL_PARKABLE=1` and
+`GGML_SYCL_PARK_VERIFY=1` (the card's bytes read back at every return). Its
+ring at the load: "577.23 MiB of weights that can park". The floor at
+12 GiB for the rows ("park_host_floor_bytes: 0 -> 12884901888 (12,288
+MiB)") and back ("12884901888 -> 0", read back 0).
+
+| row | on the card |
+|---|---|
+| `state` | "parks, state 'loaded', size_vram 1,315 MiB" |
+| `cycles -n 20 --return request` | "20 of 20 cycles: the same bytes; a park 142.4 ms (median, 141.7-147.1), a return with its sixteen sentences 227.6 ms (225.7-246.3)"; every cycle "577 MiB to the host, the process holds 319 MiB of the device, 996 MiB given back"; the sixteen vectors `ce2c9ce6a503` before and through |
+| `cycles -n 20 --return load` | "20 of 20 cycles: the same bytes; a park 142.4 ms (median, 141.2-143.8), a return with its sixteen sentences 228.9 ms (227.6-231.8)" |
+| the idle minimum, in both | "answered 409 model_busy 200 times in all before the model had been idle for its second" |
+| `busy` | "2048 sentences in one request; while it ran, 1084 parks answered: {(409, 'model_busy'): 1084}; the request itself: HTTP 200, vectors identical"; afterwards loaded, 1,316 MiB |
+| `stop` | parked at 320 MiB, 577 MiB on the host, process 14043; "/backend/shutdown of the parked model: HTTP 200 in 202 ms"; not listed afterwards; "the next request: HTTP 200 in 4.17 s, vectors identical", loaded at 1,313 MiB, process 14101 |
+| `refused` (a second copy, `qual-nx-park2`, + `GGML_SYCL_PARK_REFUSE=2`) | requests 1 and 2: "HTTP 503 'no_room_on_device' Retry-After '2': qual-nx-park2: the weights cannot come back to the device now; parks, state 'parked', size_vram 317 MiB, 577 MiB on the host"; "request 3: served, vectors identical", loaded at 1,313 MiB. Its ring: "no room on the device for the 577.23 MiB of SYCL0, it stays parked" |
+
+**What the card adds to §8:**
+
+- **A park gives the card back 996 of 1,315 MiB** — the 577 MiB of weights
+  and the context — for 577 MiB of host memory. The process keeps 319–320
+  MiB, step 1's floor (parking-prototype.md §4a: 321, and 319 for a process
+  with no weights at all).
+- **A park costs 142 ms and a return with sixteen sentences 228 ms**, verify
+  on, flat over forty cycles; a model that was stopped instead costs 4.17 s.
+- **Parkable buffers under the paging default (0021)** ran together on a
+  card for the first time: nothing odd in forty cycles.
+- The card's own counter with the copy loaded: 1,340 MiB (25 empty), gtt
+  880 MiB.
+
+**The two rows whose answers move, as seen on the CPU server, to the byte:**
+A, the canary refused on a copy of bge-m3 (`keep_context_ms: 0`): 200 with
+vector `4ddc4b1be45e`; with the arm file HTTP 503 in 0.020 s, `Retry-After:
+2`, `{"error":{"code":503,"message":"the context cannot be created now, the
+memory it needs may be in use: try again later","type":
+"no_room_on_device"}}`; the ring: 2 graphs refused, "the device had no
+memory for the canary" 1, "context canary failed" 0, "does not reproduce
+the canary of the load" 0; then 200 twice with `4ddc4b1be45e`. B, the
+stream on a copy of the 9B: 155 chunks, `finish_reason` stop, `[DONE]`;
+then 7 chunks, NO `finish_reason`, `data: {"error":{"code":
+"no_room_on_device","message":"Compute error: the device had no memory for
+this computation, try again later.","type":"no_room_on_device"}}` and
+`[DONE]`; then 155 again.
+
+**NOT measured, still:**
+
+| what | why | when it matters |
+|---|---|---|
+| the card's own counter WHILE parked | München's reads of it are between commands; the 319 MiB is what the process holds, by the tool's lines | none seen: step 1 read both (321 by the process, 346 by the counter with 25 empty) |
+| a card refusing a return for its own reasons | a card cannot be made to refuse by filling it; the switch refuses before the device is asked | the first real refusal; the path above the device is the one shown |
+| a failed return (`failed`) | no switch on a card | shown on the CPU server only (§8) |
+| the gate's clause with the FINGERPRINT texts (§3.3) | the forty cycles compared the tool's own sixteen sentences, not the gate's sixteen; no such run was reported | at the gated run of the first real model that parks — it is part of that gate |
+| a quantized model, buffers above 1 GiB, the 35B, OmniVoice | §3.1's rows; only bge-m3 F16 (one 577 MiB buffer) has parked | before any of them is switched to parking |
+
+No real model parks: no model file but the two copies ever carried `park:
+true` or `GGML_SYCL_PARKABLE`, and both copies are removed. Which models
+park is the keeper's half and the operator's, a gated run each.

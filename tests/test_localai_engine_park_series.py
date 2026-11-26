@@ -58,10 +58,20 @@ def test_the_readme_and_the_status_say_what_is_live_and_what_a_rollback_puts_bac
     status = (ROOT / "docs" / "notes" / "STATUS.md").read_text(encoding="utf-8")
     assert f"LIVE since 2026-11-25 23:45:20Z: engine `{LIVE}`" in status
     assert "every fingerprint identical to before" in status and "20 × exit 0" in status
-    # what the swap did NOT do, and what is not claimed yet
+    # what the swap did NOT do
     assert "PARKING IS OFF: no model's file says `park: true`, the\n  floor is 0" in status
-    assert "PARKING'S ROWS ON COPIES are being taken in the same pass\n  and are not claimed here" in status or \
-        "PARKING ON THE CARD" in status
+    # the pass's end, and parking's rows on copies (docs/notes/parking-step-2.md §9)
+    assert "THE PASS ENDED 2026-11-26 00:19:39Z, the node paused 5,620 s" in status
+    assert "NeuRIS (nemotron) ~509 s, wikidata (nemotron) ~502 s" in status
+    card = status[status.index("- **PARKING ON THE CARD, for the first time through the server"):]
+    card = card[:card.index("\n- **", 5)]
+    for said in ("A PARK GIVES THE CARD BACK 996 OF 1,315 MiB for 577 MiB of host memory", "1,084 × 409 `model_busy`",
+                 "NOT MEASURED: the card's counter while parked", "the\n  gate's clause with the fingerprint texts",
+                 "NO REAL MODEL PARKS: both copies are removed"):
+        assert said in card, said
+    assert "being taken" not in card and "not claimed here" not in status[status.index(f"engine `{LIVE}`"):][:3000]
+    assert "ON THE CARD, ON COPIES (München, the same pass, ended 2026-11-26\n00:19:39Z)" in readme
+    assert "docs/notes/parking-step-2.md §6, §8, §9." in readme
 
 
 def test_being_able_to_park_is_not_parking_no_staged_model_asks_for_it():
