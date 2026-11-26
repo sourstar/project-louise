@@ -48,7 +48,7 @@ or checks). The engine rows are proposals until architecture decides the API.
 | D3 | The look-ahead never ran for a carried collection: carried rows bear embed marks, and the chain skipped them. | Every scheduling optimisation is tested on a CARRIED or rechunked fixture as well as a fresh one. | built: #867 |
 | D4 | The large lane's executor was one-use (gh-115634). | Built. | built: #869 |
 | D5 | A heavy document holds its whole fts batch while the pool idles. | A batch is not held by one part. | engine (open) |
-| D6 | A pause (the monitor's, 09:24Z on 11-26) aborted the corpus fetch begun at the worker's start; the resume (10:10Z) brought the collection back and no fetch. The worker starts one only at its start, at a config change or at its daily check: 18 minutes idle with ~126 k units to fetch, restarted by toggling `acquire_enabled` off and on. | As D2: a resume asks for every pass its pause cut short — the fetch as well as the scan. | engine |
+| D6 | A pause (the monitor's, 09:24Z on 11-26) aborted the corpus fetch begun at the worker's start; the resume (10:10Z) brought the collection back and no fetch. The worker starts one only at its start, at a config change or at its daily check: 18 minutes idle with ~126 k units to fetch. Toggling `acquire_enabled` off and on restarted it, but only after the scan the OFF change began had ended (the ON change's request queued behind it, 791 s): the fetch came 33 minutes after the resume. | As D2: a resume asks for every pass its pause cut short — the fetch as well as the scan. An operator never needs a config toggle to restart a fetch, and a request queued behind a running scan says so. | engine |
 
 ## E. A document's text, and its absence, are stated
 
