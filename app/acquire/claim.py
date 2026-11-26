@@ -44,6 +44,7 @@ OOM-killed fetch (no reset) still waits up to STALE_AFTER_SECONDS here.
 """
 import json
 import os
+import sqlite3
 import time
 from contextlib import contextmanager
 
@@ -135,8 +136,11 @@ def _age(claim: dict, now: float) -> float:
     boot (`uptime`: never stepped), on the wall clock otherwise."""
     made_in, this = claim.get("boot"), boot_id()
     up, up_now = claim.get("up"), uptime()
-    if made_in and this and made_in == this and isinstance(up, (int, float)) and up_now is not None:
+    if made_in and this and made_in == this and isinstance(up, (int, float)) and up_now is not None \
+            and up_now >= float(up):
         return up_now - float(up)
+    # another boot, no boot named, or a boot clock that reads it in the future
+    # (a time namespace — CRIU): the wall clock's word
     return now - float(claim.get("ts", 0))
 
 
@@ -189,14 +193,7 @@ def acquisition_claim(con, source_id: str, force: bool = False):
     Released on the way out even if the body raises, so a crash inside
     run_acquisition does not leave the claim held for the full stale window.
     """
-    now = time.time()
-    # read, check and write in ONE transaction (the module's docstring); a
-    # caller already inside one keeps it, as before
-    own_tx = not con.in_transaction
-    if own_tx:
-        con.execute("BEGIN IMMEDIATE")
-    try:
-        existing = read_claim(con)
+    def refuse_if_live(existing: dict | None, now: float) -> None:
         if not force and _is_live(existing, now):
             age = _age(existing, now)
             raise AcquisitionBusy(
@@ -206,6 +203,20 @@ def acquisition_claim(con, source_id: str, force: bool = False):
                 f"claim goes stale after {STALE_AFTER_SECONDS}s.",
                 retry_in=STALE_AFTER_SECONDS - age + 5,
                 holder=str(existing.get("holder") or f"pid {existing.get('pid')}"), held_for=int(age))
+    # A LIVE CLAIM REFUSES WITHOUT THE WRITE LOCK (the fourth read, run: under
+    # BEGIN IMMEDIATE first, a refusal on a manifest a scan streams into waited
+    # out the busy timeout and came back as OperationalError, not as the
+    # refusal — no retry was armed and the fetch was lost: D6 again). Only a
+    # claim that looks free is taken, and read again, under the lock
+    refuse_if_live(read_claim(con), time.time())
+    # read, check and write in ONE transaction (the module's docstring); a
+    # caller already inside one keeps it, as before
+    own_tx = not con.in_transaction
+    if own_tx:
+        con.execute("BEGIN IMMEDIATE")
+    try:
+        now = time.time()                 # after the lock's wait: the record's time is the write's
+        refuse_if_live(read_claim(con), now)
         db.set_control(con, CLAIM_KEY, _record(source_id, now))
         if own_tx:
             con.execute("COMMIT")
@@ -216,14 +227,26 @@ def acquisition_claim(con, source_id: str, force: bool = False):
     try:
         yield
     finally:
-        _set_if_mine(con, "")
+        try:
+            _set_if_mine(con, "")
+        except sqlite3.OperationalError:
+            # the manifest busy past its timeout: the claim goes stale by itself
+            # (and with the boot), and the pass's own result or error stands —
+            # raised here, it replaced both (the fourth read, run)
+            pass
 
 
-def refresh_claim(con, source_id: str, last_refresh: float) -> float:
+def refresh_claim(con, source_id: str, last_refresh: float, lost=None) -> float:
     """Keep a long-running acquisition's claim from going stale under it.
-    Returns the (possibly unchanged) last-refresh timestamp."""
+    Returns the (possibly unchanged) last-refresh timestamp. `lost`: an event
+    set when the row holds ANOTHER process's live claim — taken over after
+    renewals that failed for its staleness — so the pass stops beside it
+    rather than fetching the same pending list (the fourth read, run)."""
     now = time.time()
     if 0 <= now - last_refresh < _REFRESH_EVERY:
         return last_refresh           # a clock stepped back refreshes at once
-    _set_if_mine(con, _record(source_id, now))
+    if not _set_if_mine(con, _record(source_id, now)) and lost is not None:
+        other = read_claim(con)
+        if other and not _mine(other) and held(other, now):
+            lost.set()
     return now

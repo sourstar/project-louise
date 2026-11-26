@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import zipfile
+import contextvars
 import sqlite3
 import threading
 import time
@@ -1222,6 +1223,7 @@ def _run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
     with claim_mod.acquisition_claim(con, spec.source_id):
         keepalive = _ClaimKeepalive(collection, spec.source_id)
         keepalive.start()
+        lost_token = _claim_lost.set(keepalive.lost)     # the pass's files read it (`_ClaimStop`)
         try:
             if spec.transport is Transport.TORRENT and len(spec.endpoints) > 1:
                 # several torrents carrying different subsets (STATUS 5h):
@@ -1247,7 +1249,25 @@ def _run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
             return _run_acquisition_claimed(con, collection, spec, profile,
                                             stop, priority, until)
         finally:
+            _claim_lost.reset(lost_token)
             keepalive.stop()
+
+
+#: the running pass's "its claim was taken over" (`_ClaimKeepalive.lost`), set
+#: by `run_acquisition` for the pass's thread: its files stop on it
+_claim_lost: contextvars.ContextVar[threading.Event | None] = contextvars.ContextVar("acquire_claim_lost",
+                                                                                   default=None)
+
+
+class _ClaimStop:
+    """The pass's stop, set too when its claim is another process's now
+    (`_ClaimKeepalive.lost`). `is_set` is all a pass asks of a stop."""
+
+    def __init__(self, stop, lost: threading.Event) -> None:
+        self._stop, self._lost = stop, lost
+
+    def is_set(self) -> bool:
+        return self._lost.is_set() or (self._stop is not None and self._stop.is_set())
 
 
 class _ClaimKeepalive:
@@ -1260,6 +1280,8 @@ class _ClaimKeepalive:
         self._collection = collection
         self._source_id = source_id
         self._done = threading.Event()
+        #: set when its claim was taken over (`claim.refresh_claim`)
+        self.lost = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True,
                                         name=f"acquire-claim-{source_id}")
 
@@ -1277,13 +1299,22 @@ class _ClaimKeepalive:
             last = time.time()
             while not self._done.wait(30):
                 try:
-                    last = claim_mod.refresh_claim(con, self._source_id, last)
+                    last = claim_mod.refresh_claim(con, self._source_id, last, lost=self.lost)
                 except sqlite3.OperationalError:
                     # the manifest busy past its timeout: asked again at the next
                     # tick — one busy write ended this thread for the rest of the
                     # pass, and the claim read stale under a live fetch (the read
                     # of 2026-11-26)
                     continue
+                if self.lost.is_set():
+                    try:
+                        _db.log_event(con, "warn", "acquire",
+                                      f"{self._source_id}: its acquisition claim is another process's now "
+                                      f"(renewals failed past its staleness): this pass stops at its next "
+                                      f"unit, beside it")
+                    except Exception:   # noqa: BLE001 — the stop is what matters
+                        pass
+                    return
         finally:
             con.close()
 
@@ -1474,11 +1505,16 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
 
     last_report = [time.monotonic()]
     workers = min(manager.platform.transfer.workers, max(1, len(items)))
-    # the claim is already held by run_acquisition, covering the whole pass
+    # the claim is already held by run_acquisition, covering the whole pass —
+    # and the files stop at their unit if another process takes it over
+    # (`_ClaimKeepalive.lost`): two passes on one pending list race on the same
+    # `.part` files (the fourth read of the claim fix, run)
+    lost = _claim_lost.get()
+    fetch_stop = _ClaimStop(stop, lost) if lost is not None else stop
     transfer_pool.run_pool(
         items,
-        _make_worker(transport, collection, spec, manager, ranked, stop, priority),
-        _apply, max_workers=workers, stop=stop)
+        _make_worker(transport, collection, spec, manager, ranked, fetch_stop, priority),
+        _apply, max_workers=workers, stop=fetch_stop)
 
     _unit_reports(con, spec, last_report, final=True)
     if prepare is not None:

@@ -46,7 +46,13 @@ measured (published figures disagree).
   compare-and-set (read then written apart, a holder could overwrite another's fresh claim); the
   keepalive thread outlives a busy manifest (one locked write ended it for the pass); a retry due while
   the refused thread still ends is kept; acquisition turned on again while the stopped fetch unwinds asks
-  it again; a free claim's retry for a paused collection comes back as the fetch, not a discovery.
+  it again; a free claim's retry for a paused collection comes back as the fetch, not a discovery. The
+  fourth read, run: under BEGIN IMMEDIATE first, a refusal on a busy manifest came back as
+  OperationalError and armed no retry (D6 again) — a live claim now refuses before the lock, and a busy
+  deferral is asked again in 30 s; a busy give-back no longer replaces the pass's result; a holder whose
+  claim was taken over (renewals failed past its staleness) stops its files at their unit instead of
+  fetching beside its successor; a boot clock that reads a claim in the future gives way to the wall
+  clock; the re-arm "acquisition turned on again" is forgotten when a fresh fetch starts.
 
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
   `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"

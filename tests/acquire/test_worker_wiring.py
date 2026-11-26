@@ -893,3 +893,49 @@ def test_acquisition_turned_on_again_while_the_stopped_fetch_unwinds_asks_it_aga
             worker._acquire_threads.pop(collection.name, None)
         _forget_more(collection.name)
         _forget(collection)
+
+
+
+def test_a_fetch_deferred_for_a_busy_manifest_is_asked_again(tmp_path, monkeypatch):
+    """THE FOURTH READ, run: the completion flag asks nothing for a fetch that
+    fetched nothing, and the busy deferral was lost until the interval's
+    discovery (360 min, or never)."""
+    import sqlite3
+
+    def busy(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    collection, con = _wired(tmp_path, monkeypatch, busy)
+    try:
+        worker._acquire_worker(collection, _SPEC, "demo", "startup")
+        assert worker._claim_retries[collection.name] > time.time()
+        rows = con.execute("SELECT message FROM events WHERE stage = 'acquire' ORDER BY id").fetchall()
+        assert "manifest busy" in rows[-1][0] and "retrying in 30 s" in rows[-1][0]
+    finally:
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_the_re_arm_acquisition_turned_on_left_is_forgotten_when_a_fresh_fetch_starts(tmp_path, monkeypatch):
+    """THE FOURTH READ, run: the old thread ended before the change's
+    discovery came, a fresh fetch ran — and the re-arm asked one more
+    discovery and one more fetch after it."""
+    import dataclasses
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, stop=None, **k: _DONE)
+    off = dataclasses.replace(collection, acquire_enabled=False)
+    alive = threading.Event()
+    old = threading.Thread(target=alive.wait, args=(10,), daemon=True)
+    old.start()
+    try:
+        with worker._acquire_lock:
+            worker._acquire_threads[collection.name] = old
+        worker._apply_acquire_switch(con, off, collection)
+        assert collection.name in worker._paused_aborts
+        alive.set()
+        old.join(5)                                        # it ends before the change's discovery comes
+        worker._acquire(con, collection, "config changed")
+        worker._acquire_threads[collection.name].join(timeout=10)
+        assert collection.name not in worker._paused_aborts, "the fresh fetch owes it nothing"
+    finally:
+        alive.set()
+        _forget_more(collection.name)
+        _forget(collection)

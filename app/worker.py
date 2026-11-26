@@ -2730,6 +2730,7 @@ def _apply_acquire_switch(con, prev, kept) -> None:
             t = _acquire_threads.get(kept.name)
             if t is not None and t.is_alive():
                 _paused_aborts.add(kept.name)
+                _rearm_reason[kept.name] = ACQUIRE_ON_REASON
 
 
 def _background_priority() -> None:
@@ -2808,11 +2809,15 @@ def _acquire_worker(collection, spec, profile: str, reason: str) -> None:
         # The manifest was busy past the busy timeout — a discovery pass
         # streaming millions of rows can starve this thread. NOTHING moved
         # and nothing is inconsistent: the claim was never taken, so this
-        # is a deferral, not a failure. The completion flag below turns
-        # into a discovery request, which starts the fetch again.
+        # is a deferral, not a failure — and ASKED AGAIN, as a refusal is
+        # (`_claim_retries`): the completion flag asks nothing for a fetch
+        # that fetched nothing, and the fetch was lost until the interval's
+        # discovery (the fourth read of the claim fix, run)
+        with _acquire_lock:
+            _claim_retries[collection.name] = time.time() + CLAIM_READ_AGAIN_S
         db.log_event(con, "warn", "acquire",
                      f"corpus fetch ({reason}) deferred — manifest busy "
-                     f"({e}); retrying next round")
+                     f"({e}); retrying in {CLAIM_READ_AGAIN_S:.0f} s")
     except httpx.TransportError as e:
         # THE ORIGIN DID NOT ANSWER — a timeout, a reset, a refused
         # connection: the origin's state, not the collection's (CLAUDE.md:
@@ -3023,8 +3028,14 @@ def _acquire(con, collection, reason: str) -> None:
             return
         off.clear()                 # acquisition is on here (checked above): nothing to stop
         # a retry another writer's claim left owes nothing once a fetch starts:
-        # asked after it, it would pay a full discovery for a fetch that ran
+        # asked after it, it would pay a full discovery for a fetch that ran —
+        # nor does the re-arm "acquisition turned on" left (the fourth read, run:
+        # the old thread ended before the change's discovery came, a fresh fetch
+        # ran, and the re-arm asked a discovery and a fetch more)
         _claim_retries.pop(collection.name, None)
+        if _rearm_reason.get(collection.name) == ACQUIRE_ON_REASON:
+            _rearm_reason.pop(collection.name, None)
+            _paused_aborts.discard(collection.name)
         thread = threading.Thread(
             target=_acquire_worker,
             args=(collection, spec, collection.profile or "demo", reason),
@@ -4062,6 +4073,7 @@ def _finish_completed_acquires(cons, all_collections, last_discover,
 #: how soon a claim that could not be read (the manifest busy) is read again
 CLAIM_READ_AGAIN_S = 30.0
 CLAIM_FREE_REASON = "the claim that refused it is no longer held"
+ACQUIRE_ON_REASON = "acquisition turned on again"
 
 
 def _retry_refused_fetches(due: list[str], all_collections, cons, known) -> None:

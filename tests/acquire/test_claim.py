@@ -224,7 +224,7 @@ def test_the_claims_keepalive_outlives_a_busy_manifest(tmp_path, monkeypatch):
     from app.acquire import engine
     calls = []
 
-    def refresh(con, source_id, last):
+    def refresh(con, source_id, last, lost=None):
         calls.append(1)
         if len(calls) == 1:
             raise sqlite3.OperationalError("database is locked")
@@ -237,5 +237,75 @@ def test_the_claims_keepalive_outlives_a_busy_manifest(tmp_path, monkeypatch):
         name="eurlex", plugin="eurlex", profile=None, embed_mode_default=None, corpus_dir=tmp_path / "c",
         manifest_path=tmp_path / "m.db", fts_dir=tmp_path / "f", lance_dir=tmp_path / "l")
     keep._done = type("Done", (), {"wait": lambda self, s: next(waits)})()
+    import threading
+    keep.lost = threading.Event()
     keep._run()
     assert calls == [1, 1], "asked again after the busy write"
+
+
+
+def test_a_live_claim_refuses_without_waiting_for_the_write_lock(con, tmp_path):
+    """THE FOURTH READ, run: under BEGIN IMMEDIATE first, a refusal on a
+    manifest a scan streams into waited out the busy timeout and came back as
+    OperationalError — no retry armed, the fetch lost (D6 again)."""
+    import sqlite3
+    db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(
+        {"pid": 8, "holder": "8@4026533985", "ts": time.time(), "source_id": "eurlex"}))
+    path = con.execute("PRAGMA database_list").fetchone()[2]
+    writer = sqlite3.connect(path, isolation_level=None)
+    writer.execute("BEGIN IMMEDIATE")                       # a scan holding the write lock
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(claim_mod.AcquisitionBusy):
+            with claim_mod.acquisition_claim(con, "eurlex"):
+                pass
+        assert time.monotonic() - t0 < 2.0, "refused at once, the lock never asked"
+    finally:
+        writer.execute("ROLLBACK")
+        writer.close()
+
+
+def test_a_busy_give_back_leaves_the_passes_own_result(con, monkeypatch):
+    import sqlite3
+    real = claim_mod._set_if_mine
+
+    def busy(c, value):
+        if value == "":
+            raise sqlite3.OperationalError("database is locked")
+        return real(c, value)
+    monkeypatch.setattr(claim_mod, "_set_if_mine", busy)
+    got = None
+    with claim_mod.acquisition_claim(con, "eurlex"):
+        got = {"fetched": 7}
+    assert got == {"fetched": 7}, "the pass's result stands; the claim goes stale by itself"
+
+
+def test_a_holder_whose_claim_was_taken_over_is_told_so(con):
+    """THE FOURTH READ, run: renewals failed past the claim's staleness,
+    another process took it, and the first fetch went on beside it."""
+    import threading
+    from app.acquire import engine
+    lost = threading.Event()
+    with claim_mod.acquisition_claim(con, "eurlex"):
+        db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(
+            {"pid": 9, "holder": "9@1", "ts": time.time(), "source_id": "eurlex", "boot": claim_mod.boot_id(),
+             "up": claim_mod.uptime()}))
+        claim_mod.refresh_claim(con, "eurlex", last_refresh=0.0, lost=lost)
+        assert lost.is_set()
+        stop = engine._ClaimStop(None, lost)
+        assert stop.is_set(), "the pass's stop: it ends at its next unit"
+    lost.clear()
+    db.set_control(con, claim_mod.CLAIM_KEY, "")
+    claim_mod.refresh_claim(con, "eurlex", last_refresh=0.0, lost=lost)
+    assert not lost.is_set(), "given back, taken by nobody: nothing lost"
+
+
+def test_a_boot_clock_that_reads_a_claim_in_the_future_gives_way_to_the_wall_clock(con, monkeypatch):
+    """THE FOURTH READ: a claim's "up" ahead of the reader's CLOCK_BOOTTIME (a
+    time namespace, a CRIU restore) read a day-old claim as held."""
+    monkeypatch.setattr(claim_mod, "boot_id", lambda: "this-boot")
+    monkeypatch.setattr(claim_mod, "uptime", lambda: 100.0)
+    db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(
+        {"pid": 8, "holder": "8@1", "ts": time.time() - 86_400, "source_id": "eurlex", "boot": "this-boot",
+         "up": 50_000.0}))
+    assert claim_mod.busy_for(con) is None, "a day old by the wall clock"
