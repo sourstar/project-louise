@@ -115,6 +115,15 @@ is the one place that chooses the verb:
   409 model_busy    it works: NOT stopped, the next candidate is asked;
   412, or no route  nothing moved: stopped instead (`/backend/shutdown`), as before;
   not loaded / its backend broke the park and was stopped — off the card.
+AN ENCODER IS PARKED ONLY AS A RUN ADMITTED TO PARK (2026-11-26; operator:
+"Either a model is validated or it does not embed"). A collection's encoder
+whose file says `park: true` is validated AS ONE THAT PARKS by the gate's
+counted cycles; until the run that answers now has them for every collection
+that uses it (`run_check.park_admitted`) — a run nobody gated yet, one the
+gate refused — it gives its room by a STOP, as before parking existed, and
+the line says so. Found on the node: bge-m3 restarted with its parking env,
+the keeper counted it as parkable at once, and its gate had not run. A model
+that is no collection's encoder has no gate, and parks as LocalAI says.
 A PARKED MODEL IS LISTED AND IS NOT ON THE CARD: it is no candidate while a
 loaded one can give the room, and only then is it stopped for what its
 process still holds there (321 MiB for bge-m3) — a stop, since nothing of it
@@ -181,8 +190,9 @@ class Loaded:
     size: int                    # bytes on the card now: what unloading it gives back
     last_used: float | None      # epoch s of its last real use; None never used
     busy: bool = False
-    parks: bool = False          # LocalAI says it can be parked (`/system` `"parks": true`)
+    parks: bool = False          # LocalAI says it can be parked (`/system` `"parks": true`) AND its run is admitted to
     parked: bool = False         # its weights are in host memory: `size` is what its process still holds
+    unadmitted: bool = False     # LocalAI says it parks, and its run's park cycles are not counted: stopped instead
 
 
 @dataclass(frozen=True)
@@ -483,8 +493,11 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
         keep = {tuple(k) for k in protect} | {(server, m) for m in exclude}
         pinned = sorted(m for m in held if (server, m) in pins and (server, m) in known and (server, m) not in keep)
         parks, away = model_load.parks(server), model_load.parked(server)     # the same answer: no request
+        # PARKED ONLY AS A RUN ADMITTED TO PARK (`_may_park`): any other gives its room by a stop
+        unadmitted = {m for m in parks if m in held and m not in away and not _may_park(server, m)}
         loaded = [Loaded(m, int(size or 0), use.get((server, m)), cpu.get(m, 0.0) > BUSY_CPU_PERCENT,
-                         parks=m in parks, parked=m in away)
+                         parks=m in parks and m not in unadmitted, parked=m in away,
+                         unadmitted=m in unadmitted)
                   for m, (_pid, size) in held.items()
                   if (server, m) in known and (server, m) not in keep and (server, m) not in pins
                   and (server, m) not in mem.elsewhere and not gate_twin.is_twin(m)]
@@ -560,7 +573,7 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
                      f"for {for_what} — {said}; its process stays and its next request brings the weights "
                      f"back in the time of a copy (operator, 2026-11-25: \"Do parking.\")")
     if gone:
-        _say("info", f"card: unloaded {', '.join(f'{v.model} ({_ago(now, v.last_used)}, {v.size // MIB:,} MiB' + (', it was parked: what its process still held' if v.parked else '') + ')' for v in gone)} "
+        _say("info", f"card: unloaded {', '.join(f'{v.model} ({_ago(now, v.last_used)}, {v.size // MIB:,} MiB' + (', it was parked: what its process still held' if v.parked else '') + (', its file says it parks and its run is not admitted to (not gated with its park cycles, not yet bound to this process, or a collection file not read): stopped' if v.unadmitted else '') + ')' for v in gone)} "
                      f"for {for_what} — {said}; the oldest real use goes first (operator, 2026-11-16)")
     if free + freed < need:
         return Outcome(False, need, free, tuple(v.model for v in gone),
@@ -577,6 +590,24 @@ def make_room(server: str, *, need: int, horizon: float | None, for_what: str,
             break
         sleep(ROOM_POLL_S)
     return Outcome(True, need, free, tuple(v.model for v in gone), parked=tuple(v.model for v, _ in away_now))
+
+
+def _may_park(server: str, model: str) -> bool:
+    """Whether a model LocalAI lists as one that parks may be PARKED by this
+    node now — its PROCESS, (pid, started_at) as the listing this process
+    read last names it (`model_load.known_process`, no request) —
+    (`run_check.park_admitted`): an encoder only once the run heard from
+    that process has its park cycles counted for every collection that uses
+    it; a model that is no collection's encoder as LocalAI says. Anything
+    that cannot be read is a stop — always right — never a park. Asked by
+    EVERY path that gives a model's room back: the evictor and the question
+    card (app/question_card.py)."""
+    try:
+        from . import model_load, run_check
+        got = model_load.known_process(server, model)
+        return run_check.park_admitted(server, model, got[0] if got is not None else None) is not False
+    except Exception:   # noqa: BLE001
+        return False
 
 
 #: what `give_back` did

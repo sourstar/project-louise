@@ -475,6 +475,13 @@ class HeldBack(RuntimeError):
     Not a TransportError: no file failed, nothing is recorded against one."""
 
 
+class Waiting(TransportError):
+    """A unit that WAITS for something the pass could not do first (eurlex:
+    its listing window, unlisted): nothing was asked of the origin for it, so
+    the engine records nothing — no failure, no retry count, no error — and
+    the next pass offers it again (architecture's review of a783fd1c, 6)."""
+
+
 class TransferAborted(TransportError):
     """A stop event (SIGTERM) fired mid-transfer.
 

@@ -37,7 +37,7 @@ from . import updatefiles
 from .transport_https import RangeUnsupported
 from .spec import (AcquisitionPlan, AcquisitionSpec, ChecksumSource, DiskPreflightError,
                     Endpoint, Filter, HeldBack, LicenseAckRequiredError, RemoteFile, TransferAborted,
-                    Transport, TransportError, estimated_bytes_for, resolve_profile)
+                    Transport, TransportError, Waiting, estimated_bytes_for, resolve_profile)
 from .transports import REGISTRY
 
 _DRY_RUN_ASSUMED_RATE_BPS = 5_000_000   # ~5 MB/s — a named placeholder; P0.7 has real measurement
@@ -960,7 +960,11 @@ def _unit_fetch(endpoint, f: RemoteFile, collection, spec: AcquisitionSpec,
     pass compares (`_is_pending`). Raises as the normal path raises."""
     dest = collection.corpus_dir / f.rel_path
     started = time.monotonic()
-    moved = int(spec.unit_fetcher.fetch(endpoint, f, dest) or 0)
+    try:
+        moved = int(spec.unit_fetcher.fetch(endpoint, f, dest) or 0)
+    except Waiting as e:
+        return _FileResult(remote=f, endpoint_url=endpoint.url, status="deferred",
+                            error=f"Waiting ({type(e).__name__}): {e}"[:300])
     elapsed = time.monotonic() - started
     manager.record_throughput(endpoint_key, moved, elapsed)
     digest = checksum.digest_and_verify(dest, spec.checksums)
@@ -1466,6 +1470,10 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
             elif r.status == "aborted":
                 _upsert_aborted(con, spec.source_id, r.remote, r.endpoint_url,
                                  r.bytes_now, profile)
+            elif r.status == "deferred" and (r.error or "").startswith("Waiting ("):
+                # a unit that WAITS (spec.Waiting): counted, said once a pass
+                # below, not one event a unit (review of 13743848, 3: ~100k)
+                counters["waiting_units"] = counters.get("waiting_units", 0) + 1
             elif r.status == "deferred":
                 # nothing is known about the file this pass (its directory
                 # could not be read): the row is left exactly as it was, the
@@ -1520,6 +1528,11 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
         raise
 
     _unit_reports(con, spec, last_report, final=True)
+    if counters.get("waiting_units"):
+        db.log_event(con, "info", "acquire",
+                     f"{counters['waiting_units']} unit(s) wait for what the pass could not do first "
+                     f"(their listing): nothing asked of the origin; each due again when its "
+                     f"wait (60 s to 2 h) ends")
     if prepare is not None:
         # what it opened for the pass (a bulk's index) is let go with it
         close = getattr(spec.unit_fetcher, "close", None)

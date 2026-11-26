@@ -430,6 +430,13 @@ def _fold(record: dict, marks: list[dict]) -> dict:
             entry["tried"] = value
         elif kind == "state" and isinstance(value, dict):
             entry.update({k: value[k] for k in ("held", "lacks", "whole") if k in value})
+        elif kind == "listed":
+            entry.pop("waiting", None)           # its window came back listed: due at once, n from 0
+        elif kind == "waiting" and isinstance(value, dict):
+            # waiting for its LISTING window, apart from Cellar's episodes on it,
+            # which keep their own count (review of d863230c, Y2)
+            prev = entry.get("waiting") if isinstance(entry.get("waiting"), dict) else {}
+            entry["waiting"] = {"at": value.get("at"), "n": int(prev.get("n") or 0) + 1, "why": value.get("why")}
         elif kind == "deferred" and isinstance(value, dict):
             prev = entry.get("deferred") if isinstance(entry.get("deferred"), dict) else {}
             entry["deferred"] = {"at": value.get("at"), "n": int(prev.get("n") or 0) + 1, "why": value.get("why")}
@@ -555,10 +562,9 @@ def incomplete_due(corpus: Path, langs, *, now: float | None = None) -> list[tup
             entry = entry if isinstance(entry, dict) else {}
             if entry.get("tried") or entry.get("fetched"):
                 continue                    # Cellar asked once for it: not again until a newer dump
-            waited = entry.get("deferred")
-            if isinstance(waited, dict) and \
-                    now < float(waited.get("at") or 0) + retry_wait_s(int(waited.get("n") or 0)):
-                continue                    # waiting out its episode: the listing has its turn
+            if any(isinstance(w, dict) and now < float(w.get("at") or 0) + retry_wait_s(int(w.get("n") or 0))
+                   for w in (entry.get("deferred"), entry.get("waiting"))):
+                continue                    # waiting out its episode or its window: the listing has its turn
             # where it is held (`_held_at`), and its tree's identity, from one stat
             rel = unit_rel(lang, celex)
             at = sig = None
@@ -614,6 +620,27 @@ def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
     """A recorded incomplete unit Cellar did not give either (a failure that
     is not the endpoint going away): not asked first again."""
     _mark(corpus, [(lang, celex, "tried", why[:300])])
+
+
+def mark_waiting(corpus: Path, lang: str, celex: str, why: str) -> None:
+    """A recorded unit asked first that WAITS for its listing window
+    (cellar.WindowNotListed): not due again before `retry_wait_s(n)` of its
+    own count — apart from Cellar's episodes (`mark_deferred`) — or until
+    the window comes back listed (`mark_listed`)."""
+    import time as _time
+    _mark(corpus, [(lang, celex, "waiting", {"at": _time.time(), "why": why[:300]})])
+
+
+def mark_listed(corpus: Path, units: list[tuple[str, str]]) -> None:
+    """Recorded units whose listing window was LISTED this pass (cellar
+    TreeUnits.prepare): the wait for it is over, its count from 0; a
+    Cellar episode's deferral keeps its own (architecture's reviews of
+    7eb82ba1, 4, and d863230c, Y1/Y2). One write. A unit still inside its
+    wait is not among the pass's pending, so it is reached only when its
+    wait ends: a delay of up to 2 h, not "at once"."""
+    import time as _time
+    when = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+    _mark(corpus, [(lang, celex, "listed", when) for lang, celex in units])
 
 
 def mark_deferred(corpus: Path, lang: str, celex: str, why: str) -> None:
