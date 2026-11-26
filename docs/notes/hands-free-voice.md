@@ -3,7 +3,11 @@
 *2026-11-26. The operator: "I would like to be able to keep the mic on,
 summoning the chat by starting a phrase with its name 'Philippe...', and
 possibly pause or stop it 'Philippe wait/stop/hold on', resume, or ask a
-follow up question." This is a design to evaluate. Nothing has been built
+follow up question." And the same day: "a 'waiting music' phrase, likely a
+clip from a proper set, to cover the search time, something like 'let me
+check', 'well, let's see what I can find on the topic' … maybe adding
+something like 'uhm', or something that shows that it's doing something"
+(§7). This is a design to evaluate. Nothing has been built
 or measured; every figure below is read from the repository, and its
 source is named.*
 
@@ -57,6 +61,8 @@ source is named.*
 4. **A question, said after the name:** a new question, or a follow-up to
    the last one.
 5. **The node's own voice is not taken for the reader's** (echo).
+6. **The wait is covered:** a short spoken phrase says the question was
+   taken while the search runs (§7).
 
 ## 3. Decision 1: where the name is heard
 
@@ -71,7 +77,7 @@ whether it began with "Philippe".
 | D. The browser's Web Speech API | Nothing to build. | Chrome sends the audio to Google, and Firefox lacks it. Not self-hosted: rejected. |
 
 **Recommendation: A.** It is the smallest step, uses only what runs now,
-and is measured in a day (§7). B is the standardized alternative, taken
+and is measured in a day (§8). B is the standardized alternative, taken
 if M2 or M4 fail: too many misses or false calls, or too much STT load
 from a car radio. Default if the operator says nothing: A.
 
@@ -137,10 +143,67 @@ is built once, for both.
 | C. No new search: answer from the previous sources | The fastest. | Wrong whenever the follow-up needs other sources. |
 | Status quo: each question stands alone | Nothing to build. | "and his brother?" is answered about nothing. |
 
-**Recommendation: A, as its own step** (§8, step 2), because the typed
+**Recommendation: A, as its own step** (§9, step 3), because the typed
 Ask needs it too. Default: A.
 
-## 7. What is measured before step 1 is called done
+## 7. Decision 5: covering the wait
+
+**What it is:** between the end of a question and the first sentence of
+its answer there is silence:
+- the search, measured at 13.0 s, of which 11.9 s is the rerank;
+- then the answer's first words;
+- then the first sentence's synthesis. OmniVoice makes a clip in 1.5–2×
+  its length (speech-latency.md).
+
+With the screen not watched (hands-free, the car), that silence reads as
+"it did not hear me". A short spoken phrase says the question was taken
+and is being worked on: "Vediamo…", "Let me check", "Mmm, let's see what
+I can find on this".
+
+| choice | pros | cons |
+|---|---|---|
+| **A. Phrases from a fixed set, made ONCE per voice and kept** (recommended) | Played the instant the question is taken, in the reader's own voice (the same profile as the answer). Nothing is synthesised while the search runs, so nothing competes for the card with the rerank. Each clip is made once and kept like every other clip (app/speech.py, keyed on the engine since #937), and a clip that sounds wrong is dropped from the set. | Generic: it cannot name the topic. A set heard often repeats, so it rotates, at most three a question. |
+| B. A phrase that names the topic ("let's see what I can find on Napoleon"), synthesised per question | Sounds attentive. | Synthesis at 1.5–2× real time, on the card the search is using, so the phrase arrives late and slows the search. Taking the topic out of the question needs the chat model, or it takes the wrong words. |
+| C. A sound, not words: a soft tone, or a looping "thinking" sound (the earcon of the commercial assistants) | Language-free, never repetitive in meaning, the smallest clips. | Says less than words. A loop over 13 s is "waiting music" in the bad sense. |
+| Status quo: silence | Nothing to build. | In hands-free and in the car there is nothing to see, so the reader repeats the question. |
+
+**Recommendation: A**, with C's single tone as the very first cue where
+the reader turned phrases off. Default if the operator says nothing: A.
+
+How A runs:
+- **THE SET:** a small text file per language beside the commands' table.
+  Each phrase is tagged by when it may be said:
+  - at once (under 1 s): "Vediamo…", "Let me check", "Voyons…";
+  - a thinking sound for the middle of the wait: "Mmm…", "Uhm, un
+    attimo…";
+  - a longer one for a long wait (about 2 s): "Sto cercando quello che
+    trovo sull'argomento", "Still looking, one moment".
+  - Nothing claims a result ("found it") before there is one.
+  - The disfluencies ("uhm", "mmm") are what TTS renders worst, so each
+    clip is heard once before it joins the set (M5).
+- **WHEN:** the cue plan, at most three a question:
+  - the "at once" phrase when the question is taken (hands-free: when
+    `/ask/voice/heard` says it was addressed; tap-to-speak: when the
+    transcript comes back; a typed question with the speaker on: at Ask);
+  - a thinking sound at about 5 s if no sentence is ready;
+  - the long phrase at about 11 s.
+  - The answer's first sentence waits for the phrase that is playing
+    (each is under 2 s), never cutting it.
+  - The language is the answer's.
+  - No phrase is said twice in a row (across questions too).
+- **MADE IN ADVANCE:** the page asks the node for the set's clips (one
+  Louise route, `/ask/voice/fillers?lang=`). The node makes the missing
+  ones at low priority when the card is free, such as on the first use of a
+  voice, and the page prefetches them when the microphone or the speaker
+  is first used. A clip not made yet is simply not played: never made on
+  demand during a search.
+- **THE ECHO GUARD** (Decision 2A) knows the set, so a phrase heard back
+  is never taken for the reader.
+- **A PERSONAL CHOICE:** on by default for spoken questions. Settings ›
+  voice turns the phrases off (C's tone instead), with the account, else
+  in this browser. Nothing asks.
+
+## 8. What is measured before each step is called done
 
 - **M1 echo.** Hands-free on, on the phone's speaker and in the car:
   - utterances heard from the node's own voice: 0 after the guard;
@@ -160,9 +223,17 @@ Ask needs it too. Default: A.
   - STT seconds;
   - phone battery;
   - mobile data;
-  - the node's corpus work: it must keep running (§8, rule).
+  - the node's corpus work: it must keep running (§9, rule).
+- **M5 the phrases** (Decision 5): every clip of the set heard once in
+  each voice used, and a clip that sounds wrong dropped. Measured on 10
+  spoken questions:
+  - the time from the question taken to the first phrase (target under
+    1 s);
+  - the share of the silence the cues cover;
+  - how much the first sentence was delayed by a phrase still playing;
+  - the operator's verdict on repetition.
 
-## 8. The steps
+## 9. The steps
 
 1. **Hands-free, the name and the commands** (Decisions 1A, 2A, 3):
    - a hands-free switch beside the microphone;
@@ -184,9 +255,16 @@ Ask needs it too. Default: A.
    - Tests: the name forms, the commands, continuation, the echo guard
      and the activity rule in Python; the page's states in
      tests/browser/ask_voice.js.
-2. **The follow-up** (Decision 4A), for the typed and the spoken Ask
+2. **The phrases that cover the wait** (Decision 5A). They do not need
+   hands-free: they serve tap-to-speak and a typed question with the
+   speaker on as well. So they can ship first, alone, measured by M5.
+   - Tests: the cue plan (when each phrase plays, never twice in a row,
+     never during a sentence, at most three), the set file per language,
+     the route making only the missing clips at low priority; the page's
+     cues in tests/browser/ask_voice.js.
+3. **The follow-up** (Decision 4A), for the typed and the spoken Ask
    alike.
-3. **Only if M2 or M4 fail:** a wake-word model (Decision 1B, openWakeWord
+4. **Only if M2 or M4 fail:** a wake-word model (Decision 1B, openWakeWord
    over Wyoming), a new dependency to ask for first.
 
 **The cost of step 1 in the car:** with the microphone open, the car stays
