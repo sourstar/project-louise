@@ -101,13 +101,30 @@ def measure(query: str, names: list[str] | None = None, *, k: int = 10, times: i
     if trace:
         import tracemalloc
         tracemalloc.start(1)
-    from app import collections as collections_mod, retrieval
+    from app import retrieval
 
     left_out = ["the vector leg and the reranker (models)", "the query's translation (a model)",
                 "the citations queue and the lazy-embed queue (writes)"]
-    retrieval._reranked = lambda query, hits, *a, **kw: (hits, False, "measurement: no reranker asked")
-    retrieval.verify_on_use.cite = lambda *a, **kw: None
-    retrieval._enqueue_lazy_embed = lambda *a, **kw: None
+    # No model asked, nothing written - FOR THIS MEASUREMENT ONLY. The three are put back when it ends: a caller
+    # that imports this (a test, a notebook) keeps its reranker. Left replaced, the second test of this tool
+    # switched the reranker off for every test after it in the same run (11 failures in the ordered suite,
+    # 2026-11-26: "its list was not reranked this time").
+    replaced = ((retrieval, "_reranked", lambda query, hits, *a, **kw: (hits, False, "measurement: no reranker asked")),
+                (retrieval.verify_on_use, "cite", lambda *a, **kw: None),
+                (retrieval, "_enqueue_lazy_embed", lambda *a, **kw: None))
+    before = [(owner, name, getattr(owner, name)) for owner, name, _ in replaced]
+    for owner, name, stand_in in replaced:
+        setattr(owner, name, stand_in)
+    try:
+        return _measured(query, names, k=k, times=times, trace=trace, left_out=left_out)
+    finally:
+        for owner, name, was in before:
+            setattr(owner, name, was)
+
+
+def _measured(query: str, names: list[str] | None, *, k: int, times: int, trace: bool,
+              left_out: list[str]) -> dict[str, Any]:
+    from app import collections as collections_mod, retrieval
 
     out: dict[str, Any] = {"query": query, "k": k, "left_out": left_out, "trace": trace,
                            "start": rss(), "steps": []}

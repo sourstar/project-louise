@@ -50,3 +50,26 @@ def test_the_trace_names_pythons_largest_sites(held):
     assert got["python_mib"] >= 0
     import tracemalloc
     tracemalloc.stop()
+
+
+def test_the_tool_puts_back_what_it_replaced(held):
+    """It replaces the reranker and two writers so that no model is asked and nothing is written. It left them
+    replaced: in the ordered suite the test above switched the reranker off for every test after it - eleven
+    failures in tests/test_merge_by_relevance.py and tests/test_model_load.py, each passing alone (2026-11-26)."""
+    was = (retrieval._reranked, retrieval.verify_on_use.cite, retrieval._enqueue_lazy_embed)
+    got = search_memory.measure("balena", [held.name], times=1)
+    assert got["steps"] and "error" not in got["steps"][0]["search"]
+    assert (retrieval._reranked, retrieval.verify_on_use.cite, retrieval._enqueue_lazy_embed) == was
+
+    # and when the measurement itself fails
+    def broken(*a, **k):
+        raise RuntimeError("the collections cannot be read")
+    real = collections_mod.load_all
+    collections_mod.load_all = broken
+    try:
+        with pytest.raises(RuntimeError):
+            search_memory.measure("balena", [held.name], times=1)
+    finally:
+        collections_mod.load_all = real
+    assert (retrieval._reranked, retrieval.verify_on_use.cite, retrieval._enqueue_lazy_embed) == was
+

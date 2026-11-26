@@ -27,6 +27,12 @@ import pytest
 from app import (config, gpu, httpc, localai_reclaimer, model_evict, model_load, model_pins, model_use, node_state,
                  platform_config, resident)
 from tests.test_model_evict import _in_set, _known, _used  # noqa: F401
+# `_used` writes "last used h hours before NOW", and NOW is tests/test_model_evict.py's: taken again at each test
+# THERE by its autouse fixture, and here only if this module has the fixture too. Without it NOW was the moment
+# the eviction's tests last ran, and "used four seconds ago" was over a minute old by the time the suite came
+# here: test_idle_and_in_host_memory_is_unloaded_where_the_rule_does_not_page failed in the ordered suite and
+# passed alone (2026-11-26).
+from tests.test_model_evict import _now_is_taken_when_the_test_starts  # noqa: F401
 
 REAL_FETCH = model_load._fetch_system
 S = "http://localai:8080"
