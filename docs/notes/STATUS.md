@@ -20,6 +20,18 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **A DEAD WORKER'S ACQUISITION CLAIM REFUSED ITS SUCCESSOR'S FETCH, AND NOTHING ASKED AGAIN; A
+  COLLECTION'S RESUME ASKED NO FETCH (München, D6/D7, after the 09:00:20Z hardware reset).** The claim
+  the killed worker held was 179 s old; the new worker's startup fetch got `AcquisitionBusy` ("re-run
+  once the claim goes stale after 300s"), logged it as an ERROR, and nothing re-ran it — EUR-Lex5.next's
+  fetch stood still 101 minutes, until a hand toggle of `acquire_enabled`; `node pause` / `node resume
+  EUR-Lex5.next` in between asked no fetch either. FIXED (app/acquire/claim.py, app/worker.py): a claim
+  made before the HOST last booted (`btime`, the same in every container) is dead whatever its age; a
+  refusal is a deferral (warn, "asked again in N s") and is asked again when the claim goes stale
+  (`_claim_retries`, joined to the pause's re-arms); a collection resumed on its own asks its fetch
+  again when it fetches (`_rearm_resumed`); and a re-arm pending for a collection not run this round —
+  paused on its own, another writer's lock — waits for it instead of being dropped as retired.
+
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
   `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"
   for wikipedia's fifty records).** 50 candidates, 38 works of 266 records, 269 lookups returning 456

@@ -48,6 +48,7 @@ from .rage import card_record, dispatch
 from .rage import keep as rage_keep
 from .rage.dispatch import Level
 from .acquire import engine as acquire_engine
+from .acquire import claim as acquire_claim
 from .acquire.spec import DiskPreflightError, LicenseAckRequiredError
 from .acquire.specs import ACQUIRE_REGISTRY
 from .bundles import genesis as bundle_genesis
@@ -2658,6 +2659,9 @@ _acquire_done: dict[str, bool] = {}      # collection -> did it fetch anything
 #: the node is no longer paused (`_rearm_paused_aborts`). Guarded by
 #: _acquire_lock.
 _paused_aborts: set[str] = set()
+#: name -> when to ask again a fetch another writer's claim refused (`_acquire_worker`,
+#: `_rearm_paused_aborts`). Guarded by `_acquire_lock`.
+_claim_retries: dict[str, float] = {}
 _acquire_lock = threading.Lock()
 
 
@@ -2756,6 +2760,18 @@ def _acquire_worker(collection, spec, profile: str, reason: str) -> None:
         db.log_event(con, "info", "acquire", f"corpus fetch ({reason}): {result}")
     except (LicenseAckRequiredError, DiskPreflightError) as e:
         db.log_event(con, "error", "acquire", str(e))
+    except acquire_claim.AcquisitionBusy as e:
+        # ANOTHER WRITER'S CLAIM: a deferral, never a failure, and ASKED AGAIN
+        # when that claim goes stale if its holder does not renew it — a dead
+        # holder whose claim is younger than its staleness (a worker a crash
+        # killed and a container that did not restart the host) refused the
+        # startup fetch of its successor, said "re-run once the claim goes
+        # stale", and nothing did (München, 2026-11-26, D6: 101 minutes)
+        retry_at = time.time() + e.retry_in
+        with _acquire_lock:
+            _claim_retries[collection.name] = retry_at
+        db.log_event(con, "warn", "acquire",
+                     f"corpus fetch ({reason}) deferred — {e} Asked again in {e.retry_in:.0f} s."[:400])
     except sqlite3.OperationalError as e:
         # The manifest was busy past the busy timeout — a discovery pass
         # streaming millions of rows can starve this thread. NOTHING moved
@@ -3998,8 +4014,33 @@ def _finish_completed_acquires(cons, all_collections, last_discover,
             last_discover[collection.name] = time.time()
 
 
+#: the collections paused on their own at the last round (`_rearm_resumed`); None before the first
+_paused_last: set[str] | None = None
+
+
+def _rearm_resumed(all_collections, paused_now) -> list[str]:
+    """A COLLECTION RESUMED (`node resume <collection>`) asks its fetch again,
+    as the node's resume does (`_rearm_paused_aborts`): its pause retired the
+    fetch in flight, or a fetch had been refused before it, and nothing else
+    asks — a resume asked no scan and no fetch (München, 2026-11-26, D7: the
+    fetch stood still until a hand toggle of `acquire_enabled`). Only one that
+    fetches (`acquire_enabled`); one that does not owes the scan its pause cut
+    short, which `_request_owed_scans` asks. Returns the names re-armed."""
+    global _paused_last
+    now = set(paused_now or ())
+    before, _paused_last = _paused_last, now
+    if before is None or not (before - now):
+        return []                                     # the idle round costs nothing
+    names = [c.name for c in all_collections
+             if c.name in before - now and getattr(c, "acquire_enabled", False)]
+    if names:
+        with _acquire_lock:
+            _paused_aborts.update(names)
+    return names
+
+
 def _rearm_paused_aborts(all_collections, last_discover, pipeline: bool,
-                         cons=None) -> list[str]:
+                         cons=None, known=None) -> list[str]:
     """Restart the corpus fetches the node's pause stopped or refused.
     Returns the names re-armed.
 
@@ -4022,8 +4063,21 @@ def _rearm_paused_aborts(all_collections, last_discover, pipeline: bool,
     itself. The first version only cleared the interval stamp and left the
     interval check to do it — and with DISCOVER_INTERVAL_MIN=0 ("startup
     only") that check never runs, so the fetch was lost until a restart.
+
+    `known`: every collection the node holds. One of them not run this round
+    (`all_collections` is the round's: one paused on its own, or another
+    writer's lock) is KEPT pending, not dropped as retired — its fetch was
+    lost so (2026-11-26).
     """
     with _acquire_lock:
+        # A FETCH ANOTHER'S CLAIM REFUSED is asked again once that claim is
+        # stale: its name joins the pause's re-arms when its time comes
+        if _claim_retries:
+            now = time.time()
+            due = [n for n, at in _claim_retries.items() if at <= now]
+            for n in due:
+                del _claim_retries[n]
+                _paused_aborts.add(n)
         if not _paused_aborts:
             # THE IDLE ROUND COSTS NOTHING. This runs every round the node
             # is not paused and almost always has nothing to do; it must not
@@ -4033,13 +4087,14 @@ def _rearm_paused_aborts(all_collections, last_discover, pipeline: bool,
             return []
         pending = set(_paused_aborts)
         live = {c.name: c for c in all_collections}
+        waiting = {c.name for c in (known or ())} - live.keys()
         still_running = set()
         for name in pending:
             thread = _acquire_threads.get(name)
             if thread is not None and thread.is_alive():
                 still_running.add(name)
         _paused_aborts.clear()
-        _paused_aborts.update(still_running)
+        _paused_aborts.update(still_running | (pending & waiting))
         rearmed = sorted((pending - still_running) & live.keys())
         # Forget "done" for what this re-arms, under the SAME lock. Third
         # review, 2026-09-13: `_finish_completed_acquires` and this function
@@ -7638,8 +7693,9 @@ def run_forever():
                                                  pipeline=pipeline)
             # 07 §7.7: the lock of every collection the node runs; one the operator
             # paused or another writer holds is not run this round
-            active = _hold_locks(all_collections,
-                                 node_state.paused_collections(node_con), cons)
+            paused_now = node_state.paused_collections(node_con)
+            active = _hold_locks(all_collections, paused_now, cons)
+            _rearm_resumed(all_collections, paused_now)
             # the frozen set, once a round, as the pause is (07 §7.3 `node freeze`)
             _sync_frozen(node_con)
             _finish_completed_acquires(cons, all_collections, last_discover,
@@ -7685,7 +7741,7 @@ def run_forever():
             _paused.clear()
             # Re-arm the fetches a pause stopped, BEFORE the interval check
             # below — without pipeline threads, that check is what runs them.
-            _rearm_paused_aborts(active, last_discover, pipeline, cons=cons)
+            _rearm_paused_aborts(active, last_discover, pipeline, cons=cons, known=all_collections)
             # and catch up what a freeze held back, once it is lifted
             _catch_up_unfrozen(active, last_discover, pipeline, cons=cons)
             # download/seeding only: fetching continues — the pipeline

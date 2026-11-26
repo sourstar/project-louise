@@ -130,3 +130,33 @@ def test_a_claim_from_before_the_tag_is_read_by_its_pid(con, monkeypatch):
                    json.dumps({"pid": os.getpid(), "ts": time.time(), "source_id": "test"}))
     with claim_mod.acquisition_claim(con, "test"):
         pass
+
+
+# ---- a dead predecessor's claim (München, 2026-11-26, D6) -------------------------------
+
+def test_a_claim_from_before_the_host_booted_is_dead_whatever_its_age(con, monkeypatch):
+    """The worker a hardware reset killed at 09:00:20Z held the claim, 179 s
+    old; its successor's startup fetch was refused for the 300 s staleness.
+    A claim older than the host's boot has a dead holder for certain."""
+    now = time.time()
+    db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(
+        {"pid": 8, "holder": "8@4026533985", "ts": now - 179, "source_id": "eurlex"}))
+    monkeypatch.setattr(claim_mod, "host_boot_time", lambda: now - 60)      # booted after it was claimed
+    with claim_mod.acquisition_claim(con, "eurlex"):
+        assert claim_mod.read_claim(con)["pid"] == os.getpid()
+    db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(
+        {"pid": 8, "holder": "8@4026533985", "ts": now - 179, "source_id": "eurlex"}))
+    monkeypatch.setattr(claim_mod, "host_boot_time", lambda: now - 3600)    # claimed since the boot: live
+    with pytest.raises(claim_mod.AcquisitionBusy) as e:
+        with claim_mod.acquisition_claim(con, "eurlex"):
+            pass
+    assert 120 <= e.value.retry_in <= 130, "asked again when it goes stale, not before"
+    monkeypatch.setattr(claim_mod, "host_boot_time", lambda: None)          # unreadable: the age decides
+    with pytest.raises(claim_mod.AcquisitionBusy):
+        with claim_mod.acquisition_claim(con, "eurlex"):
+            pass
+
+
+def test_the_hosts_boot_is_read_from_the_kernel():
+    boot = claim_mod.host_boot_time()
+    assert boot is None or 0 < boot < time.time()

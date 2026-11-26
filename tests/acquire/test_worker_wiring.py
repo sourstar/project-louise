@@ -599,3 +599,75 @@ def test_an_idle_round_does_not_walk_the_collection_list(monkeypatch):
         worker._paused_aborts.clear()
     assert worker._rearm_paused_aborts(Unwalkable(), {}, True) == []
     assert touched == []
+
+
+# ---- a fetch another writer's claim refused, and a collection's resume (2026-11-26, D6 / D7) ----
+
+def test_a_fetch_refused_by_anothers_claim_is_a_deferral_asked_again_when_it_goes_stale(tmp_path, monkeypatch):
+    """München, 2026-11-26: "corpus fetch (startup) failed: AcquisitionBusy …
+    re-run once the claim goes stale after 300s" — logged as an ERROR, and
+    nothing re-ran it: the fetch stood still 101 minutes until a hand toggle."""
+    from app.acquire import claim as claim_mod
+
+    def run(con, collection, spec, profile, stop=None):
+        raise claim_mod.AcquisitionBusy("eurlex: acquisition already running in 8@4026533985 (claimed 179s ago).",
+                                        retry_in=126)
+    collection, con = _wired(tmp_path, monkeypatch, run)
+    clock = [1_000_000.0]
+    monkeypatch.setattr(worker.time, "time", lambda: clock[0])
+    try:
+        worker._acquire_worker(collection, _SPEC, "demo", "startup")
+        rows = con.execute("SELECT level, message FROM events WHERE stage = 'acquire' ORDER BY id").fetchall()
+        assert rows[-1][0] == "warn" and "deferred" in rows[-1][1] and "Asked again in 126 s" in rows[-1][1]
+        assert not [r for r in rows if r[0] == "error"], "a refusal is a deferral, never a failure"
+        assert worker._claim_retries[collection.name] == clock[0] + 126
+        assert worker._rearm_paused_aborts([collection], {}, True) == [], "not before the claim goes stale"
+        assert worker._take_discovery_request(collection.name) is None
+        clock[0] += 127
+        assert worker._rearm_paused_aborts([collection], {}, True) == [collection.name]
+        assert worker._take_discovery_request(collection.name) == ("resume after pause", True), "a FETCH"
+        assert collection.name not in worker._claim_retries
+    finally:
+        with worker._acquire_lock:
+            worker._claim_retries.pop(collection.name, None)
+        _forget(collection)
+
+
+def test_a_collection_resumed_asks_its_fetch_again(tmp_path, monkeypatch):
+    """München, 2026-11-26, D7: `node resume EUR-Lex5.next` asked no scan and no
+    fetch — the fetch its pause retired, or one refused before it, stood still."""
+    fetching = _collection(tmp_path, acquire_enabled=True)
+    other = collections_mod.Collection(
+        name="hand", plugin="gutenberg", profile="demo", embed_mode_default=None,
+        corpus_dir=tmp_path / "corpus", manifest_path=tmp_path / "m2.db",
+        fts_dir=tmp_path / "fts2", lance_dir=tmp_path / "l2", acquire_enabled=False, license_ack=None)
+    monkeypatch.setattr(worker, "_paused_last", None)
+    try:
+        assert worker._rearm_resumed([fetching, other], {"test", "hand"}) == [], "the first round only reads"
+        assert worker._rearm_resumed([fetching, other], {"test", "hand"}) == [], "still paused: nothing"
+        assert worker._rearm_resumed([fetching, other], set()) == ["test"], "resumed: the one that fetches"
+        assert "test" in worker._paused_aborts and "hand" not in worker._paused_aborts
+        assert worker._rearm_resumed([fetching, other], set()) == [], "once"
+    finally:
+        with worker._acquire_lock:
+            worker._paused_aborts.discard("test")
+
+
+def test_a_fetch_pending_for_a_collection_not_run_this_round_waits_for_it(tmp_path, monkeypatch):
+    """Paused on its own, or another writer's lock: the round's list leaves it
+    out, and the name was dropped as if retired — its fetch lost for good."""
+    collection = _collection(tmp_path, acquire_enabled=True)
+    gone = "retired-meanwhile"
+    with worker._acquire_lock:
+        worker._paused_aborts.update({collection.name, gone})
+    try:
+        assert worker._rearm_paused_aborts([], {}, True, known=[collection]) == []
+        assert collection.name in worker._paused_aborts, "waits while not run"
+        assert gone not in worker._paused_aborts, "one the node no longer holds is dropped"
+        assert worker._rearm_paused_aborts([collection], {}, True, known=[collection]) == [collection.name]
+        assert worker._take_discovery_request(collection.name) == ("resume after pause", True)
+    finally:
+        with worker._acquire_lock:
+            worker._paused_aborts.discard(collection.name)
+            worker._paused_aborts.discard(gone)
+        _forget(collection)

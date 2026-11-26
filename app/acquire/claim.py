@@ -33,7 +33,26 @@ _REFRESH_EVERY = 60
 
 
 class AcquisitionBusy(RuntimeError):
-    """Another live process is already acquiring for this collection."""
+    """Another live process is already acquiring for this collection.
+    `retry_in`: the seconds until its claim goes stale, if it is not renewed
+    (the caller asks again then: a refusal is a deferral, never a failure)."""
+
+    def __init__(self, message: str, retry_in: float = float(STALE_AFTER_SECONDS)) -> None:
+        super().__init__(message)
+        self.retry_in = max(1.0, float(retry_in))
+
+
+def host_boot_time() -> float | None:
+    """The HOST's boot, from the kernel (`btime` in /proc/stat: the same in
+    every container on the host). None where it cannot be read."""
+    try:
+        with open("/proc/stat", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("btime "):
+                    return float(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
 
 
 def read_claim(con) -> dict | None:
@@ -72,8 +91,16 @@ def _record(source_id: str, now: float) -> str:
 def _is_live(claim: dict | None, now: float) -> bool:
     if not claim:
         return False
-    if now - float(claim.get("ts", 0)) > STALE_AFTER_SECONDS:
+    ts = float(claim.get("ts", 0))
+    if now - ts > STALE_AFTER_SECONDS:
         return False          # stale: the holder died or hung; take it over
+    boot = host_boot_time()
+    if boot is not None and ts < boot:
+        # CLAIMED BEFORE THE HOST LAST BOOTED: its holder is dead for certain,
+        # whatever its age (München, 2026-11-26: the worker a hardware reset
+        # killed at 09:00:20Z held the claim, 179 s old, and its successor's
+        # startup fetch was refused for the 300 s and then never asked again)
+        return False
     return not _mine(claim)
 
 
@@ -92,7 +119,8 @@ def acquisition_claim(con, source_id: str, force: bool = False):
             f"{source_id}: acquisition already running in "
             f"{existing.get('holder') or 'pid ' + str(existing.get('pid'))} "
             f"(claimed {held_for}s ago). Wait for it to finish, or re-run once the "
-            f"claim goes stale after {STALE_AFTER_SECONDS}s.")
+            f"claim goes stale after {STALE_AFTER_SECONDS}s.",
+            retry_in=STALE_AFTER_SECONDS - held_for + 5)
     db.set_control(con, CLAIM_KEY, _record(source_id, now))
     try:
         yield
