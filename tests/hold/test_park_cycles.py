@@ -40,9 +40,19 @@ from app import (collections as collections_mod, embeddings, gate_twin, httpc, l
                  model_evict, model_load, own_unloads, platform_config, resident, run_check)
 from app.hold import embedder as emb, runs as hold_runs
 from tests.hold.conftest import fake_embed
-from tests.hold.test_backend_engine import _vega_run
+from tests.hold.test_backend_engine import BACKEND, _vega_run
 from tests.hold.test_embedder import a_key, codex_768, perturbed, reference
 from tests.hold.test_near_exact import _nudged
+
+
+#: the engine as launched WITH the park switch: what the run's own statement
+#: says of whether its weights can leave the card (`embedder.can_park`)
+PARK_ENGINE = __import__("dataclasses").replace(BACKEND, env={**BACKEND.env, "GGML_SYCL_PARKABLE": "1",
+                                                                 "GGML_SYCL_PARK_VERIFY": "1"})
+
+
+def _parking_run(codex):
+    return _vega_run(codex, engine=PARK_ENGINE)
 
 
 class Parking:
@@ -131,7 +141,7 @@ def _gate(model: Parking, *, exactness: str = "exact", park: bool = True):
     ref = reference()
     return codex, emb.run_gate(
         codex, reference=ref, embed=lambda t: ref, seed=b"\x09" * 32,
-        stated=_vega_run(codex), embed_one=model.one, contribute=model.one,
+        stated=_parking_run(codex), embed_one=model.one, contribute=model.one,
         cpu_reference=("sha256:" + "44" * 32, perturbed(ref, indices=(3,), to=0.9995)),
         reload=model.reload, exactness=exactness, park=model if park else None)
 
@@ -165,16 +175,17 @@ def test_a_model_that_does_not_park_is_asked_nothing():
     assert run.park_cycles == 0 and run.ok and "park" not in run.why()
 
 
-def test_one_answer_after_a_return_off_by_its_last_bits_fails_an_exact_run():
+def test_one_answer_after_a_return_off_by_its_last_bits_refuses_parking_and_fails_nothing():
+    """THE PASS NEVER MAKES A FAILING STATEMENT (the second read of 2026-11-26):
+    nothing is written from a run before its cycles are counted, so a run that
+    parks badly is the run it was once it no longer parks. A FAIL kept for it
+    would have outlived `park: true` and stopped its collection."""
     model = Parking(bad=41, wrong=lambda v: _nudged(v, 0.9999995))
-    codex, run = _gate(model)
-    assert run.park_cycles == 64 and run.park_variation < 1.0
-    assert run.load_variation == run.park_variation, "the statement's number covers it"
-    assert not run.ok
-    why = run.why()
-    assert "after its weights came back from host memory" in why and "64 park cycles" in why
-    assert "fresh loads" not in why, "the loads were exact: the reason names the parking"
-    assert not hold_runs.passing(emb.statement(run, codex, a_key(), now="2026-11-26T09:00:00Z")["body"], codex)
+    with pytest.raises(emb.ParkRefused, match="is not the same text's first answer") as e:
+        _gate(model)
+    said = str(e.value)
+    assert "park cycle 41" in said and "bytes or nothing" in said and "its statement stands" in said
+    assert model.loads == 0, "refused before the fresh loads"
 
 
 def test_a_near_run_takes_it_within_the_bound_and_no_further():
@@ -184,14 +195,15 @@ def test_a_near_run_takes_it_within_the_bound_and_no_further():
     assert "the same bytes" not in run.parks_said() and "the closest answer after a return 0.99999" in run.why()
     assert hold_runs.passing(emb.statement(run, codex, a_key(), now="2026-11-26T09:00:00Z")["body"], codex)
     beyond = Parking(bad=7, wrong=lambda v: _nudged(v, 0.9995))
-    _codex, run = _gate(beyond, exactness="near")
-    assert not run.ok
+    with pytest.raises(emb.ParkRefused, match="under the near-exact bound"):
+        _gate(beyond, exactness="near")
 
 
-def test_a_nan_after_a_return_is_a_wrong_answer_not_a_variation():
-    model = Parking(bad=3, wrong=lambda v: [float("nan")] + list(v[1:]))
-    _codex, run = _gate(model, exactness="near")
-    assert run.park_variation == 0.0 and not run.ok
+def test_a_nan_after_a_return_refuses_parking_whatever_the_collection_asks():
+    for exactness in ("exact", "near"):
+        model = Parking(bad=3, wrong=lambda v: [float("nan")] + list(v[1:]))
+        with pytest.raises(emb.ParkRefused, match="is not a number"):
+            _gate(model, exactness=exactness)
 
 
 # ---- not a cycle --------------------------------------------------------------------
@@ -235,12 +247,14 @@ def test_counts_that_started_again_between_the_park_and_the_answer_refuse_the_ru
     a failing statement would stop the collection even with `park: true`
     taken out of the file again (the review of 2026-11-26)."""
     model = Parking(restart={12})
-    with pytest.raises(emb.GateError, match="STARTED AGAIN") as e:
+    with pytest.raises(emb.ParkRefused, match="STARTED AGAIN") as e:
         _gate(model)
     assert not isinstance(e.value, emb.GateDeferred)
     said = str(e.value)
     assert "(12, 11, 1) then (0, 0, 0)" in said, "the counts as they were read"
     assert "Take `park: true` out of the model's file" in said and "its statement stands" in said
+    # the worker's event is cut at 500 characters and its control row at 400: the way out is inside both
+    assert said.index("its statement stands") < 380, len(said)
     assert model.loads == 0, "refused before the fresh loads"
     # ...and through `validate`: the run's earlier statement is untouched, no record is written
     codex, before = _validated(tmp_path, "c", Parking(), park=False)
@@ -264,7 +278,7 @@ def test_a_parked_model_louise_itself_stopped_is_not_a_failed_return():
 
 def test_a_park_that_broke_its_backend_refuses_the_run_the_same_way():
     model = Parking(refuse={7: "model_stopped"})
-    with pytest.raises(emb.GateError, match="the park broke the model's backend") as e:
+    with pytest.raises(emb.ParkRefused, match="the park broke the model's backend") as e:
         _gate(model)
     assert not isinstance(e.value, emb.GateDeferred) and "its statement stands" in str(e.value)
 
@@ -273,7 +287,7 @@ def test_a_park_that_broke_its_backend_refuses_the_run_the_same_way():
 
 def test_a_park_the_runner_will_never_make_refuses_the_run():
     model = Parking(refuse={1: "cannot_park"})
-    with pytest.raises(emb.GateError, match="GGML_SYCL_PARKABLE=1") as e:
+    with pytest.raises(emb.ParkRefused, match="cannot_park") as e:
         _gate(model)
     assert not isinstance(e.value, emb.GateDeferred), "a rule in the way, not a wait"
 
@@ -303,7 +317,7 @@ def test_a_runner_that_keeps_refusing_defers_with_its_own_word():
 
 def test_cycles_nobody_counted_are_never_assumed():
     model = Parking(counted=False)
-    with pytest.raises(emb.GateError, match="nobody counted") as e:
+    with pytest.raises(emb.ParkRefused, match="nobody counted") as e:
         _gate(model)
     assert not isinstance(e.value, emb.GateDeferred)
     assert model.attempts == 0 and model.retried >= 1, "read again before it is refused, and nothing parked"
@@ -316,7 +330,7 @@ def _validated(tmp_path, name: str, model: Parking, *, park: bool = True, at: st
     ref = reference()
     (tmp_path / name).mkdir(exist_ok=True)
     body = hold_runs.validate(tmp_path, name, codex, role="document", reference=ref, embed=lambda t: ref,
-                              embed_one=model.one, contribute=model.one, stated=_vega_run(codex),
+                              embed_one=model.one, contribute=model.one, stated=_parking_run(codex),
                               key=a_key(), now=at, reload=model.reload, park=model if park else None)
     return codex, body
 
@@ -332,82 +346,114 @@ def test_the_cycles_are_recorded_for_the_statement_of_their_own_pass(tmp_path):
     assert hold_runs.parks_measured(tmp_path, "d", "document", plain["run"]) is None
 
 
-def _holds(monkeypatch, held: dict):
-    """`statements`: name -> {run: body}, as the collections' files would give."""
-    monkeypatch.setattr(hold_runs, "statements", lambda root, name, *a, **k: dict(held.get(name, {})))
-    monkeypatch.setattr(hold_runs, "_others", lambda root, name: sorted(n for n in held if n != name))
+def _who():
+    from app.hold import envelope as env
+    return env.key_text(a_key().verify_key)
 
 
-def test_a_model_that_parks_now_and_was_gated_while_it_did_not_is_gated_again(tmp_path, monkeypatch):
+def _check(tmp_path, name: str, codex, run_id: str, **kw):
+    """`runs.check` over the statements as they are kept on disk."""
+    return hold_runs.check(tmp_path, name, codex, {run_id}, signer=_who(), batched=False, **kw)
+
+
+def test_a_model_that_parks_now_and_was_gated_while_it_did_not_is_gated_again(tmp_path):
     """Its file gained `park: true`, or the runner its patch, under the same
     run id: the statement is good and never saw a return."""
     codex, body = _validated(tmp_path, "c", Parking(), park=False)
     run_id = body["run"]
-    _holds(monkeypatch, {"c": {run_id: body}})
-    hold_runs.check(tmp_path, "c", codex, {run_id}, signer=None, batched=False)
+    _check(tmp_path, "c", codex, run_id)
     with pytest.raises(hold_runs.RunUnvalidated) as e:
-        hold_runs.check(tmp_path, "c", codex, {run_id}, signer=None, batched=False, parks=True)
+        _check(tmp_path, "c", codex, run_id, parks=True)
     assert e.value.failed is False and "counted no park cycles" in str(e.value)
-    _codex, again = _validated(tmp_path, "c", Parking())
-    _holds(monkeypatch, {"c": {run_id: again}})
-    hold_runs.check(tmp_path, "c", codex, {run_id}, signer=None, batched=False, parks=True)
+    _validated(tmp_path, "c", Parking())
+    _check(tmp_path, "c", codex, run_id, parks=True)
 
 
-def test_cycles_counted_for_one_statement_admit_no_other(tmp_path, monkeypatch):
-    """The review of 2026-11-26 (R1): a pass whose answers after a return
-    differ keeps a FAILING statement and 64 counted cycles. Parking off, the
-    run is measured again and passes; parking on again, the old count must
-    not admit that statement — it never saw a return."""
-    codex, failed = _validated(tmp_path, "c", Parking(bad=9, wrong=lambda v: _nudged(v, 0.9999995)))
-    run_id = failed["run"]
-    assert not hold_runs.passing(failed, codex)
-    assert hold_runs.parks_measured(tmp_path, "c", "document", run_id)["cycles"] == 64
-    _codex, passing = _validated(tmp_path, "d", Parking(), park=False)          # the same run, measured again
-    assert passing["run"] == run_id and hold_runs.passing(passing, codex)
-    _holds(monkeypatch, {"c": {run_id: passing}})
+def test_a_run_whose_engine_cannot_park_is_held_to_no_cycles(tmp_path):
+    """LocalAI lists `"parks": true` on the FILE's word; an engine started
+    without the park switch never moves its weights (Tensor, §12): the run's
+    own statement says so, and it is asked nothing and held to nothing —
+    else every look would gate it again for cycles that cannot be asked."""
+    codex = codex_768(version=5)
+    ref = reference()
+    (tmp_path / "c").mkdir()
+    plain = Parking()
+    body = hold_runs.validate(tmp_path, "c", codex, role="document", reference=ref, embed=lambda t: ref,
+                              embed_one=plain.one, contribute=plain.one, stated=_vega_run(codex),
+                              key=a_key(), now="2026-11-26T05:00:00Z", reload=plain.reload, park=None)
+    assert emb.can_park(body["engine"]) is False and emb.can_park(PARK_ENGINE.to_dict()) is True
+    assert emb.can_park({"image": "x"}) is None and emb.can_park(None) is None, "no environment stated: unknown"
+    _check(tmp_path, "c", codex, body["run"], parks=True)
+
+
+def test_the_record_matches_the_statement_as_it_is_read_back_from_its_file(tmp_path):
+    """The digest is taken over the body `validate` signs and compared with
+    the body `statements` reads from the kept file: the same bytes, or every
+    parking run would be gated again at every check, for ever."""
+    codex, body = _validated(tmp_path, "c", Parking())
+    held = hold_runs.statements(tmp_path, "c", codex, "document", signer=_who())
+    assert held[body["run"]] == body
+    _check(tmp_path, "c", codex, body["run"], parks=True)
+    # ...and a sibling of the space with no statement of its own takes statement and cycles together
+    (tmp_path / "d").mkdir()
+    _check(tmp_path, "d", codex, body["run"], parks=True)
+    assert hold_runs.parks_measured(tmp_path, "d", "document", body["run"])["statement"] == \
+        hold_runs.statement_digest(body)
+
+
+def test_cycles_counted_for_one_statement_admit_no_other(tmp_path):
+    """The review of 2026-11-26 (R1): the run gated with parking, then
+    measured again without it — a new statement, which never saw a return.
+    Parking on again, the old count must not admit it."""
+    codex, first = _validated(tmp_path, "c", Parking())
+    run_id = first["run"]
+    _check(tmp_path, "c", codex, run_id, parks=True)
+    _codex, again = _validated(tmp_path, "c", Parking(), park=False, at="2026-11-26T06:00:00Z")
+    assert again["run"] == run_id and again != first
+    assert hold_runs.parks_measured(tmp_path, "c", "document", run_id)["cycles"] == 64, "the old record is still there"
     with pytest.raises(hold_runs.RunUnvalidated, match="counted no park cycles"):
-        hold_runs.check(tmp_path, "c", codex, {run_id}, signer=None, batched=False, parks=True)
+        _check(tmp_path, "c", codex, run_id, parks=True)
 
 
-def test_a_sibling_lends_its_cycles_only_with_the_statement_they_were_counted_for(tmp_path, monkeypatch):
-    """The review (R9): A and B share a space, both validated before parking.
-    A is gated again and FAILS on a return; B, on its own older passing
-    statement, must not be admitted by A's 64 counted cycles."""
+def test_a_siblings_verdict_is_taken_with_its_cycles_and_only_with_them(tmp_path):
+    """ONE GATE PER (space, run), for the park cycles too (the second read of
+    2026-11-26): B, on its own older statement, takes A's passing statement
+    WITH A's counted cycles — statement and record, byte for byte — and is
+    not gated in full when `park: true` lands. A's cycles alone, without the
+    statement they were counted for, admit nothing (the first review, R9)."""
     codex, b_old = _validated(tmp_path, "b", Parking(), park=False)
     run_id = b_old["run"]
-    _codex, a_failed = _validated(tmp_path, "a", Parking(bad=30, wrong=lambda v: _nudged(v, 0.9999995)))
-    assert a_failed["run"] == run_id and not hold_runs.passing(a_failed, codex)
-    _holds(monkeypatch, {"a": {run_id: a_failed}, "b": {run_id: b_old}})
+    _codex, a_new = _validated(tmp_path, "a", Parking(), at="2026-11-26T06:00:00Z")
+    assert a_new["run"] == run_id
+    _check(tmp_path, "b", codex, run_id, parks=True)
+    assert hold_runs.statements(tmp_path, "b", codex, "document", signer=_who())[run_id] == a_new, \
+        "A's statement, over B's own"
+    assert hold_runs.parks_measured(tmp_path, "b", "document", run_id)["statement"] == \
+        hold_runs.statement_digest(a_new)
+    # A is then measured again WITHOUT parking: its record is another statement's, and lends nothing
+    _codex, e_old = _validated(tmp_path, "e", Parking(), park=False, at="2026-11-26T04:00:00Z")
+    _validated(tmp_path, "a", Parking(), park=False, at="2026-11-26T07:00:00Z")
+    (tmp_path / "b").rename(tmp_path / "gone")           # B, which holds the pair, leaves the node
+    __import__("shutil").rmtree(tmp_path / "gone")
     with pytest.raises(hold_runs.RunUnvalidated, match="counted no park cycles"):
-        hold_runs.check(tmp_path, "b", codex, {run_id}, signer=None, batched=False, parks=True)
-    assert hold_runs.parks_measured(tmp_path, "b", "document", run_id) is None, "nothing was copied"
-    # the SAME statement, held by both (as `statements_for_space` copies it), lends its cycles
-    _codex, a_good = _validated(tmp_path, "a", Parking())
-    _holds(monkeypatch, {"a": {run_id: a_good}, "b": {run_id: a_good}})
-    hold_runs.check(tmp_path, "b", codex, {run_id}, signer=None, batched=False, parks=True)
-    assert hold_runs.parks_measured(tmp_path, "b", "document", run_id)["cycles"] == 64, "one borrowed is one kept"
-    # a record whose sibling no longer holds that statement lends nothing
-    (tmp_path / "e").mkdir()
-    _holds(monkeypatch, {"a": {run_id: a_failed}, "e": {run_id: a_good}})
-    with pytest.raises(hold_runs.RunUnvalidated):
-        hold_runs.check(tmp_path, "e", codex, {run_id}, signer=None, batched=False, parks=True)
+        _check(tmp_path, "e", codex, run_id, parks=True)
+    assert hold_runs.statements(tmp_path, "e", codex, "document", signer=_who())[run_id] == e_old, "untouched"
 
 
-def test_eight_threads_borrowing_at_once_write_one_whole_record(tmp_path, monkeypatch):
+def test_eight_threads_borrowing_at_once_write_one_whole_record(tmp_path):
     """`check` runs on the embed stage's threads: one temporary name per pid
     gave `FileNotFoundError` on the first round (the review, R10) — an error
     on a document, not a deferral."""
     codex, body = _validated(tmp_path, "a", Parking())
     run_id = body["run"]
-    (tmp_path / "b").mkdir()
-    _holds(monkeypatch, {"a": {run_id: body}, "b": {run_id: body}})
+    _validated(tmp_path, "b", Parking(), park=False, at="2026-11-26T04:00:00Z")
     errors: list = []
     start = threading.Barrier(8)
 
     def one() -> None:
         try:
             start.wait(5)
-            hold_runs.check(tmp_path, "b", codex, {run_id}, signer=None, batched=False, parks=True)
+            _check(tmp_path, "b", codex, run_id, parks=True)
         except Exception as e:   # noqa: BLE001
             errors.append(e)
     threads = [threading.Thread(target=one) for _ in range(8)]
@@ -417,6 +463,7 @@ def test_eight_threads_borrowing_at_once_write_one_whole_record(tmp_path, monkey
         t.join(10)
     assert errors == []
     assert hold_runs.parks_measured(tmp_path, "b", "document", run_id)["cycles"] == 64
+    assert hold_runs.statements(tmp_path, "b", codex, "document", signer=_who())[run_id] == body
     assert not list((tmp_path / "b").rglob("*.tmp")), "no temporary file left behind"
 
 
@@ -570,12 +617,25 @@ def test_a_runner_without_the_patch_parks_nothing_and_the_gate_asks_nothing(loca
     assert not parker.parks() and not run_check.parks_now(_recipe())
 
 
-def test_a_node_with_no_host_floor_cannot_ask_the_cycles_and_says_so(localai):
-    localai()
+def test_a_node_with_no_host_floor_parks_nothing_and_is_asked_nothing(localai):
+    """With `[models] page_floor_gib` 0 LocalAI answers every park
+    `parking_off` and a model gives its room back by being stopped: nothing
+    parks here, so no cycle is asked and none is required."""
+    r = localai()
     localai.floor_gib = 0
-    with pytest.raises(emb.GateError, match="page_floor_gib is 0") as e:
-        run_check.Parker(_recipe(), name="c").prepare()
-    assert not isinstance(e.value, emb.GateDeferred)
+    parker = run_check.Parker(_recipe(), name="c")
+    assert parker.parks() is False and run_check.parks_now(_recipe()) is False
+    assert r.gets == [], "the runner is not even asked"
+    with pytest.raises(emb.GateError, match="page_floor_gib is 0"):
+        parker.prepare()                         # and the pass, were it asked, says why it cannot run
+
+
+def test_an_engine_started_without_the_park_switch_is_not_asked_the_runner(localai):
+    r = localai()
+    codex = codex_768(version=5)
+    parker = run_check.Parker(_recipe(), name="c", stated=_vega_run(codex))
+    assert parker.parks() is False and r.gets == [], "the run's own statement answers"
+    assert run_check.Parker(_recipe(), name="c", stated=_parking_run(codex)).parks() is True
 
 
 def test_a_platform_file_that_cannot_be_read_is_not_a_node_without_a_floor(localai, monkeypatch):
@@ -593,7 +653,7 @@ def test_a_floor_that_cannot_be_set_defers_the_gate_and_says_nothing_of_the_sett
     r.settings_post = 500
     with pytest.raises(emb.GateDeferred, match="park floor could not be set") as e:
         run_check.Parker(_recipe(), name="c").prepare()
-    assert SECRET not in str(e.value) and SECRET not in repr(e.value.__cause__)
+    assert SECRET not in str(e.value) and e.value.__cause__ is None, "raised from None: no chained answer"
     # ...and where the settings did not answer the keeper a moment ago, the gate does not ask them again
     resident._hold_settings(S, "LocalAI's park floor", localai_reclaimer.NotAnswered("no answer"))
     before = len(r.gets)
@@ -634,6 +694,28 @@ def test_a_model_a_warm_has_just_loaded_is_read_before_it_is_called_not_parking(
     assert run_check.parks_now(_recipe()) is True and r.gets.count(f"{S}/system") == reads + 1, "then from the answer"
 
 
+def test_a_load_whose_room_was_made_by_a_stop_is_unread_too_and_a_silent_runner_is_not_asked_at_every_check(localai):
+    """The second read: making room drops the cached answer, and the load that
+    follows was then never marked unread — `parks_now` said "no" without
+    asking. And while `/system` is silent, twenty checks asked it twenty
+    times, each bounded at 2 s, on the embed stage's threads."""
+    r = localai()
+    model_load.loaded_models(S, 0.0)
+    with model_load._lock:
+        model_load._systems.pop(S, None)                         # as an unload or a park for room does
+        model_load._parks.pop(S, None)
+    model_load._note_loaded(S, M)
+    assert not model_load.row_read(S, M)
+    assert run_check.parks_now(_recipe()) is True
+    # silent now: one read, then none while that silence is fresh
+    model_load._note_loaded(S, M)
+    r.system = "down"
+    reads = r.gets.count(f"{S}/system")
+    for _ in range(20):
+        run_check.parks_now(_recipe())
+    assert r.gets.count(f"{S}/system") == reads + 1
+
+
 # ---- the real parker drives the real pass against the runner ---------------------------
 
 def _driven(r: LocalAI, **kw):
@@ -656,8 +738,29 @@ def test_a_return_that_fails_at_the_runner_refuses_the_run(localai):
     r = localai()
     parker, texts, first = _driven(r)
     r.restart_on_return = True
-    with pytest.raises(emb.GateError, match="STARTED AGAIN"):
+    with pytest.raises(emb.ParkRefused, match="STARTED AGAIN"):
         emb.park_cycles(texts, parker.ask, first, b"\x01" * 32, parker)
+
+
+def test_a_nan_behind_vega_names_no_run_and_is_still_the_verdict(localai):
+    """Behind VeGa a NaN is handed back before its receipt is read: that
+    answer names no run. An empty set of runs read as "an endpoint that
+    stated none" and made the pass INCONCLUSIVE — after the fresh loads and
+    the 300 contexts, at every look, the NaN said nowhere (the second read)."""
+    r = localai()
+    seen = []
+
+    def fn(texts, runs):
+        seen.append(1)
+        out = r.embed(texts, set() if len(seen) == 1 else runs)   # the first names no run
+        if len(seen) == 1:
+            out[0] = [float("nan")] + list(out[0][1:])
+        return out
+    parker = run_check.Parker(_recipe(), hold_runs.Answers(fn), name="c", sleep=lambda s: None)
+    texts = [f"testo {i}" for i in range(16)]
+    with pytest.raises(emb.ParkRefused, match="is not a number"):
+        emb.park_cycles(texts, parker.ask, fake_embed(texts), b"\x01" * 32, parker)
+    assert parker.runs is None, "an answer that named no run adds none: never an empty set"
 
 
 def test_another_gates_reload_of_the_shared_load_is_the_nodes_own_stop(localai):
@@ -667,11 +770,12 @@ def test_another_gates_reload_of_the_shared_load_is_the_nodes_own_stop(localai):
     r = localai()
     parker, texts, first = _driven(r)
     assert parker.park() == emb.PARKED and not parker.stopped_by_node()
+    assert own_unloads.since((S, M), 60) == "parked", "and the note says why (München: it was empty)"
     embeddings.reload_model(_recipe())
     assert parker.stopped_by_node(), "the gate's reload is noted where every process reads it"
-    assert own_unloads.since((S, M), 60) is not None
+    assert own_unloads.since((S, M), 60) == "stopped for a gate's fresh load"
     gate_twin.release(S, f"{M}--gate")
-    assert own_unloads.since((S, f"{M}--gate"), 60) is not None
+    assert own_unloads.since((S, f"{M}--gate"), 60) == "a gate's twin, let go"
 
 
 def test_a_nan_is_handed_to_the_gate_as_the_engine_gave_it(monkeypatch):
@@ -755,11 +859,14 @@ def test_a_pass_answered_by_another_run_is_inconclusive(tmp_path):
 def test_a_query_model_that_parks_now_is_gated_again_for_its_cycles(monkeypatch, tmp_path):
     """Nobody writes a query's vector, so `runs.check` never sees the query
     side — the look does (`_look_at_the_query_side`): a query embedded on
-    weights that came back wrong searches a wrong neighbourhood all the same."""
+    weights that came back wrong searches a wrong neighbourhood all the same.
+    ONLY A PASSING STATEMENT is sent back for its cycles: a failed one was
+    gated at every look, for ever (the second read: four looks, four gates)."""
     codex = SimpleNamespace(space=SimpleNamespace(query=SimpleNamespace(encoder=object())))
     collection = SimpleNamespace(name="c", codex=codex)
-    body = {"run": RUN, "passed": 28, "median": "0.9999", "batch_invariant": True}
-    state = {"parks": False, "counted": False}
+    body = {"run": RUN, "passed": 28, "median": "0.9999", "batch_invariant": True,
+            "engine": PARK_ENGINE.to_dict()}
+    state = {"parks": False, "counted": False, "passing": True, "sibling": None}
     rechecked, gated, said = [], [], []
     monkeypatch.setattr(run_check.collections_mod, "recipe_for", lambda c: _recipe())
     monkeypatch.setattr(run_check, "answering_run", lambda recipe, query=False: RUN)
@@ -768,19 +875,59 @@ def test_a_query_model_that_parks_now_is_gated_again_for_its_cycles(monkeypatch,
     monkeypatch.setattr(run_check, "_root", lambda: tmp_path)
     monkeypatch.setattr(run_check, "signer", lambda *a: None)
     monkeypatch.setattr(run_check.runs_mod, "statements_for_space", lambda *a, **k: {RUN: body})
+    monkeypatch.setattr(run_check.runs_mod, "passing", lambda b, c: state["passing"])
+    monkeypatch.setattr(run_check.runs_mod, "parks_counted", lambda *a, **k: state["counted"])
+    monkeypatch.setattr(run_check.runs_mod, "adopt_parked", lambda *a, **k: state["sibling"])
     monkeypatch.setattr(run_check, "recheck", lambda *a, **k: rechecked.append(k.get("role")) or True)
     monkeypatch.setattr(run_check, "validate", lambda *a, **k: gated.append(k.get("role")) or body)
     monkeypatch.setattr(run_check, "parks_now", lambda recipe, query=False: query and state["parks"])
-    monkeypatch.setattr(run_check.runs_mod, "parks_counted", lambda *a, **k: state["counted"])
+    look = lambda: run_check._look_at_the_query_side(collection, None, said.append)   # noqa: E731
 
-    run_check._look_at_the_query_side(collection, None, said.append)
+    look()
     assert (rechecked, gated) == (["query"], []), "a model that does not park: its statement, re-checked"
     state["parks"] = True
-    run_check._look_at_the_query_side(collection, None, said.append)
-    assert gated == ["query"] and len(rechecked) == 1, "parks now, no cycles counted for this statement: the gate"
-    state["counted"] = True
-    run_check._look_at_the_query_side(collection, None, said.append)
-    assert gated == ["query"] and len(rechecked) == 2, "counted: its statement stands"
+    look()
+    assert gated == ["query"] and len(rechecked) == 1, "parks now, no cycles for this statement: the gate"
+    state["sibling"] = body
+    look()
+    assert gated == ["query"] and len(rechecked) == 2, "a sibling's verdict with its cycles is taken instead"
+    state.update(sibling=None, counted=True)
+    look()
+    assert gated == ["query"] and len(rechecked) == 3, "counted: its statement stands"
+    state.update(counted=False, passing=False)
+    for _ in range(4):
+        look()
+    assert gated == ["query"] and len(rechecked) == 7, "a FAILED statement is not gated again for cycles"
+    state["passing"] = True
+    body["engine"] = BACKEND.to_dict()               # an engine that cannot park
+    look()
+    assert gated == ["query"], "nor a run whose engine cannot park"
+
+
+def test_a_refusal_is_remembered_for_the_same_run_and_another_run_is_gated_at_once(monkeypatch, tmp_path):
+    """The refusal keeps no statement, so nothing stopped the worker from
+    gating again 300 s later — 512 texts on a twin loaded afresh, with the
+    unloads that make its room — for as long as the fault lasted."""
+    codex = SimpleNamespace()
+    inner, answering = [], {"run": RUN}
+
+    def gate(root, name, codex_, recipe, **kw):
+        inner.append(answering["run"])
+        run_check._last_stated[(S, M, kw["role"])] = answering["run"]
+        raise emb.ParkRefused("park cycle 3: the weights did not come back")
+    monkeypatch.setattr(run_check, "_validate_on_twin_or_shared", gate)
+    monkeypatch.setattr(run_check, "answering_run", lambda recipe, query=False, probe_item=None: answering["run"])
+    monkeypatch.setattr(run_check, "probe_for", lambda codex_, role="document": "probe")
+    monkeypatch.setattr(run_check, "_park_refused", {})
+    for _ in range(3):
+        with pytest.raises(emb.ParkRefused, match="the weights did not come back") as e:
+            run_check.validate(tmp_path, "c", codex, _recipe())
+    assert inner == [RUN], "gated once; the next two looks are answered from the refusal"
+    assert "not gated again within 60 min" in str(e.value)
+    answering["run"] = "sha256:" + "cd" * 32                     # the file changed: another run answers
+    with pytest.raises(emb.ParkRefused):
+        run_check.validate(tmp_path, "c", codex, _recipe())
+    assert inner == [RUN, answering["run"]], "another run is gated at once"
 
 
 # ---- watched: what a park costs -------------------------------------------------------
@@ -826,11 +973,11 @@ def test_the_log_says_why_a_run_failed_and_what_the_cycles_cost(caplog):
     import logging
     passed: list = []
     _, good = _gate(Parking())
-    _, failed = _gate(Parking(bad=3, wrong=lambda v: _nudged(v, 0.9999995)))
+    failed = __import__("dataclasses").replace(good, load_variation=0.5, park_cycles=0)
     with caplog.at_level(logging.INFO, logger="app.run_check"):
         run_check._said("c", "document", "sha256:" + "ab" * 32, passed.append)(good)
         run_check._said("c", "document", "sha256:" + "ab" * 32, None)(failed)
     text = caplog.text
     assert "64 park cycles, each counted by the engine" in text and "a return " in text
-    assert "the gate FAILED document run" in text and "after its weights came back from host memory" in text
+    assert "the gate FAILED document run" in text and "did not give back its own bytes" in text
     assert passed == [good], "the caller's own hook still gets the pass"

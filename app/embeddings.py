@@ -358,7 +358,7 @@ def reload_model(recipe: "collections_mod.EmbedRecipe", *, query: bool = False,
     # Louise's own stop, said where every process reads it (app/own_unloads.py):
     # a gate's reload of a shared load is not a reclaimer's eviction to the
     # keeper, nor a failed return to another gate's park cycles
-    model_load._note_own(model_load.server_of(base), model)
+    model_load._note_own(model_load.server_of(base), model, "stopped for a gate's fresh load")
 
 
 def _post(recipe: "collections_mod.EmbedRecipe", url: str, *, timeout: float, **kw):

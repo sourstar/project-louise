@@ -153,10 +153,14 @@ statement says the cycles was not answered: it does not (§6).
 ## 6. The gate's park cycles (`embedder.park_cycles`, built 2026-11-26)
 
 A return is an upload of the weights again — a path no gate had seen. So a
-model LocalAI says parks (`/system` `"parks": true`, read fresh once the
-gate's 512 texts have loaded it) is parked and asked a fingerprint text, 64
-times (four rounds of the sixteen, a new order each), and each answer is held
-to the same text's first. It runs right after the two single-text passes and
+model that parks is parked and asked a fingerprint text, 64 times (four
+rounds of the sixteen, a new order each), and each answer is held to the same
+text's first. "Parks" has three parts, each asked of the one who knows: the
+ENGINE (the run's own statement lists the environment it was launched with;
+without `GGML_SYCL_PARKABLE=1` it never moves its weights, whatever the file
+says — `embedder.can_park`), the NODE (a host floor above 0) and the FILE
+(LocalAI's `/system` `"parks": true`, read fresh once the gate's 512 texts
+have loaded the model). It runs right after the two single-text passes and
 BEFORE the fresh loads and the 300 contexts: a pass refused, deferred or
 failed there has spent seconds, not the gate's minutes.
 
@@ -175,25 +179,33 @@ failed there has spent seconds, not the gate's minutes.
 |---|---|
 | a park refused 409 (the model works), counts something else moved, a model found parked, a model the runner no longer holds | not a cycle: one text puts the model back on the card, the cycle is asked again, 10 times 3 s apart, then DEFERRED with the last reason |
 | counts that STARTED AGAIN between the park and the answer | the return failed and a load answered in its place (200, the same vectors, the same run id): REFUSED as a run that parks, and NO statement kept (below) |
+| an answer after a return that is not the text's first: a NaN, other bytes under `exact`, further than 0.99999 under `near` | REFUSED the same way — the pass never makes a failing statement |
+| other bytes within 0.99999, under `near` | admitted; what the returns differ by is in the statement's `load_variation` |
 | the same, where Louise itself stopped the parked model meanwhile (app/own_unloads.py: a question took the card, another gate reloaded the shared load, a twin was let go) | not a cycle: asked again |
 | 500 `model_stopped` (the park broke its backend) | REFUSED, the same way |
-| 412 `cannot_park` | REFUSED: the file says `park: true` and the engine was not started with `GGML_SYCL_PARKABLE=1` |
+| 412 `cannot_park` | REFUSED (it is not reached for an engine without the switch: that one is asked nothing) |
 | 412 `host_memory_floor`, `parking_off` | deferred |
 | `/system` silent, or not listing the model that has just answered | deferred: silence is never "does not park" |
-| a NaN after a return | a wrong answer: the run FAILS, statement kept. The gate's request is not healed by the client's retry (`embeddings.unhealed`) |
-| no counts to read | REFUSED after three reads. It is what a file with `park: true` on an engine WITHOUT `GGML_SYCL_PARKABLE=1` gives: `/system` lists `"parks": true` on the file's word, the engine's status is "Unimplemented" and the monitor answers 500 (Tensor, parking-step-2.md §12) — the refusal names the env line |
+| a NaN the client's retry would have hidden | seen: the gate's request is not healed (`embeddings.unhealed`), and behind VeGa a NaN names no run — which adds none, and is the verdict |
+| no counts to read | REFUSED after three reads |
+| the file says `park: true`, the engine was started WITHOUT the switch | asked nothing, held to nothing: `/system` lists `"parks": true` on the file's word, the park is 412 and the monitor 500 (Tensor, parking-step-2.md §12) — the model never parks, the evictor stops it as before, and its statement stands |
+| the node's `page_floor_gib` is 0 | asked nothing: nothing parks on this node |
 | an answer that differs | counted in `load_variation`: fails an `exact` collection's run, admitted within 0.99999 for a `near` one |
 
-**Refused, not failed, and why.** A return that fails is answered by a fresh
-load: the vectors are right — fresh loads are what the gate certifies
-elsewhere — so nothing wrong was written, and the defect is the cold start
-nobody sees. A FAILING statement kept for it would replace the run's good
-one and stop its collection even after `park: true` is taken out again (the
-run id does not change with that line), on a verdict that a stop made by
-anything else — a tool, the kernel — would also produce. So the gate raises,
-keeps nothing, and says the two ways out; with the line out the model does
-not park, its statement stands and embedding goes on. While the line stays
-the gate is tried at every look and says the same thing.
+**Refused, not failed, and why** (`embedder.ParkRefused`). Nothing is written
+from a run while its model parks before its cycles are counted, so a pass
+that goes wrong has written nothing wrong; and a FAILING statement kept for
+it would replace the run's good one and stop its collection even after
+`park: true` is taken out again (the run id does not change with that line)
+— for a failed return, on a verdict that a stop made by anything else, a
+tool or the kernel, would also produce. So EVERY way the pass can go wrong
+raises, keeps nothing, and says the two ways out; with the line out the
+model does not park, its statement stands and embedding goes on. The first
+cut kept a FAIL for an inexact return and for a NaN: both read again and
+changed before the merge. While the line stays, the refusal is remembered
+for an hour for that same run (in the process: no gate, no twin load, no
+unload in between); another run of the model, or a restart, is gated at
+once.
 
 **The floor.** LocalAI parks nothing while `park_host_floor_bytes` is 0, and
 the keeper that sets it beats in the worker; a gate from the command line may
@@ -213,7 +225,11 @@ gated again before anything is written from it. The digest is what the
 review of 2026-11-26 added: counted alone, the 64 cycles of a pass that
 FAILED on an inexact return admitted the run on another pass's statement —
 its own older one, or a sibling collection's. A sibling lends its cycles
-only together with the statement they were counted for. The query side is
+only together with the statement they were counted for — and that is how
+the gate stays ONE PER (space, run): a collection on its own older statement
+takes a sibling's passing statement with its cycles, both byte for byte
+(`runs.adopt_parked`), as it takes the one that held the run to its CPU
+reference. The query side is
 held to the same record by the look (`_look_at_the_query_side`): nobody
 writes a query's vector, so `runs.check` never sees it. Putting `park_cycles` in the signed statement instead is
 09 §9.12 version 7 — a wire change, one more gate of every parking run, and

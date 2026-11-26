@@ -32,11 +32,20 @@ measured (published figures disagree).
   say whether the model parks defers it. THE STATEMENT IS UNCHANGED (the operator's third choice was not
   answered: no wire change is taken without his word): the cycles are recorded on the node
   (`gate-parks.json`), bound to the digest of the statement of the same pass, and a run gated while its
-  model did not park is gated again before a write — the query side too. AN INDEPENDENT REVIEW READ THE
-  FIRST CUT BEFORE IT WAS MERGED and found eight things, two of them false passes (the record admitted a
-  run on another pass's statement; silence from `/system` skipped the pass), all fixed and each a test
-  (tests/hold/test_park_cycles.py, 50). OPEN, the operator's: the gate's other single-text passes still
-  judge what the client's NaN retry returned (parking-keeper.md §6, last paragraph). The
+  model did not park is gated again before a write — the query side too. AN INDEPENDENT REVIEW READ IT
+  TWICE BEFORE IT WAS MERGED: eight things in the first cut, two of them false passes (the record admitted
+  a run on another pass's statement; silence from `/system` skipped the pass); five in the fixes (a NaN
+  behind VeGa read as "inconclusive"; a failed query statement gated at every look; every collection of a
+  space gating for itself; a refusal gated again every 300 s; a silent runner asked at every check). All
+  fixed, each a test (tests/hold/test_park_cycles.py, 56). The rule it converged on: THE PASS NEVER MAKES
+  A FAILING STATEMENT — a run that parks badly is refused as a run that parks and is the run it was once
+  `park: true` is out; whether an engine can park at all is read from the run's own statement
+  (`GGML_SYCL_PARKABLE=1` in its stated env), so the runner's silence stops nothing that cannot park. ALSO
+  FOUND ON THE WAY: the lists do not run tests/test_context_on_demand.py, test_parking.py,
+  test_own_unloads.py, test_gate_twin.py, test_model_evict.py, test_resident.py — one of them had been
+  red on main since 11-25 (repaired here); they are run by hand before every merge until the deploy's
+  list takes them. OPEN, the operator's: the gate's other single-text passes still judge what the
+  client's NaN retry returned (parking-keeper.md §6, last paragraph). The
   request itself brings the weights back for the gate (`model_load.returns_on_request`: no warm whose
   vector nobody reads). What the byte check costs is said by the gate's report, the evictor's line ("…
   to host memory in N s") and the load record. NOT held to the wrapper's `created`, against what the

@@ -42,6 +42,16 @@ class GateError(CodexError):
     """The gate could not run, or the encoder is not compliant."""
 
 
+class ParkRefused(GateError):
+    """The run is NOT ADMITTED AS A RUN THAT PARKS (`park_cycles`): its
+    return failed, its answer after one differed, its cycles could not be
+    counted. NO statement is kept and none is touched: nothing is written
+    from the run while its model parks, so nothing wrong was written, and
+    with `park: true` out of the model's file it does not park and is the
+    run it was — the verdict it had stands. A rule in the way (exit 2), not a
+    deferral: it does not pass by waiting."""
+
+
 class GateDeferred(GateError):
     """03 §3.1: the check could not run — the encoder was unreachable or
     past its bounded wait. Neither a failure nor a pass: no attestation, no
@@ -351,13 +361,7 @@ class Run:
                              f"{CPU_NEAR_LINE} ({'none is stored' if self.cpu_worst is None else f'worst {self.cpu_worst:.6f}'}; "
                              f"`louise hold embedder cpu-reference`)")
         elif self.load_variation < 1.0 and self.reproducible is not False:
-            if self.park_cycles and self.park_variation <= self.load_variation:
-                parts.append(f"the run did not give back its own bytes after its weights came back "
-                             f"from host memory: over {self.park_cycles} park cycles the closest an "
-                             f"answer came to the same text's first is {self.park_variation:.7f} "
-                             f"(the model's file says `park: true`, docs/notes/parking-keeper.md), "
-                             f"and its collection asks `exactness = \"exact\"`: bytes or nothing")
-            elif self.contexts and self.context_variation <= self.load_variation:
+            if self.contexts and self.context_variation <= self.load_variation:
                 parts.append(f"the run did not give back its own bytes on a context created "
                              f"for the request: over {self.contexts} fresh contexts the closest "
                              f"an answer came to the same text's first is "
@@ -581,6 +585,25 @@ def fresh_contexts(texts: Sequence, embed_fresh, first: Sequence[Sequence[float]
     return made, closest
 
 
+#: THE ENGINE'S OWN SWITCH, in the run's stated `engine.env` (the engine as
+#: launched, VeGa's wrapper's word): only an engine started with it can move
+#: its weights off the card. LocalAI lists `"parks": true` on the FILE's word
+#: alone; without the switch the park is 412 `cannot_park`, the model stays
+#: loaded and the evictor stops it as before (Tensor, parking-step-2.md §12)
+PARK_SWITCH = {"GGML_SYCL_PARKABLE": "1"}
+
+
+def can_park(engine: Any) -> bool | None:
+    """Whether the stated engine was started so that its weights can leave
+    the card; None where the statement lists no environment (the runner is
+    asked instead). A run whose engine cannot park never parks, whatever its
+    model's file says: it is asked no park cycle and held to none."""
+    env = engine.get("env") if isinstance(engine, dict) else None
+    if not isinstance(env, dict):
+        return None
+    return any(str(env.get(k)) == v for k, v in PARK_SWITCH.items())
+
+
 #: `parker.park()`'s answers besides a refusal's own word
 PARKED, PARK_BUSY = "parked", "busy"
 #: a refusal's word (LocalAI's error `type`) that REFUSES the run, and those
@@ -594,7 +617,8 @@ PARK_LATER = {
 
 
 def park_cycles(texts: Sequence, ask, first: Sequence[Sequence[float]], seed: bytes, parker,
-                cycles: int = PARK_CYCLES) -> tuple[int, float, float | None, float | None]:
+                cycles: int = PARK_CYCLES, *,
+                exactness: str = EXACT) -> tuple[int, float, float | None, float | None]:
     """(cycles counted, the closest an answer after a return came to the same
     text's `first` answer — 1.0 when every one is the same byte string, the
     median seconds of a park, of a return). `ask(text)` embeds one text
@@ -625,11 +649,11 @@ def park_cycles(texts: Sequence, ask, first: Sequence[Sequence[float]], seed: by
         the same vectors, a new process under the SAME run id with valid
         receipts — nothing a caller sees says it was not a cycle (Tensor's
         junction run; its own tool took it for one). The run is REFUSED AS A
-        RUN THAT PARKS — a `GateError`, and NO statement: the vectors are a
-        fresh load's, which the gate certifies elsewhere, so nothing wrong
-        was written, and a FAIL kept for the run would stop its collection
-        even with `park: true` taken out again. Without that line the model
-        does not park, its statement stands and the run is the run it was.
+        RUN THAT PARKS — `ParkRefused`, and NO statement: nothing is written
+        from a run before its cycles are counted, so nothing wrong was
+        written, and a FAIL kept for the run would stop its collection even
+        with `park: true` taken out again. Without that line the model does
+        not park, its statement stands and the run is the run it was.
         Unless Louise itself stopped the parked model in that moment
         (`parker.stopped_by_node()`: a question took the card, another gate
         reloaded the shared load) — its own doing, noted where every process
@@ -642,9 +666,16 @@ def park_cycles(texts: Sequence, ask, first: Sequence[Sequence[float]], seed: by
         its floor at this moment defers it.
       - NO COUNTS TO READ: the clause cannot be checked, and a model that
         parks is not admitted on cycles nobody counted.
-      - A NaN after a return is a wrong answer (0.0), and the run FAILS: the
-        asker hands the answer as the engine gave it, not after the client's
-        retry (`embeddings.unhealed`)."""
+      - AN ANSWER AFTER A RETURN THAT IS NOT THE TEXT'S FIRST refuses the run
+        the same way, for the same reason: a NaN (the asker hands the answer
+        as the engine gave it, not after the client's retry —
+        `embeddings.unhealed`), other bytes where the collection asks
+        `exactness = "exact"`, or further than NEAR_VARIATION where it asks
+        "near". Within that bound a near collection's run is admitted, and
+        what its returns differ by is in the statement's `load_variation`.
+        THE PASS NEVER MAKES A FAILING STATEMENT: a run that parks badly is
+        the run it was once it no longer parks (the second read of
+        2026-11-26: an inexact return kept a FAIL that outlived `park: true`)."""
     if not parker.parks():
         return 0, 1.0, None, None
     import random
@@ -661,12 +692,10 @@ def park_cycles(texts: Sequence, ask, first: Sequence[Sequence[float]], seed: by
             # LocalAI lists `"parks": true` on the FILE's word; an engine that
             # cannot park answers its status "Unimplemented", and the route 500
             # (Tensor, parking-step-2.md §12, measured 2026-11-26)
-            raise GateError("this model's file says `park: true`, and the gate can read none of the engine's "
-                            "counts of its parks and returns (LocalAI's /backend/monitor, asked "
-                            f"{unread} time(s)) — as for an engine that was not started so that its weights "
-                            "can leave the card: `GGML_SYCL_PARKABLE=1` belongs in the file's `env`, beside "
-                            "`park: true`, or neither. A park cycle nobody counted is not a cycle, and the "
-                            "run is not admitted on one")
+            raise ParkRefused(_not_admitted_to_park(
+                "this model's file says `park: true`, and the gate can read none of the engine's counts of "
+                f"its parks and returns (LocalAI's /backend/monitor, asked {unread} time(s)): a park cycle "
+                "nobody counted is not a cycle", ""))
     parker.prepare()
     want = [np.asarray(v, dtype="<f4").tobytes() for v in first]
     rng = random.Random(seed + b"/parks")
@@ -694,14 +723,13 @@ def park_cycles(texts: Sequence, ask, first: Sequence[Sequence[float]], seed: by
                 how = parker.park()
                 park_s = time.monotonic() - t0
                 if how == PARK_NEVER:
-                    raise GateError(
-                        "the park-cycles pass cannot run: the model's file says `park: true` and the runner "
-                        "will not park it (cannot_park) — its engine was not started so that the weights "
-                        "can leave the card: `GGML_SYCL_PARKABLE=1` belongs in the file's `env`")
+                    raise ParkRefused(_not_admitted_to_park(
+                        "the model's file says `park: true` and the runner will not park it (cannot_park: "
+                        "its engine does not move its weights off the card)", ""))
                 if how == PARK_BROKE:
-                    raise GateError(_not_admitted_to_park(
+                    raise ParkRefused(_not_admitted_to_park(
                         f"park cycle {done + 1}: the park broke the model's backend and LocalAI stopped it "
-                        f"(model_stopped) — its weights did not leave the card for host memory"))
+                        f"(model_stopped)", ""))
                 if how in PARK_LATER:
                     raise GateDeferred(f"the park-cycles pass, cycle {done + 1} of {cycles}: "
                                        f"{PARK_LATER[how]} — nothing is certified, and it is tried again")
@@ -722,12 +750,13 @@ def park_cycles(texts: Sequence, ask, first: Sequence[Sequence[float]], seed: by
                         after = parker.counts()
                         if after is not None and (after[0] < mid[0] or after[1] < mid[1]):
                             if not parker.stopped_by_node():
-                                raise GateError(_not_admitted_to_park(
-                                    f"park cycle {done + 1}: the answer came, and the engine's counts "
-                                    f"STARTED AGAIN between the park and the answer ({mid} then {after}: "
-                                    f"parks, returns, parked) — the weights did not come back from host "
-                                    f"memory and a load answered in their place (the same run id, valid "
-                                    f"receipts: nothing else says so)"))
+                                raise ParkRefused(_not_admitted_to_park(
+                                    f"park cycle {done + 1}: the weights did not come back from host "
+                                    f"memory — the engine's counts STARTED AGAIN between the park and the "
+                                    f"answer ({mid} then {after}: parks, returns, parked) and a load "
+                                    f"answered in their place",
+                                    " Nothing else says so: HTTP 200, the same vectors, the same run id, "
+                                    "valid receipts."))
                             not_one = ("Louise itself stopped the parked model before it was asked (a "
                                        "question took the card, a load its room, another gate its load)")
                         elif after != due:
@@ -749,19 +778,29 @@ def park_cycles(texts: Sequence, ask, first: Sequence[Sequence[float]], seed: by
         arr = np.asarray(v, dtype="<f4")
         done += 1
         if not np.all(np.isfinite(arr)):
-            return done, 0.0, None, None
+            raise ParkRefused(_not_admitted_to_park(
+                f"park cycle {done}: the first answer after the weights came back from host memory is not "
+                f"a number (a NaN, as the engine gave it)", ""))
         if arr.tobytes() != want[k]:
-            closest = min(closest, min(cosine(v, first[k]), 1.0 - 1e-12))
+            apart = min(cosine(v, first[k]), 1.0 - 1e-12)
+            if exactness == EXACT or apart < NEAR_VARIATION:
+                raise ParkRefused(_not_admitted_to_park(
+                    f"park cycle {done}: the answer after the weights came back from host memory is not "
+                    f"the same text's first answer (cosine {apart:.7f}; "
+                    + ("its collection asks `exactness = \"exact\"`: bytes or nothing)" if exactness == EXACT
+                       else f"under the near-exact bound {NEAR_VARIATION})"), ""))
+            closest = min(closest, apart)
         parks_s.append(park_s)
         returns_s.append(return_s)
     return done, closest, stats.median(parks_s), stats.median(returns_s)
 
 
-def _not_admitted_to_park(what: str) -> str:
-    return (f"{what}. A run that cannot do that is not admitted AS A RUN THAT PARKS: no statement is kept, "
-            f"and nothing is written from it while its model parks. Take `park: true` out of the model's "
-            f"file and it does not park — its statement stands and it is the run it was; or fix the engine "
-            f"and let the gate run again")
+def _not_admitted_to_park(what: str, more: str) -> str:
+    """The refusal, WITH ITS WAY OUT IN THE FIRST 400 CHARACTERS: the worker's
+    event is cut at 500 and its control row at 400 (`run_check.embed_allowed`)."""
+    return (f"{what}. NOT ADMITTED AS A RUN THAT PARKS, and no statement is kept. Take `park: true` out of "
+            f"the model's file and it is the run it was (its statement stands), or fix the engine: the "
+            f"gate is tried again at every look.{more}")
 
 
 def _round_counts(before, after, asked: int) -> tuple[int | None, int | None]:
@@ -927,7 +966,7 @@ def run_gate(codex: Codex, *, reference: Sequence[Sequence[float]],
             # sixteen, not the fresh loads and the 300 contexts behind them
             parks, across_parks, park_s, return_s = park_cycles(
                 sixteen, getattr(park, "ask", None) or (lambda t: embed_one([t])[0]),
-                list(single), seed or b"", park)
+                list(single), seed or b"", park, exactness=exactness)
             variation = min(variation, across_parks)
         if contribute is not None:
             # THE LONG TEXTS TOO (2026-11-02, München's gut-diag): gutenberg's

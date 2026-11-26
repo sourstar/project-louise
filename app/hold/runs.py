@@ -284,6 +284,37 @@ def parks_for_space(root: Path, name: str, codex: Codex, role: str, run_id: str,
     return own
 
 
+def adopt_parked(root: Path, name: str, codex: Codex, role: str, run_id: str, *,
+                 signer: str | None) -> dict[str, Any] | None:
+    """A PASSING statement of `run_id` that another collection of the space
+    holds WITH its counted cycles, copied over this collection's own — the
+    statement byte for byte, and its record — and returned; None where no
+    sibling has one. THE GATE RUNS ONCE PER (space, run), for the park cycles
+    too: when `park: true` lands on a model, the first collection's gate
+    counts them and every other collection of the space takes that verdict,
+    as it takes the one that held the run to its CPU reference
+    (`statements_for_space`). Without it each collection, on its own older
+    statement, gated in full (the second read of 2026-11-26)."""
+    for other in _others(root, name):
+        held = statements(root, other, codex, role, signer=signer).get(run_id)
+        if held is None or not passing(held, codex):
+            continue
+        theirs = parks_measured(root, other, role, run_id)
+        if not _parks_counted(theirs, held):
+            continue
+        src, dst = path_for(root, other, run_id, role), path_for(root, name, run_id, role)
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dst.with_suffix(f".json.{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_bytes(src.read_bytes())
+            os.replace(tmp, dst)
+        except OSError:
+            continue                    # not kept here: not adopted — the gate runs
+        _record(_parks_file(root, name), f"{role}:{run_id}", dict(theirs))
+        return held
+    return None
+
+
 def parks_counted(root: Path, name: str, codex: Codex, role: str, run_id: str,
                   body: dict[str, Any], *, signer: str | None) -> bool:
     """Were PARK_CYCLES park cycles counted for this statement of the run —
@@ -693,12 +724,21 @@ def check(root: Path, name: str, codex: Codex, answered: set, *,
                 f"(version {body.get('version')}) does not say how many fresh contexts the gate "
                 f"counted; nothing from it is written until the gate has run again (03 §3.3, "
                 f"09 §9.12 version {emb.CONTEXTS_VERSION})", run_id)
-        if parks and not parks_counted(root, name, codex, role, run_id, body, signer=signer):
+        if parks and emb.can_park(body.get("engine")) is not False \
+                and not parks_counted(root, name, codex, role, run_id, body, signer=signer):
             # A MODEL THAT PARKS NOW, GATED WHILE IT DID NOT (its file gained
             # `park: true`, or the runner its patch, under the same run): a
             # return is an upload of the weights again, which that gate never
-            # saw. Not a failure: the gate runs again (`run_check._look`) and
-            # counts its park cycles
+            # saw. A sibling's verdict that did see it is taken with its
+            # cycles (`adopt_parked`); else, not a failure: the gate runs
+            # again (`run_check._look`) and counts its park cycles. A run
+            # whose stated engine cannot park (`emb.can_park`) never parks,
+            # and is held to nothing
+            adopted = adopt_parked(root, name, codex, role, run_id, signer=signer)
+            if adopted is not None:
+                body = adopted
+        if parks and emb.can_park(body.get("engine")) is not False \
+                and not parks_counted(root, name, codex, role, run_id, body, signer=signer):
             raise RunUnvalidated(
                 f"{name}: run {run_id[:23]}… parks now (its weights leave the card for host memory "
                 f"and come back) and its gate counted no park cycles; nothing from it is written "
@@ -787,7 +827,8 @@ def validate(root: Path, name: str, codex: Codex, *, role: str, reference,
         record_contexts(root, name, role, stated.run_id, contexts=run.contexts,
                         closest=run.context_variation, at=now)
     if run.park_cycles:
-        # for THIS statement, pass or fail: what `check` holds the record to
+        # for THIS statement: what `check` holds the record to (a pass that
+        # could not count its cycles kept no statement at all, `ParkRefused`)
         record_parks(root, name, role, stated.run_id, cycles=run.park_cycles,
                      closest=run.park_variation, park_s=run.park_s, return_s=run.return_s, at=now,
                      statement=statement_digest(statement["body"]))

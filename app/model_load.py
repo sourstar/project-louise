@@ -693,13 +693,14 @@ def unload(url: str, model: str | None) -> bool:
     return r.status_code == 200
 
 
-def _note_own(server: str, model: str) -> None:
+def _note_own(server: str, model: str, why: str = "stopped") -> None:
     """Louise stopped or parked this model itself: said where the keeper's
     process reads it, so the stop is not taken for an eviction of the
-    reclaimer's (app/own_unloads.py). Never raises."""
+    reclaimer's (app/own_unloads.py), with `why` in a word for whoever reads
+    the file (München, 2026-11-26: `"why": ""`). Never raises."""
     try:
         from app import own_unloads
-        own_unloads.note(server, model)
+        own_unloads.note(server, model, why)
     except Exception:   # noqa: BLE001
         pass
 
@@ -759,14 +760,14 @@ def park_asked(url: str, model: str | None) -> tuple[str, int, str]:
     with _lock:
         _systems.pop(server, None)           # what it holds may have changed
     if status == 200:
-        _note_own(server, model)
+        _note_own(server, model, "parked")
         got = body.get("parked") if isinstance(body.get("parked"), dict) else {}
         moved = got.get("size_vram_needed")
         return PARKED, (moved if isinstance(moved, int) and not isinstance(moved, bool) and moved > 0 else 0), ""
     if status == 409 and kind == "model_busy":
         return PARK_BUSY, 0, said
     if status == 500 and kind == "model_stopped":
-        _note_own(server, model)             # our park broke its backend and LocalAI stopped it: Louise's doing
+        _note_own(server, model, "stopped by a park that broke its backend")   # LocalAI stopped it: Louise's doing
         return PARK_GONE, 0, said
     if status == 404 and kind == "model_not_loaded":
         return PARK_GONE, 0, said            # gone before the park: not ours
@@ -825,12 +826,31 @@ def row_read(server: str, model: str) -> bool:
         return (server_of(server), model) not in _unread
 
 
+def refresh_row(server: str, model: str) -> None:
+    """Read `/system` once, now, where `model`'s row is unread (`row_read`) —
+    and not again while the runner's last answer, under SYSTEM_TTL_S old, was
+    silence: twenty checks of a batch asked a silent runner twenty times,
+    each bounded at 2 s, on the embed stage's threads (the second read of
+    2026-11-26)."""
+    server = server_of(server)
+    with _lock:
+        if (server, model) not in _unread:
+            return
+        got = _systems.get(server)
+        silent_lately = got is not None and got[1] is None and time.monotonic() - got[0] < SYSTEM_TTL_S
+    if not silent_lately:
+        loaded_models(server, 0.0)
+
+
 def _note_loaded(server: str, model: str) -> None:
     with _lock:
         got = _systems.get(server)
         if got is not None and got[1] is not None:
             _systems[server] = (got[0], got[1] | {model}, got[2])
-            _unread.add((server, model))
+        # unread WHATEVER the cache holds: a load whose room was made by a
+        # park or a stop finds the cached answer dropped, and what this
+        # process last read of the model is from before it loaded
+        _unread.add((server, model))
         # one that came back from a park is on the card from here on; the
         # next reading says what it holds
         _parked.get(server, {}).pop(model, None)

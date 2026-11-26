@@ -53,11 +53,11 @@ def runner(monkeypatch, isolated_config):
 
 
 def test_every_stop_and_park_the_runner_took_is_noted_and_a_refused_one_is_not(runner):
-    assert model_load.unload(S, "m") is True and own_unloads.since((S, "m"), 60) == ""
+    assert model_load.unload(S, "m") is True and own_unloads.since((S, "m"), 60) == "stopped"
     own_unloads._path().unlink()
     runner["shutdown"] = 500
     assert model_load.unload(S, "m") is False and own_unloads.since((S, "m"), 60) is None
-    assert model_load.park(S, "m")[0] == model_load.PARKED and own_unloads.since((S, "m"), 60) == ""
+    assert model_load.park(S, "m")[0] == model_load.PARKED and own_unloads.since((S, "m"), 60) == "parked"
     own_unloads._path().unlink()
     runner["park"] = (409, {"error": {"type": "model_busy", "code": 409, "message": "busy"}})
     assert model_load.park(S, "m")[0] == model_load.PARK_BUSY and own_unloads.since((S, "m"), 60) is None
@@ -65,7 +65,8 @@ def test_every_stop_and_park_the_runner_took_is_noted_and_a_refused_one_is_not(r
 
 def test_a_park_that_broke_its_backend_is_louises_own_and_a_model_already_gone_is_not(runner):
     runner["park"] = (500, {"error": {"type": "model_stopped", "code": 500, "message": "stopped"}})
-    assert model_load.park(S, "m")[0] == model_load.PARK_GONE and own_unloads.since((S, "m"), 60) == ""
+    assert model_load.park(S, "m")[0] == model_load.PARK_GONE
+    assert own_unloads.since((S, "m"), 60) == "stopped by a park that broke its backend"
     own_unloads._path().unlink()
     runner["park"] = (404, {"error": {"type": "model_not_loaded", "code": 404, "message": "not loaded"}})
     assert model_load.park(S, "m")[0] == model_load.PARK_GONE and own_unloads.since((S, "m"), 60) is None
