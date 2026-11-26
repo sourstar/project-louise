@@ -62,7 +62,7 @@ def test_the_readme_and_the_status_say_what_is_live_and_what_a_rollback_puts_bac
     assert "PARKING IS OFF: no model's file says `park: true`, the\n  floor is 0" in status
     # the pass's end, and parking's rows on copies (docs/notes/parking-step-2.md §9)
     assert "THE PASS ENDED 2026-11-26 00:19:39Z, the node paused 5,620 s" in status
-    assert "NeuRIS (nemotron) ~509 s, wikidata (nemotron) ~502 s" in status
+    assert "NeuRIS (nemotron) 509 s, wikidata (nemotron) 508 s, worst 1.000000 each" in status
     card = status[status.index("- **PARKING ON THE CARD, for the first time through the server"):]
     card = card[:card.index("\n- **", 5)]
     for said in ("A PARK GIVES THE CARD BACK 996 OF 1,315 MiB for 577 MiB of host memory", "1,084 × 409 `model_busy`",

@@ -318,6 +318,14 @@ def test_the_card_s_rows_are_recorded_with_what_they_did_not_measure():
                 "| a quantized model, buffers above 1 GiB, the 35B, OmniVoice |"):
         assert row in still, row
     assert "No real model parks" in still and "both copies are removed" in still
+    assert "München confirms the fingerprint texts were NOT run on the copy" in still
+    # one package rebuilt, three left as they were: the table as the node reads after the pass
+    table = [line for line in still.splitlines() if line.startswith("| `vega-louise-")]
+    assert len(table) == 4
+    assert [("47bf02eaae7c01e4" in line, "10833aab79818132` | 15e84e9" in line) for line in table] == \
+        [(True, False), (False, True), (False, True), (False, True)]
+    assert "1ac1ecc | `louise-sycl-f16-llama-cpp-ed93e3c1b2e2-stack-7c301a7ba437`" in table[0]
+    assert "NeuRIS\n(nemotron) 509 s, worst 1.000000; wikidata (nemotron) 508 s" in still
     # the two answers that move with this engine and server, as the CPU server showed them
     for said in ('"type":\n"no_room_on_device"}}`; the ring: 2 graphs refused', '"context canary failed" 0',
                  "then 7 chunks, NO `finish_reason`"):

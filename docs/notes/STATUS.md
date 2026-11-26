@@ -561,7 +561,7 @@ measured (published figures disagree).
   the seven run ids the same; the readiness poll's row, three cold loads of one model: 4.84 / 4.48 / 4.45 s before, 2.98 / 2.83 /
   2.67 s after; ONE vega package rebuilt (`vega-louise-llama-cpp`, with the wrapper's part for a return through it, #882), the byte
   check identical; five gates passed, each "exact, 3 fresh load(s)", every fingerprint identical to before — wikipedia (bge-m3) 98 s,
-  gutenberg (qwen3-embedding-4b) 1,983 s, pubmed query (medcpt-query) 70 s, NeuRIS (nemotron) ~509 s, wikidata (nemotron) ~502 s;
+  gutenberg (qwen3-embedding-4b) 1,983 s, pubmed query (medcpt-query) 70 s, NeuRIS (nemotron) 509 s, wikidata (nemotron) 508 s, worst 1.000000 each;
   twenty unloads through the rebuilt wrapper, 20 × exit 0, none of a second or more. LocalAI's two Postgres suites had run whole on
   the new server's builder first (the architecture session's condition, met). PARKING IS OFF: no model's file says `park: true`, the
   floor is 0. THE PASS ENDED 2026-11-26 00:19:39Z, the node paused 5,620 s and back in embed mode. ACCEPTANCE (München): MADLAD T4

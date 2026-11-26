@@ -1119,9 +1119,32 @@ this computation, try again later.","type":"no_room_on_device"}}` and
 | the card's own counter WHILE parked | München's reads of it are between commands; the 319 MiB is what the process holds, by the tool's lines | none seen: step 1 read both (321 by the process, 346 by the counter with 25 empty) |
 | a card refusing a return for its own reasons | a card cannot be made to refuse by filling it; the switch refuses before the device is asked | the first real refusal; the path above the device is the one shown |
 | a failed return (`failed`) | no switch on a card | shown on the CPU server only (§8) |
-| the gate's clause with the FINGERPRINT texts (§3.3) | the forty cycles compared the tool's own sixteen sentences, not the gate's sixteen; no such run was reported | at the gated run of the first real model that parks — it is part of that gate |
+| the gate's clause with the FINGERPRINT texts (§3.3) | the forty cycles compared the tool's own sixteen sentences, not the gate's sixteen; München confirms the fingerprint texts were NOT run on the copy | at the gated run of the first real model that parks — it is part of that gate |
 | a quantized model, buffers above 1 GiB, the 35B, OmniVoice | §3.1's rows; only bge-m3 F16 (one 577 MiB buffer) has parked | before any of them is switched to parking |
 
 No real model parks: no model file but the two copies ever carried `park:
 true` or `GGML_SYCL_PARKABLE`, and both copies are removed. Which models
 park is the keeper's half and the operator's, a gated run each.
+
+**The gates of the swap, to the second** (each exit 0, "exact, 3 fresh
+load(s)", fingerprints as before): wikipedia (bge-m3) 98 s; gutenberg
+(qwen3-embedding-4b) 1,983 s; pubmed query (medcpt-query) 70 s; NeuRIS
+(nemotron) 509 s, worst 1.000000; wikidata (nemotron) 508 s, worst
+1.000000; both nemotron fingerprints `sha256:9863c1d7…`, as before.
+
+**The wrapper each vega package runs after the pass** (one rebuilt — the
+architecture session's decision; the change is inert in the other three):
+
+| package | wrapper sha256 | REVISION | backend |
+|---|---|---|---|
+| `vega-louise-llama-cpp` (rebuilt and gated in the pass; before it `10833aab79818132`) | `47bf02eaae7c01e4` | 1ac1ecc | `louise-sycl-f16-llama-cpp-ed93e3c1b2e2-stack-7c301a7ba437` |
+| `vega-louise-llama-cpp-cpu` | `10833aab79818132` | 15e84e9 | `louise-cpu-llama-cpp-ea2417d91dcc` |
+| `vega-louise-openvino` | `10833aab79818132` | 15e84e9 | `louise-python-20261030` |
+| `vega-louise-pytorch` | `10833aab79818132` | 15e84e9 | `louise-python-20261021a` |
+
+The wrapper's change is on main since (#882, main 7547fcd1: its wrapper
+hashes `47bf02eaae7c01e4`, the package's bytes). The architecture session's
+keeper half counts a parked model at what its process keeps on the card,
+not its whole size (its `parking-keeper.md` §4). ITS ORDER FOR THE NODE: the
+app deploy that carries the keeper's half first, then a model file with
+`park: true` — the operator's, a gated run each.
