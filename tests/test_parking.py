@@ -265,7 +265,9 @@ def test_a_model_that_parks_is_parked_and_counted_at_what_left_the_card(node):
     assert out.fits is True and out.parked == ("vega-bge-m3",) and out.unloaded == ()
     assert r.asked == [("park", "vega-bge-m3")] and "vega-bge-m3" in r.models, "its process stays"
     line = [t for t in node.said if t.startswith("card: parked")]
-    assert len(line) == 1 and "vega-bge-m3 (last used 30.0 h ago, 1,700 MiB to host memory)" in line[0]
+    # and how long the park took: what the engine's byte check costs is read here (2026-11-26)
+    assert len(line) == 1 and "vega-bge-m3 (last used 30.0 h ago, 1,700 MiB to host memory in 0." in line[0]
+    assert " s) for vega-qwen3-4b" in line[0]
     assert "Do parking." in line[0] and not [t for t in node.said if t.startswith("card: unloaded")]
 
 

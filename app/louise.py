@@ -6766,7 +6766,8 @@ def _space_statement(root, name: str, codex, recipe, role: str) -> dict | None:
         else:
             hold_runs.check(root, name, codex, {run_id}, signer=who, role=role,
                             batched=run_check.batched(recipe),
-                            contributes=run_check.contributing(recipe))
+                            contributes=run_check.contributing(recipe),
+                            parks=run_check.parks_now(recipe))
         if not run_check.recheck(root, name, codex, recipe, run_id, role=role):
             return None                     # set aside: the gate measures from scratch
         return hold_runs.statements_for_space(root, name, codex, role, signer=who).get(run_id)
@@ -6851,6 +6852,19 @@ def _embedder_check_runs(a, name, codex) -> int:
         print(f"  contexts    " + (f"{n} fresh, each counted as created by the engine; "
                                    f"closest {float(closest):.7f}" if n else
                                    "none asked: the run does not create its context per request"))
+        # the park cycles, counted by the engine: the pass's own, else the
+        # record its last gate kept (local: the statement has no field for it)
+        parks = next(({"cycles": r.park_cycles, "closest": r.park_variation, "park_s": r.park_s,
+                       "return_s": r.return_s} for r in passes if getattr(r, "park_cycles", 0)), None) \
+            or hold_runs.parks_measured(a.root, name, role, body["run"])
+        if parks and parks.get("cycles"):
+            took = ("" if parks.get("park_s") is None or parks.get("return_s") is None else
+                    f"; a park {float(parks['park_s']):.2f} s, a return {float(parks['return_s']):.2f} s "
+                    f"at the median")
+            print(f"  parking     {parks['cycles']} park cycles, each counted by the engine; "
+                  f"closest {float(parks.get('closest', 1.0)):.7f}{took}")
+        else:
+            print("  parking     none asked: the model did not park when it was gated")
         cpu = body.get("cpu_reference")
         print(f"  cpu         " + (f"worst {cpu['worst']}, median {cpu['median']} against the "
                                    f"stored CPU reference (run {cpu['run'][:23]}…)" if cpu else

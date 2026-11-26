@@ -361,7 +361,25 @@ from the runner asked at that moment; a runner that cannot say defers the
 gate. *Amended 2026-11-11*, with the count: it is the backend's own word
 for each call, and a round is held to the run's CALLS as well as its
 creations — as many of each as its requests, so that another collection's
-request during the round defers it.)
+request during the round defers it. *Amended 2026-11-26*, with parking
+(operator, 2026-11-25: "Do parking."; docs/notes/parking-keeper.md §6): a
+model whose weights can leave the card for host memory and come back at its
+next request is also asked the sixteen after 64 park-and-return cycles,
+each answer held to the same text's first and counted in the same
+`load_variation`. Every cycle is COUNTED by the engine's own counts — one
+park more, then one return more — and one that something else touched is
+asked again, never assumed; counts that start again between the park and
+the answer are a return that failed and a load that answered in its place.
+That, an answer after a return that is not the text's first (within the
+near-exact bound where the collection allows one), or cycles that cannot
+be counted, refuse the run AS A RUN THAT PARKS and keep NO statement:
+nothing is written from it before its cycles are counted, so the statement
+it had stands and it is the run it was once its model no longer parks. A
+run whose stated engine was not started so that its weights can leave the
+card never parks, and is asked nothing. The statement is unchanged: the cycles are
+recorded on the node beside the batching, for the statement of the pass
+that counted them and no other, and a run gated while its model did not
+park is gated again before anything is written from it once it does.)
 One whose answers to a text differ is **near-exact** when
 they all stay within cosine 0.99999 of each other and the run reaches
 the stored CPU reference at 0.999 (docs/notes/near-exact-runs.md);
