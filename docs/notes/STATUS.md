@@ -47,7 +47,12 @@ measured (published figures disagree).
   look did not settle once (the encoder busy, the re-check deferred) never looked at again on a collection
   with nothing to embed, and a query probe that times out holding the main loop half the time — an
   unsettled look now expires on the idle round too, and a query look failing for one run backs off
-  (300 → 600 → 1,200 → 1,800 s; another run heard is looked at at once); a seventh read follows. And the
+  (300 → 600 → 1,200 → 1,800 s; another run heard is looked at at once); the seventh, that the idle
+  round's settle never runs where embed producers do (the node's setting) — the search beat now looks
+  again at a settled collection whose verdict is outdated — that a failing document side took the query
+  probe along every 5 min, and that N collections on one hung encoder probed it N times (a look that
+  times out now holds the encoder as busy, `encoder_timeouts`, and the idle round waits the hold); an
+  eighth read follows. And the
   manual door, `hold embedder check`, is
   shut on a running node — the worker holds every collection's lock — so its hint now says to pause
   the collection first; that is how today's gate was run. I had told München the record was shared

@@ -2067,6 +2067,7 @@ def _look(collection, stop: Callable[[], bool] | None,
     encoder could not be asked or the gate deferred). Never raises."""
     name, codex = collection.name, collection.codex
     run_id = None
+    recipe = None
     try:
         recipe = collections_mod.recipe_for(collection)
         run_id = answering_run(recipe, probe_item=probe_for(codex))
@@ -2103,9 +2104,22 @@ def _look(collection, stop: Callable[[], bool] | None,
         return True, (f"run {run_id[:23]}… is validated for this space"
                       + _canary_note(collection, run_id)), run_id, True
     except (runs_mod.RunRefused, runs_mod.RunUnvalidated, emb.GateError) as e:
-        return False, str(e), run_id, not isinstance(e, emb.GateDeferred)
+        # a refused RECEIPT refuses one answer, not the run: not settled (the
+        # seventh read), as a deferred gate is not
+        return False, str(e), run_id, not isinstance(e, (emb.GateDeferred, embeddings.ReceiptRefused))
     except Exception as e:                              # noqa: BLE001
-        # the endpoint away: a deferral, retried; nothing is flagged
+        # the endpoint away: a deferral, retried; nothing is flagged. ONE THAT
+        # TIMED OUT IS HELD AS BUSY, as the embed stage holds it
+        # (`encoder_timeouts.hold`, doubling while it stays silent, released by
+        # its first answer): every collection on it then waits that hold, not
+        # FAIL_TTL_S each — N collections sent N probes to one hung encoder, and
+        # on the main loop held it half the time (the seventh read, run)
+        if recipe is not None and isinstance(e, (httpx.TimeoutException, embeddings.EndpointTimedOut)):
+            try:
+                from . import encoder_timeouts
+                encoder_timeouts.hold(encoder_timeouts.endpoint_of(recipe))
+            except Exception:                           # noqa: BLE001 — a hold is a courtesy
+                pass
         return False, f"the encoder could not be asked: {type(e).__name__}: {e}", run_id, False
 
 
@@ -2177,10 +2191,12 @@ def _asymmetric(collection) -> bool:
 
 def _query_settled(kept, heard: str | None, now: float) -> bool:
     """Is a verdict's query side (`kept`, `_verdicts[...][5]`) about the query
-    run last heard — or a look that failed less than FAIL_TTL_S ago, with no
-    other run heard since?"""
+    run last heard — or a look that failed within its bound (FAIL_TTL_S,
+    doubled at each failure in a row for that run, up to QUERY_FAIL_CAP_S),
+    with no other run heard since?"""
     if isinstance(kept, tuple) and kept and kept[0] == QUERY_UNSETTLED:
-        bound = min(FAIL_TTL_S * 2 ** (kept[3] if len(kept) > 3 else 0), QUERY_FAIL_CAP_S)
+        n = min(int(kept[3]) if len(kept) > 3 else 0, 3)          # 300, 600, 1,200, then the cap
+        bound = min(FAIL_TTL_S * 2 ** n, QUERY_FAIL_CAP_S)
         return now - kept[1] < bound and (heard is None or heard == kept[2])
     return heard is None or kept == heard
 
@@ -2284,7 +2300,16 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         # never at every step (the third read: twenty looks in ten rounds, a
         # twin load and stop on each, for a query model in LocalAI's cooldown)
         query_heard: list = []
-        query_run = _look_at_the_query_side(collection, stop, log, heard_by=query_heard)
+        was_q = cached[5] if cached is not None else None
+        if (isinstance(was_q, tuple) and was_q and was_q[0] == QUERY_UNSETTLED and _asymmetric(collection)
+                and _query_settled(was_q, heard_now.get("query"), time.time())):
+            # ITS OWN BOUND STILL RUNS: not asked again because the DOCUMENT side
+            # is looked at (the seventh read, run: a document side failing too
+            # took the query probe along every FAIL_TTL_S, and the backoff
+            # counted 35 failures and held none of them)
+            query_run = was_q
+        else:
+            query_run = _look_at_the_query_side(collection, stop, log, heard_by=query_heard)
         if query_run is None and _asymmetric(collection):
             # WHEN it failed — after the look, which may have taken its whole
             # timeout (the fourth read: stamped before it, a probe that timed

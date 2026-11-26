@@ -676,9 +676,8 @@ def test_a_query_look_that_keeps_failing_for_one_run_is_put_off_longer_each_time
         backend_gate.embed_allowed(con, collection)
         clock[0] += 60
     gaps = [round(b - a) for a, b in zip(looks, looks[1:])]
-    assert gaps[:4] == [360, 600, 1200, 1800] or gaps[:4] == [300, 600, 1200, 1800] or \
-        all(g >= 300 for g in gaps), gaps
-    assert gaps[1] >= 600 and gaps[2] >= 1200 and max(gaps) <= run_check.QUERY_FAIL_CAP_S + 60, gaps
+    assert 300 <= gaps[0] <= 360 and 600 <= gaps[1] <= 660 and 1200 <= gaps[2] <= 1260, gaps
+    assert all(1800 <= g <= 1860 for g in gaps[3:]), "the cap, from the fourth failure on"
     # ANOTHER run heard: looked at at once, whatever the count
     n = len(looks)
     time.sleep(0.01)
@@ -711,7 +710,76 @@ def test_a_run_heard_after_a_look_that_heard_nothing_is_looked_at_at_once(node, 
     _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}))
     assert run_check.verdict_outdated(collection), "the idle round looks"
     backend_gate.embed_allowed(con, collection)
-    assert looks == ["d", "q", "d", "q"], "the embed path looks"
+    assert looks == ["d", "q", "d"], "the embed path looks at the document side; the query side keeps its bound"
     time.sleep(0.01)
     _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}, role="query"))
     assert run_check.verdict_outdated(collection), "and a query run heard since"
+
+
+
+# ---- the seventh read (2026-11-26) -----------------------------------------------------
+
+def test_a_failing_document_side_does_not_take_the_query_probe_along(node, endpoint, monkeypatch):
+    """THE SEVENTH READ, run: with the document look failing too, the query
+    probe followed its FAIL_TTL_S pace — 35 probes in 3 h where the backoff
+    allows about 6."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    clock, q = [time.time()], []
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+
+    def failing(recipe, query=False, **k):
+        if query:
+            q.append(clock[0])
+        raise OSError("not answering")
+    monkeypatch.setattr(run_check, "answering_run", failing)
+    run_check._verdicts.clear()
+    for _ in range(180):                                  # 3 h, a step a minute
+        backend_gate.embed_allowed(con, collection)
+        clock[0] += 60
+    assert len(q) <= 9, f"{len(q)} query probes in 3 h"
+
+
+def test_a_look_that_timed_out_holds_the_encoder_as_busy_for_every_collection_on_it(node, endpoint, monkeypatch):
+    """THE SEVENTH READ, run: N collections on one hung encoder sent N probes
+    every FAIL_TTL_S, and on the main loop held it 98 % of the time. A look
+    that times out holds the endpoint as the embed stage does
+    (`encoder_timeouts`), and the idle round waits that hold."""
+    import httpx
+    from app import encoder_timeouts
+    root, collection, codex = node
+    con = db.connect(collection)
+    real, looks = run_check.answering_run, []
+
+    def hung(recipe, query=False, **k):
+        looks.append(1)
+        raise httpx.ReadTimeout("timed out")
+    monkeypatch.setattr(run_check, "answering_run", hung)
+    encoder_timeouts._holds.clear()
+    try:
+        run_check._verdicts.clear()
+        assert backend_gate.embed_allowed(con, collection) is False
+        assert worker._endpoint_busy_holds(collection), "held as busy"
+        n = len(looks)
+        monkeypatch.setattr(run_check, "verdict_outdated", lambda c: True)
+        worker._settle_the_run(con, collection)
+        assert len(looks) == n, "the idle round waits the hold"
+    finally:
+        encoder_timeouts._holds.clear()
+
+
+def test_a_settled_collection_is_looked_at_again_on_the_search_beat_when_its_verdict_is_outdated(
+        node, endpoint, monkeypatch):
+    """THE SEVENTH READ, run: with embed producers (the node's setting) the
+    round's `_settle_the_run` never runs; a collection on `off`, settled once,
+    never gated the run a question heard after. The search beat looks at a
+    settled collection again when its verdict is outdated — no manifest opened
+    otherwise."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    assert not worker._settle_wanted(collection), "settled and current: nothing to look at"
+    time.sleep(0.01)
+    _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}))
+    assert worker._settle_wanted(collection), "a run heard since: looked at on the beat"
