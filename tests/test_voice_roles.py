@@ -117,6 +117,20 @@ def test_the_steps_of_a_synthesis_are_the_nodes_and_go_in_every_request(node, co
     assert voice.settings().tts_steps == "24" and platform_config.tts_steps("24") == 24
 
 
+def test_a_clip_kept_before_the_engines_fade_fix_is_never_served(monkeypatch):
+    """The engine's bytes changed (its fade-out, 2026-11-26): the key carries
+    CLIP_ENGINE, so no key made before it is asked for again."""
+    import hashlib
+    import json
+    out = {"model": "m", "voice": "v", "input": IT, "params": {"flow_steps": "16"}}
+    before = hashlib.sha256(json.dumps({"url": "http://ai", **out}, sort_keys=True, ensure_ascii=False,
+                                       default=str).encode("utf-8")).hexdigest()
+    assert speech.CLIP_ENGINE >= 2 and speech._clip_key("http://ai", out) != before
+    now = speech._clip_key("http://ai", out)
+    monkeypatch.setattr(speech, "CLIP_ENGINE", speech.CLIP_ENGINE + 1)
+    assert speech._clip_key("http://ai", out) != now, "each bump makes new keys"
+
+
 def test_steps_that_are_not_a_number_in_range_are_refused_at_load(node, config_dir):
     for bad in ('"many"', '"3"', '"65"', '"2.5"', '"-8"'):
         (config_dir / "platform.toml").write_text(f"[speech]\ntts_steps = {bad}\n", encoding="utf-8")
