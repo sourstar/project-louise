@@ -492,10 +492,22 @@ def _clip_dir():
     return derived.place("speech-clips", Path(config.louise_root()))
 
 
+#: THE ENGINE'S OUTPUT, as the kept clips know it: bumped whenever the
+#: engine makes different bytes for the same request, so an old clip is
+#: never served for a new one. 2: the OmniVoice port's fade-out no longer
+#: longer than the trailing silence it kept (2026-11-26, the operator: "the
+#: last word is cut ... the volume is fading out but while there is still
+#: speech"; München measured 29 of 40 kept clips fading speech).
+CLIP_ENGINE = 2
+
+
 def _clip_key(url: str, out: dict) -> str:
     import hashlib
     import json
-    return hashlib.sha256(json.dumps({"url": url, **out}, sort_keys=True, ensure_ascii=False,
+    key = {"url": url, **out}
+    if CLIP_ENGINE > 1:          # 1 had no tag: its keys are the ones made before
+        key["clip_engine"] = CLIP_ENGINE
+    return hashlib.sha256(json.dumps(key, sort_keys=True, ensure_ascii=False,
                                      default=str).encode("utf-8")).hexdigest()
 
 

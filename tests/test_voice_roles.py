@@ -158,6 +158,20 @@ def test_the_clip_key_tells_half_steps_from_full():
     assert half != full and full == speech._clip_key("http://ai", {**out, "params": {"flow_steps": "32"}})
 
 
+def test_a_clip_kept_before_the_engines_fade_fix_is_never_served(monkeypatch):
+    """The engine's bytes changed (its fade-out, 2026-11-26): the key carries
+    CLIP_ENGINE, so no key made before it is asked for again."""
+    import hashlib
+    import json
+    out = {"model": "m", "voice": "v", "input": IT, "params": {"flow_steps": "16"}}
+    before = hashlib.sha256(json.dumps({"url": "http://ai", **out}, sort_keys=True, ensure_ascii=False,
+                                       default=str).encode("utf-8")).hexdigest()
+    assert speech.CLIP_ENGINE >= 2 and speech._clip_key("http://ai", out) != before
+    now = speech._clip_key("http://ai", out)
+    monkeypatch.setattr(speech, "CLIP_ENGINE", speech.CLIP_ENGINE + 1)
+    assert speech._clip_key("http://ai", out) != now, "each bump makes new keys"
+
+
 def test_a_kept_clip_takes_its_turn_in_order(node, monkeypatch):
     """A cache hit returns before the model's call; it still TAKES ITS TURN:
     marked done (unmarked, sentence n+1 waited TURN_ARRIVE_S for it), and
