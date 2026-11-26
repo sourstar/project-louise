@@ -169,6 +169,7 @@ def reset() -> None:
     with _board.lock:
         _board.until = 0.0
         _board.idle_since = float("-inf")
+        _searches.update(live=0, ended=float("-inf"))
     with _stood_lock:
         _stood.clear()
     _default_level = Level.QUERY
@@ -648,17 +649,56 @@ class _Board:
 _board = _Board()
 
 
-def quiet_s() -> float:
-    """HOW LONG THIS PROCESS HAS RUN NO STEP OF A QUESTION: no search, no
-    answer being written, no sentence read aloud, no interactive model call
-    (`question`, `interactive`) — 0.0 while one runs, inf when none has run.
-    NOT THE CLAIM: the claim lingers QUESTION_LINGER_S after a question's
-    last step so the corpus stays aside (`interactive_active`); work made for
-    the NEXT question — the phrases that cover the wait (app/fillers.py) —
-    asks only that none is running now, and has run for a moment. A harness
-    (`as_harness`) enters none, so it is never seen here."""
+#: this process's searches in flight (`searching`), and when the last ended
+_searches = {"live": 0, "ended": float("-inf")}
+
+
+@contextmanager
+def searching():
+    """A PERSON'S SEARCH IN FLIGHT, counted and nothing more: every search
+    goes through app/query_service.py `run_search` — the Ask page's, /api/search,
+    /v1/chat/completions, LocalAGI's, the MCP's — and most hold no question
+    (only the Ask page's relay does), so between their model calls nothing
+    else says one runs. Takes NO claim and declares no level: it changes
+    nothing a search waits for or what stands aside for it (scheduling.md
+    §12); it is read by `quiet_s` alone. A harness's searches count too."""
     with _board.lock:
-        return 0.0 if _board.live > 0 else max(0.0, time.monotonic() - _board.idle_since)
+        _searches["live"] += 1
+    try:
+        yield
+    finally:
+        with _board.lock:
+            _searches["live"] -= 1
+            if _searches["live"] == 0:
+                _searches["ended"] = time.monotonic()
+
+
+def quiet_s() -> float:
+    """HOW LONG THIS PROCESS HAS RUN NO STEP OF A QUESTION: no search
+    (`searching`), no answer being written, no sentence read aloud, no
+    interactive model call (`question`, `interactive`) — 0.0 while one runs,
+    inf when none has run. NOT THE CLAIM: the claim lingers
+    QUESTION_LINGER_S after a question's last step so the corpus stays aside
+    (`interactive_active`); work made for the NEXT question — the phrases
+    that cover the wait (app/fillers.py) — asks only that none is running
+    now, and has run for a moment. A harness (`as_harness`) enters no
+    question, so only its searches are seen here."""
+    with _board.lock:
+        if _board.live > 0 or _searches["live"] > 0:
+            return 0.0
+        return max(0.0, time.monotonic() - max(_board.idle_since, _searches["ended"]))
+
+
+def live_anywhere(now: float | None = None) -> bool:
+    """IS AN INTERACTIVE CALL LIVE IN ANY PROCESS OF THE NODE, now: a process's
+    claim row (`claims`) is written INTERACTIVE_CLAIM_TTL_S ahead and
+    refreshed while a call runs, and further ahead — QUESTION_LINGER_S — for
+    a question's linger once it ends; a row at most the TTL ahead (a second's
+    slack for the refresh) is a call running. The last TTL of a linger reads
+    the same: a caller that waits on this waits those seconds more, never
+    less. Read now, never memoised; False where the store cannot be read."""
+    at = time.time() if now is None else now
+    return any(at < v <= at + config.INTERACTIVE_CLAIM_TTL_S + 1.0 for v in claims())
 
 
 #: how long a question's claim outlasts its last step — the search, the

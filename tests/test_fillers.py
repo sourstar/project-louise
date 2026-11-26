@@ -3,9 +3,11 @@
 one or two phrases for the next cycle … prepare the phrases in the main 5
 languages and per voice. Each time you regenerate the used ones"): the set
 per language, one short and one long clip ready per voice and language, a
-clip played once and its kind remade fresh, never during a question."""
+clip played once and its kind remade fresh, never while a person's search,
+question or reading holds the card, an engine swap emptying every pool."""
 from __future__ import annotations
 
+import os
 import shutil
 import threading
 import time
@@ -15,7 +17,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from app import api, config, derived, fillers, model_load, speech, users
+from app import api, config, derived, fillers, model_load, node_state, speech, users
 from app.rage import dispatch
 
 RECORDED = "localai://voice-profiles/aaaa1111"
@@ -35,7 +37,10 @@ def _profile(voice: str, name: str, created: str, updated: str = "2026-11-25T06:
 
 
 class Node:
-    """The model server and the node's settings, as the pool meets them."""
+    """The model server and the node's settings, as the pool meets them:
+    `engine[0]` the backend the speech model is LOADED on (None: not
+    loaded), `configured` the backend its config names (LocalAI's
+    model-config API; None: it cannot be read)."""
 
     def __init__(self, monkeypatch, tmp_path: Path, config_dir: Path):
         (config_dir / "platform.toml").write_text(TABLE, encoding="utf-8")
@@ -44,9 +49,11 @@ class Node:
         self.held = [_profile(RECORDED, "Philippe", "2026-10-06"), _profile(SYNTH_IT, "Synthetic it", "2026-11-16"),
                      _profile(SYNTH_EN, "Synthetic en", "2026-11-16")]
         self.calls: list[dict] = []
+        self.levels: list[tuple] = []
         self.status = 200
         self.gate: threading.Event | None = None
         self.engine: list[str | None] = [ENGINE]
+        self.configured: str | None = None
         #: the engine a synthesis loads the model under, where none is loaded
         self.on_load: str | None = None
         self.kept: list[str] = []
@@ -61,19 +68,27 @@ class Node:
             def json(self):
                 return self._data
 
+        def get(url, **kw):
+            if "/api/models/config-json/" in url:
+                return R(200, data={"name": url.rsplit("/", 1)[1], "backend": node.configured})
+            return R(200, data={"data": node.held})
+
         def post(url, json, **kw):
             if node.gate is not None:
                 node.gate.wait(10)
             node.calls.append(json)
+            node.levels.append((dispatch.current()[0], dispatch._board.live))
             if node.engine[0] is None and node.on_load:
                 node.engine[0] = node.on_load
             return R(node.status, b"RIFF-" + json["input"].encode("utf-8") if node.status == 200 else b"{}")
-        monkeypatch.setattr(speech.httpc, "get", lambda url, **kw: R(200, data={"data": node.held}))
+        monkeypatch.setattr(speech.httpc, "get", get)
         monkeypatch.setattr(speech.httpc, "post", post)
         monkeypatch.setattr(speech, "_profiles", (0.0, []))
         monkeypatch.setattr(speech, "PROFILES_TTL_S", 0.0)
         monkeypatch.setattr(speech, "IDLE_S", 0.2)
+        monkeypatch.setattr(speech, "_READINGS", speech.Readings())    # no other test's reading
         monkeypatch.setattr(model_load, "backend_of", lambda url, model, max_age_s=None: node.engine[0])
+        monkeypatch.setattr(model_load, "CONFIG_TTL_S", 0.0)
         # the kept clips of app/speech.py are never asked, never written (`keep=False`)
         monkeypatch.setattr(speech, "_clip_get", lambda key: node.kept.append("get"))
         monkeypatch.setattr(speech, "_clip_put", lambda key, data, ctype: node.kept.append("put"))
@@ -88,7 +103,7 @@ class Node:
         monkeypatch.setattr(fillers, "POLL_S", 0.01)
 
     def filled(self) -> None:
-        assert fillers.wait_idle(10), "the pool's worker did not finish"
+        assert fillers.wait_idle(15), "the pool's worker did not finish"
 
 
 @pytest.fixture
@@ -107,6 +122,10 @@ def node(isolated_config, config_dir, tmp_path, monkeypatch):
 
 def _pool_files(tmp_path: Path) -> list[Path]:
     return sorted(p for p in (tmp_path / "cache" / fillers.DERIVED_KIND).rglob("*") if p.is_file())
+
+
+def _clip_jsons(tmp_path: Path) -> list[Path]:
+    return [p for p in _pool_files(tmp_path) if p.suffix == ".json" and fillers._ID.fullmatch(p.stem)]
 
 
 # ---- the set ---------------------------------------------------------------------------------
@@ -133,6 +152,18 @@ def test_the_set_holds_the_five_main_languages_in_two_kinds_and_claims_nothing()
     assert "Vediamo…" in fillers.texts("it", "short") and "Let me check." in fillers.texts("en", "short")
 
 
+def test_the_set_says_no_yum_no_sources_and_no_bare_plea_for_patience():
+    """The review of 2026-11-26: "Mmm" is heard as "yum"; a phrase about the
+    sources presumes there are some; a bare "patience" is an order; the
+    Italian long phrase in idiomatic Italian."""
+    every = [t.casefold() for lang in fillers.LANGUAGES for t in fillers.texts(lang)]
+    assert not [t for t in every if t.startswith("mmm") or " mmm" in t]
+    assert not [t for t in every if any(w in t for w in ("source", "fonti", "quellen", "fuentes"))]
+    assert not [t for t in every if t.rstrip(".").endswith(("patience", "paciencia", "geduld bitte"))]
+    assert "Uhm… vediamo cosa trovo su questo argomento." in fillers.texts("it", "long")
+    assert not [t for t in fillers.texts("it") if "sull'argomento" in t]
+
+
 @pytest.mark.parametrize("lang, edit, says", [
     ("en", lambda s: s.replace('"Still looking, one moment."', '"Found it, here it is."'), "claims a result"),
     ("it", lambda s: s.replace('"Un attimo."', '"Ecco."'), "claims a result"),
@@ -140,17 +171,30 @@ def test_the_set_holds_the_five_main_languages_in_two_kinds_and_claims_nothing()
                                '"Ich suche noch, einen Moment."'), "reads as de"),
     ("fr", lambda s: s.replace('"Un instant.",\n', ""), None),          # still 4: fine
     ("fr", lambda s: s.replace('"Un instant.",\n', "").replace('"Je regarde.",\n', ""), "from 4 to 6"),
-    ("de", lambda s: s.replace('"Hmm, ich gehe die Quellen durch."', '"Einen Moment."'), "both short and long"),
+    ("de", lambda s: s.replace('"Noch einen Augenblick, ich suche weiter."', '"Einen Moment."'),
+     "both short and long"),
     ("es", lambda s: s.replace('"Lo miro."', '"Un momento, sigo buscando en las fuentes."'), "words"),
     ("en", lambda s: s.replace('"Let me look."', '"Let me look [3]."'), "read as written"),
     ("en", lambda s: s.replace("long = [", "longer = ["), "the kinds are"),
     ("es", lambda s: s.replace('"A ver…",', '"A ver…",\n    "A ver…",'), "twice"),
+    ("en", lambda s: s.replace('"Still looking, one moment."', '"Mmm, still looking."'), "'mmm'"),
+    ("en", lambda s: s.replace('"Still looking, one moment."', '"Let me go through the sources."'), "'sources'"),
+    ("it", lambda s: s.replace('"Sto ancora cercando, un momento."', '"Vediamo cosa dicono le fonti."'),
+     "'fonti'"),
+    ("fr", lambda s: s.replace('"Je cherche encore, un instant."', '"Je cherche encore, patience."'),
+     "bare 'patience'"),
+    ("de", lambda s: s.replace('"Ich suche noch, einen Moment."', '"Ich suche noch, Geduld bitte."'),
+     "bare 'geduld bitte'"),
+    ("es", lambda s: s.replace('"Sigo buscando, un momento."', '"Sigo buscando, paciencia."'), "bare 'paciencia'"),
+    ("en", lambda s: s.replace('"Let me look."', '"Uhm…"'), "hesitation alone"),
 ])
 def test_a_set_that_breaks_a_rule_is_refused(tmp_path, lang, edit, says):
     d = tmp_path / "set"
     shutil.copytree(fillers.SET_DIR, d)
     f = d / f"{lang}.toml"
-    f.write_text(edit(f.read_text(encoding="utf-8")), encoding="utf-8")
+    before = f.read_text(encoding="utf-8")
+    f.write_text(edit(before), encoding="utf-8")
+    assert f.read_text(encoding="utf-8") != before, "the edit did not apply"
     if says is None:
         fillers.load(d)
         return
@@ -177,7 +221,7 @@ def test_a_lazy_fill_answers_at_once_and_makes_one_short_and_one_long_in_the_bac
     assert fillers.ready("it")["ready"] == [], "asked again while it is made: still nothing"
     node.gate.set()
     node.filled()
-    assert len(node.calls) == 2, "one short, one long — the second ask queued nothing more"
+    assert len(node.calls) == 2, "one short, one long — the second ask made nothing more"
     got = fillers.ready("it")
     assert [r["kind"] for r in got["ready"]] == ["short", "long"]
     assert all(r["url"] == f"/ask/voice/fillers/{r['id']}" for r in got["ready"])
@@ -189,11 +233,10 @@ def test_a_lazy_fill_answers_at_once_and_makes_one_short_and_one_long_in_the_bac
     assert len(node.calls) == 2, "a full pool makes nothing"
     assert node.kept == [], "never asked of, never kept among, speech's kept clips"
     assert not (tmp_path / "cache" / "speech-clips").exists()
-    # another language is another pool, in the same voice for an admin
-    fillers.ready("en")
+    fillers.ready("en")                              # another language is another pool, the same voice
     node.filled()
     assert len(node.calls) == 4 and {c["language"] for c in node.calls[2:]} == {"en"}
-    assert len([p for p in _pool_files(tmp_path) if p.suffix == ".json"]) == 4
+    assert len(_clip_jsons(tmp_path)) == 4
 
 
 def test_a_used_clip_goes_and_exactly_its_kind_is_remade_of_another_text(node, tmp_path):
@@ -212,43 +255,96 @@ def test_a_used_clip_goes_and_exactly_its_kind_is_remade_of_another_text(node, t
         fresh = fillers._find(again["short"])[1]
         assert fresh["text"] != short["text"], "never the text just used"
         assert fresh["text"] != long_["text"], "never the other ready one's"
-    # both played: both remade, each of another text
     got = {r["kind"]: fillers._find(r["id"])[1] for r in fillers.ready("it")["ready"]}
     n = len(node.calls)
     assert fillers.used([m["id"] for m in got.values()] + ["not-an-id", "0" * 32]) == 2
     node.filled()
-    assert len(node.calls) == n + 2
+    assert len(node.calls) == n + 2, "both played: both remade"
     after = {r["kind"]: fillers._find(r["id"])[1]["text"] for r in fillers.ready("it")["ready"]}
     assert all(after[k] != got[k]["text"] for k in fillers.KINDS)
-    assert node.kept == []
-    assert len([p for p in _pool_files(tmp_path) if p.suffix == ".json" and p.name != fillers.USED]) == 2
+    assert node.kept == [] and len(_clip_jsons(tmp_path)) == 2
 
 
-def test_a_clip_another_engine_made_is_never_served_and_is_remade(node, tmp_path):
+def test_two_reports_of_one_clip_remove_it_once(node, monkeypatch):
+    fillers.ready("it")
+    node.filled()
+    cid = fillers.ready("it")["ready"][0]["id"]
+    real, gate = fillers._find, threading.Barrier(2)
+
+    def find(clip_id):
+        got = real(clip_id)
+        gate.wait(5)                                 # both reports found it before either removed it
+        return got
+    monkeypatch.setattr(fillers, "_find", find)
+    out: list[int] = []
+    ts = [threading.Thread(target=lambda: out.append(fillers.used([cid]))) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(10)
+    assert sorted(out) == [0, 1]
+
+
+# ---- the engine ------------------------------------------------------------------------------
+
+def test_a_clip_is_served_only_when_the_engine_is_known_and_is_its_own(node, tmp_path):
     fillers.ready("it")
     node.filled()
     old = {r["kind"]: r["id"] for r in fillers.ready("it")["ready"]}
-    # the speech model evicted: a clip listed under a known engine is still served by its id, but nothing is
-    # listed (whatever is kept could be another engine's)
-    node.engine[0], node.on_load = None, ENGINE
+    # the model evicted, its config read without a load: the same engine, so served and listed
+    node.engine[0], node.configured = None, ENGINE
     assert fillers.clip(old["short"]) is not None
+    assert {r["id"] for r in fillers.ready("it")["ready"]} == set(old.values())
+    # the model evicted and its config not readable: nothing served, listed or made
+    node.configured = None
+    assert fillers.clip(old["short"]) is None, "an engine not known is never taken for the clip's"
     assert fillers.ready("it")["ready"] == []
     node.filled()
-    assert len(node.calls) == 3, "the engine not known: one clip made, which loaded the model and said which"
-    assert {r["id"] for r in fillers.ready("it")["ready"]} == set(old.values()), "and its pool had it: dropped"
-    node.on_load = None
-    # the engine swapped: the old engine's clips are not found, and are made again under the new one
-    node.engine[0] = OTHER
+    assert len(node.calls) == 2, "never a synthesis to learn the engine"
+    # THE SWAP, the model not loaded since: its config names the new engine
+    node.configured, node.on_load = OTHER, OTHER
+    assert fillers.clip(old["short"]) is None, "the old engine's clip, by its id: never"
     assert fillers.ready("it")["ready"] == []
     node.filled()
-    assert len(node.calls) == 5
+    assert len(node.calls) == 4 and node.engine[0] == OTHER, "made under the new engine, which the call loaded"
     new = {r["kind"]: r["id"] for r in fillers.ready("it")["ready"]}
     assert set(new.values()).isdisjoint(old.values())
     assert all(fillers._find(i)[1]["engine"] == OTHER for i in new.values())
-    assert fillers.clip(old["long"]) is None, "another engine's: not served"
-    assert fillers._find(old["long"]) is None, "and gone"
+    assert fillers._find(old["long"]) is None, "an engine swap empties every pool"
+    assert {p.parent.name for p in _clip_jsons(tmp_path)} == {next(iter(new.values()))[:16]}
+    assert any("pool(s) of another engine" in text for _, text in node.lines)
     assert fillers.clip(new["long"]) == (b"RIFF-" + fillers._find(new["long"])[1]["text"].encode(), "audio/wav")
 
+
+def test_a_swap_with_the_model_loaded_empties_the_old_pool_off_the_request(node, monkeypatch):
+    fillers.ready("it")
+    node.filled()
+    old_pool = fillers._find(fillers.ready("it")["ready"][0]["id"])[0]
+    swept_on: list[str] = []
+    real = fillers._sweep
+    monkeypatch.setattr(fillers, "_sweep", lambda *a: swept_on.append(threading.current_thread().name) or real(*a))
+    node.engine[0] = OTHER
+    fillers.ready("it")
+    node.filled()
+    assert len(fillers.ready("it")["ready"]) == 2
+    assert not old_pool.exists()
+    assert swept_on and set(swept_on) == {"speech-fillers"}, "swept by the worker, never on the request's thread"
+
+
+def test_the_whole_key_is_checked_when_a_clip_is_fetched(node, config_dir):
+    fillers.ready("it")
+    node.filled()
+    cid = fillers.ready("it")["ready"][0]["id"]
+    assert fillers.clip(cid) is not None
+    (config_dir / "platform.toml").write_text(TABLE + 'tts_steps = "24"\n', encoding="utf-8")
+    assert fillers.clip(cid) is None, "made with other steps"
+    (config_dir / "platform.toml").write_text(TABLE, encoding="utf-8")
+    assert fillers.clip(cid) is not None
+    node.held[0] = {**node.held[0], "updated_at": "2026-11-26T08:00:00Z"}
+    assert fillers.clip(cid) is None, "the voice's recording replaced"
+
+
+# ---- never while a person holds the card -----------------------------------------------------
 
 def test_nothing_is_synthesized_while_a_question_runs(node, monkeypatch):
     monkeypatch.setattr(fillers, "QUIET_S", 0.2)
@@ -275,6 +371,99 @@ def test_nothing_is_synthesized_while_a_question_runs(node, monkeypatch):
     assert len(node.calls) == 4
 
 
+def test_nothing_is_synthesized_while_any_search_runs_and_a_search_takes_no_claim(node, monkeypatch):
+    """/api/search, /v1/chat/completions, LocalAGI's and the MCP's searches
+    hold no question: `query_service.run_search` counts them
+    (`dispatch.searching`) and nothing else — no claim, no level."""
+    from app import retrieval
+    monkeypatch.setattr(fillers, "QUIET_S", 0.2)
+    monkeypatch.setattr(api.db, "log_query", lambda *a, **k: None)
+    seen: dict = {}
+
+    def search(*a, **k):
+        seen.update(quiet=dispatch.quiet_s(), live=dispatch._board.live, until=dispatch._board.until)
+        fillers.ready("it")
+        time.sleep(0.5)
+        seen["calls"] = len(node.calls)
+        return {"hits": [], "timings": {}}
+    monkeypatch.setattr(retrieval, "search", search)
+    r = TestClient(api.app).post("/api/search", json={"query": "Dante"}, headers=ADMIN)
+    assert r.status_code == 200, r.text
+    assert seen == {"quiet": 0.0, "live": 0, "until": 0.0, "calls": 0}, seen
+    node.filled()
+    assert len(node.calls) == 2, "made once the search had ended"
+
+
+def test_nothing_is_synthesized_between_two_sentences_of_a_reading(node, monkeypatch):
+    """A reading (the page's `Louise-Reading`) is in progress from its first
+    sentence to its last (`/last`), or to READING_OPEN_S after the latest:
+    between two sentences no call runs, and a phrase made there would delay
+    the reader's next one."""
+    monkeypatch.setattr(fillers, "QUIET_S", 0.2)
+    monkeypatch.setattr(speech, "READING_OPEN_S", 1.5)
+    fillers.ready("it")
+    node.filled()
+    ids = [r["id"] for r in fillers.ready("it")["ready"]]
+    n = len(node.calls)
+    body = {"model": "omnivoice-cpp", "input": "Dante nacque a Firenze nel milleduecentosessantacinque.",
+            "voice": RECORDED, "language": "it"}
+    speech.synthesize_timed(dict(body), "http://ai:8080", reading="r1", n=0)
+    assert fillers.used(ids[:1]) == 1
+    time.sleep(0.6)                                  # sentence 0 plays, longer than QUIET_S
+    speech.synthesize_timed(dict(body, input="Morì a Ravenna, in esilio."), "http://ai:8080", reading="r1", n=1)
+    time.sleep(0.6)
+    speech.synthesize_timed(dict(body, input="Lì è sepolto."), "http://ai:8080", reading="r1", n=2, last=True)
+    t_last = time.monotonic()
+    node.filled()
+    said = [c["input"] for c in node.calls[n:]]
+    assert said[:3] == [body["input"], "Morì a Ravenna, in esilio.", "Lì è sepolto."], said
+    assert len(said) == 4 and time.monotonic() - t_last >= 0.2, "made QUIET_S after the last sentence"
+    # a reading stopped by its reader (no `/last`) is over READING_OPEN_S after its latest sentence
+    ids = [r["id"] for r in fillers.ready("it")["ready"]]
+    speech.synthesize_timed(dict(body, input="Una frase sola."), "http://ai:8080", reading="r2", n=0)
+    t0 = time.monotonic()
+    fillers.used(ids[:1])
+    node.filled()
+    assert len(node.calls) == n + 6 and time.monotonic() - t0 >= 1.3
+
+
+def test_nothing_is_synthesized_while_another_process_runs_an_interactive_call(node, monkeypatch):
+    rows: list[float] = []
+    monkeypatch.setattr(dispatch, "claims", lambda: list(rows))
+    rows[:] = [time.time() + config.INTERACTIVE_CLAIM_TTL_S]          # a call live elsewhere
+    assert dispatch.live_anywhere()
+    fillers.ready("it")
+    time.sleep(0.4)
+    assert node.calls == []
+    rows[:] = [time.time() + 250.0]                                    # a question's linger, not a call
+    assert not dispatch.live_anywhere()
+    node.filled()
+    assert len(node.calls) == 2
+
+
+def test_live_anywhere_reads_every_processs_claim_row(isolated_config):
+    node_state.connect().close()
+    assert not dispatch.live_anywhere()
+    dispatch._write_claim(time.time() + config.INTERACTIVE_CLAIM_TTL_S)
+    assert dispatch.live_anywhere(), "a call running: its row the TTL ahead"
+    dispatch._write_claim(time.time() + dispatch.QUESTION_LINGER_S)
+    assert not dispatch.live_anywhere(), "a question's linger is no call"
+    dispatch._write_claim(0.0)
+    assert not dispatch.live_anywhere()
+
+
+def test_a_phrase_takes_no_question_claim_and_says_the_corpus_level(node):
+    """A phrase is made for no reader now: the corpus does not stand aside
+    for it, the encoders keep their pins, the clock is not held."""
+    fillers.ready("it")
+    node.filled()
+    assert len(node.calls) == 2
+    assert node.levels == [(dispatch.Level.CORPUS, 0)] * 2, "no claim while it runs, the lowest level"
+    assert dispatch._board.until < time.time() + 30, "and no linger after it"
+    assert dispatch.quiet_s() == float("inf"), "nothing a person did"
+    assert speech.reading_quiet_s() == float("inf"), "and no reading"
+
+
 def test_quiet_counts_from_the_end_of_the_last_step_of_a_question():
     assert dispatch.quiet_s() == float("inf"), "none has run"
     with dispatch.question(linger=0.0):
@@ -283,7 +472,12 @@ def test_quiet_counts_from_the_end_of_the_last_step_of_a_question():
         assert dispatch.quiet_s() == 0.0, "the question still runs"
     time.sleep(0.05)
     assert 0.04 <= dispatch.quiet_s() < 5.0
+    with dispatch.searching():
+        assert dispatch.quiet_s() == 0.0 and dispatch._board.live == 0
+    assert dispatch.quiet_s() < 0.05
 
+
+# ---- failures, identity, storage -------------------------------------------------------------
 
 def test_a_failed_synthesis_is_one_line_and_is_tried_again_at_the_next_ask_never_in_a_loop(node, monkeypatch):
     node.status = 500
@@ -299,11 +493,24 @@ def test_a_failed_synthesis_is_one_line_and_is_tried_again_at_the_next_ask_never
     fillers.ready("it")
     node.filled()
     assert len(node.calls) == 3 and len(fillers.ready("it")["ready"]) == 2
-    # an engine never named: nothing kept (it could be any engine's), said once
-    node.engine[0] = None
+
+
+def test_a_recording_the_listing_does_not_show_makes_and_serves_nothing(node):
+    """`speech.profiles` answers [] for PROFILES_TTL_S after a failed
+    listing: a profile is then known by no recording, and its bare name is
+    never taken for one."""
+    fillers.ready("it")
+    node.filled()
+    cid = fillers.ready("it")["ready"][0]["id"]
+    held, node.held[:] = list(node.held), []
+    assert fillers.voice_identity(RECORDED, []) is None
+    assert fillers.ready("it") == {"lang": "it", "voice": None, "ready": []}
+    assert fillers.clip(cid) is None
     fillers.ready("fr")
     node.filled()
-    assert len(node.calls) == 4 and "does not say which engine" in node.lines[-1][1]
+    assert len(node.calls) == 2, "nothing made"
+    node.held[:] = held
+    assert fillers.clip(cid) is not None, "a later ask, the listing back: served again"
 
 
 def test_the_voice_is_known_by_its_recording_never_by_its_name(node):
@@ -331,6 +538,27 @@ def test_the_pools_are_derived_data_on_the_fast_drive_and_none_without_one(node,
     node.filled()
     assert got["ready"] == [] and got["voice"] is not None and len(node.calls) == 2, \
         "no fast drive: nothing kept, so nothing made"
+
+
+def test_a_writers_leftovers_are_swept_during_a_fill(node, tmp_path):
+    fillers.ready("it")
+    node.filled()
+    pool = fillers._find(fillers.ready("it")["ready"][0]["id"])[0]
+    old = time.time() - 2 * fillers.STALE_S
+    left = {"tmp": pool / ".x.json.7.tmp", "orphan": pool / ("ab" * 16 + ".wav"),
+            "fresh": pool / ".y.wav.7.tmp"}
+    for p in left.values():
+        p.write_bytes(b"x")
+    for k in ("tmp", "orphan"):
+        os.utime(left[k], (old, old))
+    stray = pool.parent / ("cd" * 8)
+    stray.mkdir()
+    os.utime(stray, (old, old))
+    fillers.used([fillers.ready("it")["ready"][0]["id"]])
+    node.filled()
+    assert not left["tmp"].exists() and not left["orphan"].exists() and not stray.exists()
+    assert left["fresh"].exists(), "a writer's file of this minute is left to its writer"
+    assert len(fillers.ready("it")["ready"]) == 2
 
 
 def test_another_model_set_meanwhile_makes_nothing_more_for_the_old_pool(node, config_dir):
@@ -416,3 +644,28 @@ def test_speech_without_keep_neither_reads_nor_writes_the_kept_clips(node):
     assert len(node.calls) == 2 and node.kept == []
     speech.synthesize_timed(dict(body), "http://ai:8080")
     assert node.kept == ["get", "put"], "a reading still keeps its clips"
+
+
+def test_the_engine_is_read_from_the_models_config_without_a_load(monkeypatch):
+    """`model_load.engine_of`: the backend a loaded model runs on, else the
+    one its config names (LocalAI's model-config API) — one bounded read,
+    cached CONFIG_TTL_S; never a request to the model itself."""
+    asked: list[str] = []
+
+    class R:
+        def __init__(self, data):
+            self.status_code, self._data = 200, data
+
+        def json(self):
+            return self._data
+    monkeypatch.setattr(model_load.httpc, "get", lambda url, **kw: asked.append(url) or R({"backend": OTHER}))
+    monkeypatch.setattr(model_load.httpc, "post", lambda *a, **k: pytest.fail("a request to the model"))
+    monkeypatch.setattr(model_load, "backend_of", lambda url, model, max_age_s=None: None)
+    assert model_load.engine_of("http://ai:8080/v1", "omnivoice-cpp") == OTHER
+    assert model_load.engine_of("http://ai:8080/v1", "omnivoice-cpp") == OTHER
+    assert asked == ["http://ai:8080/api/models/config-json/omnivoice-cpp"], "read once, then kept"
+    monkeypatch.setattr(model_load, "backend_of", lambda url, model, max_age_s=None: ENGINE)
+    assert model_load.engine_of("http://ai:8080/v1", "omnivoice-cpp") == ENGINE, "loaded: what it runs on"
+    monkeypatch.setattr(model_load.httpc, "get", lambda url, **kw: (_ for _ in ()).throw(OSError("down")))
+    monkeypatch.setattr(model_load, "backend_of", lambda url, model, max_age_s=None: None)
+    assert model_load.configured_backend("http://other:8080", "omnivoice-cpp") is None

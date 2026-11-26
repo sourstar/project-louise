@@ -6,6 +6,7 @@ circular import (api.py mounts web.py's routers).
 from fastapi import HTTPException
 
 from . import cancel, collections as collections_mod, db, retrieval
+from .rage import dispatch
 
 
 def withheld_reason(collection) -> str | None:
@@ -172,6 +173,9 @@ def book_ids_for(filters: dict | None):
     return resolve
 
 
+# counted while it runs (`dispatch.searching`: no claim, no level) — the one
+# sign, for every caller, that a person's search is in flight
+@dispatch.searching()
 def run_search(collection_names: list[str] | None, query: str, k: int, mode: str,
                translate: bool, verify: bool = False,
                rerank_depth: int = retrieval.RERANK_TOP_N,

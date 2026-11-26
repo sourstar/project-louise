@@ -1811,15 +1811,21 @@ answer is read in, for one of en, de, fr, it, es (any other: none);
 language one `short` clip (under a second) and one `long` (about two), each
 a synthesis of a text of `app/filler_phrases/<lang>.toml`; a pool short of
 one is made in the background — the route answers at once with what is
-ready — one synthesis at a time, once the web has run no step of a
-question for 5 s. `GET /ask/voice/fillers/{id}` → the clip's audio (404:
-gone, made by another speech engine, or in a voice the reader is not read
-to in). `POST /ask/voice/fillers/used` `{ids}` (at most 16) → `{removed}`:
-a clip is played once; each reported goes, and its kind is remade from
-another text, as a new synthesis, never a kept clip. The pools are derived
-data under `LOUISE_CACHE_DIR`, keyed on the voice's profile and recording,
-the language, the model, its steps and the engine; without a fast drive
-none is kept and none offered. `POST /v1/audio/transcriptions` (multipart `file`,
+ready — one synthesis at a time, holding no question's claim, started only
+while no search, question step or reading has run for 5 s and no
+interactive call is live on the node. `GET /ask/voice/fillers/{id}` → the
+clip's audio (404: gone, in a voice the reader is not read to in, or not
+made under the key the answer would be made under now — the model, its
+steps, the voice's recording and the speech engine, which must be known).
+`POST /ask/voice/fillers/used` `{ids}` (at most 16) → `{removed}`: a clip
+is played once; each reported goes, and its kind is remade from another
+text, as a new synthesis, never a kept clip. The pools are derived data
+under `LOUISE_CACHE_DIR`. The engine is read without loading the model (the
+backend it is loaded on, else the one its config names in LocalAI's
+`GET /api/models/config-json/<model>`); where it cannot be read nothing is
+served, and an engine swap empties every pool of another engine. Without a
+fast drive, or where the voice's recording is not listed, none is kept and
+none offered. `POST /v1/audio/transcriptions` (multipart `file`,
 `model`, `language`, `response_format`, … — OpenAI's shape; at most 25 MB,
 413 above): the node's `stt_model` where none is named, 400 where there is
 neither. Where `[speech] vad_model` is set, a clip that is a WAV of 16-bit

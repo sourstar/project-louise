@@ -599,10 +599,69 @@ NO_SYNTHETIC = (b'{"error": {"message": "no synthetic voice is set on this node,
                 b'voice is read to an admin only"}}')
 
 
+#: a reading whose last sentence (`/last`) has not come is in progress until
+#: this long without one of its sentences — a reader who stopped it, a page
+#: gone; while its answer is still written the answer's own call is live
+READING_OPEN_S = 6.0
+
+
+class Readings:
+    """WHAT IS BEING READ ALOUD (the phrases that cover the wait are made
+    only between readings, app/fillers.py): every sentence a reader asks for,
+    from its turn's wait to its clip, and each reading the page numbers
+    (`Louise-Reading`) from its first sentence to its last (`/last`), or to
+    READING_OPEN_S after the latest. Node-wide in fact: speech is answered by
+    the web process alone."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._live = 0
+        self._ended = float("-inf")
+        self._open: dict[str, float] = {}
+
+    @contextmanager
+    def sentence(self, reading: str | None, last: bool) -> Iterator[None]:
+        with self._lock:
+            self._live += 1
+            if reading is not None:
+                self._open[reading] = time.monotonic()
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._live -= 1
+                now = self._ended = time.monotonic()
+                if reading is not None:
+                    if last:
+                        self._open.pop(reading, None)
+                    else:
+                        self._open[reading] = now
+
+    def quiet_s(self) -> float:
+        """How long nothing has been read: 0.0 while a sentence is made or a
+        reading is in progress, inf when nothing was ever read."""
+        with self._lock:
+            if self._live:
+                return 0.0
+            now = time.monotonic()
+            for r in [r for r, at in self._open.items() if now - at >= READING_OPEN_S]:
+                del self._open[r]
+            return 0.0 if self._open else max(0.0, now - self._ended)
+
+
+_READINGS = Readings()
+
+
+def reading_quiet_s() -> float:
+    """`Readings.quiet_s` of this node's readings."""
+    return _READINGS.quiet_s()
+
+
 def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
                      reading: str | None = None, n: int | None = None,
                      last: bool = False, account_voice: str | None = None,
-                     admin: bool = True, keep: bool = True) -> tuple[int, bytes, str, list]:
+                     admin: bool = True, keep: bool = True,
+                     background: bool = False) -> tuple[int, bytes, str, list]:
     """`synthesize` and its `Server-Timing` (W3C; 2026-11-08, to measure the
     reading's start and its pauses): `turn` the wait for the reading's
     sentence before (`Turns`), `synth` the model server's call in ms, `audio`
@@ -612,7 +671,22 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     `keep` False: a NEW synthesis, never answered from the kept clips nor
     kept among them — a phrase that covers the wait is made fresh each time
     it is remade (app/fillers.py), and the kept clip of the same words would
-    be the very clip just played."""
+    be the very clip just played. `background` True: work for no reader now
+    (those phrases) — no question's claim, the lowest level, and no reading
+    (`Readings`)."""
+    if background:
+        return _synthesize_timed(body, url, account_voice=account_voice, admin=admin, keep=keep,
+                                 background=True)
+    with _READINGS.sentence(reading, last):
+        return _synthesize_timed(body, url, reading=reading, n=n, last=last, account_voice=account_voice,
+                                 admin=admin, keep=keep)
+
+
+def _synthesize_timed(body: dict[str, Any], url: str | None = None, *,
+                      reading: str | None = None, n: int | None = None,
+                      last: bool = False, account_voice: str | None = None,
+                      admin: bool = True, keep: bool = True,
+                      background: bool = False) -> tuple[int, bytes, str, list]:
     from app import voice as node_voice
     url = (url or config.CHAT_URL).rstrip("/")
     text = speakable(str(body.get("input") or ""))
@@ -678,7 +752,7 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
         clip = audio_ms(kept[0])
         return 200, kept[0], kept[1], [("cache", 1.0)] + ([("audio", clip)] if clip is not None else [])
     with _TURNS.turn(reading, n) as waited:
-        status, content, ctype, timing = _synthesize_call(url, model, out, last=last)
+        status, content, ctype, timing = _synthesize_call(url, model, out, last=last, background=background)
     if keep and status == 200 and str(ctype).startswith("audio/"):
         made_by = engine or model_load.backend_of(url, model or None)
         if made_by:
@@ -686,7 +760,8 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     return status, content, ctype, ([("turn", waited)] if reading is not None else []) + timing
 
 
-def _synthesize_call(url: str, model: str | None, out: dict, *, last: bool = False) -> tuple[int, bytes, str, list]:
+def _synthesize_call(url: str, model: str | None, out: dict, *, last: bool = False,
+                     background: bool = False) -> tuple[int, bytes, str, list]:
     t0 = time.perf_counter()
     # A PERSON'S QUERY, ITS LAST STEP (2026-11-08, München: one synthesis took
     # 0.81 of its clip's length alone and up to 1.49 beside the corpus
@@ -705,8 +780,13 @@ def _synthesize_call(url: str, model: str | None, out: dict, *, last: bool = Fal
     # The 5-minute rule supersedes both (docs/notes/ask-card-workflow.md spec
     # 6): the claim lingers dispatch.QUESTION_LINGER_S after every sentence,
     # the last one included; `last` is kept for the page and the log.
-    with dispatch.question(), \
-            dispatch.interactive(dispatch.Level.CHAT):
+    # WORK FOR NO READER NOW (`background`: the phrases that cover the wait,
+    # app/fillers.py) holds NO claim and no linger — the corpus does not stand
+    # aside, the encoders keep their pins, the clock is not held — and says
+    # the lowest level there is
+    held = (dispatch.working_as(dispatch.Level.CORPUS) if background
+            else _question_claim(dispatch))
+    with held:
         if not model:
             r = httpc.post(f"{url}/v1/audio/speech", json=out, timeout=CALL_TIMEOUT_S)
         else:
@@ -720,3 +800,10 @@ def _synthesize_call(url: str, model: str | None, out: dict, *, last: bool = Fal
     if clip is not None:
         timing.append(("audio", clip))
     return r.status_code, r.content, r.headers.get("content-type", "application/octet-stream"), timing
+
+
+@contextmanager
+def _question_claim(dispatch: Any) -> Iterator[None]:
+    """A reader's sentence: the question's claim, at the chat level."""
+    with dispatch.question(), dispatch.interactive(dispatch.Level.CHAT):
+        yield

@@ -157,7 +157,7 @@ its answer there is silence:
 
 With the screen not watched (hands-free, the car), that silence reads as
 "it did not hear me". A short spoken phrase says the question was taken
-and is being worked on: "Vediamo…", "Let me check", "Mmm, let's see what
+and is being worked on: "Vediamo…", "Let me check", "Uhm… let me see what
 I can find on this".
 
 | choice | pros | cons |
@@ -178,12 +178,14 @@ How it runs:
 - **THE SET:** a small text file per language, beside the commands' table,
   of phrase TEXTS in two kinds (*as built:* `app/filler_phrases/<lang>.toml`,
   five texts a kind, read and checked by `app/fillers.py` `load`: none
-  claims a result, none in both kinds, each read as written and in its
-  file's language; `fillers.texts(lang)` gives them to the echo guard):
+  claims a result, none in both kinds, no "mmm" (heard as "yum"), none
+  that presumes sources, no bare plea for patience, a hesitation only
+  inside a longer phrase, each read as written and in its file's language;
+  `fillers.texts(lang)` gives them to the echo guard):
   - SHORT, said at once (under 1 s): "Vediamo…", "Let me check",
     "Voyons…", "Mal sehen…", "A ver…";
-  - LONG, for a long wait (about 2 s), where the "uhm" lives: "Uhm… sto
-    cercando quello che trovo sull'argomento", "Still looking, one
+  - LONG, for a long wait (about 2 s), where the "uhm" lives: "Uhm…
+    vediamo cosa trovo su questo argomento", "Still looking, one
     moment".
   - Nothing claims a result ("found it") before there is one.
   - The disfluencies ("uhm", "mmm") are what TTS renders worst, so each
@@ -206,38 +208,49 @@ How it runs:
     - Each is a NEW synthesis of a text drawn from the set: never the text
       just used, and never the other ready one's. Even a text that comes
       back sounds different.
-    - Made at low priority, never during a search. *As built:* one
-      synthesis at a time, through app/speech.py's own path but never its
-      kept clips (`synthesize_timed(keep=False)`: their key holds the
-      words, so a text that comes back would be the old clip), once the web
-      has run no step of a question — a search, an answer being written, a
-      sentence read — for 5 s (`dispatch.quiet_s`); bounded at 10 min, then
-      dropped until the next ask. Not the question's claim
-      (`interactive_active`): it lingers 5 min, and a follow-up asked
-      within them would find the pool short. A synthesis that started just
-      before a question runs to its end (2–5 s): a GPU request is not
-      pre-empted.
-  - **FIRST MADE LAZILY** (*as built*; the note had: when a voice is
-    created or first chosen, and at boot): when the page first asks for a
-    voice and language whose pool is short — the microphone or the speaker
-    first used. The route answers at once with what is ready, possibly
-    nothing, and the pool is made in the background; nothing is made for a
-    voice no reader is given. A full pool is 10 clips of 1–2.5 s each, made
-    at 1.5–2× their length: about a minute of synthesis a voice. After a
-    question it is one or two clips, about 2–5 s.
-  - **AN ENGINE SWAP EMPTIES NOTHING** (*as built*; the note had: empties
-    every pool): a pool is keyed on the engine (#937), so another engine's
-    clips are simply not found, and the new engine's pool is made lazily.
-    While the speech model is not loaded the engine is unknown and nothing
-    is listed; the clip then made loads the model and says which engine
-    answers. A clip fetched by its id once its engine is known to be
-    another is refused, and goes.
+    - Made at low priority, when no question holds the card (dispatch's
+      levels), never during a search.
+      - *As built:* one synthesis at a time, through app/speech.py's own
+        path but never its kept clips (`synthesize_timed(keep=False)`),
+        holding no question's claim and no linger, at the corpus level
+        (`background=True`). It starts only while nothing holds the card
+        for a person: no search (`dispatch.searching`, every caller of
+        `query_service.run_search`) and no step of a question in the web
+        for 5 s (`dispatch.quiet_s`), no reading in progress and none for
+        5 s after its last sentence (`speech.reading_quiet_s`), no
+        interactive call live in any process (`dispatch.live_anywhere`,
+        the claim rows); checked again right before the call; bounded at
+        10 min, then dropped until the next ask. Not the claim itself
+        (`interactive_active`): it lingers 5 min, and a follow-up asked
+        within them would find the pool short. What is not excluded: a
+        question that begins during a synthesis meets it, 2–5 s, since a
+        GPU request is not pre-empted.
+  - **FIRST MADE** when a voice is created or first chosen, and at boot for
+    any voice whose pool is short. That is 10 clips of 1–2.5 s each,
+    made at 1.5–2× their length: about a minute of synthesis a voice.
+    After a question it is one or two clips, about 2–5 s.
+    - *As built (step 2, node side):* made lazily, when the page first asks
+      for a voice and language whose pool is short (the route answers at
+      once with what is ready, possibly nothing); not yet at boot or at a
+      voice's creation.
+  - **AN ENGINE SWAP** empties every pool: the kept clips are keyed on the
+    engine (#937). The pools are remade at low priority.
+    - *As built:* the engine is the one that answers the model's next
+      request, read without loading it (`model_load.engine_of`: the backend
+      it is loaded on, else the one its config names in LocalAI's
+      model-config API). A clip is served only when that engine is known
+      and is the clip's; where it cannot be read, nothing is served or
+      made, and the page plays the tone. Once it is known, the worker
+      deletes every pool of another engine or model (`fillers._sweep`),
+      never on a request's thread.
   - **WHERE:** derived, re-creatable data. It goes under
     `LOUISE_CACHE_DIR` through app/derived.py (invariant 6), keyed on the
-    voice's physical identity, never on its name: *as built*, the profile's
-    id with its recording as LocalAI lists it (size, length, `updated_at`:
-    `voice_ping.clip_of`; LocalAI gives no hash of the file). No fast drive
-    named: nothing is kept and nothing offered — the tone.
+    voice's physical identity (its profile's file), never on its name.
+    - *As built:* the profile's id with its recording as LocalAI lists it
+      (size, length, `updated_at`: `voice_ping.clip_of`; LocalAI gives no
+      hash of the file). A profile the listing does not show has no
+      identity: nothing is made or served for it until it does. No fast
+      drive named: nothing is kept and nothing offered — the tone.
 - **WHEN, at most two a question** (the pool's size):
   - the SHORT one when the question is taken (hands-free: when
     `/ask/voice/heard` says it was addressed; tap-to-speak: when the
