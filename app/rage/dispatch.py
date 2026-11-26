@@ -429,43 +429,6 @@ _claim_seen: dict[str, tuple[float, bool]] = {}
 _claim_lock = threading.Lock()
 
 
-#: when the node's last PERSON'S QUESTION began and ended (`question`), as
-#: every process reads it: the claim is held by any interactive call — the
-#: keeper's warms too — and a claim rewritten is no question (the third read
-#: of the mode switch, run: a keeper's reranker warm stopped the switch as
-#: "a person's question")
-QUESTION_BEGAN_KEY, QUESTION_ENDED_KEY = "question_began", "question_ended"
-
-
-def _write_mark(key: str, at: float) -> None:
-    """Never raises: a question is answered even when the store cannot be written."""
-    try:
-        con = _node_con()
-        if con is None:
-            return
-        with closing(con):
-            con.execute("INSERT INTO control(key, value) VALUES(?, ?) "
-                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, repr(at)))
-    except Exception:   # noqa: BLE001
-        pass
-
-
-def question_marks() -> tuple[float, float]:
-    """(when the last person's question began, when the last one ended), epoch
-    s, 0.0 for never or unreadable. A question is in flight while the first is
-    the later — two that overlap read as ended when the first ends."""
-    try:
-        con = _node_con()
-        if con is None:
-            return 0.0, 0.0
-        with closing(con):
-            rows = dict(con.execute("SELECT key, value FROM control WHERE key IN (?, ?)",
-                                    (QUESTION_BEGAN_KEY, QUESTION_ENDED_KEY)).fetchall())
-        return float(rows.get(QUESTION_BEGAN_KEY) or 0.0), float(rows.get(QUESTION_ENDED_KEY) or 0.0)
-    except Exception:   # noqa: BLE001 — unread: none
-        return 0.0, 0.0
-
-
 def claim_until() -> float | None:
     """The node's interactive claim as written — until when it holds (epoch
     s) — read now, not memoised; None where none is written or it cannot be
@@ -667,13 +630,11 @@ def question(linger: float | None = None):
     if _harness:
         yield
         return
-    _write_mark(QUESTION_BEGAN_KEY, time.time())
     _board.enter()
     try:
         yield
     finally:
         _board.leave(linger=QUESTION_LINGER_S if linger is None else linger)
-        _write_mark(QUESTION_ENDED_KEY, time.time())
 
 
 #: called once by the first corpus request that stands aside for a claim

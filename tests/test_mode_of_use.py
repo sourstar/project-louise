@@ -538,17 +538,31 @@ def test_the_control_route_refuses_to_run_everything_in_chat_mode(client):
     assert client.post("/api/control", json={"state": "running"}, headers=ADMIN).status_code == 200
 
 
-def _rooms(monkeypatch, *fits, why="chat-35b needs 21,715 MiB … — vega-bge-m3 pinned by work in flight"):
-    """The room the switch is told, one answer an ask (the last one for ever)."""
+def _rooms(monkeypatch, *fits, why="chat-35b needs 21,715 MiB … — vega-bge-m3 pinned by work in flight",
+           unloaded=()):
+    """The room the switch is made, one answer an ask (the last one for ever)."""
     from app import model_evict
     asked: list = []
 
-    def room(server, model):
+    def room(server, model, *, horizon, protect=(), **kw):
         asked.append(model)
         f = fits[min(len(asked) - 1, len(fits) - 1)]
-        return None if f is None else model_evict.Outcome(f, why="" if f else why)
-    monkeypatch.setattr(model_evict, "room_before_load", room)
+        return model_evict.Outcome(f, why="" if f else why, unloaded=tuple(unloaded) if f is False else ())
+    monkeypatch.setattr(model_evict, "make_room_for", room)
     return asked
+
+
+class _Clock:
+    """A clock the switch's sleeps move (so a bounded wait ends at once)."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
 
 
 def test_a_switch_makes_the_room_first_and_waits_for_it(platform, monkeypatch, capsys):
@@ -567,7 +581,7 @@ def test_a_switch_makes_the_room_first_and_waits_for_it(platform, monkeypatch, c
     monkeypatch.setattr(__import__("app.llm", fromlist=["warm"]), "warm",
                         lambda *a, **k: (inside.append(model_evict._room_made.get()), real_warm()))
     slept = []
-    got = worker._mode_models("embed", "query", question=lambda: False, sleep=slept.append)
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=slept.append, busy=lambda: False)
     assert asked == ["chat-35b"] * 3 and slept == [worker.MODE_ROOM_POLL_S] * 2
     assert got["loaded"] is True and runner.calls == [("unload", "chat-9b"), ("warm", "chat-35b")]
     assert inside == [True], "the room is made: the cold-load hook does not make it again"
@@ -578,12 +592,9 @@ def test_a_switch_whose_room_never_comes_sends_no_load_the_card_cannot_hold(plat
     runner = _Runner(monkeypatch)
     node_mode.switch("query", by="test")
     asked = _rooms(monkeypatch, False)
-    clock = [0.0]
-
-    def sleep(s):
-        clock[0] += s
-    got = worker._mode_models("embed", "query", question=lambda: False, sleep=sleep,
-                              clock=lambda: clock[0])
+    clock = _Clock()
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=clock.sleep, clock=clock,
+                              busy=lambda: False)
     assert got["loaded"] is False and ("warm", "chat-35b") not in runner.calls
     assert len(asked) == int(worker.MODE_ROOM_WAIT_S / worker.MODE_ROOM_POLL_S) + 1, "bounded"
     out = capsys.readouterr().out
@@ -594,12 +605,12 @@ def test_a_switch_whose_room_never_comes_sends_no_load_the_card_cannot_hold(plat
 def test_a_switch_counts_the_room_once_the_driver_shows_the_old_model_gone(platform, monkeypatch):
     """The card's reading lags a process's exit: counted from a reading that
     still holds the 9B, the room would stop models the switch need not stop."""
-    from app import model_evict, resident
+    from app import model_evict, model_load, resident
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     _Runner(monkeypatch)
     node_mode.switch("query", by="test")
     GIB = 1 << 30
-    monkeypatch.setattr(model_evict, "need_of", lambda server, model: 6 * GIB if model == "chat-9b" else None)
+    monkeypatch.setattr(model_load, "held_sizes", lambda server, max_age_s=None: {"chat-9b": (7, 6 * GIB)})
     readings = iter([(32 * GIB, 20 * GIB), (32 * GIB, 20 * GIB), (32 * GIB, 19 * GIB), (32 * GIB, 14 * GIB)])
     seen = []
 
@@ -609,14 +620,14 @@ def test_a_switch_counts_the_room_once_the_driver_shows_the_old_model_gone(platf
         return got
     monkeypatch.setattr(resident, "_card", card)
     asked_after = []
-    from app import model_evict as me
-    monkeypatch.setattr(me, "room_before_load", lambda s, m: asked_after.append(list(seen)) or None)
-    worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
+    monkeypatch.setattr(model_evict, "make_room_for",
+                        lambda s, m, **k: asked_after.append(list(seen)) or model_evict.Outcome(True))
+    worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None, busy=lambda: False)
     assert asked_after == [[20, 20, 19, 14]], "the room asked once the card shows half the 9B given back"
 
 
 def test_a_switch_waiting_for_room_stops_waiting_when_the_model_is_loaded_meanwhile(platform, monkeypatch):
-    """The keeper's beat (or a question) may load it while the switch waits:
+    """The keeper's beat, or a question, may load it while the switch waits:
     counted then, the model's own bytes would read as a card with no room."""
     from app import model_load
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
@@ -625,43 +636,102 @@ def test_a_switch_waiting_for_room_stops_waiting_when_the_model_is_loaded_meanwh
     asked = _rooms(monkeypatch, False)
     monkeypatch.setattr(model_load, "loaded_models",
                         lambda server, *a, **k: {"chat-35b"} if len(asked) >= 2 else set())
-    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None, busy=lambda: False)
     assert len(asked) == 2 and got["loaded"] is True, "it stopped waiting once the model was there"
 
 
-def test_a_switch_leaves_the_load_to_a_question_that_comes_while_it_waits(platform, monkeypatch, capsys):
-    """THE READ OF 2026-11-26: a question releases the corpus pins and loads its
-    own models, the chat model first; a room asked beside it could unload what
-    it just loaded."""
+def test_a_switch_asks_no_room_beside_a_call_running_and_never_stops_for_one(platform, monkeypatch):
+    """THE READS: a question's load ahead makes its own room, and one made
+    beside it could unload what it just loaded — but read off the claim, a
+    keeper's warm and a question's linger stopped the switch, and read off marks
+    of its own, overlapping questions and every route outside the Ask page
+    were missed. The switch asks no room while a call RUNS, and goes on after."""
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     runner = _Runner(monkeypatch)
     node_mode.switch("query", by="test")
-    asked = _rooms(monkeypatch, False)
-    looks = []
+    asked = _rooms(monkeypatch, True)
+    calls = iter([True, True, False])                    # a keeper's warm, for two polls
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None,
+                              busy=lambda: next(calls, False))
+    assert asked == ["chat-35b"] and got["loaded"] is True, "asked once the call ended, and loaded"
 
-    def question():
-        looks.append(1)
-        return len(looks) > 1                       # none at the first ask; one comes during the wait
-    got = worker._mode_models("embed", "query", question=lambda: False, question_meanwhile=question,
-                              sleep=lambda s: None)
-    assert got["loaded"] is False and ("warm", "chat-35b") not in runner.calls and len(asked) == 1
-    assert "a person's question holds the card: it loads its models itself" in capsys.readouterr().out
+
+def test_a_call_that_holds_the_card_for_the_whole_wait_leaves_the_load_to_the_first_question(
+        platform, monkeypatch, capsys):
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    asked = _rooms(monkeypatch, True)
+    clock = _Clock()
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=clock.sleep, clock=clock,
+                              busy=lambda: True)
+    assert asked == [] and got["loaded"] is False and ("warm", "chat-35b") not in runner.calls
+    assert "a call held the card for the whole 240 s" in capsys.readouterr().out
+
+
+def test_a_call_is_running_while_its_claim_is_refreshed_and_a_linger_is_none(monkeypatch):
+    from app.rage import dispatch
+    now = time.time()
+    monkeypatch.setattr(dispatch, "claim_until", lambda: now + 4.0)
+    assert worker._live_call() is True, "refreshed to a TTL ahead: a call runs"
+    monkeypatch.setattr(dispatch, "claim_until", lambda: now + 240.0)
+    assert worker._live_call() is False, "a question's linger holds no model"
+    monkeypatch.setattr(dispatch, "claim_until", lambda: now - 1.0)
+    assert worker._live_call() is False
+    monkeypatch.setattr(dispatch, "claim_until", lambda: None)
+    assert worker._live_call() is False
+
+
+def test_a_real_interactive_call_pauses_the_switch_and_a_linger_does_not(platform, isolated_config, monkeypatch):
+    """The real claim, not a stand-in (the fourth read: every switch test
+    stubbed the question)."""
+    import threading
+    from app import node_state
+    from app.rage import dispatch
+    from app.rage.dispatch import Level
+    node_state.connect().close()
+    monkeypatch.setattr(dispatch, "_board", dispatch._Board())
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    _Runner(monkeypatch)
+    node_mode.switch("query", by="test")
+    inside, release = threading.Event(), threading.Event()
+
+    def call():
+        with dispatch.interactive(Level.CHAT):
+            inside.set()
+            release.wait(5)
+    t = threading.Thread(target=call, daemon=True)
+    t.start()
+    assert inside.wait(5)
+    try:
+        assert worker._live_call() is True
+    finally:
+        release.set()
+        t.join(5)
+    assert worker._live_call() is False, "ended: the claim is let go"
+    with dispatch.question(linger=300.0):
+        pass
+    assert worker._live_call() is False, "a question's linger is no call running"
 
 
 def test_a_switch_back_ends_the_first_switchs_wait(platform, monkeypatch, capsys):
-    """THE READ: thread A (embed→query) kept asking the 35B's room under embed
-    mode's rule after the switch back, then warmed CHAT_MODEL — the 9B by then
-    — and said "chat-35b loaded"."""
+    """THE SECOND READ: thread A (embed→query) kept asking the 35B's room after
+    the switch back. A switch back starts a newer thread: A stops."""
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     runner = _Runner(monkeypatch)
     node_mode.switch("query", by="test")
     asked = _rooms(monkeypatch, False)
+    gen = worker._mode_gen[0]
 
     def sleep(s):
-        node_mode.switch("embed", by="test")           # the operator switches back meanwhile
-    got = worker._mode_models("embed", "query", question=lambda: False, sleep=sleep)
+        worker._mode_gen[0] = gen + 1                     # `_start_mode_models` for the switch back
+    try:
+        got = worker._mode_models("embed", "query", question=lambda: False, sleep=sleep, busy=lambda: False,
+                                  gen=gen)
+    finally:
+        worker._mode_gen[0] = gen
     assert got["loaded"] is False and len(asked) == 1 and not [c for c in runner.calls if c[0] == "warm"]
-    assert "the node switched again (now embed, chat model chat-9b)" in capsys.readouterr().out
+    assert "a newer switch owns the models" in capsys.readouterr().out
 
 
 def test_a_switch_joins_a_load_in_flight_and_asks_no_room_for_it(platform, monkeypatch):
@@ -671,22 +741,41 @@ def test_a_switch_joins_a_load_in_flight_and_asks_no_room_for_it(platform, monke
     node_mode.switch("query", by="test")
     asked = _rooms(monkeypatch, False)
     monkeypatch.setattr(model_load, "in_flight", lambda server, model: model == "chat-35b")
-    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None, busy=lambda: False)
     assert asked == [] and got["loaded"] is True, "the keeper's flight: the warm joins it"
 
 
+def test_a_switch_waits_for_a_load_of_the_old_model_before_it_unloads_it(platform, monkeypatch):
+    """THE FOURTH READ, run: switched back during the older switch's 75 s load,
+    `unload` found the model not listed and did nothing; the load then ended,
+    and both chat models were resident in embed mode."""
+    from app import model_load
+    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
+    runner = _Runner(monkeypatch, loaded=("chat-35b",))
+    node_mode.switch("embed", by="test")
+    _rooms(monkeypatch, True)
+    loading = [3]
+
+    def in_flight(server, model):
+        if model == "chat-35b" and loading[0] > 0:
+            loading[0] -= 1
+            return True
+        return False
+    monkeypatch.setattr(model_load, "in_flight", in_flight)
+    slept = []
+    worker._mode_models("query", "embed", question=lambda: False, sleep=slept.append, busy=lambda: False)
+    assert loading[0] == 0 and slept[:3] == [1.0, 1.0, 1.0], "waited for the load to end"
+    assert runner.calls[0] == ("unload", "chat-35b"), "then unloaded it"
+
+
 def test_a_switch_makes_a_partial_room_once(platform, monkeypatch, capsys):
-    """THE READ, run: a refusal that unloaded something (a victim kept by
-    LocalAI's pin, a park refused) was asked again every 5 s — the same models
-    stopped three times in 120 s as the keeper loaded them back."""
-    from app import model_evict
+    """THE READ, run: a refusal that unloaded something was asked again every
+    5 s — the same models stopped three times in 120 s."""
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     runner = _Runner(monkeypatch)
     node_mode.switch("query", by="test")
-    asked = []
-    monkeypatch.setattr(model_evict, "room_before_load", lambda server, model: asked.append(1) or model_evict.Outcome(
-        False, unloaded=("vega-a",), why="chat-35b: 7,023 of 21,715 MiB made"))
-    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
+    asked = _rooms(monkeypatch, False, why="chat-35b: 7,023 of 21,715 MiB made", unloaded=("vega-a",))
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None, busy=lambda: False)
     assert len(asked) == 1 and got["loaded"] is False
     out = capsys.readouterr().out
     assert "chat-35b not loaded now — no room on the card (chat-35b: 7,023 of 21,715 MiB made)" in out
@@ -700,9 +789,8 @@ def test_a_parked_chat_model_gets_its_room_asked(platform, monkeypatch):
     asked = _rooms(monkeypatch, True)
     monkeypatch.setattr(model_load, "loaded_models", lambda server, *a, **k: {"chat-35b"})
     monkeypatch.setattr(model_load, "parked", lambda server: {"chat-35b": (1, 2)})
-    worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
+    worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None, busy=lambda: False)
     assert asked == ["chat-35b"], "parked is not loaded: its return needs its room"
-
 
 
 def test_a_switch_back_during_the_answers_wait_unloads_nothing(platform, monkeypatch, capsys):
@@ -711,49 +799,17 @@ def test_a_switch_back_during_the_answers_wait_unloads_nothing(platform, monkeyp
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     runner = _Runner(monkeypatch)
     node_mode.switch("query", by="test")
+    gen = worker._mode_gen[0]
 
     def sleep(s):
-        node_mode.switch("embed", by="test")
-    got = worker._mode_models("embed", "query", question=lambda: True, sleep=sleep)
+        worker._mode_gen[0] = gen + 1
+    try:
+        got = worker._mode_models("embed", "query", question=lambda: True, sleep=sleep, busy=lambda: False,
+                                  gen=gen)
+    finally:
+        worker._mode_gen[0] = gen
     assert runner.calls == [] and got["unloaded"] is False and got["loaded"] is False
-    assert "the node switched again (now embed, chat model chat-9b)" in capsys.readouterr().out
-
-
-def test_only_a_persons_question_stops_the_switch_never_a_claim_or_a_keepers_warm(platform, monkeypatch):
-    """THE SECOND READ: a claim lingers five minutes after a question, and read
-    as live it stopped a cron job's switch. THE THIRD: the keeper's own warms
-    (`llm.warm`, the reranker's) hold the claim and rewrite it, and one ended
-    the switch as "a person's question". Only `dispatch.question`'s mark is."""
-    from app.rage import dispatch
-    platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
-    runner = _Runner(monkeypatch)
-    node_mode.switch("query", by="test")
-    monkeypatch.setattr(dispatch, "claim_until", lambda: time.time() + 240)      # lingering, and rewritten
-    marks = [(time.time() - 60, time.time() - 50)]                             # the last question ended
-    monkeypatch.setattr(dispatch, "question_marks", lambda: marks[-1])
-    _rooms(monkeypatch, False, True)
-
-    def sleep(s):
-        dispatch._board.enter()                                                 # a keeper's warm meanwhile
-        dispatch._board.leave()
-    got = worker._mode_models("embed", "query", question=lambda: False, sleep=sleep)
-    assert got["loaded"] is True, "a claim, lingering or rewritten, is no question"
-    node_mode.switch("embed", by="test")
-    node_mode.switch("query", by="test")
-    _rooms(monkeypatch, False, True)
-
-    def asks(s):
-        marks.append((time.time() + 1, marks[-1][1]))                          # a person asks now
-    got = worker._mode_models("embed", "query", question=lambda: False, sleep=asks)
-    assert got["loaded"] is False, "a person's question: it loads its own models"
-
-
-def test_the_answers_wait_waits_for_a_persons_question_in_flight_not_a_lingering_claim(platform, monkeypatch):
-    from app.rage import dispatch
-    monkeypatch.setattr(dispatch, "question_marks", lambda: (100.0, 200.0))
-    assert worker._question_in_flight() is False, "ended: its linger is no answer in flight"
-    monkeypatch.setattr(dispatch, "question_marks", lambda: (300.0, 200.0))
-    assert worker._question_in_flight() is True
+    assert "a newer switch owns the models" in capsys.readouterr().out
 
 
 def test_the_rounds_own_switch_thread_stops_if_the_node_switched_back_before_it_began(platform, monkeypatch, capsys):
@@ -763,35 +819,36 @@ def test_the_rounds_own_switch_thread_stops_if_the_node_switched_back_before_it_
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     runner = _Runner(monkeypatch)
     node_mode.switch("embed", by="test")                  # already back when the thread starts
-    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None, expect="query")
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None, expect="query",
+                              busy=lambda: False)
     assert runner.calls == [] and got["unloaded"] is False and got["loaded"] is False
     assert "the node switched again" in capsys.readouterr().out
 
 
-def test_a_newer_switch_ends_the_older_switchs_thread(platform, monkeypatch):
+def test_a_switch_makes_its_room_in_every_run_mode(platform, monkeypatch):
+    """THE FOURTH READ, run: in query mode with its run set to seed-only or
+    paused, the cold-load hook makes no room for a preload, and the switch's
+    load went into embed mode's encoders unsaid. The switch is the operator's
+    own act: its room is made whatever the run mode."""
+    from app import node_state
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
-    runner = _Runner(monkeypatch)
+    _Runner(monkeypatch)
     node_mode.switch("query", by="test")
-    _rooms(monkeypatch, False)
-    gen = worker._mode_gen[0]
-
-    def sleep(s):
-        worker._mode_gen[0] = gen + 1                     # `_start_mode_models` for a newer switch
-    try:
-        got = worker._mode_models("embed", "query", question=lambda: False, sleep=sleep, gen=gen)
-        assert got["loaded"] is False and not [c for c in runner.calls if c[0] == "warm"]
-    finally:
-        worker._mode_gen[0] = gen
+    monkeypatch.setattr(node_state, "peek_worker_state", lambda: "seed-only")
+    asked = _rooms(monkeypatch, True)
+    got = worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None, busy=lambda: False)
+    assert asked == ["chat-35b"] and got["loaded"] is True
 
 
 def test_into_a_mode_that_does_not_embed_the_old_modes_idle_pins_go_at_once(platform, monkeypatch):
     """THE SECOND READ: the pins the switch waited for go PIN_IDLE_S after
-    their last batch and at the next beat — 120 to 180 s — and the wait gave
-    up before. Into query mode, which embeds nothing, they go now (RULE 1)."""
-    from app import model_pins
+    their last batch and at the next beat — 120 to 180 s. Into query mode,
+    which embeds nothing, they go now (RULE 1)."""
+    from app import model_pins, resident
     platform('[models]\nchat_large = "chat-35b"\nchat_small = "chat-9b"\n')
     _Runner(monkeypatch)
     node_mode.switch("query", by="test")
+    monkeypatch.setattr(resident, "node_embeds", lambda state=None: False)
     released = []
     monkeypatch.setattr(model_pins, "release", lambda holder, *a, **k: released.append(holder))
     with worker._pins_lock:
@@ -799,7 +856,7 @@ def test_into_a_mode_that_does_not_embed_the_old_modes_idle_pins_go_at_once(plat
         worker._pins["worker embed pubmed"] = [1, time.time()]            # a batch in flight: kept
     try:
         _rooms(monkeypatch, True)
-        worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None)
+        worker._mode_models("embed", "query", question=lambda: False, sleep=lambda s: None, busy=lambda: False)
         assert released == ["worker embed wikipedia"]
     finally:
         with worker._pins_lock:
