@@ -1327,6 +1327,8 @@ def source_entries(hits: list[dict], reads: list | None = None,
             "reader": reader,
             # the work's first publication, as its record states it (05 §5.3), and by whom where not its own
             "first_published": h.get("first_published"), "first_published_by": h.get("first_published_by"),
+            # what the record states the work is (retrieval.work_verdict), as the answer was told it
+            "work": h.get("work"),
             "editions": [{"uid": e.get("uid"), "title": e.get("title"), "lang": e.get("lang"),
                           "held": bool(e.get("held"))} for e in h.get("editions") or []],
             "annotations": [{"type": a.get("type"), "uid": (a.get("record") or {}).get("uid"),

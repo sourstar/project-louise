@@ -121,6 +121,14 @@ def _origin_url(collection, hit: dict[str, Any]) -> str | None:
         return None
 
 
+def _work_said(hit: dict[str, Any]) -> str | None:
+    from app import retrieval
+    try:
+        return retrieval._work_said(hit) or None
+    except Exception:   # noqa: BLE001 — a framing is a courtesy, never the search's failure
+        return None
+
+
 def result_of(collection, ctx: dict[str, Any], hit: dict[str, Any], rank: int, *, own_key: str | None,
               reranked: bool) -> dict[str, Any]:
     """One hit as 05 §5.3 carries it."""
@@ -138,6 +146,11 @@ def result_of(collection, ctx: dict[str, Any], hit: dict[str, Any], rank: int, *
         "title": hit.get("title"), "authors": hit.get("authors"), "lang": hit.get("lang"),
         "first_published": hit.get("first_published"),
         "first_published_by": hit.get("first_published_by"),
+        # what the record states the work is, and the header the answer's model
+        # is given (retrieval.work_verdict, _work_said): every answer path frames
+        # a source alike (architecture, 2026-11-26)
+        "work": hit.get("work"),
+        "work_said": _work_said(hit),
         "figures": ctx["figures"], "reranked": reranked,
         "credits": ctx.get("credits") or [],
     }

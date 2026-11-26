@@ -11,14 +11,14 @@ from app import api, ask_pdf, retrieval
 
 NAPOLEON = {"chunk_id": "gutenberg:42:0:1", "book_id": 42, "title": "Il cinque maggio", "authors": "Manzoni",
             "lang": "it", "text": "Ei fu. Siccome immobile…", "first_published": 1821,
-            "work_subjects": ("Napoleon I, Emperor of the French, 1769-1821 -- Poetry",)}
+            "subjects": "Napoleon I, Emperor of the French, 1769-1821 -- Poetry"}
 # "by": where the year is not the record's own plain statement — today only
 # PG's automatic summary (app/ask/works.py attach_first_published); never an
 # annotation's claim, which no code sets as first_published
 HISTORY = {"chunk_id": "gutenberg:7:0:1", "book_id": 7, "title": "History of Napoleon", "authors": "Abbott",
            "lang": "en", "text": "He died in 1821.", "first_published": 1855,
            "first_published_by": "PG's automatic summary",
-           "work_subjects": ("Napoleon I, Emperor of the French, 1769-1821",)}
+           "subjects": "Napoleon I, Emperor of the French, 1769-1821"}
 BARE = {"chunk_id": "gutenberg:9:0:1", "book_id": 9, "title": "Untitled", "authors": "?", "lang": "en",
         "text": "Some text."}
 
@@ -60,10 +60,10 @@ def test_a_literary_work_is_told_by_its_subject_headings_form_never_by_a_word_in
     no = ["Romance languages -- Grammar", "Rome -- History -- Empire, 30 B.C.-476 A.D.",
           "Drama -- History and criticism", "English poetry -- History and criticism",
           "Napoleon I, Emperor of the French, 1769-1821", "France -- History -- 1789-1815",
-          "Fiction -- Technique", "Romanticism", "Universe", "Bible stories", "Bible stories, English"]
+          "Fiction -- Technique", "Romanticism", "Universe"]
     assert [s for s in yes if not retrieval.literary(s)] == []
     assert [s for s in no if retrieval.literary(s)] == []
-    _, user = _sources({**BARE, "work_subjects": "France -- History -- 1789-1815 | Historical fiction"})
+    _, user = _sources({**BARE, "subjects": "France -- History -- 1789-1815 | Historical fiction"})
     assert "a literary work" in user, "subjects as PG's flat string too"
 
 
@@ -229,3 +229,39 @@ def test_through_the_real_stages_and_search_each_record_says_what_it_is(isolated
     novel, law = heads.get("2600", ""), heads.get("5", "")
     assert "a literary work (by its subject headings)" in novel and "Gutenberg category: Historical Novels" in novel
     assert "a literary work" not in law and "opinion" not in law and "LCC JK, KF" in law
+
+
+# ---- architecture's last read, 2026-11-26: the verdict on every path ---------
+
+WAR_AND_PEACE = {"chunk_id": "gutenberg:2600:0:1", "book_id": 2600, "uid": "gutenberg:2600", "title": "War and Peace",
+                 "authors": "Tolstoy", "lang": "en", "text": "Napoleon…",
+                 "subjects": "Napoleonic Wars, 1800-1815 -- Campaigns -- Russia -- Fiction | Historical fiction | PG",
+                 "bookshelves": "Category: Historical Novels | Category: Novels"}
+
+
+def test_the_reader_sees_the_verdict_beside_the_source_as_the_model_was_told_it():
+    hit = {**WAR_AND_PEACE, "work": retrieval.work_verdict(WAR_AND_PEACE)}
+    assert hit["work"] == {"kind": "a literary work", "basis": "by its subject headings"}
+    assert api.source_entries([hit])[0]["work"] == hit["work"]
+    from app import web
+    html = web.TEMPLATES.env.get_template("_ask_results.html").render(
+        result={"hits": [hit], "catalog": [], "facts": [], "timings": {}})
+    assert 'data-work' in html and "a literary work · by its subject headings" in html
+    assert ask_pdf._work_shown(hit) == "a literary work · by its subject headings"
+    doc = ask_pdf.AskPdf(question="q", answer="[1]", references=[ask_pdf.PdfReference(
+        n=1, title="War and Peace", work="a literary work · by its subject headings")])
+    pdf = ask_pdf.build_html(doc, base_url="https://ask.example.org", node="n",
+                             when=datetime(2026, 11, 26, tzinfo=timezone.utc))
+    assert "a literary work · by its subject headings" in pdf
+
+
+def test_the_other_answer_path_frames_a_source_alike():
+    """/ask/chat, MCP and the PDF built from a question: the same header and
+    the same rule as /v1/chat/completions and the Ask tab."""
+    from app.ask import chat, results
+    hit = {**WAR_AND_PEACE, "work_said": retrieval._work_said(WAR_AND_PEACE)}
+    shown = chat.shown_search("Napoleon", {"lists": [{"hits": [hit]}]}, chat.Sources(), translated=False)
+    assert "a literary work (by its subject headings)" in shown
+    import inspect
+    assert "retrieval.WORK_RULE" in inspect.getsource(chat._ask)
+    assert "\"work_said\": _work_said(hit)" in inspect.getsource(results.result_of)

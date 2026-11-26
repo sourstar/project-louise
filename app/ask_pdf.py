@@ -139,8 +139,10 @@ class PdfReference(BaseModel):
     lang: str | None = Field(default=None, max_length=32)
     collection: str | None = Field(default=None, max_length=256)
     authors: str | None = Field(default=None, max_length=MAX_SHORT)
-    #: the work's first publication as the page shows it ("1880", "1880 · by Wikidata")
+    #: the work's first publication as the page shows it ("1880", "1880 · by PG's automatic summary")
     first_published: str | None = Field(default=None, max_length=MAX_SHORT)
+    #: what its record states the work is, as the page shows it ("a literary work · by its subject headings")
+    work: str | None = Field(default=None, max_length=MAX_SHORT)
     chapter: str | None = Field(default=None, max_length=MAX_SHORT)
     passage: str = Field(default="", max_length=MAX_PASSAGE)
     #: the language the shown passage was translated INTO; None: as published
@@ -529,6 +531,7 @@ def build_html(doc: AskPdf, *, base_url: str, node: str, when: datetime,
             "lang": r.lang, "lang_name": language_name(r.lang) if r.lang else None,
             "collection": r.collection, "authors": (r.authors or "").strip() or None,
             "first_published": (r.first_published or "").strip() or None,
+            "work": (r.work or "").strip() or None,
             "chapter": (r.chapter or "").strip() or None,
             "passage": r.passage.strip(), "dir": direction(r.translated_to or r.lang),
             "translated_from": (language_name(r.lang) if r.translated_to and r.translated_to != r.lang
@@ -648,11 +651,18 @@ def _reference(n: int, hit: dict, names: dict[str, str]) -> PdfReference:
         lang=_cut(hit.get("lang"), 32) or None, collection=_cut(name, 256) or None,
         authors=_cut(hit.get("authors"), MAX_SHORT) or None, chapter=_cut(hit.get("chapter"), MAX_SHORT) or None,
         first_published=_cut(_year_said(hit), MAX_SHORT) or None,
+        work=_cut(_work_shown(hit), MAX_SHORT) or None,
         passage=_cut(hit.get("passage") if hit.get("passage") is not None else hit.get("text"), MAX_PASSAGE),
         origin_url=_cut(hit.get("origin_url"), 4096) or None,
         book=book, chunk=_cut(hit.get("chunk_id"), 512) if book else None,
         plates=_hit_plates(hit, hit.get("source_collection") or name),
         read=hit["read"] if isinstance(hit.get("read"), bool) else None)
+
+
+def _work_shown(hit: dict) -> str | None:
+    """What a hit's record states its work is, as the page shows it."""
+    w = hit.get("work")
+    return f"{w['kind']} · {w['basis']}" if isinstance(w, dict) and w.get("kind") else None
 
 
 def _year_said(hit: dict) -> str | None:

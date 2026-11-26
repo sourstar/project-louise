@@ -1357,7 +1357,13 @@ def _attach_metadata_and_enqueue(con, collection, hits: list[dict]) -> None:
             # read as a genre they would call an encyclopedia literature
             # (architecture, 2026-11-26)
             if collection.plugin in CLASSIFIED_PLUGINS:
-                meta[int(r["native_id"])].update(subjects=r["subjects"] or "", bookshelves=r["bookshelves"] or "")
+                one = meta[int(r["native_id"])]
+                one.update(subjects=r["subjects"] or "", bookshelves=r["bookshelves"] or "")
+                # what the record states its work is, for the page, the
+                # answer's sources and its PDF (`work_verdict`); absent: none
+                verdict = work_verdict(one)
+                if verdict:
+                    one["work"] = verdict
     for h in hits:
         h.update(meta.get(h["book_id"], {}))
         h.pop("rrf", None)
@@ -1930,8 +1936,6 @@ def literary(subject: str) -> bool:
         return False
     main = re.sub(r"\s*\([^)]*\)\s*$", "", parts[0])          # "(Tragedy)", "(Literary genre)"
     main = re.sub(r",\s*[^,]+$", "", main)                        # ", American", ", Greek", ", English"
-    if re.match(r"^bible\b", main, re.IGNORECASE):
-        return False
     return parts[-1].lower() in LITERARY_FORMS or bool(LITERARY_HEADING.match(main))
 
 
@@ -1954,11 +1958,43 @@ OPINION_SHELVES = frozenset(s.casefold() for s in (
 #: and a bare genre heading (a form subdivision "-- Fiction" still stands)
 NONFICTION_SUBDIVISIONS = frozenset(("biography", "history and criticism", "criticism and interpretation",
                                      "technique", "description and travel", "sources"))
-#: scripture, wherever in a heading the record says it: "Bible", "Taoism --
-#: Sacred books", "Theravada Buddhism -- Sacred texts", "Koran" (the real
-#: records: KJV #10 and #30, Book of Mormon #17, Tao Te Ching #216,
-#: Dhammapada #2017 — shelved as Poetry, as Religion, as Mythology)
-SCRIPTURE = re.compile(r"^(sacred books|sacred texts|bible|koran|qur.an|talmud|vedas|upanishads)\b", re.IGNORECASE)
+#: SCRIPTURE, as its record writes it (architecture, 2026-11-26, over PG's
+#: 78,518 texts): a heading that IS a scripture — its title alone, or with
+#: "-- Selections" / "-- Paraphrases" ("Bible", "Qur'an", "Mishnah. Avot",
+#: "Tipitaka. … Jataka -- Paraphrases, English"), or one carrying "-- Sacred
+#: books" / "-- Sacred texts" ("Taoism -- Sacred books"), or its stories
+#: ("Bible stories", "Book of Mormon stories", "Jataka stories") — every
+#: religion alike. A heading ABOUT a scripture is no scripture: its
+#: criticism, its sermons, "Bible and science" follow the rule of any work,
+#: and its events retold with a literary form ("Bible. Genesis -- History of
+#: Biblical events -- Poetry", Ben-Hur's "-- Fiction", "Bible plays") are
+#: literature like any other. Scripture gets no verdict at all: one work on
+#: two shelves must not be framed two ways (invariant 4).
+SCRIPTURE_TITLES = ("bible", "qur'an", "quran", "koran", "talmud", "mishnah", "midrash", "vedas", "upanishads",
+                    "tipitaka", "book of mormon", "bhagavadgita", "puranas")
+SCRIPTURE_STORIES = SCRIPTURE_TITLES + ("jataka",)
+SCRIPTURE_OWN = ("selections", "paraphrases")
+
+
+def scripture(heading: str) -> bool:
+    """Whether one subject heading says its record IS a scripture."""
+    parts = [p.strip().rstrip(".").casefold() for p in str(heading).split("--")]
+    if not parts or not parts[0]:
+        return False
+    if any(p.startswith(("sacred books", "sacred texts")) for p in parts[1:]):
+        return True
+    main = parts[0].replace("’", "'")
+    if any(re.match(rf"^{re.escape(t)} stories\b", main) for t in SCRIPTURE_STORIES):
+        return True
+    title = main.split(".")[0].strip()
+    if title.split(" (")[0] not in SCRIPTURE_TITLES:
+        return False
+    return all(p.startswith(SCRIPTURE_OWN) for p in parts[1:])
+
+
+#: satire is a literary work's own mode: its "argument" is the author's
+#: invention, never their view (A Modest Proposal, #1080)
+SATIRE = re.compile(r"\bsatire\b", re.IGNORECASE)
 #: a BARE genre heading is a topic: a work ABOUT poetry (Aristotle's Poetics,
 #: Shelley's Defence of Poetry) as often as a book of poems
 BARE_GENRES = frozenset(("poetry", "drama", "fiction"))
@@ -1985,11 +2021,12 @@ def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -
     where nothing in the record states it is a life, a history, a travel
     account, sources or scripture, an exact PG form shelf, LCC PZ, or a
     bare genre heading on a record with no essay or philosophy shelf and no
-    LCC PN. Opinion or belief: only the three exact PG shelves that say so.
+    LCC PN. Opinion or belief: only the two exact PG shelves that say so (Essays, Letters & Speeches;
+    Philosophy & Ethics), never on a satire.
     Scripture gets no verdict at all: the same work on two shelves must not
     be framed two ways (invariant 4, no point of view by default)."""
     cats = {c.casefold() for c in categories}
-    if any(SCRIPTURE.match(p.strip()) for x in subjects for p in x.split("--")):
+    if any(scripture(x) for x in subjects):
         return None
     if any(literary(x) and _main_heading(x).casefold() not in BARE_GENRES or
            (len(x.split("--")) > 1 and x.split("--")[-1].strip().casefold() in LITERARY_FORMS)
@@ -2005,9 +2042,21 @@ def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -
         if any(_main_heading(x).casefold() in BARE_GENRES and len(x.split("--")) == 1 for x in subjects) \
                 and not (cats & OPINION_SHELVES) and not any(c.startswith("PN") for c in classes):
             return ("a literary work", "by its subject headings")
-    if cats & OPINION_SHELVES:
+    if cats & OPINION_SHELVES and not any(SATIRE.search(x) for x in subjects):
         return ("a work of opinion or belief", "by its Gutenberg category")
     return None
+
+
+def work_verdict(h: dict) -> dict | None:
+    """What a hit's own record states its work is — {"kind", "basis"} — for
+    the page, the answer's sources and its PDF; None where it states neither
+    (the same verdict the answer's header gives, `_work_kind`)."""
+    every = _split(h.get("subjects"))
+    classes = [x for x in every if LCC.match(x)]
+    subjects = [x for x in every if not LCC.match(x)]
+    categories = [x[len(CATEGORY):].strip() for x in _split(h.get("bookshelves")) if x.startswith(CATEGORY)]
+    got = _work_kind(subjects, categories, classes)
+    return {"kind": got[0], "basis": got[1]} if got else None
 
 
 def _split(v) -> list[str]:
@@ -2028,8 +2077,10 @@ def _work_said(h: dict) -> str:
     if year:
         by = h.get("first_published_by")
         parts.append(f"first published {year}" + (f" (by {by})" if by else ""))
-    every = _split(h.get("work_subjects")) or _split(h.get("subjects"))
-    classes = [x for x in _split(h.get("subjects")) if LCC.match(x)]
+    # `subjects` only: set on the live path for CLASSIFIED_PLUGINS records alone
+    # (`work_subjects`, of a path no longer run, is never read: architecture, 2026-11-26)
+    every = _split(h.get("subjects"))
+    classes = [x for x in every if LCC.match(x)]
     subjects = [x for x in every if not LCC.match(x)]
     categories = [x[len(CATEGORY):].strip() for x in _split(h.get("bookshelves")) if x.startswith(CATEGORY)]
     kind = _work_kind(subjects, categories, classes)

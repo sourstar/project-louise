@@ -1375,6 +1375,7 @@ function pdfReferences(){
             lang:lang==='?'?null:lang, collection:h.dataset.collection||null,
             authors:shown(h.querySelector('[data-authors]'))||null, chapter:shown(ch)||null, passage:shown(s),
             first_published:shown(h.querySelector('[data-first-published]'))||null,
+            work:shown(h.querySelector('[data-work]'))||null,
             translated_to:tl(s), origin_url:src?src.href:null, book:h.dataset.book||null,
             chunk:h.dataset.cid||null, moved_by:[...h.querySelectorAll('[data-moved]')].map(shown),
             read:readOf(i), plates:pdfPlates(h)};

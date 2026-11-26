@@ -93,6 +93,7 @@
     {%- if r.lang_name %}<span class="tag">{{ r.lang_name }}</span>{% endif %}
     {%- if r.authors %} {{ r.authors }}{% endif %}
     {%- if r.first_published %} · first published {{ r.first_published }}{% endif %}
+    {%- if r.work %} · {{ r.work }}{% endif %}
     {%- if r.chapter %} · section “{{ r.chapter }}”{% endif %} · rank {{ r.n }} of {{ total }}
     {%- for m in r.moved_by %} · {{ m }}{% endfor %}</div>
   {% if r.passage %}<blockquote class="passage" dir="{{ r.dir }}">{{ r.passage }}{% if r.translated_from %} <span class="tr-note">· translated from {{ r.translated_from }}</span>{% endif %}</blockquote>{% endif %}
