@@ -23,6 +23,13 @@ num2words==0.5.14
 # with the Noto fonts by the Dockerfile). Its dependencies are pinned in
 # constraints.txt with it.
 weasyprint==70.0
+# THE PREVIEW OF A TIFF PLATE (operator, 2026-11-26, "Option A": the node
+# renders a PNG of EUR-Lex's pictures; app/ask/preview.py). Pillow's TIFF
+# plugin over its bundled libtiff, run in a child process over bytes whose
+# header our own reader has held to caps first. NOT a new package in the
+# image: WeasyPrint has brought it since 2026-11-11 and constraints.txt pins
+# it — declared here because this node now calls it itself.
+pillow==12.3.0
 # PINNED (2026-10-23): the text index is part of what peers must agree on (05 §5.1:
 # the same list on every peer with the same members), and a new tantivy may tokenize
 # or stem differently — 0.27.0 changed the Greek stemmer (Perugia's image build,
