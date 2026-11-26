@@ -163,6 +163,26 @@ def statement(folder: Path) -> tuple[str, datetime] | str:
     return lang, created
 
 
+def dump_folders(base: Path) -> list[Path]:
+    """The folders under `base` that are one language's dump: a folder that
+    states itself (`datadump.json`) or holds zips at any depth, as before;
+    and, where a folder states nothing but holds folders that DO state
+    themselves, those folders instead, one level down (a dated dump:
+    `dump-2026-11-15/datadump-<lang>/`, 2026-11-26), the MTD's own folder
+    among them passed over unless it states itself."""
+    out: list[Path] = []
+    for p in sorted(q for q in Path(base).iterdir() if q.is_dir()):
+        if (p / STATEMENT).is_file():
+            out.append(p)
+            continue
+        stated = [c for c in sorted(q for q in p.iterdir() if q.is_dir()) if (c / STATEMENT).is_file()]
+        if stated:
+            out += stated
+        elif next(p.rglob("*.zip"), None) is not None:
+            out.append(p)                   # zips and no statement: said, as before
+    return out
+
+
 class Dumps:
     """The dumps under `EURLEX_DATADUMP_DIR`, one language open at a time
     per need (LRU of OPEN_LANGUAGES). Thread-safe."""
@@ -177,19 +197,27 @@ class Dumps:
         self._mtd_lock = threading.Lock()
 
     def _scan(self) -> dict[str, tuple[Path, datetime]]:
+        """Each language's NEWEST dump, by its statement's `created`
+        (2026-11-26: a whole dump of 2026-11-15, 601 GB, sat a level down as
+        `dump-2026-11-15/datadump-<lang>/`, and only the 11-08 cut at the top
+        was read, so the bulk-first check never saw the newer one)."""
         out: dict[str, tuple[Path, datetime]] = {}
         if self.base is None or not self.base.is_dir():
             return out
-        for folder in sorted(p for p in self.base.iterdir() if p.is_dir()):
-            if not (folder / STATEMENT).is_file() and next(folder.rglob("*.zip"), None) is None:
-                continue                    # not a dump: another folder of the same place
+        for folder in dump_folders(self.base):
             got = statement(folder)
             if isinstance(got, str):
                 self.log(f"[datadump] {got}")
                 continue
             lang, created = got
             if lang in out:
-                self.log(f"[datadump] {folder}: a second dump of {lang} ({out[lang][0]} kept)")
+                older, newer = sorted([out[lang], (folder, created)], key=lambda fc: fc[1])
+                if older[1] == newer[1]:
+                    self.log(f"[datadump] {folder}: a second dump of {lang} of the same date ({out[lang][0]} kept)")
+                    continue
+                self.log(f"[datadump] {lang}: the dump of {newer[1].isoformat()} ({newer[0]}) is used, "
+                         f"not the older one of {older[1].isoformat()} ({older[0]})")
+                out[lang] = newer
                 continue
             out[lang] = (folder, created)
         return out
