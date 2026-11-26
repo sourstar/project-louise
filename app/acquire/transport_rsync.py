@@ -230,7 +230,7 @@ class RsyncTransport:
             # THE WRITER INHERITS THE CLAIM'S LOCK (`claim.passing_locks`): its
             # holder killed, the lock lives as long as this rsync writes the
             # `.part` in place
-            with acquire_claim.passing_locks() as fds:
+            with acquire_claim.passing_locks(progress_path) as fds:
                 proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                          text=True, start_new_session=True, pass_fds=fds)
         except FileNotFoundError as e:

@@ -65,7 +65,11 @@ measured (published figures disagree).
   it lives as long as the last writer of a `.part`; `hold records fetch` and `hold update` read another
   process's fetch as a deferral (exit 3; waiting, never a try); the pause of a fetch begun before the first
   lock take reaches it. Not changed: the retry deadlines stay on the wall clock — a clock stepped back
-  delays a retry at most to the collection's next discovery, which asks the fetch itself.
+  delays a retry at most to the collection's next discovery, which asks the fetch itself. The eighth read
+  (safe to merge): a writer is handed its OWN pass's lock only (`scope`, the corpus it writes) — handed
+  every lock, an orphaned rsync of one collection kept another's after the worker died. Recorded, not
+  changed: a dead holder's row still reads "in progress" on the Library card, and puts a refused retry off,
+  for up to 305 s where no lock is taken to tell; a lock probe would refuse a real taker instead.
 
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
   `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"

@@ -501,3 +501,24 @@ def test_a_writer_child_keeps_the_lock_after_its_holder_is_killed(con):
                 os.kill(child, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+def test_a_writer_is_handed_its_own_passs_lock_and_no_other(tmp_path):
+    """THE EIGHTH READ, run: an rsync was handed every lock the process held;
+    the worker SIGKILLed, an orphaned rsync of one collection kept another's
+    lock, and that one's fetch waited for it. Only the lock of the pass whose
+    corpus the writer writes."""
+    a_dir, b_dir = tmp_path / "a", tmp_path / "b"
+    con_a = db.connect(_collection(a_dir.mkdir() or a_dir))
+    con_b = db.connect(_collection(b_dir.mkdir() or b_dir))
+    with claim_mod.acquisition_claim(con_a, "a", scope=a_dir / "corpus"), \
+            claim_mod.acquisition_claim(con_b, "b", scope=b_dir / "corpus"):
+        fd_a = claim_mod._held_fds[str(claim_mod.lock_path(con_a))][0]
+        fd_b = claim_mod._held_fds[str(claim_mod.lock_path(con_b))][0]
+        with claim_mod.passing_locks(a_dir / "corpus" / "x" / "f.zip.part") as fds:
+            assert fds == (fd_a,)
+        with claim_mod.passing_locks(b_dir / "corpus" / "f.zip.part") as fds:
+            assert fds == (fd_b,)
+        with claim_mod.passing_locks(None) as fds:
+            assert fds == (), "a writer that names nothing it writes is handed no scoped lock"
+    assert claim_mod._held_fds == {}

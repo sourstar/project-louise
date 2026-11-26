@@ -136,26 +136,31 @@ def _record(source_id: str, now: float, locked: bool = False) -> str:
 
 
 #: the lock files this process holds now (`acquisition_claim`), by path, with
-#: their descriptors: a renewal keeps saying so (`refresh_claim`), and a
-#: fetch's rsync is handed them (`passing_locks`)
-_held_fds: dict[str, int] = {}
+#: their descriptors and the corpus each pass writes (its `scope`): a renewal
+#: keeps saying so (`refresh_claim`), and a fetch's rsync is handed its own
+#: (`passing_locks`)
+_held_fds: dict[str, tuple[int, "Path | None"]] = {}
 _fds_lock = threading.Lock()
 
 
 @contextmanager
-def passing_locks():
-    """The descriptors of the locks this process holds, for a child that
+def passing_locks(writes: "Path | None" = None):
+    """The descriptor of the lock whose pass writes `writes`, for a child that
     WRITES the corpus to inherit (`subprocess.Popen(pass_fds=...)`): an flock
     belongs to its open file description, so the lock then lives as long as
     the last writer — a holder SIGKILLed while its rsync writes a `.part`
     `--inplace` leaves the lock held until that rsync ends, and no successor
-    starts a second one on the same file (the seventh read, run). Held while
-    the child is started, so no descriptor is closed under it. Every lock the
-    process holds goes to the child; another collection's pass still lets go
-    of its own at its end (`LOCK_UN` on the shared description), so a child
-    keeps nobody else's lock past its holder."""
+    starts a second one on the same file (the seventh read, run). ONLY that
+    pass's lock (the eighth read, run: handed every lock the process held, an
+    orphaned rsync of one collection kept every other collection's lock after
+    the worker died, and their fetches waited for it); a lock taken with no
+    scope goes to every writer, as nothing tells which it is. Held while the
+    child is started, so no descriptor is closed under it."""
+    from pathlib import Path
+    target = Path(writes).resolve() if writes is not None else None
     with _fds_lock:
-        yield tuple(_held_fds.values())
+        yield tuple(fd for fd, scope in _held_fds.values()
+                    if scope is None or (target is not None and target.is_relative_to(scope)))
 
 
 def _age(claim: dict, now: float) -> float:
@@ -237,7 +242,7 @@ def _busy(source_id: str, existing: dict | None, now: float, why: str, retry_in:
 
 
 @contextmanager
-def acquisition_claim(con, source_id: str, force: bool = False):
+def acquisition_claim(con, source_id: str, force: bool = False, scope: "Path | None" = None):
     """Claim acquisition for `source_id`, or raise AcquisitionBusy.
 
     THE CLAIM IS AN FLOCK on `acquire.lock` beside the manifest (the standard
@@ -253,6 +258,9 @@ def acquisition_claim(con, source_id: str, force: bool = False):
     before. `force` takes the row without the lock, as before — and over a
     live holder's: its renewals then match no row, and the Library shows the
     forcing process (no caller in app/ passes it; kept for the command line).
+
+    `scope`: the corpus the pass writes — its writers are handed this lock
+    and no other (`passing_locks`).
 
     Released on the way out even if the body raises."""
     path = lock_path(con)
@@ -298,8 +306,9 @@ def acquisition_claim(con, source_id: str, force: bool = False):
                 os.close(fd)
         raise
     if fd is not None:
+        from pathlib import Path
         with _fds_lock:
-            _held_fds[str(path)] = fd
+            _held_fds[str(path)] = (fd, Path(scope).resolve() if scope is not None else None)
     try:
         yield
     finally:

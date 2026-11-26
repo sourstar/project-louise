@@ -1219,7 +1219,7 @@ def _run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
     with _listing_bound(stop, priority):
         spec = effective_spec(collection, spec, profile,   # peer plane, when the TOML says so
                               stop=stop)
-    with claim_mod.acquisition_claim(con, spec.source_id):
+    with claim_mod.acquisition_claim(con, spec.source_id, scope=getattr(collection, "corpus_dir", None)):
         keepalive = _ClaimKeepalive(collection, spec.source_id)
         keepalive.start()
         try:
