@@ -1892,7 +1892,7 @@ WORK_RULE = (
     "A time span or a 'now' in a source (\"dead these hundred years\", \"today\") counts from that "
     "work's first publication, when its header gives one: date it from that year, never from today; "
     "where the header gives none, do not turn it into a date. Where its header says a work of opinion or "
-    "belief (essays, letters, speeches, philosophy, religion, politics), what it states is its author's "
+    "belief, what it states is its author's "
     "view: attribute it (\"X argues …\", \"according to X …\"), never present it as established fact. "
     "A date's source is named where the header names it (\"by …\")."
 )
@@ -1935,34 +1935,71 @@ def literary(subject: str) -> bool:
     return parts[-1].lower() in LITERARY_FORMS or bool(LITERARY_HEADING.match(main))
 
 
-#: PG's own shelves of kind ("Category: Novels", "Category: Essays, Letters &
-#: Speeches", "Category: History - European"): what the work IS, by the
-#: shelf's NAME (a word of it, these names being kinds, not topics)
+#: PG's own shelves of FORM, by their exact names (after "Category: "): what
+#: the work IS. Its other shelves are TOPICS — Adventure, Humour, Mythology,
+#: History - Religious, Politics — and a topic says nothing of fiction or
+#: opinion: they made Anabasis, Plutarch, The Golden Bough, the US
+#: Constitution and the Maastricht Treaty literature or opinion
+#: (architecture, 2026-11-26, on 37,334 texts of PG's catalogue)
+LITERARY_SHELVES = frozenset(s.casefold() for s in (
+    "Novels", "Historical Novels", "Short Stories", "Poetry", "Plays/Films/Dramas",
+    "Science-Fiction & Fantasy", "Romance", "Crime, Thrillers and Mystery", "Crime, Thrillers & Mystery"))
+OPINION_SHELVES = frozenset(s.casefold() for s in (
+    "Essays, Letters & Speeches", "Philosophy & Ethics", "Religion/Spirituality"))
+#: the record's own statements that it is NOT invention — a life, a history
+#: of a literature, a travel account, sources, scripture: they veto a shelf
+#: and a bare genre heading (a form subdivision "-- Fiction" still stands)
+NONFICTION_SUBDIVISIONS = frozenset(("biography", "history and criticism", "criticism and interpretation",
+                                     "technique", "description and travel", "sources"))
+SCRIPTURE = re.compile(r"^(sacred books|bible)\b", re.IGNORECASE)
+#: a BARE genre heading is a topic: a work ABOUT poetry (Aristotle's Poetics,
+#: Shelley's Defence of Poetry) as often as a book of poems
+BARE_GENRES = frozenset(("poetry", "drama", "fiction"))
 CATEGORY = "Category:"
-CATEGORY_LITERARY = re.compile(r"\b(novels?|fiction|short stories|poetry|drama|plays|theatre|humou?r|"
-                               r"mythology|legends|folklore|fairy tales|romance|adventure|mystery|crime)\b",
-                               re.IGNORECASE)
-CATEGORY_OPINION = re.compile(r"\b(essays|letters|speeches|philosophy|ethics|religio\w*|spirituality|"
-                              r"politics|opinion|sermons|theology)\b", re.IGNORECASE)
-#: Library of Congress Classification, as PG's records carry it (its class
-#: letters, "PQ", "DC", "PZ"): PZ is fiction in English and juvenile
-#: fiction; B but BF (psychology) is philosophy and religion. The other
-#: literature classes (PA-PT) hold criticism and the classics' histories
-#: too: they are named, never read as fiction.
-LCC = re.compile(r"^[A-Z]{1,3}$")
+#: Library of Congress Classification, as PG's records carry it ("PQ", "DC",
+#: "PZ", "E300", "F590.3"): PZ is fiction in English and juvenile fiction.
+#: The other literature classes (PA-PT) hold criticism and the classics'
+#: histories too: named, never read as fiction. PN is literature in general
+#: (its theory, its history).
+LCC = re.compile(r"^[A-Z]{1,3}(?:\d+(?:\.\d+)?)?$")
 
 
-def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -> str | None:
-    """What a record says its work IS — "a literary work", "a work of
-    opinion or belief" — or None where it says neither. Its own subject
-    headings' form first (`literary`), then PG's category shelves, then its
-    LCC class."""
-    if any(literary(x) for x in subjects) or any(CATEGORY_LITERARY.search(c) for c in categories) \
-            or "PZ" in classes:
-        return "a literary work"
-    if any(CATEGORY_OPINION.search(c) for c in categories) \
-            or any(c.startswith("B") and not c.startswith("BF") for c in classes):
-        return "a work of opinion or belief"
+def _main_heading(subject: str) -> str:
+    main = str(subject).split("--")[0].strip().rstrip(".")
+    main = re.sub(r"\s*\([^)]*\)\s*$", "", main)
+    return re.sub(r",\s*[^,]+$", "", main).strip()
+
+
+def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -> tuple[str, str] | None:
+    """What a record STATES its work is — ("a literary work" | "a work of
+    opinion or belief", the basis) — or None where it states neither.
+
+    Literary: a heading's form ("-- Fiction", "Historical fiction"); else,
+    where nothing in the record states it is a life, a history, a travel
+    account, sources or scripture, an exact PG form shelf, LCC PZ, or a
+    bare genre heading on a record with no essay or philosophy shelf and no
+    LCC PN. Opinion or belief: only the three exact PG shelves that say so.
+    Scripture gets no verdict at all: the same work on two shelves must not
+    be framed two ways (invariant 4, no point of view by default)."""
+    cats = {c.casefold() for c in categories}
+    if any(SCRIPTURE.match(x) for x in subjects):
+        return None
+    if any(literary(x) and _main_heading(x).casefold() not in BARE_GENRES or
+           (len(x.split("--")) > 1 and x.split("--")[-1].strip().casefold() in LITERARY_FORMS)
+           for x in subjects):
+        return ("a literary work", "by its subject headings")
+    vetoed = any(p.strip().rstrip(".").casefold() in NONFICTION_SUBDIVISIONS
+                 for x in subjects for p in x.split("--")[1:])
+    if not vetoed:
+        if cats & LITERARY_SHELVES:
+            return ("a literary work", "by its Gutenberg category")
+        if "PZ" in classes:
+            return ("a literary work", "by its Library of Congress class")
+        if any(_main_heading(x).casefold() in BARE_GENRES and len(x.split("--")) == 1 for x in subjects) \
+                and not (cats & OPINION_SHELVES) and not any(c.startswith("PN") for c in classes):
+            return ("a literary work", "by its subject headings")
+    if cats & OPINION_SHELVES:
+        return ("a work of opinion or belief", "by its Gutenberg category")
     return None
 
 
@@ -1990,7 +2027,7 @@ def _work_said(h: dict) -> str:
     categories = [x[len(CATEGORY):].strip() for x in _split(h.get("bookshelves")) if x.startswith(CATEGORY)]
     kind = _work_kind(subjects, categories, classes)
     if kind:
-        parts.append(kind)
+        parts.append(f"{kind[0]} ({kind[1]})")
     if categories:
         parts.append("Gutenberg category: " + "; ".join(categories[:4])[:160])
     if classes:

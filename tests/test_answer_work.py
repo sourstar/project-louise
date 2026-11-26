@@ -30,7 +30,8 @@ def _sources(*hits) -> str:
 
 def test_each_source_says_its_first_publication_and_whether_it_is_a_literary_work():
     system, user = _sources(NAPOLEON, HISTORY, BARE)
-    assert "[1] gutenberg:42 — Il cinque maggio — Manzoni (it) — first published 1821 — a literary work — " \
+    assert "[1] gutenberg:42 — Il cinque maggio — Manzoni (it) — first published 1821 — a literary work " \
+           "(by its subject headings) — " \
            "subjects: Napoleon I, Emperor of the French, 1769-1821 -- Poetry" in user
     assert "[2] gutenberg:7 — History of Napoleon — Abbott (en) — first published 1855 (by PG\'s automatic summary) — " \
            "subjects: Napoleon I, Emperor of the French, 1769-1821" in user
@@ -84,20 +85,51 @@ def test_gutenbergs_category_shelves_and_class_say_fiction_fact_or_opinion():
     tag to determine what's fiction, what's a fact and what's an opinion"."""
     novel = retrieval._work_said({"subjects": "Napoleon I, Emperor of the French, 1769-1821 | PQ",
                                   "bookshelves": "Category: Novels | Category: Historical Fiction | Best Books Ever"})
-    assert novel.startswith(" — a literary work — Gutenberg category: Novels; Historical Fiction — LCC PQ")
+    assert novel.startswith(" — a literary work (by its Gutenberg category) — Gutenberg category: Novels; "
+                            "Historical Fiction — LCC PQ")
     assert "Best Books" not in novel, "a shelf that is not a category is not said"
     essay = retrieval._work_said({"subjects": "Liberty | JC",
                                   "bookshelves": "Category: Essays, Letters & Speeches | Category: Politics"})
-    assert essay.startswith(" — a work of opinion or belief — ")
+    assert essay.startswith(" — a work of opinion or belief (by its Gutenberg category) — ")
     history = retrieval._work_said({"subjects": "France -- History -- 1789-1815 | DC",
                                     "bookshelves": "Category: History - European"})
     assert "a literary work" not in history and "opinion" not in history
     assert "Gutenberg category: History - European — LCC DC" in history
-    assert retrieval._work_said({"subjects": "Ethics | BJ"}).startswith(" — a work of opinion or belief")
-    assert "opinion" not in retrieval._work_said({"subjects": "Psychology | BF"}), "BF is psychology"
+    assert "opinion" not in retrieval._work_said({"subjects": "Etiquette | BJ"}), "a class is a topic, not a stance"
     assert retrieval._work_said({"subjects": "Animals -- Juvenile fiction | PZ"}).startswith(" — a literary work")
     assert "a literary work" not in retrieval._work_said({"subjects": "Shakespeare -- Criticism | PR"}), \
         "PA-PT hold criticism too: named, never read as fiction"
+    assert "LCC E300" in retrieval._work_said({"subjects": "United States -- History | E300"}), "an LCC with digits"
+
+
+def test_a_topic_shelf_says_nothing_and_the_records_own_nonfiction_vetoes_a_form_shelf():
+    """Architecture's read, 2026-11-26, over PG's catalogue: topic shelves
+    (Adventure, Humour, Mythology, History - Religious, Politics) made
+    Anabasis, Plutarch and the US Constitution literature or opinion; a
+    biography on a Poetry shelf was called a poem; a bare "Poetry" heading
+    made Aristotle's Poetics literary; scripture was framed two ways.
+    PROVISIONAL records, shaped as PG's; the real ones from their RDF are to
+    replace them (gutenberg.org was down for maintenance)."""
+    w = retrieval._work_said
+    for shelves in ("Category: Adventure", "Category: Humour", "Category: Mythology, Legends & Folklore"):
+        assert "a literary work" not in w({"subjects": "Greece -- History -- Expedition of Cyrus, 401 B.C. | PA",
+                                           "bookshelves": shelves}), shelves
+    for shelves in ("Category: History - Religious", "Category: Politics"):
+        assert "opinion" not in w({"subjects": "United States -- Constitution | KF", "bookshelves": shelves}), shelves
+    assert "a literary work" not in w({"subjects": "Browning, Robert, 1812-1889 -- Biography | PR",
+                                       "bookshelves": "Category: Biographies | Category: Poetry"}), "a life vetoes"
+    assert "a literary work" not in w({"subjects": "Mississippi River -- Description and travel",
+                                       "bookshelves": "Category: Humour | Category: Short Stories"})
+    poetics = w({"subjects": "Poetry | PN", "bookshelves": "Category: Philosophy & Ethics"})
+    assert "a literary work" not in poetics and "opinion or belief (by its Gutenberg category)" in poetics
+    assert w({"subjects": "Poetry | PQ"}).startswith(" — a literary work (by its subject headings)"), \
+        "a bare Poetry heading on a book of poems still counts"
+    assert w({"subjects": "Fourth dimension | QA", "bookshelves": "Category: Science-Fiction & Fantasy"}) \
+        .startswith(" — a literary work (by its Gutenberg category)"), "Flatland: the shelf is all it says"
+    for subj, shelf in (("Bible | BS", "Category: Religion/Spirituality"), ("Bible | BS", "Category: Poetry"),
+                        ("Sacred books -- China", "Category: Philosophy & Ethics")):
+        said = w({"subjects": subj, "bookshelves": shelf})
+        assert "a literary work" not in said and "opinion" not in said, ("scripture: no verdict", said)
     system, _ = _sources(BARE)
     assert "what it states is its author's view" in system
 
@@ -172,5 +204,6 @@ def test_through_the_search_a_novels_record_says_so_in_the_answers_header(isolat
     assert out["hits"], out
     _, user = retrieval.build_answer_messages("Julien Sorel", out)[0:2]
     head = user["content"].split("[1]")[1].split("\n")[0]
-    assert "a literary work — Gutenberg category: Novels — LCC PQ — subjects: France -- History -- 1815-1830 -- Fiction" \
+    assert "a literary work (by its subject headings) — Gutenberg category: Novels — LCC PQ — subjects: " \
+           "France -- History -- 1815-1830 -- Fiction" \
         in head, head
