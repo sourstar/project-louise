@@ -1036,3 +1036,64 @@ then 0022: `aa88ab5c356a`. Another engine, a build and every gate; it touches
 the speech port's request path only. If `d658549772ca` is not gated yet it
 can be gated in its place — one gating for both — or it rides the park
 engine, whose series starts from these lines.
+
+## 15. A clip's last word is kept: the fade-out lasts as long as the silence it fades (2026-11-26)
+
+The operator hears the last word cut at full stops when reading aloud.
+München measured the 40 newest kept clips on the node: every clip ends in
+100 ms of pad; the gap between its last chunk above -50 dBFS and the end of
+the fade is 0 ms in 11, 10–30 ms in 13, 40–90 ms in 6, 100 ms or more in
+10; in the worst speech at -20…-35 dBFS runs right into the pad, and
+`f2ff332553` loses a syllable. The architecture session, from the WAVs:
+30 of 40 clips fade speech, 24 of them with under 40 ms of their own silence.
+
+**The defect, the reference's, ported 1:1.** `finish()` trims the trailing
+silence to at most 100 ms (`remove_silence`, as `omnivoice/utils/audio.py`),
+then fades the last 100 ms linearly to zero WHATEVER THEY HOLD
+(`fade_and_pad`, as `fade_and_pad_audio`). A clip with 100 ms of its own
+silence loses nothing; one whose audio ends at its last word, or keeps
+10–40 ms after it, has the word faded away.
+
+**The fix (staged 0030, inner `0024-mtmd-omnivoice-fade-out-ends-with-the-kept-silence.patch`;
+the architecture session's design).** `remove_silence` says how much
+trailing silence it kept; `fade_and_pad` takes the fade-out apart from the
+fade-in; the fade-out lasts as long as that kept silence, at most 100 ms
+(the fade-in's very sample count) and never under 5 ms, so that a cut at a
+sample is never a click (`fade_out_for_kept_trail`). The trim, the level,
+the fade-in and the pad are unchanged. It DEPARTS FROM upstream's
+`fade_and_pad_audio` and says so where it does. And with
+`MTMD_DEBUG_OMNIVOICE=<dir>` the joined audio is dumped before any trim or
+fade, `audio-joined.bin` (int32 n_dims, int32 shape, float32 samples).
+
+| | |
+|---|---|
+| the patch's own test, standalone (`tools/mtmd/tests/test-trailing-fade.cpp`, 14 cases), compiled by the repository's test on the header the staged patches build | MEASURED: 14 of 14. A tone that runs to 20 ms before the clip's end: none of it attenuated, where upstream attenuated 1,919 samples (80 ms). A tone that runs to the end: only its last 5 ms, the last sample at zero. 150 ms of silence: the clip is upstream's to the byte, the fade-in too |
+| three sentences end to end on a CPU build (the live engine's tree + 0030, `llama-tts`, seed 7, four threads), each WAV against its dumped audio post-processed by hand | MEASURED: each WAV is the fixed post-processing of its joined audio, sample for sample. Two end in their own 100 ms of silence: fade and bytes as before. The third (`Il poema racconta un viaggio.`) has its audio END IN SPEECH, -27.6 dBFS over its last 100 ms: upstream's fade took those 100 ms and 81 % of their energy, the fixed one 5 ms (99 % kept) |
+| the live clips on the card | NOT measured: the engine is not built. Deploying it is the operator's word |
+
+**The engine.** `engine-fade.series` = `engine-park.series` (the live
+`ed93e3c1b2e2`) line for line, then 0030: **`aea955022a8f`**. Another engine, a
+build and every gate; only the speech pipeline's last 100 ms change, so no
+other model's answer can move.
+
+**The kept clips (app/speech.py).** They were keyed on the request alone
+(model, voice, language, words, steps), so a fixed engine would have been
+answered with the old one's clips for every sentence already read. They are
+keyed now on the request AND the engine LocalAI names for the model
+(`model_load.backend_of`, the package name carries the engine's id): a swap
+makes every sentence again, without a tag to bump at each engine and
+whatever the order of the app's deploy and the swap. Where the engine is not
+known (the model not loaded) nothing is served from the drive; what is made
+is kept under the engine that answered. A test holds it
+(tests/test_speech.py).
+
+**(b), still open: does the model's own predicted length cut words?** The
+third sentence above says it can END IN SPEECH: its audio as the model gave
+it, before any trim, has -27.6 dBFS in its last 100 ms. Whether that is a
+word cut or a word's natural tail is for the ear. The probe on the card,
+after the fix and on the same sentences: `MTMD_DEBUG_OMNIVOICE=<dir>` in a
+COPY's env, then `audio-joined.bin` is the audio with `finish()` bypassed.
+
+**(c)**, the phone flushing its buffer at `ended`, can still be heard on top:
+it is the voice rework's, measured on the phone after this fix.
+

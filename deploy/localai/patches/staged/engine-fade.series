@@ -1,0 +1,39 @@
+# A CANDIDATE: A CLIP'S LAST WORD IS KEPT (the speech port's fade-out;
+# docs/notes/omnivoice-on-our-backend.md §15). engine-park.series, the LIVE
+# engine ed93e3c1b2e2, line for line, then:
+#   0030  the fade-out lasts as long as the trailing silence the trim kept
+#         (at most 100 ms, never under 5 ms), where it faded the last 100 ms
+#         whatever they held: a clip ending at its word kept the word faded
+#         away (30 of 40 clips read aloud faded speech). A clip with 100 ms
+#         of its own silence is the same bytes as before. And the joined
+#         audio before any trim or fade, dumped with MTMD_DEBUG_OMNIVOICE.
+#   SERIES_FILE=deploy/localai/patches/staged/engine-fade.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
+# ANOTHER ENGINE: a build and every gate again. Only the speech port's
+# post-processing changes, and only a clip's last 100 ms; no other model's
+# answer can move (the patch touches tools/mtmd's speech pipeline alone).
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0009-llama-cpp-omnivoice.patch
+staged/0010-llama-cpp-tts-voice-modes.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch
+staged/0016-llama-cpp-sycl-pool-refuse-switch.patch
+staged/0017-llama-cpp-moe-record.patch
+staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch
+staged/0020-llama-cpp-omnivoice-nothing-kept-between-requests.patch
+staged/0021-llama-cpp-sycl-paging-is-the-default.patch
+staged/0022-llama-cpp-omnivoice-language-tag.patch
+staged/0025-llama-cpp-stream-fails-after-its-first-chunk.patch
+staged/0026-llama-cpp-sycl-graph-refuse-switch.patch
+staged/0023-llama-cpp-park-when-told.patch
+staged/0030-llama-cpp-omnivoice-fade-out-ends-with-the-kept-silence.patch

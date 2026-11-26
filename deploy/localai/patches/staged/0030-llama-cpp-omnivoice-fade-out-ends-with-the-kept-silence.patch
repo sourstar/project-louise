@@ -1,0 +1,370 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 26 Nov 2026 17:52:59 +0000
+Subject: [PATCH] fix(llama-cpp): OmniVoice keeps a clip's last word: the
+ fade-out lasts as long as the silence it fades
+
+Carried as a llama.cpp patch beside the others
+(patches/0024-mtmd-omnivoice-fade-out-ends-with-the-kept-silence.patch),
+after 0012-mtmd-omnivoice.patch, whose post-processing it changes.
+
+The post-processing of the reference trims a clip's trailing silence to at
+most 100 ms, then fades the last 100 ms to zero whatever they hold. A clip
+that ends at its last word has that word faded away: in 40 clips read
+aloud, 30 faded speech and one lost a whole syllable - heard at every full
+stop.
+
+The fade-out now lasts as long as the trailing silence the trim kept, at
+most 100 ms, never under 5 ms. A clip with 100 ms of its own silence is the
+same bytes as before; one ending at its word keeps the word. This departs
+from upstream's fade_and_pad_audio, and says so where it does.
+
+Checked: a standalone test of 14 cases, and three sentences end to end on a
+CPU build at a fixed seed - two unchanged, and the one ending in speech
+faded over 5 ms instead of 100.
+
+Assisted-by: Claude Code
+---
+ ...-fade-out-ends-with-the-kept-silence.patch | 330 ++++++++++++++++++
+ 1 file changed, 330 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0024-mtmd-omnivoice-fade-out-ends-with-the-kept-silence.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0024-mtmd-omnivoice-fade-out-ends-with-the-kept-silence.patch b/backend/cpp/llama-cpp/patches/0024-mtmd-omnivoice-fade-out-ends-with-the-kept-silence.patch
+new file mode 100644
+index 0000000..416ca5e
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0024-mtmd-omnivoice-fade-out-ends-with-the-kept-silence.patch
+@@ -0,0 +1,330 @@
++mtmd: OmniVoice - the fade-out lasts as long as the silence it fades, so a clip's last word is kept
++
++The post-processing of the reference (omnivoice/utils/audio.py), ported
++1:1, trims a clip's trailing silence to at most 100 ms and then fades the
++last 100 ms linearly to zero, whatever they hold. A clip with 100 ms of its
++own silence loses nothing. A clip that ends at its last word - the model's
++own length ends in speech, or the trim left 10-40 ms - has that word faded
++away: in 40 clips of the pipeline 30 faded speech, 24 of them with under
++40 ms of their own silence, and one lost a whole syllable. It is heard at
++every full stop.
++
++The fade-out now lasts as long as the trailing silence the trim KEPT, at
++most 100 ms (the fade-in's sample count), never under 5 ms, so a cut at a
++sample is never a click: remove_silence says how much it kept
++(kept_trail_n), fade_and_pad takes the fade-out apart from the fade-in
++(fade_out_n), fade_out_for_kept_trail() is the rule. A clip with 100 ms of
++its own silence comes out the same bytes as before; one ending at its word
++keeps the word, with a 5 ms ramp. The fade-in, the trim, the level and the
++pad are unchanged. THIS DEPARTS FROM upstream's fade_and_pad_audio, and says
++so where it does (audio-postproc.h).
++
++With MTMD_DEBUG_OMNIVOICE=<dir> the joined audio is also dumped before any
++trim or fade (audio-joined.bin): whether the model's own length cuts a word
++is read there, not in the finished clip.
++
++Checked: tools/mtmd/tests/test-trailing-fade.cpp, standard library only, 14
++cases - a tone that runs to 20 ms before the clip's end is not attenuated
++at all (upstream faded 80 ms of it), one that runs to the end only in its
++last 5 ms, and a clip with 150 ms of silence is upstream's to the byte, the
++fade-in too. And end to end on a CPU build, three sentences at a fixed
++seed: each WAV is the fixed post-processing of its dumped audio sample for
++sample; two that end in 100 ms of silence are unchanged, and in the one
++whose audio ends in speech (-27.6 dBFS in its last 100 ms) the fade now
++takes 5 ms of it, where it took 100 ms and 81 % of their energy.
++---
++diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
++index 5a90620..f72b2e7 100644
++--- a/tools/mtmd/mtmd-helper-gen.cpp
+++++ b/tools/mtmd/mtmd-helper-gen.cpp
++@@ -2118,7 +2118,22 @@ private:
++         if (audio.empty()) {
++             return false;
++         }
++-        ov::remove_silence(audio, info.sample_rate, 500, 100, 100, -50.0);
+++        // MTMD_DEBUG_OMNIVOICE: the audio as the model gave it, before any trim or fade - whether the model's own
+++        // length cuts a word is read there, not in the finished clip
+++        std::vector<float> raw_joined;
+++        if (trace_dir()) {
+++            raw_joined = audio;
+++        }
+++        // the trailing silence the trim kept: the fade-out lasts that long and no longer (at most 100 ms, at least
+++        // 5 ms), so that a clip ending at its last word does not have it faded away (audio-postproc.h, fade_and_pad)
+++        int kept_trail = 0;
+++        ov::remove_silence(audio, info.sample_rate, 500, 100, 100, -50.0, &kept_trail);
+++        if (trace_dir()) {
+++            trace_dump("audio-joined", raw_joined, { (int32_t) raw_joined.size() });
+++        }
+++        raw_joined.clear();
+++        raw_joined.shrink_to_fit();
+++        const int fade_out_n = ov::fade_out_for_kept_trail(kept_trail, info.sample_rate, 0.1);
++         if (voice_rms < 0.0f) {
++             // without a voice clip there is no level to follow: half scale at the peak
++             ov::peak_normalize_half(audio);
++@@ -2128,7 +2143,7 @@ private:
++                 v *= voice_rms / 0.1f;
++             }
++         }
++-        ov::fade_and_pad(audio, info.sample_rate, 0.1, 0.1);
+++        ov::fade_and_pad(audio, info.sample_rate, 0.1, 0.1, fade_out_n);
++         // the backbone context is the request's: between two requests only the weights stay loaded
++         backbone.reset();
++         n_rows_max = 0;
++diff --git a/tools/mtmd/tests/test-trailing-fade.cpp b/tools/mtmd/tests/test-trailing-fade.cpp
++new file mode 100644
++index 0000000..3d858d8
++--- /dev/null
+++++ b/tools/mtmd/tests/test-trailing-fade.cpp
++@@ -0,0 +1,124 @@
+++// The fade at the end of an OmniVoice clip (vendor/omnivoice/audio-postproc.h, fade_and_pad): the fade-out lasts
+++// only as long as the trailing silence the trim kept, so that a clip ending at its last word keeps the word.
+++// Standard library only:
+++//   c++ -std=c++17 -I vendor tools/mtmd/tests/test-trailing-fade.cpp -o test-trailing-fade && ./test-trailing-fade
+++
+++// the header's own standard headers first: it is included inside a namespace, as the pipeline includes it
+++#include <algorithm>
+++#include <cmath>
+++#include <cstdint>
+++#include <cstdio>
+++#include <cstring>
+++#include <utility>
+++#include <vector>
+++
+++namespace ov {
+++#include <omnivoice/audio-postproc.h>
+++} // namespace ov
+++
+++static const int SR = 24000;
+++static int failed = 0;
+++
+++static void expect(bool ok, const char * what) {
+++    if (!ok) {
+++        failed++;
+++    }
+++    printf("%s %s\n", ok ? "ok:  " : "FAIL:", what);
+++}
+++
+++// a tone of `tone_s` seconds, then `silence_s` of digital silence, in whole 10 ms chunks counted from the end
+++static std::vector<float> clip(double tone_s, double silence_s) {
+++    const int n_tone = (int) std::lround(tone_s * SR), n_sil = (int) std::lround(silence_s * SR);
+++    std::vector<float> a((size_t) (n_tone + n_sil), 0.0f);
+++    for (int i = 0; i < n_tone; i++) {
+++        a[(size_t) i] = 0.3f * (float) std::sin(2.0 * M_PI * 440.0 * i / SR);
+++    }
+++    return a;
+++}
+++
+++// finish()'s post-processing, as the pipeline runs it: the trim, the level (no voice clip: half scale at the peak),
+++// the fade and the pad. `upstream` is the fade before this change: the last 100 ms whatever they hold.
+++static std::vector<float> finished(std::vector<float> a, bool upstream, int * kept = nullptr) {
+++    int kept_trail = 0;
+++    ov::remove_silence(a, SR, 500, 100, 100, -50.0, &kept_trail);
+++    ov::peak_normalize_half(a);
+++    if (upstream) {
+++        ov::fade_and_pad(a, SR, 0.1, 0.1);
+++    } else {
+++        ov::fade_and_pad(a, SR, 0.1, 0.1, ov::fade_out_for_kept_trail(kept_trail, SR, 0.1));
+++    }
+++    if (kept) {
+++        *kept = kept_trail;
+++    }
+++    return a;
+++}
+++
+++// the same clip, trimmed and levelled but neither faded nor padded: what the tone is before the fade
+++static std::vector<float> levelled(std::vector<float> a) {
+++    ov::remove_silence(a, SR, 500, 100, 100, -50.0);
+++    ov::peak_normalize_half(a);
+++    return a;
+++}
+++
+++// how many samples before the end of the tone are attenuated: the clip's samples against the levelled ones
+++static int attenuated_before_tone_end(const std::vector<float> & out, const std::vector<float> & ref, int tone_end) {
+++    const int pad = SR / 10;
+++    int first = tone_end;
+++    for (int i = 0; i < tone_end; i++) {
+++        if (std::fabs(out[(size_t) (pad + i)]) + 1e-7f < std::fabs(ref[(size_t) i]) && i >= SR / 10) {
+++            first = i;
+++            break;
+++        }
+++    }
+++    return tone_end - first;
+++}
+++
+++int main() {
+++    const int ms5 = SR / 200, ms100 = SR / 10;
+++
+++    {   // the tone runs to 20 ms before the end: nothing of it is faded (upstream faded 80 ms of it)
+++        const std::vector<float> a = clip(1.0, 0.020);
+++        int kept = -1;
+++        const std::vector<float> out = finished(a, false, &kept), old = finished(a, true), ref = levelled(a);
+++        const int tone_end = (int) ref.size() - kept;
+++        expect(kept == SR / 50, "a clip ending 20 ms after its tone: the trim kept those 20 ms of silence");
+++        expect(out.size() == ref.size() + 2 * (size_t) ms100, "the pad, as before: 100 ms on each side");
+++        const int faded = attenuated_before_tone_end(out, ref, tone_end);
+++        printf("      the tone's samples attenuated at its end: %d (upstream %d)\n", faded, attenuated_before_tone_end(old, ref, tone_end));
+++        expect(faded <= ms5, "the tone is not attenuated beyond its last 5 ms");
+++        expect(attenuated_before_tone_end(old, ref, tone_end) > SR / 20, "(upstream faded more than 50 ms of the tone)");
+++    }
+++    {   // the tone runs to the very end: a 5 ms ramp, never a cut at a sample
+++        const std::vector<float> a = clip(1.0, 0.0);
+++        int kept = -1;
+++        const std::vector<float> out = finished(a, false, &kept), ref = levelled(a);
+++        expect(kept == 0, "a clip ending in its tone: no trailing silence kept");
+++        expect(attenuated_before_tone_end(out, ref, (int) ref.size()) <= ms5, "only its last 5 ms are faded");
+++        expect(out[out.size() - (size_t) ms100 - 1] == 0.0f, "and its last sample is brought to zero: no click");
+++    }
+++    {   // 150 ms of its own silence: the trim keeps 100 ms, and the clip is faded exactly as upstream, to the byte
+++        const std::vector<float> a = clip(1.0, 0.150);
+++        int kept = -1;
+++        const std::vector<float> out = finished(a, false, &kept), old = finished(a, true);
+++        expect(kept == ms100, "a clip with 150 ms of silence: the trim kept 100 ms of it");
+++        expect(out.size() == old.size() && std::memcmp(out.data(), old.data(), out.size() * sizeof(float)) == 0,
+++               "the clip is the same bytes as upstream's");
+++    }
+++    {   // the fade-in is upstream's whatever the end holds
+++        const std::vector<float> a = clip(1.0, 0.020);
+++        const std::vector<float> out = finished(a, false), old = finished(a, true);
+++        expect(std::memcmp(out.data(), old.data(), (size_t) (2 * ms100) * sizeof(float)) == 0,
+++               "the pad and the fade-in at the start are upstream's, to the byte");
+++    }
+++    {   // the rule itself
+++        expect(ov::fade_out_for_kept_trail(0, SR, 0.1) == ms5, "nothing kept: 5 ms");
+++        expect(ov::fade_out_for_kept_trail(480, SR, 0.1) == 480, "20 ms kept: 20 ms");
+++        expect(ov::fade_out_for_kept_trail(9000, SR, 0.1) == (int) (0.1 * SR), "more than 100 ms: 100 ms, upstream's count");
+++        int kept = -1;
+++        std::vector<float> none;
+++        ov::remove_silence(none, SR, 500, 100, 100, -50.0, &kept);
+++        expect(kept == 0, "an empty clip: nothing kept");
+++    }
+++    printf("%s\n", failed ? "FAILED" : "all passed");
+++    return failed ? 1 : 0;
+++}
++diff --git a/vendor/omnivoice/audio-postproc.h b/vendor/omnivoice/audio-postproc.h
++index 645b893..ce213aa 100644
++--- a/vendor/omnivoice/audio-postproc.h
+++++ b/vendor/omnivoice/audio-postproc.h
++@@ -197,12 +197,21 @@ static int postproc_detect_leading_silence(const std::vector<int16_t> & s16, dou
++ // pydub split_on_silence with keep_silence == mid_sil_ms), then trims the
++ // leading and trailing silences leaving lead_sil_ms / trail_sil_ms intact.
++ // thresh_db is the dBFS threshold (default -50 dBFS in upstream).
+++//
+++// kept_trail_n, where given, receives how many samples at the end of the
+++// result are the trailing silence that was KEPT: what the trailing scan found
+++// below the threshold, up to trail_sil_ms. 0 where the audio ends in sound.
+++// (Not upstream's: fade_and_pad's fade-out is held to it, see there.)
++ static void remove_silence(std::vector<float> & a,
++                            int                  sr,
++                            int                  mid_sil_ms,
++                            int                  lead_sil_ms,
++                            int                  trail_sil_ms,
++-                           double               thresh_db) {
+++                           double               thresh_db,
+++                           int *                kept_trail_n = nullptr) {
+++    if (kept_trail_n) {
+++        *kept_trail_n = 0;
+++    }
++     if (a.empty()) {
++         return;
++     }
++@@ -263,11 +272,14 @@ static void remove_silence(std::vector<float> & a,
++ 
++     std::reverse(s16.begin(), s16.end());
++ 
++-    int trim_trail = postproc_detect_leading_silence(s16, thresh_lin, chunk_n);
++-    trim_trail     = std::max(0, trim_trail - sr * trail_sil_ms / 1000);
+++    const int silent_trail = postproc_detect_leading_silence(s16, thresh_lin, chunk_n);
+++    int       trim_trail   = std::max(0, silent_trail - sr * trail_sil_ms / 1000);
++     if (trim_trail > 0) {
++         s16.erase(s16.begin(), s16.begin() + std::min(trim_trail, (int) s16.size()));
++     }
+++    if (kept_trail_n) {
+++        *kept_trail_n = std::min(silent_trail - trim_trail, (int) s16.size());
+++    }
++ 
++     std::reverse(s16.begin(), s16.end());
++ 
++@@ -333,31 +345,49 @@ static void peak_normalize_half(std::vector<float> & a) {
++ }
++ 
++ // fade_and_pad: linear fade-in / fade-out on the first and last fade_dur
++-// seconds, then pad pad_dur seconds of silence on each side. 1:1 port of
++-// fade_and_pad_audio in omnivoice/utils/audio.py.
++-static void fade_and_pad(std::vector<float> & a, int sr, double fade_dur, double pad_dur) {
+++// seconds, then pad pad_dur seconds of silence on each side. A port of
+++// fade_and_pad_audio in omnivoice/utils/audio.py, with ONE DEPARTURE:
+++//
+++// fade_out_n, where given (>= 0), is the fade-out's length in samples, apart
+++// from the fade-in's. Upstream fades the last 100 ms whatever they hold, and
+++// trims the trailing silence to at most 100 ms just before: a clip that ends
+++// at its last word, with little or none of its own silence left, has that
+++// word faded away - measured on 40 clips of the pipeline, 30 faded speech and
+++// one lost a syllable. The pipeline passes the trailing silence remove_silence
+++// kept (at most 100 ms) with a floor of 5 ms, so that a cut at a sample is
+++// never a click: a clip with 100 ms of its own silence is faded as upstream,
+++// to the same bytes; one that ends at its word keeps the word.
+++// fade_out_n < 0 (the default) is upstream's: the fade-out as long as the fade-in.
+++static int fade_out_for_kept_trail(int kept_trail_n, int sr, double fade_dur);
+++
+++static void fade_and_pad(std::vector<float> & a, int sr, double fade_dur, double pad_dur, int fade_out_n = -1) {
++     if (a.empty()) {
++         return;
++     }
++ 
++     int fade_n = (int) (fade_dur * (double) sr);
++     int pad_n  = (int) (pad_dur * (double) sr);
+++    int out_n  = fade_out_n < 0 ? fade_n : fade_out_n;
++ 
++-    if (fade_n > 0) {
++-        int k = std::min(fade_n, (int) a.size() / 2);
++-        if (k > 0) {
++-            int denom = std::max(k - 1, 1);
++-
++-            for (int i = 0; i < k; i++) {
++-                float w = (float) i / (float) denom;
++-                a[(size_t) i] *= w;
++-            }
++-
++-            for (int i = 0; i < k; i++) {
++-                float w = 1.0f - (float) i / (float) denom;
++-                a[a.size() - (size_t) k + (size_t) i] *= w;
+++    auto ramp = [&](int n, bool in) {
+++        int k = std::min(n, (int) a.size() / 2);
+++        if (k <= 0) {
+++            return;
+++        }
+++        int denom = std::max(k - 1, 1);
+++        for (int i = 0; i < k; i++) {
+++            if (in) {
+++                a[(size_t) i] *= (float) i / (float) denom;
+++            } else {
+++                a[a.size() - (size_t) k + (size_t) i] *= 1.0f - (float) i / (float) denom;
++             }
++         }
+++    };
+++    if (fade_n > 0) {
+++        ramp(fade_n, true);
+++    }
+++    if (out_n > 0) {
+++        ramp(out_n, false);
++     }
++ 
++     if (pad_n > 0) {
++@@ -367,6 +397,15 @@ static void fade_and_pad(std::vector<float> & a, int sr, double fade_dur, double
++     }
++ }
++ 
+++// The fade-out the pipeline asks of fade_and_pad (not upstream's; see there): as long as the trailing silence
+++// remove_silence kept, at most fade_dur - the same sample count as the fade-in, so that a clip with that much
+++// silence of its own is faded exactly as upstream - and never under 5 ms.
+++static int fade_out_for_kept_trail(int kept_trail_n, int sr, double fade_dur) {
+++    const int most  = (int) (fade_dur * (double) sr);
+++    const int least = std::min(sr / 200, most);
+++    return std::max(std::min(kept_trail_n, most), least);
+++}
+++
++ // cross_fade_chunks: concatenate audio chunks with a silence_dur gap split
++ // into fade_out, pure silence, fade_in. 1:1 port of cross_fade_chunks in
++ // omnivoice/utils/audio.py.
++-- 
++2.43.0
+-- 
+2.43.0
+

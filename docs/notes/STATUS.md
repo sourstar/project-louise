@@ -1138,6 +1138,14 @@ measured (published figures disagree).
   median, exact over 3 fresh loads and 300 fresh contexts. No park by the keeper yet. A ROLLBACK HAS ONE STEP MORE: `619655e5833b`
   does not park, and with the three lines left in a model's file the gate refuses its run ("the runner will not park it") — take
   them out first.
+- **A CLIP'S LAST WORD IS KEPT — STAGED, NOT BUILT (2026-11-26; omnivoice-on-our-backend.md §15):** the operator hears the last
+  word cut at full stops; München measured 30 of 40 clips fading speech, one losing a syllable. The speech port's fade-out (the
+  reference's, ported 1:1) took the last 100 ms whatever they held. Staged 0030: it lasts as long as the trailing silence the trim
+  kept, at most 100 ms, never under 5 ms; a clip with 100 ms of its own silence is the same bytes. MEASURED on a CPU build: the
+  patch's test 14 of 14; three sentences, each WAV the fixed post-processing of its raw audio sample for sample, the one ending in
+  speech faded over 5 ms instead of 100. Candidate `engine-fade.series` = the live series + 0030, `aea955022a8f`: its build and gates are
+  the operator's word. The kept clips are now keyed on the engine too (app/speech.py), so the swap serves no old clip. Open: (b)
+  whether the model's own length cuts words — the probe is the raw audio dumped with `MTMD_DEBUG_OMNIVOICE` on a copy.
 - **THE UPSTREAM DEFECTS SINCE B14 ARE WRITTEN OUT TO BE FILED (2026-11-26; the operator: "Write the defects for filing"):**
   [upstream-reports/mudler-localai.md](upstream-reports/mudler-localai.md) — B21 (a stream that fails after its first chunk ends
   as a complete answer), B24 (a settings write that never answers), B26 (`/backend/monitor` 500), B20 (a voice lease outliving its

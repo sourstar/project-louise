@@ -81,9 +81,12 @@ def _lines(path: Path) -> list[str]:
 
 def test_one_series_carries_it_after_the_stream_candidate_and_its_engine_s_name_is_held():
     assert _lines(SERIES) == _lines(BEFORE) + ["staged/" + PATCH.name]
+    # since it is the LIVE engine (2026-11-25 23:45:20Z) a candidate after it carries it too: as the live series
+    # line for line and then its own patches, never in any other place or order
     for series in (PATCHES / "series", *STAGED.glob("*.series")):
-        if series != SERIES:
-            assert "park-when-told" not in series.read_text(encoding="utf-8"), series.name
+        if series != SERIES and "park-when-told" in series.read_text(encoding="utf-8"):
+            assert _lines(series)[:len(_lines(SERIES))] == _lines(SERIES), \
+                f"{series.name} carries 0023 and is not the live series followed by its own patches"
     done = subprocess.run(["sh", str(BUILD), "sycl_f16", "/nonexistent"], capture_output=True, text=True,
                           env=dict(os.environ, SERIES_FILE=str(SERIES), NAME_ONLY="1"), cwd=ROOT)
     assert done.returncode == 0, done.stderr
