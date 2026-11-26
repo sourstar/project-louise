@@ -674,9 +674,11 @@ def configured_backend(url: str, model: str | None, max_age_s: float | None = No
 def engine_of(url: str, model: str | None, max_age_s: float | None = None) -> str | None:
     """THE ENGINE THAT ANSWERS `model`'s NEXT REQUEST, never loading it to
     learn it: the backend it is loaded on (`backend_of`), else — not loaded —
-    the one its config names for its next load (`configured_backend`). None
-    when neither can be read."""
-    return backend_of(url, model, max_age_s) or configured_backend(url, model)
+    the one its config names for its next load (`configured_backend`), each
+    from an answer at most `max_age_s` old (their own defaults where None;
+    0: read now, each bounded by PROBE_TIMEOUT_S). None when neither can be
+    read."""
+    return backend_of(url, model, max_age_s) or configured_backend(url, model, max_age_s)
 
 
 def backend_pid(url: str, model: str | None, max_age_s: float = INTERACTIVE_TTL_S) -> int | None:

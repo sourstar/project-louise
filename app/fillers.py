@@ -81,7 +81,8 @@ THE REQUEST'S THREAD IS BOUNDED: `ready` reads the profiles (cached
 PROFILES_TTL_S, 5 s at most a read), the loaded models (`/system`, cached
 SYSTEM_TTL_S, 2 s at most) and, the model not loaded, its config (cached
 CONFIG_TTL_S, 2 s at most), and one pool's directory; it never synthesises,
-never sweeps and never waits on the worker.
+never sweeps and never waits on the worker. `clip` reads the engine afresh
+(`/system` and the config, 2 s at most each).
 
 THE STANDARD ALTERNATIVE (CLAUDE.md, "Do not reinvent the wheel"):
 `concurrent.futures.ThreadPoolExecutor(max_workers=1)` is the named
@@ -319,15 +320,17 @@ def _steps(node: Any) -> int | None:
         return None
 
 
-def _key_now(want: Want, node: Any, held: list[dict]) -> tuple[str, str, str, int | None] | None:
+def _key_now(want: Want, node: Any, held: list[dict], *,
+             fresh: bool = False) -> tuple[str, str, str, int | None] | None:
     """(pool name, identity, engine, steps) of `want` NOW, or None where the
     voice's recording or the engine cannot be read — then nothing is served
-    and nothing made."""
+    and nothing made. `fresh`: the engine read now, not from the answers
+    kept (`clip`: a swap is seen at once, never CONFIG_TTL_S late)."""
     from app import model_load
     identity = voice_identity(want.voice, held)
     if identity is None:
         return None
-    engine = model_load.engine_of(want.url, want.model)
+    engine = model_load.engine_of(want.url, want.model, 0.0 if fresh else None)
     if not engine:
         return None
     steps = _steps(node)
@@ -483,7 +486,8 @@ def clip(clip_id: Any, *, admin: bool = True) -> tuple[bytes, str] | None:
     such clip, one this reader may not hear, or one whose WHOLE KEY is not
     the one the answer would be made under now: the server and model, the
     steps, the voice's recording, and the engine, which must be KNOWN and the
-    clip's. One of another engine is swept in the background."""
+    clip's — read afresh, never from a kept answer. One of another engine is
+    swept in the background."""
     from app import speech, voice as node_voice
     found = _find(clip_id)
     if found is None:
@@ -493,8 +497,10 @@ def clip(clip_id: Any, *, admin: bool = True) -> tuple[bytes, str] | None:
     url = node_voice.server()
     if meta.get("url") != url or meta.get("model") != node.tts_model or not _may_hear(meta, admin):
         return None
+    # the engine read NOW (2 s at most a read): the clip is about to be played, and a swap within the
+    # config's cache would otherwise serve the old engine's for up to CONFIG_TTL_S
     key = _key_now(Want(url, node.tts_model, meta.get("voice"), str(meta.get("lang"))), node,
-                   speech.profiles(url))
+                   speech.profiles(url), fresh=True)
     if key is None or key[0] != pool.name:
         if key is not None and key[2] != meta.get("engine"):
             schedule(Sweep(url, node.tts_model, key[2]))

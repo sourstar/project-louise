@@ -696,9 +696,19 @@ def live_anywhere(now: float | None = None) -> bool:
     a question's linger once it ends; a row at most the TTL ahead (a second's
     slack for the refresh) is a call running. The last TTL of a linger reads
     the same: a caller that waits on this waits those seconds more, never
-    less. Read now, never memoised; False where the store cannot be read."""
+    less. Read now, never memoised. A STORE THAT EXISTS AND CANNOT BE READ
+    (locked past its one-second wait, broken) is True — on doubt, a call
+    runs; no store at all (no worker made one) is no call."""
     at = time.time() if now is None else now
-    return any(at < v <= at + config.INTERACTIVE_CLAIM_TTL_S + 1.0 for v in claims())
+    try:
+        con = _node_con()
+        if con is None:
+            return False
+        with closing(con):
+            rows = _claims_of(con)
+    except Exception:   # noqa: BLE001 — unread: taken as busy, never as free
+        return True
+    return any(at < v <= at + config.INTERACTIVE_CLAIM_TTL_S + 1.0 for v in rows)
 
 
 #: how long a question's claim outlasts its last step — the search, the

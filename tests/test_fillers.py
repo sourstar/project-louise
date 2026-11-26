@@ -316,6 +316,21 @@ def test_a_clip_is_served_only_when_the_engine_is_known_and_is_its_own(node, tmp
     assert fillers.clip(new["long"]) == (b"RIFF-" + fillers._find(new["long"])[1]["text"].encode(), "audio/wav")
 
 
+def test_a_clip_fetched_reads_the_engine_afresh_never_from_the_config_kept(node, monkeypatch):
+    """The config is kept CONFIG_TTL_S for the listing; the clip about to be
+    played reads it now: a swap within those seconds never serves the old
+    engine's clip (the second read's N1)."""
+    monkeypatch.setattr(model_load, "CONFIG_TTL_S", 30.0)
+    node.configured = ENGINE
+    fillers.ready("it")
+    node.filled()
+    old = fillers.ready("it")["ready"][0]["id"]
+    node.engine[0] = None                                # evicted: the config says which engine
+    assert fillers.clip(old) is not None
+    node.configured = OTHER                              # the swap, within the 30 s
+    assert fillers.clip(old) is None
+
+
 def test_a_swap_with_the_model_loaded_empties_the_old_pool_off_the_request(node, monkeypatch):
     fillers.ready("it")
     node.filled()
@@ -427,15 +442,38 @@ def test_nothing_is_synthesized_between_two_sentences_of_a_reading(node, monkeyp
     assert len(node.calls) == n + 6 and time.monotonic() - t0 >= 1.3
 
 
-def test_nothing_is_synthesized_while_another_process_runs_an_interactive_call(node, monkeypatch):
-    rows: list[float] = []
-    monkeypatch.setattr(dispatch, "claims", lambda: list(rows))
-    rows[:] = [time.time() + config.INTERACTIVE_CLAIM_TTL_S]          # a call live elsewhere
+def test_nothing_is_synthesized_while_another_process_runs_an_interactive_call(node):
+    import sqlite3
+    node_state.connect().close()
+
+    def row(until: float) -> None:                   # another process's claim row in the node store
+        with sqlite3.connect(node_state.path()) as c:
+            c.execute("INSERT INTO control(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET "
+                      "value=excluded.value", (f"{dispatch.CLAIM_KEY}:99999@other", repr(until)))
+    row(time.time() + config.INTERACTIVE_CLAIM_TTL_S)                  # a call live elsewhere
     assert dispatch.live_anywhere()
     fillers.ready("it")
     time.sleep(0.4)
     assert node.calls == []
-    rows[:] = [time.time() + 250.0]                                    # a question's linger, not a call
+    row(time.time() + 250.0)                                           # a question's linger, not a call
+    assert not dispatch.live_anywhere()
+    node.filled()
+    assert len(node.calls) == 2
+
+
+def test_a_claim_store_that_cannot_be_read_is_busy_and_nothing_is_made(node, monkeypatch):
+    """On doubt, a call runs (the second read's N4): a store that exists and
+    cannot be read defers every phrase; no store at all is no call."""
+    import sqlite3
+
+    def unreadable():
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(dispatch, "_node_con", unreadable)
+    assert dispatch.live_anywhere()
+    fillers.ready("it")
+    time.sleep(0.4)
+    assert node.calls == [], "never a synthesis on doubt"
+    monkeypatch.setattr(dispatch, "_node_con", lambda: None)
     assert not dispatch.live_anywhere()
     node.filled()
     assert len(node.calls) == 2
