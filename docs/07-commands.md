@@ -955,7 +955,12 @@ reader needs at the command line:
   node fetches nothing for this collection from its origin — what is there
   is still scanned, parsed, indexed and embedded; `true`; `default`, the
   line removed and the collection's kind decides — it was written into a
-  file by hand before, and a from-scratch collection must not need a hand),
+  file by hand before, and a from-scratch collection must not need a hand.
+  *Amended 2026-11-26*: `false` takes effect AT ONCE — a fetch already
+  running, the corpus's or an archive's, ends at its next unit as a pause
+  ends it, what landed kept and nothing marked failed; until then the
+  switch was read only where a fetch starts, and one went on for 4 min 45 s
+  after it),
   and for an annotations collection `method`
   (2026-11-12: the method the node re-runs, `wikipedia-versions`; empty:
   none; refused where the method did not make the claims and they are

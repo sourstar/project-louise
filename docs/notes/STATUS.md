@@ -20,6 +20,18 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **"DO NOT FETCH" NOW STOPS THE FETCH ALREADY RUNNING (a defect; Legal and München, 06:09–06:18Z).**
+  `acquire_enabled = false` was read where a fetch starts and nowhere else: EUR-Lex5.next's background
+  fetch went on asking Cellar 4 min 45 s after the worker logged "config changed", 164 more files, until
+  `node pause` aborted it — with a newer bulk dump unused (the bulk-first rule). The worker now publishes
+  the switch to the fetch in flight (`worker._acquire_off_event`, set by `_apply_acquire_switch` when the
+  file turns it off): the corpus fetch and the archive fetch end at their next unit, as a pause and a
+  freeze end them; turned on again while the stopped fetch unwinds, it is asked again by the pause's own
+  re-arm, not six hours later. And the key, documented and settable since 11-25, was still called "not a
+  key of 07 §7.8" at every load: off the deprecated list. tests/test_acquire_off_stops_fetch.py; 07 §7.8
+  amended. THE SAME OMISSION AS SEED-ONLY'S TEN HOURS (2026-09-13) and the freeze: every switch that says
+  "no downloads" must be an event in the fetch's stop — the test now names all of them.
+
 - **PARKING BEHIND THE LIVE WRAPPER, ON THE CARD, ON A COPY (München, 01:22–01:25Z, the node embedding
   beside it): every junction has now run together — the patched server, main's wrapper (47bf02ea…), the
   park engine and the B70.** One load stated, "the load in force asked again … run … stands" at each
