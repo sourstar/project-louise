@@ -1991,6 +1991,7 @@ def reset_cache() -> None:
     _aside_said.clear()
     with _slow_lock:
         _slow.clear()
+        _gate_slow.clear()
 
 
 def check_write(collection, recipe, answered: set) -> None:
@@ -2311,6 +2312,60 @@ def _query_settled(kept, heard: str | None, now: float) -> bool:
     return heard is None or kept == heard
 
 
+#: ONE GATE'S BACKOFF — (encoder model, space, run) -> (slow looks in a row,
+#: until when): where a look's probe was answered but the look then held its
+#: caller (its gate ran 30 s or more and did not settle — a request timed out,
+#: or it deferred late). Every collection of that space shares the one gate, and
+#: no other is held (the twelfth read, run: kept in a verdict's expiry only, a
+#: query side's shorter bound let the document gate through every 600 s, 50 %
+#: of the main loop for one collection, 91 % for two; per collection, six
+#: siblings of one space hung six times a period). Read before a look, like
+#: the encoder's mark; cleared by a look of that gate that settles
+_gate_slow: dict[tuple, tuple[int, float]] = {}
+
+
+def _gate_key(collection, model_key: str, run_id: str | None) -> tuple | None:
+    """The gate a look of `collection` runs against `run_id`: the model, the
+    space, the run, and how this peer contributes (`contributing`: its batch
+    and concurrency are measured by the gate's contribute pass, so two
+    collections of a space that contribute differently run different gates)."""
+    space = getattr(getattr(collection, "codex", None), "space_id", None)
+    if not run_id or not space:
+        return None
+    try:
+        how = contributing(collections_mod.recipe_for(collection))
+    except Exception:                                   # noqa: BLE001
+        how = None
+    return (model_key, str(space), run_id, tuple(sorted((how or {}).items())))
+
+
+def _gate_until(key, now: float) -> tuple[int, float] | None:
+    if key is None:
+        return None
+    with _slow_lock:
+        got = _gate_slow.get(key)
+    return got if got is not None and got[1] > now else None
+
+
+def _note_gate(key, took: float, answered_ok: bool) -> tuple[int, float] | None:
+    """A look of this gate ended: settled → its backoff gone; slow and not
+    settled → doubled (FAIL_TTL_S, 600, 1,200, then FAIL_CAP_S); quick and not
+    settled → left as it is (a sibling's quick deferral is no news about the
+    gate's hang)."""
+    if key is None:
+        return None
+    with _slow_lock:
+        if answered_ok:
+            _gate_slow.pop(key, None)
+            return None
+        if took < SLOW_LOOK_S:
+            got = _gate_slow.get(key)
+            return got
+        n = _gate_slow[key][0] + 1 if key in _gate_slow else 1
+        got = _gate_slow[key] = (n, time.time() + min(FAIL_TTL_S * 2 ** min(n - 1, 3), FAIL_CAP_S))
+        return got
+
+
 def _query_kept(collection, kept, heard: str | None, now: float) -> bool:
     """`_query_settled` — or an unsettled query side about the run heard while
     the query encoder's backoff (`_slow`) runs: kept as long as the mark, and
@@ -2415,7 +2470,12 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
 
         doc_key = _flight(collection)
         slow_until = _slow_until(doc_key, now, now_answering)
-        slow_n = 0
+        # ...and THIS GATE'S backoff (`_gate_slow`) for the run heard: honoured
+        # here too, not only by the cache check a query side's bound fails
+        gate_was = _gate_until(_gate_key(collection, doc_key, now_answering), now)
+        if gate_was is not None:
+            slow_until = max(slow_until or 0.0, gate_was[1])
+        slow_n = gate_was[0] if gate_was is not None else 0
         if slow_until is not None and not _suspect_since(collection, cached) and (
                 cached is None or now_answering is None or cached[3] == now_answering):
             # (a run heard since — some process had an answer — is looked at: the
@@ -2425,38 +2485,37 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             # one validated stays so (every answer is still checked before its
             # write, invariant 1), one paused stays paused — until then
             with _slow_lock:
-                slow_n = _slow.get(doc_key, (0, 0.0))[0]
+                enc_n = _slow.get(doc_key, (0, 0.0))[0]
             if cached is not None:
                 allowed, reason, settled = cached[0], cached[1], (cached[6] if len(cached) > 6 else True)
             else:
                 allowed, settled = False, False
-                reason = (f"the encoder held its last look {SLOW_LOOK_S:.0f} s or more ({slow_n} in a row); "
+                reason = (f"the encoder held its last look {SLOW_LOOK_S:.0f} s or more "
+                          f"({max(enc_n, slow_n)} in a row); "
                           f"asked again at {time.strftime('%H:%M:%S', time.localtime(slow_until))}")
             run_id = cached[3] if cached is not None else None
         else:
             t_look = _look_clock()
             _look_state.timed_out = False
             allowed, reason, run_id, settled = _look(collection, stop, log)
-            # a look that heard a run did not hang, whatever its gate did after —
-            # unless a request of it timed out (the delta read: a gate whose first
-            # request waited its 300 s held the main loop half the time again)
-            hung = bool(getattr(_look_state, "timed_out", False))
             took = _look_clock() - t_look
             # THE ENCODER'S BACKOFF only where it did not answer its probe (no run
             # heard): it holds every collection on the model. A probe answered
             # clears it — the encoder is not hung (the eleventh read, run: a mark
             # set by one collection's own gate timeouts held another whose gate
             # would pass, for as long as the first kept timing out)
-            slow_n, slow_until = _note_look(doc_key, took, settled or allowed or run_id is not None,
-                                            now_answering)
-            if run_id is not None and hung and took >= SLOW_LOOK_S and not (settled or allowed):
-                # ...AND THIS COLLECTION'S OWN where its gate hung after the probe
-                # answered (a request timed out, `_timed_out`): its own verdict put
-                # off longer each time for that run, no other collection held
-                prev = cached[7] if (cached is not None and len(cached) > 7 and not cached[0]
-                                     and cached[3] == run_id and not (len(cached) > 6 and cached[6])) else 0
-                slow_n = int(prev or 0) + 1
-                slow_until = time.time() + min(FAIL_TTL_S * 2 ** min(slow_n - 1, 3), FAIL_CAP_S)
+            enc_n, slow_until = _note_look(doc_key, took, settled or allowed or run_id is not None,
+                                           now_answering)
+            slow_n = enc_n
+            if run_id is not None:
+                # ...AND THE GATE'S where its probe answered but the look held its
+                # caller and did not settle — a request timed out, or the gate
+                # deferred late (the twelfth read: a 240 s deferral asked again
+                # every 300 s held the main loop 44 %): that gate put off longer
+                # each time, every collection of its space with it, no other held
+                got = _note_gate(_gate_key(collection, doc_key, run_id), took, settled or allowed)
+                if got is not None and not (settled or allowed):
+                    slow_n, slow_until = got
         # THE RUN A VERDICT IS ABOUT: the one its look heard; where it heard
         # none (the encoder could not be asked), the one heard BEFORE it — so
         # a run heard since, by any process, is looked at at once, and one

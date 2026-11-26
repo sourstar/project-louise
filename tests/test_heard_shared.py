@@ -635,6 +635,7 @@ def _hung_clock(monkeypatch) -> list:
     mono = [1000.0]
     monkeypatch.setattr(run_check, "_look_clock", lambda: mono[0])
     monkeypatch.setattr(run_check, "_slow", {})
+    monkeypatch.setattr(run_check, "_gate_slow", {})
     return mono
 
 
@@ -1079,3 +1080,50 @@ def test_a_chain_cut_on_purpose_is_not_read_for_a_timeout():
             raise hold_emb.GateDeferred("could not embed") from inner
     except hold_emb.GateDeferred as e:
         assert run_check._timed_out(e) is True
+
+
+# ---- the twelfth read (2026-11-26) -----------------------------------------------------
+
+@pytest.mark.parametrize("why", ["timed out", "deferred late"])
+def test_a_hung_gate_beside_a_quickly_failing_query_side_backs_off(node, endpoint, monkeypatch, why):
+    """THE TWELFTH READ, run (BLOCKING): a collection's own gate backoff lived
+    in its verdict's expiry only, so an asymmetric space's query side failing
+    quickly (its shorter bound) let the document gate through every 600 s —
+    50 % of the main loop, 91 % with two collections. And a gate that ran
+    240 s and deferred with no timeout was asked again every 300 s (44 %). The
+    GATE's backoff is read before every look, slow deferrals included."""
+    import httpx
+    from app.hold import embedder as hold_emb
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    mono = _hung_clock(monkeypatch)
+    clock = [time.time()]
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+
+    def probe(recipe, query=False, **k):
+        if query:
+            raise OSError("query model refused")          # a quick failure
+        return R2                                          # answered: a run never gated
+    monkeypatch.setattr(run_check, "answering_run", probe)
+    gates, held = [], [0.0]
+
+    def slow_gate(*a, role="document", **k):
+        gates.append(clock[0])
+        mono[0] += 300.0 if why == "timed out" else 240.0
+        clock[0] += 300.0 if why == "timed out" else 240.0
+        held[0] += 300.0 if why == "timed out" else 240.0
+        if why == "timed out":
+            try:
+                raise httpx.ReadTimeout("timed out")
+            except httpx.ReadTimeout as e:
+                raise hold_emb.GateDeferred("the encoder could not embed: timed out") from e
+        raise hold_emb.GateDeferred("another request held the context")
+    monkeypatch.setattr(run_check, "validate", slow_gate)
+    run_check._verdicts.clear()
+    start = clock[0]
+    while clock[0] - start < 3 * 3600:
+        backend_gate.embed_allowed(con, collection)
+        clock[0] += 60
+    share = held[0] / (clock[0] - start)
+    assert len(gates) <= 8 and share <= 0.21, (len(gates), round(share, 3))

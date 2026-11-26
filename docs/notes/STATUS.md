@@ -73,7 +73,14 @@ measured (published figures disagree).
   would pass, for as long as the first kept timing out — so the encoder's mark is now set only where the
   encoder did not answer its PROBE (it is hung for everyone), and a gate that hung after the probe answered
   backs off its own collection alone (300, 600, 1,200, 1,800 s); `_timed_out` stops where a chain was cut
-  on purpose (`from None`: VeGa's receipts read timing out is not the encoder). And the
+  on purpose (`from None`: VeGa's receipts read timing out is not the encoder). The twelfth read, run: kept
+  in a verdict's expiry only, that own backoff was passed whenever an asymmetric space's query side failed
+  quickly (50 % of the main loop, 91 % for two); and a gate deferring late without a timeout was asked every
+  300 s (44 %). The backoff is now the GATE's — (model, space, run, how this peer contributes) — read before
+  every look like the encoder's mark, doubled by any slow look that does not settle, cleared by one that
+  does; siblings of one space share it. Two rules, then: the encoder's mark for a probe it did not answer
+  (every collection on it waits), the gate's for a gate that holds its caller (the collections that run it
+  wait). And the
   manual door, `hold embedder check`, is
   shut on a running node — the worker holds every collection's lock — so its hint now says to pause
   the collection first; that is how today's gate was run. I had told München the record was shared
