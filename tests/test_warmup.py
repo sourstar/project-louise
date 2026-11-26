@@ -24,6 +24,8 @@ def path(monkeypatch):
     monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: held)
     monkeypatch.setattr(config, "RERANK_URL", "")
     done: list[str] = []
+    from app import node_state
+    monkeypatch.setattr(node_state, "peek_worker_state", lambda: "running")     # a node that runs: it warms
     monkeypatch.setattr(translate, "warm", lambda: done.append("translate"))
     monkeypatch.setattr(llm, "warm", lambda: done.append("chat"))
     monkeypatch.setattr(retrieval, "_warm_reranker", lambda r: done.append(r.model))
@@ -33,6 +35,31 @@ def path(monkeypatch):
 def test_the_translator_each_distinct_reranker_and_the_chat_model_in_order(path):
     warmup.warm_all("test")
     assert path == ["translate", "louise-rerank-bge", "louise-rerank-medcpt", "chat"]
+
+
+def test_a_paused_node_warms_nothing_and_says_why(path, monkeypatch, capsys):
+    """The node's mode decides, as for the keeper (München, 2026-11-25: on a
+    PAUSED node, after the model server's restart, the web loaded MADLAD, a
+    reranker and the chat model by itself onto a card a pass had emptied)."""
+    from app import node_state, resident
+    monkeypatch.setattr(node_state, "peek_worker_state", lambda: "paused")
+    warmup.warm_all("model server back: http://ai:8080")
+    assert path == [], "nothing loaded: the GPU is the operator's"
+    said = capsys.readouterr().out
+    assert said.count("[web info:warmup]") == 1 and "nothing warmed (model server back: http://ai:8080)" in said
+    assert "the node is paused" in said and "a question loads what it needs" in said
+    monkeypatch.setattr(node_state, "peek_worker_state", lambda: "running")
+    warmup.warm_all("test")
+    assert path == ["translate", "louise-rerank-bge", "louise-rerank-medcpt", "chat"]
+    path.clear()
+    monkeypatch.setattr(resident, "preloads", lambda state=None: (_ for _ in ()).throw(RuntimeError("unread")))
+    warmup.warm_all("test")
+    assert len(path) == 4, "a resolution that itself fails holds nothing back: the warm is what it was"
+    path.clear()
+    monkeypatch.setattr(resident, "preloads", lambda state=None: (False, f"the node is {state}: the GPU is the operator's"))
+    monkeypatch.setattr(node_state, "peek_worker_state", lambda: "unknown")
+    warmup.warm_all("test")
+    assert path == [], "a state that cannot be read warms nothing, as the keeper preloads nothing"
 
 
 def test_a_failed_warm_is_said_and_the_next_one_still_goes(path, monkeypatch, capsys):
