@@ -79,6 +79,11 @@ class Node:
         monkeypatch.setattr(speech, "_clip_put", lambda key, data, ctype: node.kept.append("put"))
         from app import model_pins
         monkeypatch.setattr(model_pins, "node_event", lambda level, text: node.lines.append((level, text)))
+        # THE PINS ARE FAKED, as tests/test_speech.py's: speech arms a release IDLE_S after each synthesis, and
+        # a real `model_pins.release` firing after this test's teardown resolves the REAL root (2026-11-26:
+        # /data/state/.model-pins.lock was made so) — the timer keeps the function it was armed with
+        monkeypatch.setattr(model_pins, "hold", lambda url, model, holder: True)
+        monkeypatch.setattr(model_pins, "release", lambda holder, path=None: None)
         monkeypatch.setattr(fillers, "QUIET_S", 0.0)
         monkeypatch.setattr(fillers, "POLL_S", 0.01)
 
@@ -89,8 +94,15 @@ class Node:
 @pytest.fixture
 def node(isolated_config, config_dir, tmp_path, monkeypatch):
     fillers.reset()
-    yield Node(monkeypatch, tmp_path, config_dir)
+    n = Node(monkeypatch, tmp_path, config_dir)
+    yield n
+    if n.gate is not None:
+        n.gate.set()                                 # nothing left waiting on the fake model
     fillers.reset()
+    with speech._lock:                               # no release armed by this test outlives it
+        for t in speech._timers.values():
+            t.cancel()
+        speech._timers.clear()
 
 
 def _pool_files(tmp_path: Path) -> list[Path]:
