@@ -118,7 +118,7 @@ REAL = {
     44027: None,      # The Expositor's Bible: The Psalms — "Bible. Psalms -- Commentaries", a Poetry shelf
     30252: None,      # Ezekiel's visitors — "-- Criticism, interpretation, etc." outranks Science-Fiction & Fantasy
     # Cheyne's Job and Solomon: a study (its criticism headings), on a Philosophy & Ethics shelf — opinion by
-    # that shelf, as the probe's Bible criticism on a Philosophy shelf (#45475); architecture expected none
+    # that shelf, exactly as the probe's Bible criticism on a Philosophy shelf (#45475; architecture, 2026-11-26)
     65866: "a work of opinion or belief",
 }
 
