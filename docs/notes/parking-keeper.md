@@ -90,7 +90,7 @@ set to 12 GiB by the tool and back to 0 after. No real model parks.
 | | measured |
 |---|---|
 | a park | 142 ms |
-| a return, with sixteen sentences asked | 228 ms; 20 of 20 cycles the same bytes, by a request and by `/backend/load` alike |
+| a return, with sixteen sentences asked | 228 ms; 20 of 20 cycles the same bytes, by a request and by `/backend/load` alike — the TOOL's own sentences: the gate's clause (the sixteen FINGERPRINT texts after park cycles) was not run, and is owed to the gated run of the first real model that parks |
 | what a park gives back | 996 of 1,315 MiB (76 %): 577 MiB are in host memory, and the process still holds 319 MiB of the card — the reason `make_room` counts a park at what the answer says moved, never at the model's whole size |
 | a busy model | 1,084 parks asked during one 2,048-sentence request: every one 409 `model_busy`, the request served |
 | a parked model stopped (`/backend/shutdown`) | 200 in 202 ms, not listed after; its next request loads it afresh in 4.17 s — what `host_claims` and the last-resort stop of a parked model do |
@@ -101,6 +101,11 @@ So a give-way that today costs its model 4.2 s to come back (bge-m3's own
 fresh load in that pass) costs 0.14 s to make and 0.23 s to undo.
 
 ## 5. Rows owed from the node (none exists yet: nothing parks until a model's file says `park: true`)
+
+A model parks when its file says `park: true` AND its `env` carries
+`GGML_SYCL_PARKABLE=1` — a new run, gated once, with the gate's park-cycles
+clause (not built yet: STATUS.md, 2026-11-26). Which models, and whether the
+signed statement says the cycles, is the operator's.
 
 1. `louise node resident show`: `"parks": true` for a model loaded from a
    file with `park: true` (the server's own first row).

@@ -20,14 +20,28 @@ measured (published figures disagree).
 
 ### 2026-11-26
 
+- **WHAT A REAL MODEL NEEDS BEFORE IT PARKS — and what the pass did NOT measure (Tensor and München,
+  00:40Z).** (1) Two lines in the model's file: `park: true` (the server's) AND `GGML_SYCL_PARKABLE=1` in
+  its `env` (the engine allocates the weights so that they can leave the card). The env is inside the
+  run's statement, so EACH MODEL THAT PARKS IS A NEW RUN, GATED ONCE (bge-m3's gate is 98 s, gutenberg's
+  33 min, NeuRIS and wikidata 8.5 min each). (2) THE GATE'S OWN CLAUSE FOR A PARKING RUN WAS NOT RUN: the
+  design gives the gate "the sixteen fingerprints after N park cycles, as after 300 context creations"
+  (parking-step-2.md §3.3, models-beyond-the-card.md §4). The pass's "20 of 20 cycles the same bytes" are
+  the measuring tool's own sentences on a copy — evidence, not the gate; the clause is owed to the gated
+  run of the first real model that parks, and it is NOT BUILT (app/hold/embedder.py has `fresh_contexts`,
+  no park cycles). Whether the signed statement says the cycles — as it says the contexts since the
+  operator's choice of 2026-11-11, statement version 6 — is a wire-format question, put to him with the
+  choice of which models park. (3) On the card a park is refused 409 until the model has been without a
+  request for a second (ten refusals a cycle when asked right after one): the evictor's "next candidate"
+  already covers it. (4) No model file changes until he chooses; nothing parks.
 - **THE PARKING PASS ENDED 00:19:39Z, COMPLETED (München; the node paused 5,620 s, back in embed mode):
   the park server and the park engine are LIVE, nothing parks, and #882 is merged (main 7547fcd1).** Server
   v5.0.1-6-gffb10fdf3 (0024 the readiness poll, the amended 0027, 0029 the watchdog's settings fix) — a
   server swap gates nothing, the seven run ids the same. Engine ed93e3c1b2e2 with ONE package rebuilt,
   vega-louise-llama-cpp at 1ac1ecc (wrapper sha256 47bf02eaae7c01e4 = main's file), live since 23:45:20Z:
   the five llama.cpp gates all exact, three fresh loads each, every fingerprint identical to before
-  (wikipedia 98 s, gutenberg 1,983 s, pubmed query 70 s, NeuRIS about 509 s, wikidata about 502 s); 20
-  unloads through the rebuilt wrapper, none slow. The other three packages keep the wrapper of their own
+  (wikipedia 98 s, gutenberg 1,983 s, pubmed query 70 s, NeuRIS 509 s, wikidata 508 s — München's
+  correction of "about 502"); 20 unloads through the rebuilt wrapper, none slow. The other three packages keep the wrapper of their own
   build (10833aab79818132, REVISION 15e84e9): the table is in approved-encoders.md ("The wrapper each
   package runs"). PARKING ON THE CARD, on a copy of bge-m3 (parking-keeper.md §4): a park 142 ms, a return
   228 ms, 20 of 20 cycles the same bytes; a park gives back 996 of 1,315 MiB — 76 %, the process keeps 319
