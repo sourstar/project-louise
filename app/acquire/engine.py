@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import zipfile
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -1275,7 +1276,14 @@ class _ClaimKeepalive:
         try:
             last = time.time()
             while not self._done.wait(30):
-                last = claim_mod.refresh_claim(con, self._source_id, last)
+                try:
+                    last = claim_mod.refresh_claim(con, self._source_id, last)
+                except sqlite3.OperationalError:
+                    # the manifest busy past its timeout: asked again at the next
+                    # tick — one busy write ended this thread for the rest of the
+                    # pass, and the claim read stale under a live fetch (the read
+                    # of 2026-11-26)
+                    continue
         finally:
             con.close()
 

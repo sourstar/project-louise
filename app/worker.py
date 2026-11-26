@@ -2721,6 +2721,15 @@ def _apply_acquire_switch(con, prev, kept) -> None:
                      + "; what is there is still scanned, parsed, indexed and embedded")
     elif kept.acquire_enabled and not prev.acquire_enabled:
         _acquire_off_event(kept.name).clear()
+        # TURNED ON AGAIN WHILE THE FETCH THE "OFF" STOPPED STILL UNWINDS: the
+        # discovery this change asks reaches `_acquire`, which finds the thread
+        # alive and the event clear, and returns — the fetch was lost (the
+        # third read, run, in the production order: this edit first). Asked
+        # again once that thread is gone, by the re-arm a pause's stop uses
+        with _acquire_lock:
+            t = _acquire_threads.get(kept.name)
+            if t is not None and t.is_alive():
+                _paused_aborts.add(kept.name)
 
 
 def _background_priority() -> None:
@@ -4081,6 +4090,13 @@ def _retry_refused_fetches(due: list[str], all_collections, cons, known) -> None
             if busy is not None:
                 _claim_retries[n] = time.time() + busy
                 continue
+            t = _acquire_threads.get(n)
+            if t is not None and t.is_alive():
+                # THE REFUSED THREAD STILL ENDING (its log write may wait out the
+                # busy timeout): `_acquire` would return silently beside it and
+                # the retry would be gone — D6 again (the third read, run)
+                _claim_retries[n] = time.time() + CLAIM_READ_AGAIN_S
+                continue
             del _claim_retries[n]
             if n not in live:
                 if n in held:
@@ -4107,7 +4123,12 @@ def _runs_again(name: str) -> None:
     with _acquire_lock:
         if name in _paused_waiting:
             _paused_waiting.discard(name)
-            _paused_aborts.add(name)
+            if _rearm_reason.get(name) == CLAIM_FREE_REASON:
+                # a free claim's retry: the FETCH again, due now, never a discovery
+                _rearm_reason.pop(name, None)
+                _claim_retries[name] = time.time()
+            else:
+                _paused_aborts.add(name)
 
 
 def _rearm_paused_aborts(all_collections, last_discover, pipeline: bool,

@@ -23,8 +23,16 @@ a hardware reset killed held the claim, 179 s old, and its successor's
 startup fetch was refused for the rest of the 300 s. A claim of another boot
 of the host's kernel (`boot_id`) has a dead holder for certain, whatever its
 age; one that names no boot (made before this) is judged by its age alone.
-No clock is read for it: a clock stepped after a boot moves `btime`, never
-the boot's id.
+WITHIN ONE BOOT ITS AGE IS THE BOOT'S OWN CLOCK (`uptime`, CLOCK_BOOTTIME:
+the same in every runc container, never stepped): a wall clock stepped back
+made a live claim read as stale, and another process took it while its
+holder fetched (the third read, run). The wall clock (`ts`) dates a claim
+that names no boot, and is kept for whoever reads the row.
+
+ONE WRITER AT A TIME: a claim is taken under BEGIN IMMEDIATE (read, check and
+write in one transaction), renewed and given back only where it is still the
+holder's own (one compare-and-set statement) — read then written apart, a
+holder could overwrite the claim another had just taken.
 
 THE STANDARD ALTERNATIVE, written down: an flock on a per-collection lock
 file, as the collection's write lock is (app/hold/lock.py) — the kernel drops
@@ -78,6 +86,16 @@ def boot_id() -> str | None:
     return got or None
 
 
+def uptime() -> float | None:
+    """Seconds since this boot of the host's kernel (CLOCK_BOOTTIME: shared by
+    every container of the host, never stepped, counting a suspend). None
+    where it cannot be read."""
+    try:
+        return time.clock_gettime(time.CLOCK_BOOTTIME)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
 def read_claim(con) -> dict | None:
     raw = db.get_control(con, CLAIM_KEY)
     if not raw:
@@ -109,7 +127,17 @@ def _mine(claim: dict | None) -> bool:
 
 def _record(source_id: str, now: float) -> str:
     return json.dumps({"pid": os.getpid(), "holder": _me(), "ts": now, "source_id": source_id,
-                       "boot": boot_id()})
+                       "boot": boot_id(), "up": uptime()})
+
+
+def _age(claim: dict, now: float) -> float:
+    """How old `claim` is: on the boot's own clock where it was made in this
+    boot (`uptime`: never stepped), on the wall clock otherwise."""
+    made_in, this = claim.get("boot"), boot_id()
+    up, up_now = claim.get("up"), uptime()
+    if made_in and this and made_in == this and isinstance(up, (int, float)) and up_now is not None:
+        return up_now - float(up)
+    return now - float(claim.get("ts", 0))
 
 
 def held(claim: dict | None, now: float | None = None) -> bool:
@@ -119,19 +147,11 @@ def held(claim: dict | None, now: float | None = None) -> bool:
     if not claim:
         return False
     now = time.time() if now is None else now
-    ts = float(claim.get("ts", 0))
-    if now - ts > STALE_AFTER_SECONDS:
-        return False          # stale: the holder died or hung; take it over
-    if ts > now + 2 * _REFRESH_EVERY:
-        # MADE AFTER NOW by more than two refreshes: the clock was stepped back
-        # since, and a live holder rewrites its claim within one refresh of any
-        # step (`refresh_claim`) — this one did not
-        return False
     made_in, this = claim.get("boot"), boot_id()
     if made_in and this and made_in != this:
         # MADE IN ANOTHER BOOT: its holder is dead for certain, whatever its age
         return False
-    return True
+    return _age(claim, now) <= STALE_AFTER_SECONDS      # stale: the holder died or hung
 
 
 def _is_live(claim: dict | None, now: float) -> bool:
@@ -149,7 +169,17 @@ def busy_for(con, now: float | None = None) -> float | None:
     claim = read_claim(con)
     if not _is_live(claim, now):
         return None
-    return max(1.0, STALE_AFTER_SECONDS - (now - float(claim.get("ts", now))) + 5)
+    return max(1.0, STALE_AFTER_SECONDS - _age(claim, now) + 5)
+
+
+_HOLDER_IS = ("CASE WHEN json_valid(value) THEN json_extract(value, '$.holder') END = ?")
+
+
+def _set_if_mine(con, value: str) -> bool:
+    """Write `value` to the claim's row only where the claim is this
+    process's: one statement, so nothing taken meanwhile is overwritten."""
+    cur = con.execute(f"UPDATE control SET value=? WHERE key=? AND {_HOLDER_IS}", (value, CLAIM_KEY, _me()))
+    return bool(cur.rowcount)
 
 
 @contextmanager
@@ -160,22 +190,33 @@ def acquisition_claim(con, source_id: str, force: bool = False):
     run_acquisition does not leave the claim held for the full stale window.
     """
     now = time.time()
-    existing = read_claim(con)
-    if not force and _is_live(existing, now):
-        held_for = int(now - float(existing.get("ts", now)))
-        raise AcquisitionBusy(
-            f"{source_id}: acquisition already running in "
-            f"{existing.get('holder') or 'pid ' + str(existing.get('pid'))} "
-            f"(claimed {held_for}s ago). Wait for it to finish, or re-run once the "
-            f"claim goes stale after {STALE_AFTER_SECONDS}s.",
-            retry_in=STALE_AFTER_SECONDS - (now - float(existing.get("ts", now))) + 5,
-            holder=str(existing.get("holder") or f"pid {existing.get('pid')}"), held_for=held_for)
-    db.set_control(con, CLAIM_KEY, _record(source_id, now))
+    # read, check and write in ONE transaction (the module's docstring); a
+    # caller already inside one keeps it, as before
+    own_tx = not con.in_transaction
+    if own_tx:
+        con.execute("BEGIN IMMEDIATE")
+    try:
+        existing = read_claim(con)
+        if not force and _is_live(existing, now):
+            age = _age(existing, now)
+            raise AcquisitionBusy(
+                f"{source_id}: acquisition already running in "
+                f"{existing.get('holder') or 'pid ' + str(existing.get('pid'))} "
+                f"(claimed {int(age)}s ago). Wait for it to finish, or re-run once the "
+                f"claim goes stale after {STALE_AFTER_SECONDS}s.",
+                retry_in=STALE_AFTER_SECONDS - age + 5,
+                holder=str(existing.get("holder") or f"pid {existing.get('pid')}"), held_for=int(age))
+        db.set_control(con, CLAIM_KEY, _record(source_id, now))
+        if own_tx:
+            con.execute("COMMIT")
+    except BaseException:
+        if own_tx and con.in_transaction:
+            con.execute("ROLLBACK")
+        raise
     try:
         yield
     finally:
-        if _mine(read_claim(con)):
-            db.set_control(con, CLAIM_KEY, "")
+        _set_if_mine(con, "")
 
 
 def refresh_claim(con, source_id: str, last_refresh: float) -> float:
@@ -183,7 +224,6 @@ def refresh_claim(con, source_id: str, last_refresh: float) -> float:
     Returns the (possibly unchanged) last-refresh timestamp."""
     now = time.time()
     if 0 <= now - last_refresh < _REFRESH_EVERY:
-        return last_refresh           # a clock stepped back refreshes at once: its ts is in the future
-    if _mine(read_claim(con)):
-        db.set_control(con, CLAIM_KEY, _record(source_id, now))
+        return last_refresh           # a clock stepped back refreshes at once
+    _set_if_mine(con, _record(source_id, now))
     return now

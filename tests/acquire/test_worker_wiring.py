@@ -782,9 +782,12 @@ def test_a_claim_retry_for_a_collection_not_run_waits_and_says_why_when_it_comes
         worker._rearm_paused_aborts([], {}, True, cons={collection.name: con}, known=[collection])
         assert collection.name in worker._paused_waiting and collection.name not in worker._claim_retries
         worker._runs_again(collection.name)
-        assert worker._rearm_paused_aborts([collection], {}, True, known=[collection]) == [collection.name]
-        assert worker._take_discovery_request(collection.name) == \
-            ("the claim that refused it is no longer held", True)
+        assert collection.name not in worker._paused_aborts, "never a discovery (the third read)"
+        assert worker._claim_retries[collection.name] <= time.time(), "the FETCH again, due now"
+        fetched = []
+        monkeypatch.setattr(worker, "_acquire", lambda c, coll, why: fetched.append(why))
+        worker._rearm_paused_aborts([collection], {}, True, cons={collection.name: con}, known=[collection])
+        assert fetched == ["the claim that refused it is no longer held"]
     finally:
         _forget_more(collection.name)
         _forget(collection)
@@ -840,3 +843,53 @@ def test_a_collections_own_pause_is_told_before_its_retirement_and_forgotten_onc
     finally:
         worker._locks.pop(collection.name, None)
         _forget_more(collection.name)
+
+
+
+def test_a_claim_retry_due_while_the_refused_thread_still_ends_is_kept(tmp_path, monkeypatch):
+    """THE THIRD READ, run: the retry fell due while the refused thread's log
+    write waited out the busy timeout; `_acquire` returned silently beside the
+    live thread, and nothing was left to ask the fetch again."""
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, **k: _DONE)
+    alive = threading.Event()
+    thread = threading.Thread(target=alive.wait, args=(10,), daemon=True)
+    thread.start()
+    fetched = []
+    monkeypatch.setattr(worker, "_acquire", lambda c, coll, why: fetched.append(why))
+    try:
+        with worker._acquire_lock:
+            worker._acquire_threads[collection.name] = thread
+            worker._claim_retries[collection.name] = time.time() - 1
+        worker._rearm_paused_aborts([collection], {}, True, cons={collection.name: con}, known=[collection])
+        assert fetched == [] and worker._claim_retries[collection.name] > time.time() + 20, "kept"
+    finally:
+        alive.set()
+        thread.join(5)
+        with worker._acquire_lock:
+            worker._acquire_threads.pop(collection.name, None)
+        _forget_more(collection.name)
+        _forget(collection)
+
+
+def test_acquisition_turned_on_again_while_the_stopped_fetch_unwinds_asks_it_again(tmp_path, monkeypatch):
+    """THE THIRD READ, run, in the production order (the "on" edit applied
+    first): `_acquire` found the old thread alive and the event clear, and
+    returned — the fetch was lost."""
+    collection, con = _wired(tmp_path, monkeypatch, lambda *a, **k: _DONE)
+    import dataclasses
+    off = dataclasses.replace(collection, acquire_enabled=False)
+    alive = threading.Event()
+    thread = threading.Thread(target=alive.wait, args=(10,), daemon=True)
+    thread.start()
+    try:
+        with worker._acquire_lock:
+            worker._acquire_threads[collection.name] = thread
+        worker._apply_acquire_switch(con, off, collection)
+        assert collection.name in worker._paused_aborts, "asked again once that thread is gone"
+    finally:
+        alive.set()
+        thread.join(5)
+        with worker._acquire_lock:
+            worker._acquire_threads.pop(collection.name, None)
+        _forget_more(collection.name)
+        _forget(collection)

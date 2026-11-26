@@ -166,17 +166,76 @@ def test_the_boot_is_read_from_the_kernel():
     assert got is None or (len(got) >= 32 and got == claim_mod.boot_id())
 
 
-def test_a_claim_made_after_now_is_a_clock_stepped_back_and_its_live_holder_rewrites_it(con, monkeypatch):
-    """THE SECOND READ: a claim whose holder died right after the clock was
-    stepped back an hour read as held for that hour. A live holder rewrites
-    its claim at its next refresh after any step."""
+def test_within_one_boot_a_claims_age_is_the_boots_own_clock(con, monkeypatch):
+    """THE THIRD READ, run: after the wall clock was stepped back more than two
+    refreshes, a `hold records fetch` beside the worker took its LIVE claim,
+    and both fetched the same pending list. Within one boot the age is
+    CLOCK_BOOTTIME's, which no step moves."""
+    up = [10_000.0]
+    monkeypatch.setattr(claim_mod, "uptime", lambda: up[0])
+    monkeypatch.setattr(claim_mod, "boot_id", lambda: "this-boot")
     now = time.time()
-    db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(
-        {"pid": 8, "holder": "8@4026533985", "ts": now + 3600, "source_id": "eurlex", "boot": claim_mod.boot_id()}))
+    live = {"pid": 8, "holder": "8@4026533985", "source_id": "eurlex", "boot": "this-boot", "up": up[0] - 30}
+    for ts in (now + 3600, now - 3600):                  # the wall clock stepped back, then forward, an hour
+        db.set_control(con, claim_mod.CLAIM_KEY, json.dumps({**live, "ts": ts}))
+        assert 270 <= claim_mod.busy_for(con) <= 276, "30 s old on the boot's clock, whatever the wall says"
+    up[0] += 300                                         # its holder died: 330 s on the boot's clock
     assert claim_mod.busy_for(con) is None
-    db.set_control(con, claim_mod.CLAIM_KEY, json.dumps(
-        {"pid": 8, "holder": "8@4026533985", "ts": now + 30, "source_id": "eurlex", "boot": claim_mod.boot_id()}))
-    assert claim_mod.busy_for(con) is not None, "a refresh's jitter is not a step"
+    # a claim that names no boot is dated by the wall clock, as before
+    db.set_control(con, claim_mod.CLAIM_KEY, json.dumps({"pid": 8, "holder": "8@4026533985", "ts": now - 30,
+                                                          "source_id": "eurlex"}))
+    assert claim_mod.busy_for(con) is not None
     with claim_mod.acquisition_claim(con, "eurlex", force=True):
-        stamped = claim_mod.refresh_claim(con, "eurlex", last_refresh=now + 3600)   # stepped back since
-        assert stamped <= time.time() + 1 and claim_mod.read_claim(con)["ts"] <= time.time() + 1
+        mine = claim_mod.read_claim(con)
+        assert mine["up"] == up[0] and mine["boot"] == "this-boot"
+
+
+def test_a_claim_is_renewed_and_given_back_only_while_it_is_its_holders(con):
+    """THE THIRD READ: read, then written apart, a holder could overwrite the
+    claim another process had just taken."""
+    with claim_mod.acquisition_claim(con, "eurlex"):
+        theirs = json.dumps({"pid": 9, "holder": "9@1", "ts": time.time(), "source_id": "eurlex"})
+        db.set_control(con, claim_mod.CLAIM_KEY, theirs)              # taken meanwhile
+        claim_mod.refresh_claim(con, "eurlex", last_refresh=0.0)
+        assert db.get_control(con, claim_mod.CLAIM_KEY) == theirs, "not renewed over another's"
+    assert db.get_control(con, claim_mod.CLAIM_KEY) == theirs, "not given back over another's"
+    db.set_control(con, claim_mod.CLAIM_KEY, "")
+    claim_mod.refresh_claim(con, "eurlex", last_refresh=0.0)          # nothing to renew: nothing written
+    assert db.get_control(con, claim_mod.CLAIM_KEY) == ""
+
+
+def test_a_claim_is_taken_in_one_transaction_and_inside_a_callers_own(con):
+    with claim_mod.acquisition_claim(con, "eurlex"):
+        assert not con.in_transaction, "committed: the claim is visible to others at once"
+        assert claim_mod.read_claim(con)["pid"] == os.getpid()
+    con.execute("BEGIN")
+    try:
+        with claim_mod.acquisition_claim(con, "eurlex"):
+            assert con.in_transaction, "the caller's transaction is the caller's"
+    finally:
+        con.execute("COMMIT")
+
+
+def test_the_claims_keepalive_outlives_a_busy_manifest(tmp_path, monkeypatch):
+    """THE THIRD READ: one `database is locked` past the busy timeout ended the
+    keepalive thread for the rest of the pass, and the claim read stale under
+    a live fetch."""
+    import sqlite3
+    from app.acquire import engine
+    calls = []
+
+    def refresh(con, source_id, last):
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return last
+    monkeypatch.setattr(engine.claim_mod, "refresh_claim", refresh)
+    waits = iter([False, False, True])
+    keep = engine._ClaimKeepalive.__new__(engine._ClaimKeepalive)
+    keep._source_id = "eurlex"
+    keep._collection = collections_mod.Collection(
+        name="eurlex", plugin="eurlex", profile=None, embed_mode_default=None, corpus_dir=tmp_path / "c",
+        manifest_path=tmp_path / "m.db", fts_dir=tmp_path / "f", lance_dir=tmp_path / "l")
+    keep._done = type("Done", (), {"wait": lambda self, s: next(waits)})()
+    keep._run()
+    assert calls == [1, 1], "asked again after the busy write"

@@ -40,8 +40,13 @@ measured (published figures disagree).
   started meanwhile forgets the retry; the stop keeps the FIRST event that stopped it (a resume while the
   fetch unwound read the retirement instead, and D7 came back); a waiting re-arm comes back when the
   node holds the collection again, O(1), and a removed collection forgets it; an unreadable claim is read
-  again in 30 s, not every round; a claim stamped after now by a clock stepped back is stale, and a live
-  holder rewrites its own at once after such a step.
+  again in 30 s, not every round. The third read, run: a wall clock stepped back made a LIVE claim read
+  as stale and another process took it — within one boot a claim's age is now the boot's own clock
+  (CLOCK_BOOTTIME, never stepped); a claim is taken under BEGIN IMMEDIATE and renewed and given back by
+  compare-and-set (read then written apart, a holder could overwrite another's fresh claim); the
+  keepalive thread outlives a busy manifest (one locked write ended it for the pass); a retry due while
+  the refused thread still ends is kept; acquisition turned on again while the stopped fetch unwinds asks
+  it again; a free claim's retry for a paused collection comes back as the fetch, not a discovery.
 
 - **WHERE A QUESTION'S "WORKS" GO: A FRAME OF A THOUSAND CLAIMS READ FOR EACH CLAIM (München's run of
   `tools/measure/works_walk.py`, 08:24Z; the deploy's question had said "works 9,229 [claims 8,837 …]"
