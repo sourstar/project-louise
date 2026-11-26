@@ -200,3 +200,123 @@ def test_a_split_learned_reshapes_later_windows(tmp_path, monkeypatch):
            for c in ("31970R0001", "31971R0002") for lang in ("it", "fr")]
     cellar.TreeUnits()._prepare_bulk(base, corpus, ["fr", "it"], due, "eu", "https://cellar.test")
     assert (1971, ("fr", "it")) not in calls, calls
+
+
+# ---- architecture's second read of 8a31ed06 ------------------------------------------------
+
+class _Resp:
+    def __init__(self, status, body=b"", headers=None):
+        self.status_code, self._body, self.headers = status, body, headers or {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def iter_bytes(self, n):
+        return iter([self._body]) if self._body else iter(())
+
+
+def _year_of(data):
+    import re
+    return int(re.search(r'STRSTARTS\(STR\(\?celex\), "3(\d{4})"\)', data["query"]).group(1))
+
+
+def test_one_short_503_does_not_drop_the_rest_of_the_phase(tmp_path, monkeypatch):
+    import json
+    import httpx
+    from app.acquire import backoff
+    base, corpus, due = _setup(tmp_path, monkeypatch, range(1970, 1982))
+    monkeypatch.setattr(backoff, "SCALE", 1.0)
+    monkeypatch.setattr(backoff, "_sleep", lambda s: time.sleep(min(s, 0.01)))
+    answered, lock, first = set(), threading.Lock(), [True]
+
+    def stream(self, method, url, data=None, **k):
+        year = _year_of(data)
+        with lock:
+            if first[0]:
+                first[0] = False
+                return _Resp(503, headers={"retry-after": "1"})
+            answered.add(year)
+        time.sleep(0.05)
+        return _Resp(200, json.dumps({"results": {"bindings": [{"n": {"value": "0"}}]}}).encode())
+    monkeypatch.setattr(httpx.Client, "stream", stream)
+    stop = threading.Event()
+    with get_manager().bind(Priority.BACKFILL, Direction.DOWN, stop=stop):
+        cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
+    assert len(answered) == 12, f"{12 - len(answered)} of 12 windows left unlisted after one short 503"
+
+
+def test_a_count_that_times_out_cools_no_other_window(tmp_path, monkeypatch):
+    import json
+    import httpx
+    from app.acquire import backoff
+    base, corpus, due = _setup(tmp_path, monkeypatch, range(1970, 1982))
+    monkeypatch.setattr(backoff, "SCALE", 1.0)
+    monkeypatch.setattr(backoff, "_sleep", lambda s: time.sleep(min(s, 0.01)))
+    answered, lock = set(), threading.Lock()
+
+    def stream(self, method, url, data=None, **k):
+        year = _year_of(data)
+        if year == 1970:
+            raise httpx.ReadTimeout("timed out")
+        with lock:
+            answered.add(year)
+        return _Resp(200, json.dumps({"results": {"bindings": [{"n": {"value": "0"}}]}}).encode())
+    monkeypatch.setattr(httpx.Client, "stream", stream)
+    stop = threading.Event()
+    with get_manager().bind(Priority.BACKFILL, Direction.DOWN, stop=stop):
+        cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
+    assert answered == set(range(1971, 1982)), "every other window asked"
+    assert get_manager().cooled_for(cellar.LISTING_KEY) == 0
+
+
+def test_a_long_wait_leaves_the_windows_left_to_the_next_pass_in_one_line(tmp_path, monkeypatch):
+    base, corpus, due = _setup(tmp_path, monkeypatch, range(1970, 1978))
+    get_manager().cool_down(cellar.LISTING_KEY, cellar.LISTING_COOL_WAIT_S + 300, "test")
+    monkeypatch.setattr(cellar, "_window_files", lambda *a, **k: (_ for _ in ()).throw(AssertionError("asked")))
+    said = []
+    monkeypatch.setattr(cellar, "_say_cellar", lambda name: said.append)
+    cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
+    lines = [m for m in said if "asked the listing to wait" in m]
+    assert len(lines) == 1 and "8 window(s) left" in lines[0]
+    assert not [m for m in said if "is not listed" in m], "never one line a window"
+
+
+def test_one_year_s_languages_are_listed_in_parallel(tmp_path, monkeypatch):
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    monkeypatch.setattr(work_trees, "_BULK", {})
+    base, corpus = tmp_path / "datadump", tmp_path / "corpus"
+    langs = ("de", "fr", "it", "nl")
+    for lang in langs:
+        _statement(base / f"datadump-{lang}", lang)
+        _zip(base / f"datadump-{lang}" / "LEG_MTD.zip", {MEMBER: (FX / MTD).read_bytes()})
+    eurlex_dump._stamp(corpus, {lang: CREATED for lang in langs})
+    due = [RemoteFile(rel_path=cellar.rel_path(lang, "31993R0001"), mtime=None,
+                      remote=cellar.encode("31993R0001", lang)) for lang in langs]
+    live, peak, lock = [0], [0], threading.Lock()
+
+    def window(client, url, year, ls, code_of, charge, place=None, learned=None):
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        time.sleep(0.3)
+        with lock:
+            live[0] -= 1
+        return iter(())
+    monkeypatch.setattr(cellar, "_window_files", window)
+    cellar.TreeUnits()._prepare_bulk(base, corpus, list(langs), due, "eu", "https://cellar.test")
+    assert peak[0] == 4, f"{peak[0]} window(s) at once for one year's 4 languages"
+
+
+def test_no_thread_outlives_the_phase(tmp_path, monkeypatch):
+    base, corpus, due = _setup(tmp_path, monkeypatch, range(1970, 1978))
+    monkeypatch.setattr(cellar, "_window_files", lambda *a, **k: iter(()))
+    stop = threading.Event()
+    before = {t.ident for t in threading.enumerate()}
+    with get_manager().bind(Priority.BACKFILL, Direction.DOWN, stop=stop):
+        cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
+    time.sleep(0.1)
+    left = [t.name for t in threading.enumerate() if t.ident not in before]
+    assert not left, left
