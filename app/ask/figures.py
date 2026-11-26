@@ -320,15 +320,16 @@ def _read_and_place(collection, shard_tree: Path, snapshot, uid: str, order: str
         return None
 
 
-def figure_bytes(collection: str, uid: str, hash_: str, *, root: Path | None = None) -> tuple[bytes, str]:
-    """07 §7.4: one plate's bytes and the media type its record names,
-    checked against the hash the record names. 403 for a red-class
-    collection (its figures never travel, as its text never does, 04 §4.4);
-    404 for a plate not held, not named by the record, or not carried.
-
-    OPAQUE BYTES: nothing here decodes or trusts them beyond their hash.
-    Whether they may be SHOWN is `not_displayable`, which the route asks
-    before it answers inline (08 §8.7, amended 2026-10-25)."""
+def figure_place(collection: str, uid: str, hash_: str, *,
+                 root: Path | None = None) -> tuple[Path, str, dict, Path]:
+    """WHERE one plate is, without its bytes: (its container, its bare hash,
+    the record's entry for it, the collection's SHARD tree). Every refusal
+    `figure_bytes` makes before it reads is made here — 403 for a red-class
+    collection or terms not acknowledged, 404 for a plate the record does not
+    name or the collection does not carry. For a caller that must know a
+    plate's TYPE AND SIZE before it decides to hold its bytes at all: a
+    preview is rendered in a child (app/ask/preview.py), and EUR-Lex's
+    largest plate is 565 MB."""
     from app import collections as collections_mod
     from app.hold import collection as col, figures as fig
     from app.share import seeder
@@ -351,7 +352,20 @@ def figure_bytes(collection: str, uid: str, hash_: str, *, root: Path | None = N
         raise FigureNotServed(404, f"{uid} names no figure {want[:12]}…")
     if not entry.get("carried", True):
         raise FigureNotServed(404, f"{want[:12]}… is not carried by this collection: asking again never works")
-    path = fig.path_for(shard_tree, shard.slice, shard.n)
+    return fig.path_for(shard_tree, shard.slice, shard.n), want, entry, shard_tree
+
+
+def figure_bytes(collection: str, uid: str, hash_: str, *, root: Path | None = None) -> tuple[bytes, str]:
+    """07 §7.4: one plate's bytes and the media type its record names,
+    checked against the hash the record names. 403 for a red-class
+    collection (its figures never travel, as its text never does, 04 §4.4);
+    404 for a plate not held, not named by the record, or not carried.
+
+    OPAQUE BYTES: nothing here decodes or trusts them beyond their hash.
+    Whether they may be SHOWN is `not_displayable`, which the route asks
+    before it answers inline (08 §8.7, amended 2026-10-25)."""
+    from app.hold import figures as fig
+    path, want, entry, _tree = figure_place(collection, uid, hash_, root=root)
     try:
         data = fig.read_figure(path, want)
     except (fig.FigureError, OSError):
@@ -507,7 +521,9 @@ def mentions(text: str, figures: list | None, *, link: str | None,
     marker's figure (`figures[i]`, placed for this chunk, 09 §9.5's
     alignment) is drawn when this node holds it; otherwise the entry points
     at `link`, the origin's page that shows it, and says why it is not
-    drawn here. `kind`: "img" (`hash`), "link" (`href`), "download"
+    drawn here. `kind`: "img" (`hash`; with `preview`, `media_type` and
+    `size` where what is drawn is this node's PNG of a plate the page cannot
+    show itself — a TIFF — and its own bytes are a download), "link" (`href`), "download"
     (`hash`, `media_type`, `bytes`, `size`, `why`: held, but not displayable under
     08 §8.7 — an SVG, a GIF, a plate over a cap — so offered as a file and
     never drawn), or "none" when no page is known either — said, never
@@ -520,6 +536,14 @@ def mentions(text: str, figures: list | None, *, link: str | None,
         if f is not None and f.get("state") == "held":
             why = entry_not_displayable(f)
             if why is not None:
+                from . import preview
+                if preview.entry_previewable(f):
+                    # drawn as the preview this node renders (08 §8.7, amended
+                    # 2026-11-26), its own bytes offered beside it
+                    out.append({"kind": "img", "hash": f["hash"], "caption": f.get("caption") or caption,
+                                "preview": True, "media_type": f.get("media_type"),
+                                "size": _size(f["bytes"] if isinstance(f.get("bytes"), int) else None)})
+                    continue
                 out.append({"kind": "download", "hash": f["hash"], "caption": f.get("caption") or caption,
                             "media_type": f.get("media_type"), "bytes": f.get("bytes"),
                             "size": _size(f["bytes"] if isinstance(f.get("bytes"), int) else None),

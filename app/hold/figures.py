@@ -273,6 +273,62 @@ def read_figure(path: Path, sha256: str) -> bytes:
     return data
 
 
+#: a plate is streamed in pieces of this size
+STREAM_CHUNK = 1 << 20
+
+
+class _Extent:
+    """`size` bytes of a file from `offset`, as the file-like object pyarrow
+    reads a compressed stream from."""
+
+    def __init__(self, f, offset: int, size: int) -> None:
+        self._f, self._left = f, size
+        f.seek(offset)
+
+    def read(self, n: int = -1) -> bytes:
+        if self._left <= 0:
+            return b""
+        got = self._f.read(self._left if n is None or n < 0 else min(n, self._left))
+        self._left -= len(got)
+        return got
+
+    def readable(self) -> bool:
+        return True
+
+    @property
+    def closed(self) -> bool:
+        return self._f.closed
+
+
+def stream_figure(path: Path, sha256: str, chunk: int = STREAM_CHUNK) -> Iterator[bytes]:
+    """One plate's bytes, by hash, IN PIECES — for a plate too large to hold
+    (EUR-Lex's largest is 565 MB; `read_figure` would hold it whole, twice
+    while it decompresses). The container's frame is read through zstd's
+    streaming decoder (pyarrow's `CompressedInputStream`: the library's own
+    call), hashed as it goes. A plate that does not hash to its key, or does
+    not have the length its index states, RAISES `FigureError` after its last
+    piece: a receiver that was sent pieces sees the transfer fail, never a
+    whole file that is not the plate."""
+    want = bare(sha256)
+    entry = read_index(path).get(want)
+    if entry is None:
+        raise FigureError(f"{Path(path).name}: holds no figure {want[:12]}…")
+    sha, sent = hashlib.sha256(), 0
+    with open(path, "rb") as f:
+        with pa.CompressedInputStream(pa.PythonFile(_Extent(f, entry.offset, entry.frame_bytes), mode="r"),
+                                      "zstd") as plain:
+            while True:
+                piece = plain.read(chunk)
+                if not piece:
+                    break
+                sha.update(piece)
+                sent += len(piece)
+                yield piece
+    if sent != entry.bytes or sha.hexdigest() != want:
+        raise FigureError(f"{Path(path).name}: figure {want[:12]}… streamed {sent} bytes hashing to "
+                          f"{sha.hexdigest()[:12]}… (its index states {entry.bytes})")
+
+
 def walk(path: Path) -> Iterator[tuple[str, bytes]]:
     """Every plate in the container, in hash order. One open, one pass —
     the shape a check wants, where `read_figure` is the shape a reader
