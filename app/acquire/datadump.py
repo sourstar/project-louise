@@ -254,7 +254,20 @@ class Dumps:
         Whether it is current is the caller's test (work_trees.matches)."""
         from ..plugins.eurlex import rdf
         with self._mtd_lock:
-            self._mtd_opened()
+            if self._mtd is None:
+                self._mtd = []
+                with self._lock:
+                    if self._folders is None:
+                        self._folders = self._scan()
+                    folders = [f for f, _ in self._folders.values()]
+                for folder in folders:
+                    for p in sorted(folder.rglob("*.zip")):
+                        if "MTD" not in p.name.upper():
+                            continue
+                        try:
+                            self._mtd.append(zipfile.ZipFile(_staged(p, self.log)))
+                        except (zipfile.BadZipFile, OSError) as e:
+                            self.log(f"[datadump] {p}: not read ({e}); its trees come from Cellar")
             data = None
             for zf in self._mtd:
                 try:
@@ -270,30 +283,6 @@ class Dumps:
             return rdf.read(data)           # outside the lock: the parse is the cost
         except rdf.RdfError:
             return None
-
-    def mtd_paths(self) -> list[Path]:
-        """The MTD zips `mtd_tree` reads, as staged (work_trees.mtd_index
-        reads them whole, each member once)."""
-        with self._mtd_lock:
-            self._mtd_opened()
-            return [Path(zf.filename) for zf in self._mtd if zf.filename]
-
-    def _mtd_opened(self) -> None:
-        """Under `_mtd_lock`: the MTD zips opened, once."""
-        if self._mtd is None:
-            self._mtd = []
-            with self._lock:
-                if self._folders is None:
-                    self._folders = self._scan()
-                folders = [f for f, _ in self._folders.values()]
-            for folder in folders:
-                for p in sorted(folder.rglob("*.zip")):
-                    if "MTD" not in p.name.upper():
-                        continue
-                    try:
-                        self._mtd.append(zipfile.ZipFile(_staged(p, self.log)))
-                    except (zipfile.BadZipFile, OSError) as e:
-                        self.log(f"[datadump] {p}: not read ({e}); its trees come from Cellar")
 
 
 #: the tree's file under its work's folder in the dump's MTD zip

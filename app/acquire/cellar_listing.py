@@ -79,3 +79,24 @@ def keep(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str
     tmp.write_bytes(gzip.compress(json.dumps({"n": n, "last": last, "rows": rows},
                                              separators=(",", ":")).encode(), 6))
     os.replace(tmp, path)
+
+
+def dates_of(wanted: set[tuple[str, str]]) -> dict[tuple[str, str], int]:
+    """The latest date any kept window gives each wanted (CELEX, language)
+    — its unit-modified as the last listing saw it (2026-11-26, architecture's
+    review of 1be767f6: a unit the Data Dump lacks is asked first with no
+    listing date, so a bulk tree older than what Cellar listed would land
+    unchecked). Read-only; a window that does not read is skipped."""
+    out: dict[tuple[str, str], int] = {}
+    if not wanted:
+        return out
+    for p in sorted(_base().glob("*/*.json.gz")):
+        try:
+            rows = json.loads(gzip.decompress(p.read_bytes())).get("rows") or []
+        except (OSError, ValueError, EOFError):
+            continue
+        for row in rows:
+            k = (str(row[0]), str(row[1]))
+            if k in wanted and isinstance(row[2], int) and row[2] > out.get(k, -1):
+                out[k] = row[2]
+    return out

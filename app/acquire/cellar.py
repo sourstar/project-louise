@@ -798,7 +798,8 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
                          client: httpx.Client | None = None,
                          charge: Callable[[int], None] = budget.acquire_bytes,
                          trees=None, listed_mtime: int | None = None,
-                         bulk: Callable[[str], dict | None] | None = None) -> Fetched:
+                         bulk: Callable[[str], dict | None] | None = None,
+                         bulk_not_before: int | None = None) -> Fetched:
     """A PARSER-4 unit of (CELEX, language) into `dest`, whole or not at all:
     the work's non-inferred tree scoped to the language (`tree.json`) and the
     items of the best form the TREE lists (`form_of` on `from_tree.notice`) —
@@ -809,9 +810,12 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
     listing's date of the unit; a tree `trees` kept serves it only where
     that tree dates the unit at least as late (review 2026-11-21, Q1).
     `bulk` (work_trees.BulkTrees): the work's tree from the Data Dump's MTD
-    by CELEX, taken FIRST, under the same rule as a kept one (bulk first,
-    2026-11-26: the tree landed is byte for byte the one Cellar serves,
-    München's proof on 20 units); never passed by `records-vs-origin`."""
+    by CELEX, taken FIRST where it dates the unit at least `bulk_not_before`
+    (bulk first, 2026-11-26: the tree landed is byte for byte the one Cellar
+    serves, München's proof on 20 units); never passed by `records-vs-origin`.
+    An item the bulk's tree names that Cellar does not serve as named sends
+    the unit back to Cellar's own tree, once, before it counts as failed: the
+    two are then not of one moment."""
     from ..plugins.eurlex import formex, from_tree, rdf
     from ..plugins.eurlex.source import LANGUAGES
     code = LANGUAGES[lang]
@@ -858,7 +862,7 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
         # the tree is the WORK's, every language's in it (no Accept-Language):
         # `trees` (work_trees.RecentTrees) serves one Cellar served for the
         # work's other languages within the pass
-        taken = _bulk_tree(bulk, celex, code, listed_mtime)
+        taken = _bulk_tree(bulk, celex, code, bulk_not_before)
         if taken is not None:
             (scoped, note), tree_from = taken, "dump"
         else:
@@ -868,37 +872,45 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
                 data, tree_from = _tree(client, url, celex, count), "cellar"
             scoped, note = parse(data)
         tree_s = time.monotonic() - t0 if tree_from == "cellar" else 0.0
-        form = form_of(note)
-        listed = note.items.get(form) or [] if form else []
-        if not listed or any(not it.name or not _NAME.match(it.name) for it in listed):
-            raise TransportError(f"cellar: the tree of {celex} ({code}) names no item of any of "
-                                 f"{', '.join(FORMS)} by a plain file name")
-        files: dict[str, bytes] = {}
-        t0 = time.monotonic()
-        for it in listed:
-            _stop_check()
-            if it.name in files or it.name in (NOTICE, rdf.TREE_FILE):
-                raise TransportError(f"cellar: two items of {celex} ({code}) named {it.name}")
-            files[it.name] = _get(client, it.uri, _headers({"Accept-Language": code.lower()}),
-                                  f"{it.name} of {celex} ({code})", charge=count).content
-        if form == "fmx4":
-            try:
-                view = formex.unpack(files)[0]          # a package read through
-                formex.own_wrapper(view, celex, view.__getitem__)
-            except formex.FormexError as e:
-                # no wrapper of THIS act: the next form the tree lists is its
-                # text, beside the Formex items (`next_form`)
-                alt = next_form(note)
-                if alt is None:
-                    raise TransportError(f"cellar: {celex} ({code}): {e}") from None
-                for it in note.items[alt]:
-                    _stop_check()
-                    if it.name in files or it.name in (NOTICE, rdf.TREE_FILE):
-                        raise TransportError(f"cellar: two items of {celex} ({code}) named {it.name}")
-                    files[it.name] = _get(client, it.uri, _headers({"Accept-Language": code.lower()}),
-                                          f"{it.name} of {celex} ({code})", charge=count).content
-            # a text in another language under this one's expression lands as
-            # the origin files it; the parser labels it (operator, 2026-11-16, B)
+        try:
+            form = form_of(note)
+            listed = note.items.get(form) or [] if form else []
+            if not listed or any(not it.name or not _NAME.match(it.name) for it in listed):
+                raise TransportError(f"cellar: the tree of {celex} ({code}) names no item of any of "
+                                     f"{', '.join(FORMS)} by a plain file name")
+            files: dict[str, bytes] = {}
+            t0 = time.monotonic()
+            for it in listed:
+                _stop_check()
+                if it.name in files or it.name in (NOTICE, rdf.TREE_FILE):
+                    raise TransportError(f"cellar: two items of {celex} ({code}) named {it.name}")
+                files[it.name] = _get(client, it.uri, _headers({"Accept-Language": code.lower()}),
+                                      f"{it.name} of {celex} ({code})", charge=count).content
+            if form == "fmx4":
+                try:
+                    view = formex.unpack(files)[0]          # a package read through
+                    formex.own_wrapper(view, celex, view.__getitem__)
+                except formex.FormexError as e:
+                    # no wrapper of THIS act: the next form the tree lists is its
+                    # text, beside the Formex items (`next_form`)
+                    alt = next_form(note)
+                    if alt is None:
+                        raise TransportError(f"cellar: {celex} ({code}): {e}") from None
+                    for it in note.items[alt]:
+                        _stop_check()
+                        if it.name in files or it.name in (NOTICE, rdf.TREE_FILE):
+                            raise TransportError(f"cellar: two items of {celex} ({code}) named {it.name}")
+                        files[it.name] = _get(client, it.uri, _headers({"Accept-Language": code.lower()}),
+                                              f"{it.name} of {celex} ({code})", charge=count).content
+                # a text in another language under this one's expression lands as
+                # the origin files it; the parser labels it (operator, 2026-11-16, B)
+        except TransportError as e:
+            if tree_from != "dump" or isinstance(e, TransferAborted):
+                raise
+            # the bulk's tree and what Cellar serves now are not of one
+            # moment: the unit is asked again with Cellar's own tree, once
+            return fetch_unit_from_tree(base, celex, lang, dest, client=client, charge=charge, trees=trees,
+                                        listed_mtime=listed_mtime)
         items_s = time.monotonic() - t0
         files[rdf.TREE_FILE] = rdf.dumps(scoped)
         _land(dest, files)
@@ -1077,6 +1089,8 @@ class CellarUnits:
         self._lock = threading.Lock()
         self._counts: Counter = Counter()
         self._since = time.monotonic()
+        self._bulk: dict[str, dict] = {}            # corpus root → {lang: work_trees.BulkTrees}
+        self._dates: dict[str, dict] = {}           # corpus root → {(celex, lang): listed mtime}
 
     def _count(self, got: "Fetched") -> None:
         with self._lock:
@@ -1245,10 +1259,10 @@ class TreeUnits(CellarUnits):
         root = _corpus_of(dest, remote)
         try:
             from . import work_trees
+            bulk, not_before = self._bulk_of(root, unit, remote, dest)
             got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent,
                                        trees=work_trees.recent_for(root) if root is not None else None,
-                                       listed_mtime=remote.mtime,
-                                       bulk=work_trees.bulk_for(root, log=_say_cellar(root.name)) if root is not None else None)
+                                       listed_mtime=remote.mtime, bulk=bulk, bulk_not_before=not_before)
         except TransportError as e:
             # a unit the dump lacked that Cellar does not give either: not
             # asked first again (eurlex_dump.mark_tried), so the complete
@@ -1270,6 +1284,22 @@ class TreeUnits(CellarUnits):
             eurlex_dump.mark_fetched(root, unit["lang"], unit["celex"])   # asked first once
         self._count(got)
         return got.moved
+
+    def _bulk_of(self, root: Path | None, unit: dict, remote: RemoteFile, dest: Path):
+        """The bulk's tree source for this unit and the date it must reach:
+        none for a unit HELD already (architecture's review of 1be767f6,
+        blocking: the dump build leaves to the API exactly the held units
+        NEWER than the dump, and the MTD's older tree landed over them) or
+        where `prepare` readied none; the listing's date, else the kept
+        listing's, else none."""
+        if root is None or dest.exists() or dest.parent.exists():
+            return None, None
+        key = str(root.resolve())
+        with self._lock:
+            bulk = (self._bulk.get(key) or {}).get(unit["lang"])
+            when = remote.mtime if remote.mtime is not None else \
+                (self._dates.get(key) or {}).get((unit["celex"], unit["lang"]))
+        return bulk, when
 
     def _reform(self, dest: Path, remote: RemoteFile, note) -> bool:
         """A held unit lacking the Formex package its tree lists is asked
@@ -1306,7 +1336,39 @@ class TreeUnits(CellarUnits):
             raise HeldBack(f"{getattr(collection, 'name', 'eurlex')}: a newer Data Dump of {', '.join(langs)} "
                            f"was not built ({type(e).__name__}: {str(e)[:300]}); bulk first, so Cellar is "
                            f"not asked for its units until it is") from e
+        self._prepare_bulk(dumps.base, Path(collection.corpus_dir), langs, pending,
+                           getattr(collection, "name", "eurlex"))
         return []
+
+    def _prepare_bulk(self, dump_base: Path, corpus: Path, langs: list[str], pending: list[RemoteFile],
+                      name: str) -> None:
+        """The trees the bulk holds, ready BEFORE the pass (bulk first,
+        2026-11-26): each language's MTD — the one of the dump stamped into
+        the corpus — indexed by CELEX, the stop asked between chunks; and the
+        due units' dates from the kept listing (a unit asked first has none
+        of its own: a bulk tree older than the date the listing last gave it
+        is not taken). An MTD that does not open holds the pass back."""
+        from app import parallel
+        from . import work_trees
+        from .spec import HeldBack
+        say = _say_cellar(name)
+        try:
+            bulk = work_trees.prepare_bulk(dump_base, corpus, langs, threads=parallel.processes(),
+                                           stop=_stop_requested, log=say)
+        except work_trees.Stopped as e:
+            raise TransferAborted(f"cellar: {e}") from None
+        except OSError as e:
+            raise HeldBack(f"{name}: the Data Dump's MTD does not read ({str(e)[:300]}); bulk first, so "
+                           f"Cellar is not asked for the trees it holds until it does") from e
+        due = {(unit_of(f)["celex"], unit_of(f)["lang"]) for f in pending if is_unit(f) and f.mtime is None}
+        from . import cellar_listing
+        dates = cellar_listing.dates_of(due) if bulk and due else {}
+        key = str(corpus.resolve())
+        with self._lock:
+            self._bulk[key] = bulk
+            self._dates[key] = dates
+        say(f"trees from the bulk: {', '.join(sorted(bulk)) or 'no language'}; "
+            f"{len(dates)} of {len(due)} unit(s) asked first dated by the kept listing")
 
 
 def _corpus_of(dest: Path, remote: RemoteFile) -> Path | None:
