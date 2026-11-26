@@ -1477,8 +1477,10 @@ def _where(collection) -> str:
     return str(runs_mod.directory(_root(), collection.name))
 
 
-#: place -> (allowed, reason, fresh until, the run the verdict is about,
-#: the kept statements as they were when it was given — `_kept_stamp`)
+#: place -> (allowed, reason, fresh until, the run the verdict is about — the
+#: one its look heard, or the one heard before it where the look heard none —,
+#: the kept statements as they were when it was given — `_kept_stamp` —, the
+#: query side: its run, or (QUERY_UNSETTLED, when, the run heard then))
 _verdicts: dict[str, tuple[bool, str, float, str | None, tuple, Any]] = {}
 
 
@@ -2106,18 +2108,21 @@ def _look(collection, stop: Callable[[], bool] | None,
 
 
 def _look_at_the_query_side(collection, stop: Callable[[], bool] | None,
-                            log: Callable[[str], None]) -> str | None:
+                            log: Callable[[str], None], heard_by: list | None = None) -> str | None:
     """AN ASYMMETRIC SPACE'S QUERY ENCODER IS A RUN OF ITS OWN (03 §3.3),
     gated "at once, and by itself" like the document one: until it is tested
     the space's collections answer no query (§3.6). Nobody embeds a document
     with it, so nothing here decides whether embedding may go on — it only
-    sees to it that the statement exists. Never raises."""
+    sees to it that the statement exists. Never raises. `heard_by` gets the
+    run the look heard, if it heard one, even where it then fails."""
     name, codex = collection.name, collection.codex
     if codex.space.query.encoder is None:
         return None
     try:
         recipe = collections_mod.recipe_for(collection)
         run_id = answering_run(recipe, query=True)
+        if heard_by is not None:
+            heard_by.append(run_id)
         heard(recipe, {run_id}, role="query")
         suspect = _suspect(collection, "query")
         if suspect:
@@ -2183,7 +2188,7 @@ def verdict_outdated(collection) -> bool:
         return False
     heard_now = answering(collection)
     doc = heard_now.get("document")
-    return (doc is not None and cached[3] is not None and cached[3] != doc) or \
+    return (doc is not None and cached[3] != doc) or \
         not _query_settled(cached[5], heard_now.get("query") if _asymmetric(collection) else None, time.time())
 
 
@@ -2221,7 +2226,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
     # about that side's old run (2026-11-26: only the document side was held
     # to this, and a query run a question heard would have waited the TTL out)
     if cached is not None and cached[2] > now and cached[4] == stamp and (
-            now_answering is None or cached[3] is None or cached[3] == now_answering) \
+            now_answering is None or cached[3] == now_answering) \
             and _query_settled(cached[5], heard_now.get("query") if _asymmetric(collection) else None, now) \
             and not _suspect(collection) and not _suspect(collection, "query"):
         return cached[0]
@@ -2250,21 +2255,34 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
                          f"[{collection.name}] {message}"[:500])
 
         allowed, reason, run_id = _look(collection, stop, log)
+        # THE RUN A VERDICT IS ABOUT: the one its look heard; where it heard
+        # none (the encoder could not be asked), the one heard BEFORE it — so
+        # a run heard since, by any process, is looked at at once, and one
+        # heard during the look too (the fifth read: a failed look stored
+        # "none", and "none" matched every run heard after it, so a run the
+        # web heard waited FAIL_TTL_S for its gate)
+        if run_id is None:
+            run_id = now_answering
         # the query run THIS look settled; where it could not, the time of the
         # failure: looked at again after FAIL_TTL_S, as a paused verdict is —
         # never at every step (the third read: twenty looks in ten rounds, a
         # twin load and stop on each, for a query model in LocalAI's cooldown)
-        query_run = _look_at_the_query_side(collection, stop, log)
+        query_heard: list = []
+        query_run = _look_at_the_query_side(collection, stop, log, heard_by=query_heard)
         if query_run is None and _asymmetric(collection):
             # WHEN it failed — after the look, which may have taken its whole
             # timeout (the fourth read: stamped before it, a probe that timed
-            # out was stored expired) — and the run heard then: another heard
-            # since is looked at at once, not after the bound (the fourth read)
-            query_run = (QUERY_UNSETTLED, time.time(), answering(collection).get("query"))
+            # out was stored expired) — and the run the look heard, or the one
+            # heard before it: never one heard DURING it (the fifth read: a
+            # probe hanging while the web heard R2 recorded R2 as looked at)
+            query_run = (QUERY_UNSETTLED, time.time(),
+                         query_heard[-1] if query_heard else heard_now.get("query"))
         # stamped AFTER looking: a statement the look itself wrote (a gate)
-        # is not a reason to look again
+        # is not a reason to look again — and FRESH FROM THEN: a look that took
+        # its whole timeout (300 s, as FAIL_TTL_S) was stored expired, and
+        # every step looked again, each a 300 s hang (the fifth read)
         _verdicts[where] = (allowed, reason,
-                            now + (PASS_TTL_S if allowed else FAIL_TTL_S), run_id,
+                            time.time() + (PASS_TTL_S if allowed else FAIL_TTL_S), run_id,
                             _kept_stamp(collection), query_run)
         if cached is None or cached[0] != allowed or cached[1] != reason:
             db.log_event(con, "info" if allowed else "error", "run-check",

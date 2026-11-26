@@ -39,7 +39,12 @@ measured (published figures disagree).
   standing in for a process; the second found a pid standing in for a process (LocalAI's container
   counts pids again after a restart), a run bound from an answer two processes could have given, an
   unreadable file making a model parkable, and the query side's verdict recording a run its look had
-  not settled; the third read follows these fixes. And the manual door, `hold embedder check`, is
+  not settled; the third found a binding erased by any process that could not bind and a failed query
+  look looked at again at every step; the fourth, a failed look stamped before it ended; the fifth, a
+  verdict stored already expired after a look that took its whole timeout (each step a 300 s hang), a run
+  heard DURING a failed look counted as looked at, a failed document look's "no run" matching every run
+  heard after it, and the keep rule without a test — all fixed with tests; a sixth read follows. And the
+  manual door, `hold embedder check`, is
   shut on a running node — the worker holds every collection's lock — so its hint now says to pause
   the collection first; that is how today's gate was run. I had told München the record was shared
   between web and worker: it was not, and the four silent minutes are what showed it.

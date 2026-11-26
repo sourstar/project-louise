@@ -27,6 +27,10 @@ import pytest
 from app import (config, gpu, httpc, localai_reclaimer, model_evict, model_load, model_pins, model_use, node_state,
                  platform_config, resident)
 from tests.test_model_evict import _in_set, _known, _used  # noqa: F401
+# its use rows are written against ITS module's NOW: taken when each test here
+# starts too, or a test run more than HOST_IDLE_S after that module's import
+# reads "used 4 s ago" as idle (2026-11-26: after a 65 s file before it)
+from tests.test_model_evict import _now_is_taken_when_the_test_starts  # noqa: F401
 
 REAL_FETCH = model_load._fetch_system
 S = "http://localai:8080"

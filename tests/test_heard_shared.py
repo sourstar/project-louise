@@ -518,3 +518,110 @@ def test_the_manual_door_says_to_pause_the_collection_first(node, endpoint):
     assert gate.status == copy_state.OPEN
     assert (f"`louise node pause {collection.name}`, `louise hold embedder check {collection.name}`, "
             f"`louise node resume {collection.name}`") in gate.clears
+
+
+# ---- the fifth read (2026-11-26) -------------------------------------------------------
+
+def test_a_look_that_took_its_whole_timeout_is_fresh_from_when_it_ended(node, endpoint, monkeypatch):
+    """THE FIFTH READ, run: the verdict's own expiry was `now + FAIL_TTL_S`
+    with `now` taken before both looks. The document side paused (it refuses
+    at once), the query probe running out its 300 s: stored expired, and every
+    embed step looked again — d, q, d, q, d, q, each a 300 s hang."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    real, clock, looks = run_check.answering_run, [1_000_000.0], []
+    monkeypatch.setattr(run_check.time, "time", lambda: clock[0])
+
+    def paused_and_slow(recipe, query=False, **k):
+        looks.append("q" if query else "d")
+        if query:
+            clock[0] += run_check.FAIL_TTL_S + 1          # the probe ran out its timeout
+            raise OSError("timed out")
+        raise OSError("the document model is paused")
+    monkeypatch.setattr(run_check, "answering_run", paused_and_slow)
+    run_check._verdicts.clear()
+    assert backend_gate.embed_allowed(con, collection) is False
+    for _ in range(3):
+        assert backend_gate.embed_allowed(con, collection) is False
+        worker._settle_the_run(con, collection)
+    assert looks == ["d", "q"], "looked at once, not at every step"
+    clock[0] += run_check.FAIL_TTL_S + 1
+    backend_gate.embed_allowed(con, collection)
+    assert looks == ["d", "q", "d", "q"], "and again after its bound"
+
+
+def test_a_query_run_heard_during_a_failed_look_is_looked_at_once_it_ends(node, endpoint, monkeypatch):
+    """THE FIFTH READ, run: the run heard was read AFTER the look — a query
+    probe hanging while the web heard R2 recorded R2 as looked at, and R2's
+    gate waited FAIL_TTL_S."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    real = run_check.answering_run
+
+    def hangs(recipe, query=False, **k):
+        if query:
+            time.sleep(0.01)
+            _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}, role="query"))
+            raise OSError("timed out")
+        return real(recipe, query=query, **k)
+    monkeypatch.setattr(run_check, "answering_run", hangs)
+    run_check._verdicts.clear()
+    assert backend_gate.embed_allowed(con, collection) is True
+    kept = run_check._verdicts[run_check._where(collection)][5]
+    assert kept[0] == run_check.QUERY_UNSETTLED and kept[2] == R1, "the run heard before the look"
+    assert run_check.verdict_outdated(collection), "R2, heard during it, is looked at now"
+
+
+def test_a_document_run_heard_since_a_failed_look_is_looked_at_once(node, endpoint, monkeypatch):
+    """THE FIFTH READ, run: a failed document look stored run None, and None
+    passed the cache's check for every run heard after it — a run the web
+    heard (München's case, a look during the restart) waited FAIL_TTL_S."""
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    real, looks = run_check.answering_run, []
+
+    def away(recipe, query=False, **k):
+        if not query:
+            looks.append(1)
+            raise OSError("the document model did not answer")
+        return real(recipe, query=query, **k)
+    monkeypatch.setattr(run_check, "answering_run", away)
+    run_check._verdicts.clear()
+    assert backend_gate.embed_allowed(con, collection) is False
+    assert run_check._verdicts[run_check._where(collection)][3] == R1, "the run heard before it"
+    worker._settle_the_run(con, collection)
+    assert looks == [1] and not run_check.verdict_outdated(collection), "the same run: within its bound"
+    time.sleep(0.01)
+    _as_another_process(lambda: run_check.heard(_recipe(collection), {R2}))
+    assert run_check.verdict_outdated(collection), "another run heard since: looked at now"
+    worker._settle_the_run(con, collection)
+    assert looks == [1, 1]
+    for _ in range(3):
+        worker._settle_the_run(con, collection)
+        backend_gate.embed_allowed(con, collection)
+    assert looks == [1, 1], "and no loop: that look failed holding R2, heard before it"
+
+
+def test_a_binding_survives_a_restart_and_a_stale_read(node, endpoint, pids, monkeypatch):
+    """THE FIFTH READ: the keep rule (a None process never erases a binding
+    for the same run, resolved under the lock) had no test that reached it.
+    A process just started knows no run and has only just seen the backend
+    process; a stale read of the record says nothing."""
+    now, seen = pids
+    root, collection, codex = node
+    con = db.connect(collection)
+    assert backend_gate.embed_allowed(con, collection) is True
+    key = f"{DOC_URL}\nmedcpt-article\ndocument"
+    bound = [101, "2026-11-26T08:00:00Z"]
+    assert json.loads(run_check.heard_path().read_text())["heard"][key]["proc"] == bound
+    seen["medcpt-article"] = time.monotonic()             # cannot bind yet
+    run_check._answering.clear()                          # a restart: its own memory empty
+    run_check._answering_at.clear()
+    run_check.heard(_recipe(collection), {R1})
+    assert json.loads(run_check.heard_path().read_text())["heard"][key]["proc"] == bound, "a restart"
+    monkeypatch.setattr(run_check, "_shared", lambda: {})  # the record read stale: "nothing said"
+    run_check.heard(_recipe(collection), {R1})
+    assert json.loads(run_check.heard_path().read_text())["heard"][key]["proc"] == bound, "a stale read"
