@@ -1,0 +1,312 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF xml:base="http://www.gutenberg.org/"
+  xmlns:dcterms="http://purl.org/dc/terms/"
+  xmlns:pgterms="http://www.gutenberg.org/2009/pgterms/"
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:cc="http://web.resource.org/cc/"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:dcam="http://purl.org/dc/dcam/"
+>
+  <pgterms:ebook rdf:about="ebooks/14">
+    <dcterms:publisher>Project Gutenberg</dcterms:publisher>
+    <dcterms:license rdf:resource="license"/>
+    <dcterms:issued rdf:datatype="http://www.w3.org/2001/XMLSchema#date">1991-04-01</dcterms:issued>
+    <dcterms:rights>Public domain in the USA.</dcterms:rights>
+    <pgterms:downloads rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">2066</pgterms:downloads>
+    <dcterms:creator>
+      <pgterms:agent rdf:about="2009/agents/8">
+        <pgterms:name>United States. Central Intelligence Agency</pgterms:name>
+        <pgterms:alias>Agency, United States. Central Intelligence</pgterms:alias>
+        <pgterms:alias>Central Intelligence Agency (U.S.)</pgterms:alias>
+        <pgterms:alias>CIA (Central Intelligence Agency (U.S.))</pgterms:alias>
+        <pgterms:webpage rdf:resource="https://en.wikipedia.org/wiki/Central_Intelligence_Agency"/>
+      </pgterms:agent>
+    </dcterms:creator>
+    <dcterms:title>The 1990 CIA World Factbook</dcterms:title>
+    <pgterms:marc508>Dr. Gregory B. Newby</pgterms:marc508>
+    <pgterms:marc520>"The 1990 CIA World Factbook" by the United States Central Intelligence Agency is an information-rich reference book produced for governmental use, published in the late 20th century. It provides detailed statistics and descriptions of countries and territories, including geographical data, demographic information, economic indicators, and political structures, organized for all 249 recognized entities during that period.  The beginning of the publication outlines the structure and purpose of the factbook, specifically catering to the needs of U.S. government officials. The introductory sections explain the format and content adjustments made since previous editions, laying a foundation for understanding each included nation's unique features. For instance, the facts provided for countries like Afghanistan, Albania, and Algeria introduce vital statistics about their geography, populations, economies, and government types, highlighting historical contexts such as Afghanistan's civil war and Algeria's reliance on oil exports. This serves as a fundamental resource for policy-making and research related to international relations and comparative studies in the political and economic landscape. (This is an automatically generated summary.)</pgterms:marc520>
+    <pgterms:marc908>Reading ease score: 28.2 (College graduate level). Very difficult to read.</pgterms:marc908>
+    <dcterms:language>
+      <rdf:Description rdf:nodeID="N3cfd6455d9144854b2ee85f365be9678">
+        <rdf:value rdf:datatype="http://purl.org/dc/terms/RFC4646">en</rdf:value>
+      </rdf:Description>
+    </dcterms:language>
+    <dcterms:subject>
+      <rdf:Description rdf:nodeID="N73bc4d96becd43a08ac1a09ffccdb32b">
+        <dcam:memberOf rdf:resource="http://purl.org/dc/terms/LCSH"/>
+        <rdf:value>World politics -- Handbooks, manuals, etc.</rdf:value>
+      </rdf:Description>
+    </dcterms:subject>
+    <dcterms:subject>
+      <rdf:Description rdf:nodeID="N01df114bcdf74baea9588df68b570e2c">
+        <dcam:memberOf rdf:resource="http://purl.org/dc/terms/LCSH"/>
+        <rdf:value>Geography -- Handbooks, manuals, etc.</rdf:value>
+      </rdf:Description>
+    </dcterms:subject>
+    <dcterms:subject>
+      <rdf:Description rdf:nodeID="Na2358ff048b54bb386d0b53b38faa62a">
+        <dcam:memberOf rdf:resource="http://purl.org/dc/terms/LCSH"/>
+        <rdf:value>Political science -- Handbooks, manuals, etc.</rdf:value>
+      </rdf:Description>
+    </dcterms:subject>
+    <dcterms:subject>
+      <rdf:Description rdf:nodeID="N63a8fde4928d493884ed68ca770b22f3">
+        <dcam:memberOf rdf:resource="http://purl.org/dc/terms/LCSH"/>
+        <rdf:value>Political statistics -- Handbooks, manuals, etc.</rdf:value>
+      </rdf:Description>
+    </dcterms:subject>
+    <dcterms:subject>
+      <rdf:Description rdf:nodeID="N3a49bd371b644ee3a16dd0db9abf4b69">
+        <dcam:memberOf rdf:resource="http://purl.org/dc/terms/LCC"/>
+        <rdf:value>G</rdf:value>
+      </rdf:Description>
+    </dcterms:subject>
+    <dcterms:type>
+      <rdf:Description rdf:nodeID="Nee72e79701224c5087cd580c6f0de2ce">
+        <dcam:memberOf rdf:resource="http://purl.org/dc/terms/DCMIType"/>
+        <rdf:value>Text</rdf:value>
+      </rdf:Description>
+    </dcterms:type>
+    <pgterms:bookshelf>
+      <rdf:Description rdf:nodeID="Nc6023a56bf0a47a1952ce2ac10d8011d">
+        <dcam:memberOf rdf:resource="2009/pgterms/Bookshelf"/>
+        <rdf:value>CIA World Factbooks</rdf:value>
+      </rdf:Description>
+    </pgterms:bookshelf>
+    <pgterms:bookshelf>
+      <rdf:Description rdf:nodeID="Nca0dc342a51a49329f9ead7cc9586f53">
+        <dcam:memberOf rdf:resource="2009/pgterms/Bookshelf"/>
+        <rdf:value>Category: Politics</rdf:value>
+      </rdf:Description>
+    </pgterms:bookshelf>
+    <pgterms:bookshelf>
+      <rdf:Description rdf:nodeID="N1517619d585f429db271dfbccfb20736">
+        <dcam:memberOf rdf:resource="2009/pgterms/Bookshelf"/>
+        <rdf:value>Category: Economics</rdf:value>
+      </rdf:Description>
+    </pgterms:bookshelf>
+    <pgterms:bookshelf>
+      <rdf:Description rdf:nodeID="N09f9b40846614a9291862591e0957ed1">
+        <dcam:memberOf rdf:resource="2009/pgterms/Bookshelf"/>
+        <rdf:value>Category: Encyclopedias/Dictionaries/Reference</rdf:value>
+      </rdf:Description>
+    </pgterms:bookshelf>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/14.html.images">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">2379085</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:32:15.376360</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N735822202da14a1ca538839dc4002bf4">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">text/html</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/14.html.noimages">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">2378607</dcterms:extent>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">2378608</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2025-01-01T03:33:00.766764</dcterms:modified>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2023-10-01T03:32:44.906819</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N1079f2a3c48e4f109a19704960cb31ad">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">text/html</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="Nf57e7e73f6744841ba4d7f45b72f7d1f">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">text/html</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/14.epub3.images">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">881755</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:32:41.319541</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="Nf26c1399129e4ed8a70e092d081dd76e">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/epub+zip</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/14.epub.images">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">949123</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:32:18.256387</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N439a26c653f241ad8a0ffbc251821e68">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/epub+zip</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/files/14/cover.jpg">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">255884</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2025-10-03T06:31:00</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="Nd8c637f642a942db875e14bf0884d86a">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">image/jpeg</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/14.epub.noimages">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">949124</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:32:16.723383</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N05cd4096f478422bb3ae169d8a36f174">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/epub+zip</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/14.kf8.images">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">2069869</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:32:58.873483</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N2d708fbb7e9b4e29baf1ad3f9185008e">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/x-mobipocket-ebook</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/14.kindle.images">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1926159</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:32:39.694558</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N37146e3e237148729c5834efad0ad5dd">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/x-mobipocket-ebook</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/14.kindle.noimages">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1523155</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2022-09-01T03:34:12.763508</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N296e40b1e19d4421926eb3bbc45109a3">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/x-mobipocket-ebook</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/14.txt.utf-8">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1970908</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:32:13.278354</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="Ncb27a4d663ed45288b9309c8065c54fc">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">text/plain; charset=utf-8</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/files/14/14-0.txt">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1897534</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2025-10-03T06:29:48</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="Ne5a7a702525d4c56aea4479b57f4471b">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">text/plain; charset=us-ascii</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/14.rdf">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">18663</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:32:59.203447</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N98556d51cf3547f09afae8d2fc30c6b0">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/rdf+xml</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/cache/epub/14/pg14.cover.medium.jpg">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">25062</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:32:17.022336</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="Nbef1a6ab25894b5db5bcb8ddf6417c20">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">image/jpeg</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/cache/epub/14/pg14.cover.small.jpg">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">4661</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:32:16.880354</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N772154e6c5ff45d7b9f87295285b1f32">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">image/jpeg</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/cache/epub/14/pg14-h.zip">
+        <dcterms:isFormatOf rdf:resource="ebooks/14"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">943535</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:32:15.450336</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N01df57fa6de141678279ea013ad6c05a">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value>application/octet-stream</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N7deaa073cc384dbd8534aa6b0644d4a9">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/zip</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+  </pgterms:ebook>
+  <cc:Work rdf:about="">
+    <cc:license rdf:resource="https://creativecommons.org/publicdomain/zero/1.0/"/>
+    <rdfs:comment>Archives containing the RDF files for *all* our books can be downloaded at
+            https://www.gutenberg.org/wiki/Gutenberg:Feeds#The_Complete_Project_Gutenberg_Catalog</rdfs:comment>
+  </cc:Work>
+  <rdf:Description rdf:about="https://en.wikipedia.org/wiki/Central_Intelligence_Agency">
+    <dcterms:description>en.wikipedia</dcterms:description>
+  </rdf:Description>
+</rdf:RDF>

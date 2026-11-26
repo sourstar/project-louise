@@ -1,0 +1,289 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rdf:RDF xml:base="http://www.gutenberg.org/"
+  xmlns:dcterms="http://purl.org/dc/terms/"
+  xmlns:pgterms="http://www.gutenberg.org/2009/pgterms/"
+  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns:cc="http://web.resource.org/cc/"
+  xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+  xmlns:dcam="http://purl.org/dc/dcam/"
+>
+  <pgterms:ebook rdf:about="ebooks/17">
+    <dcterms:publisher>Project Gutenberg</dcterms:publisher>
+    <dcterms:license rdf:resource="license"/>
+    <dcterms:issued rdf:datatype="http://www.w3.org/2001/XMLSchema#date">2008-06-25</dcterms:issued>
+    <dcterms:rights>Public domain in the USA.</dcterms:rights>
+    <pgterms:downloads rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">2380</pgterms:downloads>
+    <dcterms:creator>
+      <pgterms:agent rdf:about="2009/agents/12">
+        <pgterms:name>Smith, Joseph, Jr.</pgterms:name>
+        <pgterms:birthdate rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1805</pgterms:birthdate>
+        <pgterms:deathdate rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1844</pgterms:deathdate>
+        <pgterms:alias>Smith, Joseph</pgterms:alias>
+        <pgterms:webpage rdf:resource="https://en.wikipedia.org/wiki/Joseph_Smith%2C_Jr."/>
+      </pgterms:agent>
+    </dcterms:creator>
+    <dcterms:creator>
+      <pgterms:agent rdf:about="2009/agents/11">
+        <pgterms:name>Church of Jesus Christ of Latter-day Saints</pgterms:name>
+        <pgterms:webpage rdf:resource="https://en.wikipedia.org/wiki/The_Church_of_Jesus_Christ_of_Latter-day_Saints"/>
+      </pgterms:agent>
+    </dcterms:creator>
+    <dcterms:title>The Book of Mormon : $b an account written by the hand of Mormon, upon plates taken from the plates of Nephi</dcterms:title>
+    <dcterms:description>Wikipedia page about this book: https://en.wikipedia.org/wiki/Book_of_Mormon</dcterms:description>
+    <pgterms:marc508>David Widger</pgterms:marc508>
+    <pgterms:marc520>"The Book of Mormon: an account written by the hand of Mormon, upon plates…" is a religious text first published in 1830 by Joseph Smith. According to Smith, the book was translated from golden plates revealed by an angel, chronicling ancient peoples led from Jerusalem to the Americas. The text centers on an appearance of Jesus Christ in the Americas after his resurrection, containing teachings on atonement, baptism, and priesthood authority. Its origins remain contested between faith-based and scholarly interpretations. (This is an automatically generated summary.)</pgterms:marc520>
+    <pgterms:marc908>Reading ease score: 68.7 (8th &amp; 9th grade). Neither easy nor difficult to read.</pgterms:marc908>
+    <dcterms:language>
+      <rdf:Description rdf:nodeID="N7c9261032747420e8c1d02e0e507abd4">
+        <rdf:value rdf:datatype="http://purl.org/dc/terms/RFC4646">en</rdf:value>
+      </rdf:Description>
+    </dcterms:language>
+    <dcterms:subject>
+      <rdf:Description rdf:nodeID="Ndbb1ac0a14294b718056aeb4685235be">
+        <dcam:memberOf rdf:resource="http://purl.org/dc/terms/LCSH"/>
+        <rdf:value>Church of Jesus Christ of Latter-day Saints -- Sacred books</rdf:value>
+      </rdf:Description>
+    </dcterms:subject>
+    <dcterms:subject>
+      <rdf:Description rdf:nodeID="N0ae5f6bf662041edb1e96a8b4fcbad50">
+        <dcam:memberOf rdf:resource="http://purl.org/dc/terms/LCSH"/>
+        <rdf:value>Latter Day Saint churches -- Sacred books</rdf:value>
+      </rdf:Description>
+    </dcterms:subject>
+    <dcterms:subject>
+      <rdf:Description rdf:nodeID="N8458807d9ab745829dd0103cb3fb5538">
+        <dcam:memberOf rdf:resource="http://purl.org/dc/terms/LCC"/>
+        <rdf:value>BX</rdf:value>
+      </rdf:Description>
+    </dcterms:subject>
+    <dcterms:type>
+      <rdf:Description rdf:nodeID="Nb023d6e92210488ebc951a24a9d9b833">
+        <dcam:memberOf rdf:resource="http://purl.org/dc/terms/DCMIType"/>
+        <rdf:value>Text</rdf:value>
+      </rdf:Description>
+    </dcterms:type>
+    <pgterms:bookshelf>
+      <rdf:Description rdf:nodeID="N16f2a6cce24b48fb8929bb52a188b5e9">
+        <dcam:memberOf rdf:resource="2009/pgterms/Bookshelf"/>
+        <rdf:value>Christianity</rdf:value>
+      </rdf:Description>
+    </pgterms:bookshelf>
+    <pgterms:bookshelf>
+      <rdf:Description rdf:nodeID="N5219983cc1174186ab07a14e78db7df8">
+        <dcam:memberOf rdf:resource="2009/pgterms/Bookshelf"/>
+        <rdf:value>Latter Day Saints</rdf:value>
+      </rdf:Description>
+    </pgterms:bookshelf>
+    <pgterms:bookshelf>
+      <rdf:Description rdf:nodeID="N5589288b0d93481abad78934f32c8c0d">
+        <dcam:memberOf rdf:resource="2009/pgterms/Bookshelf"/>
+        <rdf:value>Category: Mythology, Legends &amp; Folklore</rdf:value>
+      </rdf:Description>
+    </pgterms:bookshelf>
+    <pgterms:bookshelf>
+      <rdf:Description rdf:nodeID="N842b0b55c74141f285c67f540647059a">
+        <dcam:memberOf rdf:resource="2009/pgterms/Bookshelf"/>
+        <rdf:value>Category: Religion/Spirituality</rdf:value>
+      </rdf:Description>
+    </pgterms:bookshelf>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/17.html.images">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1600614</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:33:40.109521</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="Nfa92454c1ad541d18a4e8106207b2e92">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">text/html</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/files/17/17-h/17-h.htm">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1575426</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2025-10-11T06:25:48</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N7b39e2a125d14f90aa8ecf081985c49a">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">text/html</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/17.epub3.images">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">727789</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:33:52.106513</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N298f453bb8c840e3acfd56baf6f978b5">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/epub+zip</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/17.epub.images">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">744994</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:33:41.781521</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N77e0db657c7545918cae30a7fefbbba1">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/epub+zip</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/17.epub.noimages">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">649239</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:33:40.873483</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N39ec8065d7b848eebf3f6b6c4c87e8ef">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/epub+zip</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/17.kf8.images">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1136098</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:34:00.621394</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N76dea012940b4a5ebf487e7fe2d9bf0b">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/x-mobipocket-ebook</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/17.kindle.images">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1105075</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:33:51.183491</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N67bb8eb81d5949c0a288f3ab964ea943">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/x-mobipocket-ebook</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/17.kindle.noimages">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">991658</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2022-09-01T03:36:23.430111</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N7bdfdd82b20a44b69d93324e63b7e7c2">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/x-mobipocket-ebook</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/17.txt.utf-8">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1518918</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:33:37.910498</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N7b27d8f8606f453bbad4105c6d438a40">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">text/plain; charset=utf-8</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/files/17/17-0.txt">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">1467913</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2025-10-11T06:18:50</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N8abb3fd03afe4d5e8209bea3abfb452c">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">text/plain; charset=us-ascii</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/ebooks/17.rdf">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">16827</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:34:00.893397</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N4e0182188e0e403ea4c0a5f15e48ae20">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/rdf+xml</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/cache/epub/17/pg17.cover.medium.jpg">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">25970</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:33:41.122496</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="Nddf4d433448f47cf91a421f01d2104c4">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">image/jpeg</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/cache/epub/17/pg17.cover.small.jpg">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">2462</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:33:40.998497</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N714e2a1497a94c788e01ec29590e1f12">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">image/jpeg</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+    <dcterms:hasFormat>
+      <pgterms:file rdf:about="https://www.gutenberg.org/cache/epub/17/pg17-h.zip">
+        <dcterms:isFormatOf rdf:resource="ebooks/17"/>
+        <dcterms:extent rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">710277</dcterms:extent>
+        <dcterms:modified rdf:datatype="http://www.w3.org/2001/XMLSchema#dateTime">2026-07-01T03:33:40.171530</dcterms:modified>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N57da616564964457ad3a3c92d5f7f7ab">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value>application/octet-stream</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+        <dcterms:format>
+          <rdf:Description rdf:nodeID="N43a2cd50f4a445549e221e199a9e97b7">
+            <dcam:memberOf rdf:resource="http://purl.org/dc/terms/IMT"/>
+            <rdf:value rdf:datatype="http://purl.org/dc/terms/IMT">application/zip</rdf:value>
+          </rdf:Description>
+        </dcterms:format>
+      </pgterms:file>
+    </dcterms:hasFormat>
+  </pgterms:ebook>
+  <cc:Work rdf:about="">
+    <cc:license rdf:resource="https://creativecommons.org/publicdomain/zero/1.0/"/>
+    <rdfs:comment>Archives containing the RDF files for *all* our books can be downloaded at
+            https://www.gutenberg.org/wiki/Gutenberg:Feeds#The_Complete_Project_Gutenberg_Catalog</rdfs:comment>
+  </cc:Work>
+  <rdf:Description rdf:about="https://en.wikipedia.org/wiki/Joseph_Smith%2C_Jr.">
+    <dcterms:description>en.wikipedia</dcterms:description>
+  </rdf:Description>
+  <rdf:Description rdf:about="https://en.wikipedia.org/wiki/The_Church_of_Jesus_Christ_of_Latter-day_Saints">
+    <dcterms:description>en.wikipedia</dcterms:description>
+  </rdf:Description>
+</rdf:RDF>
