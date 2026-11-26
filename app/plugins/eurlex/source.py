@@ -290,6 +290,9 @@ ISSUES = {
                                 "validity: it stays open-ended, labelled (under-closed)",
     "form-disagrees-with-celex": "the Formex body is a consolidation (CONS.ACT) and the CELEX an "
                                  "original, or the reverse; the CELEX decides the version",
+    "orphan-image": "an image the unit holds is neither placed in the text (no Formex INCL.ELEMENT, no "
+                    "html <img> names it) nor offered in another form of the expression: its content is in "
+                    "no text and in no alternative (operator, 2026-11-26)",
     "item-not-its-form": "an item the origin lists under a manifestation is not of that form (a TIFF "
                          "page image declared application/pdf): held in the unit, not read as that form",
     "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
@@ -425,6 +428,49 @@ PDF_HEADER_WINDOW = 1024
 def _is_pdf(data: bytes) -> bool:
     """Is this file a PDF by its CONTENT — the header a PDF reader looks for?"""
     return b"%PDF-" in data[:PDF_HEADER_WINDOW]
+
+
+_IMAGE_KINDS = frozenset({"tiff", "jpeg", "png", "gif"})
+_FILEREF = re.compile(rb'FILEREF\s*=\s*"([^"]+)"')
+_IMG_SRC = re.compile(rb'<img\b[^>]*?\bsrc\s*=\s*"([^"]+)"', re.IGNORECASE)
+
+
+def _image_kind(name: str, data: bytes) -> str | None:
+    """An image by its name's extension or its first bytes, else None."""
+    kind = formex.EXTENSION_KIND.get(os.path.splitext(name)[1].lower())
+    if kind in _IMAGE_KINDS:
+        return kind
+    if data[:4] in (b"II*\x00", b"MM\x00*") or data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image"
+    return None
+
+
+def _orphan_images(view: dict[str, bytes], form: str | None, note) -> list[str]:
+    """The images of the unit that no text places and no other form offers:
+    referenced where a Formex body or annex names it (`INCL.ELEMENT
+    FILEREF`, every TYPE) or an html's `<img src>` does; offered in another
+    form where the expression's tree lists a manifestation other than the
+    one read, or where the read form is a PDF the manifestation holds beside
+    its page scans (32007M4820 en)."""
+    images = [n for n, b in view.items() if _image_kind(n, b)]
+    if not images:
+        return []
+    named: set[str] = set()
+    for n, b in view.items():
+        kind = formex.EXTENSION_KIND.get(os.path.splitext(n)[1].lower())
+        if kind != "markup" or formex.is_wrapper(n):
+            continue
+        for m in _FILEREF.finditer(b):
+            named.add(os.path.basename(m.group(1).decode("utf-8", "replace")))
+        for m in _IMG_SRC.finditer(b):
+            named.add(os.path.basename(m.group(1).decode("utf-8", "replace")))
+    other_forms = {f for f, items in (note.items or {}).items() if items and f != form}
+    if other_forms:
+        return []
+    if form is not None and form.startswith("pdf") and any(
+            it.name in view and _is_pdf(view[it.name]) for it in note.items.get(form, []) if it.name):
+        return []                       # the PDF beside its page scans offers them as text
+    return sorted(n for n in images if n not in named)
 
 
 def _content_kind(data: bytes) -> str:
@@ -1041,6 +1087,15 @@ class EurlexSource:
                                           f"({', '.join(sorted(note.items))})")
         except formex.FormexError as e:
             raise UnindexableDocument(f"{unit}: {e}") from None
+        # ORPHAN IMAGES (operator, 2026-11-26: "either the same information are
+        # offered in a different format or there is a reference to the image
+        # in the text, both work, just signal when an image has no alternative
+        # form and no reference in the text"): said, never refused
+        orphans = _orphan_images(view, form, note)
+        if orphans:
+            found.append(Issue("orphan-image", f"{len(orphans)} image(s) neither placed in the text nor offered "
+                                               f"in another form of the expression: {', '.join(orphans[:10])}"
+                                               + (" …" if len(orphans) > 10 else "")))
         # RULE 2: the record is what the origin returned. A unit whose
         # notice or tree is another act's, or another language's expression,
         # is refused — never filed under the slice it was asked for

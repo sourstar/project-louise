@@ -158,3 +158,28 @@ def test_any_folder_name_zips_at_any_depth_and_other_folders_passed_over(mock, t
     got = cellar.fetch_unit(mock.base, ACT, "en", tmp_path / src.unit_rel("en", ACT), dump=dumps.for_language("en"))
     assert got.from_dump == sum(len(b) for b in files.values()) and not _item_gets(mock)
     assert not said, "a folder that is not a dump is not reported"
+
+
+def test_a_dated_dump_a_level_down_is_read_and_each_language_takes_its_newest(tmp_path):
+    """2026-11-26: a whole dump of 2026-11-15 (601 GB) sat as
+    `dump-2026-11-15/datadump-<lang>/` beside the 11-08 cut's
+    `datadump-<lang>/`; only the top level was read, and the bulk-first
+    check never saw the newer dump. EuroVoc's folder beside them is no dump."""
+    root = tmp_path / "louise-measure"
+    _dump(root, "bg", {"x/fmx4/y": b"old"}, created="2026-11-08T00:00:00+14:00")
+    dated = root / "dump-2026-11-15"
+    _dump(dated, "bg", {"x/fmx4/y": b"new"}, created="2026-11-15T01:00:00+01:00")
+    _dump(dated, "sv", {"x/fmx4/y": b"new"}, created="2026-11-15T01:00:00+01:00")
+    (dated / "datadump-mtd").mkdir()
+    with zipfile.ZipFile(dated / "datadump-mtd" / "LEG_MTD.zip", "w") as z:
+        z.writestr("u/tree_non_inferred.rdf", b"<rdf/>")
+    (root / "euvoc-2026-11-16").mkdir()
+    (root / "euvoc-2026-11-16" / "eurovoc.rdf").write_bytes(b"<rdf/>")
+    said: list[str] = []
+    found = datadump.Dumps(root, log=said.append)._scan()
+    assert found["bg"][0] == dated / "EURLEX_BG" and found["bg"][1].date().isoformat() == "2026-11-15"
+    assert found["sv"][0] == dated / "EURLEX_SV"
+    assert any("the dump of 2026-11-15" in s and "not the older one" in s for s in said)
+    assert not any("datadump-mtd" in s or "euvoc" in s for s in said), said
+    from app.acquire import eurlex_dump
+    assert not eurlex_dump.unread_statements(root, tmp_path / "corpus"), "nothing left unread"
