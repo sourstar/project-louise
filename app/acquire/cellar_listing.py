@@ -26,6 +26,7 @@ asked.
 """
 from __future__ import annotations
 
+import contextlib
 import gzip
 import hashlib
 import json
@@ -66,16 +67,104 @@ def held(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str
         data = json.loads(gzip.decompress(_path(endpoint, year, languages, force).read_bytes()))
     except (OSError, ValueError, EOFError):
         return None
+    if data.get("shape") != SHAPE:
+        return None             # an older format (review of 13743848, 2): paged once, kept anew
     if data.get("n") != n or data.get("last") != last or len(data.get("rows") or []) > n:
         return None
     return data["rows"]
 
 
-def keep(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str | None, rows: list, *,
-         force: bool = False) -> None:
-    path = _path(endpoint, year, languages, force)
+@contextlib.contextmanager
+def _locked(path: Path):
+    """One writer of a window at a time across processes (`keep`, `vouched`):
+    `vouched`'s read-modify-write must not put old rows back under a fresh
+    `at` (review of 13743848, 4)."""
+    import fcntl
     path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(f".{path.name}.lock"), "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def keep(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str | None, rows: list, *,
+         force: bool = False, at: float | None = None) -> None:
+    """The window as listed. `at`: when its COUNT was asked — what the rows
+    are known whole as of (review of 7eb82ba1, 3a: the last page's time is
+    later than what the count vouched for)."""
+    path = _path(endpoint, year, languages, force)
+    with _locked(path):
+        _keep(path, year, languages, n, last, rows, force=force, endpoint=endpoint, at=at)
+
+
+def _keep(path: Path, year: int, languages: tuple[str, ...], n: int, last: str | None, rows: list, *,
+          force: bool, endpoint: str, at: float | None) -> None:
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
-    tmp.write_bytes(gzip.compress(json.dumps({"n": n, "last": last, "rows": rows},
+    import time
+    tmp.write_bytes(gzip.compress(json.dumps({"n": n, "last": last, "rows": rows, "year": year,
+                                              "languages": list(languages), "force": force,
+                                              "endpoint": endpoint.rstrip("/"), "shape": SHAPE,
+                                              "at": time.time() if at is None else at},
                                              separators=(",", ":")).encode(), 6))
     os.replace(tmp, path)
+
+
+
+def vouched(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: str | None, *,
+            force: bool = False, at: float | None = None) -> None:
+    """The window's fingerprint was asked NOW and still holds (cellar
+    `_window_files`): its `at` — when it was last known whole, which
+    `coverage` reads — is set to now, the file rewritten whole (review of
+    a783fd1c, 5: a file's mtime is not a statement). A window kept before
+    `at` was stored is left as it is: it vouches for nothing, and is listed."""
+    import time
+    path = _path(endpoint, year, languages, force)
+    with _locked(path):
+        try:
+            data = json.loads(gzip.decompress(path.read_bytes()))
+        except (OSError, ValueError, EOFError):
+            return
+        if data.get("shape") != SHAPE or data.get("n") != n or data.get("last") != last:
+            return              # another format, or another pass kept other rows meanwhile
+        data["at"] = time.time() if at is None else at
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
+        tmp.write_bytes(gzip.compress(json.dumps(data, separators=(",", ":")).encode(), 6))
+        os.replace(tmp, path)
+
+
+def coverage(wanted: set[tuple[str, str]], after: dict[str, float],
+             endpoint: str) -> tuple[dict[tuple[str, str], int], dict[tuple[int, str], float]]:
+    """WHAT THE KEPT LISTING VOUCHES FOR SINCE THE DUMP (architecture's decision,
+    2026-11-26, on EUR-Lex5.next's 122,317 units asked first): a window is a
+    whole enumeration of a (CELEX year, language set) with each unit's
+    modified date, so one known whole (`at`) after the stamped dump's
+    `created` (`after`, `{lang: epoch}`) says for each of its units whether it
+    changed since. ONLY a window of this endpoint and this SHAPE counts: the
+    file must sit at the path its own (year, languages, force) name for
+    `endpoint` (review of a783fd1c, blocking: windows of the format before
+    11-19, dated by the work alone, still lay beside them and would vouch a
+    unit whose manifestation Cellar replaced). Anything else is not counted,
+    and its window is listed again. Returns the wanted units' dates from such
+    windows, and the (year, language) pairs they cover with the `at` each is
+    known whole as of. Read-only."""
+    dates: dict[tuple[str, str], int] = {}
+    cover: dict[tuple[int, str], float] = {}
+    for p in sorted(_base().glob("*/*.json.gz")):
+        try:
+            data = json.loads(gzip.decompress(p.read_bytes()))
+            year, langs = int(data["year"]), tuple(data["languages"])
+            at, force = float(data["at"]), bool(data.get("force"))
+        except (OSError, ValueError, EOFError, KeyError, TypeError):
+            continue
+        if data.get("shape") != SHAPE or p != _path(endpoint, year, langs, force):
+            continue
+        fresh = {l for l in langs if at > after.get(l, float("inf"))}
+        for l in fresh:
+            cover[(year, l)] = max(at, cover.get((year, l), 0.0))
+        for row in data.get("rows") or []:
+            k = (str(row[0]), str(row[1]))
+            if k[1] in fresh and k in wanted and isinstance(row[2], int) and row[2] > dates.get(k, -1):
+                dates[k] = row[2]
+    return dates, cover

@@ -66,6 +66,7 @@ and language, the busiest start day and the inventory's time are OWED.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -80,7 +81,7 @@ import httpx
 
 from ..transfer.manager import current_handle
 from . import budget
-from .spec import AcquisitionSpec, Endpoint, Filter, RemoteFile, TransferAborted, TransportError
+from .spec import AcquisitionSpec, Endpoint, Filter, RemoteFile, TransferAborted, TransportError, Waiting
 
 PREFIX = "cellar:"
 SPARQL_PATH = "/webapi/rdf/sparql"
@@ -492,6 +493,7 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     deferred to the next round."""
     from . import cellar_listing
     lang_text = ",".join(languages) if len(languages) <= 4 else f"{len(languages)} languages"
+    counted_at = time.time()                # what the window is known whole as of (review of 7eb82ba1, 3a)
     try:
         counted = sparql(client, base, fingerprint_query(year, languages),
                          what=f"the count of {year} ({lang_text})", charge=charge)
@@ -512,6 +514,7 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     force = place is not None
     kept = cellar_listing.held(base, year, languages, want, latest, force=force)
     if kept is not None:
+        cellar_listing.vouched(base, year, languages, want, latest, force=force, at=counted_at)
         # the window as the last pass listed it: its count and its latest
         # modification are the same, so no row moved (cellar_listing.py)
         for row in kept:
@@ -547,7 +550,7 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
         # re-listed next pass (worded for engine.transient)
         raise TransportError(f"cellar: the {year} window answered {got} of the {want} rows its "
                              f"count names (connection timed out, the answer cut)")
-    cellar_listing.keep(base, year, languages, want, latest, listed, force=force)
+    cellar_listing.keep(base, year, languages, want, latest, listed, force=force, at=counted_at)
 
 
 # ---- one unit ---------------------------------------------------------------------------------
@@ -797,7 +800,9 @@ def fetch_unit(base: str, celex: str, lang: str, dest: Path, *,
 def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
                          client: httpx.Client | None = None,
                          charge: Callable[[int], None] = budget.acquire_bytes,
-                         trees=None, listed_mtime: int | None = None) -> Fetched:
+                         trees=None, listed_mtime: int | None = None,
+                         bulk: Callable[[str], dict | None] | None = None,
+                         bulk_not_before: int | None = None) -> Fetched:
     """A PARSER-4 unit of (CELEX, language) into `dest`, whole or not at all:
     the work's non-inferred tree scoped to the language (`tree.json`) and the
     items of the best form the TREE lists (`form_of` on `from_tree.notice`) —
@@ -806,7 +811,14 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
     unit the Data Dump builds (eurlex_dump.py) is this one, byte for byte:
     what `records-vs-origin` re-fetches to check it. `listed_mtime`: the
     listing's date of the unit; a tree `trees` kept serves it only where
-    that tree dates the unit at least as late (review 2026-11-21, Q1)."""
+    that tree dates the unit at least as late (review 2026-11-21, Q1).
+    `bulk` (work_trees.BulkTrees): the work's tree from the Data Dump's MTD
+    by CELEX, taken FIRST where it dates the unit at least `bulk_not_before`
+    (bulk first, 2026-11-26: the tree landed is byte for byte the one Cellar
+    serves, München's proof on 20 units); never passed by `records-vs-origin`.
+    An item the bulk's tree names that Cellar does not serve as named sends
+    the unit back to Cellar's own tree, once, before it counts as failed: the
+    two are then not of one moment."""
     from ..plugins.eurlex import formex, from_tree, rdf
     from ..plugins.eurlex.source import LANGUAGES
     code = LANGUAGES[lang]
@@ -853,43 +865,69 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
         # the tree is the WORK's, every language's in it (no Accept-Language):
         # `trees` (work_trees.RecentTrees) serves one Cellar served for the
         # work's other languages within the pass
-        if trees is not None:
-            data, tree_from = trees.get(celex, lambda: _tree(client, url, celex, count), current)
-        else:
-            data, tree_from = _tree(client, url, celex, count), "cellar"
-        scoped, note = parse(data)
-        tree_s = time.monotonic() - t0 if tree_from == "cellar" else 0.0
-        form = form_of(note)
-        listed = note.items.get(form) or [] if form else []
-        if not listed or any(not it.name or not _NAME.match(it.name) for it in listed):
-            raise TransportError(f"cellar: the tree of {celex} ({code}) names no item of any of "
-                                 f"{', '.join(FORMS)} by a plain file name")
-        files: dict[str, bytes] = {}
-        t0 = time.monotonic()
-        for it in listed:
-            _stop_check()
-            if it.name in files or it.name in (NOTICE, rdf.TREE_FILE):
-                raise TransportError(f"cellar: two items of {celex} ({code}) named {it.name}")
-            files[it.name] = _get(client, it.uri, _headers({"Accept-Language": code.lower()}),
-                                  f"{it.name} of {celex} ({code})", charge=count).content
-        if form == "fmx4":
+        taken = _bulk_tree(bulk, celex, code, bulk_not_before)
+        kept = trees.peek(celex) if taken is not None and hasattr(trees, "peek") else None
+        if kept is not None:
+            # a tree Cellar served this pass that dates the unit LATER than
+            # the bulk's wins, with no request (review of 9870a240)
             try:
-                view = formex.unpack(files)[0]          # a package read through
-                formex.own_wrapper(view, celex, view.__getitem__)
-            except formex.FormexError as e:
-                # no wrapper of THIS act: the next form the tree lists is its
-                # text, beside the Formex items (`next_form`)
-                alt = next_form(note)
-                if alt is None:
-                    raise TransportError(f"cellar: {celex} ({code}): {e}") from None
-                for it in note.items[alt]:
-                    _stop_check()
-                    if it.name in files or it.name in (NOTICE, rdf.TREE_FILE):
-                        raise TransportError(f"cellar: two items of {celex} ({code}) named {it.name}")
-                    files[it.name] = _get(client, it.uri, _headers({"Accept-Language": code.lower()}),
-                                          f"{it.name} of {celex} ({code})", charge=count).content
-            # a text in another language under this one's expression lands as
-            # the origin files it; the parser labels it (operator, 2026-11-16, B)
+                k_note = parse(kept)[1]
+            except TransportError:
+                k_note = None
+            k_when = _epoch(k_note.modified or k_note.last_modified) if k_note is not None else None
+            b_when = _epoch(taken[1].modified or taken[1].last_modified)
+            if k_when is not None and (b_when is None or k_when > b_when):
+                taken, data, tree_from = None, kept, "kept"
+        if taken is not None:
+            (scoped, note), tree_from = taken, "dump"
+        elif kept is not None and tree_from == "kept":
+            scoped, note = parse(data)
+        else:
+            if trees is not None:
+                data, tree_from = trees.get(celex, lambda: _tree(client, url, celex, count), current)
+            else:
+                data, tree_from = _tree(client, url, celex, count), "cellar"
+            scoped, note = parse(data)
+        tree_s = time.monotonic() - t0 if tree_from == "cellar" else 0.0
+        try:
+            form = form_of(note)
+            listed = note.items.get(form) or [] if form else []
+            if not listed or any(not it.name or not _NAME.match(it.name) for it in listed):
+                raise TransportError(f"cellar: the tree of {celex} ({code}) names no item of any of "
+                                     f"{', '.join(FORMS)} by a plain file name")
+            files: dict[str, bytes] = {}
+            t0 = time.monotonic()
+            for it in listed:
+                _stop_check()
+                if it.name in files or it.name in (NOTICE, rdf.TREE_FILE):
+                    raise TransportError(f"cellar: two items of {celex} ({code}) named {it.name}")
+                files[it.name] = _get(client, it.uri, _headers({"Accept-Language": code.lower()}),
+                                      f"{it.name} of {celex} ({code})", charge=count).content
+            if form == "fmx4":
+                try:
+                    view = formex.unpack(files)[0]          # a package read through
+                    formex.own_wrapper(view, celex, view.__getitem__)
+                except formex.FormexError as e:
+                    # no wrapper of THIS act: the next form the tree lists is its
+                    # text, beside the Formex items (`next_form`)
+                    alt = next_form(note)
+                    if alt is None:
+                        raise TransportError(f"cellar: {celex} ({code}): {e}") from None
+                    for it in note.items[alt]:
+                        _stop_check()
+                        if it.name in files or it.name in (NOTICE, rdf.TREE_FILE):
+                            raise TransportError(f"cellar: two items of {celex} ({code}) named {it.name}")
+                        files[it.name] = _get(client, it.uri, _headers({"Accept-Language": code.lower()}),
+                                              f"{it.name} of {celex} ({code})", charge=count).content
+                # a text in another language under this one's expression lands as
+                # the origin files it; the parser labels it (operator, 2026-11-16, B)
+        except TransportError as e:
+            if tree_from != "dump" or isinstance(e, TransferAborted) or _episode(e):
+                raise                       # the endpoint going away says nothing of the bulk's tree
+            # the bulk's tree and what Cellar serves now are not of one
+            # moment: the unit is asked again with Cellar's own tree, once
+            return fetch_unit_from_tree(base, celex, lang, dest, client=client, charge=charge, trees=trees,
+                                        listed_mtime=listed_mtime)
         items_s = time.monotonic() - t0
         files[rdf.TREE_FILE] = rdf.dumps(scoped)
         _land(dest, files)
@@ -900,6 +938,55 @@ def fetch_unit_from_tree(base: str, celex: str, lang: str, dest: Path, *,
     finally:
         if own:
             client.close()
+
+
+def _say_cellar(name: str) -> Callable[[str], None]:
+    """A log line naming the collection (its corpus's name, as TreeInventory's)."""
+    return lambda message: print(f"{time.strftime('%H:%M:%S')} [{name} info:cellar] {message}", flush=True)
+
+
+#: a covered window's fingerprint is asked again after this (once a day)
+WINDOW_REFRESH_S = 24 * 3600.0
+#: a window whose re-ask failed is not asked again before this, nor before
+#: the next prepare (review of 4076ab4c, Z1: 50 units, 50 counts of 900 s)
+WINDOW_FAILED_HOLD_S = 15 * 60.0
+
+
+class WindowNotListed(Waiting):
+    """A unit asked first whose listing window is not known whole since the
+    dump was cut: it WAITS. Nothing is asked of Cellar; the engine records
+    nothing (spec.Waiting); TreeUnits.fetch marks it waiting in the dump's
+    ledger (`eurlex_dump.mark_waiting`, never tried), so it is due again
+    after `engine.retry_wait_s(n)` of its own count — 60 s up to 2 h — and
+    the count restarts from 0 once a pass lists its window (`mark_listed`);
+    a unit inside its wait is reached only when the wait ends."""
+
+
+def window_year(celex: str) -> int | None:
+    """The CELEX year of the listing window a CELEX falls in (`_window`:
+    sector 3 acts and 0 consolidations), or None."""
+    m = re.match(r"^[03](\d{4})", celex)
+    return int(m.group(1)) if m else None
+
+
+def _bulk_tree(bulk, celex: str, code: str, listed_mtime: int | None):
+    """(scoped tree, notice) of the unit from the bulk's tree, or None: no
+    bulk, the MTD lacks the work, its tree does not read as the unit's, or it
+    dates the unit before the listing does (the rule a kept tree meets)."""
+    from ..plugins.eurlex import from_tree, rdf
+    full = bulk(celex) if bulk is not None else None
+    if full is None:
+        return None
+    scoped = rdf.scope(full, code)
+    try:
+        note = from_tree.notice(scoped, code, celex)
+    except from_tree.TreeError:
+        return None
+    if listed_mtime is not None:
+        held = _epoch(note.modified or note.last_modified)
+        if held is None or held < listed_mtime:
+            return None
+    return scoped, note
 
 
 def _work_of(note) -> str | None:
@@ -1043,6 +1130,14 @@ class CellarUnits:
         self._lock = threading.Lock()
         self._counts: Counter = Counter()
         self._since = time.monotonic()
+        self._bulk: dict[str, dict] = {}            # corpus root → {lang: work_trees.BulkTrees}
+        self._dates: dict[str, dict] = {}           # corpus root → {(celex, lang): listed mtime}
+        self._cover: dict[str, dict] = {}           # corpus root → {(year, lang): at}, known whole since the dump
+        self._after: dict[str, dict] = {}           # corpus root → {lang: the stamped dump's created, epoch}
+        self._due: dict[str, set] = {}              # corpus root → the units asked first this pass
+        self._base_url: dict[str, str | None] = {}  # corpus root → Cellar's base, for a window asked again
+        self._window_locks: dict[tuple, Any] = {}   # (root, year, lang) → one refresher at a time
+        self._window_failed: dict[tuple, float] = {}  # (root, year, lang) → when its re-ask failed
 
     def _count(self, got: "Fetched") -> None:
         with self._lock:
@@ -1209,11 +1304,21 @@ class TreeUnits(CellarUnits):
                 self._count(Fetched(files={}, moved=0, tree_from="held"))
                 return 0
         root = _corpus_of(dest, remote)
+        from . import work_trees
         try:
-            from . import work_trees
+            bulk, not_before = self._bulk_of(root, unit, remote, dest)
+        except WindowNotListed as e:
+            # it waits (nothing asked); marked so the asked-first list lets the
+            # complete listing have its turn (review of 13743848, 3)
+            if root is not None and remote.mtime is None:
+                from . import eurlex_dump
+                eurlex_dump.mark_waiting(root, unit["lang"], unit["celex"], str(e))
+            raise
+        try:
             got = fetch_unit_from_tree(endpoint.url, unit["celex"], unit["lang"], dest.parent,
                                        trees=work_trees.recent_for(root) if root is not None else None,
-                                       listed_mtime=remote.mtime)
+                                       listed_mtime=remote.mtime if remote.mtime is not None else not_before,
+                                       bulk=bulk, bulk_not_before=not_before)
         except TransportError as e:
             # a unit the dump lacked that Cellar does not give either: not
             # asked first again (eurlex_dump.mark_tried), so the complete
@@ -1230,11 +1335,124 @@ class TreeUnits(CellarUnits):
                 elif remote.mtime is None:
                     eurlex_dump.mark_deferred(root, unit["lang"], unit["celex"], str(e))
             raise
+        if root is not None:
+            work_trees.record_source(root, unit["lang"], unit["celex"], got.tree_from,
+                                     getattr(bulk, "created", None))
         if remote.mtime is None and root is not None:
             from . import eurlex_dump
             eurlex_dump.mark_fetched(root, unit["lang"], unit["celex"])   # asked first once
         self._count(got)
         return got.moved
+
+    def _bulk_of(self, root: Path | None, unit: dict, remote: RemoteFile, dest: Path):
+        """The bulk's tree source for this unit and the date it must reach
+        (architecture's decision, 2026-11-26):
+          - a unit HELD already: none (review of 1be767f6: the dump build
+            leaves to the API exactly the held units newer than the dump);
+          - a unit with a listing date: the bulk, not older than it;
+          - a unit asked first, its window known whole since the dump: the
+            bulk where the listing shows it unchanged since `created`,
+            Cellar's tree (or a newer kept one) where changed or absent;
+          - its window not known whole since the dump: it WAITS
+            (`WindowNotListed`), never taken from the bulk on silence;
+          - a CELEX no window lists (another sector): Cellar's tree."""
+        if root is None or dest.exists() or dest.parent.exists():
+            return None, None
+        key = str(root.resolve())
+        with self._lock:
+            bulk = (self._bulk.get(key) or {}).get(unit["lang"])
+            dates = self._dates.get(key) or {}
+            cover = self._cover.get(key) or {}
+            after = (self._after.get(key) or {}).get(unit["lang"])
+        if bulk is None:
+            return None, None
+        if remote.mtime is not None:
+            return bulk, remote.mtime
+        year = window_year(unit["celex"])
+        if year is None or after is None:
+            return None, None
+        at = cover.get((year, unit["lang"]))
+        if at is None:
+            raise WindowNotListed(f"cellar: {unit['celex']} ({unit['lang']}): its {year} window is not "
+                                  f"known whole since the dump was cut; nothing asked, it waits for the listing")
+        when = dates.get((unit["celex"], unit["lang"]))
+        if when is None:
+            # absent from the listing, or listed with no modification date (58
+            # of the node's 240,392 rows): nothing says it is unchanged since
+            # the dump, so Cellar's tree — never the bulk's on silence
+            return None, None
+        if when > after:
+            return None, when                   # changed since the dump: Cellar's tree, no older than this
+        if time.time() - at > WINDOW_REFRESH_S:
+            # THE BOUND, ENFORCED AT FETCH TIME, on the one path that takes the
+            # bulk's tree (architecture's decisions on d863230c, Y3, and on
+            # 6f6e72ab, 2): a window counted more than a day ago is asked
+            # again HERE, once (its fingerprint, under its lock), and the unit
+            # is judged on the fresh count; a window that cannot be asked
+            # leaves the unit waiting
+            self._refresh_window(key, year, unit["lang"])
+            with self._lock:
+                when = (self._dates.get(key) or {}).get((unit["celex"], unit["lang"]))
+                at = (self._cover.get(key) or {}).get((year, unit["lang"]))
+            if at is None or time.time() - at > WINDOW_REFRESH_S:
+                raise WindowNotListed(f"cellar: {unit['celex']} ({unit['lang']}): its {year} window was known "
+                                      f"whole more than a day ago and could not be asked again; it waits")
+            if when is None:
+                return None, None
+            if when > after:
+                return None, when
+        return bulk, when
+
+    def _refresh_window(self, key: str, year: int, lang: str) -> None:
+        """The (year, language) window asked again — its fingerprint, its
+        pages where it moved — by ONE fetch thread (a lock per window; the
+        others wait for it and find it fresh), and `_cover`/`_dates` refreshed
+        from what it now vouches. An episode leaves both as they were."""
+        from . import cellar_listing
+        from ..plugins.eurlex.source import LANGUAGES
+        with self._lock:
+            lock = self._window_locks.setdefault((key, year, lang), __import__("threading").Lock())
+            base_url = self._base_url.get(key)
+        with lock:
+            _stop_check()                               # a stop while queued on the lock asks nothing
+            with self._lock:
+                at = (self._cover.get(key) or {}).get((year, lang))
+                due, after = set(self._due.get(key) or ()), dict(self._after.get(key) or {})
+                failed = self._window_failed.get((key, year, lang))
+            if base_url is None or (at is not None and time.time() - at <= WINDOW_REFRESH_S):
+                return                                  # another thread refreshed it meanwhile
+            if failed is not None and time.time() - failed < WINDOW_FAILED_HOLD_S:
+                return                                  # failed a moment ago: its units wait, nothing asked
+            code_of = {v: k for k, v in LANGUAGES.items()}
+            try:
+                # bound WITHOUT the endpoint's key, as the engine's listings are
+                # (engine._listing_bound; review of 4076ab4c, Z2): a count that
+                # times out must not cool Cellar for every fetch thread
+                from ..transfer.manager import Direction, get_manager
+                handle = current_handle()
+                bound = get_manager().bind(handle.priority, Direction.DOWN, stop=handle.stop) \
+                    if handle is not None else contextlib.nullcontext()
+                with bound, httpx.Client(timeout=TIMEOUT_S) as client:
+                    for _ in _window_files(client, base_url, year, (lang,), code_of, budget.acquire_bytes,
+                                           place=lambda *a: False, learned={"group": 1}):
+                        pass
+            except TransferAborted:
+                raise
+            except (TransportError, OSError) as e:
+                # an episode, a window that moved between its count and its
+                # pages, or the listing not written (ENOSPC): remembered, so the
+                # window's other units wait at once (Z1, Z5, Z3); said once
+                with self._lock:
+                    self._window_failed[(key, year, lang)] = time.time()
+                _say_cellar(Path(key).name)(f"the {year} window ({lang}) was not asked again "
+                                            f"({type(e).__name__}: {str(e)[:200]}): its units wait")
+                return
+            dates, cover = cellar_listing.coverage({u for u in due if u[1] == lang and window_year(u[0]) == year},
+                                                   after, base_url)
+            with self._lock:
+                if (year, lang) in cover:
+                    self._dates.setdefault(key, {}).update(dates)       # the dates before the cover
+                    self._cover.setdefault(key, {})[(year, lang)] = cover[(year, lang)]
 
     def _reform(self, dest: Path, remote: RemoteFile, note) -> bool:
         """A held unit lacking the Formex package its tree lists is asked
@@ -1260,9 +1478,14 @@ class TreeUnits(CellarUnits):
         from . import datadump, eurlex_dump
         from .spec import HeldBack
         dumps = datadump.dumps()
-        if dumps.base is None:
-            return []
         langs = sorted({unit_of(f)["lang"] for f in pending if is_unit(f)})
+        if dumps.base is None:
+            # no dump folder named: nothing newer to build, but a language
+            # whose dump is stamped into the corpus holds the pass back
+            # (review of 13743848, 1: an unset EURLEX_DATADUMP_DIR sent every
+            # tree to Cellar)
+            self._prepare_bulk_held(None, collection, langs, pending, endpoint)
+            return []
         try:
             eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs, stop=_stop_requested)
         except (TransferAborted, HeldBack):
@@ -1271,7 +1494,132 @@ class TreeUnits(CellarUnits):
             raise HeldBack(f"{getattr(collection, 'name', 'eurlex')}: a newer Data Dump of {', '.join(langs)} "
                            f"was not built ({type(e).__name__}: {str(e)[:300]}); bulk first, so Cellar is "
                            f"not asked for its units until it is") from e
+        self._prepare_bulk_held(dumps.base, collection, langs, pending, endpoint)
         return []
+
+    def _prepare_bulk_held(self, dump_base, collection, langs, pending, endpoint) -> None:
+        """`_prepare_bulk`, whatever stops it holding the pass back (review of
+        7eb82ba1, 1: an OSError in the listing phase — ENOSPC on the fast
+        drive — left prepare as itself, the engine went on "not prepared",
+        and every tree was asked of Cellar: F4 again)."""
+        from .spec import HeldBack
+        name = getattr(collection, "name", "eurlex")
+        try:
+            self._prepare_bulk(dump_base, Path(collection.corpus_dir), langs, pending, name,
+                               getattr(endpoint, "url", None))
+        except (TransferAborted, HeldBack):
+            raise
+        except Exception as e:  # noqa: BLE001 — whatever stopped the bulk, Cellar waits for it
+            raise HeldBack(f"{name}: the trees the Data Dump holds were not readied ({type(e).__name__}: "
+                           f"{str(e)[:300]}); bulk first, so Cellar is not asked for them until they are") from e
+
+    def _prepare_bulk(self, dump_base: Path, corpus: Path, langs: list[str], pending: list[RemoteFile],
+                      name: str, base_url: str | None = None) -> None:
+        """The trees the bulk holds, ready BEFORE the pass (bulk first,
+        2026-11-26): each language's MTD — the one of the dump stamped into
+        the corpus — indexed by CELEX, the stop asked between chunks. Then
+        WHAT CHANGED SINCE THE DUMP WAS CUT, from the listing (architecture's
+        decision, 2026-11-26): a (CELEX year, language) of a unit asked first
+        whose window was not known whole after the stamped dump's `created`
+        is listed FIRST — a windowed listing, a count and its pages, kept and
+        re-used — the stop asked between windows; a window that cannot be
+        listed leaves its units waiting. An MTD that does not open holds the
+        pass back."""
+        from app import parallel
+        from . import cellar_listing, datadump, eurlex_dump, work_trees
+        from .spec import HeldBack
+        from ..plugins.eurlex.source import LANGUAGES
+        say = _say_cellar(name)
+        try:
+            bulk = work_trees.prepare_bulk(dump_base, corpus, langs, threads=parallel.processes(),
+                                           stop=_stop_requested, log=say)
+        except work_trees.Stopped as e:
+            raise TransferAborted(f"cellar: {e}") from None
+        except OSError as e:
+            raise HeldBack(f"{name}: the Data Dump's MTD does not read ({str(e)[:300]}); bulk first, so "
+                           f"Cellar is not asked for the trees it holds until it does") from e
+        due = {(unit_of(f)["celex"], unit_of(f)["lang"]) for f in pending
+               if is_unit(f) and f.mtime is None and unit_of(f)["lang"] in bulk}
+        after: dict[str, float] = {}
+        for lang, when in eurlex_dump.stamp(corpus).items():
+            got = datadump._stamp(when)
+            if got is not None:
+                after[lang] = got.timestamp()
+        dates, cover = cellar_listing.coverage(due, after, base_url) if due and base_url else ({}, {})
+        # A COVERED WINDOW IS ASKED AGAIN ONCE A DAY (architecture's decision,
+        # 2026-11-26, the operator's bulk-check rule): its fingerprint, for a
+        # window known whole more than REFRESH_S ago that holds units still
+        # due — a change Cellar made since is then seen. THE BOUND LEFT: a
+        # change within the day before a unit lands lands the dump's tree; the
+        # next complete listing sees its date and fetches it again.
+        missing: dict[int, set[str]] = {}
+        stale = 0
+        now = time.time()
+        for celex, lang in due:
+            year = window_year(celex)
+            if year is None:
+                continue
+            at = cover.get((year, lang))
+            if at is None or now - at > WINDOW_REFRESH_S:
+                stale += at is not None and lang not in missing.get(year, set())
+                missing.setdefault(year, set()).add(lang)
+        unlisted: set[tuple[int, str]] = set()
+        if missing and base_url:
+            t0, asked = time.monotonic(), 0
+            code_of = {v: k for k, v in LANGUAGES.items()}
+            say(f"listing what changed since the dump: {sum(len(v) for v in missing.values())} "
+                f"(year, language) window(s) of {len(missing)} year(s), {stale} of them known whole more "
+                f"than a day ago, before any unit is built from it")
+            # THE SPLIT, LEARNED across the years, as `listing` does (review of
+            # a783fd1c, 3: a 24-language count ran past 900 s on 11-14)
+            learned = {"group": max(len(v) for v in missing.values())}
+            with httpx.Client(timeout=TIMEOUT_S) as client:
+                for year in sorted(missing):
+                    _stop_check()
+                    langs_y = sorted(missing[year])
+                    group = max(1, learned["group"])
+                    for window in (tuple(langs_y[i:i + group]) for i in range(0, len(langs_y), group)):
+                        try:
+                            for _ in _window_files(client, base_url, year, window, code_of, budget.acquire_bytes,
+                                                   place=lambda *a: False, learned=learned):
+                                pass
+                            asked += 1
+                        except TransportError as e:
+                            if isinstance(e, TransferAborted):
+                                raise
+                            unlisted |= {(year, l) for l in window}
+                            say(f"cellar: the {year} window ({', '.join(window)}) is not listed "
+                                f"({str(e)[:200]}): its units wait")
+            dates, cover = cellar_listing.coverage(due, after, base_url)
+            # only the windows LISTED this pass end their units' wait (review
+            # of d863230c, Y1: a re-listing that failed reset it; Y2: every
+            # covered window's units were marked, ~122k marks a pass)
+            now_listed = {(y, l) for y, ls in missing.items() for l in ls} - unlisted
+            waiting = {(l, c) for l, units_ in eurlex_dump.incomplete(corpus).items()
+                       for c, e in units_.items() if isinstance(e, dict) and e.get("waiting")}
+            back = [(l, c) for c, l in due if (window_year(c), l) in now_listed and (window_year(c), l) in cover
+                    and (l, c) in waiting]          # only a unit that waits (review of 6f6e72ab, 3)
+            if back:
+                eurlex_dump.mark_listed(corpus, back)       # their wait is over: n from 0
+            say(f"listed {asked} window(s) in {time.monotonic() - t0:.0f} s")
+        elif missing:
+            unlisted = {(y, l) for y, ls in missing.items() for l in ls}
+        cover = {k: at for k, at in cover.items() if k not in unlisted}
+        key = str(corpus.resolve())
+        with self._lock:
+            self._bulk[key] = bulk
+            self._dates[key] = dates
+            self._cover[key] = cover
+            self._after[key] = after
+            self._due[key] = due
+            self._base_url[key] = base_url
+            for k in [k for k in self._window_failed if k[0] == key]:
+                del self._window_failed[k]              # a new prepare asks every window afresh
+        changed = sum(1 for k, d in dates.items() if d > after.get(k[1], float("inf")))
+        unchanged = len(dates) - changed
+        say(f"trees from the bulk: {', '.join(sorted(bulk)) or 'no language'}; of {len(due)} unit(s) asked first, "
+            f"{unchanged} unchanged since the dump (its tree), {changed} changed (Cellar's), "
+            f"{len(due) - len(dates)} not vouched for (Cellar's, or waiting: {len(unlisted)} window(s) unlisted)")
 
 
 def _corpus_of(dest: Path, remote: RemoteFile) -> Path | None:
