@@ -1,0 +1,345 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 26 Nov 2026 22:12:21 +0000
+Subject: [PATCH] fix(model): a park refused for the host's memory floor says
+ what it read
+
+A park that would leave the host under park_host_floor_bytes is refused
+(412 host_memory_floor) with four figures: what was available, what other
+parks in flight are copying, the bytes to park, the floor. Nothing was
+logged, and "available" is itself a decision - the host's MemAvailable or a
+memory cgroup's room, whichever is smaller - so a refusal could not say
+WHICH limited it. A refusal seen during a gate (six parks of 605 MB, then
+412 while several models were starting) could not be told from a full
+container or a host whose page cache was not yet counted.
+
+The host is now read once into xsysinfo.MemoryReading - MemAvailable, each
+memory cgroup's limit, working set and room, and the ZFS ARC's size and its
+floor where the host has one (/proc/spl/kstat/zfs/arcstats; Linux's
+MemAvailable does not count the ARC, which gives memory back under
+pressure) - and the park is decided on that very reading, by the same rule
+as before (AllocatableMemory is ReadMemory().Allocatable(); the ARC is said
+and decided on by nobody). A refusal logs a warning with every figure, and
+its answer ends with the reading:
+
+  ... a floor of 12288 MiB (MemAvailable 9674 MiB; cgroup v2: limit 24576
+  MiB, working set ... MiB, room ... MiB; ZFS ARC 14336 MiB, its floor 1024
+  MiB (not counted in MemAvailable))
+
+Specs: the reading keeps each cgroup's figures, parses the ARC and decides
+nothing on it, and gives the same figure as before; a refusal names the
+reading it was decided on, read once (it fails without this change).
+
+Assisted-by: Claude Code
+---
+ pkg/model/park.go                    |  36 ++++----
+ pkg/model/park_internal_test.go      |  32 ++++++++
+ pkg/xsysinfo/memory_headroom.go      | 118 +++++++++++++++++++++++++--
+ pkg/xsysinfo/memory_headroom_test.go |  29 +++++++
+ 4 files changed, 192 insertions(+), 23 deletions(-)
+
+diff --git a/pkg/model/park.go b/pkg/model/park.go
+index 3608c70..18948c7 100644
+--- a/pkg/model/park.go
++++ b/pkg/model/park.go
+@@ -153,13 +153,12 @@ func (ml *ModelLoader) SetHostAvailableMemorySource(available func() (uint64, er
+ 	ml.hostAvailable = available
+ }
+ 
+-// hostAvailableMemory is what a backend of this process can still take: the
++// readHostMemory is what a backend of this process can still take: the
+ // host's available memory and, in a container with a memory limit, no more
+-// than the limit still allows. The weights are copied into the BACKEND's
+-// memory, which is this process's cgroup.
+-func hostAvailableMemory() (uint64, error) {
+-	return xsysinfo.AllocatableMemory(), nil
+-}
++// than the limit still allows (xsysinfo.MemoryReading.Allocatable). The
++// weights are copied into the BACKEND's memory, which is this process's
++// cgroup. A variable, so that a spec can give it a reading.
++var readHostMemory = xsysinfo.ReadMemory
+ 
+ // ParkModel parks a loaded model: its weights leave the device, its process
+ // stays. It waits for nothing but the park itself - not for a busy model,
+@@ -274,13 +273,19 @@ func (ml *ModelLoader) park(ctx context.Context, modelName, address string) (Par
+ 
+ 	// The host, now. Not an hour ago, and not a budget: what is available at
+ 	// this moment, less what the parks in flight are about to copy into it
+-	// and what this one would, against the floor.
++	// and what this one would, against the floor. Read ONCE, and the reading
++	// kept: a refusal says what it was decided on (MemAvailable, the cgroup's
++	// room, the ZFS ARC beside them), in its answer and in the log.
++	var free uint64
++	saw := "the host's memory as a source set for this process reads it"
+ 	if available == nil {
+-		available = hostAvailableMemory
+-	}
+-	free, err := available()
+-	if err != nil {
+-		return ParkedState{}, fmt.Errorf("%w: the host's memory could not be read (%v)", ErrParkHostFloor, err)
++		reading := readHostMemory()
++		free, saw = reading.Allocatable(), reading.String()
++	} else {
++		var err error
++		if free, err = available(); err != nil {
++			return ParkedState{}, fmt.Errorf("%w: the host's memory could not be read (%v)", ErrParkHostFloor, err)
++		}
+ 	}
+ 	ml.mu.Lock()
+ 	reserved := ml.parkReserved
+@@ -290,8 +295,11 @@ func (ml *ModelLoader) park(ctx context.Context, modelName, address string) (Par
+ 	}
+ 	ml.mu.Unlock()
+ 	if !fits {
+-		return ParkedState{}, fmt.Errorf("%w: %d MiB available, %d MiB being parked by others, %d MiB to park, a floor of %d MiB",
+-			ErrParkHostFloor, free>>20, reserved>>20, size>>20, floor>>20)
++		xlog.Warn("A park was refused: it would leave the host under its memory floor", "model", modelName,
++			"available_mib", free>>20, "parking_by_others_mib", reserved>>20, "to_park_mib", size>>20,
++			"floor_mib", floor>>20, "read", saw)
++		return ParkedState{}, fmt.Errorf("%w: %d MiB available, %d MiB being parked by others, %d MiB to park, a floor of %d MiB (%s)",
++			ErrParkHostFloor, free>>20, reserved>>20, size>>20, floor>>20, saw)
+ 	}
+ 	defer func() {
+ 		ml.mu.Lock()
+diff --git a/pkg/model/park_internal_test.go b/pkg/model/park_internal_test.go
+index 0668b50..df2671a 100644
+--- a/pkg/model/park_internal_test.go
++++ b/pkg/model/park_internal_test.go
+@@ -12,6 +12,7 @@ import (
+ 	"github.com/mudler/LocalAI/pkg/grpc"
+ 	pb "github.com/mudler/LocalAI/pkg/grpc/proto"
+ 	"github.com/mudler/LocalAI/pkg/system"
++	"github.com/mudler/LocalAI/pkg/xsysinfo"
+ 	. "github.com/onsi/ginkgo/v2"
+ 	. "github.com/onsi/gomega"
+ 	ggrpc "google.golang.org/grpc"
+@@ -276,6 +277,37 @@ var _ = Describe("Parking", func() {
+ 			Expect(backend.parks).To(Equal(1))
+ 		})
+ 
++		It("says what it read when it refuses for the floor, and decides on that very reading", func() {
++			// the default source: one reading, the same one the answer and the log name
++			ml.SetHostAvailableMemorySource(nil)
++			was := readHostMemory
++			defer func() { readHostMemory = was }()
++			reads := 0
++			readHostMemory = func() xsysinfo.MemoryReading {
++				reads++
++				return xsysinfo.MemoryReading{HostAvailable: 40 * gib,
++					V2:  xsysinfo.CgroupRoom{Limited: true, Limit: 24 * gib, WorkingSet: 24*gib - (floor + 6*gib - 1), Headroom: floor + 6*gib - 1},
++					ARC: true, ARCSize: 14 * gib, ARCMin: 1 * gib}
++			}
++			_, err := ml.ParkModel(context.Background(), "m")
++			Expect(err).To(MatchError(ErrParkHostFloor))
++			Expect(reads).To(Equal(1), "read once")
++			Expect(err.Error()).To(ContainSubstring(fmt.Sprintf("%d MiB available", (floor+6*gib-1)>>20)),
++				"the cgroup's room decided it: the smaller of the two")
++			Expect(err.Error()).To(ContainSubstring("(MemAvailable 40960 MiB; cgroup v2: limit 24576 MiB, working set"))
++			Expect(err.Error()).To(ContainSubstring("; ZFS ARC 14336 MiB, its floor 1024 MiB (not counted in MemAvailable))"))
++			Expect(backend.parks).To(BeZero())
++
++			// the same reading with room: parked, read once again
++			readHostMemory = func() xsysinfo.MemoryReading {
++				reads++
++				return xsysinfo.MemoryReading{HostAvailable: floor + 6*gib}
++			}
++			_, err = ml.ParkModel(context.Background(), "m")
++			Expect(err).NotTo(HaveOccurred())
++			Expect(reads).To(Equal(2))
++		})
++
+ 		It("does not park blind when the host's memory cannot be read", func() {
+ 			ml.SetHostAvailableMemorySource(func() (uint64, error) { return 0, errors.New("no /proc") })
+ 			_, err := ml.ParkModel(context.Background(), "m")
+diff --git a/pkg/xsysinfo/memory_headroom.go b/pkg/xsysinfo/memory_headroom.go
+index 9147526..9e86055 100644
+--- a/pkg/xsysinfo/memory_headroom.go
++++ b/pkg/xsysinfo/memory_headroom.go
+@@ -1,6 +1,7 @@
+ package xsysinfo
+ 
+ import (
++	"fmt"
+ 	"strconv"
+ 	"strings"
+ 
+@@ -14,6 +15,8 @@ var (
+ 	cgroupV2StatPath    = "/sys/fs/cgroup/memory.stat"
+ 	cgroupV1UsagePath   = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
+ 	cgroupV1StatPath    = "/sys/fs/cgroup/memory/memory.stat"
++	// the ZFS ARC, where the host has one: read for what it says, never decided on
++	zfsArcstatsPath = "/proc/spl/kstat/zfs/arcstats"
+ )
+ 
+ // AllocatableMemory is how many bytes this process, or a child of it, can
+@@ -27,24 +30,121 @@ var (
+ // trusts that figure can take the container over its limit, and it is the
+ // process holding the weights that the kernel then kills.
+ func AllocatableMemory() uint64 {
+-	return chooseAllocatableMemory(
+-		memory.AvailableMemory(),
++	return ReadMemory().Allocatable()
++}
++
++// MemoryReading is everything AllocatableMemory is decided on, read at one
++// moment, and the ZFS ARC beside it: a caller that refuses something for
++// want of memory can say what it saw, not only the result.
++type MemoryReading struct {
++	// HostAvailable is the host's MemAvailable.
++	HostAvailable uint64
++	// V2 and V1: the memory cgroup this process runs in, where it has a limit.
++	V2, V1 CgroupRoom
++	// ARCSize and ARCMin: the ZFS ARC's size and the floor it is not shrunk
++	// under (c_min), where the host has an ARC (ARC false otherwise). Linux's
++	// MemAvailable does not count the ARC, though the ARC gives memory back
++	// under pressure: it is said here, and not decided on.
++	ARC             bool
++	ARCSize, ARCMin uint64
++}
++
++// CgroupRoom is one memory cgroup's limit, its working set (its usage less
++// the inactive file cache) and what the limit still allows. Limited is false
++// where there is no limit or the usage cannot be read.
++type CgroupRoom struct {
++	Limited                     bool
++	Limit, WorkingSet, Headroom uint64
++}
++
++// ReadMemory reads the host's and this process's cgroup's memory once.
++func ReadMemory() MemoryReading {
++	return readingFrom(memory.AvailableMemory(),
+ 		readFileBestEffort(cgroupV2MaxPath), readFileBestEffort(cgroupV2CurrentPath), readFileBestEffort(cgroupV2StatPath),
+ 		readFileBestEffort(cgroupV1LimitPath), readFileBestEffort(cgroupV1UsagePath), readFileBestEffort(cgroupV1StatPath),
+-	)
++		readFileBestEffort(zfsArcstatsPath))
++}
++
++// Allocatable is the minimum of the host's available memory and each
++// cgroup's headroom, where a cgroup has a limit.
++func (r MemoryReading) Allocatable() uint64 {
++	best := r.HostAvailable
++	for _, c := range []CgroupRoom{r.V2, r.V1} {
++		if c.Limited && c.Headroom < best {
++			best = c.Headroom
++		}
++	}
++	return best
++}
++
++// String says the reading in MiB, for a log line or an answer.
++func (r MemoryReading) String() string {
++	mib := func(v uint64) uint64 { return v >> 20 }
++	s := fmt.Sprintf("MemAvailable %d MiB", mib(r.HostAvailable))
++	for _, c := range []struct {
++		name string
++		room CgroupRoom
++	}{{"cgroup v2", r.V2}, {"cgroup v1", r.V1}} {
++		if c.room.Limited {
++			s += fmt.Sprintf("; %s: limit %d MiB, working set %d MiB, room %d MiB", c.name, mib(c.room.Limit),
++				mib(c.room.WorkingSet), mib(c.room.Headroom))
++		}
++	}
++	if r.ARC {
++		s += fmt.Sprintf("; ZFS ARC %d MiB, its floor %d MiB (not counted in MemAvailable)", mib(r.ARCSize), mib(r.ARCMin))
++	} else {
++		s += "; no ZFS ARC"
++	}
++	return s
+ }
+ 
+ // chooseAllocatableMemory is the minimum of the host's available memory and
+ // each cgroup's headroom, where a cgroup has a limit.
+ func chooseAllocatableMemory(hostAvailable uint64, v2Max, v2Current, v2Stat, v1Limit, v1Usage, v1Stat string) uint64 {
+-	best := hostAvailable
+-	if room, limited := cgroupHeadroom(parseCgroupV2Max(v2Max), v2Current, v2Stat, "inactive_file"); limited && room < best {
+-		best = room
++	return readingFrom(hostAvailable, v2Max, v2Current, v2Stat, v1Limit, v1Usage, v1Stat, "").Allocatable()
++}
++
++func readingFrom(hostAvailable uint64, v2Max, v2Current, v2Stat, v1Limit, v1Usage, v1Stat, arcstats string) MemoryReading {
++	r := MemoryReading{HostAvailable: hostAvailable,
++		V2: cgroupRoom(parseCgroupV2Max(v2Max), v2Current, v2Stat, "inactive_file"),
++		V1: cgroupRoom(parseCgroupV1Limit(v1Limit), v1Usage, v1Stat, "total_inactive_file")}
++	r.ARCSize, r.ARCMin, r.ARC = parseArcstats(arcstats)
++	return r
++}
++
++func cgroupRoom(limit uint64, usageRaw, statRaw, inactiveFileKey string) CgroupRoom {
++	room, limited := cgroupHeadroom(limit, usageRaw, statRaw, inactiveFileKey)
++	if !limited {
++		return CgroupRoom{}
+ 	}
+-	if room, limited := cgroupHeadroom(parseCgroupV1Limit(v1Limit), v1Usage, v1Stat, "total_inactive_file"); limited && room < best {
+-		best = room
++	working := uint64(0)
++	if limit > room {
++		working = limit - room
+ 	}
+-	return best
++	return CgroupRoom{Limited: true, Limit: limit, WorkingSet: working, Headroom: room}
++}
++
++// parseArcstats reads the ARC's "size" and "c_min" rows of
++// /proc/spl/kstat/zfs/arcstats ("name type data"); ok false where the file
++// is absent or holds no size.
++func parseArcstats(raw string) (size, min uint64, ok bool) {
++	for line := range strings.SplitSeq(raw, "\n") {
++		fields := strings.Fields(line)
++		if len(fields) != 3 {
++			continue
++		}
++		v, err := strconv.ParseUint(fields[2], 10, 64)
++		if err != nil {
++			continue
++		}
++		switch fields[0] {
++		case "size":
++			size, ok = v, true
++		case "c_min":
++			min = v
++		}
++	}
++	return size, min, ok
+ }
+ 
+ // cgroupHeadroom is what a memory cgroup with a limit still allows: the
+diff --git a/pkg/xsysinfo/memory_headroom_test.go b/pkg/xsysinfo/memory_headroom_test.go
+index db0b6ed..6ed166c 100644
+--- a/pkg/xsysinfo/memory_headroom_test.go
++++ b/pkg/xsysinfo/memory_headroom_test.go
+@@ -38,3 +38,32 @@ var _ = Describe("chooseAllocatableMemory", func() {
+ 		Expect(chooseAllocatableMemory(40*gi, itoa(24*gi)+"\n", "", "", "", "", "")).To(Equal(40 * gi))
+ 	})
+ })
++
++var _ = Describe("MemoryReading", func() {
++	const gi = uint64(1) << 30
++
++	It("keeps what the room was decided on: the host, each cgroup's limit, working set and room", func() {
++		r := readingFrom(40*gi, itoa(24*gi)+"\n", itoa(20*gi)+"\n", "inactive_file "+itoa(6*gi)+"\n", "", "", "", "")
++		Expect(r.Allocatable()).To(Equal(10 * gi))
++		Expect(r.V2).To(Equal(CgroupRoom{Limited: true, Limit: 24 * gi, WorkingSet: 14 * gi, Headroom: 10 * gi}))
++		Expect(r.V1.Limited).To(BeFalse())
++		Expect(r.String()).To(Equal("MemAvailable 40960 MiB; cgroup v2: limit 24576 MiB, working set 14336 MiB, room 10240 MiB; no ZFS ARC"))
++	})
++
++	It("reads the ZFS ARC where the host has one, and decides nothing on it", func() {
++		arc := "13 1 0x01 123 33536 1234 5678\nname                            type data\nhits                            4    9\n" +
++			"c_min                           4    " + itoa(gi) + "\nsize                            4    " + itoa(14*gi) + "\n"
++		r := readingFrom(2*gi, "", "", "", "", "", "", arc)
++		Expect(r.ARC).To(BeTrue())
++		Expect(r.ARCSize).To(Equal(14 * gi))
++		Expect(r.ARCMin).To(Equal(gi))
++		Expect(r.Allocatable()).To(Equal(2*gi), "the ARC is said, not counted")
++		Expect(r.String()).To(Equal("MemAvailable 2048 MiB; ZFS ARC 14336 MiB, its floor 1024 MiB (not counted in MemAvailable)"))
++		Expect(readingFrom(2*gi, "", "", "", "", "", "", "garbage\n").ARC).To(BeFalse())
++	})
++
++	It("is the same figure as chooseAllocatableMemory, the one function both read through", func() {
++		Expect(readingFrom(40*gi, "", "", "", itoa(24*gi)+"\n", itoa(20*gi)+"\n", "total_inactive_file 0\n", "").Allocatable()).
++			To(Equal(chooseAllocatableMemory(40*gi, "", "", "", itoa(24*gi)+"\n", itoa(20*gi)+"\n", "total_inactive_file 0\n")))
++	})
++})
+-- 
+2.43.0
+

@@ -1481,3 +1481,45 @@ meets that refusal.
 
 **NOT shown, still:** the keeper's first park of a real model; a failed
 return on a card; a quantized model, buffers above 1 GiB, the 35B.
+
+## 14. A refusal for the host's floor says what it read (2026-11-26)
+
+In the fade engine's gate a park of `vega-bge-m3--gate` was answered **412
+`host_memory_floor`** at 21:57:32Z, after six parks of 605,265,920 B, while a
+question on the web cold-started MADLAD, a reranker, qwen3-4b, the 35B and
+the speech model; the floor 12,884,901,888 B (München). The answer's four
+figures (available, being parked by others, to park, the floor) reached no
+log, and "available" is itself a decision — the host's MemAvailable or the
+memory cgroup's room, whichever is smaller — so the refusal could not say
+WHICH limited it. The architecture session also suspects MemAvailable leaves
+out the ZFS ARC's reclaimable part (about 14.4 GiB on the node); München
+measures that on a quiet node.
+
+**Staged 0031** (the SERVER, after 0029; `git rev-parse HEAD^{tree}`
+`ab5de7ade4dbfbccff216ea614adb65f6c98bbf2` after it): the host is read once
+into a reading (`xsysinfo.MemoryReading`: MemAvailable, each cgroup's limit,
+working set and room, and the ZFS ARC's `size` and `c_min` from
+`/proc/spl/kstat/zfs/arcstats` where they exist); the park is decided on THAT
+reading by the same rule as before (`AllocatableMemory` is
+`ReadMemory().Allocatable()`); a refusal is logged ("A park was refused: it
+would leave the host under its memory floor", with `available_mib`,
+`parking_by_others_mib`, `to_park_mib`, `floor_mib` and `read`) and its
+answer ends with the reading:
+
+    ... a floor of 12288 MiB (MemAvailable 9674 MiB; cgroup v2: limit … MiB, working set … MiB, room … MiB; ZFS ARC … MiB, its floor … MiB (not counted in MemAvailable))
+
+**What it does not do: count the ARC.** Whether the floor should count the
+ARC's reclaimable part is a decision on numbers nobody has yet; the log
+gives them at the next refusal, and München's quiet-node reading before it.
+Pros of counting it: the floor would not refuse for memory the kernel gives
+back on demand. Cons: the ARC shrinks at its own pace and not below `c_min`,
+and a park copies hundreds of MB at once; an ARC that gives back too late is
+an OOM of the process holding the weights. Not counted until measured.
+
+| | |
+|---|---|
+| the reading: each cgroup's figures, the ARC parsed and decided on by nobody, the same figure as before | MEASURED, `pkg/xsysinfo` specs |
+| a refusal names the reading it was decided on, read once | MEASURED, `pkg/model` (279 of 279); the spec fails on the old decision code |
+| LocalAI's endpoints suite | 695 of 742 with and without 0031 here: the 47 need Postgres through Docker, which this container has not; whole on the node's builder |
+| the log line on the node | NOT measured: a server build, no gate — the operator's word, with the next server pass |
+

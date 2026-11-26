@@ -1245,6 +1245,11 @@ measured (published figures disagree).
   median, exact over 3 fresh loads and 300 fresh contexts. No park by the keeper yet. A ROLLBACK HAS ONE STEP MORE: `619655e5833b`
   does not park, and with the three lines left in a model's file the gate refuses its run ("the runner will not park it") — take
   them out first.
+- **A PARK REFUSED FOR THE HOST'S FLOOR SAYS WHAT IT READ — STAGED, NOT BUILT (2026-11-26; parking-step-2.md §14):** a 412 in the
+  fade engine's gate reached no log, and could not say whether MemAvailable or the cgroup's room refused it. Staged 0031, the SERVER
+  after 0029 (tree `ab5de7ad…`): one reading — MemAvailable, each cgroup's limit, working set and room, the ZFS ARC where present —
+  the park decided on it as before, a refusal logged with every figure and its answer ending with them. The ARC is said, NOT
+  counted: that is for München's quiet-node reading and the next refusal's numbers.
 - **A CLIP'S LAST WORD IS KEPT — STAGED, NOT BUILT (2026-11-26; omnivoice-on-our-backend.md §15):** the operator hears the last
   word cut at full stops; München measured 30 of 40 clips fading speech, one losing a syllable. The speech port's fade-out (the
   reference's, ported 1:1) took the last 100 ms whatever they held. Staged 0030: it lasts as long as the trailing silence the trim
