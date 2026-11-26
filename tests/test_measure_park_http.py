@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from app.vega import tag as vtag
+
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("park_http", ROOT / "tools" / "measure" / "park_http.py")
 tool = importlib.util.module_from_spec(spec)
@@ -52,6 +54,16 @@ class StandIn:
         self.monitor = "counts"         # "sampled": LocalAI's fallback for a backend without Status; "none": no route
         self.reload_at = None           # this return FAILS and is paid as a load: a new process, the counts at 0
         self.uncounted_park = False     # the server says parked, the engine counted nothing
+        # BEHIND VEGA'S WRAPPER: an input without a tag is refused; each item gets a receipt naming the run;
+        # the wrapper counts its calls and the contexts created (one at the load, one a return)
+        self.vega = False
+        self.run = "sha256:" + "ab" * 32
+        self.receipt_items: dict[str, dict] = {}
+        self.w_calls, self.w_created, self.w_canary_failed = 0, 1, 0
+        self.second_run_at = None       # from this return on the wrapper states ANOTHER run
+        self.w_restart_at = None        # at this return the WRAPPER's counts start again (a new wrapper process)
+        self.no_context_created = False # the wrapper counts no context for a return
+        self.vega_paths: list[tuple[str, dict]] = []
         self.calls: list[str] = []
         self.headers: list[dict] = []
         self.lock = threading.Lock()
@@ -101,6 +113,15 @@ def localai():
                 self._answer(200, {"backends": [], "loaded_models": [stand_in.row(), {"id": "another", "size_vram": 5}]})
             elif self.path == "/api/settings":
                 self._answer(200, stand_in.settings)
+            elif self.path.startswith("/vega/"):
+                stand_in.vega_paths.append((self.path, dict(self.headers)))
+                if self.path == "/vega/keeps":
+                    return self._answer(200, {"buckets": [], "runs": [
+                        {"run_id": "sha256:" + "00" * 32, "calls": 7, "created": 7, "canary_failed": 0},
+                        {"run_id": stand_in.run, "on_demand": True, "calls": stand_in.w_calls,
+                         "created": stand_in.w_created, "canary_failed": stand_in.w_canary_failed}]})
+                ids = self.path.split("ids=")[1].split(",")
+                self._answer(200, {"receipts": [stand_in.receipt_items[i] for i in ids if i in stand_in.receipt_items]})
             elif self.path == "/backend/monitor?model=copy" and stand_in.monitor == "counts":
                 parked = stand_in.state == "parked"
                 self._answer(200, {"state": 2, "memory": {"total": 1208184832, "breakdown": {
@@ -147,11 +168,29 @@ def localai():
                             stand_in.n_parks = stand_in.n_unparks = stand_in.n_no_room = 0
                         else:
                             stand_in.n_unparks += 1
+                        if stand_in.returns == stand_in.w_restart_at:
+                            stand_in.w_calls, stand_in.w_created = 0, 1
+                        elif not stand_in.no_context_created:
+                            stand_in.w_created += 1
+                        if stand_in.returns == stand_in.second_run_at:
+                            stand_in.run = "sha256:" + "cd" * 32
                         if not stand_in.stuck_parked:
                             stand_in.state = "loaded"
                 if self.path == "/backend/load":
                     return self._answer(200, {"loaded": ["copy"], "message": "model loaded"})
                 texts = body["input"]
+                if stand_in.vega:
+                    # the wrapper: no input without a tag; the tag stripped; a receipt for each item
+                    if not all(isinstance(x, str) and x.startswith(vtag.MARK) for x in texts):
+                        return self._answer(500, {"error": {"code": 500, "type": "", "message":
+                                                            "rpc error: code = InvalidArgument desc = VeGa: an input "
+                                                            "without a VeGa tag: every input to a vega- model is tagged"}})
+                    parsed = [vtag.parse_window(x) for x in texts]
+                    for tid, _form, content, _window in parsed:
+                        stand_in.receipt_items[tid] = {"id": tid, "run_id": stand_in.run, "input_digest": "sha256:" + "11" * 32,
+                                                       "vector_digest": "sha256:" + "22" * 32}
+                    texts = [content for _tid, _form, content, _window in parsed]
+                    stand_in.w_calls += len(texts)
                 with stand_in.lock:
                     stand_in.running += 1
                 try:
@@ -336,6 +375,95 @@ def test_a_park_that_reaches_the_server_before_the_request_does_is_not_counted_a
         passed, lines = tool.busy(server, "copy", sentences=64, lead=0.15)
         assert passed, "\n".join(lines)
         assert "(200, 'parked')" not in lines[0]
+
+
+# ---- a model behind VeGa's wrapper (--vega, --receipts)
+
+def test_a_model_behind_the_wrapper_takes_no_untagged_input_and_the_tagged_rows_pass(localai):
+    stand_in, server = localai
+    stand_in.vega = True
+    passed, lines = tool.cycles(server, "copy", 2, "request")
+    assert not passed and lines[-1].startswith("NOT RUN: the model does not answer: HTTP 500")
+    assert "an input without a VeGa tag" in lines[-1]
+    tagged = tool.Server(server.base, vega=True)
+    passed, lines = tool.cycles(tagged, "copy", 3, "request")
+    assert passed, "\n".join(lines)
+    assert lines[-1].startswith("3 of 3 cycles: the same bytes"), "a fresh id on every input, the same vectors"
+    assert len(tagged.last_ids) == 16 and len(stand_in.receipt_items) == 16 * 4
+    assert not stand_in.vega_paths and "VeGa:" not in "\n".join(lines), "no receipts service given: none is asked"
+    for verb in (tool.refused, tool.stop_parked):
+        stand_in.refuse_returns = 1
+        assert verb(tagged, "copy")[1], verb.__name__
+
+
+def test_with_the_receipts_service_each_cycle_is_held_to_the_run_and_to_the_wrapper_s_count(localai):
+    stand_in, server = localai
+    stand_in.vega = True
+    held = tool.Server(server.base, receipts=server.base)        # --receipts implies --vega
+    passed, lines = tool.cycles(held, "copy", 3, "request")
+    assert passed, "\n".join(lines)
+    assert lines[2] == (f"VeGa: the sixteen receipts name one run, {stand_in.run}; the wrapper's count: "
+                        "calls 16, created 1, canary_failed 0")
+    cycle = lines[3]
+    assert "the engine: 1 parked, 0 back, 0 refused for room, away -> 1 parked, 1 back, 0 refused for room, on the device" in cycle
+    assert "receipts of run sha256:abababababababab..." in cycle
+    assert "the wrapper: calls 16, created 1, canary_failed 0 -> calls 32, created 2, canary_failed 0" in cycle
+    assert f"VeGa: ONE run through 3 returns, {stand_in.run}; the wrapper's count: calls 16, created 1, canary_failed 0 -> " \
+           "calls 64, created 4, canary_failed 0" in lines
+    # the key to LocalAI is LocalAI's: the receipts service is never sent it
+    assert stand_in.vega_paths and all("Authorization" not in h for _path, h in stand_in.vega_paths)
+
+
+def test_a_second_run_stated_at_a_return_fails_the_cycle(localai):
+    stand_in, server = localai
+    stand_in.vega, stand_in.second_run_at = True, 2
+    passed, lines = tool.cycles(tool.Server(server.base, receipts=server.base), "copy", 4, "request")
+    assert not passed and lines[-1].startswith(
+        "FAIL: cycle 2: answered with the same bytes, but the receipts after the return name "
+        "['sha256:cdcdcdcdcdcdcdcd...'], not the run of before the park")
+
+
+def test_the_wrapper_s_counts_starting_again_fail_the_cycle_even_where_the_run_id_and_the_receipts_hold(localai):
+    """parking-step-2.md §11, point 4: a failed return paid as a load keeps the run id and gives valid receipts."""
+    stand_in, server = localai
+    stand_in.vega, stand_in.w_restart_at = True, 2
+    passed, lines = tool.cycles(tool.Server(server.base, receipts=server.base), "copy", 4, "request")
+    assert not passed
+    assert "the wrapper's counts started again (calls 16, created 1, canary_failed 0; they were calls 32, created 2, " \
+           "canary_failed 0): another wrapper process answers" in lines[-1]
+    # and a return for which the wrapper counted no context is not a return either
+    stand_in.w_restart_at, stand_in.no_context_created, stand_in.state = None, True, "loaded"
+    passed, lines = tool.cycles(tool.Server(server.base, receipts=server.base), "copy", 2, "request")
+    assert not passed and "the wrapper counted no context created for the return's request" in lines[-1]
+
+
+def test_receipts_that_are_not_there_are_not_run_rather_than_passed(localai):
+    stand_in, server = localai
+    stand_in.vega = True
+    held = tool.Server(server.base, receipts=server.base)
+
+    class Lost(dict):
+        def __setitem__(self, key, value):          # the wrapper delivered nothing
+            pass
+    stand_in.receipt_items = Lost()
+    passed, lines = tool.cycles(held, "copy", 2, "request")
+    assert not passed and lines[-1].startswith("NOT RUN: the sixteen vectors do not carry receipts of ONE run: ['no receipt']")
+    assert "POST /backend/park" not in stand_in.calls
+    # a receipts service that does not answer is the same: nothing is certified on it
+    gone = tool.Server(server.base, receipts="http://127.0.0.1:9")
+    passed, lines = tool.cycles(gone, "copy", 2, "request")
+    assert not passed and lines[-1].startswith("NOT RUN: the sixteen vectors do not carry receipts of ONE run")
+
+
+def test_the_command_line_takes_vega_and_the_receipts_service(localai, capsys, monkeypatch):
+    stand_in, server = localai
+    stand_in.vega = True
+    monkeypatch.setattr("sys.argv", ["park_http.py", "--receipts", server.base, "cycles", server.base, "copy", "-n", "2"])
+    assert tool.main() == 0
+    out = capsys.readouterr().out
+    assert "VeGa: ONE run through 2 returns" in out and "2 of 2 cycles: the same bytes" in out
+    monkeypatch.setattr("sys.argv", ["park_http.py", "cycles", server.base, "copy", "-n", "2"])
+    assert tool.main() == 1 and "an input without a VeGa tag" in capsys.readouterr().out
 
 
 def test_the_floor_is_written_with_the_whole_settings_object(localai):

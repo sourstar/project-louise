@@ -24,6 +24,20 @@ every return). Nothing parks while LocalAI's `park_host_floor_bytes` is 0.
 SERVER is LocalAI's address (http://host:port). A LocalAI that asks for a key:
 `--token-file PATH` (the key is never printed).
 
+A MODEL BEHIND VEGA'S WRAPPER (a `vega-` package) takes no input without a
+VeGa tag. `--vega` tags every input as Louise's client does
+(app/vega/client.py `tag_batch`; found beside this file's tree, or under
+`--louise-src DIR`). `--receipts URL` (VeGa's receipts service, e.g.
+http://louise-vega:8000; it implies `--vega`) makes `cycles` hold each return
+to VeGa's word as well as the engine's: the receipts of the request after the
+return name THE RUN OF BEFORE THE PARK (no second run is stated for a return),
+and the wrapper's own count for that run (`GET /vega/keeps`: `calls`,
+`created`) went UP - a context was created for the return - and did not start
+again, which is how a return that failed and was paid as a load by a new
+wrapper process shows: it keeps the run id and gives valid receipts
+(docs/notes/parking-step-2.md §11). Each cycle's line prints the run id and
+both counts.
+
 A model that answered a request under a second ago is busy for a park (409
 `model_busy`): one HTTP request is several calls to its backend, and between
 two of them the model is in use. `cycles` and `refused` ask again until that
@@ -89,10 +103,20 @@ class Server:
     (status, body, headers): an error status is an answer to read, not an
     exception."""
 
-    def __init__(self, base: str, token_file: str | None = None, timeout: float = 300.0):
+    def __init__(self, base: str, token_file: str | None = None, timeout: float = 300.0, *,
+                 vega: bool = False, receipts: str | None = None, louise_src: str | None = None):
         self.base = base.rstrip("/")
         self.timeout = timeout
         self._token = Path(token_file).read_text(encoding="utf-8").strip() if token_file else None
+        #: VeGa's receipts service, where one was given; LocalAI's key is never sent to it
+        self.receipts = receipts.rstrip("/") if receipts else None
+        self.last_ids: tuple[str, ...] = ()
+        self._tag = None
+        if vega or receipts:
+            # Louise's own tagging, from the tree this file is in (or the one named): the standard library alone
+            sys.path.insert(0, str(Path(louise_src).resolve() if louise_src else Path(__file__).resolve().parents[2]))
+            from app.vega import client
+            self._tag = client.tag_batch
 
     def call(self, method: str, path: str, body: object | None = None) -> tuple[int, object, dict[str, str]]:
         headers = {"Content-Type": "application/json"}
@@ -107,7 +131,11 @@ class Server:
             return e.code, _json(e.read()), dict(e.headers)
 
     def embed(self, model: str, texts: list[str] | None = None) -> tuple[int, object, dict[str, str]]:
-        status, body, headers = self.call("POST", "/v1/embeddings", {"model": model, "input": texts or TEXTS})
+        inputs = list(texts or TEXTS)
+        if self._tag is not None:
+            batch = self._tag(inputs)                # a fresh id each: the receipts of THIS request are asked for by them
+            self.last_ids, inputs = tuple(batch.ids), list(batch.inputs)
+        status, body, headers = self.call("POST", "/v1/embeddings", {"model": model, "input": inputs})
         if status == 200 and isinstance(body, dict):
             return status, [d["embedding"] for d in body["data"]], headers
         return status, body, headers
@@ -133,6 +161,36 @@ class Server:
         if not isinstance(breakdown, dict) or any(k not in breakdown for k in COUNT_KEYS):
             return None
         return {k: int(breakdown[k]) for k in COUNT_KEYS}
+
+    def _vega(self, path: str) -> object:
+        try:
+            with urllib.request.urlopen(self.receipts + path, timeout=30) as r:
+                return _json(r.read())
+        except (urllib.error.URLError, OSError) as e:
+            return {"unreachable": type(e).__name__}
+
+    def receipt_runs(self) -> set[str] | None:
+        """the runs the receipts of the LAST request's items name, "no receipt" among them where an item has
+        none; None where no receipts service was given"""
+        if not self.receipts or not self.last_ids:
+            return None
+        runs: set[str] = set()
+        for i in range(0, len(self.last_ids), 128):
+            part = self.last_ids[i:i + 128]
+            body = self._vega("/vega/receipts?ids=" + ",".join(part))
+            found = body.get("receipts") if isinstance(body, dict) else None
+            if not isinstance(found, list):
+                return {"no receipt"}
+            runs |= {str(r.get("run_id")) for r in found}
+            if len(found) != len(part):
+                runs.add("no receipt")
+        return runs
+
+    def wrapper_count(self, run: str) -> dict | None:
+        """the wrapper's own count for a run (GET /vega/keeps): calls, created, canary_failed"""
+        body = self._vega("/vega/keeps")
+        rows = body.get("runs") if isinstance(body, dict) else None
+        return next((r for r in rows or [] if r.get("run_id") == run), None)
 
     def rows(self) -> list[dict]:
         status, body, _ = self.call("GET", "/system")
@@ -207,6 +265,39 @@ def miscounted(before: dict[str, int], after: dict[str, int] | None, parks: int,
     return ""
 
 
+def short(run: str) -> str:
+    return run[:23] + "..." if run.startswith("sha256:") else run
+
+
+def kept(count: dict | None) -> str:
+    if count is None:
+        return "no count"
+    return f"calls {count.get('calls')}, created {count.get('created')}, canary_failed {count.get('canary_failed')}"
+
+
+def wrapper_after_return(server: Server, run: str, before: dict | None, patience: float = 3.0) -> tuple[dict | None, str]:
+    """the wrapper's count once the return's request is in it, and what is wrong with it ("" where nothing is).
+    The wrapper tells a count before the vector of a call that created a context, so it is normally there at once."""
+    deadline = time.monotonic() + patience
+    while True:
+        now = server.wrapper_count(run)
+        behind = (now is not None and before is not None and int(now.get("created", 0)) == int(before.get("created", 0))
+                  and int(now.get("calls", 0)) >= int(before.get("calls", 0)))
+        if not behind or time.monotonic() > deadline:
+            break
+        time.sleep(0.1)
+    if now is None or before is None:
+        return now, "the wrapper's count for the run cannot be read (GET /vega/keeps)"
+    if int(now.get("created", 0)) < int(before.get("created", 0)) or int(now.get("calls", 0)) < int(before.get("calls", 0)):
+        return now, (f"the wrapper's counts started again ({kept(now)}; they were {kept(before)}): another wrapper "
+                     f"process answers - a return that FAILED and was paid as a load is not a cycle")
+    if int(now.get("created", 0)) == int(before.get("created", 0)):
+        return now, f"the wrapper counted no context created for the return's request ({kept(now)})"
+    if int(now.get("canary_failed", 0)) != int(before.get("canary_failed", 0)):
+        return now, f"a context did not reproduce its canary after the return ({kept(now)})"
+    return now, ""
+
+
 def park_when_idle(server: Server, model: str, patience: float = 5.0) -> tuple[int, object, float, int]:
     """One park, asked again while the answer is 409 model_busy: LocalAI takes a model that answered a request
     under a second ago for busy (one HTTP request is several calls to its backend), so a park asked right after
@@ -239,11 +330,21 @@ def cycles(server: Server, model: str, n: int, back: str) -> tuple[bool, list[st
         return False, lines + ["NOT RUN: the engine's counts cannot be read (GET /backend/monitor?model=...): "
                                "a cycle is counted by the engine, never taken from an HTTP 200"]
     lines.append(f"the engine's counts before: {said(first)}")
+    run, made_first = None, None
+    runs = server.receipt_runs()
+    if runs is not None:
+        if len(runs) != 1 or "no receipt" in runs:
+            return False, lines + [f"NOT RUN: the sixteen vectors do not carry receipts of ONE run: {sorted(runs)} - is "
+                                   "the model behind VeGa's wrapper, and --receipts its receipts service?"]
+        (run,) = runs
+        made_first = server.wrapper_count(run)
+        lines.append(f"VeGa: the sixteen receipts name one run, {run}; the wrapper's count: {kept(made_first)}")
     parks, returns, passed, settled = [], [], True, 0
     for i in range(1, n + 1):
         counted = server.counts(model)
         if counted is None:
             return False, lines + [f"FAIL: cycle {i}: the engine's counts cannot be read any more"]
+        made = server.wrapper_count(run) if run else None
         status, answer, took_park, busy_first = park_when_idle(server, model)
         settled += busy_first
         if status != 200:
@@ -272,7 +373,18 @@ def cycles(server: Server, model: str, n: int, back: str) -> tuple[bool, list[st
         after = server.row(model)
         same = got == base
         state_ok = after is not None and after.get("state") == "loaded"
-        wrong = miscounted(away, server.counts(model), 0, 1, 0)   # against the reading taken while it was away
+        returned = server.counts(model)
+        wrong = miscounted(away, returned, 0, 1, 0)   # against the reading taken while it was away
+        vega = ""
+        if run:
+            named = server.receipt_runs() or set()
+            made_now, wrong_vega = wrapper_after_return(server, run, made)
+            if named != {run}:
+                wrong_vega = (f"the receipts after the return name {sorted(short(r) for r in named)}, not the run of before "
+                              f"the park: a second run was stated, or a vector has no receipt")
+            wrong = wrong or wrong_vega
+            vega = (f"; the engine: {said(away)} -> {said(returned)}; receipts of run {short(run)}; the wrapper: "
+                    f"{kept(made)} -> {kept(made_now)}")
         passed = passed and same and state_ok and not wrong
         parks.append(took_park)
         returns.append(took_return)
@@ -280,7 +392,7 @@ def cycles(server: Server, model: str, n: int, back: str) -> tuple[bool, list[st
                      f"{mib(parked.get('size_vram'))} of the device"
                      + (f", {mib(freed)} given back" if freed is not None else "") + f"); back by "
                      f"{'/backend/load and a request' if back == 'load' else 'the request'} in {took_return * 1000:7.1f} ms; "
-                     f"vectors {'identical' if same else 'DIFFERENT: ' + digest(got)}"
+                     f"vectors {'identical' if same else 'DIFFERENT: ' + digest(got)}" + vega
                      + ("" if state_ok else f"; /system afterwards: {describe(after)}"))
         if not same or not state_ok:
             return False, lines + [f"FAIL: cycle {i}: " + ("the vectors are not the first ones" if not same
@@ -289,6 +401,9 @@ def cycles(server: Server, model: str, n: int, back: str) -> tuple[bool, list[st
             return False, lines + [f"FAIL: cycle {i}: answered with the same bytes, but {wrong}"]
     last = server.counts(model)
     lines.append(f"the engine's counts after: {said(last)} - {n} parks and {n} returns COUNTED, in the one process")
+    if run:
+        made_last = server.wrapper_count(run)
+        lines.append(f"VeGa: ONE run through {n} returns, {run}; the wrapper's count: {kept(made_first)} -> {kept(made_last)}")
     lines.append(f"each park was asked right after a request: answered 409 model_busy {settled} times in all before "
                  f"the model had been idle for its second")
     lines.append(f"{n} of {n} cycles: the same bytes; a park {statistics.median(parks) * 1000:.1f} ms (median, "
@@ -348,6 +463,7 @@ def stop_parked(server: Server, model: str) -> tuple[bool, list[str]]:
     if status != 200:
         return False, [f"NOT RUN: the model does not answer: HTTP {status} {error_of(base)}"]
     before = server.row(model)
+    run_before = server.receipt_runs()
     status, answer, _, _ = park_when_idle(server, model)
     if status != 200:
         return False, [f"NOT RUN: the park answered HTTP {status} {error_of(answer)}"]
@@ -362,6 +478,8 @@ def stop_parked(server: Server, model: str) -> tuple[bool, list[str]]:
     after = server.row(model)
     lines.append(f"the next request: HTTP {status2} in {time.monotonic() - t:.2f} s, vectors "
                  f"{'identical' if got == base else 'DIFFERENT'}; {describe(after)}; its process {pid_of(after)}")
+    if run_before is not None:
+        lines.append(f"VeGa: the receipts named {sorted(run_before)} before, {sorted(server.receipt_runs() or [])} after the load afresh")
     ok = status == 200 and gone is None and status2 == 200 and got == base and after is not None and after.get("state") == "loaded"
     if ok and pid_of(before) is not None and pid_of(before) == pid_of(after):
         return False, lines + ["FAIL: the same process answers after the shutdown"]
@@ -376,6 +494,7 @@ def failed_return(server: Server, model: str) -> tuple[bool, list[str]]:
     if status != 200:
         return False, [f"NOT RUN: the model does not answer: HTTP {status} {error_of(base)}"]
     before = server.row(model)
+    run_before = server.receipt_runs()
     status, answer, _, _ = park_when_idle(server, model)
     if status != 200:
         return False, [f"NOT RUN: the park answered HTTP {status} {error_of(answer)}"]
@@ -394,6 +513,8 @@ def failed_return(server: Server, model: str) -> tuple[bool, list[str]]:
     ok = status == 200 and got == base and after is not None and after.get("state") == "loaded"
     recount = server.counts(model)
     lines.append(f"the engine's counts afterwards: {said(recount)}")
+    if run_before is not None:
+        lines.append(f"VeGa: the receipts named {sorted(run_before)} before, {sorted(server.receipt_runs() or [])} after")
     if ok and counted is not None and recount is not None and recount["parks"] >= counted["parks"]:
         return False, lines + ["FAIL: another process answers, and the counts did not start again"]
     return ok, lines + [("ok: the failed return cost a load, not an error" if ok
@@ -441,6 +562,10 @@ def busy(server: Server, model: str, sentences: int = 2048, lead: float = 0.2) -
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--token-file", help="the file that holds LocalAI's API key")
+    ap.add_argument("--vega", action="store_true", help="tag every input as Louise's client does (a model behind VeGa's wrapper)")
+    ap.add_argument("--receipts", metavar="URL", help="VeGa's receipts service: hold each cycle to its receipts and the "
+                                                      "wrapper's count too (implies --vega)")
+    ap.add_argument("--louise-src", metavar="DIR", help="the tree that holds app/vega/client.py (default: this file's own)")
     sub = ap.add_subparsers(dest="verb", required=True)
     for verb in ("state", "floor", "park", "cycles", "refused", "busy", "stop", "failed"):
         p = sub.add_parser(verb)
@@ -455,7 +580,7 @@ def main() -> int:
         if verb == "busy":
             p.add_argument("--sentences", type=int, default=2048)
     a = ap.parse_args()
-    server = Server(a.server, a.token_file)
+    server = Server(a.server, a.token_file, vega=a.vega, receipts=a.receipts, louise_src=a.louise_src)
 
     if a.verb == "state":
         rows = [server.row(a.model)] if a.model else [r for r in server.rows() if r.get("parks")]

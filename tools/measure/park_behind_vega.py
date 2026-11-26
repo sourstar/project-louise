@@ -14,13 +14,14 @@ across a return - had run nowhere.
     python3 tools/measure/park_behind_vega.py LOCAL_AI GRPC_SERVER MODEL.gguf \\
         --localai-tree <LocalAI's source: backend/backend.proto, backend/python/common> [--work DIR] [-n 20]
 
-It starts a receipts service of its own (app/vega/service.py, on a socket in
-the work directory), writes a `vega-park` package and a model file that says
-`park: true`, starts LocalAI three times - plainly, with the stand-in refusing
-two returns, with it failing a return - and runs tools/measure/park_http.py's
-rows through it, each cycle COUNTED by the engine. Then what only VeGa can
-say: one run across every return, the contexts the wrapper counted, the
-canary failures.
+It starts a receipts service of its own (app/vega/service.py: the intake on a
+socket in the work directory, its read-only HTTP API on a port), writes a
+`vega-park` package and a model file that says `park: true`, starts LocalAI
+three times - plainly, with the stand-in refusing two returns, with it failing
+a return - and runs tools/measure/park_http.py's rows through it IN THE MODE
+THE NODE'S ROW USES (`--receipts`: inputs tagged, each cycle counted by the
+engine AND held to its receipts and to the wrapper's count). Then what only
+the wrapper's own lines can say: one load stated across every return.
 
 Exit 0: every row passed. The work directory keeps LocalAI's logs.
 """
@@ -46,7 +47,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from app.vega import client  # noqa: E402
+from app.vega import service  # noqa: E402
 from app.vega.service import Intake, Keeps, Passes, ReceiptStore, Runs  # noqa: E402
 from app.vega.store import RunStore  # noqa: E402
 
@@ -69,23 +70,9 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
     return bool(ok)
 
 
-class Tagged(park.Server):
-    """park_http's client, sending every input TAGGED as Louise's client does (app/vega/client.py): the wrapper
-    refuses an input without a VeGa tag. The ids of the last request's items are kept: their receipts are asked for."""
-
-    last_ids: tuple[str, ...] = ()
-
-    def embed(self, model, texts=None):
-        batch = client.tag_batch(list(texts or park.TEXTS))
-        self.last_ids = batch.ids
-        status, body, headers = self.call("POST", "/v1/embeddings", {"model": model, "input": list(batch.inputs)})
-        if status == 200 and isinstance(body, dict):
-            return status, [d["embedding"] for d in body["data"]], headers
-        return status, body, headers
-
-
 class Receipts:
-    """VeGa's receipts service, as tests/vega/conftest.py runs it: the intake on an event loop of its own"""
+    """VeGa's receipts service: the intake on an event loop of its own, as tests/vega/conftest.py runs it, and
+    its read-only HTTP API (`service.router`) on a port, which is where park_http.py --receipts reads"""
 
     def __init__(self, work: Path) -> None:
         self.socket = work / "r.sock"
@@ -97,8 +84,26 @@ class Receipts:
         self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
         self.thread.start()
         asyncio.run_coroutine_threadsafe(self.intake.start(), self.loop).result(10)
+        import uvicorn
+        from fastapi import FastAPI
+        api = FastAPI()
+        api.include_router(service.router(self.receipts, self.runs, self.passes, self.keeps))
+        self.port = free_port()
+        self.url = f"http://127.0.0.1:{self.port}"
+        self.http = uvicorn.Server(uvicorn.Config(api, host="127.0.0.1", port=self.port, log_level="error"))
+        threading.Thread(target=self.http.run, daemon=True).start()
+        deadline = time.monotonic() + 20
+        while True:
+            try:
+                urllib.request.urlopen(self.url + "/vega/keeps", timeout=2).read()
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise SystemExit("the receipts service's HTTP API did not start") from None
+                time.sleep(0.2)
 
     def stop(self) -> None:
+        self.http.should_exit = True
         asyncio.run_coroutine_threadsafe(self.intake.close(), self.loop).result(10)
         self.loop.call_soon_threadsafe(self.loop.stop)
         self.thread.join(10)
@@ -156,7 +161,7 @@ def free_port() -> int:
 
 
 class LocalAI:
-    def __init__(self, binary: Path, work: Path, name: str, env: dict[str, str]) -> None:
+    def __init__(self, binary: Path, work: Path, name: str, env: dict[str, str], receipts_url: str) -> None:
         self.port, self.log = free_port(), work / f"localai-{name}.log"
         self.wrapper_log = work / f"wrapper-{name}.log"
         self.wrapper_log.touch()
@@ -179,7 +184,8 @@ class LocalAI:
                 if self.proc.poll() is not None or time.monotonic() > deadline:
                     raise SystemExit(f"LocalAI did not start: see {self.log}") from None
                 time.sleep(0.5)
-        self.server = Tagged(self.url)
+        # the tool's own vega mode: inputs tagged, each cycle held to the receipts and to the wrapper's count
+        self.server = park.Server(self.url, receipts=receipts_url)
         self.server.set_floor(FLOOR)
 
     def said(self, words: str) -> int:
@@ -197,7 +203,7 @@ class LocalAI:
         time.sleep(1.0)        # the add-on owner's port is the next server's too
 
 
-def row(name: str, passed: bool, lines: list[str], keep: int = 3) -> bool:
+def row(name: str, passed: bool, lines: list[str], keep: int = 4) -> bool:
     print(f"--- {name}", flush=True)
     for line in (lines if len(lines) <= 2 * keep else lines[:keep] + ["..."] + lines[-keep:]):
         print("    " + line, flush=True)
@@ -241,7 +247,7 @@ def main() -> int:
     one = [park.TEXTS[0]]
     try:
         # ---- one cycle by hand: the five things the wrapper's part for a return (#882) assumes
-        lai = LocalAI(a.local_ai.resolve(), work, "plain", {})
+        lai = LocalAI(a.local_ai.resolve(), work, "plain", {}, receipts.url)
         try:
             server = lai.server
             status, base, _ = server.embed(MODEL)
@@ -307,7 +313,7 @@ def main() -> int:
             lai.stop()
 
         # ---- a return the device refuses
-        lai = LocalAI(a.local_ai.resolve(), work, "refuse", {"GGML_CPU_PARK_TEST_REFUSE": "2"})
+        lai = LocalAI(a.local_ai.resolve(), work, "refuse", {"GGML_CPU_PARK_TEST_REFUSE": "2"}, receipts.url)
         try:
             row("a return refused twice is a deferral twice, then served", *park.refused(lai.server, MODEL))
             check("the wrapper kept the run through the refusals: one load stated, the receipts name it",
@@ -317,7 +323,7 @@ def main() -> int:
             lai.stop()
 
         # ---- (4) a return that FAILS, and is paid as a load
-        lai = LocalAI(a.local_ai.resolve(), work, "broken", {"GGML_CPU_PARK_TEST_BROKEN": "1"})
+        lai = LocalAI(a.local_ai.resolve(), work, "broken", {"GGML_CPU_PARK_TEST_BROKEN": "1"}, receipts.url)
         try:
             passed, lines = park.cycles(lai.server, MODEL, 3, "request")
             row("a FAILED return is not counted as a cycle (the row must FAIL, saying the counts started again)",

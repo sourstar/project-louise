@@ -1283,7 +1283,7 @@ Then the rows, each cycle counted by the engine:
 
     20 cycles, back by the request        20 of 20 the same bytes; 20 parks and 20 returns COUNTED, in the one process
     20 cycles, back by /backend/load      20 of 20 the same bytes; 20 parks and 20 returns COUNTED, in the one process
-    a park asked while a request runs     1134 parks answered: {(409, 'model_busy'): 1134}; the request whole
+    a park asked while a request runs     1444 parks answered: {(409, 'model_busy'): 1444}; the request whole
     the engine, in all                    parks 41, unparks 41
     the wrapper, in all                   41 repeated loads let through, ONE load stated; created 1 -> 42, canary_failed 0
     a parked model shut down              200 in 103 ms; the load afresh stated, the same run id
@@ -1302,7 +1302,40 @@ six run ids, differing in `Seed` alone. All 15 vega model files staged here
 pin `"seed": 0`; nothing refuses one that does not (the architecture
 session's to judge).
 
+**The tool has the mode for it: `park_http.py --receipts`** (it implies
+`--vega`: every input tagged by app/vega/client.py, found beside the tool's
+own tree, the standard library alone). `cycles` then holds each return to
+the engine's counts AND to VeGa: the receipts of the request after the
+return name the run of before the park, and the wrapper's count for that run
+(`GET /vega/keeps`) went up and did not start again. The harness drives the
+rows in that mode against the real service's routes; a cycle's line:
+
+    cycle  1: parked in    51.6 ms (63 MiB to the host, the process holds ? of the device); back by the request in   578.7 ms; vectors identical; the engine: 2 parked, 1 back, 0 refused for room, away -> 2 parked, 2 back, 0 refused for room, on the device; receipts of run sha256:8540f2e6a44e9f67...; the wrapper: calls 18, created 2, canary_failed 0 -> calls 35, created 3, canary_failed 0
+    VeGa: ONE run through 20 returns, sha256:8540f2e6…; the wrapper's count: calls 18, created 2, canary_failed 0 -> calls 339, created 22, canary_failed 0
+
+(The wrapper tells `calls` from a thread and `created` at once, so `calls`
+may read behind; it never reads lower than it was except in a new process.)
+
+**THE NODE'S ROW (München's):** a copy of `vega-bge-m3` behind the live
+package, the file as it is but for its name, `park: true`, and two lines
+more in its env, `GGML_SYCL_PARKABLE=1` and `GGML_SYCL_PARK_VERIFY=1` —
+`GGML_SYCL_ENABLE_DNN=0` stays, the wrapper states no card run without its
+vendor's mode. The env is in the run, so the copy is ANOTHER RUN than
+vega-bge-m3's, gated by nobody: nothing of Louise's writes a vector from it.
+
+    T="python3 -I tools/measure/park_http.py --token-file <LocalAI's key file> --receipts <VEGA_URL>"
+    $T floor  SERVER 12884901888
+    $T cycles SERVER COPY -n 3  --return request      # each line: the engine's counts, the receipt's run, the wrapper's calls and created
+    $T cycles SERVER COPY -n 20 --return request ;  $T cycles SERVER COPY -n 20 --return load
+    $T busy   SERVER COPY ;  $T stop SERVER COPY
+    $T refused SERVER COPY2                            # a second copy whose env adds GGML_SYCL_PARK_REFUSE=2
+    $T floor  SERVER 0
+
+and, from the copy's log, the wrapper's own lines: at its load ONE "loaded
+on <the card>, run …" (and any "VRAM before the load not read"); at each
+return "the load in force asked again (… the backend: 'Model already
+loaded'): run … stands", and no second "loaded on".
+
 **NOT shown:** a card. The stand-in parks a CPU buffer; the times are not
 the card's, and the wrapper's reading of the device (which card the backend
 holds, how much moved) was not exercised — the run is a CPU run and says so.
-A copy of a vega model behind the wrapper on the node is München's next row.

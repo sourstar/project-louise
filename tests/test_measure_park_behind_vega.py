@@ -57,11 +57,19 @@ def test_the_model_file_is_one_the_wrapper_states_a_run_for_and_the_same_run_at_
     assert len(files) >= 15 and all('"seed": 0' in f.read_text(encoding="utf-8") for f in files)
 
 
-def test_it_sends_tagged_inputs_and_counts_cycles_by_the_engine(tool):
-    assert issubclass(tool.Tagged, tool.park.Server)
-    assert "client.tag_batch(list(texts or park.TEXTS))" in SOURCE
+def test_it_drives_the_tool_in_the_mode_the_node_s_row_uses(tool):
+    """No client of its own: park_http.py's `--receipts` mode, against the real receipts service's routes."""
+    assert "park.Server(self.url, receipts=receipts_url)" in SOURCE and "class Tagged" not in SOURCE
+    assert "service.router(self.receipts, self.runs, self.passes, self.keeps)" in SOURCE
     assert "an input without a VeGa tag" in (ROOT / "app" / "vega" / "tag.py").read_text(encoding="utf-8")
     assert tool.park.COUNT_KEYS == ("parks", "unparks", "no_room", "parked")
+    # the routes the tool reads are the service's own
+    service = (ROOT / "app" / "vega" / "service.py").read_text(encoding="utf-8")
+    http = (ROOT / "tools" / "measure" / "park_http.py").read_text(encoding="utf-8")
+    for route in ('@api.get("/vega/keeps")', '@api.get("/vega/receipts")'):
+        assert route in service
+    assert '"/vega/receipts?ids="' in http and 'self._vega("/vega/keeps")' in http
+    assert 'RECEIPT_KEYS = ("id", "run_id", "input_digest", "vector_digest")' in service and 'r.get("run_id")' in http
     # the row for a failed return passes only when `cycles` FAILS for the right reason
     assert 'not passed and "the engine\'s counts started again" in lines[-1]' in SOURCE
     tree = ast.parse(SOURCE)
@@ -78,6 +86,9 @@ def test_the_note_says_what_was_seen_and_what_was_not():
                  "| 5 | a park inside the idle second | 409 `model_busy`",
                  "41 repeated loads let through, ONE load stated; created 1 -> 42, canary_failed 0",
                  "nothing in a receipt tells it from a\ncycle", "six loads,\nsix run ids, differing in `Seed` alone",
-                 "**NOT shown:** a card."):
+                 "**NOT shown:** a card.",
+                 # the node's row: the tool's own mode, and what the copy's file keeps
+                 "`park_http.py --receipts`", "calls 18, created 2, canary_failed 0 -> calls 339, created 22, canary_failed 0",
+                 "**THE NODE'S ROW (München's):**", "`GGML_SYCL_ENABLE_DNN=0` stays"):
         assert said in section, said
     assert 1 + 20 + 20 == 41
