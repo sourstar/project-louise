@@ -154,6 +154,21 @@ def fresh_worker_state():
 
 
 @pytest.fixture(autouse=True)
+def query_traces_stay_in_tmp(monkeypatch, tmp_path_factory):
+    """An admin's question is traced into `<LOUISE_ROOT>/state/query-traces`
+    (app/query_trace.py), and a test that asks as the admin without
+    isolated_config resolved that root to the machine's real /data
+    (architecture's test machine, 2026-11-26: a /v1/chat/completions test's
+    line landed in /data/state/query-traces and tripped other branches' /data
+    guard). Every test's traces go to a temporary directory of its own; a
+    test that reads them patches `trace_dir` itself."""
+    from app import query_trace
+    d = tmp_path_factory.mktemp("query-traces")
+    monkeypatch.setattr(query_trace, "trace_dir", lambda: d)
+    yield d
+
+
+@pytest.fixture(autouse=True)
 def no_runner_says_what_it_holds(monkeypatch):
     """app/model_load.py asks a model's runner (`GET <server>/system`) whether
     the model is loaded before a request. No test's fake encoder, reranker or

@@ -349,3 +349,15 @@ def test_the_ask_routes_trace_an_admin(traced, monkeypatch):
     _wait(lambda: _lines(traced))
     (got,) = _lines(traced)
     assert got["kind"] == "ask:search" and '"T"' in got["results"]["json"]
+
+
+def test_no_trace_lands_outside_the_tests_temporary_directories(query_traces_stay_in_tmp):
+    """The guard: in the suite, `trace_dir` is a temporary directory, never
+    the root a test without isolated_config resolves to (/data)."""
+    import tempfile
+    d = query_trace.trace_dir()
+    assert d == query_traces_stay_in_tmp
+    assert str(d.resolve()).startswith(str(Path(tempfile.gettempdir()).resolve())), d
+    t = query_trace.Trace("search", "g1", "admin:admin", "q", sample_s=10.0)
+    t.end(); t.join(5)
+    assert list(d.glob("*.jsonl")), "written there"
