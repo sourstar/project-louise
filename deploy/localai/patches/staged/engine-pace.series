@@ -1,0 +1,38 @@
+# A CANDIDATE: A PARK PACED BY THE HOST (the operator's "C", 2026-11-26: the ZFS ARC
+# counted by the server, staged 0032, and the copy paced by the engine).
+# engine-fade.series, the LIVE engine aea955022a8f, line for line, then:
+#   0033  with GGML_SYCL_PARK_HOST_RESERVE=<bytes> in a model's env, a park copies its
+#         weights to host memory in 256 MiB pieces and waits before each, at most
+#         GGML_SYCL_PARK_HOST_WAIT_MS, while MemAvailable is under the reserve plus the
+#         piece; at that bound the weights stay on the device. Unset: nothing changes.
+#         The reserve must not be above zfs_arc_sys_free.
+#   SERIES_FILE=deploy/localai/patches/staged/engine-pace.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
+# ANOTHER ENGINE: a build and every gate again. Only a park with the reserve set
+# changes; no model's answer can move.
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0009-llama-cpp-omnivoice.patch
+staged/0010-llama-cpp-tts-voice-modes.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch
+staged/0016-llama-cpp-sycl-pool-refuse-switch.patch
+staged/0017-llama-cpp-moe-record.patch
+staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch
+staged/0020-llama-cpp-omnivoice-nothing-kept-between-requests.patch
+staged/0021-llama-cpp-sycl-paging-is-the-default.patch
+staged/0022-llama-cpp-omnivoice-language-tag.patch
+staged/0025-llama-cpp-stream-fails-after-its-first-chunk.patch
+staged/0026-llama-cpp-sycl-graph-refuse-switch.patch
+staged/0023-llama-cpp-park-when-told.patch
+staged/0030-llama-cpp-omnivoice-fade-out-ends-with-the-kept-silence.patch
+staged/0033-llama-cpp-sycl-park-paced-by-the-host-reserve.patch

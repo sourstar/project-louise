@@ -1531,3 +1531,48 @@ an OOM of the process holding the weights. Not counted until measured.
 | LocalAI's endpoints suite | 695 of 742 with and without 0031 here: the 47 need Postgres through Docker, which this container has not; whole on the node's builder |
 | the log line on the node | NOT measured: a server build, no gate — the operator's word, with the next server pass |
 
+## 15. The ZFS ARC counted, the copy paced (the operator's "C", 2026-11-26)
+
+München's quiet-node reading (§14) showed the ARC outside MemAvailable and
+slow to give back. The operator chose "C": A, `zfs_arc_sys_free` raised so
+the ARC keeps the host's memory free (set by München: 15,032,385,536 B; the
+ARC settled at 5.1 GiB from 14.4, MemAvailable 33.8 GiB at rest and 23.1 GiB
+under a 10 GiB allocation); and B, below, so that A can come down and the
+cache refill.
+
+**B, the server (staged 0032, after 0031; `git rev-parse HEAD^{tree}`
+`1222e3616d6b569cc577cc9a0c27f014476d11ae` after it).** The reading keeps the ARC's evictable part
+(arcstats' `mru_evictable_data`, `mru_evictable_metadata`,
+`mfu_evictable_data`, `mfu_evictable_metadata`), and a park is decided on
+`ForParking`: MemAvailable PLUS what of the ARC can be given back — its
+evictable part, no more than its size less `c_min`, less a margin of 1 GiB —
+and under a memory cgroup limit no more than the limit allows (the ARC is
+the host's: it adds nothing to the cgroup's room). `Allocatable` is
+unchanged: a caller that cannot wait for the ARC does not count it. The
+refusal's reading says the evictable part and what of it was counted.
+
+**B, the engine (staged 0033, inner `0025-sycl-park-paced-by-the-host-reserve.patch`;
+candidate `engine-pace.series` = the live `engine-fade.series` + 0033:
+`3216ace3205f`).** With `GGML_SYCL_PARK_HOST_RESERVE=<bytes>` in a model's env, a
+park copies its weights to host memory in pieces of 256 MiB and, before
+each, waits — in steps of 50 ms, at most `GGML_SYCL_PARK_HOST_WAIT_MS`
+(30,000) for the whole park — while MemAvailable is under the reserve plus
+the piece. At the bound the park does not happen: the host copy is freed,
+the device memory was never released, NO_MEMORY (the server stops the model
+instead, as for a host with no room). Unset, the copy runs as before.
+
+**THE ONE CONSTRAINT: the reserve must not be above `zfs_arc_sys_free`.**
+ZFS gives memory back when the host's free memory falls under
+`zfs_arc_sys_free`; an engine waiting under a HIGHER reserve waits for
+nothing, and every park ends at its bound. So A can come down only as far as
+the reserve — e.g. a reserve of 2 GiB with `zfs_arc_sys_free` at 4 GiB — and
+the server's floor (12 GiB, counted with the ARC) is another number than the
+engine's reserve (counted on MemAvailable alone).
+
+| | |
+|---|---|
+| the server: the evictable part read, counted with its margin and its cap, nothing added under a cgroup limit, a park admitted on the ARC | MEASURED, `pkg/xsysinfo` and `pkg/model` (279 of 279); the new spec fails when the park ignores the ARC |
+| the engine: the wait (no reserve: no reading; room: at once; under it: steps until back; never back: refused after exactly the bound, the park's bound; unreadable: goes) | MEASURED, `tests/test-sycl-park-pace.cpp`, 12 of 12 |
+| the engine compiles | MEASURED: `ggml-sycl.cpp` with icpx (oneAPI 2025.3); the inner patch applies on the very file the live series produces |
+| a park paced on the card, the ARC giving back under it | NOT measured: a build, a gate, and a copy of a model with the reserve set — München's |
+

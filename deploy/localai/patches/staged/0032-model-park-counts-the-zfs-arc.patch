@@ -1,0 +1,253 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 27 Nov 2026 07:09:34 +0000
+Subject: [PATCH] feat(model): a park counts the ZFS ARC's evictable part as
+ memory the copy can take
+
+On a host whose page cache is the ZFS ARC, MemAvailable leaves the ARC out,
+though the ARC gives memory back to an allocation that needs it: a park was
+refused for its floor with gigabytes of evictable cache beside it (measured
+on a node, 2026-11-26: 10.5 GiB evictable in a 14.4 GiB ARC).
+
+The reading now keeps the ARC's evictable part (arcstats' MRU and MFU
+evictable data and metadata), and a park is decided on ForParking:
+MemAvailable plus what of the ARC can be given back - its evictable part, no
+more than its size less c_min, less a margin of 1 GiB - and, under a memory
+cgroup limit, no more than the limit allows (the ARC is the host's, it adds
+nothing to the cgroup's room). Allocatable is unchanged: a caller that
+cannot wait for the ARC does not count it. The backend copying the weights
+paces itself on the host's memory, so that the ARC has time to give back.
+
+The refusal's reading says the evictable part and what of it was counted.
+
+Assisted-by: Claude Code
+---
+ pkg/model/park.go                    | 11 ++---
+ pkg/model/park_internal_test.go      | 15 ++++++-
+ pkg/xsysinfo/memory_headroom.go      | 66 +++++++++++++++++++++++-----
+ pkg/xsysinfo/memory_headroom_test.go | 37 +++++++++++++++-
+ 4 files changed, 110 insertions(+), 19 deletions(-)
+
+diff --git a/pkg/model/park.go b/pkg/model/park.go
+index 18948c7..30bc00c 100644
+--- a/pkg/model/park.go
++++ b/pkg/model/park.go
+@@ -272,15 +272,16 @@ func (ml *ModelLoader) park(ctx context.Context, modelName, address string) (Par
+ 	}
+ 
+ 	// The host, now. Not an hour ago, and not a budget: what is available at
+-	// this moment, less what the parks in flight are about to copy into it
+-	// and what this one would, against the floor. Read ONCE, and the reading
+-	// kept: a refusal says what it was decided on (MemAvailable, the cgroup's
+-	// room, the ZFS ARC beside them), in its answer and in the log.
++	// this moment - MemAvailable and the ZFS ARC's evictable part, which the
++	// ARC gives back to the copy (xsysinfo.MemoryReading.ForParking) - less
++	// what the parks in flight are about to copy into it and what this one
++	// would, against the floor. Read ONCE, and the reading kept: a refusal
++	// says what it was decided on, in its answer and in the log.
+ 	var free uint64
+ 	saw := "the host's memory as a source set for this process reads it"
+ 	if available == nil {
+ 		reading := readHostMemory()
+-		free, saw = reading.Allocatable(), reading.String()
++		free, saw = reading.ForParking(), reading.String()
+ 	} else {
+ 		var err error
+ 		if free, err = available(); err != nil {
+diff --git a/pkg/model/park_internal_test.go b/pkg/model/park_internal_test.go
+index df2671a..52285f0 100644
+--- a/pkg/model/park_internal_test.go
++++ b/pkg/model/park_internal_test.go
+@@ -295,9 +295,20 @@ var _ = Describe("Parking", func() {
+ 			Expect(err.Error()).To(ContainSubstring(fmt.Sprintf("%d MiB available", (floor+6*gib-1)>>20)),
+ 				"the cgroup's room decided it: the smaller of the two")
+ 			Expect(err.Error()).To(ContainSubstring("(MemAvailable 40960 MiB; cgroup v2: limit 24576 MiB, working set"))
+-			Expect(err.Error()).To(ContainSubstring("; ZFS ARC 14336 MiB, its floor 1024 MiB (not counted in MemAvailable))"))
++			Expect(err.Error()).To(ContainSubstring("; ZFS ARC 14336 MiB, its floor 1024 MiB, evictable 0 MiB, 0 MiB of it counted for a park (not in MemAvailable))"))
+ 			Expect(backend.parks).To(BeZero())
+ 
++			// MemAvailable alone short of it, the ARC's evictable part covering it: parked
++			readHostMemory = func() xsysinfo.MemoryReading {
++				reads++
++				return xsysinfo.MemoryReading{HostAvailable: floor, ARC: true, ARCSize: 14 * gib, ARCMin: 1 * gib,
++					ARCEvictable: 6*gib + xsysinfo.ARCMargin}
++			}
++			_, err = ml.ParkModel(context.Background(), "m")
++			Expect(err).NotTo(HaveOccurred(), "the ARC gives back what the copy needs")
++			Expect(reads).To(Equal(2))
++			Expect(ml.unpark(context.Background(), m)).To(Succeed())
++
+ 			// the same reading with room: parked, read once again
+ 			readHostMemory = func() xsysinfo.MemoryReading {
+ 				reads++
+@@ -305,7 +316,7 @@ var _ = Describe("Parking", func() {
+ 			}
+ 			_, err = ml.ParkModel(context.Background(), "m")
+ 			Expect(err).NotTo(HaveOccurred())
+-			Expect(reads).To(Equal(2))
++			Expect(reads).To(Equal(3))
+ 		})
+ 
+ 		It("does not park blind when the host's memory cannot be read", func() {
+diff --git a/pkg/xsysinfo/memory_headroom.go b/pkg/xsysinfo/memory_headroom.go
+index 9e86055..8ff20f4 100644
+--- a/pkg/xsysinfo/memory_headroom.go
++++ b/pkg/xsysinfo/memory_headroom.go
+@@ -42,11 +42,50 @@ type MemoryReading struct {
+ 	// V2 and V1: the memory cgroup this process runs in, where it has a limit.
+ 	V2, V1 CgroupRoom
+ 	// ARCSize and ARCMin: the ZFS ARC's size and the floor it is not shrunk
+-	// under (c_min), where the host has an ARC (ARC false otherwise). Linux's
+-	// MemAvailable does not count the ARC, though the ARC gives memory back
+-	// under pressure: it is said here, and not decided on.
+-	ARC             bool
+-	ARCSize, ARCMin uint64
++	// under (c_min), where the host has an ARC (ARC false otherwise); and
++	// ARCEvictable, what of it ZFS says it can evict now (its MRU and MFU
++	// lists' evictable data and metadata). Linux's MemAvailable does not count
++	// the ARC, though the ARC gives memory back under pressure: Allocatable
++	// leaves it out; ForParking counts its evictable part (see there).
++	ARC                           bool
++	ARCSize, ARCMin, ARCEvictable uint64
++}
++
++// ARCMargin is what ForParking keeps back of the ARC's evictable part: the
++// ARC gives memory back at its own pace (measured on a node, 2026-11-26: a
++// 10 GiB allocation, the ARC unmoved for 24 s, then 2.3 GiB back), and the
++// evictable figure moves while it is read.
++const ARCMargin = uint64(1) << 30
++
++// ARCCounted is the part of the ARC that ForParking counts as available: its
++// evictable part, no more than it can shrink (its size less c_min), less
++// ARCMargin; 0 where there is no ARC or nothing to count.
++func (r MemoryReading) ARCCounted() uint64 {
++	if !r.ARC || r.ARCSize <= r.ARCMin {
++		return 0
++	}
++	can := min(r.ARCEvictable, r.ARCSize-r.ARCMin)
++	if can <= ARCMargin {
++		return 0
++	}
++	return can - ARCMargin
++}
++
++// ForParking is what a park may copy weights into: the host's MemAvailable
++// AND the ZFS ARC's evictable part (ARCCounted) - the ARC gives that back to
++// an allocation that needs it - and under a memory cgroup limit no more than
++// the limit still allows (the ARC is the host's, not the cgroup's: it adds
++// nothing there). Not Allocatable: a caller that cannot wait for the ARC must
++// not count it. The backend that copies paces itself on the host's memory
++// (GGML_SYCL_PARK_HOST_RESERVE), so that the ARC has time to give back.
++func (r MemoryReading) ForParking() uint64 {
++	best := r.HostAvailable + r.ARCCounted()
++	for _, c := range []CgroupRoom{r.V2, r.V1} {
++		if c.Limited && c.Headroom < best {
++			best = c.Headroom
++		}
++	}
++	return best
+ }
+ 
+ // CgroupRoom is one memory cgroup's limit, its working set (its usage less
+@@ -91,7 +130,8 @@ func (r MemoryReading) String() string {
+ 		}
+ 	}
+ 	if r.ARC {
+-		s += fmt.Sprintf("; ZFS ARC %d MiB, its floor %d MiB (not counted in MemAvailable)", mib(r.ARCSize), mib(r.ARCMin))
++		s += fmt.Sprintf("; ZFS ARC %d MiB, its floor %d MiB, evictable %d MiB, %d MiB of it counted for a park (not in MemAvailable)",
++			mib(r.ARCSize), mib(r.ARCMin), mib(r.ARCEvictable), mib(r.ARCCounted()))
+ 	} else {
+ 		s += "; no ZFS ARC"
+ 	}
+@@ -108,7 +148,7 @@ func readingFrom(hostAvailable uint64, v2Max, v2Current, v2Stat, v1Limit, v1Usag
+ 	r := MemoryReading{HostAvailable: hostAvailable,
+ 		V2: cgroupRoom(parseCgroupV2Max(v2Max), v2Current, v2Stat, "inactive_file"),
+ 		V1: cgroupRoom(parseCgroupV1Limit(v1Limit), v1Usage, v1Stat, "total_inactive_file")}
+-	r.ARCSize, r.ARCMin, r.ARC = parseArcstats(arcstats)
++	r.ARCSize, r.ARCMin, r.ARCEvictable, r.ARC = parseArcstats(arcstats)
+ 	return r
+ }
+ 
+@@ -125,9 +165,11 @@ func cgroupRoom(limit uint64, usageRaw, statRaw, inactiveFileKey string) CgroupR
+ }
+ 
+ // parseArcstats reads the ARC's "size" and "c_min" rows of
+-// /proc/spl/kstat/zfs/arcstats ("name type data"); ok false where the file
+-// is absent or holds no size.
+-func parseArcstats(raw string) (size, min uint64, ok bool) {
++// /proc/spl/kstat/zfs/arcstats ("name type data"), and its evictable part:
++// the sum of mru_evictable_data, mru_evictable_metadata, mfu_evictable_data
++// and mfu_evictable_metadata; ok false where the file is absent or holds no
++// size.
++func parseArcstats(raw string) (size, min, evictable uint64, ok bool) {
+ 	for line := range strings.SplitSeq(raw, "\n") {
+ 		fields := strings.Fields(line)
+ 		if len(fields) != 3 {
+@@ -142,9 +184,11 @@ func parseArcstats(raw string) (size, min uint64, ok bool) {
+ 			size, ok = v, true
+ 		case "c_min":
+ 			min = v
++		case "mru_evictable_data", "mru_evictable_metadata", "mfu_evictable_data", "mfu_evictable_metadata":
++			evictable += v
+ 		}
+ 	}
+-	return size, min, ok
++	return size, min, evictable, ok
+ }
+ 
+ // cgroupHeadroom is what a memory cgroup with a limit still allows: the
+diff --git a/pkg/xsysinfo/memory_headroom_test.go b/pkg/xsysinfo/memory_headroom_test.go
+index 6ed166c..1b77447 100644
+--- a/pkg/xsysinfo/memory_headroom_test.go
++++ b/pkg/xsysinfo/memory_headroom_test.go
+@@ -58,7 +58,7 @@ var _ = Describe("MemoryReading", func() {
+ 		Expect(r.ARCSize).To(Equal(14 * gi))
+ 		Expect(r.ARCMin).To(Equal(gi))
+ 		Expect(r.Allocatable()).To(Equal(2*gi), "the ARC is said, not counted")
+-		Expect(r.String()).To(Equal("MemAvailable 2048 MiB; ZFS ARC 14336 MiB, its floor 1024 MiB (not counted in MemAvailable)"))
++		Expect(r.String()).To(Equal("MemAvailable 2048 MiB; ZFS ARC 14336 MiB, its floor 1024 MiB, evictable 0 MiB, 0 MiB of it counted for a park (not in MemAvailable)"))
+ 		Expect(readingFrom(2*gi, "", "", "", "", "", "", "garbage\n").ARC).To(BeFalse())
+ 	})
+ 
+@@ -67,3 +67,38 @@ var _ = Describe("MemoryReading", func() {
+ 			To(Equal(chooseAllocatableMemory(40*gi, "", "", "", itoa(24*gi)+"\n", itoa(20*gi)+"\n", "total_inactive_file 0\n")))
+ 	})
+ })
++
++var _ = Describe("ForParking", func() {
++	const gi = uint64(1) << 30
++	arcstats := func(size, cmin, mruData, mruMeta, mfuData, mfuMeta uint64) string {
++		return "name type data\nsize 4 " + itoa(size) + "\nc_min 4 " + itoa(cmin) +
++			"\nmru_evictable_data 4 " + itoa(mruData) + "\nmru_evictable_metadata 4 " + itoa(mruMeta) +
++			"\nmfu_evictable_data 4 " + itoa(mfuData) + "\nmfu_evictable_metadata 4 " + itoa(mfuMeta) +
++			"\nmru_size 4 999999999999\n"
++	}
++
++	It("counts the ARC's evictable part, less a margin, on top of MemAvailable", func() {
++		// the node, 2026-11-26: 10.5 GiB evictable of a 14.4 GiB ARC; here 10 of 14, c_min 2
++		r := readingFrom(8*gi, "", "", "", "", "", "", arcstats(14*gi, 2*gi, 6*gi, 1*gi, 2*gi, 1*gi))
++		Expect(r.ARCEvictable).To(Equal(10 * gi))
++		Expect(r.ARCCounted()).To(Equal(10*gi - ARCMargin))
++		Expect(r.ForParking()).To(Equal(8*gi + 10*gi - ARCMargin))
++		Expect(r.Allocatable()).To(Equal(8*gi), "a caller that cannot wait for the ARC does not count it")
++		Expect(r.String()).To(ContainSubstring("evictable 10240 MiB, 9216 MiB of it counted for a park"))
++	})
++
++	It("counts no more than the ARC can shrink, and nothing under the margin", func() {
++		// evictable 10 GiB, but the ARC is 6 GiB with a floor of 2: it can give back 4
++		r := readingFrom(8*gi, "", "", "", "", "", "", arcstats(6*gi, 2*gi, 6*gi, 1*gi, 2*gi, 1*gi))
++		Expect(r.ARCCounted()).To(Equal(4*gi - ARCMargin))
++		small := readingFrom(8*gi, "", "", "", "", "", "", arcstats(14*gi, 2*gi, ARCMargin/2, 0, 0, 0))
++		Expect(small.ARCCounted()).To(BeZero())
++		Expect(readingFrom(8*gi, "", "", "", "", "", "", "").ForParking()).To(Equal(8*gi), "no ARC: MemAvailable")
++	})
++
++	It("adds nothing where a memory cgroup is the limit: the ARC is the host's", func() {
++		r := readingFrom(8*gi, itoa(24*gi)+"\n", itoa(20*gi)+"\n", "inactive_file 0\n", "", "", "",
++			arcstats(14*gi, 2*gi, 6*gi, 1*gi, 2*gi, 1*gi))
++		Expect(r.ForParking()).To(Equal(4*gi), "the cgroup's 4 GiB of room, whatever the ARC holds")
++	})
++})
+-- 
+2.43.0
+
