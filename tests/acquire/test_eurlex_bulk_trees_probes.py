@@ -161,8 +161,9 @@ def test_P5_a_fingerprint_that_no_longer_holds_leaves_the_window_as_kept(tmp_pat
 
 
 def test_an_oserror_while_listing_holds_the_pass_back(tmp_path, monkeypatch):
-    """Review of 7eb82ba1, 1: ENOSPC in `keep` left prepare as an OSError, the
-    engine went on "not prepared", every tree asked of Cellar."""
+    """Review of 7eb82ba1, 1, kept with the pipeline (review of b797db0e,
+    B3): ENSOSPC in the listing beside the fetch holds the pass back — the
+    engine asks `held_back`, asks nothing more and ends it HeldBack."""
     base, corpus = _setup(tmp_path, monkeypatch)
     monkeypatch.setattr(datadump, "_DUMPS", datadump.Dumps(base))
     monkeypatch.setattr(eurlex_dump, "build_newer", lambda *a, **k: None)
@@ -171,8 +172,14 @@ def test_an_oserror_while_listing_holds_the_pass_back(tmp_path, monkeypatch):
         raise OSError(28, "No space left on device")
     monkeypatch.setattr(cellar, "_window_files", full)
     f = _unit()
-    with pytest.raises(HeldBack):
-        cellar.TreeUnits().prepare([f], [f], SimpleNamespace(corpus_dir=corpus, name="eu"), SimpleNamespace(url=URL))
+    units = cellar.TreeUnits()
+    units.prepare([f], [f], SimpleNamespace(corpus_dir=corpus, name="eu"), SimpleNamespace(url=URL))
+    thread, _events, _phase = next(iter(units._runs.values()))
+    thread.join(10)
+    assert units.held_back() and "local fault" in units.held_back()
+    units.ready(f, None)                                          # returns at once: the pass is held
+    units.close()
+
 
 
 def test_a_covered_window_is_asked_again_once_a_day_and_its_units_come_back_at_once(tmp_path, monkeypatch):

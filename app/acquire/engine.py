@@ -1092,8 +1092,11 @@ def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
 
 def _make_worker(transport, collection, spec, manager, ranked, stop, priority):
     ready = getattr(spec.unit_fetcher, "ready", None) if spec.unit_fetcher is not None else None
+    held_back = getattr(spec.unit_fetcher, "held_back", None) if spec.unit_fetcher is not None else None
 
     def _work(item: _WorkItem) -> list[_FileResult]:
+        if held_back is not None and held_back():
+            return []                   # the pass is held back: nothing more is asked, nothing recorded
         if ready is not None and item.data is not None:
             # what the unit needs first, waited for WITHOUT a slot (eurlex's
             # pipeline: its listing window); bounded and stop-aware by contract
@@ -1529,6 +1532,7 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
 
     last_report = [time.monotonic()]
     workers = min(manager.platform.transfer.workers, max(1, len(items)))
+    held_back = getattr(spec.unit_fetcher, "held_back", None) if spec.unit_fetcher is not None else None
     # the claim is already held by run_acquisition, covering the whole pass
     try:
         transfer_pool.run_pool(
@@ -1540,6 +1544,20 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
         # before is told, so its scan is asked (app/worker.py)
         e.fetched = counters["fetched"]
         raise
+    finally:
+        if prepare is not None:
+            # what it opened for the pass (a bulk's index, a listing running
+            # beside it) is let go with it, however the pool ended (review of
+            # b797db0e: a busy manifest's retry ran a second listing beside the first)
+            close = getattr(spec.unit_fetcher, "close", None)
+            if close is not None:
+                close()
+    # A UNIT FETCHER THAT HELD THE PASS BACK MID-PASS (spec.UnitFetcher
+    # `held_back`, optional; eurlex: a local fault in the listing running
+    # beside the fetch) ends it as prepare's HeldBack does
+    why = held_back() if held_back is not None else None
+    if why:
+        raise HeldBack(why)
 
     _unit_reports(con, spec, last_report, final=True)
     if counters.get("waiting_units"):
@@ -1547,11 +1565,6 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
                      f"{counters['waiting_units']} unit(s) wait for what the pass could not do first "
                      f"(their listing): nothing asked of the origin; each due again when its "
                      f"wait (60 s to 2 h) ends")
-    if prepare is not None:
-        # what it opened for the pass (a bulk's index) is let go with it
-        close = getattr(spec.unit_fetcher, "close", None)
-        if close is not None:
-            close()
     # a deferred file (its directory unread this pass) is skipped: nothing
     # moved, nothing recorded, the copy stands — not a failure of the file
     return {"fetched": counters["fetched"], "skipped": skipped + counters["deferred"],
