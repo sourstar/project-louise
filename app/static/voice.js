@@ -786,12 +786,41 @@
     } catch (e) { return buf; }
   }
 
-  function speakState(on) {
+  function speakState(on, paused = false) {
     if (!speak) return;
     speak.classList.toggle('on', on);
-    speak.setAttribute('aria-pressed', on ? 'true' : 'false');
-    speak.title = on ? 'stop reading' : 'read the answer aloud';
-    const l = speak.querySelector('.speak-label'); if (l) l.textContent = on ? 'stop' : 'read aloud';
+    speak.classList.toggle('paused', on && paused);
+    speak.setAttribute('aria-pressed', on && !paused ? 'true' : 'false');
+    speak.title = !on ? 'read the answer aloud' : paused ? 'resume reading' : 'pause reading';
+    const l = speak.querySelector('.speak-label');
+    if (l) l.textContent = !on ? 'read aloud' : paused ? 'resume' : 'pause';
+  }
+
+  // A TAP PAUSES THE READING WHERE IT IS, the next resumes it (operator,
+  // 2026-11-27: "I do", to a true pause): the player paused at its position,
+  // the pieces made and being made kept, nothing aborted; on resume the same
+  // piece goes on and the next ones follow. A new answer, another language
+  // or voice, or PAUSE_MAX_MS of pause end it as a stop did before.
+  const PAUSE_MAX_MS = 10 * 60 * 1000;
+  function pauseReading() {
+    const r = reading; if (!r || r.paused) return;
+    r.paused = true; times.pauses = (times.pauses || []).concat([now()]);
+    if (player && !player.paused) player.pause();
+    speakState(true, true);
+    clearTimeout(r.pauseTimer);
+    r.pauseTimer = setTimeout(() => { if (reading === r && r.paused) stopReading(); }, PAUSE_MAX_MS);
+  }
+  function resumeReading() {
+    const r = reading; if (!r || !r.paused) return;
+    r.paused = false; clearTimeout(r.pauseTimer);
+    speakState(true, false);
+    // inside the tap: the browser lets the paused element play on
+    if (player && r.playing) player.play().catch(e => { if (e && e.name === 'NotAllowedError') r.blocked = true; });
+    if (r.resumed) { const f = r.resumed; r.resumed = null; f(); }
+  }
+  // the reading's loop waits here while paused
+  async function whilePaused(r) {
+    while (reading === r && r.paused) await new Promise(ok => { r.resumed = ok; });
   }
 
   // THE PAGE'S ONE PLAYER, played silent inside a tap — the microphone's,
@@ -828,8 +857,10 @@
     const r = reading; if (!r) return;
     reportReading(r);
     reading = null; r.ctl.abort();             // the fetches in flight with it
+    clearTimeout(r.pauseTimer);
     if (player) { player.pause(); player.removeAttribute('src'); }
     if (r.wake) r.wake();
+    if (r.resumed) r.resumed();
     if (r.more) r.more();
     for (const it of r.items) it.ok(null);     // nothing waits on them any more
     for (const u of r.urls) URL.revokeObjectURL(u);
@@ -897,7 +928,11 @@
     }
     pick.value = chosenVoice() || got.default || list[0].voice;
     // what was made ahead of a tap is in the voice it was made in: made again
-    pick.onchange = () => { keepVoice(pick.value); if (ahead) { dropAhead(); prefetch(); } };
+    pick.onchange = () => {
+      keepVoice(pick.value);
+      if (reading && reading.paused) stopReading();   // another voice ends a paused reading
+      if (ahead) { dropAhead(); prefetch(); }
+    };
     box.hidden = false;
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadVoices);
@@ -996,6 +1031,8 @@
   function follow() {
     const r = reading;
     if (r.lang === answerLang && answerText().startsWith(r.text)) { feed(r); return; }
+    // another text (a translation) ends a PAUSED reading, and starts nothing by itself
+    if (r.paused) { stopReading(); return; }
     stopReading(); startReading();
   }
 
@@ -1062,11 +1099,19 @@
         if (reading !== r || i >= r.items.length) return;
         const url = await r.items[i].p;
         if (reading !== r) return;
-        if (url) { r.items[i].t.play = now(); await play(r, url); r.items[i].t.end = now(); }
+        await whilePaused(r);
+        if (reading !== r) return;
+        if (url) {
+          r.items[i].t.play = now(); r.playing = true;
+          await play(r, url);
+          r.playing = false; r.items[i].t.end = now();
+        }
         if (reading !== r) return;
         // the pause the boundary it was cut at asks for, before the next piece
         const gap = GAP_MS[r.items[i].gap];
         if (gap && i + 1 < r.items.length) await new Promise(ok => setTimeout(ok, gap));
+        if (reading !== r) return;
+        await whilePaused(r);
         if (reading !== r) return;
         if (r.blocked) {
           if (speak) speak.hidden = false;
@@ -1081,7 +1126,7 @@
 
   if (speak) speak.addEventListener('click', () => {
     times.taps.push(now());                    // when the tap came, beside when a reading started
-    if (reading) { stopReading(); return; }
+    if (reading) { if (reading.paused) resumeReading(); else pauseReading(); return; }
     unlock(); startReading();
   });
 

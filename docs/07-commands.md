@@ -1914,7 +1914,10 @@ the node's kept clips serve it.
 The next piece starts after that boundary's pause (a word's none, a comma's 180 ms, a ; or :'s 300 ms; a
 sentence's its own), the silence the model left at the cut trimmed first. A kept clip still takes its turn:
 it waits for the piece before it, and the next one does not wait for it. The reading's line in the node's log
-says each piece's budget, steps and boundary. THE READY TONE (*added
+says each piece's budget, steps and boundary. A TAP ON THE SPEAKER PAUSES THE READING WHERE IT IS, the next resumes it (*amended 2026-11-27*,
+operator: "I do", to a true pause, replacing the tap that stopped it): the player paused at its position,
+the pieces made and being made kept, nothing aborted; resumed, the same piece goes on and the next follow.
+A new answer, another language or voice, or ten minutes of pause end it as the stop did. THE READY TONE (*added
 2026-11-26*, operator: "Send a gentle ping when the microphone is ready (both car and no car) so the user
 knows when to talk without watching the screen"): one soft 160 ms tone at 880 Hz when the microphone turns
 red — only once it gives sound — from the page's own audio context; the microphone's energy check does not

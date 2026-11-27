@@ -224,15 +224,26 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(posted.speech.every(b => b.language === 'it' && !('model' in b) && !('voice' in b)),
         '4. the node\'s model and voice: the page names neither', posted.speech);
 
-  // 5. tapped again while reading: it stops, and asks nothing more
+  // 5. A TAP PAUSES, THE NEXT RESUMES (operator, 2026-11-27: "I do", to a true
+  //    pause): the player paused at its place, nothing aborted, nothing made
+  //    twice; resumed, the same sentence goes on and the next ones follow
   posted.speech.length = 0; speechDelay = 400;
   await page.click('#speak');
   check(await until(() => document.getElementById('speak').classList.contains('on'), 2000), '5. reading again');
-  await sleep(150);
+  for (const t5 = Date.now(); posted.speech.length < 1 && Date.now() - t5 < 3000;) await sleep(40);
+  await sleep(300);
   await page.click('#speak');
+  check(await until(() => document.getElementById('speak').classList.contains('paused'), 1000), '5. a tap pauses it, and says so',
+        await page.evaluate(() => document.getElementById('speak').className));
+  const at5 = posted.speech.length;
   await sleep(1500);
-  check(posted.speech.length <= 2, '5. a tap stops it: no request after', posted.speech.length);
-  check(await page.evaluate(() => !document.getElementById('speak').classList.contains('on')), '5. and says so');
+  check(await page.evaluate(() => document.getElementById('speak').classList.contains('on')), '5. paused is not stopped');
+  check(posted.speech.length >= at5, '5. nothing in flight was aborted', posted.speech.length);
+  await page.click('#speak');
+  check(await until(() => !document.getElementById('speak').classList.contains('paused'), 1000), '5. the next tap resumes');
+  check(await until(() => !document.getElementById('speak').classList.contains('on'), 15000), '5. and the reading goes to its end');
+  check(JSON.stringify(posted.speech.map(b => b.input)) === JSON.stringify(SENTENCES),
+        '5. every sentence asked for once, in order: nothing made twice', posted.speech.map(b => b.input));
   speechDelay = 0;
 
   // 6. a new question takes the speaker away
@@ -344,7 +355,7 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
     const b = document.getElementById('speak').getBoundingClientRect();
     return { right: b.right, scroll: document.documentElement.scrollWidth, label: document.getElementById('speak').textContent.trim() };
   });
-  check(ph.right <= 360 && ph.scroll <= 360 && ph.label === 'stop', '8. reading, on a phone: the speaker inside the screen', ph);
+  check(ph.right <= 360 && ph.scroll <= 360 && ph.label === 'pause', '8. reading, on a phone: the speaker inside the screen', ph);
   await emit('delta', { text: 'lowed him.' });
   await sleep(500);
   check(posted.speech.length === 2, '8. the last sentence waits for the stream\'s end: it could still grow', posted.speech.map(b => b.input));
@@ -360,23 +371,25 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
         '8. each sentence names its reading and its place (the node keeps the order: speech.Turns)', order);
   slow = {};
 
-  // 9. tapped while the answer is still written: the fetches in flight are
-  //    cancelled, and nothing more is asked for or played
+  // 9. paused while the answer is still written: the fetches in flight go on,
+  //    nothing is played while paused; resumed, the whole answer is read once
   await reset(); speechDelay = 1500;
   await asked(() => page.evaluate(() => { ask(); }));
   await emit('delta', { text: SENTENCES.slice(0, 2).join(' ') + ' Petrarch and Boccaccio fol' });
   await page.click('#speak');
   check(await until(() => __speech.length === 2, 3000), '9. two sentences being made', await inputs());
   await page.click('#speak');
-  check(await until(() => __speech.every(s => s.state === 'aborted'), 3000), '9. a tap cancels them', await page.evaluate(() => __speech));
+  await sleep(300);
+  check(await page.evaluate(() => __speech.every(s => s.state !== 'aborted')), '9. a pause cancels nothing',
+        await page.evaluate(() => __speech));
   await emit('delta', { text: 'lowed him.' });
   await emit('end', { state: 'done', reason: '' });
   await sleep(2000);
-  // operator, 2026-11-09: "keep the buffering available even when I stop/start
-  // the speech" — the answer still arriving is made into speech, never played
-  check(posted.speech.length > 2 && (await played()).length === 0 && !(await on()),
-        '9. nothing is played, and the rest of the answer is still made into speech (buffered)',
-        { posted: posted.speech.length, played: await played() });
+  check((await played()).length === 0 && await on(), '9. paused: nothing is played meanwhile', await played());
+  await page.click('#speak');
+  check(await until(() => !document.getElementById('speak').classList.contains('on'), 15000), '9. resumed, it reads to its end');
+  check((await played()).length === SENTENCES.length && posted.speech.length === SENTENCES.length,
+        '9. every sentence played once, none made twice', { played: await played(), posted: posted.speech.length });
 
   // 10. a new question stops the reading too
   await reset();
