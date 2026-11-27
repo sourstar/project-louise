@@ -34,7 +34,7 @@ from typing import Any, Iterable
 #: the rules' version: BUMPED EXPLICITLY with any change to
 #: retrieval.work_verdict and the rules under it (invariant 3's spirit: no
 #: silent re-pin); every row computed by another version is recomputed
-RULES_VERSION = 1
+RULES_VERSION = 2  # 2: periodicals of a bare genre and studied works give no verdict (architecture, 2026-11-27)
 #: the rows one maintainer window covers, in its own BEGIN IMMEDIATE
 WINDOW = 5_000
 #: the maintainer's time on one collection, a round

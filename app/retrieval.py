@@ -1963,7 +1963,6 @@ OPINION_SHELVES = frozenset(s.casefold() for s in (
 #: and a bare genre heading (a form subdivision "-- Fiction" still stands)
 NONFICTION_SUBDIVISIONS = frozenset(("biography", "history and criticism", "criticism and interpretation",
                                      "criticism, interpretation, etc", "commentaries",
-
                                      "technique", "description and travel", "sources"))
 #: what vetoes LCC PZ alone (architecture, 2026-11-27, over the 242 records
 #: literary by PZ alone): "-- Juvenile literature", LCSH's mark of NON-fiction
@@ -2054,20 +2053,37 @@ def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -
     # unless the heading's own main term is a literary genre: a genre's
     # periodical is fiction, and its heading says so ("Detective and mystery
     # stories -- Periodicals", Lord Lister 68190, 68937)
+    studied = any(p.strip().rstrip(".").casefold() in CRITICISM_SUBDIVISIONS
+                  for x in subjects for p in x.split("--")[1:])
     periodicals = [x for x in subjects if any(p.strip().rstrip(".").casefold() == "periodicals"
                                               for p in x.split("--")[1:])]
     if periodicals:
+        # a periodical that states criticism is a study, whatever genre it
+        # names (The Fantasy Fan: "Fantasy fiction -- History and criticism --
+        # Periodicals"; architecture, 2026-11-27)
+        if studied:
+            return None
+
+        def genre_periodical(x: str) -> bool:
+            # a NON-bare genre heading ("American poetry -- Periodicals",
+            # "Detective and mystery stories -- Periodicals") or a form
+            # subdivision before it ("Napoleon -- Fiction -- Periodicals");
+            # a bare "Poetry/Drama/Fiction -- Periodicals" is a topic (The
+            # Mirror of Taste, Poet-Lore), as a bare genre is everywhere
+            main = _main_heading(x)
+            if literary(main) and main.casefold() not in BARE_GENRES:
+                return True
+            parts = [p.strip().rstrip(".").casefold() for p in x.split("--")]
+            return len(parts) > 2 and parts[-2] in LITERARY_FORMS
         # ...or when EVERY other heading is literary — a form subdivision or a
         # genre heading: an issue that is one work (architecture, 2026-11-27:
         # 63399 "American poetry -- 20th century"); one topic heading beside
         # them keeps the veto (Punch's "Wit and humor", Fire!!'s "African
         # American art -- 20th century")
         others = [x for x in subjects if x not in periodicals]
-        if any(literary(_main_heading(x)) for x in periodicals) or (others and all(literary(x) for x in others)):
+        if any(genre_periodical(x) for x in periodicals) or (others and all(literary(x) for x in others)):
             return ("a literary work", "by its subject headings")
         return None
-    studied = any(p.strip().rstrip(".").casefold() in CRITICISM_SUBDIVISIONS
-                  for x in subjects for p in x.split("--")[1:])
     # a FORM subdivision ("-- Fiction", "-- Poetry") is the record saying what
     # it is; a genre heading ("Gnomic poetry, Hebrew") is, unless the record
     # also says it is a study of such works

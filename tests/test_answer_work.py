@@ -314,8 +314,15 @@ def test_a_periodical_states_no_one_kind_unless_its_heading_is_a_genre():
         said = w({"subjects": subj, "bookshelves": shelf})
         assert "a literary work" not in said and "opinion" not in said, (subj, said)
     for subj in ("Detective and mystery stories -- Periodicals | PT", "Dime novels -- Periodicals | PS",
-                 "Short stories -- Periodicals | PZ", "Poetry -- Periodicals | PN"):
+                 "Short stories -- Periodicals | PZ", "American poetry -- Periodicals | PS"):
         assert w({"subjects": subj}).startswith(" — a literary work (by its subject headings)"), subj
+    # architecture, 2026-11-27: a BARE genre's periodical is a topic (The Mirror of Taste, Poet-Lore),
+    # and a periodical that states criticism is a study (The Fantasy Fan)
+    for subj in ("Poetry -- Periodicals | PN", "Drama -- Periodicals | PN",
+                 "Fantasy fiction -- History and criticism -- Periodicals | Fan magazines | "
+                 "Fantasy fiction -- Periodicals | PN"):
+        said = w({"subjects": subj})
+        assert "a literary work" not in said and "opinion" not in said, (subj, said)
 
 
 def test_juvenile_literature_and_periodicals_veto_lcc_pz_alone():
