@@ -86,8 +86,8 @@ def _embed_as_cut(root, codex):
     fts.index_books([(d["lang"] or "en", int(d["native_id"]), by_book[int(d["native_id"])]) for d in docs], coll)
     fts.close_all()
     m = sqlite3.connect(root / NAME / "state" / "manifest.sqlite")
-    m.execute("UPDATE documents SET embed_done=1, embed_version=7, fts_done=1, fts_version=2, entity_version=1, "
-              "chunks=3, tokens=9")
+    m.execute("UPDATE documents SET rdf_done=1, embed_done=1, embed_version=7, fts_done=1, fts_version=2, "
+              "entity_version=1, chunks=3, tokens=9")
     m.commit()
     m.close()
     return held
@@ -140,6 +140,13 @@ def held_gb(isolated_config, tmp_path, corpus_dir, words, signer):
     platform_config.platform_path().write_text(
         f'[node]\nquarantine = "report"\nquarantine_in_use_before = ["{old.collection_id}", '
         f'"{ed.collection_id}"]\n', encoding="utf-8")
+    from app import node_state
+    node_state.path().parent.mkdir(parents=True, exist_ok=True)
+    ns = sqlite3.connect(node_state.path())
+    ns.execute("CREATE TABLE IF NOT EXISTS control(key TEXT PRIMARY KEY, value TEXT)")
+    ns.execute("INSERT OR REPLACE INTO control(key, value) VALUES(?, ?)", (f"publish:{NAME}", "{}"))
+    ns.commit()
+    ns.close()
     return root, old, held, ed
 
 
@@ -192,10 +199,15 @@ def _naming_left(root, name, cid):
 
 
 def _tree(root):
+    """The bytes the refit may write, stat by stat: both collections' folders,
+    their files, platform.toml and node.sqlite."""
+    from app import node_state, platform_config
     out = {}
-    for p in sorted([*(root / NAME).rglob("*"), *(root / "gb-editions").rglob("*"), *root.glob("*.toml")]):
+    for p in sorted([*(root / NAME).rglob("*"), *(root / "gb-editions").rglob("*"), *root.glob("*.toml"),
+                     platform_config.platform_path(), node_state.path()]):
         if p.is_file() and p.name != "lock" and not p.name.endswith(("-wal", "-shm")):
-            out[str(p.relative_to(root))] = (p.stat().st_size, p.stat().st_mtime_ns)
+            out[str(p.relative_to(root)) if p.is_relative_to(root) else str(p)] = \
+                (p.stat().st_size, p.stat().st_mtime_ns, hashlib.sha256(p.read_bytes()).hexdigest())
     return out
 
 
@@ -231,6 +243,10 @@ def test_the_one_affected_book_is_reset_and_the_identity_replaced_everywhere(hel
     assert _naming_left(root, "gb-editions", ed.collection_id) == []
     assert _naming_left(root, "gb-editions", old.collection_id) == []
     assert (root / "gb-editions.toml").read_text().count(ed_now.collection_id) == 1
+    from app import node_state
+    ns = sqlite3.connect(node_state.path())
+    assert ns.execute("SELECT COUNT(*) FROM control WHERE key=?", (f"publish:{NAME}",)).fetchone()[0] == 0
+    ns.close()
     # the cascade's record and platform.toml's quarantine list, through their writers
     from app import platform_config
     from app.hold import cascade
@@ -266,7 +282,7 @@ def test_refused_while_the_worker_runs_and_the_refusal_names_how_the_node_stays_
     holder = _hold(p)
     try:
         tree = _tree(root)
-        assert _refit(root, *FIT) == 3
+        assert _refit(root, *FIT) == 2, "2, never 3: supervise-pass must not retry it into an unattended start"
         err = capsys.readouterr().err
         assert "midclt call app.stop louise-rag" in err and "unless-stopped" in err
         assert "deploy/supervise-pass.sh" in err
@@ -446,7 +462,7 @@ def test_the_dry_run_writes_nothing_and_names_every_dataset_it_writes_by_its_rea
     tree = _tree(root)
     assert _refit(root, *FIT, extra=("--dry-run",)) == 0
     out = capsys.readouterr().out
-    assert "affected    1 document(s): " + _dense(root) in out and "gb-editions" in out
+    assert "affected    1 of 3 document(s) (bound 10): " + _dense(root) in out and "gb-editions" in out
     assert "take a ZFS snapshot of every dataset holding these — that is the rollback" in out
     for what, path in (("gb: vector table", elsewhere), ("gb: SHARD", root / NAME / "shard"),
                        ("gb: build area", root / NAME / "state" / "build"), ("gb-editions: state",
@@ -454,7 +470,7 @@ def test_the_dry_run_writes_nothing_and_names_every_dataset_it_writes_by_its_rea
         assert f"{what}: {os.path.realpath(path)}" in out, what
     assert "platform.toml:" in out and "node.sqlite:" in out
     for said in ("coverage rows of the old space deleted", "published marker of snapshot 2026-09 set aside",
-                 "publisher's row of gb in node.sqlite deleted", "search of gb withheld until the worker's gate",
+                 "publisher's row of gb in node.sqlite deleted", "search of gb goes on (quarantine only reports",
                  "bundles exported again under the new id", "quarantine_in_use_before names the new ids"):
         assert said in out, said
     assert "gb/state/bundles/" in out and "gb/state/refused-bundles/" in out and "gb/state/share/" in out
@@ -692,3 +708,190 @@ def test_the_worker_boots_on_the_result_gates_it_then_serves_it_and_redoes_the_o
                                "vector": rng.standard_normal(new.space.dim).astype("float32")} for c in chunks],
                              collection=coll, dtype=new.space.dtype)
     assert _rows(root, [native])[native] == {c["id"]: c["text"] for c in chunks} and _entries(root, native) > 0
+
+
+# ---- the second independent read of 5a93b7c7 ----------------------------------------------------
+
+def test_a_tokenizer_that_cannot_be_loaded_is_refused_before_anything(held_gb, capsys):
+    root, _old, _h, _e = held_gb
+    tree = _tree(root)
+    assert _refit(root, "max_tokens=120", "tokenizer=sha256:" + "ab" * 32) == 2
+    err = capsys.readouterr().err
+    assert "tokenizer cannot be loaded" in err and "TokenizerMissing" in err
+    assert _tree(root) == tree
+
+
+def test_a_document_the_new_layers_cannot_cut_is_refused_never_counted_a_change(held_gb, monkeypatch, capsys):
+    """A cut error counted as a change made every document "affected" and
+    the run reset them all (10.5M vectors on gutenberg)."""
+    from app import layers
+    root, old, _h, _e = held_gb
+    real = layers.chunks_for_document
+
+    def cut(coll, row, *a, **k):
+        if coll.codex.collection_id != old.collection_id:
+            raise RuntimeError("the new layer's tokenizer is broken")
+        return real(coll, row, *a, **k)
+    monkeypatch.setattr(layers, "chunks_for_document", cut)
+    tree = _tree(root)
+    assert _refit(root, *FIT, extra=("--dry-run",)) == 2
+    out = capsys.readouterr().out
+    assert "affected    0 of 3 document(s)" in out
+    assert "REFUSED     (exit 2) the new layers fail to cut 3 document(s)" in out and "tokenizer is broken" in out
+    assert _refit(root, *FIT) == 2
+    assert "the new layers fail to cut 3 document(s)" in capsys.readouterr().err
+    assert _tree(root) == tree
+
+
+def test_a_change_wider_than_the_bound_is_refused_unless_stated(held_gb, monkeypatch, capsys):
+    root, _old, _h, _e = held_gb
+    monkeypatch.setattr(refit_mod, "AFFECTED_FLOOR", 0)
+    tree = _tree(root)
+    assert _refit(root, *FIT) == 2
+    assert "state it with --affected-max 1" in capsys.readouterr().err
+    assert _tree(root) == tree
+    assert _refit(root, *FIT, extra=("--affected-max", "1")) == 0
+
+
+@pytest.mark.parametrize("which", ["gb", "gb-editions"])
+def test_a_half_done_refit_refuses_that_collection_at_boot(held_gb, monkeypatch, which):
+    """Invariant 1's per-collection refusal: a worker started on a refit half
+    done would cut and embed at the OLD layers what the refit reset."""
+    from app import spaces
+    from app.hold import records as rec, snapshot as sn
+    root, old, _h, ed = held_gb
+    if which == "gb":
+        restore = _killing(monkeypatch, refit_mod, "_drop_index_entries")
+    else:
+        restore = _killing(monkeypatch, sn, "sign_snapshot", when=lambda r, n, *a, **k: n == "gb-editions")
+    with pytest.raises(_Kill):
+        _refit(root, *FIT)
+    restore()
+    if which == "gb":
+        refused = spaces.refuse_boot([rec.local_collection(root, NAME, col.read(root, NAME))])
+        assert len(refused) == 1, refused
+        why = refused[0][1]
+    else:
+        from types import SimpleNamespace
+        with pytest.raises(spaces.BootValidationError) as e:
+            spaces._validate_one(None, SimpleNamespace(name=which,
+                                                       manifest_path=root / which / "state" / "manifest.sqlite"))
+        why = str(e.value)
+    assert "refit" in why and "under way" in why and "louise hold collection refit" in why, why
+    assert _refit(root, *FIT) == 0
+    assert refit_mod.boot_refusal(root / which / "state") is None
+    _, now = col.resolve(root, NAME)
+    assert spaces.refuse_boot([rec.local_collection(root, NAME, now)]) == [], "finished, it boots"
+
+
+def test_a_collection_file_the_writer_cannot_rewrite_refuses_in_the_plan(held_gb, capsys):
+    root, old, _h, _e = held_gb
+    (root / f"{NAME}.toml").write_text(f'"codex" = "{old.collection_id}"\nembed = "all"\n', encoding="utf-8")
+    tree = _tree(root)
+    assert _refit(root, *FIT) == 2
+    err = capsys.readouterr().err
+    assert "collection file cannot take the new id" in err and "Traceback" not in err
+    assert _tree(root) == tree
+
+
+def test_an_indented_codex_line_is_rewritten_and_nothing_else(held_gb):
+    root, old, _h, _e = held_gb
+    (root / f"{NAME}.toml").write_text(f'  codex = "{old.collection_id}"\nembed = "all"  # kept\n',
+                                       encoding="utf-8")
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    assert (root / f"{NAME}.toml").read_text() == f'codex = "{new.collection_id}"\nembed = "all"  # kept\n'
+
+
+def test_parquet_parts_refuse_in_the_plan(held_gb, monkeypatch, capsys):
+    from app.hold import codex as cx_mod
+    root, _old, _h, _e = held_gb
+    monkeypatch.setattr(cx_mod, "container_of", lambda codex: "parquet")
+    _refused_untouched(root, capsys, "a refit of a Parquet part is not built")
+
+
+def test_each_dataset_is_said_with_its_hosts_source_and_mount_point():
+    table = refit_mod.mounts("36 35 98:0 /data /data rw,noatime - zfs ssd3/louise rw\n"
+                             "37 35 98:1 /lance /data/lance rw - zfs ssd4/louise-lance rw\n"
+                             "38 35 98:1 / /config rw - zfs ssd4/config rw\n"
+                             "39 35 0:1 / / rw - overlay overlay rw\n"
+                             "40 35 98:0 /a\\040b /mnt/a\\040b rw - zfs ssd3/with\\040space rw\n")
+    assert refit_mod.where("/data/lance/gb", table) == \
+        "/data/lance/gb — on ssd4/louise-lance (zfs), mounted at /data/lance from /lance"
+    assert refit_mod.where("/data/collections/gb/state", table).startswith("/data/collections/gb/state — on "
+                                                                           "ssd3/louise (zfs), mounted at /data")
+    assert refit_mod.where("/config/collections", table) == \
+        "/config/collections — on ssd4/config (zfs), mounted at /config"
+    assert "on ssd3/with space (zfs), mounted at /mnt/a b" in refit_mod.where("/mnt/a b/x", table)
+
+
+def test_the_dry_run_says_where_each_dataset_lies(held_gb, capsys):
+    root, _old, _h, _e = held_gb
+    assert _refit(root, *FIT, extra=("--dry-run",)) == 0
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if "gb: SHARD:" in ln)
+    assert " — on " in line and "mounted at " in line
+
+
+def test_the_dry_run_takes_no_index_writer_while_the_worker_runs(held_gb, monkeypatch, capsys):
+    root, _old, _h, _e = held_gb
+    took = []
+    monkeypatch.setattr(refit_mod, "_index_writers", lambda coll, changed: took.append(coll.name) or [])
+    holder = _hold(lock_mod.worker_state(root) / lock_mod.WORKER_LOCK)
+    try:
+        assert _refit(root, *FIT, extra=("--dry-run",)) == 2
+        assert "REFUSED     (exit 2)" in capsys.readouterr().out
+        assert took == [], "the worker's writers are never taken while it runs"
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+@pytest.mark.parametrize("switch", ["report", "enforce"])
+def test_what_search_does_at_restart_is_said_as_the_quarantine_switch_says(held_gb, capsys, switch):
+    from app import copy_state, platform_config
+    root, old, _h, ed = held_gb
+    platform_config.platform_path().write_text(
+        f'[node]\nquarantine = "{switch}"\nquarantine_in_use_before = ["{old.collection_id}", '
+        f'"{ed.collection_id}"]\n', encoding="utf-8")
+    copy_state._switch.clear()
+    assert _refit(root, *FIT, extra=("--dry-run",)) == 0
+    out = capsys.readouterr().out
+    copy_state._switch.clear()
+    if switch == "enforce":
+        assert "search of gb withheld until the worker's gate passes" in out
+    else:
+        assert "search of gb goes on (quarantine only reports here" in out and "withheld" not in out
+
+
+def test_the_worker_s_own_text_index_stage_redoes_the_one_book_at_the_new_layers(held_gb, tmp_path, corpus_dir):
+    """The restart, by the worker's real stage: `stage_fts` takes the reset
+    book (and it alone), cut by the new layers as a fresh build cuts it. The
+    EMBED stage is not run here: it asks the collection file's [encoder] for
+    vectors and writes only an answer from a run its gate validated against
+    the weights' stored CPU reference — an endpoint, a stated run and a CPU
+    reference this fixture's custom-tokenizer collection does not have (the
+    harness that has them, tests/test_run_check.py's `node`, builds another
+    collection); its selection and its cut are checked instead."""
+    from app import db, fts, worker
+    from app.hold import records as rec
+    root, _old, held, _e = held_gb
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    coll = rec.local_collection(root, NAME, new)
+    con = db.connect(coll)
+    try:
+        row = con.execute(worker._FTS_FRESH, (99,)).fetchone()
+        assert row is not None and row["uid"] == _dense(root), "the reset book is the stage's to redo"
+        worker.stage_fts(con, dict(row), coll)
+        assert con.execute(worker._FTS_FRESH, (99,)).fetchone() is None, "and nothing else"
+        done = dict(con.execute("SELECT fts_done, embed_done FROM documents WHERE uid=?", (row["uid"],)).fetchone())
+        backlog = con.execute(worker._EMBED_BACKLOG, (99, 10)).fetchone()[0]
+    finally:
+        con.close()
+        fts.close_all()
+    assert done == {"fts_done": 1, "embed_done": 0} and backlog == 1, "next, the embed stage: the one book"
+    native = int(row["native_id"])
+    assert _entries(root, native) > 0
+    chunks = worker._load_chunks(dict(row), coll)
+    assert len(chunks) != len(held[native]) and all(c["id"].startswith(row["uid"]) for c in chunks)

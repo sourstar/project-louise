@@ -1158,12 +1158,14 @@ def cmd_collection_refit(a) -> int:
         key = None
     log = lambda m: print(m, flush=True)        # noqa: E731
     if a.dry_run:
-        pl = refit_mod.plan(root, name, layers, key=key, processes=a.processes, dry=True, log=log)
+        pl = refit_mod.plan(root, name, layers, key=key, processes=a.processes, dry=True,
+                            affected_max=a.affected_max, log=log)
         print(f"refit {name} (a dry run: nothing written)")
         print(f"  from        {pl['from']}")
         print(f"  to          {pl['to']}")
-        print(f"  affected    {len(pl['changed'])} document(s): "
-              + (", ".join(c[1] for c in pl["changed"][:20]) or "none — nothing to refit"))
+        print(f"  affected    {len(pl['changed'])} of {pl['documents']} document(s) (bound {pl['bound']}): "
+              + (", ".join(c[1] for c in pl["changed"][:10]) + (" …" if len(pl["changed"]) > 10 else "")
+                 if pl["changed"] else "none — nothing to refit"))
         print(f"  parts       " + (", ".join(p["path"] for p in pl["parts"]) or "none"))
         print(f"  others      " + (", ".join(f"{o} → {pl['others_to'][o][:23]}…" for o in pl["others"]) or "none")
               + " (re-keyed to the new id)")
@@ -1188,7 +1190,8 @@ def cmd_collection_refit(a) -> int:
         print("  steps       reset those documents, write the new Codex, rewrite their parts and the snapshot, "
               "replace the old id everywhere, re-key the others and platform.toml, attest; then restart the node")
         return 0
-    refit_mod.run(root, name, layers, key=key, now=_utc_now(), processes=a.processes, log=log)
+    refit_mod.run(root, name, layers, key=key, now=_utc_now(), processes=a.processes,
+                  affected_max=a.affected_max, log=log)
     return 0
 
 
@@ -1254,7 +1257,24 @@ def _layers_with(codex, params: dict[str, Any]) -> tuple:
         raise CodexError(f"--layer-param {', '.join(unknown)}: no layer's chunker states it (they state "
                          f"{', '.join(have) or 'none'}" + (f"; they take {', '.join(takes)}" if takes else "")
                          + "); a new param is the chunker's own change")
+    _tokenizers_load(out)
     return tuple(out)
+
+
+def _tokenizers_load(layers) -> None:
+    """Every tokenizer the layers pin found and loaded (`TOKENIZERS_DIR`, its
+    sha256 the one named) before anything else: one the cut cannot load made
+    every document a cut error (the second independent read of 5a93b7c7, 1)."""
+    from app.plugins.wikidata import chunker as pinned
+    for i, layer in enumerate(layers):
+        sha = (layer.chunker.params or {}).get("tokenizer")
+        if sha is None:
+            continue
+        try:
+            pinned.tokenizer_for(sha)
+        except Exception as e:   # noqa: BLE001 — TokenizerMissing, ChunkerError, a broken file: refused in words
+            raise CodexError(f"--layer-param tokenizer={sha}: layer {i}'s tokenizer cannot be loaded "
+                             f"({type(e).__name__}: {e}); nothing was written") from None
 
 
 def _encoder_of(root, name: str, fallback: dict) -> dict:
@@ -8375,9 +8395,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="the outcome as one JSON object")
     p.set_defaults(fn=cmd_collection_update)
 
-    p = verbs.add_parser("refit", help="OFFLINE (`node stop` first): the collection's encoder window changed — "
-                                       "the documents it cuts otherwise reset, the Codex rewritten, the new "
-                                       "identity replaced everywhere; take a ZFS snapshot first")
+    p = verbs.add_parser("refit", help="OFFLINE (the app's containers stopped, an operator pass): the "
+                                       "collection's encoder window changed — the documents it cuts otherwise "
+                                       "reset, the Codex rewritten, the new identity replaced everywhere; take a "
+                                       "ZFS snapshot first")
     root_arg(p)
     p.add_argument("collection")
     p.add_argument("--layer-param", dest="layer_param", action="append", default=None, metavar="KEY=VALUE",
@@ -8386,6 +8407,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="the affected documents and parts, the collections re-keyed; writes nothing")
     p.add_argument("--processes", type=int, default=None, metavar="N",
                    help="at most N processes for the pass (default: the node profile's cores)")
+    p.add_argument("--affected-max", dest="affected_max", type=int, default=None, metavar="N",
+                   help="at most N documents cut otherwise (default: 1%% of the documents, at least 10); "
+                        "a wider change is refused")
     p.set_defaults(fn=cmd_collection_refit)
     p = verbs.add_parser(
         "migrate", help="add the §9.3 fields a Codex predates, each as null")

@@ -500,6 +500,13 @@ def _refuse_split_dims(collection) -> None:
 
 
 def _validate_one(con, collection, *, pin_if_missing: bool = True) -> bool:
+    # A REFIT HALF DONE (app/hold/refit.py `boot_refusal`): this collection
+    # refuses, the node runs its others — the worker would re-embed at the
+    # old layers what the refit reset
+    from .hold import refit
+    why = refit.boot_refusal(Path(collection.manifest_path).parent)
+    if why:
+        raise BootValidationError(f"collection '{collection.name}': {why}")
     if getattr(collection, "codex", None) is not None:
         return _validate_codex(con, collection, pin_if_missing=pin_if_missing)
     components = gather_components(collection)

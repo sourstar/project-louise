@@ -78,7 +78,9 @@ def _replace(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
-_CODEX_LINE_RE = re.compile(r'^codex\s*=.*$', re.MULTILINE)
+#: the `codex` line, an indent before it allowed (TOML allows it; the second independent read
+#: of 5a93b7c7, 3: ` codex =` was refused after the refit's first write)
+_CODEX_LINE_RE = re.compile(r'^[ \t]*codex[ \t]*=.*$', re.MULTILINE)
 
 
 def recodex(path: Path, collection_id: str) -> str:

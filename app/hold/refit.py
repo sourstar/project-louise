@@ -167,13 +167,16 @@ def cut_window(source, target, lo: int, hi: int) -> dict:
     at the SOURCE's and the TARGET's layers, as the stages cut them
     (`record_source.title_sections_and_source`, `layers.chunks_for_document`).
     Returns the changed documents (rowid, uid, native id), the counts, never a
-    text. A document that cannot be cut is counted CHANGED: nothing proves its
-    vectors are the new layer's, so the worker meets it as by the book.
-    Module-level, so it pickles; reads the manifest read-only."""
+    text. A document that cannot be cut is NOT a change: it is counted in
+    `errors` (its uid in `failed`, the first error said), and the plan refuses
+    while there is one — counted as a change, a tokenizer the pass could not
+    load made every document "affected", and the run reset them all (the
+    second independent read of 5a93b7c7, 1). Module-level, so it pickles;
+    reads the manifest read-only."""
     from app import db, layers, record_source
     con = db.read_only_connect(source)
     if con is None:
-        return {"changed": [], "documents": 0, "errors": 0, "first_error": None, "errored": 0,
+        return {"changed": [], "documents": 0, "errors": 0, "first_error": None, "failed": [], "errored": 0,
                 "out_of_scope": 0}
     try:
         rows = [dict(r) for r in con.execute(
@@ -183,6 +186,7 @@ def cut_window(source, target, lo: int, hi: int) -> dict:
     plugin = source.plugin_instance()
     pair = layers.has_pair_layer(source)
     changed: list[list] = []
+    failed: list[str] = []
     documents = errors = errored = out_of_scope = 0
     first_error = None
     for row in rows:
@@ -192,16 +196,17 @@ def cut_window(source, target, lo: int, hi: int) -> dict:
             title, sections, _src = record_source.title_sections_and_source(source, row, plugin, pair=pair)
             before = [(c["id"], c["text"]) for c in layers.chunks_for_document(source, row, sections, title=title)]
             after = [(c["id"], c["text"]) for c in layers.chunks_for_document(target, row, sections, title=title)]
-        except Exception as e:   # noqa: BLE001 — counted and reset; the stage meets it as by the book
+        except Exception as e:   # noqa: BLE001 — counted, never a change: the plan refuses
             errors += 1
             first_error = first_error or f"{row['uid']}: {type(e).__name__}: {e}"[:300]
-            changed.append([int(row["rowid"]), row["uid"], int(row["native_id"])])
+            if len(failed) < SHOWN:
+                failed.append(row["uid"])
             continue
         documents += 1
         if before != after:
             changed.append([int(row["rowid"]), row["uid"], int(row["native_id"])])
     return {"changed": changed, "documents": documents, "errors": errors, "first_error": first_error,
-            "errored": errored, "out_of_scope": out_of_scope}
+            "failed": failed, "errored": errored, "out_of_scope": out_of_scope}
 
 
 def _changes(s_coll, t_coll, *, start: int, window: int, processes: int | None, stop,
@@ -522,7 +527,10 @@ def worker_runs(root) -> str | None:
 
 
 def _running(why: str) -> RefitRefused:
-    return _refused(f"{why}: the refit is offline only — {STAY_DOWN}", 3)
+    """The worker runs: exit 2, not 3 — `deploy/supervise-pass.sh` retries a
+    3, and a refit retried until the worker happens to be down would start
+    unattended (the second independent read of 5a93b7c7, 2)."""
+    return _refused(f"{why}: the refit is offline only — {STAY_DOWN}", 2)
 
 
 def take_locks(root, names) -> list:
@@ -776,6 +784,27 @@ def _quarantine_refusal(listed: list[str] | None) -> str | None:
     return None
 
 
+def _recodex_refusal(root: Path, name: str, new_id: str) -> str | None:
+    """The collection file's `codex` line rewritten on a COPY by its one
+    writer (`collection_file.recodex`): a file it would refuse refuses here,
+    in words, before anything (the second independent read of 5a93b7c7, 3)."""
+    import shutil
+    import tempfile
+    from app import collection_file
+    from . import deposit
+    held = deposit.held_file(root, name)
+    if not held.is_file():
+        return None
+    with tempfile.TemporaryDirectory(prefix="refit-file-") as d:
+        copy = Path(d) / held.name
+        shutil.copyfile(held, copy)
+        try:
+            collection_file.recodex(copy, new_id)
+        except (collection_file.SetRefused, ValueError) as e:
+            return f"{name}'s collection file cannot take the new id: {str(e).replace(str(copy), str(held))}"
+    return None
+
+
 def _rekey_quarantine(listed: list[str] | None, log) -> bool:
     from app import platform_config
     if listed is None:
@@ -787,17 +816,69 @@ def _rekey_quarantine(listed: list[str] | None, log) -> bool:
     return bool(changed)
 
 
+def _unescape(field: str) -> str:
+    """mountinfo's octal escapes (`\\040` a space, proc(5))."""
+    import re
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
+
+
+def mounts(text: str | None = None) -> list[dict[str, str]]:
+    """`/proc/self/mountinfo`, each line (proc(5)): the mount point in this
+    container, the root within its filesystem, the filesystem type and its
+    SOURCE — on the node a ZFS dataset (`ssd3/…`), the host's own name for
+    it."""
+    if text is None:
+        try:
+            text = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+        except OSError:
+            return []
+    out = []
+    for line in text.splitlines():
+        f = line.split()
+        if "-" not in f or len(f) < 10:
+            continue
+        dash = f.index("-")
+        out.append({"root": _unescape(f[3]), "mount_point": _unescape(f[4]), "fstype": f[dash + 1],
+                    "source": _unescape(f[dash + 2])})
+    return out
+
+
+def mount_of(path: str, table: list[dict[str, str]] | None = None) -> dict[str, str] | None:
+    """The mount holding `path` (a real path): the longest mount point it is
+    under; None where nothing says."""
+    best = None
+    for m in mounts() if table is None else table:
+        mp = m["mount_point"].rstrip("/") or "/"
+        if (path == mp or path.startswith(mp.rstrip("/") + "/") or mp == "/") and \
+                (best is None or len(mp) > len(best["mount_point"].rstrip("/") or "/")):
+            best = m
+    return best
+
+
+def where(path: str, table: list[dict[str, str]] | None = None) -> str:
+    """`path` said with its host's source and mount point — what the host's
+    ZFS snapshot names (the second independent read of 5a93b7c7, 4)."""
+    m = mount_of(path, table)
+    if m is None:
+        return f"{path} (no mount found for it)"
+    return (f"{path} — on {m['source']} ({m['fstype']}), mounted at {m['mount_point']}"
+            + (f" from {m['root']}" if m["root"] not in ("/", "") else ""))
+
+
 def datasets(root: Path, name: str, others: list[str], *, platform: bool) -> list[tuple[str, str]]:
     """Every place the refit writes, resolved to its real path (each link
     followed — the vector table under LOUISE_LANCE_ROOT, a SHARD on its own
-    dataset): the ZFS snapshot taken first, of the datasets holding these,
-    is the rollback (the independent read of d40a4731, 4)."""
+    dataset), each said with the host's source and mount point holding it
+    (`where`): the ZFS snapshot taken first, of those datasets, is the
+    rollback (the independent read of d40a4731, 4)."""
     from app import fts, node_state, platform_config, vector_place
     from . import collection as col, deposit, records as rec
     out: list[tuple[str, str]] = []
 
+    table = mounts()
+
     def add(what: str, p) -> None:
-        out.append((what, os.path.realpath(p)))
+        out.append((what, where(os.path.realpath(p), table)))
     for n in [name, *others]:
         add(f"{n}: state", root / n / rec.STATE)
         add(f"{n}: SHARD", col.shard_dir_of(root, n))
@@ -813,15 +894,27 @@ def datasets(root: Path, name: str, others: list[str], *, platform: bool) -> lis
     return out
 
 
-def effects(name: str, snap_id: str | None, others: list[str], listed: list[str] | None) -> list[str]:
-    """What else changes, in words (the independent read of d40a4731, 9)."""
+def _enforced() -> bool:
+    from app import copy_state
+    return copy_state.enforced()
+
+
+def effects(name: str, snap_id: str | None, others: list[str], listed: list[str] | None, *,
+            enforced: bool) -> list[str]:
+    """What else changes, in words (the independent read of d40a4731, 9) —
+    what happens to search at restart as THIS node's quarantine switch says
+    (platform.toml `[node] quarantine`): withheld only where it enforces."""
+    gate = (f"at restart: search of {name} withheld until the worker's gate passes for the new space (the "
+            f"calibration statements are the old space's, set aside)" if enforced else
+            f"at restart: search of {name} goes on (quarantine only reports here, platform.toml "
+            f"quarantine = \"report\"): its kept vectors and index answer, `hold collection show` reads "
+            f"quarantine until the worker's gate passes for the new space")
     out = [f"the manifest's coverage rows of the old space deleted (carry's re-pin)",
            f"the published marker of snapshot {snap_id} set aside; the new snapshot's is written by its "
            f"signature" if snap_id else "no snapshot published",
            f"the publisher's row of {name} in node.sqlite deleted: the new id is published afresh",
-           f"at restart: search of {name} withheld until the worker's gate passes for the new space (the "
-           f"calibration statements are the old space's, set aside), the documents reset cut, indexed and "
-           f"embedded again, bundles exported again under the new id"]
+           gate + "; the documents reset cut, indexed and embedded again, bundles exported again under the "
+                  "new id"]
     out += [f"{o}: re-keyed to the new id, with a new identity of its own" for o in others]
     if listed is not None:
         out.append("platform.toml: quarantine_in_use_before names the new ids (through its writer)")
@@ -845,14 +938,36 @@ def _others(root: Path, name: str, old_id: str) -> list[str]:
     return named
 
 
-def _changed_of(root: Path, name: str, old: Codex, new: Codex, *, window: int, processes, log) -> list[list]:
+def _changed_of(root: Path, name: str, old: Codex, new: Codex, *, window: int, processes,
+                log) -> tuple[list[list], dict[str, Any]]:
+    """The change set and the pass's counts: documents cut, cut errors (the
+    first said, the first uids)."""
     from . import records as rec
     s_coll = rec.local_collection(root, name, old)
     t_coll = planned_target(s_coll, new)
     changed: list[list] = []
-    _changes(s_coll, t_coll, start=0, window=window, processes=processes, stop=None,
-             each=lambda _hi, got: changed.extend(got["changed"]), log=log)
-    return changed
+    counts: dict[str, Any] = {"documents": 0, "errors": 0, "first_error": None, "failed": []}
+
+    def each(_hi, got) -> None:
+        changed.extend(got["changed"])
+        counts["documents"] += got["documents"] + got["errors"]
+        counts["errors"] += got["errors"]
+        counts["first_error"] = counts["first_error"] or got["first_error"]
+        counts["failed"] = (counts["failed"] + got.get("failed", []))[:SHOWN]
+    _changes(s_coll, t_coll, start=0, window=window, processes=processes, stop=None, each=each, log=log)
+    return changed, counts
+
+
+#: a change wider than this share of the collection's documents is refused
+#: unless the operator states the bound (`--affected-max N`): a wide change is
+#: never a surprise (the second independent read of 5a93b7c7, 1); the floor
+#: keeps a small collection from refusing for one document
+AFFECTED_SHARE = 0.01
+AFFECTED_FLOOR = 10
+
+
+def affected_bound(documents: int, given: int | None) -> int:
+    return int(given) if given is not None else max(AFFECTED_FLOOR, int(documents * AFFECTED_SHARE))
 
 
 def _snapshot_of(root: Path, name: str, codex: Codex):
@@ -887,7 +1002,8 @@ def _sweep_table(root: Path, name: str, old_id: str, *, key, latest: str | None,
 
 
 def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: int | None = None,
-         dry: bool = False, log: Callable[[str], None] = print) -> dict[str, Any]:
+         dry: bool = False, affected_max: int | None = None,
+         log: Callable[[str], None] = print) -> dict[str, Any]:
     """EVERYTHING THAT CAN REFUSE, decided before the first write (pin-run's
     rule, pin_run.py `plan`): the identity's rules (an official publication,
     a shared text index), the node key, the other collections naming the old
@@ -906,10 +1022,13 @@ def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: 
         refusals.append((code, why))
     _, old = col.resolve(root, name)
     new = new_codex(old, layers)
-    if dry:
-        why = worker_runs(root)
-        if why:
-            refuse(f"{why}: the refit is offline only — {STAY_DOWN}", 3)
+    running = worker_runs(root) if dry else None
+    if running:
+        refuse(f"{running}: the refit is offline only — {STAY_DOWN}", 2)
+    from .codex import JSONL, container_of
+    if container_of(old) != JSONL:
+        refuse(f"{name}'s record parts are {container_of(old)}: a refit of a Parquet part is not built (its cells "
+               f"are written from the record, not kept line by line)")
     for why in (official_publication(root, name, old), shared_index_refusal(root, name)):
         if why:
             refuse(why.removesuffix("; nothing was written"))
@@ -937,9 +1056,23 @@ def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: 
     why = _quarantine_refusal(listed)
     if why:
         refuse(why)
-    changed = _changed_of(root, name, old, new, window=window, processes=processes, log=log)
-    if not changed:
+    for n, to in [(name, new.collection_id), *others_to.items()]:
+        why = _recodex_refusal(root, n, to)
+        if why:
+            refuse(why)
+    changed, counts = _changed_of(root, name, old, new, window=window, processes=processes, log=log)
+    if counts["errors"]:
+        refuse(f"the new layers fail to cut {counts['errors']} document(s) ({', '.join(counts['failed'][:10])}"
+               f"{' …' if counts['errors'] > 10 else ''}); the first: {counts['first_error']} — a document that "
+               f"cannot be cut is never counted a change")
+    elif not changed:
         refuse("the new window cuts no document otherwise: there is nothing to refit")
+    bound = affected_bound(counts["documents"], affected_max)
+    if len(changed) > bound:
+        refuse(f"the new window cuts {len(changed)} of {counts['documents']} document(s) otherwise, more than "
+               f"{'the stated' if affected_max is not None else 'the default'} bound of {bound} "
+               f"({AFFECTED_SHARE:.0%} of them, at least {AFFECTED_FLOOR}): state it with --affected-max "
+               f"{len(changed)} if this is meant")
     uids = {c[1] for c in changed}
     for o in others:
         for why in _references(root, o, old, latest["id"] if latest else None, uids):
@@ -954,7 +1087,7 @@ def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: 
         table.update(_sweep_table(root, o, own, key=key, latest=(others_latest[o] or {}).get("hash"),
                                   dropped=set(), refuse=refuse))
         sweep[o] = table
-    if dry and changed:
+    if dry and changed and not running:              # never the worker's writers while it runs
         coll = rec._local_collection(root, name, old)
         try:
             _index_writers(coll, changed)
@@ -963,14 +1096,40 @@ def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: 
         finally:
             _release_index_writers(coll)
     return {"name": name, "from": old.collection_id, "to": new.collection_id, "changed": changed,
+            "documents": counts["documents"], "bound": bound,
             "parts": parts, "snapshot": latest["id"] if latest else None, "latest": latest, "others": others,
             "others_to": others_to, "others_latest": others_latest, "sweep": sweep, "quarantine": listed,
             "datasets": datasets(root, name, others, platform=listed is not None),
-            "effects": effects(name, latest["id"] if latest else None, others, listed),
+            "effects": effects(name, latest["id"] if latest else None, others, listed, enforced=_enforced()),
             "refusals": refusals, "codex": new}
 
 
 # ---- the run ----------------------------------------------------------------------------
+
+def boot_refusal(state_dir: Path) -> str | None:
+    """Why the collection whose `state/` is `state_dir` may not be run now, or
+    None: a refit begun and not finished — its own (`refit.json`, not done)
+    or, for an annotations collection, its target's (`refit-target.json`).
+    The worker started on it would cut, index and embed at the OLD layers
+    what the refit reset, and the rerun skips the reset (the second
+    independent read of 5a93b7c7, 2). Invariant 1's per-collection refusal:
+    that collection is not served, the others run (`spaces._validate_one`),
+    and `hold collection show` names it."""
+    d = Path(state_dir)
+    try:
+        m = json.loads((d / MARKER).read_text(encoding="utf-8")) if (d / MARKER).is_file() else None
+    except (OSError, ValueError):
+        m = {"steps": {}, "to": "?"}
+    if m is not None and not m.get("done"):
+        done = [s for s in STEPS if (m.get("steps") or {}).get(s, {}).get("done")]
+        return (f"a refit is under way (state/{MARKER}: to {str(m.get('to'))[:23]}…, done "
+                f"{', '.join(done) or 'nothing yet'}): run `louise hold collection refit` again to finish it, "
+                f"with the node down, before this collection is served")
+    if (d / TARGET_MARKER).is_file():
+        return (f"the refit of the collection it annotates is under way (state/{TARGET_MARKER}): run `louise hold "
+                f"collection refit` on that collection again to finish it, before this one is served")
+    return None
+
 
 def read_marker(root, name: str) -> dict | None:
     p = Path(root) / name / "state" / MARKER
@@ -1032,7 +1191,7 @@ def predecessor(root, name: str) -> Codex:
 
 
 def run(root, name: str, layers, *, key=None, now: str, window: int = WINDOW, processes: int | None = None,
-        log: Callable[[str], None] = print) -> dict[str, Any]:
+        affected_max: int | None = None, log: Callable[[str], None] = print) -> dict[str, Any]:
     """The steps (module docstring), from where `state/refit.json` says,
     under the worker's node-wide lock and every affected collection's."""
     from . import records as rec
@@ -1053,7 +1212,8 @@ def run(root, name: str, layers, *, key=None, now: str, window: int = WINDOW, pr
         if key is None:
             raise _refused(NO_KEY)
         if m is None:
-            p = plan(root, name, layers, key=key, window=window, processes=processes, log=log)
+            p = plan(root, name, layers, key=key, window=window, processes=processes,
+                     affected_max=affected_max, log=log)
             # the index writers TAKEN before the marker is saved: decided first, saved after
             _index_writers(coll, p["changed"])
             m = {"kind": "louise-refit", "from": old.collection_id, "to": new.collection_id,
@@ -1197,7 +1357,10 @@ def rekey(root: Path, name: str, old: Codex, new: Codex, *, key, now: str, rewri
     out: dict[str, Any] = {}
     held = deposit.held_file(root, name)
     if held.is_file():
-        out["file"] = collection_file.recodex(held, new.collection_id)
+        try:
+            out["file"] = collection_file.recodex(held, new.collection_id)
+        except collection_file.SetRefused as e:   # the plan tried it on a copy: something wrote it since
+            raise CodexError(f"refit: {e}") from None
     manifest = base / "state" / "manifest.sqlite"
     if manifest.is_file() and getattr(new, "space", None) is not None:
         out["coverage_cleared"] = carry_mod._repin(manifest, old, new)
