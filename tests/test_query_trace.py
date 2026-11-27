@@ -50,7 +50,12 @@ def test_only_an_admin_is_traced():
 
 def test_an_admins_search_writes_its_line_with_the_node_and_the_results(traced, monkeypatch):
     def result(body):
-        time.sleep(0.15)                       # a few samples while it runs
+        # the search runs until the sampler has taken one sample beside its first
+        # (bounded), and 150 ms at least: on a loaded node a fixed 150-ms sleep
+        # gave the sampler too few ticks (2 samples, load 14 — München, 2026-11-27)
+        t0 = time.monotonic()
+        _wait(lambda: any(len(t.samples) >= 2 for t in list(query_trace._live)))
+        time.sleep(max(0.0, 0.15 - (time.monotonic() - t0)))
         return {"hits": [{"source_collection": "gutenberg", "uid": "u1", "book_id": 1, "chunk_id": "gutenberg:1:0:1", "title": "Moby Dick",
                           "rrf": 0.03, "rerank_score": 0.91, "text": "Call me Ishmael. " * 50}],
                 "timings": {"languages": 22.0, "fts": 4.9, "rerank": 12.5, "total": 43.2}}
