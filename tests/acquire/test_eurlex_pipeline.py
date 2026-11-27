@@ -479,3 +479,45 @@ def test_a_ready_without_collection_is_said_at_the_start_of_the_pass():
     with pytest.raises(TypeError, match="collection"):
         engine._make_worker(None, None, SimpleNamespace(unit_fetcher=Old()), None, [], threading.Event(),
                             Priority.BACKFILL)
+
+
+def test_one_corpus_s_close_leaves_another_s_listing_running(tmp_path, monkeypatch):
+    """Architecture's fourth read (abac25f1): a close without its
+    collection ended every corpus's listing."""
+    from types import SimpleNamespace
+    base_a, corpus_a, due_a = _setup(tmp_path / "a", monkeypatch, (1970,))
+    gate = threading.Event()
+    monkeypatch.setattr(cellar, "_window_files", lambda *a, **k: (gate.wait(10), iter(()))[1])
+    units = cellar.TreeUnits()
+    units._prepare_bulk(base_a, corpus_a, ["it"], due_a, "A", URL, background=True)
+    base_b, corpus_b, due_b = _setup(tmp_path / "b", monkeypatch, (1971,))
+    units._prepare_bulk(base_b, corpus_b, ["it"], due_b, "B", URL, background=True)
+    key_b = str(corpus_b.resolve())
+    thread_b, events_b, phase_b = units._runs[key_b]
+    units.close(collection=SimpleNamespace(corpus_dir=corpus_a))
+    assert key_b in units._runs and thread_b.is_alive() and not phase_b.is_set()
+    assert not any(ev.is_set() for ev in events_b.values()), "B's units still wait for B's listing"
+    gate.set()
+    units.close(collection=SimpleNamespace(corpus_dir=corpus_b))
+    assert not units._runs
+
+
+def test_a_ready_whose_signature_cannot_be_read_is_not_checked():
+    from types import SimpleNamespace
+    from app.acquire import engine
+
+    class Odd:
+        pass
+    odd = Odd()
+    odd.ready = object()                                          # not introspectable
+
+    def boom(*a, **k):
+        raise ValueError("no signature")
+    import inspect
+    real = inspect.signature
+    inspect.signature = boom
+    try:
+        engine._make_worker(None, None, SimpleNamespace(unit_fetcher=odd), None, [], threading.Event(),
+                            Priority.BACKFILL)
+    finally:
+        inspect.signature = real

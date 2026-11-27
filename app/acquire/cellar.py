@@ -1478,13 +1478,21 @@ class TreeUnits(CellarUnits):
                 return self._held.get(key)
             return next(iter(self._held.values()), None) if len(self._held) == 1 else None
 
-    def close(self) -> None:
-        """The pass ended: a pipelined listing still running ends at its next
-        request (its windows are kept as listed; the rest wait for the next pass)."""
+    def close(self, collection=None) -> None:
+        """THIS collection's pass ended: its pipelined listing still running
+        ends at its next request (its windows are kept as listed; the rest wait
+        for the next pass). Keyed by the corpus root, as `ready` and
+        `pass_held` are (review of abac25f1: A's close stopped B's listing);
+        no collection: every corpus's (a process ending)."""
+        key = self._key_of(collection)
         with self._lock:
-            runs = list(self._runs.items())
-            self._runs.clear()
-            self._order.clear()
+            if key is None:
+                runs = list(self._runs.items())
+                self._runs.clear()
+                self._order.clear()
+            else:
+                runs = [(key, self._runs.pop(key))] if key in self._runs else []
+                self._order.pop(key, None)
         for _key, (thread, events, phase) in runs:
             phase.set()                     # the listing ends at its next request (review of b797db0e)
             for ev in events.values():

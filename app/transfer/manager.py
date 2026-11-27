@@ -103,6 +103,7 @@ class TransferManager:
         #: INTERACTIVE callers waiting for an endpoint's slot, per key
         #: (`urgent`): every other caller stands back until they have one
         self._urgent: dict[str, int] = {}
+        self._urgent_mid: dict[str, int] = {}      # rank 1: eurlex's listing beside its own fetch
         self._ewma: dict[str, float] = {}
         self._rsync_active = 0
         self._last_schedule_check = -1e9
@@ -274,7 +275,7 @@ class TransferManager:
         # RANK 1, BETWEEN A PERSON AND THE WORKER (review of f69d4bd9): a
         # background caller the regular fetch must yield to, which itself
         # yields to a person (rank 0) — eurlex's listing beside its own fetch
-        table = self._urgent if rank == 0 else self.__dict__.setdefault("_urgent_mid", {})
+        table = self._urgent if rank == 0 else self._urgent_mid
         with self._lock:
             for k in keys:
                 table[k] = table.get(k, 0) + 1
@@ -296,7 +297,7 @@ class TransferManager:
         with self._lock:
             if self._urgent.get(key, 0) > 0:
                 return True
-            return rank > 1 and self.__dict__.get("_urgent_mid", {}).get(key, 0) > 0
+            return rank > 1 and getattr(self, "_urgent_mid", {}).get(key, 0) > 0
 
     def cooled_for(self, key: str) -> float:
         """Seconds left in the endpoint's cool-down; 0 when none runs."""
