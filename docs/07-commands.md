@@ -1326,9 +1326,15 @@ reader needs at the command line:
      model server, its description saying how it was made;
   4. `[speech] synthetic_voices` gets the language's voice, the others kept;
   5. one short synthesis in the voice has the engine encode its clip.
-  `--candidates N` makes "Synthetic <lang> A", "B", … and sets none, to be
-  chosen by ear (Italian's is "Synthetic it C", the operator's choice of
-  11-25); `--use NAME` sets the one chosen and makes nothing. The sentence
+  `--candidates N` makes "Synthetic <lang> A", "B", … (the first letters no
+  profile holds) and sets none, to be chosen by ear (Italian's is
+  "Synthetic it C", the operator's choice of 11-25); `--use NAME` sets the
+  one chosen and makes nothing. *Amended 2026-11-27* (München: three
+  no-voice draws were one voice, the model's default speaker): candidates
+  are DESIGNED, as Italian's were on 11-24 — the first N of its six designs
+  ("male, elderly, low pitch" … "male, elderly"), each sent as the
+  request's `instructions` — and `--designs "…; …"` gives them (one design
+  makes one voice and sets it). The sentence
   is Louise's for it, en, fr, de and es; for another language `--text`
   gives it (and `--tag` the profile's region, es-ES). A profile is never
   replaced or deleted here: a name already held is refused, naming `--use`.
