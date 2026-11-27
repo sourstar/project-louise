@@ -868,16 +868,38 @@ def load_annotations() -> list:
     beside every search and every seeding beat."""
     cfg_dir = collections_dir()
     out: list[Collection] = []
+    _annotation_refusals.clear()
     if not cfg_dir.is_dir():
         return out
+    from .hold import refit
     for p in sorted(cfg_dir.glob("*.toml")):
         try:
             c = _load_one(p)
         except Exception:                               # noqa: BLE001
             continue
-        if is_annotations(c):
-            out.append(c)
+        if not is_annotations(c):
+            continue
+        # NOT SERVED MID-REFIT (invariant 1; the fourth read of caa9fd8f, 4):
+        # its target's identity is being replaced — the seeder, the cascade
+        # and a question leave it out, through the one function the boot
+        # check reads (app/hold/refit.py `boot_refusal`, app/spaces.py)
+        try:
+            why = refit.boot_refusal(Path(c.manifest_path).parent)
+        except Exception as e:                          # noqa: BLE001 — fail closed
+            why = f"whether it is served cannot be judged ({type(e).__name__}: {e})"
+        if why:
+            _annotation_refusals.append(Refusal(c.name, p, why))
+            continue
+        out.append(c)
     return out
+
+
+#: the annotations collections the last `load_annotations` left out, and why
+_annotation_refusals: list = []
+
+
+def annotation_refusals() -> list:
+    return list(_annotation_refusals)
 
 
 #: 07 §7.8 spells the middle mode `on-demand`; the code has always called

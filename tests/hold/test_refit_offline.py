@@ -980,19 +980,80 @@ def test_the_web_does_not_search_a_collection_whose_refit_is_half_done(held_gb, 
     assert not (query_service.withheld_reason(done) or "").startswith("not served")
 
 
-@pytest.mark.parametrize("error, cleared", [
-    ("embed: embed server HTTP 413: input is too long for the context", True),
-    ("embed: embed server HTTP 400: too many tokens (still refused at a 8000-character cut)", True),
-    ("retracted: the origin retracted the record (06 §6.1)", False),
-    ("rdf: ParseError: unclosed tag at line 4", False)])
-def test_the_reset_clears_only_the_error_the_refit_explains(held_gb, capsys, error, cleared):
+class _Refusing:
+    """An encoder answering `status`/`text` for the second document's input,
+    200 for every other — what the real embed stage meets."""
+
+    def __init__(self, status, text):
+        self.status, self.text = status, text
+
+    def post(self, url, json=None, timeout=None, headers=None):
+        import httpx
+        texts = list(json["input"])
+        req = httpx.Request("POST", url)
+        if any("abstract of 2" in t for t in texts):
+            return httpx.Response(self.status, request=req, text=self.text)
+        return httpx.Response(200, request=req, json={"data": [
+            {"index": i, "embedding": [1.0] + [0.0] * 7} for i in range(len(texts))]})
+
+
+def _written_by_the_embed_stage(tmp_path, monkeypatch, status, text):
+    """The error the worker's real parallel embed stage writes for that
+    answer (`_embed_parallel`, `record_error`), never a typed string."""
+    from app import collections as collections_mod, config, db, embeddings, worker
+    from app.verify import backend_gate
+    from tests.test_endpoint_classification import _collection
+    monkeypatch.setattr(worker, "_endpoint_paused", {})
+    monkeypatch.setattr(config, "BACKEND_GATE", "off")
+    backend_gate.reset_cache()
+    d = tmp_path / "encoder-stage"
+    d.mkdir()
+    c = _collection(d, monkeypatch, concurrency=3)
+    real = embeddings.httpc.post
+    monkeypatch.setattr(embeddings.httpc, "post", _Refusing(status, text).post)
+    try:
+        con = db.connect(c)
+        worker._embed_parallel(con, c, collections_mod.recipe_for(c))
+        error = con.execute("SELECT error FROM documents WHERE uid='fake:2'").fetchone()[0]
+        con.close()
+    finally:
+        monkeypatch.setattr(embeddings.httpc, "post", real)
+        backend_gate.reset_cache()
+    assert error and error.startswith("embed: "), error
+    return error
+
+
+@pytest.mark.parametrize("status, text, cleared", [
+    (400, "too many tokens", True),
+    (413, "Payload Too Large", True),
+    (500, "input (774 tokens) is too large to process. increase the physical batch size", True),
+    (500, "request (11187 tokens) exceeds the available context size (8192 tokens)", True),
+    (500, "json: error calling MarshalJSON for type schema.Item: json: unsupported value: NaN", False)])
+def test_the_reset_clears_the_window_refusal_the_embed_stage_wrote_and_nothing_else(
+        held_gb, tmp_path, monkeypatch, capsys, status, text, cleared):
     root, _old, _h, _e = held_gb
+    error = _written_by_the_embed_stage(tmp_path, monkeypatch, status, text)
+    assert refit_mod.clears(error) is cleared, error
+    _reset_with(root, capsys, error, cleared)
+
+
+@pytest.mark.parametrize("error", ["retracted: the origin retracted the record (06 §6.1)",
+                                   "rdf: ParseError: unclosed tag at line 4",
+                                   "embed: RuntimeError: embed server HTTP 500: Resource not found"])
+def test_the_reset_keeps_every_other_error(held_gb, capsys, error):
+    root, _old, _h, _e = held_gb
+    assert not refit_mod.clears(error)
+    _reset_with(root, capsys, error, False)
+
+
+def _reset_with(root, capsys, error, cleared):
     dense = _dense(root)
     m = sqlite3.connect(root / NAME / "state" / "manifest.sqlite")
     m.execute("UPDATE documents SET error=?, retries=3 WHERE uid=?", (error, dense))
     m.commit()
     m.close()
     native = int(_marks(root)[dense][0])
+    capsys.readouterr()
     assert _refit(root, *FIT, extra=("--dry-run",)) == 0
     out = capsys.readouterr().out
     assert ("keep their error" in out) is not cleared
@@ -1023,3 +1084,94 @@ def test_the_codex_line_keeps_its_comment_and_the_file_its_line_endings(held_gb)
     _, new = col.resolve(root, NAME)
     assert f.read_bytes() == \
         f'codex = "{new.collection_id}"   # the encoder window, 2026-11-27\r\nembed = "all"\r\n'.encode()
+
+
+# ---- the fourth read of caa9fd8f ------------------------------------------------------------
+
+def test_a_document_the_old_layers_cannot_cut_and_the_new_can_goes_through_holding(held_gb, monkeypatch, capsys):
+    """It holds vectors: refused, never counted a change."""
+    from app import layers
+    root, old, _h, _e = held_gb
+    dense = _dense(root)
+    real = layers.chunks_for_document
+
+    def cut(coll, row, *a, **k):
+        if coll.codex.collection_id == old.collection_id and row["uid"] == dense:
+            raise RuntimeError("the old layer cannot cut it")
+        return real(coll, row, *a, **k)
+    monkeypatch.setattr(layers, "chunks_for_document", cut)
+    tree = _tree(root)
+    assert _refit(root, *FIT, extra=("--dry-run",)) == 2
+    out = capsys.readouterr().out
+    assert "the old layers cannot cut hold vector rows or index entries" in out and dense in out
+    assert "holding nothing: unchanged" not in out, "never said unchanged for what it refuses"
+    assert _refit(root, *FIT) == 2
+    assert _tree(root) == tree
+
+
+def test_the_dry_run_does_not_call_a_refused_document_unchanged(held_gb, capsys):
+    root, _old, _h, _e = held_gb
+    uid = _no_source(root, vectors=True)
+    assert _refit(root, *FIT, extra=("--dry-run",)) == 2
+    out = capsys.readouterr().out
+    assert uid in out and "holding nothing: unchanged" not in out
+
+
+def test_the_old_layers_tokenizer_is_loaded_too(held_gb, tmp_path, monkeypatch, capsys):
+    """After a first refit the old layers pin a tokenizer; one that cannot be
+    loaded makes every old cut fail: refused in the plan, named."""
+    from app import config
+    root, _old, _h, _e = held_gb
+    assert _refit(root, *FIT) == 0
+    tok = Tokenizer(models.WordLevel({"[UNK]": 0, "a": 1}, unk_token="[UNK]"))
+    tok.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    raw = tok.to_str().encode("utf-8")
+    sha2 = "sha256:" + hashlib.sha256(raw).hexdigest()
+    _wd.register(sha2, Tokenizer.from_str(raw.decode("utf-8")))
+    try:
+        _wd._tokenizers.pop(_SHA, None)
+        (config.TOKENIZERS_DIR / f"{_SHA[7:]}.json").unlink()
+        tree = _tree(root)
+        assert _refit(root, "max_tokens=120", f"tokenizer={sha2}") == 2
+        err = capsys.readouterr().err
+        assert f"the collection's own layer 0 pins tokenizer {_SHA}, which cannot be loaded" in err
+        assert _tree(root) == tree
+    finally:
+        _wd._tokenizers.pop(sha2, None)
+
+
+def test_every_reader_of_an_annotations_collection_leaves_it_out_mid_refit(held_gb, monkeypatch):
+    """The seeder, the cascade and a question read annotations collections
+    through `load_annotations`, which `load_all` does not list: one whose
+    target's refit is under way is left out of it, through the boot check's
+    own function."""
+    import datetime
+    from app import collections as collections_mod
+    from app.ask import annotations as ask_ann
+    from app.hold import cascade, cascade_keeper
+    from app.share import seeder
+    root, _old, _h, _e = held_gb
+
+    def as_the_node(read):
+        """`read` with this root as the node's (its files where the node reads them)."""
+        with monkeypatch.context() as m:
+            m.setenv("LOUISE_ROOT", str(root.parent))
+            m.setattr(collections_mod, "collections_dir", lambda: root)
+            return read()
+    assert [a.name for a in as_the_node(collections_mod.load_annotations)] == ["gb-editions"]
+    restore = _killing(monkeypatch, refit_mod, "_drop_index_entries")
+    with pytest.raises(_Kill):
+        _refit(root, *FIT)
+    restore()
+    assert as_the_node(collections_mod.load_annotations) == []
+    assert [r.name for r in collections_mod.annotation_refusals()] == ["gb-editions"]
+    assert "under way" in collections_mod.annotation_refusals()[0].reason
+    assert as_the_node(lambda: seeder.with_annotations([], {})[0]) == [], "the seeder does not share it"
+    assert as_the_node(ask_ann._held) == [], "a question does not read it"
+    ran = []
+    assert cascade_keeper._one(root, "gb-editions", cascade.declarations(root),
+                               now=datetime.datetime(2026, 11, 27, tzinfo=datetime.timezone.utc), failed={},
+                               log=lambda m: None, run=lambda *a, **k: ran.append(a), stop=None) is None
+    assert ran == [], "the cascade does not run it"
+    assert _refit(root, *FIT) == 0
+    assert [a.name for a in as_the_node(collections_mod.load_annotations)] == ["gb-editions"]

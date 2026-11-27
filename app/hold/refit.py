@@ -202,14 +202,15 @@ def cut_window(source, target, lo: int, hi: int) -> dict:
             title, sections, _src = record_source.title_sections_and_source(source, row, plugin, pair=pair)
             before = [(c["id"], c["text"]) for c in layers.chunks_for_document(source, row, sections, title=title)]
         except Exception as e:   # noqa: BLE001 — uncut at the old layers: the plan looks at what it holds
-            try:                 # ...and at the new: one the new layers cut now is a change (it held nothing)
-                if sections is None:
-                    raise
-                layers.chunks_for_document(target, row, sections, title=title)
-                changed.append([int(row["rowid"]), row["uid"], int(row["native_id"])])
-            except Exception:    # noqa: BLE001 — uncut at both layers: unchanged, if it holds nothing
-                first_uncut = first_uncut or f"{row['uid']}: {type(e).__name__}: {e}"[:300]
-                uncut.append([int(row["rowid"]), row["uid"], int(row["native_id"])])
+            new_cuts = False
+            try:                 # ...and at the new: [.., True] when the new layers cut it now
+                if sections is not None:
+                    layers.chunks_for_document(target, row, sections, title=title)
+                    new_cuts = True
+            except Exception:    # noqa: BLE001 — uncut at both layers
+                pass
+            first_uncut = first_uncut or f"{row['uid']}: {type(e).__name__}: {e}"[:300]
+            uncut.append([int(row["rowid"]), row["uid"], int(row["native_id"]), new_cuts])
             continue
         try:
             after = [(c["id"], c["text"]) for c in layers.chunks_for_document(target, row, sections, title=title)]
@@ -282,12 +283,17 @@ def _commit(con, fn) -> None:
 
 
 #: THE ONE ERROR A REFIT CAN EXPLAIN: the encoder's refusal of an input
-#: (embeddings.InputRefused, recorded as `embed: embed server HTTP 400|413|422 …`)
-#: — an over-window input, which the new window cuts to fit. Every other error
+#: (`embeddings.InputRefused`) — an over-window input, which the new window
+#: cuts to fit — as its writers write it: the parallel embed stage
+#: `embed: InputRefused: embed server HTTP …` (worker.py `_embed_parallel`,
+#: `record_error`), the serial one `embed: embed server HTTP …` (`_fail`), for
+#: a 400, 413 or 422, or the 500 a llama-server, LocalAI or VeGa window
+#: refusal arrives as (embeddings.py `_over_budget`, `vclient.is_input_refusal`:
+#: InputRefused is raised for an input refusal only). Every other error
 #: (a retraction, 06 §6.1; a parse error; one a human set) is KEPT: the
 #: document is still deleted and cut again if its cut changed, and stays out
 #: of every selection until a human intervenes (the third read of 141b1d2e, 4).
-CLEARED_ERROR = r"^embed: embed server HTTP (400|413|422)\b"
+CLEARED_ERROR = r"^embed: (?:InputRefused: )?embed server HTTP (?:400|413|422|500)\b"
 
 
 def clears(error: str | None) -> bool:
@@ -513,6 +519,24 @@ def rebuild_part(t_coll, src: str, dst: str) -> dict[str, Any]:
             "root": shard_mod.pieces_root_of(Path(dst)),
             "records_root": hold_records.records_root(r["content_hash"] for r in recs),
             "chunks_root": hold_records.chunks_root_of(b"".join(blobs))}
+
+
+def tokenizer_refusals(codex: Codex, whose: str) -> list[str]:
+    """Every tokenizer `codex`'s layers pin that cannot be loaded, said —
+    the OLD layers' too (the fourth read of caa9fd8f, 3): an old cut that fails
+    for want of its tokenizer would make every document "uncut at the old
+    layers"."""
+    from app.plugins.wikidata import chunker as pinned
+    out = []
+    for i, layer in enumerate(getattr(codex, "layers", None) or ()):
+        sha = (layer.chunker.params or {}).get("tokenizer")
+        if sha is None:
+            continue
+        try:
+            pinned.tokenizer_for(sha)
+        except Exception as e:   # noqa: BLE001 — TokenizerMissing, ChunkerError, a broken file
+            out.append(f"{whose} layer {i} pins tokenizer {sha}, which cannot be loaded ({type(e).__name__}: {e})")
+    return out
 
 
 def _hex(cid: str) -> str:
@@ -1122,7 +1146,8 @@ def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: 
     if container_of(old) != JSONL:
         refuse(f"{name}'s record parts are {container_of(old)}: a refit of a Parquet part is not built (its cells "
                f"are written from the record, not kept line by line)")
-    for why in (official_publication(root, name, old), shared_index_refusal(root, name)):
+    for why in (official_publication(root, name, old), shared_index_refusal(root, name),
+                *tokenizer_refusals(old, "the collection's own"), *tokenizer_refusals(new, "the new")):
         if why:
             refuse(why.removesuffix("; nothing was written"))
     if key is None:
@@ -1160,12 +1185,19 @@ def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: 
                f"cannot be cut is never counted a change")
     elif not changed:
         refuse("the new window cuts no document otherwise: there is nothing to refit")
+    # EVERY document the old layers cannot cut goes through `holding` (the
+    # fourth read of caa9fd8f, 3): one holding rows refuses, whatever the new
+    # layers make of it; one holding nothing is unchanged when the new layers
+    # cannot cut it either, and a change (it gains its cut) when they can
     uncut = counts["uncut"]
     held_uncut = holding(rec._local_collection(root, name, old), uncut) if uncut else []
     if held_uncut:
         refuse(f"{len(held_uncut)} document(s) the old layers cannot cut hold vector rows or index entries "
                f"({', '.join(held_uncut[:10])}{' …' if len(held_uncut) > 10 else ''}): what cut them is not this "
                f"tree's — the first: {counts['first_uncut']}")
+    unheld = [d for d in uncut if d[1] not in set(held_uncut)]
+    changed += [d[:3] for d in unheld if d[3]]
+    unchanged = [d[1] for d in unheld if not d[3]]
     bound = affected_bound(counts["documents"], affected_max)
     if len(changed) > bound:
         refuse(f"the new window cuts {len(changed)} of {counts['documents']} document(s) otherwise, more than "
@@ -1195,7 +1227,7 @@ def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: 
         finally:
             _release_index_writers(coll)
     return {"name": name, "from": old.collection_id, "to": new.collection_id, "changed": changed,
-            "documents": counts["documents"], "bound": bound, "uncut": [d[1] for d in uncut],
+            "documents": counts["documents"], "bound": bound, "uncut": unchanged,
             "first_uncut": counts["first_uncut"], "kept_errors": kept_errors(root, name, old, changed),
             "aside": aside_name(root, name, old.collection_id),
             "others_aside": {o: aside_name(root, o, col.resolve(root, o)[1].collection_id) for o in others},

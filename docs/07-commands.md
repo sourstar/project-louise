@@ -128,8 +128,9 @@ louise hold
                  collection's, sorted — exit 2 while the worker runs (never 3: supervise-pass would retry it into an
                  unattended start). A collection with a refit begun and not finished (state/refit.json, or an
                  annotations collection's state/refit-target.json, written with the refit's first write) is refused
-                 at boot, alone (invariant 1) — by the worker and by the web, which leaves it out of every search —
-                 until the refit is run again to its end. `node stop` alone is not the way (the
+                 at boot, alone (invariant 1) — by the worker and by the web, which leaves it out of every search,
+                 and an annotations collection by every reader of one (`load_annotations`: the seeder, the cascade,
+                 a question) — until the refit is run again to its end. `node stop` alone is not the way (the
                  restart policy brings the worker back): `midclt call app.stop louise-rag`, then the refit as an
                  operator pass with the worker's mounts and key (deploy/supervise-pass.sh), then `app.start`.
                  Not routed (the worker cannot run it). EVERYTHING THAT CAN REFUSE IS DECIDED BEFORE THE FIRST
@@ -140,12 +141,14 @@ louise hold
                  ("publish or discard them first"), an annotations collection on an older snapshot or with claims
                  on a chunk of a document cut otherwise, a platform.toml its writer cannot rewrite; a held
                  index writer exits 3. A tokenizer that cannot be loaded refuses before anything; each document is
-                 judged by its OLD cut and its NEW: uncut at both and holding nothing (no epub, txt or rdf) it is
-                 unchanged and named; uncut at the old layers while it holds vector rows or index entries it refuses;
-                 cut at the old and not at the new it refuses (never counted a change: the count and the first
-                 error said). The reset clears one error only, the encoder's refusal of an over-window input
-                 (`embed: embed server HTTP 400|413|422`); every other (a retraction, a parse error) is kept, the
-                 document deleted and cut again all the same. What is set aside goes under
+                 judged by its OLD cut and its NEW (the old layers' tokenizers loaded too, refused by name): uncut
+                 at the old layers while it holds vector rows or index entries it refuses; holding nothing, it is
+                 unchanged and named when the new layers cannot cut it either, a change when they can; cut at
+                 the old and not at the new it refuses (never counted a change: the count and the first error
+                 said). The reset clears one error only, the encoder's refusal of an input as the embed stages
+                 write it (`embed: [InputRefused: ]embed server HTTP 400|413|422|500`, the 500 a llama-server,
+                 LocalAI or VeGa window refusal); every other (a retraction, a parse error, a NaN answer) is
+                 kept, the document deleted and cut again all the same. What is set aside goes under
                  .replaced/<old id>[.<n>], so a refit back to an earlier Codex works; a change
                  wider than 1 % of the documents (at least 10) refuses unless --affected-max N states it; Parquet
                  parts and a collection file its writer cannot rewrite (tried on a copy) refuse. Then: the documents

@@ -41,14 +41,6 @@ def withheld_reason(collection) -> str | None:
     answered queries. `app/licensing.py` is THE resolution; this only
     reads it.
     """
-    # invariant 1: what the boot check refused is not served — and a refit
-    # begun since, read now (the check's own function, app/hold/refit.py)
-    why = _refused_at_start.get(_state_of(collection))
-    if why is None:
-        from .hold import refit
-        why = refit.boot_refusal(_state_of(collection))
-    if why:
-        return f"not served: {why}"
     from . import licensing
     try:
         if licensing.state_for(collection) == licensing.MISSING:
@@ -61,6 +53,19 @@ def withheld_reason(collection) -> str | None:
         # is withheld until it can.
         return (f"license state cannot be judged ({type(e).__name__}: {e}); "
                 f"withheld until it can (invariant 9)")
+    # invariant 1: what the boot check refused is not served — and a refit
+    # begun since, read now (the check's own function, app/hold/refit.py) —
+    # FAIL CLOSED, as the licence gate above: a state that cannot be read
+    # withholds (the fourth read of caa9fd8f, 2)
+    try:
+        why = _refused_at_start.get(_state_of(collection))
+        if why is None:
+            from .hold import refit
+            why = refit.boot_refusal(_state_of(collection))
+    except Exception as e:  # noqa: BLE001
+        why = f"whether it is served cannot be judged ({type(e).__name__}: {e})"
+    if why:
+        return f"not served: {why}"
     # 03 §3.6: a copy in quarantine — not yet tested on THIS peer — enters no
     # list, in either leg. Only once the node enforces it (copy_state.enforced:
     # the first deploy computes and shows the states and withholds nothing).

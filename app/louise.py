@@ -2985,6 +2985,10 @@ def _refusal_for(name: str) -> str | None:
             for r in collections_mod.refusals():
                 if r.name == name:
                     return r.reason
+            collections_mod.load_annotations()         # an annotations collection mid-refit
+            for r in collections_mod.annotation_refusals():
+                if r.name == name:
+                    return r.reason
             mine = [c for c in loaded if c.name == name and c.codex is not None]
             for _c, reason in spaces.refuse_boot(mine) if mine else []:
                 return reason
