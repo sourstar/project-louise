@@ -41,7 +41,10 @@ QUESTIONS: list[tuple[str, str, str]] = [
     ("waterloo", "How did the battle of Waterloo end?", "fact_with_fiction"),
     ("caesar", "Who killed Julius Caesar, and when?", "fact_with_fiction"),
     ("la-rochelle", "What did Cardinal Richelieu do at the siege of La Rochelle?", "fact_with_fiction"),
-    ("cinque-maggio", "Che cosa dice Il cinque maggio di Manzoni su Napoleone?", "control"),
+    # a question ABOUT a literary work: citing literary sources is what it asks
+    # for (München's re-score, 2026-11-27: the poem's source is the book that
+    # holds it, "Le tragedie, gl'inni sacri e le odi", so no title matches)
+    ("cinque-maggio", "Che cosa dice Il cinque maggio di Manzoni su Napoleone?", "control_about_work"),
     ("anabasis", "What happened to the Ten Thousand after the battle of Cunaxa?", "control"),
     ("pericles", "What did Pericles build in Athens?", "control"),
 ]
@@ -120,6 +123,11 @@ def check(files: list[Path]) -> int:
         for row in rows:
             if "error" in row:
                 print(f"  {row['id']} run {row['run']}: ERROR {row['error']}")
+                continue
+            if row["kind"] == "control_about_work":
+                # what is checked here is that the answer still comes; literary
+                # sources are what such a question asks for
+                print(f"  {row['id']} run {row['run']} (about a work): answered, not checked for evidence")
                 continue
             flagged = as_evidence(row["answer"], row["sources"], row.get("question", ""))
             lit = sorted(literary_ns(row["sources"]))
