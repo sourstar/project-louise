@@ -120,6 +120,7 @@ if str(ROOT) not in sys.path:
 from tools import encoder_bakeoff as bakeoff  # noqa: E402 — fetch, metrics_for, LICENCE
 from tools import code_pin  # noqa: E402 — the code a run executes (§13)
 from tools.measure import chat_eval  # noqa: E402 — settle, withheld_legs, pilot_ok (§12, §13)
+from tools.measure import jsonl  # noqa: E402
 
 KS = (1, 3, 5, 10, 20)
 DEFAULT_K = 20
@@ -1358,7 +1359,7 @@ def main(argv: list[str] | None = None) -> int:
         a.out.write_text("".join(json.dumps(it, ensure_ascii=False) + "\n" for it in items), encoding="utf-8")
         print(f"{len(items)} stubs written to {a.out} — review them before they count")
         return 0
-    items = [json.loads(line) for line in a.questions.read_text(encoding="utf-8").splitlines() if line.strip()]
+    items = [json.loads(line) for line in jsonl.lines(a.questions.read_text(encoding="utf-8")) if line.strip()]
     got = temporal_run(held, items, k=a.k)
     path = _write(a.out, "temporal", {**_stamp(held), "k": a.k, **got})
     print(json.dumps(got["summary"]))

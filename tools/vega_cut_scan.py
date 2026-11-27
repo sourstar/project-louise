@@ -22,6 +22,7 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.vega import client  # noqa: E402
+from tools.measure import jsonl  # noqa: E402
 
 
 def scan(texts: list[dict[str, Any]], *, url: str, model: str, window: int,
@@ -52,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="JSON lines with `text` (and `i`)")
     args = p.parse_args(argv)
     import httpx
-    texts = [json.loads(line) for line in args.texts.read_text(encoding="utf-8").splitlines()
+    texts = [json.loads(line) for line in jsonl.lines(args.texts.read_text(encoding="utf-8"))
              if line.strip()]
     refused = scan(texts, url=args.url, model=args.model, window=args.window, post=httpx.post)
     for r in refused:

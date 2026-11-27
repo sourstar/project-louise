@@ -53,9 +53,9 @@ def pick(out: Path, *, docs: int = 32, queries: int = 16) -> list[dict]:
     """`docs` chunks spread over the sample's lengths (the shortest and the
     longest included) and `queries` questions, the languages alternating as
     the sample has them. Deterministic: the same sample gives the same texts."""
-    corpus = [json.loads(line) for line in (out / "corpus.jsonl").read_text(encoding="utf-8").splitlines()
+    corpus = [json.loads(line) for line in (out / "corpus.jsonl").read_text(encoding="utf-8").split("\n")
               if line.strip()]
-    qs = [json.loads(line) for line in (out / "queries.jsonl").read_text(encoding="utf-8").splitlines()
+    qs = [json.loads(line) for line in (out / "queries.jsonl").read_text(encoding="utf-8").split("\n")
           if line.strip()]
     chunks = sorted({c for e in corpus for c in e["chunks"]}, key=lambda t: (len(t), t))
     n = min(docs, len(chunks))
@@ -75,7 +75,7 @@ def pick(out: Path, *, docs: int = 32, queries: int = 16) -> list[dict]:
 
 
 def read_texts(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line.strip()]
 
 
 def reference(model: str, texts: list[dict], *, query_prompt: str, document_prompt: str,
@@ -135,10 +135,10 @@ def sent_text(encoder: str, text: str, query: bool) -> str:
 def sample_texts(out: Path) -> list[dict]:
     """Every chunk and every question of a wikidata_encoder_ab sample."""
     texts = [{"side": "document", "text": c}
-             for line in (out / "corpus.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()
+             for line in (out / "corpus.jsonl").read_text(encoding="utf-8").split("\n") if line.strip()
              for c in json.loads(line)["chunks"]]
     texts += [{"side": "query", "text": json.loads(line)["query"]}
-              for line in (out / "queries.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+              for line in (out / "queries.jsonl").read_text(encoding="utf-8").split("\n") if line.strip()]
     return texts
 
 

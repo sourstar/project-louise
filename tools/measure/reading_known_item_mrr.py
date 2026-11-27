@@ -25,6 +25,7 @@ import json
 import statistics
 import sys
 from pathlib import Path
+from tools.measure import jsonl  # noqa: E402
 
 RULE = "ON stays if MRR@10(on) >= MRR@10(off) - 0.02; a larger loss to the operator the same day"
 
@@ -72,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     if not version:
         return reading_store.refuse("no reading table is held: copy ON would read nothing and be compared with "
                                     "OFF. Sync wikisource-readings, or pass --readings-tsv")
-    lines = [json.loads(x) for x in a.set.read_text(encoding="utf-8").splitlines() if x.strip()]
+    lines = [json.loads(x) for x in jsonl.lines(a.set.read_text(encoding="utf-8")) if x.strip()]
     queries = [q for q in lines if "qid" in q and not q.get("refused")]
     col = collections_mod.by_name(a.collection)
     con = ro_connect(col)

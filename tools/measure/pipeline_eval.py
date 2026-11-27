@@ -62,6 +62,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from tools.measure import jsonl  # noqa: E402
 
 #: the reranker's depths the operator named
 DEPTHS = (10, 40, 50, 100)
@@ -124,7 +125,7 @@ class RerankCache:
         self.path = where / "scores.jsonl"
         self.scores: dict[tuple[int, str, str], float] = {}
         if self.path.exists():
-            for line in self.path.read_text(encoding="utf-8").splitlines():
+            for line in jsonl.lines(self.path.read_text(encoding="utf-8")):
                 if line.strip():
                     x = json.loads(line)
                     self.scores[(x["q"], x["c"], x["v"])] = float(x["s"])
@@ -145,7 +146,7 @@ class PlanStore:
         self.rows: dict[int, dict] = {}
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
+            for line in jsonl.lines(path.read_text(encoding="utf-8")):
                 if line.strip():
                     x = json.loads(line)
                     self.rows[x["q"]] = x
@@ -216,7 +217,7 @@ class QueryRanker:
         self.vectors: dict[str, np.ndarray] = {}
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
+            for line in jsonl.lines(path.read_text(encoding="utf-8")):
                 if line.strip():
                     x = json.loads(line)
                     self.vectors[x["t"]] = np.asarray(x["v"], dtype=np.float32)

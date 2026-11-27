@@ -50,6 +50,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from tools.measure import jsonl  # noqa: E402
 
 DATA_URL = "https://huggingface.co/datasets/tonytan48/Re-DocRED/resolve/main/{name}"
 SPLITS = ("test_revised.json", "dev_revised.json")
@@ -242,7 +243,7 @@ def run(out: Path, name: str, *, model: str, url: str, extra: dict[str, Any] | N
     answers = run_dir / "answers.jsonl"
     done = set()
     if answers.exists():
-        done = {json.loads(l)["index"] for l in answers.read_text(encoding="utf-8").splitlines() if l}
+        done = {json.loads(l)["index"] for l in jsonl.lines(answers.read_text(encoding="utf-8")) if l}
     todo = [d for d in docs if d.index not in done]
     ask = ask or chat_http(url, model, extra or {})
     lock = threading.Lock()

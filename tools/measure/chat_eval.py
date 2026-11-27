@@ -139,6 +139,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.measure import sampling_probe
+from tools.measure import jsonl  # noqa: E402
 
 DEFAULT_QUERIES = Path(__file__).with_name("one_language_queries.tsv")
 #: a citation by uid or canonical id in brackets ([pubmed:37000021]); Ask's own
@@ -477,7 +478,7 @@ class SearchCache:
         self._live = live
         self._kept: dict[str, tuple[Any, float]] = {}
         if path.exists():
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = jsonl.lines(path.read_text(encoding="utf-8"))
             head = json.loads(lines[0]) if lines else {}
             if head.get("data") != version:
                 raise SystemExit(f"{path}: recorded on {head.get('data')}, the node holds {version}: "
@@ -1053,7 +1054,7 @@ def search_seconds(turns: list[dict[str, Any]]) -> dict[str, float]:
 
 def _rows(out: Path, name: str) -> list[dict[str, Any]]:
     path = out / "runs" / name / "answers.jsonl"
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l]
+    return [json.loads(l) for l in jsonl.lines(path.read_text(encoding="utf-8")) if l]
 
 
 def summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1307,11 +1308,11 @@ def rescore(out: Path, name: str, cache: Path) -> int:
     pass, its cache grown, keeps that file; the rows it rewrites are in it)."""
     from app.ask.chat import Sources, shown_search
     kept: dict[str, Any] = {}
-    for line in cache.read_text(encoding="utf-8").splitlines()[1:]:
+    for line in jsonl.lines(cache.read_text(encoding="utf-8"))[1:]:
         row = json.loads(line)
         kept[row["key"]] = row["result"]
     path = out / "runs" / name / "answers.jsonl"
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows = [json.loads(line) for line in jsonl.lines(path.read_text(encoding="utf-8")) if line.strip()]
     done = kept_as_was = 0
     new: list[dict[str, Any]] = []
     for r in rows:

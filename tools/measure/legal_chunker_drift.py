@@ -46,6 +46,7 @@ from collections import Counter
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from tools.measure import jsonl  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -209,7 +210,7 @@ def measure(collection, *, to_version: int = 4, window: int = 5000, examples: in
     head = {"collection": collection.name, "window": int(window), "top": int(top), "to": int(to_version)}
     answered: dict[int, dict] = {}
     if progress is not None and progress.exists():
-        lines = progress.read_text(encoding="utf-8").splitlines()
+        lines = jsonl.lines(progress.read_text(encoding="utf-8"))
         if not lines or json.loads(lines[0]) != head:
             raise SystemExit(f"legal_chunker_drift: {progress} is another pass's ({lines[0] if lines else 'empty'}), "
                              f"not {head}")

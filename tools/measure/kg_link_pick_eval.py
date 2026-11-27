@@ -49,6 +49,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+from tools.measure import jsonl  # noqa: E402
 
 BASE = "https://huggingface.co/datasets/izhx/mewsli-x/resolve/main/"
 CANDIDATES_TAR = "candidate_entities.jsonl.tar.gz"
@@ -61,7 +62,7 @@ SYSTEM = "You link a mention in a sentence to the entity it refers to. Answer wi
 
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    return [json.loads(l) for l in jsonl.lines(path.read_text(encoding="utf-8")) if l.strip()]
 
 
 def surface_and_context(mention: str) -> tuple[str, str]:

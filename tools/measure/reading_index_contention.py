@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from tools.measure import jsonl  # noqa: E402
 
 
 def pct(xs: list[float], q: float) -> float:
@@ -42,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["LOUISE_CACHE_DIR"] = tempfile.mkdtemp(prefix="reading-contention-")
     from app import collections as collections_mod, reading, retrieval
     from tools.measure.reading_summary_eval import ro_connect
-    queries = [q["query"] for q in (json.loads(x) for x in a.set.read_text(encoding="utf-8").splitlines() if x.strip())
+    queries = [q["query"] for q in (json.loads(x) for x in jsonl.lines(a.set.read_text(encoding="utf-8")) if x.strip())
                if "qid" in q and not q.get("refused")][: a.n] or ["chi era il mercante"]
     col = collections_mod.by_name(a.collection)
     con = ro_connect(col)

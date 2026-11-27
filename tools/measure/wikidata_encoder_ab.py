@@ -57,6 +57,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Callable
+from tools.measure import jsonl  # noqa: E402
 
 TOP = 10
 #: the candidate depths a reranker reads (the operator, 2026-11-02: "if it fits a
@@ -129,7 +130,7 @@ PROMPTS = {
 
 
 def _jsonl(path: Path) -> list[dict]:
-    return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()] \
+    return [json.loads(x) for x in jsonl.lines(path.read_text(encoding="utf-8")) if x.strip()] \
         if path.exists() else []
 
 

@@ -162,6 +162,7 @@ if str(ROOT) not in sys.path:
 from tools.measure import chat_eval  # noqa: E402 — settle, withheld_legs, read_queries, load_works
 from tools.measure.fusion_calibration import RELEVANT as UMBRELA_RELEVANT  # noqa: E402
 from tools.measure.fusion_calibration import append_jsonl, read_jsonl  # noqa: E402
+from tools.measure import jsonl  # noqa: E402
 
 TOP = 10
 #: the results a search returns (05 §5.4); the candidates are max(4k, depth)
@@ -290,7 +291,7 @@ def _data_rows(path: Path) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             return list(ast.literal_eval(body.strip()))
     # "\n" alone ends a JSON line: str.splitlines() also breaks at U+2028/U+2029, which a JSON string holds unescaped
-    return [json.loads(line) for line in text.split("\n") if line.strip()]
+    return [json.loads(line) for line in jsonl.lines(text) if line.strip()]
 
 
 def load_gutenberg(sources: Sequence[Path], *, works: Path | None = None,

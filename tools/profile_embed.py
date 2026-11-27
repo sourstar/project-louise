@@ -57,6 +57,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from tools.measure import jsonl  # noqa: E402
 
 _SENTENCES = [
     "The lighthouse keeper counted the ships as they crossed the grey horizon.",
@@ -322,7 +323,7 @@ def read_texts(args) -> list[str]:
         texts = [t for t in corpus.texts if t]
     elif args.texts_file:
         texts = []
-        for line in Path(args.texts_file).read_text(encoding="utf-8").splitlines():
+        for line in jsonl.lines(Path(args.texts_file).read_text(encoding="utf-8")):
             if line.strip():
                 x = json.loads(line)
                 texts.append(x["text"] if isinstance(x, dict) else x)

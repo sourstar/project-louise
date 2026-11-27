@@ -67,6 +67,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
+from tools.measure import jsonl  # noqa: E402
 
 WIKILINGUA = "https://huggingface.co/datasets/esdurmus/wiki_lingua/resolve/main/{config}/train-00000-of-00001.parquet"
 BOOKSUM = "https://huggingface.co/datasets/kmfoda/booksum/resolve/main/test.csv"
@@ -195,7 +196,7 @@ def fetch(out: Path, *, langs: Iterable[str] = tuple(LANGS), per_lang: int = 20,
 
 
 def items_of(out: Path) -> list[dict[str, Any]]:
-    return [json.loads(l) for l in (out / "items.jsonl").read_text(encoding="utf-8").splitlines() if l]
+    return [json.loads(l) for l in jsonl.lines((out / "items.jsonl").read_text(encoding="utf-8")) if l]
 
 
 def jobs_of(items: list[dict[str, Any]]) -> list[tuple[str, str]]:
@@ -252,7 +253,7 @@ def run(out: Path, name: str, *, model: str, url: str, extra: dict[str, Any] | N
     else:
         stated.write_text(json.dumps(settings, indent=1, sort_keys=True), encoding="utf-8")
     answers = run_dir / "answers.jsonl"
-    done = ({json.loads(l)["key"] for l in answers.read_text(encoding="utf-8").splitlines() if l}
+    done = ({json.loads(l)["key"] for l in jsonl.lines(answers.read_text(encoding="utf-8")) if l}
             if answers.exists() else set())
     todo = [(k, t) for k, t in jobs_of(items) if k not in done]
     ask = ask or chat_http(url, model, extra or {})

@@ -55,6 +55,7 @@ import sqlite3
 import sys
 from pathlib import Path
 from typing import Any, Iterable
+from tools.measure import jsonl  # noqa: E402
 
 TOP = 10                  # judged, and measured: MRR@10, nDCG@10
 RELEVANT = 2              # UMBRELA's "has an answer"
@@ -94,7 +95,7 @@ def read_jsonl(path: Path) -> list[dict]:
     # "\n" alone ends a JSON line: str.splitlines() also breaks at U+2028/U+2029, which a JSON string holds unescaped
     if not Path(path).exists():
         return []
-    return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").split("\n")
+    return [json.loads(line) for line in jsonl.lines(Path(path).read_text(encoding="utf-8"))
             if line.strip()]
 
 
