@@ -1009,6 +1009,14 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     if held is None:
         if not sp["manifest"].is_file():
             raise CodexError(f"carry: {from_name} has no manifest at {sp['manifest']}")
+        from app import text_index
+        reads = [] if copy else text_index.readers(root, from_name)
+        if reads:
+            # its text index MOVES with a carry that does not copy: never from
+            # under a sister who reads it where it lies (as `rename` refuses)
+            raise CodexError(f"carry: {', '.join(reads)} reads {from_name}'s text index where it lies "
+                             f"({from_name}/index); `louise hold collection unshare` each first, or carry "
+                             f"with --copy; nothing was changed")
         refuse_unless_pinned(sp["lance"], sp["manifest"], src, from_name)
         if unembedded:
             why = unembedded_why_not(sp["lance"], sp["manifest"])

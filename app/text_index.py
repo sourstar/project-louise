@@ -142,6 +142,10 @@ def _identity_body(collection) -> dict[str, Any] | None:
         "slices": list(held) if held is not None else getattr(collection, "slices", "all"),
         "validity": validity.declared(collection) is not None,
         "names": fts.names_capable(collection),
+        # the dated-dump run it holds (`collection.snapshot`, the one answer of
+        # app/hold/origin_run.py): a writer moving to a new run withholds her
+        # until her own update reaches it (the read of eef52262, 2)
+        "run": getattr(collection, "snapshot", None),
     }
 
 
@@ -183,9 +187,9 @@ _placements: dict[str, tuple[int, dict | None]] = {}
 
 
 def placement(root: Path, name: str) -> dict | None:
-    """`{"dir": ".text-index/<identity>", "identity": …}`, or None: the
-    collection's index is its own `<name>/index`. Read once per change of
-    the file (its mtime)."""
+    """`{"dir": "<sister>/index", "identity": …, "writer": <sister>,
+    "withheld"?: why}`, or None: the collection's index is its own
+    `<name>/index`. Read once per change of the file (its mtime)."""
     pf = placement_file(root, name)
     try:
         mtime = pf.stat().st_mtime_ns
@@ -379,6 +383,18 @@ def withheld_at(root: Path, name: str) -> str | None:
 def withheld(collection) -> str | None:
     root = _root_of(collection)
     return withheld_at(root, collection.name) if root is not None else None
+
+
+def unread(collection) -> str | None:
+    """Why her text leg answers nothing, in words, or None: withheld (the
+    check's reason), or the folder she reads gone — never a silent empty
+    leg (the read of eef52262, 4)."""
+    why = withheld(collection)
+    root = _root_of(collection)
+    pl = placement(root, collection.name) if root is not None and why is None else None
+    if pl is not None and not (root / pl["dir"]).is_dir():
+        why = f"{pl['dir']}, the index she reads, is gone: `louise hold collection unshare {collection.name}`"
+    return why
 
 
 def role(collection) -> Role:
@@ -836,15 +852,46 @@ def hand_over(root: Path, name: str, *, dry_run: bool = False) -> dict[str, Any]
     r = rs[0]
     src, dst = root / name / "index", root / r / "index"
     groups = [g.name for g in group_dirs(src)]
-    if not dry_run:
-        dst.mkdir(parents=True, exist_ok=True)
-        for g in groups:
-            if not (dst / g).exists():
-                os.rename(src / g, dst / g)
-        placement_file(root, r).unlink(missing_ok=True)
-        _fsync_dir(placement_file(root, r).parent)
-        invalidate()
-    return {"to": r, "groups": groups, **({"dry_run": True} if dry_run else {})}
+    out: dict[str, Any] = {"to": r, "groups": groups, **({"dry_run": True} if dry_run else {})}
+    if dry_run:
+        return out
+    dst.mkdir(parents=True, exist_ok=True)
+    for g in groups:
+        if (dst / g).exists() and not (dst / g / "meta.json").is_file():
+            # a directory of that name that is no index (an empty one a read
+            # made, a copy cut short): moved aside, never in the group's way
+            os.rename(dst / g, dst / f".{g}.aside-{time.time_ns()}")
+        if not (dst / g).exists():
+            os.rename(src / g, dst / g)
+    # what her marks claim must be in the folder she now writes: a group they
+    # name that is not there (moved from under her by a carry, say) and every
+    # mark is reset, said — the worker indexes her again
+    claimed = _marked_groups(_manifest(root, r))
+    missing = sorted(claimed - {g.name for g in group_dirs(dst)})
+    if missing:
+        out["reset"] = _reset_all(_manifest(root, r))
+        out["says"] = (f"{r}'s marks name {', '.join(missing)}, not in the index it receives: its "
+                       f"{out['reset']} indexed document(s) reset, to be indexed again")
+    placement_file(root, r).unlink(missing_ok=True)
+    _fsync_dir(placement_file(root, r).parent)
+    invalidate()
+    return out
+
+
+def _marked_groups(manifest: Path) -> set[str]:
+    """The language groups a manifest's indexed documents of one language
+    are in (a multilingual record's sections may be in several: it claims
+    none for certain)."""
+    from . import fts
+    try:
+        con = sqlite3.connect(f"file:{manifest}?mode=ro", uri=True, timeout=30)
+        try:
+            langs = [row[0] for row in con.execute("SELECT DISTINCT lang FROM documents WHERE fts_done=1")]
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return set()
+    return {fts.group_for(lang) for lang in langs if (lang or "") != fts.MULTILINGUAL}
 
 
 def settle(root: Path, collections: list, *, log: Callable[[str], None] = print) -> dict[str, Any]:
@@ -854,7 +901,7 @@ def settle(root: Path, collections: list, *, log: Callable[[str], None] = print)
     read (`withheld`) and said; nothing is moved, copied or reset. A group
     folder an earlier version made is refused in words, never migrated."""
     root = Path(root)
-    report: dict[str, Any] = {"freed": 0, "served": [], "withheld": []}
+    report: dict[str, Any] = {"served": [], "withheld": []}
     earlier = root / EARLIER
     if earlier.is_dir() and any(d.is_dir() for d in earlier.iterdir()):
         report["earlier"] = str(earlier)

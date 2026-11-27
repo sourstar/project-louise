@@ -6558,6 +6558,8 @@ def _sync_collections(all_collections, cons, last_discover, pipeline: bool = Fal
             _release_embedder(kept, cons[kept.name], "the switch")
         if prev.acquire_enabled != kept.acquire_enabled:
             _apply_acquire_switch(cons[kept.name], prev, kept)     # a fetch in flight ends at its unit
+        if prev != kept:
+            _recheck_shares(prev, kept, current)
         if (prev.acquire_enabled, prev.license_ack, prev.profile,
                 prev.extras, prev.peer_source, prev.snapshot) != \
                 (kept.acquire_enabled, kept.license_ack, kept.profile,
@@ -7986,15 +7988,12 @@ def run_forever():
             print(f"NOT SERVED: {c.name}: {reason}", file=sys.stderr)
         all_collections = [c for c in all_collections if c.name not in names]
 
-    # SISTERS SHARE ONE TEXT INDEX (app/text_index.py): groups are formed,
-    # joined and left HERE, before any stage and before this process opens an
-    # index — the one moment no thread of this worker holds one open
+    # A SISTER READING HER SISTER'S TEXT INDEX (app/text_index.py, the static
+    # share): each placement CHECKED here, before any stage — nothing moved,
+    # copied or reset; one that no longer holds is withheld, said
     try:
-        settled = text_index.settle(collections_mod.louise_root() / "collections", all_collections,
-                                    log=lambda m: print(f"[info:text-index] {m}", flush=True))
-        if settled["freed"]:
-            print(f"[info:text-index] {settled['freed'] / 2**30:.2f} GiB of duplicate text "
-                  f"indexes freed", flush=True)
+        text_index.settle(collections_mod.louise_root() / "collections", all_collections,
+                          log=lambda m: print(f"[info:text-index] {m}", flush=True))
     except Exception as e:   # noqa: BLE001 — every collection keeps the index it had
         print(f"[warn:text-index] not settled ({type(e).__name__}: {e}); every collection "
               f"keeps the index it had", flush=True)
@@ -8421,6 +8420,21 @@ def _start_oom_watch() -> None:
 
 
 # ---- forget (07 §7.3) -----------------------------------------------------
+def _recheck_shares(prev, kept, current) -> None:
+    """A live edit (profile, slices, run) that changes a collection's INDEX
+    IDENTITY re-checks every placement at once (`text_index.settle`, which
+    moves nothing): a sister who no longer matches has her text leg withheld
+    now, said, not at the next boot (the read of eef52262, 2)."""
+    try:
+        if text_index.identity(prev) == text_index.identity(kept):
+            return
+        text_index.settle(text_index._root_of(kept) or collections_mod.louise_root() / "collections",
+                          current, log=lambda m: print(f"[info:text-index] {m}", flush=True))
+    except Exception as e:   # noqa: BLE001 — said; the next round or boot checks again
+        print(f"[warn:text-index] {kept.name}: placements not re-checked ({type(e).__name__}: {e})",
+              flush=True)
+
+
 def retire_collection(name: str, timeout: float = 60.0) -> None:
     """`hold collection forget`, run by this worker's job thread (app/jobs.py,
     the DEPOSIT kind's op "forget"): the collection's threads told to stop
@@ -8449,9 +8463,12 @@ def retire_collection(name: str, timeout: float = 60.0) -> None:
             thread.join(timeout=max(0.0, deadline - time.time()))
     # its catalog writer too, held by path: the directory goes, and a
     # collection made again under this name would inherit a writer on
-    # deleted files (`catalog.release_under`)
+    # deleted files (`catalog.release_under`); and its text index's writers,
+    # before the forget renames that folder to a sister who reads it
+    # (`text_index.hand_over`: the tantivy writer lock goes with them)
     try:
         from . import catalog
+        fts.release_under(collections_mod.louise_root() / "collections" / name / "index")
         catalog.release_under(collections_mod.louise_root() / "collections" / name)
     except Exception:   # noqa: BLE001 — the forget goes on; the next start holds nothing
         pass

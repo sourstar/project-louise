@@ -1158,6 +1158,11 @@ def _form_text_index(root: Path, her_sister_name: str, name: str, *, probe: bool
     RULE 1). None: their identities differ (she holds a copy). `probe`: only
     that check, nothing written."""
     from app import text_index
+    from app.hold import lock as lock_mod
+    if lock_mod.holder(lock_mod.worker_state(Path(root)), file=lock_mod.WORKER_LOCK) is not None:
+        raise _defer(f"the worker runs (it holds the node-wide lock): {name} is made to read "
+                     f"{her_sister_name}'s text index with the node stopped. `louise node stop`, then run "
+                     f"this again: it resumes where it stopped (CLAUDE.md RULE 1)")
     held = text_index.writer_held(text_index.base(Path(root) / her_sister_name / "index"))
     if held is not None:
         raise _defer(f"{her_sister_name}'s text index ({held}) has its writer held by another process (the "

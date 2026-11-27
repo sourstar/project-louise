@@ -146,3 +146,52 @@ def test_the_order_check_finds_a_room_check_moved_after_the_seed():
            "    need, free = recreate.room(root, a, b, make=False, parts=recreate.COPIED)\n"
            "    parts = recreate.seed_parts(root, a, b)\n")
     assert _seed_order_issues(dry)[1] == ["line 3: no room check before the seed"]
+
+
+def test_a_carry_that_would_move_an_index_a_sister_reads_is_refused(pair):  # noqa: F811
+    """The read of eef52262, 1: `dev carry W T --yes` without --copy moves
+    W's index; never from under a sister who reads it (as rename refuses)."""
+    from app.hold import carry
+    from app.hold.codex import CodexError
+    from tests.hold.test_carry import _seeded, _vectors
+    root, old, _new = pair
+    _seeded(root)
+    _vectors(root, old)
+    (root / "rd" / "state").mkdir(parents=True)
+    (root / "rd.toml").write_text("", encoding="utf-8")
+    text_index.write_placement(root, "rd", "old/index", "x", writer="old")
+    with pytest.raises(CodexError, match="rd reads old's text index where it lies"):
+        carry.carry(root, "old", "new", apply=True, log=quiet)
+    assert text_index.placement(root, "rd")["dir"] == "old/index"
+    assert (root / "old" / "state" / "manifest.sqlite").is_file(), "nothing moved"
+    assert carry.carry(root, "old", "new", copy=True, apply=True, log=quiet)["apply"], "a copy moves nothing"
+
+
+def test_her_creation_s_share_waits_for_the_worker_s_node_wide_lock(tmp_path):
+    """Main's refit added `state/worker.lock`: the share's "node stopped"
+    test probes it too (the worker may hold no index writer at all)."""
+    import os
+    import time
+    from app import louise
+    from app.hold import lock as lock_mod
+    from app.hold.codex import CodexError
+    root = tmp_path / "collections"
+    (root / "old" / "index").mkdir(parents=True)
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:                                            # the worker runs
+        lk = lock_mod.take_worker(root, "the node (worker)")
+        os.write(w, b"1")
+        time.sleep(30)
+        lk.release()
+        os._exit(0)
+    try:
+        os.read(r, 1)
+        with pytest.raises(CodexError, match="louise node stop") as got:
+            louise._form_text_index(root, "old", "sis", probe=True)
+        assert got.value.exit_code == 3
+    finally:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        os.close(r), os.close(w)
+    assert louise._form_text_index(root, "old", "sis", probe=True) is None, "free: the probe passes"

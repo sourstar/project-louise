@@ -1165,7 +1165,12 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
         # the mixed groups — the other one-language indexes get no variant
         main = plan.main_for(collection) if hasattr(plan, "main_for") else None
         tasks: list[tuple[str, str]] = []
-        for group in fts.existing_groups(collection):
+        # A SISTER'S TEXT LEG THAT CANNOT ANSWER says why (app/text_index.py):
+        # withheld by the placement check, or the folder she reads gone —
+        # never an empty leg in silence (the read of eef52262, 4)
+        from . import text_index
+        text_why = text_index.unread(collection)
+        for group in ([] if text_why else fts.existing_groups(collection)):
             if not plan.searches(group):
                 continue
             held = fts.group_languages(group, collection)

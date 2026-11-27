@@ -550,3 +550,89 @@ def test_a_collection_a_sister_reads_is_not_renamed_from_under_her(tmp_path):
     with pytest.raises(CodexError, match="beta reads its text index where it lies"):
         rename_mod.rename(root, "alpha", "omega")
     assert (root / "alpha").is_dir()
+
+
+# ---- the read of eef52262 --------------------------------------------------------
+
+def test_unread_says_a_withheld_placement_or_a_gone_folder(tmp_path):
+    root, [(a, _), (b, _)] = _discovered(tmp_path)
+    assert text_index.unread(b) is None
+    text_index.write_placement(root, "beta", "gone/index", "x", writer="gone")
+    assert "gone/index, the index she reads, is gone" in text_index.unread(b)
+    _share(root, ["alpha", "beta"], "alpha")
+    assert text_index.unread(b) is None
+    text_index.write_placement(root, "beta", "alpha/index", "x", writer="alpha", withheld="the reason")
+    assert text_index.unread(b) == "the reason"
+
+
+def test_the_run_a_collection_holds_is_in_its_identity():
+    """A writer moving to a new dated-dump run withholds her until her own
+    update reaches it (the read of eef52262, 2)."""
+    c = _codex()
+    a, b = _held("a", c), _held("b", c)
+    a.snapshot, b.snapshot = "20261101", "20261101"
+    assert text_index.identity(a) == text_index.identity(b)
+    b.snapshot = "20261201"
+    assert text_index.identity(a) != text_index.identity(b)
+
+
+def test_a_live_edit_that_changes_an_identity_withholds_her_at_once(tmp_path, monkeypatch):
+    """`_sync_collections` sees a profile or slice edit: every placement is
+    re-checked now, and a sister who no longer matches is withheld, said."""
+    root, [(a, _), (b, _)] = _discovered(tmp_path)
+    _share(root, ["alpha", "beta"], "alpha")
+    idents = {"alpha": "id1", "beta": "id1"}
+    monkeypatch.setattr(text_index, "identity", lambda c: idents[c.name] if c.name in idents else c.name)
+    edited = SimpleNamespace(**{**a.__dict__, "name": "alpha-edited"})
+    idents["alpha"] = "id2"                                  # the edit: alpha's slices changed
+    worker._recheck_shares(edited, a, [a, b])
+    assert "no longer matches alpha's" in (text_index.withheld(b) or "")
+
+
+def test_a_forget_hand_over_resets_her_marks_when_a_group_they_claim_is_missing(tmp_path):
+    """The read of eef52262, 1: what her marks claim must be in the folder
+    she receives; a same-named directory that is no index is moved aside."""
+    from app.hold import forget as forget_mod
+    root, [(a, acon), (b, bcon)] = _discovered(tmp_path)
+    langs = {r[0] for r in bcon.execute("SELECT lang FROM documents")}
+    bcon.execute("UPDATE documents SET fts_done=1")
+    bcon.commit()
+    acon.close()
+    present = sorted(fts.group_for(l) for l in langs)[0]
+    _fake_group(a.fts_dir, present, b"alpha")
+    (b.fts_dir / present).mkdir(parents=True)                 # no meta.json: in the way
+    _share(root, ["alpha", "beta"], "alpha")
+    out = forget_mod.forget(root, "alpha")["text_index"]
+    assert (b.fts_dir / present / "seg.store").read_bytes() == b"alpha", "renamed in, the empty one aside"
+    assert len({fts.group_for(l) for l in langs}) > 1, "the fixture names a group alpha lacks"
+    assert out["reset"] == 3 and "not in the index it receives" in out["says"]
+    assert bcon.execute("SELECT COUNT(*) FROM documents WHERE fts_done=1").fetchone()[0] == 0
+
+
+def test_a_forget_cut_short_is_finished_after_a_boot_withheld_her(tmp_path, monkeypatch):
+    """The read of eef52262, 3: alpha's held file already gone (the forget
+    cut short), a boot withheld beta (her sister not held): the forget run
+    again completes the hand-over."""
+    from app.hold import forget as forget_mod
+    root, [(a, acon), (b, bcon)] = _discovered(tmp_path)
+    acon.close(), bcon.close()
+    _fake_group(a.fts_dir, "en", b"alpha")
+    _share(root, ["alpha", "beta"], "alpha")
+    (root / "alpha.toml").unlink()
+    text_index.invalidate()
+    text_index.settle(root, [b], log=lambda m: None)
+    assert "is not held" in text_index.withheld(b)
+    out = forget_mod.forget(root, "alpha")
+    assert out["text_index"]["to"] == "beta" and text_index.placement(root, "beta") is None
+    assert (b.fts_dir / "en" / "seg.store").read_bytes() == b"alpha" and not (root / "alpha").exists()
+
+
+def test_retiring_a_collection_lets_go_of_its_text_index_writers(tmp_path, monkeypatch):
+    """A routed forget renames the folder: the worker's tantivy writer on it
+    is let go first (its writer lock with it)."""
+    root, [(a, _), (_b, _)] = _discovered(tmp_path)
+    monkeypatch.setattr(collections_mod, "louise_root", lambda: root.parent)
+    fts.index_book("en", 1, [{"id": "x:0:1", "chapter": "", "text": "a b c"}], a)
+    assert text_index.writer_held(a.fts_dir), "the writer this process holds"
+    worker.retire_collection("alpha", timeout=1.0)
+    assert text_index.writer_held(a.fts_dir) is None

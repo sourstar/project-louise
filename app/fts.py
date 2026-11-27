@@ -507,8 +507,9 @@ def forget(fts_dir) -> int:
 
 def forget_missing() -> int:
     """Drop this process's handles on indexes whose directory is gone — a
-    shared text index removed with its last member (app/text_index.py),
-    whose path a group formed again with the same identity would reuse."""
+    collection's index renamed to a sister at its forget (app/text_index.py
+    `hand_over`), whose path a collection made again under the name would
+    reuse."""
     from pathlib import Path
     with _lock:
         for b in {k[0] for k in list(_indexes) + list(_writers) + list(_opening)}:
@@ -525,6 +526,24 @@ def forget_missing() -> int:
             _writers.pop(k, None)
             _opening.pop(k, None)
     return len(set(keys))
+
+
+def release_under(base) -> int:
+    """Let go of this process's writers, and drop its handles, on the
+    indexes under `base` — a forget about to rename that folder to the
+    sister who reads it (app/text_index.py `hand_over`): the tantivy writer
+    lock goes with the writer. How many writers went."""
+    b = str(base)
+    with _lock:
+        held = [(k, v) for k, v in _writers.items() if k[0] == b]
+        for k, _ in held:
+            _writers.pop(k, None)
+        for k in [k for k in _indexes if k[0] == b]:
+            _indexes.pop(k, None)
+    for _key, (writer, lock) in held:
+        with lock:
+            writer.wait_merging_threads()      # consumes it: the directory is free
+    return len(held)
 
 
 def close_all() -> None:

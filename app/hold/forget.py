@@ -546,7 +546,9 @@ def _forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     # than one, or one withheld, and nothing is removed
     text_index.invalidate()
     sisters = text_index.readers(root, name)
-    if len(sisters) > 1 or any(text_index.withheld_at(root, r) for r in sisters):
+    # a forget cut short, re-run after a boot: this one no longer held, her
+    # placement withheld for that reason alone — the hand-over completes
+    if len(sisters) > 1 or (held.exists() and any(text_index.withheld_at(root, r) for r in sisters)):
         raise CodexError(f"forget {name}: {', '.join(sisters)} read its text index ({name}/index), and "
                          f"only one sister whose index identity still matches can be handed it. Nothing "
                          f"was removed. First, for each: " + "; ".join(
