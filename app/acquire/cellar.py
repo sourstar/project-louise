@@ -348,6 +348,11 @@ def sparql(client: httpx.Client, base: str, query: str, *, what: str = "the SPAR
             for chunk in r.iter_bytes(_CHUNK):
                 body += chunk
                 charge(len(chunk))
+            if str(r.headers.get("x-sql-state", "")).strip().upper() == "S1TAT":
+                # VIRTUOSO'S "ANYTIME" ANSWER (architecture, 2026-11-27, the 2021 nl
+                # window): a partial result, aggregates included, served as 200 —
+                # a count or a page cut by Cellar's time limit, never bindings
+                return _CUT, None, b""
             return r.status_code, None, bytes(body)
     # a query that ran to its bound is not repeated at once: the duration
     # floor (backoff.py) makes its next wait at least as long, which defers
@@ -368,6 +373,10 @@ def sparql(client: httpx.Client, base: str, query: str, *, what: str = "the SPAR
         except httpx.TransportError as e:
             r_.episode(f"{type(e).__name__} on {what}: {e}", cause=e)
             continue
+        if status == _CUT:
+            r_.episode(f"connection timed out: {what} was cut by Cellar's time limit (X-SQL-State S1TAT)",
+                       cool=not _listing_thread())
+            continue
         if backoff.retryable_status(status):
             r_.episode(f"{status} to {what}", retry_after=asked)
             continue
@@ -380,6 +389,10 @@ def sparql(client: httpx.Client, base: str, query: str, *, what: str = "the SPAR
             r_.episode(f"connection timed out: {what}'s answer did not parse ({e})", cause=e,
                        cool=not _listing_thread())
     r_.give_up("cellar: ")
+
+
+#: `once`'s status for an answer Virtuoso cut short (X-SQL-State S1TAT)
+_CUT = -1
 
 
 def _listing_thread() -> bool:
@@ -542,7 +555,9 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
         return
     listed: list = []
     got = 0
+    starts: list[int] = []                  # where each page's rows begin in `listed`
     while got < want:
+        starts.append(len(listed))
         t_q = time.monotonic()
         rows = sparql(client, base, page_query(year, languages, got, force),
                       what=f"the {year} page at offset {got} ({lang_text})", charge=charge)
@@ -564,9 +579,51 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
                 history = False
             yield RemoteFile(rel_path=rel_path(lang, celex, history), mtime=mtime, remote=encode(celex, lang))
         got += len(rows)
-    if got != want:
+    from . import backoff
+    # THE ROWS AS UNITS: a row read twice across pages (rows inserted before
+    # the OFFSET between two pages re-read k rows and miss the new ones) is no
+    # whole listing (review of c4b47315, B)
+    # — only a unit first seen on an EARLIER page: a repeat inside one page is
+    # structural (two terms of one text and another datatype, which Virtuoso
+    # groups apart and the count counts too) and kept as it was (review of
+    # b96023cb, 2)
+    seen: set[tuple[str, str]] = set()
+    again: list[tuple[str, str]] = []
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(listed)
+        page = {(r[0], r[1]) for r in listed[start:end]}
+        again += sorted(page & seen)
+        seen |= page
+    if again:
+        # the keys said: a structural pair straddling a page boundary would
+        # refuse its window every pass, and is then seen (review of ea6c550a)
+        shown = ", ".join(f"{c} ({l})" for c, l in again[:5]) + (" …" if len(again) > 5 else "")
+        raise backoff.Deferred(f"cellar: the {year} window ({lang_text}) read {len(again)} unit(s) on two "
+                               f"pages ({shown}): rows moved between its pages; listed again")
+    if got > want:
+        # MORE ROWS THAN ITS COUNT (architecture, 2026-11-27: 2021 nl, 3,063
+        # against 3,060): Cellar added rows between the count and the pages,
+        # or the count was cut. Counted once more: the same as the pages, the
+        # window is kept with that count but the FIRST count's `latest` and
+        # time (review of c4b47315, A: the re-count's max, taken after the
+        # pages, would stand over an older row for good — the next pass's
+        # fingerprint matching, the row never re-read); otherwise said as what
+        # it is, an episode (Deferred: read as one, never "timed out")
+        recount = sparql(client, base, fingerprint_query(year, languages),
+                         what=f"the re-count of {year} ({lang_text})", charge=charge)
+        try:
+            n2 = int(recount[0]["n"]["value"]) if recount else 0
+        except (KeyError, ValueError, IndexError):
+            raise backoff.Deferred(f"cellar: the re-count of {year} ({lang_text}) answered "
+                                   f"{recount!r:.120}, not a count; listed again") from None
+        if n2 != got:
+            raise backoff.Deferred(f"cellar: the {year} window ({lang_text}) answered {got} rows, more than "
+                                   f"its count {want} (re-counted {n2}): the window changed while it was "
+                                   f"listed; listed again")
+        want = n2                           # `latest` stays the first count's
+    elif got < want:
         # a Virtuoso answer cut short says nothing: the window is
-        # re-listed next pass (worded for engine.transient)
+        # re-listed (worded for engine.transient)
         raise TransportError(f"cellar: the {year} window answered {got} of the {want} rows its "
                              f"count names (connection timed out, the answer cut)")
     cellar_listing.keep(base, year, languages, want, latest, listed, force=force, at=counted_at)
@@ -1729,6 +1786,9 @@ class TreeUnits(CellarUnits):
                 missing.setdefault(year, set()).add(lang)
         unlisted: set[tuple[int, str]] = set()
         key = str(corpus.resolve())
+        with self._lock:
+            for k in [k for k in self._window_failed if k[0] == key]:
+                del self._window_failed[k]          # a new prepare asks every window afresh
         events = {(y, l): threading.Event() for y, ls in missing.items() for l in ls} if missing else {}
         # THE LISTING'S OWN STOP, here so `close` can end it with the pass
         # (review of b797db0e): set by the pass's stop, a local fault, or close
@@ -1948,15 +2008,34 @@ class TreeUnits(CellarUnits):
             elif missing:
                 unlisted = {(y, l) for y, ls in missing.items() for l in ls}
             cover = {k: at for k, at in cover.items() if k not in unlisted}
+            # the dates grouped by window ONCE, outside the lock (review of
+            # ea6c550a: per window over every date, ~0.06 s a window at 122 k,
+            # with every fetch thread waiting on the lock)
+            dates_by_window: dict[tuple[int, str], dict] = {}
+            if background:
+                for u, d in dates.items():
+                    dates_by_window.setdefault((window_year(u[0]), u[1]), {})[u] = d
             with self._lock:
                 self._bulk[key] = bulk
-                self._dates[key] = dates
-                self._cover[key] = cover
+                if background:
+                    # what a fetch thread's inline re-ask set meanwhile stays:
+                    # merged, the newer `at` kept (review of c4b47315); a window
+                    # taken from the newest file REPLACES its units' dates — a
+                    # due unit that file lacks has none (N2; review of b96023cb, 1)
+                    held_d = self._dates.setdefault(key, {})
+                    held_c = self._cover.setdefault(key, {})
+                    for k, at_k in cover.items():
+                        if at_k >= held_c.get(k, 0.0):
+                            for u in by_window.get(k, ()):
+                                held_d.pop(u, None)
+                            held_d.update(dates_by_window.get(k, {}))
+                            held_c[k] = at_k
+                else:
+                    self._dates[key] = dates
+                    self._cover[key] = cover
                 self._after[key] = after
                 self._due[key] = due
                 self._base_url[key] = base_url
-                for k in [k for k in self._window_failed if k[0] == key]:
-                    del self._window_failed[k]              # a new prepare asks every window afresh
             changed = sum(1 for k, d in dates.items() if d > after.get(k[1], float("inf")))
             unchanged = len(dates) - changed
             say(f"trees from the bulk: {', '.join(sorted(bulk)) or 'no language'}; of {len(due)} unit(s) asked first, "
@@ -1982,8 +2061,6 @@ class TreeUnits(CellarUnits):
             self._after[key] = after
             self._due[key] = due
             self._base_url[key] = base_url
-            for k in [k for k in self._window_failed if k[0] == key]:
-                del self._window_failed[k]
             self._order[key] = {k: i for i, k in enumerate(sorted(events))}
             self._held.pop(key, None)
         import contextvars
