@@ -64,8 +64,27 @@ def test_the_sparql_answer_thread_charges_under_the_pass_handle():
 
 
 def test_a_local_fault_ends_the_phase_promptly(tmp_path, monkeypatch):
+    """A local fault (ENOSPC) in one listing window ends the phase: no window
+    begins once the PHASE is set, and the phase raises long before the 4-s
+    window would end. MEASURED FROM THE PHASE BEING SET, not from the raise
+    (the bug session, 2026-11-27: under load the faulting thread was
+    descheduled between its raise and its `phase.set()`, and a window that
+    rightly began in that gap — the phase not set yet — failed the test:
+    "windows begun after the fault: [1972]", 1 run in 6 with six busy cores).
+    The bounds allow a loaded machine's scheduling: a missing stop would
+    begin a window every 0.3 s for the second the 8 left take."""
+    import types
     base, corpus, due = _setup(tmp_path, monkeypatch, range(1970, 1982))
     started, lock, fault_at = [], threading.Lock(), []
+    phase_set: list[float] = []
+
+    class Recorded(threading.Event):
+        def set(self):
+            if not phase_set:
+                phase_set.append(time.monotonic())
+            super().set()
+    monkeypatch.setattr(cellar, "threading", types.SimpleNamespace(
+        **{**{k: getattr(threading, k) for k in dir(threading) if not k.startswith("__")}, "Event": Recorded}))
 
     def window(client, url, year, langs, code_of, charge, place=None, learned=None):
         with lock:
@@ -85,8 +104,10 @@ def test_a_local_fault_ends_the_phase_promptly(tmp_path, monkeypatch):
         with pytest.raises(OSError):
             cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
         took = time.monotonic() - t0
-    after = [y for y, t in started if t > fault_at[0] + 0.05]
-    assert not after and took < 1.5, f"windows begun after the fault: {after}; the phase raised {took:.1f} s in"
+    assert phase_set and phase_set[0] >= fault_at[0], "the phase is set by the fault"
+    after = [y for y, t in started if t > phase_set[0] + 0.25]
+    assert not after, f"windows begun after the phase was set: {after}"
+    assert took < 2.5, f"the phase raised {took:.1f} s in, as if it waited for the 4-s window"
 
 
 def test_a_stop_ends_every_listing_thread_within_a_second_and_resumes(tmp_path, monkeypatch):
