@@ -146,6 +146,8 @@
   const AC = window.AudioContext || window.webkitAudioContext;
   // questionOn: a question of the page is being searched or answered
   let rec = null, busy = false, questionOn = false;
+  // a long press just turned hands-free on or off: the click after it is not a tap
+  let micHeld = false;
 
   // THE MICROPHONE'S THREE LOOKS (operator, 2026-11-12: "After speaking, the
   // button remains red; it shall instead turn grey while the query is
@@ -160,7 +162,8 @@
     mic.setAttribute('aria-pressed', kind === 'rec' || kind === 'wake' ? 'true' : 'false');
     mic.disabled = kind === 'busy' || kind === 'wait';
     mic.title = kind === 'rec' || kind === 'wake' ? 'stop recording'
-      : kind === 'wait' ? 'the microphone comes back once the question is answered' : 'speak the question';
+      : kind === 'wait' ? 'the microphone comes back once the question is answered'
+      : 'speak the question' + (document.getElementById('hands-free') ? ' (hold: hands-free)' : '');
     if (status) { status.textContent = text || ''; status.hidden = !text; }
   }
   // at rest: grey while a question runs, else ready
@@ -523,6 +526,7 @@
     if (window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && AC) {
       mic.hidden = false;
       mic.addEventListener('click', () => {
+        if (micHeld) { micHeld = false; return; }           // a long press, done at its own time
         // hands-free on: the tap turns it off (one microphone at a time)
         if (hf) { if (hfBox) { hfBox.checked = false; hfBox.dispatchEvent(new Event('change')); } else hfStop(); return; }
         if (busy || (questionOn && !rec)) return; rec ? stop() : start();
@@ -1380,8 +1384,43 @@
     hfSay('');
   }
   document.addEventListener('visibilitychange', () => { if (hf && !hf.lock && document.visibilityState === 'visible') hfLock(hf); });
+  // A LONG PRESS ON THE MICROPHONE TURNS HANDS-FREE ON OR OFF (operator,
+  // 2026-11-27: "Hands free function, can you recognize a long pressure on the
+  // mic button?"); a tap stays one spoken question. W3C Pointer Events, the
+  // usual reading of a long press: one pointer held HOLD_MS on the button
+  // without moving off it. The click that ends it is not a tap (`micHeld`), a
+  // phone's own long-press menu and text selection are kept off the button
+  // (contextmenu, ask.html's CSS), and a short vibration says it took, where
+  // the phone has one. The switch beside it stays: a keyboard or a screen
+  // reader has no long press.
+  const HOLD_MS = 600, HOLD_SLOP_PX = 12;
+  function hfHold() {
+    let press = null;
+    const drop = () => { if (press) { clearTimeout(press.timer); press = null; } };
+    mic.addEventListener('pointerdown', e => {
+      micHeld = false;                   // a hold released off the button left it set: this press is new
+      // a recording in progress is stopped by a tap, never turned into hands-free
+      if (e.button !== 0 || mic.disabled || rec) return;
+      drop();
+      press = { id: e.pointerId, x: e.clientX, y: e.clientY, timer: setTimeout(() => {
+        press = null; micHeld = true;
+        try { if (navigator.vibrate) navigator.vibrate(30); } catch (err) {}
+        hfBox.checked = !hfBox.checked;
+        hfBox.dispatchEvent(new Event('change'));
+      }, HOLD_MS) };
+    });
+    mic.addEventListener('pointermove', e => {
+      if (press && e.pointerId === press.id
+          && Math.hypot(e.clientX - press.x, e.clientY - press.y) > HOLD_SLOP_PX) drop();
+    });
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) mic.addEventListener(ev, drop);
+    mic.addEventListener('contextmenu', e => e.preventDefault());
+    // said on the button from the start, not only once its state first changes
+    mic.title = (mic.title || 'speak the question').replace(/ \(hold: hands-free\)$/, '') + ' (hold: hands-free)';
+  }
   if (hfBox && mic && !mic.hidden) {
     if (hfChoice) hfChoice.hidden = false;
+    hfHold();
     hfBox.addEventListener('change', () => {
       try { localStorage.setItem(HF_KEY, hfBox.checked ? 'on' : 'off'); } catch (e) {}
       if (hfBox.checked) { unlock(); toneUnlock(); hfStart(); } else hfStop();
