@@ -48,6 +48,27 @@ c. **Today against universal, on the same corpus.** Hold gutenberg (Qwen3-Embedd
 
    This is the direct test of one embedder against two.
 
+d. **The space cut** (operator, 2026-11-27: "We will also measure the
+   quality by reducing the space size as allowed by nemo"). Nemotron's card
+   allows its 2,048 dimensions cut to 1,024 or 512, each slice renormalised.
+   Of 2026-11-03 the operator said: "keep the full vectors of Nemotron, it
+   will be interesting to verify how much the quality drops halfening them
+   once we have a full overview".
+   - Measured once, on wikidata W1, the 1,024 cut cost nothing: full − cut
+     +0.009 MRR, p = 0.165 (nemotron-embed.md).
+   - Owed: 1,024 and 512 on every judged set, gutenberg-nemo included, with
+     no second embedding. tools/measure/wikidata_encoder_ab.py's `-m1024`
+     derives the cut from the stored vectors; it gains `-m512` and a
+     collection argument.
+   - What a cut buys a consumer node is disk and the vector index's memory,
+     not card memory: the encoder is the same model. At f16, wikidata's
+     ~190 GB of vectors become ~95 GB at 1,024 and ~47 GB at 512.
+   - If a cut holds, the collection that uses it is a DERIVED sister (02
+     §2.7, 09 §9.3 `derivation: truncate`): her vectors are computed from her
+     sister's without the card, and the query vector is cut the same way.
+     The Codex field is in app/hold/codex.py. The command that makes such a
+     sister, and the query side that cuts, are not built.
+
 ## 3. Before Perugia resumes
 
 - Merged and deployed on both nodes:
