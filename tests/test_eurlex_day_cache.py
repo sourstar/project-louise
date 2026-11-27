@@ -55,20 +55,53 @@ def test_a_cache_that_does_not_open_is_no_cache(tmp_path, monkeypatch):
     assert len(_ids(tmp_path)) == 1
 
 
-def test_every_app_module_the_day_is_derived_through_is_in_the_digest():
-    """Architecture's read of 2fdd1e31, 1: notice.py was left out."""
-    import importlib
+def test_every_app_file_that_runs_to_derive_a_day_is_in_the_digest(tmp_path):
+    """Architecture's reads of 2fdd1e31 (notice.py left out) and ac45c617 (a
+    fixed list cannot fail for a module it does not name): `_unit_day` and the
+    walk are run on the fixtures under a profiler, and every file of app/
+    that ran must be hashed."""
+    import os
     import sys
-    importlib.import_module("app.plugins.eurlex.source")
-    hashed = {p.resolve() for p in src._day_modules()}
-    used = {f"app/plugins/eurlex/{m}.py" for m in ("source", "formex", "from_tree", "rdf", "notice")}
     from pathlib import Path
-    root = Path(src.__file__).resolve().parents[3]
-    for m, mod in list(sys.modules.items()):
-        f = getattr(mod, "__file__", None)
-        if f and (m.startswith("app.plugins.eurlex") or m in ("app.plugins.eli", "app.plugins.base")):
-            assert Path(f).resolve() in hashed, f"{m} derives the day and is not hashed"
-    assert all((root / u).resolve() in hashed for u in used)
+    from tests.test_eurlex_parser4 import UNITS
+    root = Path(src.__file__).resolve().parents[3] / "app"
+    ran: set[Path] = set()
+
+    def prof(frame, event, arg):
+        if event == "call":
+            f = frame.f_code.co_filename
+            if f.startswith(str(root)):
+                ran.add(Path(f).resolve())
+    for celex in UNITS:
+        base = tmp_path / celex
+        unit = _lay(base, celex)
+        entries = sorted(os.scandir(unit), key=lambda e: e.name)
+        sys.setprofile(prof)
+        try:
+            src._unit_day(unit, celex, entries, SOURCE.TREE_FACTS)
+        finally:
+            sys.setprofile(None)
+    hashed = {p.resolve() for p in src._day_modules()}
+    assert ran, "the profiler saw the derivation"
+    assert ran <= hashed, f"derives the day, not hashed: {sorted(str(p) for p in ran - hashed)}"
+
+
+def test_a_cache_that_cannot_be_opened_for_another_reason_is_left_alone(tmp_path, monkeypatch):
+    import sqlite3
+    _lay(tmp_path, "31972R1473")
+    _ids(tmp_path)
+    db = next(tmp_path.rglob("days.sqlite"))
+    real = sqlite3.connect
+
+    def emfile(*a, **k):
+        e = sqlite3.OperationalError("unable to open database file")
+        e.sqlite_errorname = "SQLITE_CANTOPEN"
+        raise e
+    monkeypatch.setattr(sqlite3, "connect", emfile)
+    assert len(_ids(tmp_path)) == 1
+    monkeypatch.setattr(sqlite3, "connect", real)
+    assert not list(db.parent.glob("days.bad.*")), "a healthy cache is never moved aside"
+    assert real(db).execute("SELECT count(*) FROM day").fetchone()[0] == 1
 
 
 def test_a_transient_read_error_is_never_kept(tmp_path, monkeypatch):
@@ -92,6 +125,6 @@ def test_a_corrupt_cache_is_said_and_made_anew(tmp_path, capsys):
     src._SAID.clear()
     assert len(_ids(tmp_path)) == 1
     assert "does not open" in capsys.readouterr().out
-    assert list(db.parent.glob("days.bad.*.sqlite")), "moved aside"
+    assert list(db.parent.glob("days.bad.*.sqlite")), "moved aside, with its -wal and -shm"
     import sqlite3
     assert sqlite3.connect(db).execute("SELECT count(*) FROM day").fetchone()[0] == 1, "made anew, and kept"

@@ -744,14 +744,22 @@ class _DayCache:
         self.con = None
         place = derived.place_kept(DAY_CACHE_KIND, root) or (root / derived.BESIDE / DAY_CACHE_KIND)
         self.path = place / "days.sqlite"
+        self._corrupt = False
         self.con = self._open()
-        if self.con is None and self.path.exists():
-            # derived data: a cache that does not open is moved aside and made
-            # anew (review of 2fdd1e31, 4: a corrupt one never healed)
-            try:
-                self.path.replace(self.path.with_name(f"days.bad.{int(time.time())}.sqlite"))
-            except OSError:
-                pass
+        if self.con is None and self._corrupt and self.path.exists():
+            # derived data: a CORRUPT cache (SQLITE_NOTADB / SQLITE_CORRUPT) is
+            # moved aside with its -wal and -shm and made anew (review of
+            # 2fdd1e31, 4); any other error (too many open files, a lock)
+            # leaves the file alone: no cache this walk, said once (review of
+            # ac45c617, 2: one EMFILE moved a healthy cache aside)
+            stamp = int(time.time())
+            for suffix in ("", "-wal", "-shm"):
+                f = self.path.with_name(self.path.name + suffix)
+                try:
+                    if f.exists():
+                        f.replace(f.with_name(f"days.bad.{stamp}.sqlite{suffix}"))
+                except OSError:
+                    pass
             self.con = self._open()
 
     def _open(self):
@@ -768,8 +776,9 @@ class _DayCache:
         except (OSError, sqlite3.Error) as e:
             if con is not None:
                 con.close()
+            self._corrupt = getattr(e, "sqlite_errorname", "") in ("SQLITE_NOTADB", "SQLITE_CORRUPT")
             _say_once(f"[eurlex] the unit-day cache {self.path} does not open ({type(e).__name__}: {e}): "
-                      f"every unit is read this walk")
+                      f"every unit is read this walk" + ("; it is moved aside and made anew" if self._corrupt else ""))
             return None
 
     def sig(self, entries) -> str:
