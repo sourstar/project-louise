@@ -104,11 +104,30 @@ ID_DIGITS = 6
 
 def _words(n: int, lang: str, to: str = "cardinal") -> str:
     """num2words' words, without the commas English puts in a cardinal (a
-    comma is a pause to the voice)."""
+    comma is a pause to the voice), and with its Italian mended (`_it`)."""
     try:
-        return num2words(n, lang=lang, to=to).replace(",", "")
+        w = num2words(n, lang=lang, to=to).replace(",", "")
     except (NotImplementedError, OverflowError, ValueError):
-        return num2words(n, lang=lang).replace(",", "")
+        w = num2words(n, lang=lang).replace(",", "")
+    return _it(w) if lang == "it" else w
+
+
+def _it(w: str) -> str:
+    """NUM2WORDS' ITALIAN, MENDED (operator, 2026-11-27: 1918 read
+    "millenovecentodicotto", a k where Italian says "ch"). num2words 0.5.14
+    elides the vowel before "otto" also inside "diciotto" whenever a
+    hundred or a thousand comes before it — 9,089 of the numbers below a
+    million, every one ending in 18 past 100 ("centodicotto",
+    "centodicottesimo", "centodicottomila") — and leaves the accent off a
+    compound's final "tre" after a hundred ("centoventitre": 1,800 a
+    hundred-thousand), which tells the voice where the stress falls. Both
+    checked against the rules for every number below a million
+    (tests/test_speech_numbers.py). The fix belongs upstream (num2words'
+    lang_IT.py); until a release carries it, it is mended here."""
+    w = w.replace("dicott", "diciott")
+    if w.endswith("tre") and len(w) > 3:
+        w = w[:-3] + "tré"
+    return w
 
 
 def _ordinal(n: int, lang: str, feminine: bool = False) -> str:
