@@ -903,8 +903,14 @@ def test_a_rate_is_measured_at_the_counts_time_not_the_render(isolated_config, m
     """The counts are a scan served from cache between landings, so a delta
     counted over one span was divided by another — the render's. wikidata,
     2026-11-07: +184.021/h on the card against ~120k documents an hour in the
-    worker's log. A stage's sample carries the time its count was taken."""
+    worker's log. A stage's sample carries the time its count was taken.
+
+    THE CLOCK THE RATE READS IS FROZEN at the test's second (2026-11-27:
+    under load a second ticked between the test's read and the render's,
+    601 s for 600, 539/h; 2 runs in 150)."""
     import json as _json
+    import types
+    from app import status as status_mod
     c = collections_mod.default_collection()
     con = db.connect(c)
     _rdf_rows(con, 100, 300)
@@ -912,6 +918,7 @@ def test_a_rate_is_measured_at_the_counts_time_not_the_render(isolated_config, m
     _wait_counts(c)
     counts, _age = web._document_counts(c)
     now = int(time.time())
+    monkeypatch.setattr(status_mod, "time", types.SimpleNamespace(time=lambda: float(now)))
     # the last progress was seen at 10 parsed, 1,200 s ago; this count is 600 s old
     web._stage_rate_memo[str(c.manifest_path)] = {
         "rdf": 10, "fts": 0, "embed": 0, "fetch": 0, "ts": now - 1200,
