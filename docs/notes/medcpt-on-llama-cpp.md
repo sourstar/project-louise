@@ -270,7 +270,15 @@ Flash attention OFF: MedCPT's query encoder on this card was bit-exact across fr
 loads with it off and not with it on (approved-encoders.md); ON is measured after, as an
 optimisation, never in the gate. The lists: the judged set pubmed's calibration was
 fitted on, as the live search sends them (`python -m tools.measure.rerank_bench capture
-umbrela <that judged.jsonl> --collection pubmed --out pubmed-medcpt.jsonl`). The parity,
+umbrela <that judged.jsonl> --collection pubmed --out pubmed-medcpt.jsonl`).
+*Found on the node (München, 2026-11-27): pubmed has NO reranker calibration and NO
+judged set.* So the lists are today's real pubmed questions (the admin's, from
+`state/query-traces/<day>.jsonl`: their `query`, one per line, `{"query": ...}`), and
+the search builds them as it sends them (`rerank_bench capture queries <that file>
+--collection pubmed --out pubmed-medcpt.jsonl`: the format for questions with no
+judgement). No `--calibration`; no quality arm until a judged set exists (a public one,
+TREC PM or TREC-COVID, is a fetch and a licence: the operator's); and the calibration's
+name has nothing to keep — `louise-rerank-medcpt` is not calibrated today. The parity,
 the candidate against itself and the latency, both models on the same lists:
 
     python -m tools.measure.rerank_parity --capture pubmed-medcpt.jsonl --queries 40 --per-query 50 \

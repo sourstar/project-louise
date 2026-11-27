@@ -335,6 +335,18 @@ def load_known_item(path: Path, *, collection: str) -> JudgedSet:
     return JudgedSet(name=collection, format="known-item", source=str(path), items=items)
 
 
+def load_queries(path: Path, *, collection: str) -> JudgedSet:
+    """Questions with NO judgement - `{"query": ..., "lang"?: ...}` per line - for what needs only the lists the
+    live search sends the reranker: one reranker against another (tools/measure/rerank_parity.py), its latency.
+    `score` has nothing to score in it."""
+    items = []
+    for q in read_jsonl(path):
+        query = str(q["query"])
+        key = hashlib.sha256(f"{query}\0{collection}".encode()).hexdigest()[:16]
+        items.append(Item(key=key, query=query, collection=collection, lang=q.get("lang")))
+    return JudgedSet(name=collection, format="queries", source=str(path), items=items, exhaustive=False)
+
+
 def load_umbrela(path: Path, *, collections: Iterable[str] | None = None) -> JudgedSet:
     """fusion_calibration.py's judged.jsonl: each (query, collection) with a
     record of grade >= RELEVANT, every judged record of it graded 0-3."""
@@ -398,7 +410,9 @@ def load_set(fmt: str, sources: Sequence[Path], *, collection: str | None = None
         return load_known_item(sources[0], collection=collection)
     if fmt == "jurifindit":
         return load_jurifindit(sources[0], collection=collection)
-    raise Refused(f"no set format {fmt!r} (gutenberg, known-item, umbrela, jurifindit)")
+    if fmt == "queries":
+        return load_queries(sources[0], collection=collection)
+    raise Refused(f"no set format {fmt!r} (gutenberg, known-item, umbrela, jurifindit, queries)")
 
 
 # ---------------------------------------------------------------- files
@@ -1092,7 +1106,7 @@ def main(argv: list[str] | None = None) -> int:
                          "harness holds none (app/rage/dispatch.py `as_harness`)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("capture")
-    c.add_argument("format", choices=("gutenberg", "known-item", "umbrela", "jurifindit"))
+    c.add_argument("format", choices=("gutenberg", "known-item", "umbrela", "jurifindit", "queries"))
     c.add_argument("sources", nargs="+", type=Path)
     c.add_argument("--out", type=Path, required=True)
     c.add_argument("--name", help="the set's name in the tables (default: the format's)")
