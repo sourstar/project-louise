@@ -1900,8 +1900,14 @@ WORK_RULE = (
     "where the header gives none, do not turn it into a date. Where its header says a work of opinion or "
     "belief, what it states is its author's "
     "view: attribute it (\"X argues …\", \"according to X …\"), never present it as established fact. "
-    "A date's source is named where the header names it (\"by …\")."
+    "A date's source is named where the header names it (\"by …\"). A literary work is never evidence "
+    "for a historical fact: never count it among a fact's confirmations; cite it only for what the work "
+    "narrates."
 )
+#: said where the model reads a literary source, not only in the system
+#: prompt far above it (München's judged run, 2026-11-27: the 9B counted a
+#: novel labelled "a literary work" among the confirmations of Napoleon's death)
+LITERARY_NOTE = ": what it narrates is not evidence of what happened"
 
 #: A LITERARY WORK, as the record's own subjects say it — the Library of
 #: Congress Subject Headings Project Gutenberg's records carry (its RDF
@@ -1958,6 +1964,10 @@ OPINION_SHELVES = frozenset(s.casefold() for s in (
 #: and a bare genre heading (a form subdivision "-- Fiction" still stands)
 NONFICTION_SUBDIVISIONS = frozenset(("biography", "history and criticism", "criticism and interpretation",
                                      "criticism, interpretation, etc", "commentaries",
+                                     # LCSH's mark of NON-fiction for children (against "-- Juvenile
+                                     # fiction"): it vetoes a shelf, PZ and a bare heading
+                                     # ("Famous Islands and Memorable Voyages", 2026-11-27)
+                                     "juvenile literature",
                                      "technique", "description and travel", "sources"))
 #: a record that states it is a study of a work — its criticism, its
 #: commentary — is no work of that genre itself, whatever genre heading it
@@ -2102,7 +2112,7 @@ def _work_said(h: dict) -> str:
     categories = [x[len(CATEGORY):].strip() for x in _split(h.get("bookshelves")) if x.startswith(CATEGORY)]
     kind = _work_kind(subjects, categories, classes)
     if kind:
-        parts.append(f"{kind[0]} ({kind[1]})")
+        parts.append(f"{kind[0]} ({kind[1]})" + (LITERARY_NOTE if kind[0] == "a literary work" else ""))
     if categories:
         parts.append("Gutenberg category: " + "; ".join(categories[:4])[:160])
     if classes:

@@ -31,7 +31,7 @@ def _sources(*hits) -> str:
 def test_each_source_says_its_first_publication_and_whether_it_is_a_literary_work():
     system, user = _sources(NAPOLEON, HISTORY, BARE)
     assert "[1] gutenberg:42 — Il cinque maggio — Manzoni (it) — first published 1821 — a literary work " \
-           "(by its subject headings) — " \
+           "(by its subject headings): what it narrates is not evidence of what happened — " \
            "subjects: Napoleon I, Emperor of the French, 1769-1821 -- Poetry" in user
     assert "[2] gutenberg:7 — History of Napoleon — Abbott (en) — first published 1855 (by PG\'s automatic summary) — " \
            "subjects: Napoleon I, Emperor of the French, 1769-1821" in user
@@ -85,8 +85,8 @@ def test_gutenbergs_category_shelves_and_class_say_fiction_fact_or_opinion():
     tag to determine what's fiction, what's a fact and what's an opinion"."""
     novel = retrieval._work_said({"subjects": "Napoleon I, Emperor of the French, 1769-1821 | PQ",
                                   "bookshelves": "Category: Novels | Category: Historical Fiction | Best Books Ever"})
-    assert novel.startswith(" — a literary work (by its Gutenberg category) — Gutenberg category: Novels; "
-                            "Historical Fiction — LCC PQ")
+    assert novel.startswith(" — a literary work (by its Gutenberg category): what it narrates is not evidence of "
+                            "what happened — Gutenberg category: Novels; Historical Fiction — LCC PQ")
     assert "Best Books" not in novel, "a shelf that is not a category is not said"
     essay = retrieval._work_said({"subjects": "Liberty | JC",
                                   "bookshelves": "Category: Essays, Letters & Speeches | Category: Politics"})
@@ -286,3 +286,28 @@ def test_the_other_answer_path_frames_a_source_alike(monkeypatch):
         pass
     assert retrieval.WORK_RULE in seen.get("system", ""), "the rule goes to the model on this path too"
     assert "work_said" in mcp.TOOLS[0]["description"], "an MCP client is told how to read it"
+
+
+def test_a_literary_source_is_never_evidence_said_beside_it_and_in_the_rule():
+    """München's judged run, 2026-11-27: "When did Napoleon die?" counted a
+    historical novel, labelled a literary work, among the confirmations of
+    the date. The header says it where the model reads the source, and the
+    rule says it in so many words; a fact's source never carries the note."""
+    system, user = _sources(NAPOLEON, HISTORY)
+    head1 = user.split("[1]")[1].split("\n")[0]
+    head2 = user.split("[2]")[1].split("\n")[0]
+    assert "a literary work (by its subject headings): what it narrates is not evidence of what happened" in head1
+    assert "not evidence" not in head2
+    assert "A literary work is never evidence for a historical fact" in system
+    assert "never count it among a fact's confirmations" in system
+
+
+def test_juvenile_literature_is_nonfiction_for_children_whatever_its_class():
+    """LCSH's "-- Juvenile literature" is non-fiction for children (against
+    "-- Juvenile fiction"): it vetoes LCC PZ and a form shelf."""
+    w = retrieval._work_said
+    assert "a literary work" not in w({"subjects": "Islands -- Juvenile literature | Voyages and travels -- Juvenile "
+                                                   "literature | PZ"})
+    assert "a literary work" not in w({"subjects": "Animals -- Juvenile literature | QL",
+                                       "bookshelves": "Category: Short Stories"})
+    assert w({"subjects": "Animals -- Juvenile fiction | PZ"}).startswith(" — a literary work"), "fiction stays"
