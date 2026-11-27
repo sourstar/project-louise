@@ -34,7 +34,7 @@ def test_the_lists_are_per_space_and_a_result_carries_what_5_3_says(node, monkey
     monkeypatch.setattr(query_service, "resolve_collections", lambda names, **kw: [red, legacy])
     monkeypatch.setattr(results, "_layer", lambda c, h: "abstract" if c.plugin == "pubmed" else "verbatim")
 
-    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None):
+    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None, kind="all"):
         assert names == [name, "gutenberg"] and k == 3 and mode == "hybrid" and translate is False
         return {"hits": [
             {"chunk_id": "pubmed:37000021:0:1", "book_id": 37000021, "source_collection": name, "text": "SECRET",
@@ -73,7 +73,7 @@ def test_the_flags_this_brick_does_not_build_are_refused_not_ignored(node, monke
                         lambda names, **kw: [SimpleNamespace(name="g", plugin="gutenberg", codex=None)])
     seen = {}
 
-    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None):
+    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None, kind="all"):
         seen["filters"] = filters
         return {"hits": [], "filtered": {"x": 3}}
     out = results.search("q", filters={"subjects": "Humans"}, run=run)
@@ -105,7 +105,7 @@ def test_a_collection_named_as_the_space_narrows_to_it_and_says_so(node, monkeyp
     monkeypatch.setattr(query_service, "withheld_from", lambda names, **kw: [])
     asked = []
 
-    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None):
+    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None, kind="all"):
         asked.append(list(names))
         return {"hits": []}
     out = results.search("q", space="gutenberg", run=run)

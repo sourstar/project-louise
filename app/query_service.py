@@ -199,7 +199,7 @@ def run_search(collection_names: list[str] | None, query: str, k: int, mode: str
         raise ValueError(f"kind must be auto, facts, literature or all, not {kind!r}")
     shown = {"show_in": show_in} if show_in else {}
     if kind != "all":
-        shown["kind"] = question_kind.start(query) if kind == "auto" else kind
+        shown["kind"] = question_kind.pending(query) if kind == "auto" else kind
     if annotations is not None:
         shown["annotations"] = resolve_annotations(annotations)
     participants = resolve_collections(collection_names, private=private)

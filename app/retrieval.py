@@ -1545,6 +1545,7 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
     t0 = time.time()
     plan = language_plan.plan(query, [collection], translate, every=all_languages)
     plan_ms = round((time.time() - t0) * 1000, 1)
+    _begin_kind(kind)
     partial = _search_one_collection(con, collection, query, k, mode, translate,
                                      [e.entity_id for e in resolved], plan,
                                      _leg_depth(collection, kind, rerank_depth),
@@ -1604,6 +1605,15 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
     if partial.get("filtered") is not None:
         result["filtered"] = {collection.name: partial["filtered"]}
     return result
+
+
+def _begin_kind(kind) -> None:
+    """The question's kind asked now, after the language plan (whose chat
+    call it would otherwise queue behind) and beside the legs
+    (app/question_kind.py `Pending`)."""
+    begin = getattr(kind, "begin", None)
+    if begin is not None:
+        begin()
 
 
 def _kind_now(kind) -> tuple[str, str]:
@@ -1744,6 +1754,7 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
     t0 = time.time()
     plan = language_plan.plan(query, collections, translate, every=all_languages)
     plan_ms = round((time.time() - t0) * 1000, 1)
+    _begin_kind(kind)
 
     def _run_one(collection):
         try:

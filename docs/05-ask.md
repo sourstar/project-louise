@@ -621,7 +621,7 @@ result. A collection whose records carry no kind counts as facts. What a
 kind leaves out goes BEFORE the rerank, the legs of a collection it thins
 going twice as deep; the answer says the kind, how it was decided and how
 many it left out on what basis. `auto`, the default, asks the chat model
-in one short call beside the legs (2 s from its start, remembered per
+in one short call, after the language plan and beside the legs (2 s from its start, remembered per
 question): unsure or no answer in time is `all`, never a silent narrowing.
 It is a filter, the reader's to see and undo (§5.6, WEIGHTS (4)): the Ask
 page shows it and one tap re-runs the question with another kind.

@@ -114,3 +114,30 @@ def start(query: str) -> Callable[[], tuple[str, str]]:
                 done.append(("all", "not decided in time" if got == "late" else "not decided"))
             return done[0]
     return resolve
+
+
+class Pending:
+    """The question's kind, asked when the search says so (`begin`): after
+    its language plan, whose own chat call (the restriction, app/llm.py)
+    would otherwise queue behind this one on the one chat model, and before
+    its legs, which do not wait for it. Called, it begins if not yet begun
+    and resolves (`start`'s resolver)."""
+
+    def __init__(self, query: str) -> None:
+        self.query = query
+        self._resolve: Callable[[], tuple[str, str]] | None = None
+        self._lock = threading.Lock()
+
+    def begin(self) -> None:
+        with self._lock:
+            if self._resolve is None:
+                self._resolve = start(self.query)
+
+    def __call__(self) -> tuple[str, str]:
+        self.begin()
+        assert self._resolve is not None
+        return self._resolve()
+
+
+def pending(query: str) -> Pending:
+    return Pending(query)

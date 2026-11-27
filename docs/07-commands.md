@@ -355,7 +355,7 @@ louise share
   offer                                                                the collections neighbours announce that this node does not hold, and who serves each (04 §4.2); `fetch` takes one (added 2026-10-20)
 
 louise ask
-  search <query> [--collections …] [--space …] [--limit N] [--rerank-depth N] [--as-of DATE] [--freshness] [--history] [--translate [--all-languages]] [--filter FACET=VALUE | --filter FACET=!VALUE | --filter FACET=[!]FROM..TO …]
+  search <query> [--collections …] [--space …] [--limit N] [--rerank-depth N] [--as-of DATE] [--freshness] [--history] [--translate [--all-languages]] [--kind auto|facts|literature|all] [--filter FACET=VALUE | --filter FACET=!VALUE | --filter FACET=[!]FROM..TO …]
                                                                        the fused list of §5.1, with what §5.3 says about each result; --as-of searches the snapshot
                                                                        current at that date (§5.1); --filter restricts the legs and never ranks (§5.2, §5.7; amended
                                                                        2026-10-07 from per-facet flags: one flag, the facet named in its value, since the facets are

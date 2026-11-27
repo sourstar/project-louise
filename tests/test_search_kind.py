@@ -75,6 +75,18 @@ def test_the_legs_over_fetch_where_the_kind_thins_them(searched):
     assert seen["depth"] == [40 * work_kind.OVERFETCH]
 
 
+def test_the_question_is_asked_after_the_language_plan_and_before_the_legs(searched, monkeypatch):
+    c, con, seen = searched
+    from app import language_plan
+    real = language_plan.plan
+    monkeypatch.setattr(language_plan, "plan", lambda *a, **kw: (seen["order"].append("plan"), real(*a, **kw))[1])
+    monkeypatch.setattr(question_kind, "start",
+                        lambda q: (seen["order"].append("asked"), lambda: ("facts", "the question"))[1])
+    out = retrieval.search(con, "Napoleon", k=5, collection=c, translate=False, kind=question_kind.pending("Napoleon"))
+    assert seen["order"] == ["plan", "asked", "legs"], seen["order"]
+    assert out["kind_applied"] == "facts"
+
+
 def test_a_kind_being_decided_is_resolved_after_the_legs(searched):
     c, con, seen = searched
 
@@ -177,9 +189,12 @@ def test_run_search_starts_auto_beside_the_legs_and_refuses_an_unknown_kind(monk
     monkeypatch.setattr(query_service.db, "connect", lambda c: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(query_service.cancel, "watch", lambda con: con)
     monkeypatch.setattr(query_service.retrieval, "search", lambda con, q, **kw: got.update(kw) or {"hits": []})
-    monkeypatch.setattr(question_kind, "start", lambda q: ("resolver", q))
+    asked = []
+    monkeypatch.setattr(question_kind, "start", lambda q: asked.append(q) or (lambda: ("facts", "the question")))
     query_service.run_search(None, "Napoleon", 5, "hybrid", False, kind="auto")
-    assert got["kind"] == ("resolver", "Napoleon")
+    assert isinstance(got["kind"], question_kind.Pending) and asked == [], "asked by the search, not before it"
+    got["kind"].begin()
+    assert got["kind"]() == ("facts", "the question") and asked == ["Napoleon"], "asked once"
     query_service.run_search(None, "Napoleon", 5, "hybrid", False, kind="facts")
     assert got["kind"] == "facts"
     got.clear()

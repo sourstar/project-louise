@@ -106,7 +106,7 @@ def test_search_answers_from_the_certified_rest_and_says_so(node, monkeypatch): 
     shard_of = {"pubmed:1:0:1": SIGNED, "pubmed:2:0:1": FOREIGN}
     monkeypatch.setattr(results, "_from_shard", lambda c, hit: shard_of[hit["chunk_id"]])
 
-    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None):
+    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None, kind="all"):
         return {"hits": [{"chunk_id": cid, "book_id": int(cid.split(":")[1]), "source_collection": name,
                           "leg_ranks": {"text": 1}, "verification": "imported", "producer": "local",
                           "title": "t", "lang": "en"} for cid in ("pubmed:2:0:1", "pubmed:1:0:1")]}
