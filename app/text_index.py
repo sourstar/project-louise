@@ -696,7 +696,10 @@ def _rw(manifest: Path) -> sqlite3.Connection:
     """A manifest opened to write and NEVER CREATED (`mode=rw`): a collection
     made and not carried yet has none, and an empty one made here would be
     taken for hers (the fourth read of cf91b9ac)."""
-    return sqlite3.connect(f"file:{manifest}?mode=rw", uri=True, timeout=60, isolation_level=None)
+    from . import db
+    con = sqlite3.connect(f"file:{manifest}?mode=rw", uri=True, timeout=60, isolation_level=None)
+    db.wal(con)                       # invariant 6: every write-open of a manifest sets WAL
+    return con
 
 
 def reset_differing(reader: Path, wman: Path, *, limit: int | None = None,
