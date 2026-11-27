@@ -108,3 +108,53 @@ def test_roman_numerals_are_said_as_the_language_says_them(lang, text, said):
 ])
 def test_what_only_looks_like_a_roman_numeral_is_left_as_written(lang, text):
     assert verbalize(text, lang) == text
+
+
+# ---- num2words' Italian, mended (operator, 2026-11-27: 1918 read
+# ---- "millenovecentodicotto") ------------------------------------------------
+
+_U = ("zero uno due tre quattro cinque sei sette otto nove dieci undici dodici tredici quattordici "
+      "quindici sedici diciassette diciotto diciannove").split()
+_T = {2: "venti", 3: "trenta", 4: "quaranta", 5: "cinquanta", 6: "sessanta", 7: "settanta", 8: "ottanta",
+      9: "novanta"}
+
+
+def _it_ref(x: int) -> str:
+    """Italian cardinals by the grammar's rules: tens lose their vowel before
+    uno and otto, cento before otto and ottanta (never before diciotto), and
+    a compound ending in tre takes the accent (ventitré, centotré, milletré)."""
+    def lt100(y):
+        if y < 20:
+            return _U[y]
+        t, u = divmod(y, 10)
+        w = _T[t]
+        return w if u == 0 else (w[:-1] if u in (1, 8) else w) + _U[u]
+
+    def lt1000(y):
+        h, r = divmod(y, 100)
+        p = "" if h == 0 else ("cento" if h == 1 else _U[h] + "cento")
+        if r == 0:
+            return p
+        s = lt100(r)
+        return (p[:-1] if p and s.startswith("ott") else p) + s
+    th, r = divmod(x, 1000)
+    w = lt1000(x) if x < 1000 else ("mille" if th == 1 else lt1000(th) + "mila") + lt1000(r)
+    w = w or "zero"
+    return w[:-3] + "tré" if w.endswith("tre") and len(w) > 3 else w
+
+
+def test_every_italian_cardinal_below_a_million_is_spelled_as_the_grammar_says():
+    from app import speech_numbers
+    wrong = [(x, got, want) for x in range(1_000_000)
+             if (got := speech_numbers._words(x, "it")) != (want := _it_ref(x))]
+    assert not wrong, wrong[:10]
+
+
+@pytest.mark.parametrize("text, said", [
+    ("Finì nel 1918.", "Finì nel millenovecentodiciotto."),
+    ("Ne contò 118.", "Ne contò centodiciotto."),
+    ("Erano 123.", "Erano centoventitré."),
+])
+def test_eighteen_and_the_final_tre_are_read_right_in_italian(text, said):
+    from app import speech_numbers
+    assert speech_numbers.verbalize(text, "it") == said
