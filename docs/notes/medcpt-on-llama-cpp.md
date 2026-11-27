@@ -20,6 +20,14 @@ below came after it). Not built.
 | the cross-encoder's head | the converter dropped BERT's pooler for every BERT ("we are only using BERT for embeddings") | `classifier(tanh(pooler.dense([CLS])))` |
 | the GELU | the tanh GELU for every BERT (on the CPU from an f16 table) | transformers' BERT `"gelu"`: the exact erf GELU |
 
+UPSTREAM FIXED THE POOLER TOO, the same day (ggml-org/llama.cpp#33122, `15fcfc7`, 2026-11-27,
+"convert : preserve pooler for BertForSequenceClassification"): a `BertForSequenceClassification`
+class that renames the pooler to the head's dense layer, and writes `classifier_activation =
+"tanh"` into the GGUF. The scores are ours (tanh is the graph's default), the GGUF's bytes
+are not (one key more). Ours stays in 0034 for this candidate, whose gate is running; at the
+next move of the pin past `15fcfc7` ours is dropped for upstream's and the cross-encoder
+converted again (a reranker: no space's digest moves).
+
 And the converter stopped on MedCPT's tokenizer ("BPE pre-tokenizer was not
 recognized"): its hash is now registered (`medcpt`, WPM, as upstream's
 `convert_hf_to_gguf_update.py` lists models; llama-vocab reads no
