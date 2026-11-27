@@ -1145,38 +1145,26 @@ def _planned_identities_equal(root: Path, her_sister_name: str, name: str, her_s
 
 
 def _form_text_index(root: Path, her_sister_name: str, name: str, *, probe: bool = False) -> str | None:
-    """A sister carried beside her sister joins her sister's text index NOW,
-    when their index identities are equal (app/text_index.py
-    `form_at_carry`): placed in its shared directory, or the group FORMED by
-    renaming her sister's own directories into one, both placed. Her
-    manifest is her sister's copy, so every mark is the writer's and nothing
-    is reset or copied. None: their identities differ (she holds a copy).
-    A writer of her sister's index another process holds (the running
-    worker) defers, exit 3 (route 503), asking for `louise node stop`
-    (CLAUDE.md RULE 1). `probe`: only that check, nothing written."""
-    from app import collections as collections_mod, text_index
-    from app.hold import deposit
+    """A sister carried beside her sister, their index identities equal,
+    READS her sister's own index from now on (app/text_index.py `share`, the
+    operator's default B): a placement naming `<sister>/index`, her marks
+    reconciled once against her sister's. Made with the node stopped: a
+    writer of her sister's index another process holds (the running worker)
+    defers, exit 3 (route 503), asking for `louise node stop` (CLAUDE.md
+    RULE 1). None: their identities differ (she holds a copy). `probe`: only
+    that check, nothing written."""
+    from app import text_index
+    held = text_index.writer_held(text_index.base(Path(root) / her_sister_name / "index"))
+    if held is not None:
+        raise _defer(f"{her_sister_name}'s text index ({held}) has its writer held by another process (the "
+                     f"running worker): {name} is made to read it with the node stopped. `louise node "
+                     f"stop`, then run this again: it resumes where it stopped (CLAUDE.md RULE 1)")
     if probe:
-        if text_index.placement(root, her_sister_name) is None:
-            held = text_index.writer_held(Path(root) / her_sister_name / "index")
-            if held is not None:
-                raise _defer(f"{her_sister_name}'s text index ({held}) has its writer held by another "
-                             f"process (the running worker keeps its index writers): {name} shares it, "
-                             f"which renames it into one group. `louise node stop`, then run this "
-                             f"again: it resumes where it stopped (CLAUDE.md RULE 1)")
         return None
     ia, ib = _index_identities(root, her_sister_name, name)
-    try:
-        content = text_index.content_key(collections_mod._load_one(deposit.held_file(root, her_sister_name)))
-    except Exception:   # noqa: BLE001 — recorded as unknown
-        content = None
-    try:
-        joined = text_index.form_at_carry(root, her_sister_name, name, ia, ib, content=content)
-    except text_index.WriterHeld as e:
-        raise _defer(str(e)) from None
-    if joined:
-        text_index._remove_groups(Path(root) / name / "index")     # an earlier carry's copy
-    return joined
+    if ia is None or ia != ib:
+        return None
+    return text_index.share(root, her_sister_name, name, ia, log=lambda m: None)
 
 
 def _layer_params(given: list[str] | None) -> dict[str, Any]:
@@ -2998,6 +2986,24 @@ def cmd_collection_forget(a) -> int:
         except deposit.DepositError as e:
             raise CodexError(str(e)) from e
     _print(out)
+    return 0
+
+
+def cmd_collection_unshare(a) -> int:
+    """`hold collection unshare <collection>`: she reads no sister's text
+    index from now on — an EMPTY index of her own, her fts marks reset and
+    said; the worker indexes her again (app/text_index.py `unshare`). With
+    the node stopped: the running worker holds her lock, exit 3 asking for
+    `louise node stop`."""
+    from app import text_index
+    from app.hold import lock as lock_mod
+    name = col.name_of(a.root, a.collection)
+    root = Path(a.root) if a.root else _default_root()
+    try:
+        _take_write_lock(a.root, name, "hold collection unshare")
+    except lock_mod.Held as e:
+        raise _defer(f"{e}. `louise node stop`, then run this again") from None
+    _print(text_index.unshare(root, name, log=lambda m: None))
     return 0
 
 
@@ -8350,6 +8356,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="in this process, for a node whose worker is not running; "
                         "otherwise queued for the worker, the one writer")
     p.set_defaults(fn=cmd_collection_forget)
+
+    p = verbs.add_parser("unshare",
+                         help="read no sister's text index any more: an empty index of its own, its "
+                              "marks reset, indexed again by the worker (node stopped)")
+    root_arg(p); p.add_argument("collection")
+    p.set_defaults(fn=cmd_collection_unshare)
 
     p = verbs.add_parser("rename",
                          help="the same collection under another local name: its directory, "

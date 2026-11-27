@@ -476,7 +476,7 @@ def to_copy(root: Path, pred_name: str, name: str, *, index_by_path: bool = Fals
     yet (a resumed carry counts only what is left), counted from the
     predecessor's files by their size. `index_by_path`: a sister's text
     index, whose language groups she reads where they lie (carry
-    `_sister_index`, `text_index.form_at_carry`; never a hard link): only
+    `_sister_index`, `text_index.share`; never a hard link): only
     the rest of it counts. `parts`: what the carry copies — a case-J
     sister copies no vector table (`SISTER_PARTS`), a re-cut one no text
     index either (`RECUT_SISTER_PARTS`); gutenberg-nemo's dry run counted
@@ -492,8 +492,8 @@ def to_copy(root: Path, pred_name: str, name: str, *, index_by_path: bool = Fals
             out[rel] = _bytes_under(src) if src.exists() else 0
             if rel == "index" and src.is_dir():
                 # her sister's language groups are where her placement puts
-                # them — `<pred>/index` itself, or a shared `.text-index/`
-                # directory: read there by path (0), or copied from THERE
+                # them — `<pred>/index` itself, or the sister's index her placement
+                # names: read there by path (0), or copied from THERE
                 here = sum(_bytes_under(g) for g in text_index.group_dirs(src))
                 at = text_index.base(src)
                 out[rel] -= here

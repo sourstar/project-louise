@@ -52,7 +52,9 @@ READ_VERBS = ("show", "list")
 NOT_ROUTED = {("node", "start"): "the daemon itself is started on the node",
               ("ask",): "`ask` has its own routes (05 §5.4)",
               ("user",): "users are managed at /admin/api/users (07 §7.4)",
-              ("dev",): "operator instruments stay on the command line (RULE 2)"}
+              ("dev",): "operator instruments stay on the command line (RULE 2)",
+              ("hold", "collection", "unshare"): "it needs the node stopped (the worker holds the "
+                                                 "collection's lock): `louise node stop` first"}
 #: A read answered at once still has a bound (CLAUDE.md: no unbounded wait).
 READ_TIMEOUT_S = 120.0
 #: A command sent SIGTERM finishes its unit (07 §7.7) — bounded in time

@@ -137,21 +137,6 @@ class IndexMissing(RuntimeError):
     not there: refused, never made empty where it should be."""
 
 
-class FormingOpen(RuntimeError):
-    """The collection's text index is being formed into a shared group (an
-    unfinished journal names it, app/text_index.py `forming`): nothing is
-    written to it and no group is made for it until the journal is
-    finished. A DEFERRAL: the documents are untouched (round 5, item 3)."""
-
-
-def _refuse_forming(collection) -> None:
-    if collection is not None and text_index.forming(collection):
-        raise FormingOpen(f"{getattr(collection, 'name', '?')}: its text index is being formed into a "
-                          f"shared group (an unfinished journal under {text_index.SHARED}/.forming): "
-                          f"nothing is written to it until that is finished — the worker's boot, or "
-                          f"`hold collection new` run again, finishes it")
-
-
 #: (manifest, group) a get_index found marked and holding no index: refused
 #: for this process's life (a writer makes a group's index before it marks)
 _marked_groups: set[tuple[str, str]] = set()
@@ -202,8 +187,7 @@ def _refuse_missing(collection, root, group: str) -> None:
     name = getattr(collection, "name", "?")
     if not root.is_dir():
         raise IndexMissing(f"{name}: its text index is read at {root} (state/text-index.json), which does "
-                           f"not exist; nothing is made there. Restart the worker (`louise node restart`): "
-                           f"its boot places the index again")
+                           f"not exist; nothing is made there: `louise hold collection unshare {name}`")
 
 
 #: set while a WRITE opens its index (`_for_write`): only a write makes an
@@ -215,7 +199,6 @@ _writing = threading.local()
 def _for_write(group: str, collection=None) -> tantivy.Index:
     """`get_index` for a write (`index_books`, `rewrite_without`): it makes
     the group's index where it is missing — the write puts its data there."""
-    _refuse_forming(collection if collection is not None else collections_mod.default_collection())
     _writing.on = True
     try:
         return get_index(group, collection)
@@ -233,6 +216,11 @@ def get_index(group: str, collection=None) -> tantivy.Index:
     is missing (`delete_book`, `delete_books`: nothing is held there)."""
     if collection is None:
         collection = collections_mod.default_collection()
+    why = text_index.withheld(collection)
+    if why:
+        # her placement no longer holds (the boot's check, app/text_index.py):
+        # her text leg is withheld in words, nothing is read or made
+        raise IndexMissing(f"{getattr(collection, 'name', '?')}: {why}")
     # Keyed on the physical path, not collection.name: two different
     # Collection instances can share a name (most concretely, in tests that
     # build ad-hoc Collections) while pointing at different fts_dirs — a
@@ -254,8 +242,6 @@ def get_index(group: str, collection=None) -> tantivy.Index:
             if key in _indexes:
                 return _indexes[key]             # opened while this caller waited
         path = root / group
-        if not (path / "meta.json").is_file():
-            _refuse_forming(collection)                # no group made while it is formed
         if not getattr(_writing, "on", False) and not (path / "meta.json").is_file() \
                 and _marked_in(collection, group):
             raise IndexMissing(f"{getattr(collection, 'name', '?')}: its manifest marks documents of the "

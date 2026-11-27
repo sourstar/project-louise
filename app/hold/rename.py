@@ -216,6 +216,12 @@ def rename(root: Path, old: str, new: str, *, dry_run: bool = False) -> dict[str
         # directory, is not moved from under it (never a hard link:
         # operator, 2026-11-27): its text index, its origin directory
         from .forget import origin_heirs
+        from app import text_index
+        reads = text_index.readers(root, old)
+        if reads:
+            raise CodexError(f"rename {old}: {', '.join(reads)} reads its text index where it lies "
+                             f"({old}/index); `louise hold collection unshare` each first; nothing was "
+                             f"changed")
         heirs = origin_heirs(root, old)
         if heirs:
             raise CodexError(f"rename {old}: {', '.join(heirs)} reads its origin directory where it "

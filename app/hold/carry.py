@@ -457,7 +457,7 @@ def _sister_index(src: Path, dst: Path, *, groups: bool = True) -> str:
     her sister's own directory or the shared one her sister reads,
     app/text_index.py — copied too with `groups` (their identities differ:
     she holds her own), else NOT AT ALL: she reads them where they lie
-    (`text_index.form_at_carry`, which the caller runs). Never a hard link
+    (`text_index.share`, which the caller runs). Never a hard link
     (operator, 2026-11-27, app/file_copy.py). Whole or not at all,
     repeatable, like `_transfer`."""
     from app import text_index
@@ -1058,7 +1058,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
             # WHERE IT LIES, never copied nor linked (operator, 2026-11-10:
             # sisters share one text index; 2026-11-27: no hard link,
             # app/text_index.py) — `index_groups` False, the caller places
-            # her (`text_index.form_at_carry`); True, their identities
+            # her (`text_index.share`); True, their identities
             # differ and she holds a copy of her own
             done[k] = _sister_index(sp[k], tp[k], groups=index_groups)
             continue

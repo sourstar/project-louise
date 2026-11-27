@@ -107,7 +107,7 @@ louise hold
                 (a sister who changes only her ENCODER SIDE: S's layers, cleaning and records in a new space with
                  C's encoder side whole — encoder and engine, dim, dtype, ctx, cut, pooling, instructions, query
                  side, calibration set, reference and tolerance, carried, nothing embedded; her endpoint and model
-                 C's file's; her manifest and text index S's, her manifest copied and her text index ONE GROUP with S's, formed by rename at her carry (never copied nor hard-linked; with the worker running, `louise node stop` first, exit 3; 2026-11-27), one index identity, so she joins S's group
+                 C's file's; her manifest and text index S's, her manifest copied and her text index S's OWN, read where it lies (`state/text-index.json` names `S/index`; never copied nor hard-linked; with the worker running, `louise node stop` first, exit 3; the static share, 2026-11-27), one index identity, so she reads S's
                  (docs/notes/sister-shared-index.md); her slices S's. gutenberg-nemo, 2026-11-27)
                                                                        case J, a SISTER INTO A HELD SPACE (added 2026-11-08, normattiva-nemo): `derive` of her sister S
                                                                        into C's space and layers; carry — her parts seeded from S's snapshot, S's manifest and text index
@@ -178,6 +178,7 @@ louise hold
               ack --web-sources [--yes]                                print the web-sources disclaimer; record this node's acceptance, once (04 §4.4)
               certify <collection> <snapshot>                          sign a snapshot as this collection's certifier
               forget <collection> [--kinds …] [--yes] [--dry-run] [--here]  stop holding: remove this peer's copy and its state; --here when no worker runs
+              unshare <collection>                                read no sister's text index any more: an empty index of its own, its fts marks reset, indexed again (node stopped; not routed; 2026-11-27)
               rename <collection> <new-name> [--dry-run]               the same collection under another local name; nothing recomputed
               migrate <collection> [--apply]                           the 09 §9.3 fields a Codex predates added, each as null — collection_id moves; printed unless --apply
               update <collection> [--dry-run] [--retry]                (*amended 2026-11-17*, docs/notes/collection-updates.md) the update by cadence of a collection
@@ -2710,10 +2711,9 @@ collection is another name.
 │   └── pubmed/
 │       ├── shard/           the copy, the SHARD (`drag/` until 2026-10-11): exactly the tree of 02 §2.6 — what `share` serves, and nothing else; the bytes may live on other storage, mounted here
 │       ├── state/           manifest.sqlite (with the origin's flagged issues, 06 §6.1), cursor, ack.json, attestations/, bundles/, lock — this peer's alone; frozen/: while the collection is frozen, the newer snapshot its alignment is read against, never in the copy (04 §4.3, added 2026-11-07)
-│       ├── index/           the text index of the parts held, and the facet values (05 §5.7); a sister sharing her text index keeps only her catalogue and facets here (state/text-index.json names the shared one, below)
+│       ├── index/           the text index of the parts held, and the facet values (05 §5.7); a sister reading her sister's text index keeps only her catalogue and facets here (state/text-index.json names `<sister>/index`)
 │       ├── lance/           the vector table search reads; while it is built, a link into the build area (`LOUISE_BUILD_DIR`, below); with a Lance root, a link into it (`LOUISE_LANCE_ROOT`, below)
 │       └── origin/          the origin files the records are parsed from — 06 §6.2's corpus directory, kept for records-vs-origin; the bytes may live on other storage, mounted here
-│   └── .text-index/<id>/  ONE text index for sisters whose index would be the same byte for byte, written by one (`writer.json`), read by the others; a unique folder id made once, its identity recorded in `group.json` (2026-11-27); formed, joined and left at the worker's boot, a forming journalled in `.text-index/.forming/` and finished forward (02 §2.7, amended 2026-11-10; app/text_index.py)
 ├── state/                   node.sqlite: the catalogue, coverage maps (09 §9.10), peers seen, runtime overrides; trust.json; web-sources-ack.json (09 §9.13); working-state.json (`node checkpoint`, §7.3); resident-budget.json (the resident budget's measured margin, at-rest and largest model sizes, card total and eviction penalty, written by the worker, read by `node resident show`; §7.3, 2026-11-08)
 └── keys/                    the peer key, at NODE_KEY_PATH
 ```
@@ -2723,10 +2723,9 @@ collection is another name.
 hard links, always consciously load from a path. It already happened that
 you deleted important files because you forgot the hard links"). Nothing
 makes a second name for a file. What two collections both use is read
-WHERE IT LIES, by its path: a sister's text index (one group with her
-sister's, formed by rename at her creation: `louise node stop` first while
-the worker holds its writers; a forming is journalled before its first
-rename and finished forward), a re-check's claims, a re-created collection's origin directory (a symbolic
+WHERE IT LIES, by its path: a sister's text index (her sister's own, set once at
+her creation with the node stopped; checked at boot, withheld in words when
+her identity no longer matches, `hold collection unshare` to index her own), a re-check's claims, a re-created collection's origin directory (a symbolic
 link, handed over at its holder's forget), a discarded snapshot's part the
 build since shares (kept in place). What becomes another owner's own is
 COPIED, a reflink where the filesystem clones blocks, after a preflight of

@@ -541,6 +541,16 @@ def _forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
             f"off, and remove the corpus with it. Nothing was removed. First, for each: "
             + "; ".join(f"`louise dev carry {name} {r} --share-origin --yes`" for r in sorted(readers)))
     from app import text_index
+    # A SISTER READING ITS TEXT INDEX (app/text_index.py, the static share):
+    # one whose placement holds gets the folder by rename at step 2c; more
+    # than one, or one withheld, and nothing is removed
+    text_index.invalidate()
+    sisters = text_index.readers(root, name)
+    if len(sisters) > 1 or any(text_index.withheld_at(root, r) for r in sisters):
+        raise CodexError(f"forget {name}: {', '.join(sisters)} read its text index ({name}/index), and "
+                         f"only one sister whose index identity still matches can be handed it. Nothing "
+                         f"was removed. First, for each: " + "; ".join(
+                             f"`louise hold collection unshare {r}`" for r in sisters))
     # THE ACKNOWLEDGEMENT OUTLIVES THE FORGET (2026-11-19, München): a held
     # collection pinning the same terms text with no record of its own was
     # acknowledged through this one's (04 §4.4, licensing.state_for's peer
@@ -558,9 +568,8 @@ def _forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
                                "would_remove": [str(p) for p in plan], "removed": [],
                                **({"ack_carried_to": handed} if handed else {}),
                                **({"origin_handed_to": origin_to} if origin_to else {})}
-        # a text index shared with sisters stays while one of them is held,
-        # and goes with its last member (app/text_index.py)
-        shared = text_index.leave_at_forget(root, name, dry_run=True)
+        # its text index, to the one sister that reads it (step 2c)
+        shared = text_index.hand_over(root, name, dry_run=True)
         if shared is not None:
             out["text_index"] = shared
         if not kinds:
@@ -584,6 +593,9 @@ def _forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     # 2b. its origin directory, to the collection that reads it through a
     #     link (`_hand_over`): never removed with it
     origin_to = hand_over_origin(root, name)
+    # 2c. its text index, to the one sister that reads it: renamed into hers,
+    #     who writes it from now on (app/text_index.py `hand_over`)
+    shared = text_index.hand_over(root, name)
     # 3. a never-share collection: every deposit erased, no trace (02 §2.9)
     erased = 0
     if codex is not None and deposit.is_deposit(codex) and base.exists():
@@ -601,14 +613,7 @@ def _forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
         elif target.is_dir():
             shutil.rmtree(target)
         removed.append(str(target))
-    # 5. a text index shared with sisters (app/text_index.py): kept while
-    #    another held member reads it — the next by name writes it if this
-    #    one did — and removed with its last member. Before the directory,
-    #    whose placement file says where the shared index is
-    shared = text_index.leave_at_forget(root, name)
-    if shared is not None and shared.get("removed"):
-        removed.append(shared["dir"])
-    # 6. the directory, whole
+    # 5. the directory, whole
     if base.exists():
         shutil.rmtree(base)
         removed.append(str(base))

@@ -18,11 +18,11 @@ def test_a_member_whose_placed_index_is_gone_is_refused_and_nothing_is_made(tmp_
     root = tmp_path / "collections"
     (root / "beta" / "state").mkdir(parents=True)
     (root / "beta.toml").write_text('codex = "sha256:00"\n', encoding="utf-8")
-    text_index.write_placement(root, "beta", f"{text_index.SHARED}/id1", "id1")
+    text_index.write_placement(root, "beta", "gone/index", "id1", writer="gone")
     beta = SimpleNamespace(name="beta", fts_dir=root / "beta" / "index", codex=None)
     with pytest.raises(fts.IndexMissing, match="which does not exist; nothing is made there"):
         fts.get_index("en", beta)
-    assert not (root / text_index.SHARED).exists(), "no empty index made where the group's was"
+    assert not (root / "gone").exists(), "no empty index made where her sister's was"
 
 
 def _index(root, name, groups, catalogue=b"c" * 100):
@@ -38,14 +38,14 @@ def _index(root, name, groups, catalogue=b"c" * 100):
 
 def test_her_room_counts_her_sister_s_groups_where_they_live(tmp_path):
     root = tmp_path / "collections"
-    shared = root / text_index.SHARED / "abc"
+    shared = root / "first" / "index"
     _index(root, "old", [(shared, 5000)])
-    text_index.write_placement(root, "old", f"{text_index.SHARED}/abc", "abc")
+    text_index.write_placement(root, "old", "first/index", "abc", writer="first")
     (root / "sis").mkdir(parents=True)
     copied = recreate.to_copy(root, "old", "sis", index_by_path=False, parts=("index",))["index"]
     by_path = recreate.to_copy(root, "old", "sis", index_by_path=True, parts=("index",))["index"]
     assert by_path == 100, "her catalogue alone"
-    assert copied == 100 + 5000 + 2, "and the groups copied from the shared directory"
+    assert copied == 100 + 5000 + 2, "and the groups copied from the index she reads"
     alone = tmp_path / "alone"
     own = _index(alone, "old", [])
     _index(alone, "x", [(own, 700)])

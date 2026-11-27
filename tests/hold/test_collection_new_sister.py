@@ -475,11 +475,12 @@ def test_an_encoder_sister_has_her_sister_s_index_identity_and_slices(pair, card
     assert collections_mod.sister_refusal(alone, held=[alone]) is None
 
 
-def test_her_text_index_and_her_sister_s_are_one_group_formed_by_rename(pair, card, monkeypatch):
-    """Their index identities equal: the group is formed AT ONCE, her
-    sister's directories renamed into `.text-index/<identity>` (never copied
-    nor hard-linked: operator, 2026-11-27), both placed; the carry's proof
-    reads both through it."""
+def test_her_text_index_is_her_sister_s_own_read_by_path(pair, card, monkeypatch):
+    """Their index identities equal: at her creation she READS her sister's
+    own index (the static share, operator's default B): a placement naming
+    `old/index`, nothing moved, copied nor hard-linked (operator,
+    2026-11-27); her sister stays its only writer; the carry's proof reads
+    both through it."""
     from app import text_index
     root, old, _ = pair
     _ready_nemo(root, old, card)
@@ -490,22 +491,20 @@ def test_her_text_index_and_her_sister_s_are_one_group_formed_by_rename(pair, ca
     ino = (g / "seg.store").stat().st_ino
     monkeypatch.setattr(louise, "_index_identities", lambda root, a, b: ("id1", "id1"))
     assert _new_enc(root) == 0
-    rel = text_index.placement(root, "old")["dir"]
-    assert text_index.folder_identity(root, rel) == "id1"
-    for n in ("old", "sis"):
-        assert text_index.placement(root, n)["dir"] == rel, n
-    assert (root / rel / "en" / "seg.store").stat().st_ino == ino, "renamed: no byte copied"
-    assert not text_index.group_dirs(root / "old" / "index") and not text_index.group_dirs(root / "sis" / "index")
+    assert text_index.placement(root, "sis") == {"dir": "old/index", "identity": "id1", "writer": "old"}
+    assert text_index.placement(root, "old") is None and text_index.readers(root, "old") == ["sis"]
+    assert (g / "seg.store").stat().st_ino == ino, "where it lies: nothing moved or copied"
+    assert not text_index.group_dirs(root / "sis" / "index")
     assert text_index.index_digest(root, "sis")["sha256"] == text_index.index_digest(root, "old")["sha256"]
     assert not [f for f in root.rglob("*") if f.is_file() and not f.is_symlink() and f.stat().st_nlink > 1], \
         "no hard link anywhere"
 
 
-def test_a_boot_between_her_make_and_her_carry_leaves_both_and_her_carry_forms_the_group(pair, card,
+def test_a_boot_between_her_make_and_her_carry_leaves_both_and_her_carry_shares(pair, card,
                                                                                          monkeypatch):
-    """The fourth read of cf91b9ac, finding 3: a worker boot (`settle`)
-    between her make and her carry makes no manifest for her and moves
-    nothing of her sister's; her carry then forms the group by rename."""
+    """A worker boot (`settle`) between her make and her carry makes no
+    manifest for her and moves nothing of her sister's (nothing automatic at
+    boot); her carry then makes her read her sister's index."""
     from app import text_index
     root, old, _ = pair
     _ready_nemo(root, old, card)
@@ -525,14 +524,13 @@ def test_a_boot_between_her_make_and_her_carry_leaves_both_and_her_carry_forms_t
     monkeypatch.setattr(text_index, "content_key", lambda c: None)
     said = []
     out = text_index.settle(root, [_local(root, "old"), _local(root, "sis")], log=said.append)
-    assert ("sis", "no manifest yet (made, its carry not done)") in out["skipped"]
+    assert out["served"] == [] and out["withheld"] == []
     assert not (root / "sis" / "state" / "manifest.sqlite").exists(), "no empty manifest made for her"
     assert text_index.placement(root, "old") is None and (g / "seg.store").read_bytes() == b"the index"
     monkeypatch.setattr(louise, "_whole_quota", real)
     assert _new_enc(root) == 0
-    rel = text_index.placement(root, "old")["dir"]
-    assert text_index.placement(root, "sis")["dir"] == rel
-    assert (root / rel / "en" / "seg.store").read_bytes() == b"the index"
+    assert text_index.placement(root, "sis")["dir"] == "old/index" and text_index.placement(root, "old") is None
+    assert (g / "seg.store").read_bytes() == b"the index"
 
 
 def test_her_creation_defers_while_another_process_holds_her_sister_s_writer(pair, card, monkeypatch):

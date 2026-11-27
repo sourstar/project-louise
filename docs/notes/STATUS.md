@@ -24,12 +24,12 @@ measured (published figures disagree).
   already happened that you deleted important files because you forgot the hard links").** Every
   `os.link` in app/ is gone, and tests/test_no_hard_links.py fails on any new one (Python by AST, shell
   scripts by command). What two collections use is read where it lies, by its path:
-  - a case-J sister's text index: one group with her sister's, formed at her creation by RENAME
-    (`text_index.form_at_carry`; with the worker running, `louise node stop` first, exit 3 — RULE 1
-    decided it: the `reads` placement of 8beffe40–c275217b is gone, second read's findings A and G with it); a
-    member left alone in a group stays placed (no 54 GB copy back), a placement whose directory is
-    gone is dropped at the boot with its marks reset, a boot's copies are counted once and skipped
-    when they do not fit;
+  - a case-J sister's text index: her sister's own, `<sister>/index`, named by her placement — THE
+    STATIC SHARE (operator's default B, after six reads found the automatic groups of 74c95825–19a5cf5d
+    losing data): set once at her creation with the node stopped, her marks reconciled once; nothing
+    automatic at boot (a placement that no longer holds is withheld in words; `hold collection
+    unshare` gives her an empty index of her own); a forget hands it to its one reader by rename,
+    else refuses; an earlier version's `.text-index/` group is refused at boot, never migrated;
   - a re-check's claims, with an identity check at each pass;
   - a re-created collection's origin directory, through a symbolic link, handed over at its holder's
     forget;
@@ -45,26 +45,15 @@ measured (published figures disagree).
   (deploy/localai patches 0010/0019, hard links made by the engine's Go code: Tensor's), and the hard
   links already on the node, which `find -links +1` lists (the app makes none from now on).
   docs/07 §7.8, app/file_copy.py.
-  **Third read of 74c95825:** a group folder is a unique id made once, its identity recorded inside
-  (`group.json`), so a lone member's folder is never adopted or reused; a sister joining a folder
-  others use is reconciled like the boot does, the writer kept; a forming is journalled before its
-  first rename and finished forward by a retry or the boot; a group whose every member moves keeps
-  its folder (rename and retag, no 54 GB copy); a read never makes an empty index the manifest
-  marks populated (a write makes it, a delete makes none); a copy dereferences symbolic links (`cp -L`); a forget whose heir's lock is held
-  names `louise node pause <heir>` (the worker does not pause it itself); tools/archive_backend.py
-  writes no hard-link entry and unpacks an old one as a copy; the guard is keyed per line, refuses a
-  third party's runtime archive holding a link member, and catches filterless extraction,
+  Also: a read never makes an empty index the manifest marks populated (a marked `mul` document
+  marks every group it can be in; a write makes it, a delete makes none); a copy dereferences
+  symbolic links (`cp -L`); a forget whose heir's lock is held names `louise node pause <heir>`;
+  tools/archive_backend.py writes no hard-link entry and unpacks an old one as a copy in its place in
+  the member order; the guard names each `tar -x` by exactly one line, refuses a third party's
+  runtime archive holding a link member before each extraction, and catches filterless extraction,
   `unpack_archive`, `cp -d`/`--preserve=links|all`, `rsync -H`, `link`, `cpio -l`, `bsdtar`,
   continued lines, scripts in strings and tests_campaign/; the room check before every seed is
   checked by source order.
-  **Fourth read of cf91b9ac, round 5:** a folder stays its writer's; a member that diverges (or a
-  writer whose content changed) re-indexes into its own folder, every mark reset, said — nothing
-  copied, nothing pruned (the coordinator's default while the operator decides); the journal is
-  for forming by rename only, holds its collections' fts stage while open, and goes only after
-  every placement is synced; the boot skips what another process holds or has no manifest yet,
-  catches each identity and journal, finishes only its own journals, never creates a manifest; a
-  marked `mul` document marks every group it can be in; each named `tar -x` is exactly one line
-  with its own probe; an old archive's link entry is copied in its place in the member order.
 
 ### 2026-11-26
 
