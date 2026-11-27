@@ -88,3 +88,26 @@ collection, as the `language-stage` claims do (02 §2.10):
 2. Wikipedia's `work-kind` annotations from Wikidata (P31/P279* over the
    held dump, through the sitelinks).
 3. Only if measured necessary: plot sections as literature.
+
+## 5. Measured
+
+**Step 1 on the 35B** (München, live a07a111 = main a6c1dc2d, acquire-only
+serving louise-chat-qwen3.6-35b-a3b; `tools/measure/work_framing.py`,
+`--runs 2`, then `check`; /root/measure/judged-work/framing/after-35b-a07a111.jsonl).
+Every row passes, both runs, with the same results:
+
+| Question | Kind chosen | Left out | Literary sources in the answer |
+|---|---|---|---|
+| napoleon-death | facts, by the question | 22 | none |
+| waterloo | facts, by the question | 17 | none |
+| caesar | facts, by the question | 25 | none |
+| la-rochelle | facts, by the question | 17 | none |
+| anabasis (control) | facts, by the question | 18 | none |
+| pericles (control) | facts, by the question | 10 | none |
+| cinque-maggio (about the work) | literature, by the question | 33 | the answer is the work: read, it quotes the ode from [1], Manzoni's *Le tragedie, gl'inni sacri e le odi* ("l'uom fatale", "percossa, attonita", "immobile", "immemore", "folgorante in solio") |
+
+Before step 1 (after-35b-ec5bde3), napoleon-death, caesar and cinque-maggio
+were flagged in both runs.
+
+**Step 1 on the 9B:** owed. The 9B serves only embed mode, so it runs at the
+next embed mode. Step 1 is done when this row passes too.
