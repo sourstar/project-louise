@@ -1964,11 +1964,14 @@ OPINION_SHELVES = frozenset(s.casefold() for s in (
 #: and a bare genre heading (a form subdivision "-- Fiction" still stands)
 NONFICTION_SUBDIVISIONS = frozenset(("biography", "history and criticism", "criticism and interpretation",
                                      "criticism, interpretation, etc", "commentaries",
-                                     # LCSH's mark of NON-fiction for children (against "-- Juvenile
-                                     # fiction"): it vetoes a shelf, PZ and a bare heading
-                                     # ("Famous Islands and Memorable Voyages", 2026-11-27)
-                                     "juvenile literature",
+
                                      "technique", "description and travel", "sources"))
+#: what vetoes LCC PZ alone (architecture, 2026-11-27, over the 242 records
+#: literary by PZ alone): "-- Juvenile literature", LCSH's mark of NON-fiction
+#: for children (against "-- Juvenile fiction"; "Famous Islands and Memorable
+#: Voyages", 25882), and "-- Periodicals" (The Girl's Own Paper). A tale or a
+#: legend retold for children with neither mark stays literary by PZ.
+PZ_VETOES = frozenset(("juvenile literature", "periodicals"))
 #: a record that states it is a study of a work — its criticism, its
 #: commentary — is no work of that genre itself, whatever genre heading it
 #: also carries ("Gnomic poetry, Hebrew" on Cheyne's criticism, #65866;
@@ -2061,7 +2064,8 @@ def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -
     if not vetoed:
         if cats & LITERARY_SHELVES:
             return ("a literary work", "by its Gutenberg category")
-        if "PZ" in classes:
+        if "PZ" in classes and not any(p.strip().rstrip(".").casefold() in PZ_VETOES
+                                       for x in subjects for p in x.split("--")[1:]):
             return ("a literary work", "by its Library of Congress class")
         if any(_main_heading(x).casefold() in BARE_GENRES and len(x.split("--")) == 1 for x in subjects) \
                 and not (cats & OPINION_SHELVES) and not any(c.startswith("PN") for c in classes):

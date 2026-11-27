@@ -305,12 +305,15 @@ def test_a_literary_source_is_never_evidence_said_beside_it_and_in_the_rule():
     assert "never count it among a fact's confirmations" in system
 
 
-def test_juvenile_literature_is_nonfiction_for_children_whatever_its_class():
-    """LCSH's "-- Juvenile literature" is non-fiction for children (against
-    "-- Juvenile fiction"): it vetoes LCC PZ and a form shelf."""
+def test_juvenile_literature_and_periodicals_veto_lcc_pz_alone():
+    """Architecture, 2026-11-27: LCSH's "-- Juvenile literature" (non-fiction
+    for children) and "-- Periodicals" veto the PZ rule — and only it; a tale
+    retold for children with neither mark stays literary by PZ."""
     w = retrieval._work_said
-    assert "a literary work" not in w({"subjects": "Islands -- Juvenile literature | Voyages and travels -- Juvenile "
-                                                   "literature | PZ"})
-    assert "a literary work" not in w({"subjects": "Animals -- Juvenile literature | QL",
-                                       "bookshelves": "Category: Short Stories"})
+    assert "a literary work" not in w({"subjects": "Islands -- Juvenile literature | PZ"})
+    assert "a literary work" not in w({"subjects": "Girls -- Periodicals | PZ"})
+    assert w({"subjects": "Russia -- Social life and customs | PZ"}).startswith(
+        " — a literary work (by its Library of Congress class)"), "no mark: PZ still says it"
     assert w({"subjects": "Animals -- Juvenile fiction | PZ"}).startswith(" — a literary work"), "fiction stays"
+    assert w({"subjects": "Animals -- Juvenile literature | QL", "bookshelves": "Category: Short Stories"}) \
+        .startswith(" — a literary work (by its Gutenberg category)"), "only PZ is vetoed: a form shelf still says it"
