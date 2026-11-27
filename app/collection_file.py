@@ -81,18 +81,24 @@ def _replace(path: Path, text: str) -> None:
 #: the `codex` line, an indent before it allowed (TOML allows it; the second independent read
 #: of 5a93b7c7, 3: ` codex =` was refused after the refit's first write)
 _CODEX_LINE_RE = re.compile(r'^[ \t]*codex[ \t]*=.*$', re.MULTILINE)
+#: ...its parts: what comes before the value, the value (a one-line string), a
+#: trailing comment, and the line's own `\r` (CRLF stays CRLF) — only the value
+#: is rewritten (the third read of 141b1d2e, 6)
+_CODEX_VALUE_RE = re.compile(r'^([ \t]*codex[ \t]*=[ \t]*)("[^"\r\n]*"|\'[^\'\r\n]*\')([ \t]*(?:#[^\r\n]*)?)(\r?)$',
+                             re.MULTILINE)
 
 
 def recodex(path: Path, collection_id: str) -> str:
     """THE ONE EDIT OF A FILE'S `codex` (amendment A1l in place, 2026-11-27;
     app/hold/refit.py): the collection keeps its name and its file while its
     Codex changes where it lies (RULE 1; 07 §7.8 otherwise: "A file's `codex`
-    is never edited"). Only the `codex` line before the first table is
-    rewritten, every other byte kept, so nothing the operator set moves (the
+    is never edited"). Only the VALUE of the `codex` line before the first
+    table is rewritten — its indent, a trailing comment and the file's line
+    endings kept, every other byte too, so nothing the operator set moves (the
     writer's full rendering would drop comments, as the module says); the
     result is read back and must differ in `codex` alone, or nothing is
     written. Atomic. What was done, in words."""
-    text = path.read_text(encoding="utf-8")
+    text = path.read_bytes().decode("utf-8")           # as it is: CRLF read as CRLF
     head_end = re.search(r'^\[', text, re.MULTILINE)
     head, tail = (text[:head_end.start()], text[head_end.start():]) if head_end else (text, "")
     if len(_CODEX_LINE_RE.findall(head)) != 1:
@@ -101,13 +107,19 @@ def recodex(path: Path, collection_id: str) -> str:
     before = tomllib.loads(text)
     if before.get("codex") == collection_id:
         return f"codex {collection_id[:23]}… already"
-    out = _CODEX_LINE_RE.sub(f'codex = "{collection_id}"', head, count=1) + tail
+    if len(_CODEX_VALUE_RE.findall(head)) != 1:
+        raise SetRefused(f"{path}: its codex line is not `codex = \"…\"` (a one-line string, a comment after "
+                         f"it allowed); nothing was written")
+    out = _CODEX_VALUE_RE.sub(lambda m: f'{m.group(1)}"{collection_id}"{m.group(3)}{m.group(4)}', head,
+                              count=1) + tail
     after = tomllib.loads(out)
     if after.get("codex") != collection_id or \
             {k: v for k, v in after.items() if k != "codex"} != {k: v for k, v in before.items() if k != "codex"}:
         raise SetRefused(f"{path}: rewriting its codex line would change more than its codex; nothing "
                          f"was written")
-    _replace(path, out)
+    tmp = path.with_suffix(".toml.tmp")
+    tmp.write_bytes(out.encode("utf-8"))               # the bytes as built: no newline translation
+    tmp.replace(path)
     return f"codex {str(before.get('codex'))[:23]}… → {collection_id[:23]}…"
 
 

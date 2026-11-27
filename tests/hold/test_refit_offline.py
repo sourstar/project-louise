@@ -800,7 +800,7 @@ def test_an_indented_codex_line_is_rewritten_and_nothing_else(held_gb):
                                        encoding="utf-8")
     assert _refit(root, *FIT) == 0
     _, new = col.resolve(root, NAME)
-    assert (root / f"{NAME}.toml").read_text() == f'codex = "{new.collection_id}"\nembed = "all"  # kept\n'
+    assert (root / f"{NAME}.toml").read_text() == f'  codex = "{new.collection_id}"\nembed = "all"  # kept\n'
 
 
 def test_parquet_parts_refuse_in_the_plan(held_gb, monkeypatch, capsys):
@@ -895,3 +895,131 @@ def test_the_worker_s_own_text_index_stage_redoes_the_one_book_at_the_new_layers
     assert _entries(root, native) > 0
     chunks = worker._load_chunks(dict(row), coll)
     assert len(chunks) != len(held[native]) and all(c["id"].startswith(row["uid"]) for c in chunks)
+
+
+# ---- the third read of 141b1d2e ---------------------------------------------------------------
+
+def _no_source(root, native=10009, *, vectors=False):
+    """A manifest row whose book has no epub, txt or rdf (gutenberg's 34): the
+    old layers cannot cut it either."""
+    from app import embeddings
+    m = sqlite3.connect(root / NAME / "state" / "manifest.sqlite")
+    row = dict(zip([c[1] for c in m.execute("PRAGMA table_info(documents)")],
+                   m.execute("SELECT * FROM documents ORDER BY rowid LIMIT 1").fetchone()))
+    row.update(uid=f"gutenberg:{native}", native_id=str(native), path=f"{native}/missing.txt")
+    cols = [k for k in row]
+    m.execute(f"INSERT INTO documents({','.join(cols)}) VALUES({','.join('?' for _ in cols)})", [row[k] for k in cols])
+    m.commit()
+    m.close()
+    if vectors:
+        _, codex = col.resolve(root, NAME)
+        embeddings.upsert_chunks([{"id": f"gutenberg:{native}:0:1", "book_id": native, "lang": "en", "seq": 0,
+                                   "chapter": "", "text": "a chunk of a book no longer held",
+                                   "vector": np.ones(codex.space.dim, dtype="float32")}],
+                                 collection=_local(root, NAME), dtype=codex.space.dtype)
+    return f"gutenberg:{native}"
+
+
+def test_a_document_uncut_at_both_layers_holding_nothing_is_unchanged_and_said(held_gb, capsys):
+    root, old, held, _e = held_gb
+    uid = _no_source(root)
+    assert _refit(root, *FIT, extra=("--dry-run",)) == 0
+    out = capsys.readouterr().out
+    assert f"uncut       1 document(s) uncut at both layers, holding nothing: unchanged ({uid}" in out
+    assert "affected    1 of 4 document(s)" in out
+    before = _marks(root)[uid]
+    assert _refit(root, *FIT) == 0
+    assert _marks(root)[uid] == before, "never reset: it is not the refit's"
+
+
+def test_a_document_uncut_at_the_old_layers_that_holds_vectors_refuses(held_gb, capsys):
+    root, _old, _h, _e = held_gb
+    uid = _no_source(root, vectors=True)
+    _refused_untouched(root, capsys, "document(s) the old layers cannot cut hold vector rows or index entries", uid)
+
+
+def test_a_refit_back_to_an_earlier_codex_sets_aside_in_a_folder_of_its_own(held_gb):
+    """120 → 110 → 120 → 110: the fourth met the folder the second left."""
+    root, old, _h, _e = held_gb
+    ids = []
+    for mt in (120, 110, 120, 110):
+        assert _refit(root, f"max_tokens={mt}", f"tokenizer={_SHA}", extra=("--affected-max", "3")) == 0, mt
+        ids.append(col.read(root, NAME).collection_id)
+    assert ids[0] == ids[2] and ids[1] == ids[3] and ids[0] != ids[1]
+    folders = sorted(p.name for p in (col.shard_dir_of(root, NAME) / ".replaced").iterdir())
+    assert len(folders) == 4 and any(f.endswith(".1") for f in folders), folders
+    assert _naming_left(root, NAME, ids[0]) == [] and _naming_left(root, NAME, old.collection_id) == []
+    _, ed_now = col.resolve(root, "gb-editions")
+    assert [t.collection_id for t in cx.targets_of(ed_now)] == [ids[3]]
+
+
+def test_the_web_does_not_search_a_collection_whose_refit_is_half_done(held_gb, monkeypatch):
+    from fastapi import HTTPException
+    from app import collections as collections_mod, query_service
+    from app.hold import records as rec
+    root, _old, _h, _e = held_gb
+    restore = _killing(monkeypatch, refit_mod, "_drop_index_entries")
+    with pytest.raises(_Kill):
+        _refit(root, *FIT)
+    restore()
+    coll = rec.local_collection(root, NAME, col.read(root, NAME))
+    refused = query_service.refuse_at_start([coll])
+    assert [c.name for c, _ in refused] == [NAME]
+    assert "not served" in query_service.withheld_reason(coll) and "refit" in query_service.withheld_reason(coll)
+    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: [coll])
+    monkeypatch.setattr(collections_mod, "by_name", lambda n: coll if n == NAME else None)
+    assert query_service.resolve_collections(None) == [], "left out of the federated set"
+    with pytest.raises(HTTPException) as e:
+        query_service.resolve_collections([NAME])
+    assert e.value.status_code == 403 and "refit" in e.value.detail
+    query_service._refused_at_start.clear()
+    assert "refit" in query_service.withheld_reason(coll), "and read live, a refit begun since the start"
+    assert _refit(root, *FIT) == 0
+    done = rec.local_collection(root, NAME, col.read(root, NAME))
+    assert query_service.refuse_at_start([done]) == []
+    assert not (query_service.withheld_reason(done) or "").startswith("not served")
+
+
+@pytest.mark.parametrize("error, cleared", [
+    ("embed: embed server HTTP 413: input is too long for the context", True),
+    ("embed: embed server HTTP 400: too many tokens (still refused at a 8000-character cut)", True),
+    ("retracted: the origin retracted the record (06 §6.1)", False),
+    ("rdf: ParseError: unclosed tag at line 4", False)])
+def test_the_reset_clears_only_the_error_the_refit_explains(held_gb, capsys, error, cleared):
+    root, _old, _h, _e = held_gb
+    dense = _dense(root)
+    m = sqlite3.connect(root / NAME / "state" / "manifest.sqlite")
+    m.execute("UPDATE documents SET error=?, retries=3 WHERE uid=?", (error, dense))
+    m.commit()
+    m.close()
+    native = int(_marks(root)[dense][0])
+    assert _refit(root, *FIT, extra=("--dry-run",)) == 0
+    out = capsys.readouterr().out
+    assert ("keep their error" in out) is not cleared
+    assert _refit(root, *FIT) == 0
+    got = _marks(root)[dense]
+    assert got[-2:] == ((None, 0) if cleared else (error, 3))
+    assert _rows(root, [native])[native] == {} and _entries(root, native) == 0, "deleted all the same"
+    assert got[1:8] == (0, 0, 0, 0, 0, 0, 0), "and its marks emptied, to be cut again"
+
+
+def test_the_annotations_target_marker_is_written_with_the_first_write(held_gb, monkeypatch):
+    root, _old, _h, _e = held_gb
+    restore = _killing(monkeypatch, refit_mod, "_drop_index_entries")
+    with pytest.raises(_Kill):
+        _refit(root, *FIT)
+    restore()
+    assert (root / "gb-editions" / "state" / refit_mod.TARGET_MARKER).is_file()
+    assert refit_mod.boot_refusal(root / "gb-editions" / "state"), "refused at boot from the first write"
+    assert _refit(root, *FIT) == 0
+    assert refit_mod.boot_refusal(root / "gb-editions" / "state") is None
+
+
+def test_the_codex_line_keeps_its_comment_and_the_file_its_line_endings(held_gb):
+    root, old, _h, _e = held_gb
+    f = root / f"{NAME}.toml"
+    f.write_bytes(f'codex = "{old.collection_id}"   # the encoder window, 2026-11-27\r\nembed = "all"\r\n'.encode())
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    assert f.read_bytes() == \
+        f'codex = "{new.collection_id}"   # the encoder window, 2026-11-27\r\nembed = "all"\r\n'.encode()

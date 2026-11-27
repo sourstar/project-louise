@@ -1166,6 +1166,13 @@ def cmd_collection_refit(a) -> int:
         print(f"  affected    {len(pl['changed'])} of {pl['documents']} document(s) (bound {pl['bound']}): "
               + (", ".join(c[1] for c in pl["changed"][:10]) + (" …" if len(pl["changed"]) > 10 else "")
                  if pl["changed"] else "none — nothing to refit"))
+        if pl["uncut"]:
+            print(f"  uncut       {len(pl['uncut'])} document(s) uncut at both layers, holding nothing: unchanged "
+                  f"({', '.join(pl['uncut'][:10])}{' …' if len(pl['uncut']) > 10 else ''}; the first: "
+                  f"{pl['first_uncut']})")
+        if pl["kept_errors"]:
+            print(f"  errors      {len(pl['kept_errors'])} affected document(s) keep their error (only the "
+                  f"encoder's refusal of an over-window input is cleared): {', '.join(pl['kept_errors'][:10])}")
         print(f"  parts       " + (", ".join(p["path"] for p in pl["parts"]) or "none"))
         print(f"  others      " + (", ".join(f"{o} → {pl['others_to'][o][:23]}…" for o in pl["others"]) or "none")
               + " (re-keyed to the new id)")

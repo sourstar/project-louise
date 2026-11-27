@@ -9,6 +9,28 @@ from . import cancel, collections as collections_mod, db, question_kind, retriev
 from .rage import dispatch
 
 
+#: what the boot check refused in THIS process (`refuse_at_start`), by the
+#: collection's state directory — its physical identity, never its name
+_refused_at_start: dict[str, str] = {}
+
+
+def _state_of(collection) -> str:
+    from pathlib import Path
+    return str(Path(collection.manifest_path).parent)
+
+
+def refuse_at_start(collections) -> list[tuple]:
+    """THE WEB'S BOOT CHECK, the worker's own (`spaces.refuse_boot`,
+    invariant 1): each collection it refuses is not served — left out of the
+    federated set and refused by name (`withheld_reason`) — and the others
+    are (the third read of 141b1d2e, 3: the web only printed it)."""
+    from . import spaces
+    refused = spaces.refuse_boot(collections)
+    _refused_at_start.clear()
+    _refused_at_start.update({_state_of(c): why for c, why in refused})
+    return refused
+
+
 def withheld_reason(collection) -> str | None:
     """Why this collection may not be SEARCHED, or None.
 
@@ -19,6 +41,14 @@ def withheld_reason(collection) -> str | None:
     answered queries. `app/licensing.py` is THE resolution; this only
     reads it.
     """
+    # invariant 1: what the boot check refused is not served — and a refit
+    # begun since, read now (the check's own function, app/hold/refit.py)
+    why = _refused_at_start.get(_state_of(collection))
+    if why is None:
+        from .hold import refit
+        why = refit.boot_refusal(_state_of(collection))
+    if why:
+        return f"not served: {why}"
     from . import licensing
     try:
         if licensing.state_for(collection) == licensing.MISSING:

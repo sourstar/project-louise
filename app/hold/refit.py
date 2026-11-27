@@ -176,8 +176,8 @@ def cut_window(source, target, lo: int, hi: int) -> dict:
     from app import db, layers, record_source
     con = db.read_only_connect(source)
     if con is None:
-        return {"changed": [], "documents": 0, "errors": 0, "first_error": None, "failed": [], "errored": 0,
-                "out_of_scope": 0}
+        return {"changed": [], "documents": 0, "errors": 0, "first_error": None, "failed": [], "uncut": [],
+                "first_uncut": None, "errored": 0, "out_of_scope": 0}
     try:
         rows = [dict(r) for r in con.execute(
             "SELECT rowid, * FROM documents WHERE rowid > ? AND rowid <= ? ORDER BY rowid", (lo, hi))]
@@ -187,26 +187,43 @@ def cut_window(source, target, lo: int, hi: int) -> dict:
     pair = layers.has_pair_layer(source)
     changed: list[list] = []
     failed: list[str] = []
+    uncut: list[list] = []
     documents = errors = errored = out_of_scope = 0
-    first_error = None
+    first_error = first_uncut = None
     for row in rows:
         errored += row.get("error") is not None
         out_of_scope += not row.get("in_scope")
+        documents += 1
+        # THE OLD CUT FIRST: a document the old layers cannot cut either (no
+        # epub, txt or rdf; gutenberg's 34) is the plan's to judge by what it
+        # holds — never a change, never a cut error of the new layers
+        sections = None
         try:
             title, sections, _src = record_source.title_sections_and_source(source, row, plugin, pair=pair)
             before = [(c["id"], c["text"]) for c in layers.chunks_for_document(source, row, sections, title=title)]
+        except Exception as e:   # noqa: BLE001 — uncut at the old layers: the plan looks at what it holds
+            try:                 # ...and at the new: one the new layers cut now is a change (it held nothing)
+                if sections is None:
+                    raise
+                layers.chunks_for_document(target, row, sections, title=title)
+                changed.append([int(row["rowid"]), row["uid"], int(row["native_id"])])
+            except Exception:    # noqa: BLE001 — uncut at both layers: unchanged, if it holds nothing
+                first_uncut = first_uncut or f"{row['uid']}: {type(e).__name__}: {e}"[:300]
+                uncut.append([int(row["rowid"]), row["uid"], int(row["native_id"])])
+            continue
+        try:
             after = [(c["id"], c["text"]) for c in layers.chunks_for_document(target, row, sections, title=title)]
-        except Exception as e:   # noqa: BLE001 — counted, never a change: the plan refuses
+        except Exception as e:   # noqa: BLE001 — cut at the old layers, not at the new: the plan refuses
             errors += 1
             first_error = first_error or f"{row['uid']}: {type(e).__name__}: {e}"[:300]
             if len(failed) < SHOWN:
                 failed.append(row["uid"])
             continue
-        documents += 1
         if before != after:
             changed.append([int(row["rowid"]), row["uid"], int(row["native_id"])])
     return {"changed": changed, "documents": documents, "errors": errors, "first_error": first_error,
-            "failed": failed, "errored": errored, "out_of_scope": out_of_scope}
+            "failed": failed, "uncut": uncut, "first_uncut": first_uncut, "errored": errored,
+            "out_of_scope": out_of_scope}
 
 
 def _changes(s_coll, t_coll, *, start: int, window: int, processes: int | None, stop,
@@ -264,12 +281,45 @@ def _commit(con, fn) -> None:
         raise
 
 
+#: THE ONE ERROR A REFIT CAN EXPLAIN: the encoder's refusal of an input
+#: (embeddings.InputRefused, recorded as `embed: embed server HTTP 400|413|422 …`)
+#: — an over-window input, which the new window cuts to fit. Every other error
+#: (a retraction, 06 §6.1; a parse error; one a human set) is KEPT: the
+#: document is still deleted and cut again if its cut changed, and stays out
+#: of every selection until a human intervenes (the third read of 141b1d2e, 4).
+CLEARED_ERROR = r"^embed: embed server HTTP (400|413|422)\b"
+
+
+def clears(error: str | None) -> bool:
+    import re
+    return error is None or re.match(CLEARED_ERROR, str(error)) is not None
+
+
+def kept_errors(root: Path, name: str, codex: Codex, changed: list[list]) -> list[str]:
+    """The changed documents whose error the reset KEEPS (`clears`)."""
+    from . import records as rec
+    if not changed:
+        return []
+    con = sqlite3.connect(f"file:{Path(rec._local_collection(root, name, codex).manifest_path).as_posix()}?mode=ro",
+                          uri=True)
+    try:
+        out = []
+        for k in range(0, len(changed), 500):
+            win = [c[0] for c in changed[k:k + 500]]
+            out += [r[0] for r in con.execute(
+                f"SELECT uid, error FROM documents WHERE rowid IN ({','.join('?' for _ in win)})", win)
+                if not clears(r[1])]
+        return sorted(out)
+    finally:
+        con.close()
+
+
 def _reset(con, changed: list[list]) -> int:
     """Step (a): the changed documents' marks emptied as a relayered sister's
     are (hold/carry.py `RELAYERED_MARKS`) and `embed_done` 0 (a declined
-    document's -1 kept), their error and retries cleared (a document the
-    refit cuts again is met by the stages afresh, the independent read of
-    e492ebaf, 1); their chunk-hash, imported-chunk and queue rows dropped
+    document's -1 kept); the error the refit explains cleared with its
+    retries (`clears`: the encoder's refusal of an over-window input), every
+    other error kept; their chunk-hash, imported-chunk and queue rows dropped
     (their chunks are gone): the worker cuts, indexes and embeds them again.
     Inside the caller's transaction. Repeatable."""
     from . import carry as carry_mod
@@ -278,8 +328,13 @@ def _reset(con, changed: list[list]) -> int:
     rowids, uids, books = [c[0] for c in changed], [c[1] for c in changed], [c[2] for c in changed]
     n = con.execute(
         f"UPDATE documents SET embed_done=CASE WHEN embed_done>0 THEN 0 ELSE embed_done END, "
-        f"error=NULL, retries=0, "
         f"{carry_mod.RELAYERED_MARKS} WHERE rowid IN ({','.join('?' for _ in rowids)})", rowids).rowcount
+    cleared = [r[0] for r in con.execute(
+        f"SELECT rowid, error FROM documents WHERE rowid IN ({','.join('?' for _ in rowids)})", rowids)
+        if r[1] is not None and clears(r[1])]
+    if cleared:
+        con.execute(f"UPDATE documents SET error=NULL, retries=0 WHERE rowid IN ({','.join('?' for _ in cleared)})",
+                    cleared)
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if "chunk_hashes" in tables:
         con.execute(f"DELETE FROM chunk_hashes WHERE native_id IN ({','.join('?' for _ in books)})", books)
@@ -464,6 +519,22 @@ def _hex(cid: str) -> str:
     return cid.split(":", 1)[-1]
 
 
+def aside_name(root: Path, name: str, old_id: str) -> str:
+    """The folder under `shard/.replaced/` and `state/.replaced/` this refit
+    sets the old id's files aside in: `<old hex>`, else `<old hex>.<n>`, the
+    first free in both — a refit back to an earlier Codex, and on, never
+    meets the folder an earlier refit left (the third read of 141b1d2e, 2)."""
+    from . import collection as col
+    oh = _hex(old_id)
+    places = (col.shard_dir_of(Path(root), name) / ASIDE, Path(root) / name / "state" / ASIDE)
+    n = 0
+    while True:
+        folder = oh if n == 0 else f"{oh}.{n}"
+        if not any((d / folder).exists() for d in places):
+            return folder
+        n += 1
+
+
 def parts_holding(shard_dir: Path, snap, uids) -> list[dict]:
     """The record parts of `snap` holding any of `uids`, from each part's own
     trailing index (no record decoded), by threads."""
@@ -580,8 +651,10 @@ def _whole_of(rel: str) -> str | None:
 
 
 def _skipped(rel: str, oh: str) -> bool:
-    """What a sweep passes over: what the refit set aside, its own markers."""
-    return rel.startswith((f"shard/{ASIDE}/", f"state/{ASIDE}/")) or rel in tuple(f"state/{m}" for m in _OWN)
+    """What a sweep passes over: what the refit set aside, its own markers
+    and their temporary files (`_write_atomic`, a kill before the rename)."""
+    return (rel.startswith((f"shard/{ASIDE}/", f"state/{ASIDE}/")) or rel in tuple(f"state/{m}" for m in _OWN)
+            or rel in tuple(f"state/.{m}.refit-tmp" for m in _OWN))
 
 
 def disposition(root: Path, name: str, rel: str, old_id: str, *, key) -> tuple[str, str]:
@@ -946,16 +1019,36 @@ def _changed_of(root: Path, name: str, old: Codex, new: Codex, *, window: int, p
     s_coll = rec.local_collection(root, name, old)
     t_coll = planned_target(s_coll, new)
     changed: list[list] = []
-    counts: dict[str, Any] = {"documents": 0, "errors": 0, "first_error": None, "failed": []}
+    counts: dict[str, Any] = {"documents": 0, "errors": 0, "first_error": None, "failed": [], "uncut": [],
+                              "first_uncut": None}
 
     def each(_hi, got) -> None:
         changed.extend(got["changed"])
-        counts["documents"] += got["documents"] + got["errors"]
+        counts["documents"] += got["documents"]
         counts["errors"] += got["errors"]
         counts["first_error"] = counts["first_error"] or got["first_error"]
         counts["failed"] = (counts["failed"] + got.get("failed", []))[:SHOWN]
+        counts["uncut"] += got.get("uncut", [])
+        counts["first_uncut"] = counts["first_uncut"] or got.get("first_uncut")
     _changes(s_coll, t_coll, start=0, window=window, processes=processes, stop=None, each=each, log=log)
     return changed, counts
+
+
+def holding(coll, docs: list[list]) -> list[str]:
+    """Of `docs` ([rowid, uid, native id]), the uids holding vector rows or
+    text-index entries — read from the table and the index themselves, not
+    from the marks."""
+    from app import embeddings, fts
+    if not docs:
+        return []
+    books = [int(d[2]) for d in docs]
+    held = embeddings.held_chunks(coll, books)
+    out = {d[1] for d in docs if held.of(int(d[2]))}
+    for g, ids in _by_group(coll, docs).items():
+        for d in docs:
+            if d[1] not in out and int(d[2]) in ids and fts.books_held(g, [int(d[2])], coll):
+                out.add(d[1])
+    return sorted(out)
 
 
 #: a change wider than this share of the collection's documents is refused
@@ -1067,6 +1160,12 @@ def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: 
                f"cannot be cut is never counted a change")
     elif not changed:
         refuse("the new window cuts no document otherwise: there is nothing to refit")
+    uncut = counts["uncut"]
+    held_uncut = holding(rec._local_collection(root, name, old), uncut) if uncut else []
+    if held_uncut:
+        refuse(f"{len(held_uncut)} document(s) the old layers cannot cut hold vector rows or index entries "
+               f"({', '.join(held_uncut[:10])}{' …' if len(held_uncut) > 10 else ''}): what cut them is not this "
+               f"tree's — the first: {counts['first_uncut']}")
     bound = affected_bound(counts["documents"], affected_max)
     if len(changed) > bound:
         refuse(f"the new window cuts {len(changed)} of {counts['documents']} document(s) otherwise, more than "
@@ -1096,7 +1195,10 @@ def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: 
         finally:
             _release_index_writers(coll)
     return {"name": name, "from": old.collection_id, "to": new.collection_id, "changed": changed,
-            "documents": counts["documents"], "bound": bound,
+            "documents": counts["documents"], "bound": bound, "uncut": [d[1] for d in uncut],
+            "first_uncut": counts["first_uncut"], "kept_errors": kept_errors(root, name, old, changed),
+            "aside": aside_name(root, name, old.collection_id),
+            "others_aside": {o: aside_name(root, o, col.resolve(root, o)[1].collection_id) for o in others},
             "parts": parts, "snapshot": latest["id"] if latest else None, "latest": latest, "others": others,
             "others_to": others_to, "others_latest": others_latest, "sweep": sweep, "quarantine": listed,
             "datasets": datasets(root, name, others, platform=listed is not None),
@@ -1147,6 +1249,16 @@ def _write_atomic(p: Path, data: bytes) -> None:
     os.replace(tmp, p)
 
 
+def _write_target_marker(root: Path, name: str, m: dict) -> None:
+    _write_atomic(Path(root) / name / "state" / TARGET_MARKER, json.dumps(m, sort_keys=True).encode("utf-8"))
+
+
+def _folder(m: dict) -> str:
+    """The aside folder a marker records (`aside_name`); a marker written
+    before folders were versioned names none: its old id's hex."""
+    return m.get("aside") or _hex(m["from"])
+
+
 def _save(root, name: str, m: dict) -> None:
     _write_atomic(Path(root) / name / "state" / MARKER, json.dumps(m, sort_keys=True, indent=1).encode("utf-8"))
 
@@ -1182,7 +1294,7 @@ def _predecessor(root: Path, name: str, m: dict | None) -> Codex:
     p = col.shard_dir_of(root, name) / "codex.json"
     if p.is_file() and cx.loads(p.read_bytes()).collection_id == m["from"]:
         return cx.loads(p.read_bytes())
-    return cx.loads((col.shard_dir_of(root, name) / ASIDE / _hex(m["from"]) / "codex.json").read_bytes())
+    return cx.loads((col.shard_dir_of(root, name) / ASIDE / _folder(m) / "codex.json").read_bytes())
 
 
 def predecessor(root, name: str) -> Codex:
@@ -1194,7 +1306,7 @@ def run(root, name: str, layers, *, key=None, now: str, window: int = WINDOW, pr
         affected_max: int | None = None, log: Callable[[str], None] = print) -> dict[str, Any]:
     """The steps (module docstring), from where `state/refit.json` says,
     under the worker's node-wide lock and every affected collection's."""
-    from . import records as rec
+    from . import collection as col, records as rec
     root = Path(root)
     m = read_marker(root, name)
     if m is not None and m.get("done"):
@@ -1219,7 +1331,13 @@ def run(root, name: str, layers, *, key=None, now: str, window: int = WINDOW, pr
             m = {"kind": "louise-refit", "from": old.collection_id, "to": new.collection_id,
                  "changed": p["changed"], "parts": p["parts"], "latest": p["latest"], "others": p["others"],
                  "others_to": p["others_to"], "others_latest": p["others_latest"], "quarantine": p["quarantine"],
-                 "steps": {}, "done": False}
+                 "aside": p["aside"], "others_aside": p["others_aside"], "steps": {}, "done": False}
+            # THE FIRST WRITE, and the others' markers with it (the third read of
+            # 141b1d2e, 5): each annotations collection is refused at boot from
+            # this moment, as this one is — its target's id is about to change
+            for o in p["others"]:
+                _write_target_marker(root, o, {"from": col.resolve(root, o)[1].collection_id,
+                                               "to": p["others_to"][o], "aside": p["others_aside"][o]})
             _save(root, name, m)
             log(f"[refit] {name}: {len(p['changed'])} document(s) cut otherwise "
                 f"({', '.join(c[1] for c in p['changed'][:SHOWN])}), in {len(p['parts'])} part(s)")
@@ -1236,9 +1354,9 @@ def _steps(root: Path, name: str, old: Codex, new: Codex, m: dict, *, key, now: 
            log) -> dict[str, Any]:
     from app import db, embeddings
     from . import collection as col, records as rec
-    steps, changed, oh = m["steps"], m["changed"], _hex(old.collection_id)
+    steps, changed = m["steps"], m["changed"]
     shard = col.shard_dir_of(root, name)
-    sa = shard / ASIDE / oh
+    sa = shard / ASIDE / _folder(m)
 
     def done(step: str, **info) -> None:
         steps[step] = {"done": True, **info}
@@ -1272,7 +1390,7 @@ def _steps(root: Path, name: str, old: Codex, new: Codex, m: dict, *, key, now: 
     if not steps.get("identity"):
         done("identity", **rekey(root, name, old, new, key=key, now=now,
                                  rewritten=[(p["slice"], p["n"]) for p in m["parts"]],
-                                 latest=(m.get("latest") or {}).get("hash"), log=log))
+                                 latest=(m.get("latest") or {}).get("hash"), folder=_folder(m), log=log))
     if not steps.get("others"):
         moved = {}
         for other in m["others"]:
@@ -1295,7 +1413,7 @@ def _steps(root: Path, name: str, old: Codex, new: Codex, m: dict, *, key, now: 
 def _file_marker(root: Path, name: str, m: dict) -> None:
     """A finished refit's marker filed with what it set aside: nothing names
     the old id in the collection's state after it."""
-    _aside(root / name / "state" / MARKER, root / name / "state" / ASIDE / _hex(m["from"]) / MARKER)
+    _aside(root / name / "state" / MARKER, root / name / "state" / ASIDE / _folder(m) / MARKER)
 
 
 def _parts(root: Path, name: str, new: Codex, m: dict, sa: Path, *, key, now, log) -> str | None:
@@ -1341,7 +1459,7 @@ def _parts(root: Path, name: str, new: Codex, m: dict, sa: Path, *, key, now, lo
 
 
 def rekey(root: Path, name: str, old: Codex, new: Codex, *, key, now: str, rewritten: list,
-          latest: str | None, log) -> dict[str, Any]:
+          latest: str | None, folder: str, log) -> dict[str, Any]:
     """Every file under `name` naming the old id done as `disposition` says
     (decided at the plan): the collection file's `codex` line, the
     manifest's pin and cursors, this node's own attestations over the latest
@@ -1351,9 +1469,8 @@ def rekey(root: Path, name: str, old: Codex, new: Codex, *, key, now: str, rewri
     id>/. Held to empty after."""
     from app import collection_file
     from . import carry as carry_mod, deposit, pin_run
-    oh = _hex(old.collection_id)
     base = root / name
-    ta = base / "state" / ASIDE / oh
+    ta = base / "state" / ASIDE / folder
     out: dict[str, Any] = {}
     held = deposit.held_file(root, name)
     if held.is_file():
@@ -1471,12 +1588,13 @@ def rekey_annotations(root: Path, name: str, old_target: str, new_target: str, *
     if m is None:
         if not any(t.collection_id == old_target for t in targets_of(held)):
             return {"already": held.collection_id}
-        m = {"from": held.collection_id, "to": _retargeted(held, old_target, new_target).collection_id}
-        _write_atomic(mk, json.dumps(m, sort_keys=True).encode("utf-8"))
+        m = {"from": held.collection_id, "to": _retargeted(held, old_target, new_target).collection_id,
+             "aside": aside_name(root, name, held.collection_id)}
+        _write_target_marker(root, name, m)
     old = held if held.collection_id == m["from"] else cx.loads(
-        (shard / ASIDE / _hex(m["from"]) / "codex.json").read_bytes())
+        (shard / ASIDE / _folder(m) / "codex.json").read_bytes())
     new = _retargeted(old, old_target, new_target)
-    sa = shard / ASIDE / _hex(old.collection_id)
+    sa = shard / ASIDE / _folder(m)
     _replace_codex(shard, old, new, sa)
     if not (sa / "snapshots").exists():
         _aside(shard / "snapshots", sa / "snapshots")       # once: what is there after it is the new Codex's
@@ -1492,10 +1610,10 @@ def rekey_annotations(root: Path, name: str, old_target: str, new_target: str, *
         if key is not None:
             sn.sign_snapshot(root, name, sn.load(out), key, now=now)
         prev_hash = sn.load(out).hash
-    got = rekey(root, name, old, new, key=key, now=now, rewritten=[], latest=latest, log=log)
+    got = rekey(root, name, old, new, key=key, now=now, rewritten=[], latest=latest, folder=_folder(m), log=log)
     # ...and what names its TARGET's old id (the cascade's record of the runs)
-    _dispatch(root, name, old_target, new_target, root / name / "state" / ASIDE / _hex(old.collection_id), key=key)
-    _aside(mk, root / name / "state" / ASIDE / _hex(old.collection_id) / TARGET_MARKER)
+    _dispatch(root, name, old_target, new_target, root / name / "state" / ASIDE / _folder(m), key=key)
+    _aside(mk, root / name / "state" / ASIDE / _folder(m) / TARGET_MARKER)
     log(f"[refit] {name}: annotates {new_target[:23]}… now, {new.collection_id[:23]}…")
     return {"from": old.collection_id, "to": new.collection_id, **got}
 
