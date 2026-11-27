@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS documents (
   -- plugin that does not say — and a NULL never groups, so it never
   -- suppresses anything. Local state: in no record, moving no hash.
   work TEXT,
+  -- what the work IS by its own record (app/work_kind.py): 'literary' |
+  -- 'opinion' | NULL, its basis, and the rules' version it was computed by
+  work_kind TEXT,
+  work_kind_basis TEXT,
+  work_kind_v INTEGER,
   in_scope INTEGER DEFAULT 1,
   rdf_done INTEGER DEFAULT 0,
   fts_done INTEGER DEFAULT 0,
@@ -432,7 +437,14 @@ def connect(collection=None, *, shared: bool = False) -> sqlite3.Connection:
             # Local manifest state (invariant 6): it never travels, it is
             # not in any record, and it moves no hash. Adding it is an
             # ALTER plus an rdf re-derive, not a rebuild.
-            "ALTER TABLE documents ADD COLUMN work TEXT"):
+            "ALTER TABLE documents ADD COLUMN work TEXT",
+            # WHAT THE DOCUMENT'S WORK IS, by its own record (app/work_kind.py;
+            # operator, 2026-11-27, docs/notes/fact-fiction-search.md): derived
+            # from `subjects` and `bookshelves`, re-creatable, NULL until the
+            # rdf stage or the index maintainer computes it for this version
+            "ALTER TABLE documents ADD COLUMN work_kind TEXT",
+            "ALTER TABLE documents ADD COLUMN work_kind_basis TEXT",
+            "ALTER TABLE documents ADD COLUMN work_kind_v INTEGER"):
         try:
             con.execute(statement)
         except sqlite3.OperationalError:
