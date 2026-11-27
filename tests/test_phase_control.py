@@ -255,5 +255,6 @@ def test_a_search_claims_before_the_encoder_is_used(tmp_path, isolated_config):
              inspect.getsource(retrieval._search_one_collection).splitlines()]
     claim = next(i for i, ln in enumerate(lines)
                  if "dispatch.interactive(dispatch.Level.QUERY)" in ln)
-    use = next(i for i, ln in enumerate(lines) if "lists.append(embeddings.search" in ln)
+    # the encoder is used where the vector leg is asked (the leg kept only once it answered)
+    use = next(i for i, ln in enumerate(lines) if "embeddings.search_records(" in ln)
     assert claim < use, "claimed before the encoder is used, not after"
