@@ -29,7 +29,7 @@
      no button, and nothing asks. Hidden until /static/voice.js finds a
      browser that will open a microphone for this page. #}
   <div class="q-row">
-  <textarea id="q" rows="3" placeholder="Ask across every collection in scope… Ctrl/Cmd+Enter to ask"
+  <textarea id="q" rows="2" placeholder="Ask across every collection in scope… Ctrl/Cmd+Enter to ask"
     onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();go()}"></textarea>
   {% if voice.input.available %}
   <button id="mic" class="voice-btn" type="button" hidden aria-pressed="false" aria-label="speak the question"
@@ -217,6 +217,14 @@
   /* the question box and its microphone on one row, at any width */
   .q-row{display:flex;gap:6px;align-items:stretch}
   .q-row textarea{flex:1 1 auto;min-width:0}
+  /* THE QUESTION BOX FITS ITS TEXT (operator, 2026-11-27: "Fix the query text
+     box to a minimum size, and expand it automatically to fit the text; the
+     current manual resize is not handy"): two lines at least, growing with
+     what is written up to 40% of the screen, then scrolling; no handle.
+     CSS's own `field-sizing: content` (CSS Basic User Interface Level 4;
+     Chrome 123+, Android Chrome included); `fitQuestion` below for a browser
+     without it. */
+  #q{resize:none;field-sizing:content;min-height:calc(2lh + 16px);max-height:40vh;overflow-y:auto;line-height:1.4}
   .voice-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px}
   .voice-btn[hidden]{display:none}
   #mic{flex:0 0 auto;min-width:44px;padding:0 10px}
@@ -646,7 +654,7 @@ async function relayRestore(){
       relayDropped(s.answer&&!s.answer.ended?'answer':'search','the node no longer holds it (it restarted while the page was away)');
     return;
   }
-  document.getElementById('q').value=s.q||'';
+  document.getElementById('q').value=s.q||''; fitQuestion();
   document.getElementById('results').innerHTML='<div class="note">picking up the last question…</div>';
   tq.hold=!!s.answer;
   const mine=++goSeq;                        // it is in flight: the button aborts it
@@ -1429,6 +1437,15 @@ function linkCitations(){
 placeReport();
 wireHits();
 relayRestore();
+// the question box's height, where the browser has no `field-sizing: content`
+// (the CSS above): grown to its text, within its min-height and max-height
+function fitQuestion(){
+  const q=document.getElementById('q');
+  if(!q||(window.CSS&&CSS.supports&&CSS.supports('field-sizing','content')))return;
+  q.style.height='auto'; q.style.height=q.scrollHeight+2+'px';
+}
+document.getElementById('q').addEventListener('input',fitQuestion);
+fitQuestion();
 </script>
 {% if voice.input.available or voice.output.available %}
 <script src="/static/voice.js?v={{ asset_v }}"></script>

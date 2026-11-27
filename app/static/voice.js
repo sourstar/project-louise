@@ -500,6 +500,7 @@
       // asked is replaced by the new one
       const q = document.getElementById('q'), prior = q.value.trim();
       q.value = prior && prior !== lastAsked ? q.value.replace(/\s*$/, ' ') + text : text;
+      if (typeof window.fitQuestion === 'function') window.fitQuestion();   // the box fits what was dictated
       dictated = q.value.trim();         // asked as it is, a spoken question (asking)
       // NOT FOCUSED (operator, 2026-11-12: "Hitting the button to speak makes
       // the keyboard appear; wrong, it shall appear only by clicking in the
