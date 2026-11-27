@@ -1327,10 +1327,13 @@ measured (published figures disagree).
   does not park, and with the three lines left in a model's file the gate refuses its run ("the runner will not park it") — take
   them out first.
 - **MEDCPT ON OUR LLAMA.CPP — STAGED, NOT BUILT (2026-11-27; the operator's "Move both"; medcpt-on-llama-cpp.md):** staged 0034,
-  `engine-pair.series` = engine-pace + 0034 (`e3564b6fb4a0`): `pairs:true` builds HF's `[CLS] a [SEP] b [SEP]` (longest-first cut) for an
+  `engine-pair.series` = engine-pace + 0034 (`b77c50dd0fbb`): `pairs:true` builds HF's `[CLS] a [SEP] b [SEP]` (longest-first cut) for an
   embedding and a rerank, the second segment on token-type row 1; `rerank_score:sigmoid`; the converter keeps a BERT classifier's
-  pooler (dropped, MedCPT's cross-encoder scored noise). CPU through the gRPC server against torch: article 0.9999882 at worst
-  (0.9736 without the segments), cross sigmoid within 0.0075. Next: München converts, gates each against its OpenVINO run.
+  pooler (dropped, MedCPT's cross-encoder scored noise) and writes the GELU the model declares (erf for BERT's "gelu"). CPU through
+  the gRPC server against torch, f16: article 0.9999999 at worst (0.9999882 tanh, 0.9736 without the segments), cross sigmoid
+  within 0.00063. THE ARTICLE ENCODER IS A NEW PUBMED SPACE (a GGUF is other weights than the OV IR): its own CPU reference,
+  calibration and golden vectors, then a measured carry — the operator's word first. The reranker (not a space) goes to its
+  gate; batching it is faster but makes scores depend on batch-mates (CPU: 174 of 192 moved), not admitted.
 - **THE ZFS ARC COUNTED, THE COPY PACED — STAGED, NOT BUILT (2026-11-26; the operator's "C" and "Both go tonight"; parking-step-2.md
   §15):** A is München's (`zfs_arc_sys_free` 15,032,385,536 B, live). B: staged 0032, the SERVER after 0031 (tree `1222e361…`) —
   a park counts MemAvailable plus the ARC's evictable part less 1 GiB; and staged 0033, the ENGINE (`engine-pace.series` =

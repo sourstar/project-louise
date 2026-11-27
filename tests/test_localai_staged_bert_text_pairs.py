@@ -26,7 +26,7 @@ SERIES = STAGED / "engine-pair.series"
 BASE = STAGED / "engine-pace.series"
 BUILD = ROOT / "deploy" / "localai" / "llama-cpp" / "build.sh"
 NOTE = (ROOT / "docs" / "notes" / "medcpt-on-llama-cpp.md").read_text(encoding="utf-8")
-NAME = "e3564b6fb4a0"
+NAME = "b77c50dd0fbb"
 B = "backend/cpp/llama-cpp/"
 INNER = B + "patches/0026-bert-text-pairs.patch"
 
@@ -105,6 +105,20 @@ def test_the_marker_is_the_one_vega_writes():
     assert vtag.PAIR_MARK == "\x1e" + "LOUISE-PAIR" + "\x1e"
 
 
+def test_the_gelu_is_the_one_the_file_declares_and_none_keeps_the_tanh():
+    bert = INNER_FILES["src/models/bert.cpp"]
+    added = _added(bert)
+    assert "hparams.llm_ffn_op = LLM_FFN_GELU;" in added                       # no key: the tanh GELU, as before
+    assert 'if (hidden_act == "gelu" || hidden_act == "gelu_python") {\n            hparams.llm_ffn_op = LLM_FFN_GELU_ERF;' in added
+    assert "is not one this graph computes" in added                           # an unknown activation refused
+    assert "const llm_ffn_op_type ffn_op = model.arch == LLM_ARCH_BERT ? hparams.llm_ffn_op : LLM_FFN_GELU;" in added
+    assert "LLM_FFN_GELU, LLM_FFN_SEQ, il);" in _removed(bert) and "ffn_op, LLM_FFN_SEQ, il);" in added
+    # the standard key (ModernBert's), written by the converter for BertModel itself
+    converter = _added(INNER_FILES["conversion/bert.py"])
+    assert 'if type(self) is BertModel and (hidden_act := self.hparams.get("hidden_act")):' in converter
+    assert "self.gguf_writer.add_hidden_act(hidden_act)" in converter
+
+
 def test_the_converter_keeps_a_classifier_s_pooler_and_knows_medcpt():
     bert = _added(INNER_FILES["conversion/bert.py"])
     assert 'if name in ("pooler.dense.weight", "pooler.dense.bias") and cls is not BertModel:' in bert
@@ -160,7 +174,12 @@ def test_the_candidate_is_the_pace_engine_plus_this_patch_and_its_name_is_held()
 
 
 def test_the_note_says_what_was_measured_and_what_was_not():
-    for said in (NAME, "0.9999882", "0.9736", "within 0.0075", "216 of 216", "**The residual is the GELU, not the pair**",
-                 "NOT measured: on the card", "`cls.weight` and `cls.bias`", "`rerank_score:sigmoid`",
-                 "A model that fails stays on\nOpenVINO."):
-        assert said in NOTE, said
+    note = " ".join(NOTE.split())                 # the note's words, whatever its line breaks
+    for said in (NAME, "**0.9999999**", "0.9999882", "0.9736", "**within 0.00063**", "216 of 216",
+                 "## 4. The article encoder is a NEW pubmed space", "**its own CPU reference**, mandatory",
+                 "**Why the GELU is decided now.**", "67 of 67 vectors and 80 of 80 logits the same floats",
+                 "**Batching is the speed-up, and it breaks the score's independence from its batch-mates**",
+                 "| 4 a pass (`parallel:4`, ubatch 2,048), FA ON | 2.7 s | 174 of 192 |",
+                 "NOT measured: on the card", "`cls.weight` and `cls.bias`", '`bert.hidden_activation = "gelu"`',
+                 "A model that fails stays on OpenVINO."):
+        assert said in note, said

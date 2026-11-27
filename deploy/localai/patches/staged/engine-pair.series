@@ -9,8 +9,10 @@
 #         [SEP] inside a first segment, or inside one text, is refused.
 #         rerank_score:sigmoid answers the logit's sigmoid, as the OpenVINO backend did.
 #         The converter keeps a BERT sequence classifier's pooler (MedCPT's
-#         cross-encoder needs it) and knows MedCPT's tokenizer: its GGUFs are converted
-#         with this tree. Without pairs:true no model's answer can move.
+#         cross-encoder needs it), knows MedCPT's tokenizer, and writes the model's
+#         GELU (bert.hidden_activation: "gelu" the erf GELU, which the graph then
+#         computes): MedCPT's GGUFs are converted with this tree. A GGUF without the
+#         key keeps the tanh GELU; without pairs:true no model's answer can move.
 #   SERIES_FILE=deploy/localai/patches/staged/engine-pair.series \
 #     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
 # ANOTHER ENGINE: a build and every gate again, and MedCPT's two models gated against

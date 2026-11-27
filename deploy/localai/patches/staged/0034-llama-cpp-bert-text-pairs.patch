@@ -2,7 +2,7 @@ From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 27 Nov 2026 07:54:44 +0000
 Subject: [PATCH] feat(llama-cpp): a BERT text pair for embedding and rerank
- (pairs:true), and rerank_score:sigmoid
+ (pairs:true), its declared GELU, and rerank_score:sigmoid
 
 Carried as a llama.cpp patch beside the others
 (patches/0026-bert-text-pairs.patch), after 0025.
@@ -12,7 +12,11 @@ cross-encoder a (query, article) pair, each as Hugging Face's pair
 tokenizer builds it: `[CLS] a [SEP] b [SEP]`, the second segment on
 token-type row 1, the two cut longest first to max_length. llama.cpp gave
 every token row 0, its rerank prompt for a WordPiece vocabulary had no
-closing [SEP], and its converter dropped a BERT classifier's pooler.
+closing [SEP], its converter dropped a BERT classifier's pooler, and its
+graph computed the tanh GELU where BERT's "gelu" is the erf one. The
+inner patch makes a GGUF declare its activation (`bert.hidden_activation`,
+written by the converter, the key ModernBert reads); one without it keeps
+the tanh GELU and its bytes.
 
 With the model option `pairs:true` (VeGa's wrapper already sends pairs only
 to a model declaring it):
@@ -31,24 +35,25 @@ A llama.cpp without pair_segments (a fork) refuses a load asking pairs:true:
 a pair read as one segment is a wrong vector. Without the option nothing
 changes.
 
-Measured on CPU (this tree, both models converted with it, f32) through the
-gRPC server, against NCBI's usage (transformers, fp32, CPU): the article
-encoder, 67 PubMed pairs (three past 512 tokens, one per truncation case):
-cosine 0.9999882 at worst, the token counts Hugging Face's; without the
-segments 0.9736. The cross-encoder, 80 (title, abstract) pairs: sigmoid
-scores within 0.0075, logits within 0.079, the order of every pair the same
-but for one tie (two records with the same abstract); without pairs, logits
-off by up to 18.9. Not run on a card.
+Measured on CPU (this tree, both models converted with it, f16, the erf
+GELU declared) through the gRPC server, against NCBI's usage (transformers,
+fp32, CPU): the article encoder, 67 PubMed pairs (three past 512 tokens, one
+per truncation case): cosine 0.9999999 at worst (0.9999882 with the tanh
+GELU, 0.9736 without the segments), the token counts Hugging Face's. The
+cross-encoder, 80 (title, abstract) pairs: sigmoid scores within 0.00063
+(0.0071 with the tanh GELU), the order of every pair the same but for one
+tie (two records with the same abstract); without pairs, logits off by up
+to 18.9. Not run on a card.
 
 Assisted-by: Claude Code
 ---
  backend/cpp/llama-cpp/CMakeLists.txt          |   6 +
- backend/cpp/llama-cpp/grpc-server.cpp         | 155 ++++++-
- .../patches/0026-bert-text-pairs.patch        | 389 ++++++++++++++++++
+ backend/cpp/llama-cpp/grpc-server.cpp         | 155 +++++-
+ .../patches/0026-bert-text-pairs.patch        | 442 ++++++++++++++++++
  backend/cpp/llama-cpp/prepare.sh              |  13 +
- backend/cpp/llama-cpp/text_pair.h             | 123 ++++++
- backend/cpp/llama-cpp/text_pair_test.cpp      | 303 ++++++++++++++
- 6 files changed, 987 insertions(+), 2 deletions(-)
+ backend/cpp/llama-cpp/text_pair.h             | 123 +++++
+ backend/cpp/llama-cpp/text_pair_test.cpp      | 303 ++++++++++++
+ 6 files changed, 1040 insertions(+), 2 deletions(-)
  create mode 100644 backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch
  create mode 100644 backend/cpp/llama-cpp/text_pair.h
  create mode 100644 backend/cpp/llama-cpp/text_pair_test.cpp
@@ -293,11 +298,11 @@ index c878fa6..7550bde 100644
              int tokens_evaluated = response.value("tokens_evaluated", 0);
 diff --git a/backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch b/backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch
 new file mode 100644
-index 0000000..3cc242d
+index 0000000..56dce4b
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch
-@@ -0,0 +1,389 @@
-+llama: a BERT reads a text pair's second segment on token-type row 1 (pair_segments), and a BERT sequence classifier keeps its pooler
+@@ -0,0 +1,442 @@
++llama: a BERT reads a text pair's second segment on token-type row 1 (pair_segments), its declared GELU, and a sequence classifier keeps its pooler
 +
 +A BERT trained on text pairs reads `[CLS] a [SEP] b [SEP]` with the first
 +segment's tokens on token-type row 0 and the second's on row 1 - Hugging
@@ -330,10 +335,17 @@ index 0000000..3cc242d
 +pre-tokenizer for WPM): without it the converter stops on "BPE pre-tokenizer
 +was not recognized".
 +
-+Not changed: the residual against torch (cosine 1 - 1.2e-5, logits 0.08) is
-+ggml's tanh GELU against BERT's erf GELU, on every BERT here alike; moving
-+BERT to ggml_gelu_erf would move every BERT space's vectors and belongs to a
-+new space, not to this patch.
++The GELU a BERT was trained with: transformers' BERT "gelu" is the exact erf
++GELU, and the graph computed the tanh one for every BERT. The converter now
++writes the model's hidden_act as `bert.hidden_activation` (the key ModernBert
++reads), and the BERT graph computes the GELU the file declares: "gelu" the
++erf GELU (ggml_gelu_erf), the tanh names the tanh GELU, anything else
++refused. A GGUF without the key - every file converted before - keeps the
++tanh GELU and its bytes (measured: 67 of 67 vectors and 80 of 80 logits the
++same floats). With it, against torch: the article encoder from 1 - 1.16e-5
++to 1 - 1.17e-7 (f16 weights), the cross-encoder's logits from 0.078 to
++0.0062. The activation travels in the weights file, so in its digest: a
++space whose GGUF declares it is another space than one whose GGUF does not.
 +
 +Checked: tests/test-bert-pair-segments.cpp, standard library only, 8 cases;
 +both MedCPT models converted with this tree, embedded and scored through the
@@ -378,10 +390,22 @@ index 0000000..3cc242d
 +         if res is None:
 +             logger.warning("\n")
 +diff --git a/conversion/bert.py b/conversion/bert.py
-+index 150b266..df1028b 100644
++index 150b266..43eb494 100644
 +--- a/conversion/bert.py
 ++++ b/conversion/bert.py
-+@@ -79,8 +79,12 @@ class BertModel(TextModel):
++@@ -34,6 +34,11 @@ class BertModel(TextModel):
++         self.gguf_writer.add_causal_attention(False)
++         self._try_set_pooling_type()
++ 
+++        # the FFN's activation as transformers names it ("gelu": the exact erf GELU), read by the BERT graph as
+++        # ModernBert's reads `hidden_activation`; a GGUF without it is computed with the tanh GELU
+++        if type(self) is BertModel and (hidden_act := self.hparams.get("hidden_act")):
+++            self.gguf_writer.add_hidden_act(hidden_act)
+++
++         if self.cls_out_labels:
++             self.gguf_writer.add_classifier_output_labels([v for k, v in sorted(self.cls_out_labels.items())])
++ 
++@@ -79,8 +84,12 @@ class BertModel(TextModel):
 +         if name.endswith(".beta"):
 +             name = name[:-5] + ".bias"
 + 
@@ -396,7 +420,7 @@ index 0000000..3cc242d
 +             return None
 + 
 +         if name.startswith("cls.predictions"):
-+@@ -92,6 +96,15 @@ class BertModel(TextModel):
++@@ -92,6 +101,15 @@ class BertModel(TextModel):
 +         return super().filter_tensors((name, gen))
 + 
 +     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -549,10 +573,10 @@ index 0000000..3cc242d
 ++    return segment;
 ++}
 +diff --git a/src/models/bert.cpp b/src/models/bert.cpp
-+index b98faff..2396cdd 100644
++index b98faff..cc43601 100644
 +--- a/src/models/bert.cpp
 ++++ b/src/models/bert.cpp
-+@@ -1,5 +1,35 @@
++@@ -1,8 +1,54 @@
 + #include "models.h"
 + 
 ++#include "../llama-pair-segments.h"
@@ -588,7 +612,26 @@ index 0000000..3cc242d
 + void llama_model_bert::load_arch_hparams(llama_model_loader & ml) {
 +     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
 + 
-+@@ -87,8 +117,15 @@ llama_model_bert::graph::graph(const llm_graph_params & params) : llm_graph_cont
+++    // The FFN's activation, where the GGUF declares it (`bert.hidden_activation`, transformers' hidden_act, as
+++    // ModernBert reads it): "gelu" is BERT's exact erf GELU. A GGUF that declares none keeps the tanh GELU this graph
+++    // always used, so no file converted before moves. Anything else is refused, never computed as a GELU.
+++    hparams.llm_ffn_op = LLM_FFN_GELU;
+++    std::string hidden_act;
+++    if (arch == LLM_ARCH_BERT && ml.get_key(LLM_KV_HIDDEN_ACT, hidden_act, false)) {
+++        if (hidden_act == "gelu" || hidden_act == "gelu_python") {
+++            hparams.llm_ffn_op = LLM_FFN_GELU_ERF;
+++        } else if (hidden_act == "gelu_new" || hidden_act == "gelu_pytorch_tanh" || hidden_act == "gelu_fast" ||
+++                   hidden_act == "gelu_accurate" || hidden_act == "gelu_python_tanh") {
+++            hparams.llm_ffn_op = LLM_FFN_GELU;
+++        } else {
+++            throw std::runtime_error("BERT: hidden activation '" + hidden_act + "' is not one this graph computes");
+++        }
+++    }
+++
++     switch (hparams.n_layer()) {
++         case 3:
++             type = LLM_TYPE_17M; break; // bge-micro
++@@ -87,8 +133,15 @@ llama_model_bert::graph::graph(const llm_graph_params & params) : llm_graph_cont
 +     // construct input embeddings (token, type, position)
 +     inpL = build_inp_embd(model.tok_embd);
 + 
@@ -606,6 +649,21 @@ index 0000000..3cc242d
 +         ggml_tensor * type_row0 = ggml_view_1d(ctx0, model.type_embd, n_embd, 0);
 +         inpL                    = ggml_add(ctx0, inpL, type_row0);
 +     }
++@@ -181,11 +234,13 @@ llama_model_bert::graph::graph(const llm_graph_params & params) : llm_graph_cont
++             cb(cur, "ffn_moe_out", il);
++         } else if (model.arch == LLM_ARCH_BERT || model.arch == LLM_ARCH_NOMIC_BERT_MOE ||
++                    model.arch == LLM_ARCH_JINA_BERT_V3) {
+++            // the declared activation (load_arch_hparams), the tanh GELU where none is
+++            const llm_ffn_op_type ffn_op = model.arch == LLM_ARCH_BERT ? hparams.llm_ffn_op : LLM_FFN_GELU;
++             cur = build_ffn(cur,
++                     model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL,
++                     NULL, NULL, NULL,
++                     model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, NULL,
++-                    LLM_FFN_GELU, LLM_FFN_SEQ, il);
+++                    ffn_op, LLM_FFN_SEQ, il);
++             cb(cur, "ffn_out", il);
++         } else if (model.arch == LLM_ARCH_JINA_BERT_V2) {
++             const bool up_contains_gate = !model.layers[il].ffn_gate && model.layers[il].ffn_up->ne[1] != hparams.n_ff();
 +diff --git a/tests/test-bert-pair-segments.cpp b/tests/test-bert-pair-segments.cpp
 +new file mode 100644
 +index 0000000..49ae11a
