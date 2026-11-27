@@ -1864,7 +1864,15 @@ An utterance not addressed is answered with no text, and its words are never
 logged, kept or traced; each clip writes one `[voice] heard <s> s, vad …, stt
 <s> s: addressed (…) | dropped (…) | failed (HTTP …)` line, counts only. An
 addressed one keeps the question open; an open microphone does not. The
-name is `[speech] wake_name` (`node speech set --name`; unset, Philippe).
+name is the reader's own (*amended 2026-11-27*, operator: "the activation
+name can be customized, and every time in the speech there is that name the
+mic is muted"): Settings › name, kept with the account (`POST
+/ask/voice/name {name}`; empty, back to the node's; 409 without an account,
+whose browser keeps it and sends it with each clip as `name`), else the
+node's `[speech] wake_name` (`node speech set --name`; unset, Philippe).
+`GET /ask/voice/name` → `{wake_name, forms, mine}`: the page mutes
+hands-free while a sentence holding one of the forms is read aloud, and
+600 ms after it.
 `POST /ask/voice/fillers/used` `{ids}` (at most 16) → `{removed}`: a clip
 is played once; each reported goes, and its kind is remade from another
 text, as a new synthesis, never a kept clip. The pools are derived data

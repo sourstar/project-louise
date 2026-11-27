@@ -65,6 +65,40 @@ def fold(text: str) -> str:
     return re.sub(r"[^\w]+", " ", t).strip()
 
 
+class NameError_(ValueError):
+    """A hands-free name that cannot be one."""
+
+
+#: a name: one to three words of letters (an apostrophe or a hyphen inside), at most 32 characters
+_NAME = re.compile(r"^[^\W\d_]+(?:['’-][^\W\d_]+)*(?: [^\W\d_]+(?:['’-][^\W\d_]+)*){0,2}$")
+
+
+def valid_name(name: str | None) -> str:
+    """`name` as kept: trimmed, spaces collapsed; NameError_ for one that is
+    no name (digits, punctuation, empty, over 32 characters, over three words)."""
+    n = re.sub(r"\s+", " ", str(name or "")).strip()
+    if not n or len(n) > 32 or not _NAME.fullmatch(n):
+        raise NameError_("a name is one to three words of letters, at most 32 characters")
+    return n
+
+
+def named(words: list[str], at: int, name: str | None) -> int:
+    """How many of `words`, from `at`, are the name (one of its forms, a
+    name of several words matched whole); 0 when they are not it."""
+    for form in forms_of(name):
+        f = form.split()
+        if words[at:at + len(f)] == f:
+            return len(f)
+    return 0
+
+
+def mentions(text: str, name: str | None) -> bool:
+    """Whether `text` holds the name anywhere (one of its forms): a sentence
+    read aloud that names it mutes hands-free while it plays (the page)."""
+    words = fold(text).split()
+    return any(named(words, i, name) for i in range(len(words)))
+
+
 def forms_of(name: str | None) -> tuple[str, ...]:
     """The written forms of `name`, folded: the seeded list for a known
     name, the name itself otherwise."""
@@ -141,10 +175,13 @@ def heard(text: str, *, name: str | None = None, follow: bool = False, said: str
     # the node reading "…Philippe, stop…" aloud
     if _run(words, said):
         return Heard(False, dropped="echo")
-    forms = forms_of(name)
-    at = 1 if words[0] in LEAD and len(words) > 1 else 0
-    if words[at] in forms:
-        rest = _rest(text, at + 1)
+    # the name first (it may itself begin with a LEAD word: "Hey Jarvis"),
+    # then after one LEAD word
+    at, n = 0, named(words, 0, name)
+    if not n and words[0] in LEAD and len(words) > 1:
+        at, n = 1, named(words, 1, name)
+    if n:
+        rest = _rest(text, at + n)
     elif follow:
         rest = text.strip()
     else:

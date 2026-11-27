@@ -65,6 +65,9 @@ class User:
     #: the phrases that cover the wait (docs/notes/hands-free-voice.md §7): False
     #: = turned off, the tone instead; None = not chosen, on by default
     phrases: bool | None = None
+    #: the name hands-free is called by, the reader's own (operator,
+    #: 2026-11-27: "the activation name can be customized"); None: the node's
+    wake_name: str | None = None
 
     def state(self, now: dt.datetime | None = None) -> str:
         if self.revoked:
@@ -76,7 +79,7 @@ class User:
     def public(self, seen: dict[str, str] | None = None) -> dict:
         """What may be shown: everything but the token's hash."""
         return {"name": self.name, "role": self.role, "created": self.created, "expires": self.expires,
-                "revoked": self.revoked, "state": self.state(), "voice": self.voice, "phrases": self.phrases,
+                "revoked": self.revoked, "state": self.state(), "voice": self.voice, "phrases": self.phrases, "wake_name": self.wake_name,
                 "last_seen": (seen or {}).get(self.name)}
 
 
@@ -151,6 +154,8 @@ def _dump(users: list[User]) -> bytes:
             out.append(f"voice = {_q(u.voice)}")
         if u.phrases is not None:
             out.append(f"phrases = {'true' if u.phrases else 'false'}")
+        if u.wake_name:
+            out.append(f"wake_name = {_q(u.wake_name)}")
         out.append("")
     return "\n".join(out).encode("utf-8")
 
@@ -168,7 +173,8 @@ def _parse(raw: bytes) -> list[User]:
         out.append(User(name=str(row["name"]), role=role, token_sha256=str(row["token_sha256"]),
                         created=str(row.get("created") or ""), expires=row.get("expires") or None,
                         revoked=row.get("revoked") or None, voice=str(row.get("voice") or "") or None,
-                        phrases=row["phrases"] if isinstance(row.get("phrases"), bool) else None))
+                        phrases=row["phrases"] if isinstance(row.get("phrases"), bool) else None,
+                        wake_name=str(row.get("wake_name") or "") or None))
     return out
 
 
@@ -293,6 +299,26 @@ def set_phrases(name: str, on: bool | None) -> User:
         i = _index(users, name)
         users[i] = replace(users[i], phrases=on)
         return users[i]
+
+
+def set_wake_name(name: str, wake: str | None) -> User:
+    """The name this user calls hands-free by; None or "": the node's."""
+    from app import voice_wake
+    wake = voice_wake.valid_name(wake) if wake else None
+    with _editing() as users:
+        i = _index(users, name)
+        users[i] = replace(users[i], wake_name=wake)
+        return users[i]
+
+
+def wake_name_of(name: str | None) -> str | None:
+    """The account's own hands-free name, None for no account or none chosen."""
+    if not name:
+        return None
+    try:
+        return next((u.wake_name for u in load() if u.name == name), None)
+    except UserError:
+        return None
 
 
 def phrases_of(name: str | None) -> bool | None:
