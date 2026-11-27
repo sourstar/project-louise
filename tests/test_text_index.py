@@ -50,6 +50,26 @@ def test_the_identity_is_equal_for_sisters_and_differs_by_each_input():
     assert a != text_index.identity(_held("b", _codex(parser={"version": 2})))
 
 
+def test_a_sister_written_at_a_newer_codex_version_has_her_older_sister_s_identity():
+    """gutenberg-nemo (2026-11-27): a sister written at version 11 of an older
+    sister states a text input on her layers (version 5) and a JSONL
+    container on her slicing (version 9); both are what the older Codex
+    already meant, the same chunks and the same parts, so the same index."""
+    old = _codex(layers=({"chunker": "c", "v": 1, "input": None},), slicing={"order": "bytes"})
+    new = _codex(layers=({"chunker": "c", "v": 1, "input": {"form": "text"}},),
+                 slicing={"order": "bytes", "container": "jsonl"})
+    a = text_index.identity(_held("a", old))
+    assert a == text_index.identity(_held("b", new))
+    assert a == text_index.identity(_held("b", _codex(layers=({"chunker": "c", "v": 1, "input": None},),
+                                                         slicing={"order": "bytes"}))), "unchanged when absent"
+    assert a != text_index.identity(_held("b", _codex(layers=({"chunker": "c", "v": 1, "input": {"form": "pair"}},),
+                                                         slicing={"order": "bytes"}))), "a pair input is another cut"
+    assert a != text_index.identity(_held("b", _codex(layers=({"chunker": "c", "v": 1, "input": None},),
+                                                         slicing={"order": "bytes", "container": "parquet"})))
+    assert text_index.identity(_held("a", _codex(slicing=None))) == \
+        text_index.identity(_held("b", _codex(slicing={"container": "jsonl"})))
+
+
 def test_no_identity_without_a_codex_or_for_annotations():
     assert text_index.identity(SimpleNamespace(name="x", codex=None)) is None
     assert text_index.identity(_held("x", _codex(space=None))) is None

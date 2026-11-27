@@ -362,3 +362,222 @@ def test_a_layer_param_that_changes_nothing_or_is_unknown_is_refused(fixed_old, 
     assert _new_param(root, *params, extra=extra) == 2
     with pytest.raises(CodexError):
         col.resolve(root, "sis")
+
+
+# ---- a sister who changes only her ENCODER SIDE (--encoder-from) ------------
+# (operator, 2026-11-27, gutenberg-nemo: "Remember the indexing sharing between
+# sisters", "Do it by the books"): her sister's layers, the held collection's
+# encoder side whole, its reference carried; her index linked, one identity
+
+def _nemo(root, name="nemo"):
+    """Another encoder side, cutting OTHERWISE than her sister (as legi's
+    `legal_article` space is to gutenberg's `book`): so a copy of its space
+    would cut again, and only its encoder side is what she takes."""
+    from functools import partial
+    space = {**SPACE, "encoder": {**SPACE["encoder"], "weights": "sha256:" + "ee" * 32},
+             "dim": 1024, "query": {"encoder": None, "instruction": "query: "}}
+    layers = [{"rule": "default", "chunker": {"id": "fixed", "version": 1, "params": {"tokens": 3, "overlap": 0}},
+               "input": {"form": "text"}}]
+    return col.create_from_recipe(root, "gutenberg", recipe(space=space, layers=layers,
+                                                            work={"tokens": 7_000_000}),
+                                  platform_image=PLATFORM, embed=partial(fake_embed, dim=1024),
+                                  name=name, key=KEY, now=NOW)
+
+
+def _ready_nemo(root, old, card):
+    _, n = _ready(root, old, card)
+    nemo = _nemo(root)
+    card["weights"] = nemo.space.encoder.weights
+    return nemo, n
+
+
+def _new_enc(root, *extra, name="sis", source="nemo"):
+    return louise.main(["hold", "collection", "new", "gutenberg", "--root", str(root), "--name", name,
+                        "--sister-of", "old", "--encoder-from", source, "--encoder", "http://localai:8080",
+                        "--api", "vega", "--embed-model", "vega-nemo", "--cpu-model", "vega-nemo-cpu", *extra])
+
+
+def test_an_encoder_sister_keeps_her_sister_s_layers_and_carries_the_held_reference(pair, card, monkeypatch):
+    root, old, _ = pair
+    nemo, n = _ready_nemo(root, old, card)
+    calls = []
+    monkeypatch.setattr(col, "_write_own_calibration", lambda *a, **k: calls.append("embedded"))
+    assert _new_enc(root) == 0
+    _, sister = col.resolve(root, "sis")
+    assert sister.space_id not in (old.space_id, nemo.space_id) and sister.derived_from == old.collection_id
+    assert [l.to_dict()["chunker"] for l in sister.layers] == [l.to_dict()["chunker"] for l in old.layers], \
+        "her sister's layers, not the encoder source's"
+    assert sister.space.encoder == nemo.space.encoder and sister.space.dim == nemo.space.dim
+    assert sister.space.query.instruction == "query: " and sister.space.tolerance == nemo.space.tolerance
+    assert sister.space.calibration.vectors == nemo.space.calibration.vectors, "its reference, carried"
+    assert sister.space.epoch == old.space.epoch and sister.space_from is None
+    assert calls == [], "nothing embedded"
+    con = sqlite3.connect(root / "sis" / "state" / "manifest.sqlite")
+    try:
+        assert con.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == n
+        assert con.execute("SELECT COUNT(*) FROM documents WHERE embed_done>0 OR embed_version<>0"
+                           ).fetchone()[0] == 0, "none of her sister's vectors said held"
+    finally:
+        con.close()
+    assert (root / "sis" / "index" / "words").read_text() == "the text index", "her sister's index, carried"
+    assert not spaces.known_lance_rows(_local(root, "sis").lance_dir)
+    assert card["order"] == [("cpu-reference", "sis"), ("gate", "sis")]
+    from app.hold import workflow as wf
+    prog = json.loads(wf.progress_path("sis").read_text())
+    assert prog["case"] == "J" and set(prog["steps"]) == {"make", "carry", "cpu-reference", "gate"}
+    card["order"].clear()
+    assert _new_enc(root) == 0, "run again: each step kept, the carry checked by its counts"
+    assert card["order"] == [("cpu-reference", "sis"), ("gate", "sis")]
+
+
+def test_an_encoder_sister_has_her_sister_s_index_identity_and_slices(pair, card, monkeypatch):
+    """The share the operator asked for: one identity, so the carry's link
+    is joined (at once, or at the next boot's settle)."""
+    import tomllib
+    from app import collections as collections_mod, text_index
+    from app.hold import deposit
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    path = deposit.held_file(root, "old")
+    if path.is_file():
+        text = path.read_text(encoding="utf-8")
+    else:
+        louise._write_held_file(root, old, "http://localai:8080", api="vega", embed_model="vega-old")
+        text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("slices = []", 'slices = "all"\nacquire_enabled = true'),
+                    encoding="utf-8")
+    # her sister's origin is a link to the node's corpus folder, as gutenberg's is
+    import shutil
+    src, target = root / "old" / "origin", root.parent / "corpora-old"
+    if src.exists():
+        shutil.move(str(src), str(target))
+    else:
+        target.mkdir()
+    src.symlink_to(target)
+    assert _new_enc(root) == 0
+    assert (root / "sis" / "origin").resolve() == target.resolve(), "her origin is her sister's folder"
+    with open(deposit.held_file(root, "sis"), "rb") as f:
+        held = tomllib.load(f)
+    assert held["slices"] == "all", "her sister's slices, not []"
+    assert "acquire_enabled" not in held, "who acquires is the loader's, not a line in her file"
+    files = deposit.held_file(root, "old"), deposit.held_file(root, "sis")
+    assert root.name == "collections"
+    monkeypatch.setenv("LOUISE_ROOT", str(root.parent))      # the node's layout: <LOUISE_ROOT>/collections
+    a, b = collections_mod._one_acquirer([collections_mod._load_one(f) for f in files])
+    assert text_index.identity(a) is not None and text_index.identity(a) == text_index.identity(b)
+    assert a.slices == b.slices
+    assert a.acquire_enabled and not b.acquire_enabled and b.acquire_by == "old", \
+        "one acquirer a folder: her sister, while it is held and they read one folder"
+    assert collections_mod.sister_refusal(a, held=[a, b]) is None
+    assert "grow old" in collections_mod.sister_refusal(b, held=[a, b]), "growing her is refused"
+    alone = collections_mod._one_acquirer([collections_mod._load_one(files[1])])[0]
+    assert alone.acquire_enabled and alone.acquire_by is None, "her sister gone (legi_F): she acquires"
+    assert collections_mod.sister_refusal(alone, held=[alone]) is None
+
+
+def test_a_sister_of_a_file_spelling_profile_holds_that_profile_and_acquires_nothing(pair, card, monkeypatch):
+    """The older spelling (`profile`, as the node's gutenberg file had it):
+    hers says the same, never `slices = []` beside it."""
+    import tomllib
+    from app.hold import deposit
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    path = deposit.held_file(root, "old")
+    if not path.is_file():
+        louise._write_held_file(root, old, "http://localai:8080", api="vega", embed_model="vega-old")
+    path.write_text(path.read_text(encoding="utf-8").replace("slices = []", 'profile = "full"'), encoding="utf-8")
+    assert _new_enc(root) == 0
+    with open(deposit.held_file(root, "sis"), "rb") as f:
+        held = tomllib.load(f)
+    assert held.get("profile") == "full" and "slices" not in held and "acquire_enabled" not in held
+
+
+def test_the_dry_run_names_the_encoder_side_and_makes_nothing(pair, card, capsys):
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    assert _new_enc(root, "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert "case J" in out and "encoder side" in out and "carried" in out and "nothing embedded" in out
+    with pytest.raises(CodexError):
+        col.resolve(root, "sis")
+
+
+@pytest.mark.parametrize("why", ["with-space-from", "with-layer-param", "her-sister-s-own", "unknown",
+                                 "no-sister", "a-held-space", "another-form"])
+def test_what_an_encoder_sister_cannot_be_is_refused_before_anything(pair, card, why, monkeypatch):
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    args = ["hold", "collection", "new", "gutenberg", "--root", str(root), "--name", "sis",
+            "--sister-of", "old", "--encoder-from", "nemo", "--encoder", "http://localai:8080", "--api", "vega",
+            "--embed-model", "vega-nemo", "--cpu-model", "vega-nemo-cpu"]
+    if why == "with-space-from":
+        args += ["--space-from", "bge"]
+    elif why == "with-layer-param":
+        args += ["--layer-param", "tokens=4"]
+    elif why == "her-sister-s-own":
+        args[args.index("nemo")] = "old"            # her own encoder side: her sister's space
+    elif why == "unknown":
+        args[args.index("nemo")] = "nobody"
+    elif why == "a-held-space":
+        # bge cuts as her sister does: her space would BE bge's, which is --space-from
+        card["weights"] = col.resolve(root, "bge")[1].space.encoder.weights
+        args[args.index("nemo")] = "bge"
+    elif why == "another-form":
+        from app.hold import calibration as cal
+        real = cal.form
+        monkeypatch.setattr(cal, "form", lambda c: "pair" if c.collection_id == col.resolve(root, "nemo")[1]
+                            .collection_id else real(c))
+    else:
+        i = args.index("--sister-of")
+        del args[i:i + 2]
+    assert louise.main(args) == 2
+    with pytest.raises(CodexError):
+        col.resolve(root, "sis")
+    assert card["order"] == []
+
+
+def test_derive_refuses_encoder_from_beside_a_space_or_layers(pair):
+    root, old, _ = pair
+    nemo = _nemo(root)
+    for extra in ({"space_from": nemo}, {"layers": old.layers}, {"space": nemo.space}):
+        with pytest.raises(CodexError, match="encoder_from"):
+            col.derive(root, old.collection_id, encoder_from=nemo, plan_only=True, **extra)
+
+
+def test_one_acquirer_a_folder_and_the_file_s_own_word_wins(tmp_path):
+    """München's check of the node, 2026-11-27: legi_F (her sister gone)
+    acquires; EUR-Lex5.next acquires by its stated `true` while EUR-Lex5's
+    file says `false`; a sister reading her OWN folder acquires."""
+    import dataclasses
+    from types import SimpleNamespace
+    from app import collections as collections_mod
+    shared, own = tmp_path / "corpus", tmp_path / "own"
+    shared.mkdir()
+    own.mkdir()
+
+    def c(name, cid, sister=None, acquire=True, stated=False, folder=shared):
+        return collections_mod.Collection(
+            name=name, plugin="gutenberg", profile=None, embed_mode_default=None, corpus_dir=folder,
+            manifest_path=tmp_path / name / "m.sqlite", fts_dir=tmp_path / name / "i",
+            lance_dir=tmp_path / name / "l", acquire_enabled=acquire, acquire_stated=stated,
+            codex=SimpleNamespace(collection_id=cid, derived_from=sister))
+    root = c("root", "R")
+    sister = c("sis", "S", sister="R")
+    out = collections_mod._one_acquirer([root, sister])
+    assert out[0].acquire_enabled and not out[1].acquire_enabled and out[1].acquire_by == "root"
+    assert collections_mod._one_acquirer([sister])[0].acquire_enabled, "her sister not held"
+    stated = c("next", "N", sister="R", stated=True)
+    assert collections_mod._one_acquirer([c("root", "R", acquire=False, stated=True), stated])[1].acquire_enabled, \
+        "a file's own true wins"
+    assert collections_mod._one_acquirer([root, c("weekly", "W", sister="R", folder=own)])[1].acquire_enabled, \
+        "her own folder: her own fetch"
+    # her sister acquires nothing (a stated false, or slices = []): she keeps her own, never nobody
+    assert collections_mod._one_acquirer([c("root", "R", acquire=False, stated=True), sister])[1].acquire_enabled
+    assert collections_mod._one_acquirer([c("root", "R", acquire=False), sister])[1].acquire_enabled
+    # a chain S1 -> S2 -> S3 in one folder: exactly one acquirer
+    s2, s3 = c("s2", "S2", sister="R"), c("s3", "S3", sister="S2")
+    chain = collections_mod._one_acquirer([root, s2, s3])
+    assert [x.acquire_enabled for x in chain] == [True, False, False] and chain[2].acquire_by == "root"
+    # idempotent: run again over its own answer
+    again = collections_mod._one_acquirer(chain)
+    assert [(x.acquire_enabled, x.acquire_by) for x in again] == [(x.acquire_enabled, x.acquire_by) for x in chain]
