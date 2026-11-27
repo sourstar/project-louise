@@ -1130,6 +1130,60 @@ def _join_text_index(root: Path, her_sister_name: str, name: str) -> str | None:
     return joined
 
 
+def cmd_collection_refit(a) -> int:
+    """`hold collection refit <collection> --layer-param KEY=VALUE [...]
+    [--dry-run]` — the collection's encoder window changed OFFLINE
+    (app/hold/refit.py; the operator, 2026-11-27: "you fucking stop the node,
+    delete the vectors and the indexing of the only book that is affected by
+    the change, change the chunker offline, rewrite the codex and regenerate
+    the collection's identity, then replace it's identity everywhere. You
+    restart the node and it's done"). Exit 3 while the worker runs. A rerun
+    continues where a crash stopped it. No rollback in code: the ZFS
+    snapshot taken first is the rollback."""
+    from app.hold import lock as lock_mod, refit as refit_mod
+    root = Path(a.root)
+    name = a.collection
+    params = _layer_params(a.layer_param)
+    if not params:
+        raise CodexError("refit: at least one --layer-param KEY=VALUE — the encoder window, "
+                         "max_tokens=N and tokenizer=sha256:… together")
+    old = refit_mod.predecessor(root, name)
+    layers = _layers_with(old, params)
+    refit_mod.new_codex(old, layers)              # refused in words before anything
+    if a.dry_run:
+        pl = refit_mod.plan(root, name, layers, processes=a.processes, log=lambda m: print(m, flush=True))
+        print(f"refit {name} (a dry run: nothing written)")
+        print(f"  from        {pl['from']}")
+        print(f"  to          {pl['to']}")
+        print(f"  affected    {len(pl['changed'])} document(s): "
+              + (", ".join(c[1] for c in pl["changed"][:20]) or "none — nothing to refit"))
+        print(f"  parts       " + (", ".join(p["path"] for p in pl["parts"]) or "none"))
+        print(f"  others      " + (", ".join(pl["others"]) or "none") + " (re-keyed to the new id)")
+        print(f"  worker      {pl['worker'] or 'not running'}")
+        print("  first       take a ZFS snapshot of /data and the SHARD dataset first: that is the rollback "
+              "(the host's step, the operator's or München's)")
+        print("  steps       reset those documents, write the new Codex, rewrite their parts and the snapshot, "
+              "replace the old id everywhere, attest; then restart the node")
+        return 0
+    refit_mod._refuse_running(root, name)
+    try:
+        lk = lock_mod.take(lock_mod.state_dir(root, name), name, f"louise hold collection refit {name}")
+    except lock_mod.Held as e:
+        raise _defer(f"{e}. `louise node stop` first; then run this again") from None
+    key = None
+    try:
+        from app.bundles import keys as node_keys
+        key = node_keys.load_signing_key()
+    except Exception:   # noqa: BLE001 — no key: unsigned, and said
+        print("no node key: the new snapshot is unsigned and no attestation is written", file=sys.stderr)
+    try:
+        refit_mod.run(root, name, layers, key=key, now=_utc_now(), processes=a.processes,
+                      log=lambda m: print(m, flush=True))
+    finally:
+        lk.release()
+    return 0
+
+
 def _layer_params(given: list[str] | None) -> dict[str, Any]:
     """`["header=false", "max_tokens=512"]` → `{"header": False, "max_tokens": 512}`:
     each value read as JSON, a bare word as a string."""
@@ -1151,28 +1205,47 @@ def _said(params: dict[str, Any]) -> str:
 
 
 def _layers_with(codex, params: dict[str, Any]) -> tuple:
-    """Her sister's layers with `params` changed in every layer whose chunker
-    has them. Only a param the chunker already states, and only to another
-    value: adding one is a chunker's own change (chunking_context, the
-    architecture session's B), and the same value is the same space."""
+    """The collection's layers with `params` changed in every layer whose
+    chunker has them. A param the chunker already states, to another value;
+    or one it TAKES without requiring it (`layers.OPTIONAL_PARAMS`: `fixed`'s
+    encoder window, `max_tokens` with its `tokenizer`, both or neither —
+    operator, 2026-11-27, gutenberg), checked as a Codex would check it
+    (`layers.check_params`). Any other new param is a chunker's own change
+    (chunking_context, the architecture session's B), and the same values
+    are the same space."""
     import dataclasses
+
+    from app import layers as layers_mod
     changed: set[str] = set()
     out = []
-    for layer in codex.layers:
+    for i, layer in enumerate(codex.layers):
         cur = dict(layer.chunker.params or {})
-        mine = {k: v for k, v in params.items() if k in cur}
+        optional = layers_mod.OPTIONAL_PARAMS.get(layer.chunker.id, ())
+        mine = {k: v for k, v in params.items() if k in cur or k in optional}
         for k, v in mine.items():
-            if cur[k] == v:
+            if k not in optional and cur[k] == v:
                 raise CodexError(f"--layer-param {k}={json.dumps(v)}: {layer.chunker.id} has it already; "
                                  f"the same value is the same space")
+        group = {k: v for k, v in mine.items() if k in optional}
+        if group and all(k in cur and cur[k] == v for k, v in group.items()):
+            raise CodexError(f"--layer-param {_said(group)}: {layer.chunker.id} has it already; the same "
+                             f"values are the same space")
         changed |= set(mine)
         cur.update(mine)
+        if group:
+            try:
+                layers_mod.check_params(cur, chunker=layer.chunker.id,
+                                        where=f"--layer-param (layer {i}, {layer.chunker.id})")
+            except layers_mod.LayerError as e:
+                raise CodexError(str(e)) from None
         out.append(dataclasses.replace(layer, chunker=dataclasses.replace(layer.chunker, params=cur)))
     unknown = sorted(set(params) - changed)
     if unknown:
         have = sorted({k for l in codex.layers for k in (l.chunker.params or {})})
+        takes = sorted({k for l in codex.layers for k in layers_mod.OPTIONAL_PARAMS.get(l.chunker.id, ())})
         raise CodexError(f"--layer-param {', '.join(unknown)}: no layer's chunker states it (they state "
-                         f"{', '.join(have) or 'none'}); a new param is the chunker's own change")
+                         f"{', '.join(have) or 'none'}" + (f"; they take {', '.join(takes)}" if takes else "")
+                         + "); a new param is the chunker's own change")
     return tuple(out)
 
 
@@ -8294,6 +8367,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="the outcome as one JSON object")
     p.set_defaults(fn=cmd_collection_update)
 
+    p = verbs.add_parser("refit", help="OFFLINE (`node stop` first): the collection's encoder window changed — "
+                                       "the documents it cuts otherwise reset, the Codex rewritten, the new "
+                                       "identity replaced everywhere; take a ZFS snapshot first")
+    root_arg(p)
+    p.add_argument("collection")
+    p.add_argument("--layer-param", dest="layer_param", action="append", default=None, metavar="KEY=VALUE",
+                   help="the `fixed` layer's encoder window: max_tokens=N and tokenizer=sha256:…. Repeatable")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="the affected documents and parts, the collections re-keyed; writes nothing")
+    p.add_argument("--processes", type=int, default=None, metavar="N",
+                   help="at most N processes for the pass (default: the node profile's cores)")
+    p.set_defaults(fn=cmd_collection_refit)
     p = verbs.add_parser(
         "migrate", help="add the §9.3 fields a Codex predates, each as null")
     root_arg(p); p.add_argument("name")

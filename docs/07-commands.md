@@ -118,6 +118,19 @@ louise hold
                                                                        Every case keeps the new collection PAUSED from before her file exists until her gate has run
                                                                        (added 2026-11-08: legi's gate lost her writer to the worker), then resumes her, unless the operator
                                                                        had paused her; a worker already holding her writer is waited for, at most 600 s
+              refit <collection> --layer-param KEY=VALUE [--layer-param …] [--processes N] [--dry-run]
+                (amendment A1l, OFFLINE, 2026-11-27; the operator: "you fucking stop the node, delete the vectors
+                 and the indexing of the only book that is affected by the change, change the chunker offline,
+                 rewrite the codex and regenerate the collection's identity, then replace it's identity
+                 everywhere. You restart the node and it's done"): the `fixed` layer's encoder window
+                 (max_tokens=N with tokenizer=sha256:…) set or changed. Exit 3 while the worker runs (`louise
+                 node stop` first). The documents the window cuts otherwise found in the parse pool (refused if
+                 none), their vector rows, index entries and marks reset; the new Codex written, the old one and
+                 its snapshots set aside; their parts written again and the snapshot made and signed; the old id
+                 replaced everywhere — file, pins, attestations re-signed, RAGE settings, carry records — and in
+                 every annotations collection naming it, re-keyed in its turn. Resumable by its marker. No
+                 rollback in code: take a ZFS snapshot of /data and the SHARD dataset first. A shared text
+                 index or an official publication refuses. POST /api/hold/collection/refit
               create <plugin> --recipe FILE --encoder URL [--query-encoder URL] [--api A] [--embed-model M] [--query-model M]
               [--space-from CODEX] [--calibration-set FILE]
                                                                        the model flags: required where a URL names no model (§7.8, amended 2026-10-09)

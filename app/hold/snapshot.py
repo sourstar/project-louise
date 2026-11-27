@@ -510,7 +510,8 @@ def reissued(previous: Snapshot | None, current: Snapshot) -> list[Shard]:
 # --------------------------------------------------------------------------
 # creating one from a build (07 §7.4: `hold.snapshot.create`)
 
-def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snapshot:
+def create(root, ref: str, *, snapshot_id: str | None = None, log=print,
+           writers_from: "Snapshot | None" = None) -> Snapshot:
     """`louise hold snapshot create <collection>` — freeze the records the
     SHARD now holds as this period's snapshot.
 
@@ -584,6 +585,10 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
     from app.pack import records as pack_records
     from .codex import container_of
     before = {(s.slice, s.n, s.root): s.writer for s in previous.shards} if previous else {}
+    # a refit's first snapshot over the same parts keeps each part's writer
+    # (app/hold/refit.py): the writer is who compressed those bytes
+    if previous is None and writers_from is not None:
+        before = {(s.slice, s.n, s.root): s.writer for s in writers_from.shards}
     shards = tuple(
         Shard(slice=r["slice"], n=r["n"], root=r["root"], container=container_of(codex),
               records_root=r["records_root"],

@@ -774,6 +774,20 @@ its new id (`louise dev carry --rechunked`); a document whose every chunk was
 kept is marked embedded, and every other chunk is the embed stage's. The gate
 runs once for the new space and `vectors-sample` passes before use, as for any
 carry. The shared legal space's `legal_article` 3 → 4 is the case.
+*Amendment A1l (RULE 1, 2026-11-27; the operator, for gutenberg: "you
+fucking stop the node, delete the vectors and the indexing of the only book
+that is affected by the change, change the chunker offline, rewrite the
+codex and regenerate the collection's identity, then replace it's identity
+everywhere. You restart the node and it's done"):* a collection's layers may
+take the `fixed` chunker's encoder window in place, OFFLINE — the node
+stopped. The window keeps every window that fits byte for byte and id for
+id, so only the documents it cuts otherwise lose their vectors, index entries
+and marks; their parts are written again, the rest kept; the new Codex is a
+new identity, replaced everywhere the old one was named, an annotations
+collection naming it re-keyed in its turn (`louise hold collection refit`).
+Every collection on this node has been shared for testing only (RULE 1), so
+what was shared is superseded; an official publication refuses. The rollback
+is the host's ZFS snapshot, taken first.
 
 The **calibration** block is the contract for anyone who wants to
 contribute vectors. The calibration set is corpus-independent: a fixed
