@@ -4,6 +4,8 @@ forget — never a hard link (operator, 2026-11-27: "Never use hard links,
 always consciously load from a path"; app/file_copy.py)."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.hold import forget as forget_mod, recreate, rename as rename_mod
@@ -86,10 +88,9 @@ def _three(tmp_path):
 @pytest.mark.parametrize("cut", ["after the first rename", "after the second rename", "after one relink"])
 def test_a_hand_over_killed_at_any_step_is_completed_for_every_heir(tmp_path, monkeypatch, cut):
     import os
-    from app.hold import seeded
     root, origin = _three(tmp_path)
     renames, relinks = [], []
-    real_rename, real_link = os.rename, seeded.relative_link
+    real_rename, real_link = os.rename, forget_mod._relative_link
 
     def rename(a, b):
         real_rename(a, b)
@@ -104,12 +105,12 @@ def test_a_hand_over_killed_at_any_step_is_completed_for_every_heir(tmp_path, mo
         if cut == "after one relink":
             raise Killed(cut)
     monkeypatch.setattr(os, "rename", rename)
-    monkeypatch.setattr(seeded, "relative_link", relink)
+    monkeypatch.setattr(forget_mod, "_relative_link", relink)
     with pytest.raises(Killed):
         forget_mod.forget(root, "p")
     assert (root / ".origin-handover.p.json").is_file(), "the journal outlives the kill"
     monkeypatch.setattr(os, "rename", real_rename)
-    monkeypatch.setattr(seeded, "relative_link", real_link)
+    monkeypatch.setattr(forget_mod, "_relative_link", real_link)
     forget_mod.forget(root, "p")
     own = root / "q" / "origin"
     assert own.is_dir() and not own.is_symlink() and (own / "lang=en" / "a.txt").read_bytes() == b"a" * 100
@@ -124,7 +125,7 @@ def test_a_hand_over_across_filesystems_is_refused_before_anything(tmp_path, mon
     root, origin = _pair(tmp_path)
     recreate.share_origin(root, "p", "q")
     real = forget_mod._device
-    monkeypatch.setattr(forget_mod, "_device", lambda p: real(p) + (1 if "q" in str(p) else 0))
+    monkeypatch.setattr(forget_mod, "_device", lambda p: real(p) + (1 if Path(p).name == "q" else 0))
     for dry in (True, False):
         with pytest.raises(CodexError, match="on another filesystem: the hand-over is a rename"):
             forget_mod.forget(root, "p", dry_run=dry)

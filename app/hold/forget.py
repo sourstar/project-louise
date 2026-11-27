@@ -288,6 +288,19 @@ def _finish_half(link: Path) -> bool:
     return True
 
 
+def _relative_link(target: Path, link: Path) -> None:
+    """`link` made a RELATIVE symbolic link to `target`, computed between
+    their physical directories (it reaches the same directory wherever the
+    root is mounted). Atomic: a hidden name, renamed into place."""
+    link.parent.mkdir(parents=True, exist_ok=True)
+    rel = os.path.relpath(Path(target).resolve(), link.parent.resolve())
+    tmp = link.with_name(f".{link.name}.linking")
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    tmp.symlink_to(rel, target_is_directory=Path(target).is_dir())
+    os.replace(tmp, link)
+
+
 def _hand_over(target: Path, links: list[Path]) -> None:
     """THE HAND-OVER (never a hard link: operator, 2026-11-27,
     app/file_copy.py): `target` — a file or a directory a collection being
@@ -296,14 +309,13 @@ def _hand_over(target: Path, links: list[Path]) -> None:
     the rename into its place: `_finish_half` completes one cut short), and
     the other links pointed at it there, relative. Nothing is copied or
     removed; the bytes keep one name."""
-    from .seeded import relative_link
     first, rest = links[0], links[1:]
     os.rename(target, _half(first))
     if first.is_symlink():
         first.unlink()
     os.rename(_half(first), first)
     for o in rest:
-        relative_link(first, o)
+        _relative_link(first, o)
 
 
 def origin_heirs(root: Path, name: str) -> list[str]:
@@ -342,7 +354,6 @@ def _resume_origin(root: Path, journal: Path) -> None:
     move where nothing moved yet), then every other heir linked to it
     there — each step repeatable — then the journal removed."""
     import json
-    from .seeded import relative_link
     j = json.loads(journal.read_text(encoding="utf-8"))
     own, heirs = Path(j["origin"]), [Path(h) for h in j["heirs"]]
     first = heirs[0]
@@ -352,7 +363,7 @@ def _resume_origin(root: Path, journal: Path) -> None:
     if first.is_dir() and not first.is_symlink():
         for o in heirs[1:]:
             if not (o.is_symlink() and o.resolve() == first.resolve()):
-                relative_link(first, o)
+                _relative_link(first, o)
     journal.unlink()
 
 
@@ -407,82 +418,16 @@ def hand_over_origin(root: Path, name: str, *, dry_run: bool = False) -> dict[st
     return out
 
 
-def hand_over_parts(root: Path, name: str, *, dry_run: bool = False) -> dict[str, Any] | None:
-    """`name`'s SHARD parts other held collections read where they lie (a
-    sister's seed, hold/seeded.py — at a part's own path, its superseded
-    name, or in a discarded folder: the entry's `at` names the file in
-    `name`'s SHARD), each file handed over (`_hand_over`) to the first of
-    its readers by name — never deleted with `name`'s SHARD — and the
-    readers' records rewritten: the first holds it as its own now, the
-    others read it from the first. A hand-over cut short is finished first.
-    None when nobody reads any."""
-    from . import collection as col, seeded
-    root = Path(root)
-    readers = seeded.readers(root, name)
-    if not readers:
-        return None
-    shards = {r: col.shard_dir_of(root, r) for r in readers}
-    records = {r: dict(seeded.load(shards[r])) for r in readers}
-    by_at: dict[str, list[tuple[str, str]]] = {}
-    for r, keys in readers.items():
-        for k in keys:
-            by_at.setdefault(seeded.at_of(k, records[r][k]), []).append((r, k))
-    own = col.shard_dir_of(root, name)
-    total = sum((own / at).stat().st_size for at in by_at if (own / at).is_file())
-    out = {"to": {r: len(v) for r, v in sorted(readers.items())}, "parts": len(by_at), "bytes": total,
-           "moved": not dry_run}
-    if dry_run:
-        return out
-    try:
-        for i, (at, holders) in enumerate(sorted(by_at.items())):
-            holders = sorted(holders)
-            r0, k0 = holders[0]
-            first = shards[r0] / k0
-            _finish_half(first)
-            if first.is_symlink():
-                target = own / at
-                if target.is_symlink() or not target.is_file():
-                    continue                    # not a file of name's own: not name's to hand over
-                _hand_over(target, [shards[r] / k for r, k in holders])
-            else:
-                # handed over already, by a forget cut short before its
-                # records were written: the others read it from the first
-                for r, k in holders[1:]:
-                    link = shards[r] / k
-                    if link.is_symlink() and link.resolve() != first.resolve():
-                        seeded.relative_link(first, link)
-            records[r0].pop(k0, None)           # its own part now
-            for r, k in holders[1:]:
-                records[r][k] = {**records[r][k], "from": r0, "at": k0}
-            if i % 200 == 199:
-                for r in readers:
-                    seeded.write(shards[r], records[r])
-    finally:
-        for r in readers:
-            seeded.write(shards[r], records[r])
-    return out
-
-
 def handed_inodes(root: Path, name: str) -> set[tuple[int, int]]:
-    """The files `name`'s forget hands over rather than removes: its
-    origin directory's and its SHARD parts' (`forget_plan` counts none of
-    them as freed)."""
-    from . import collection as col, seeded
+    """The files `name`'s forget hands over rather than removes: its origin
+    directory's (`forget_plan` counts none of them as freed)."""
     root = Path(root)
     out: set[tuple[int, int]] = set()
-    paths: list[Path] = []
     if origin_heirs(root, name):
-        paths += [p for p in (root / name / "origin").rglob("*") if p.is_file() and not p.is_symlink()]
-    own = col.shard_dir_of(root, name)
-    for r, keys in seeded.readers(root, name).items():
-        entries = seeded.load(col.shard_dir_of(root, r))
-        for k in keys:
-            p = own / seeded.at_of(k, entries.get(k) or {})
+        for p in (root / name / "origin").rglob("*"):
             if p.is_file() and not p.is_symlink():
-                paths.append(p)
-    for p in paths:
-        st = os.stat(p)
-        out.add((st.st_dev, st.st_ino))
+                st = os.stat(p)
+                out.add((st.st_dev, st.st_ino))
     return out
 
 
@@ -565,13 +510,11 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     # goes to it, never with this one (`hand_over_origin`, after its threads
     # stopped; a forget cut short finishes it when run again)
     origin_to = hand_over_origin(root, name, dry_run=True) if dry_run else None
-    parts_to = hand_over_parts(root, name, dry_run=True) if dry_run else None
     if dry_run:
         out: dict[str, Any] = {"collection": name, "dry_run": True,
                                "would_remove": [str(p) for p in plan], "removed": [],
                                **({"ack_carried_to": handed} if handed else {}),
-                               **({"origin_handed_to": origin_to} if origin_to else {}),
-                               **({"parts_handed_to": parts_to} if parts_to else {})}
+                               **({"origin_handed_to": origin_to} if origin_to else {})}
         # a text index shared with sisters stays while one of them is held,
         # and goes with its last member (app/text_index.py)
         shared = text_index.leave_at_forget(root, name, dry_run=True)
@@ -595,10 +538,9 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     # 2. its threads, when this runs in the worker
     if retire is not None:
         retire(name)
-    # 2b. its origin directory and its SHARD parts, to the collections that
-    #     read them through links (`_hand_over`): never removed with it
+    # 2b. its origin directory, to the collection that reads it through a
+    #     link (`_hand_over`): never removed with it
     origin_to = hand_over_origin(root, name)
-    parts_to = hand_over_parts(root, name)
     # 3. a never-share collection: every deposit erased, no trace (02 §2.9)
     erased = 0
     if codex is not None and deposit.is_deposit(codex) and base.exists():
@@ -633,8 +575,6 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
         out["ack_carried_to"] = handed
     if origin_to:
         out["origin_handed_to"] = origin_to
-    if parts_to:
-        out["parts_handed_to"] = parts_to
     if shared is not None:
         out["text_index"] = shared
     return out

@@ -64,3 +64,16 @@ def test_her_room_counts_her_sister_s_groups_where_they_live(tmp_path):
     (alone / "sis").mkdir(parents=True)
     assert recreate.to_copy(alone, "old", "sis", index_by_path=False, parts=("index",))["index"] == 100 + 702
     assert recreate.to_copy(alone, "old", "sis", index_by_path=True, parts=("index",))["index"] == 100
+
+
+def test_a_sister_s_room_counts_the_seed_s_bytes_and_nothing_once_seeded(pair):  # noqa: F811
+    from app.hold import seed, snapshot as sn
+    root, _old, _new = pair
+    src = sn.load(root / "old" / "shard" / "snapshots" / "2026-08.json")
+    want = sum(int(b) for _p, b, _r in seed.parts_of(src))
+    assert want > 0
+    assert recreate.to_copy(root, "old", "new", parts=(recreate.SHARD_PARTS,)) == {"shard": want}
+    assert recreate.SHARD_PARTS in recreate.SISTER_PARTS, "the sister's carry counts her copy"
+    seed.seed_shards(root, "new", "old", log=quiet)
+    assert recreate.to_copy(root, "old", "new", parts=(recreate.SHARD_PARTS,)) == {"shard": 0}, \
+        "a resumed seed counts what is left"

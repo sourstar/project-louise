@@ -102,14 +102,6 @@ def _write_kept(d: Path, kept: dict[str, dict]) -> None:
     os.replace(tmp, Path(d) / KEPT)
 
 
-def _move_part(src: Path, dst: Path) -> None:
-    """A part moved within the SHARD (aside, or back): the one move
-    (`seeded.move`) — renamed, or, read where her sister holds it, linked
-    again from its new depth with its `.seeded.json` entry re-keyed."""
-    from .seeded import move
-    move(src, dst)
-
-
 def _keep(d: Path, rel: str, here: Path, root_: str, size: int, kept: dict[str, dict],
           shared_with: str) -> None:
     """`rel` left at `here`, in the SHARD: a RELATIVE symbolic link to it in
@@ -262,7 +254,7 @@ def discard(root: Path, name: str, snapshot_id: str, *, con, node_con=None,
                 _keep(dest, rel, src, *entries[rel], kept,
                       "the records build since the snapshot (state/build/manifest.json)")
             else:
-                _move_part(src, dest / rel)
+                os.replace(src, dest / rel)
     if kept:
         _write_kept(dest, kept)
     relation_paths = [r.path for r in snap.relations]
@@ -340,15 +332,15 @@ def repair(root: Path, name: str, snapshot_id: str, *, dry_run: bool = True) -> 
         return out
     for rel in back:
         (shard_dir / rel).parent.mkdir(parents=True, exist_ok=True)
-        _move_part(dest / rel, shard_dir / rel)
+        os.replace(dest / rel, shard_dir / rel)
     kept = kept_in_place(dest)
     for rel in both:
         (shard_dir / rel).parent.mkdir(parents=True, exist_ok=True)
-        _move_part(dest / rel, shard_dir / rel)
+        os.replace(dest / rel, shard_dir / rel)
         _keep(dest, rel, shard_dir / rel, *old[rel], kept,
               f"the latest snapshot {latest.snapshot_id}")
         _write_kept(dest, kept)
     for rel in aside:
         (dest / rel).parent.mkdir(parents=True, exist_ok=True)
-        _move_part(shard_mod.superseded_name(shard_dir / rel, snapshot_id), dest / rel)
+        os.replace(shard_mod.superseded_name(shard_dir / rel, snapshot_id), dest / rel)
     return out

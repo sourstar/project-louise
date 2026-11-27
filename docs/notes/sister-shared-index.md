@@ -86,6 +86,7 @@ A single collection's migration is the rename alone. The comparison statement is
 
 - **Sisters still PARSE each record each.** The reader's rdf stage still runs, and its tags could come from the writer's parse. One parse across a group is the larger saving; it follows the "one parse" work (STATUS #63).
 - **The catalogue index is per manifest.** Keying it on `native_id` instead of rowid would let a group share it too.
+- **Her SHARD's parts are her own copy** (operator, 2026-11-27: choice B of A links, B copy, C content-addressed storage; tank 4.5 TB free, gutenberg's SHARD 95 GB). The standard alternative, C, not adopted: CONTENT-ADDRESSED STORAGE — one store of parts named by their pieces root, as git's object store names objects by their hash; each SHARD names its parts in it, a stored file never changes or moves, and a file goes only when no SHARD names it. It pays once several sisters share one corpus. Adopting it means changing how every SHARD writes, supersedes, drops and forgets a part (hold/seed.py's docstring).
 - **Standard alternative:** tantivy has no multi-tenant index. The usual shape is an index per tenant group with a tenant filter field: here a `slice` field plus a filter at search would let sisters with different slices share one index. It pays once several sisters per group hold different slices.
 
 ## Tests the build ships

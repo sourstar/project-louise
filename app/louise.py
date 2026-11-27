@@ -1539,16 +1539,19 @@ def _sister_new(a, say) -> int:
                                 f"{parts['records']} records), origin {origin}, licence ack {ack}; the "
                                 f"worker indexes every document with her own layer")
             else:
-                parts = recreate.seed_parts(root, her_sister_name, name, now=_utc_now(), log=say)
                 # her text index is her sister's, read WHERE IT LIES when their
                 # identities are equal (never copied or hard-linked: operator,
-                # 2026-11-27); otherwise a copy of her own
+                # 2026-11-27); otherwise a copy of her own. The room counts
+                # everything she copies first — her SHARD's parts (her own
+                # copy, choice B), her index's catalogue, her manifest —
+                # each on the filesystem it lands on, before any is copied
                 ia, ib = _index_identities(root, her_sister_name, name)
                 by_path = ia is not None and ia == ib
                 need, free = recreate.room(root, her_sister_name, name, index_by_path=by_path,
                                            parts=recreate.SISTER_PARTS)
                 if free < need:
                     raise CodexError(recreate.no_room(her_sister_name, name, need, free))
+                parts = recreate.seed_parts(root, her_sister_name, name, now=_utc_now(), log=say)
                 out = carry_mod.carry(root, her_sister_name, name, copy=True, apply=True, sister=True,
                                       index_groups=not by_path, log=say)
                 counts = recreate.counts(root, name)

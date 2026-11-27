@@ -183,8 +183,8 @@ def seed_parts(root: Path, pred_name: str, name: str, *, now: str,
                log: Callable[[str], None]) -> dict[str, Any]:
     """`name`'s SHARD seeded from the predecessor's latest snapshot (hold/
     seed.py's G3, what `hold snapshot create --shards-from` does): its parts
-    read where they lie (relative links, hold/seeded.py: never a copy nor a
-    hard link) and checked against their
+    COPIED (her own, never a link: operator, 2026-11-27, choice B) and
+    checked against their
     roots, its build database a
     build's, the snapshot frozen again and its parts held to the source's
     (`same_parts_or_withdraw`), signed where this peer has a key. A target
@@ -440,8 +440,10 @@ def _bytes_under(path: Path) -> int:
 
 #: what the carry copies and `room` counts, by its path in the collection
 COPIED = ("lance", "index", "state/manifest.sqlite")
-#: what a case-J sister's carry copies: no vector of her sister's
-SISTER_PARTS = ("index", "state/manifest.sqlite")
+#: what a case-J sister's carry copies: no vector of her sister's — and her
+#: SHARD's parts, seeded from her sister's (`seed_parts`, COPIED: choice B)
+SHARD_PARTS = "shard"
+SISTER_PARTS = (SHARD_PARTS, "index", "state/manifest.sqlite")
 #: and a re-cut (relayered) sister's: no text index either, the worker builds hers
 RECUT_SISTER_PARTS = ("state/manifest.sqlite",)
 
@@ -477,6 +479,9 @@ def to_copy(root: Path, pred_name: str, name: str, *, index_by_path: bool = Fals
     from app import text_index
     out: dict[str, int] = {}
     for rel in parts:
+        if rel == SHARD_PARTS:
+            out[rel] = _seed_bytes(root, pred_name, name)
+            continue
         there, src = _tree(root, name, rel), _tree(root, pred_name, rel)
         if not there.exists() or (there.is_dir() and not any(there.iterdir())):
             out[rel] = _bytes_under(src) if src.exists() else 0
@@ -492,12 +497,33 @@ def to_copy(root: Path, pred_name: str, name: str, *, index_by_path: bool = Fals
     return out
 
 
+def _seed_bytes(root: Path, pred_name: str, name: str) -> int:
+    """The bytes the seed copies (`seed_parts`): every part her sister's
+    latest snapshot names that her SHARD does not hold yet (a resumed seed
+    counts only what is left)."""
+    from . import collection as col, seed
+    try:
+        snap = seed.latest_snapshot(root, pred_name)
+    except CodexError:
+        return 0
+    dst = col.shard_dir_of(Path(root), name)
+    return sum(int(b) for path, b, _r in seed.parts_of(snap) if not (dst / path).is_file())
+
+
 def _lands(root: Path, name: str, rel: str) -> Path:
     """Where the copy of `rel` is written: beside the target, but its vector
     table where its bytes live — the build area for a re-created collection
     placed there (`vector_place.place_new`), and, before it is made (the dry
     run), where `new` will place it."""
     from app import vector_place
+    if rel == SHARD_PARTS:
+        # the SHARD's own filesystem (a link to `SHARDS_ROOT/<name>`, the
+        # bulk storage), and, before it is made, where `create` will link it
+        link = Path(root) / name / "shard"
+        if link.exists():
+            return link.resolve()
+        shards = os.getenv("SHARDS_ROOT", "").strip()
+        return Path(shards) / name if shards else link
     if rel != "lance":
         return Path(root) / name / rel
     link = vector_place.table_dir(root, name)
@@ -546,7 +572,7 @@ def room(root: Path, pred_name: str, name: str, *, make: bool = True,
 def no_room(pred_name: str, name: str, need: int, free: int) -> str:
     """The carry's refusal when the copy does not fit (the run's and the dry
     run's one sentence)."""
-    return (f"carry: copying {pred_name}'s vector table, text index and manifest needs {human(need)} "
+    return (f"carry: copying {pred_name}'s SHARD parts, vector table, text index and manifest needs {human(need)} "
             f"and {human(free)} is free where {name} lives: nothing was copied. Free the space, then "
             f"run this again")
 
@@ -699,8 +725,7 @@ def forget_plan(root: Path, name: str) -> dict[str, Any]:
     only where every name it has is among what goes — a part an earlier
     carry hard-linked (before 2026-11-27; never since: app/file_copy.py)
     stays on disk — and never what its forget hands over to the collection
-    that reads it: its origin directory, its seeded parts
-    (`forget.handed_inodes`)."""
+    that reads it: its origin directory (`forget.handed_inodes`)."""
     from .forget import forget, handed_inodes
     plan = forget(Path(root), name, dry_run=True)
     handed = handed_inodes(Path(root), name)

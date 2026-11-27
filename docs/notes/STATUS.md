@@ -30,15 +30,14 @@ measured (published figures disagree).
   - a re-created collection's origin directory, through a symbolic link, handed over at its holder's
     forget;
   - a discarded snapshot's part that the build since shares (kept in place);
-  - a seeded SHARD's parts (hold/seeded.py): a relative link each, named in `.seeded.json`; every
-    read checks the part is still the one the snapshot names and refuses one the source has re-issued,
-    naming it and the source's newer snapshot; the source's forget hands the parts over, its rename is
-    refused while they are read (gutenberg's SHARD is 95 GB: nothing copied). A seeded part renamed
-    aside (its superseded name, a discarded folder) moves through one helper, `seeded.move`, which
-    re-keys its entry (`at` still names the source's file); a dropped one through `seeded.remove`.
 
   What becomes another owner's own is copied, a reflink where the filesystem clones blocks, after a
-  preflight: a carried bundle tree, an earlier corpus's units. A method's claims are moved. Symbolic links are allowed. Not changed: the engine's voice-profile leases
+  preflight: a sister's seeded SHARD parts, a carried bundle tree, an earlier corpus's units.
+  The seed was briefly built BY PATH (7f9270fe, 534b9d48: a relative link a part, checked at every
+  read, handed over at her sister's forget); the independent read found four defects in it, and the
+  operator chose B, HER OWN COPY (tank: 4.5 TB free, gutenberg's SHARD 95 GB). The links are gone;
+  the standard alternative, content-addressed parts (git's object store), is written down in
+  hold/seed.py and sister-shared-index.md. The sister's room check counts the seed's bytes. A method's claims are moved. Symbolic links are allowed. Not changed: the engine's voice-profile leases
   (deploy/localai patches 0010/0019, hard links made by the engine's Go code: Tensor's), and the hard
   links already on the node, which `find -links +1` lists (the app makes none from now on).
   docs/07 §7.8, app/file_copy.py.

@@ -48,3 +48,28 @@ def test_libtorrent_hashes_the_file_through_the_link(tmp_path):
     member_dir = seeder._place(tmp_path / "share", "snap1", member.name, rel, f)
     out = seeder.build_torrent(member_dir, t, tmp_path / "torrents")
     assert out is not None and out.is_file(), "the linked file hashes to the snapshot's infohash"
+
+
+def test_a_share_tree_of_a_seeded_sister_survives_her_sister_s_forget(tmp_path, isolated_config, corpus_dir):
+    """Finding 3 of the read of 534b9d48, checked again with copies (choice
+    B): `_place` links to the file it is given, resolved — her own copy, not
+    her sister's — so her share tree reads on after her sister is forgotten."""
+    from app.hold import collection as col, forget as forget_mod, seed, snapshot as sn
+    from tests.hold.test_carry import _create, _old, quiet
+    from app.hold import records as rec
+    root, _o = _old(tmp_path, corpus_dir)
+    _create(root, "new")
+    rec.write_validation(root, "new")
+    for n in ("old", "new"):
+        (root / f"{n}.toml").write_text('codex = "sha256:00"\n', encoding="utf-8")
+    out = seed.seed_shards(root, "new", "old", log=quiet)
+    snap = sn.create(root, "new", snapshot_id=out["snapshot_id"], log=quiet)
+    mine = col.shard_dir_of(root, "new")
+    rel = snap.shards[0].path
+    assert not (mine / rel).is_symlink() and (mine / rel).stat().st_nlink == 1, "her own copy"
+    member_dir = seeder._place(root / "new" / "state" / "share", snap.snapshot_id, "records-x", rel, mine / rel)
+    placed = member_dir / rel
+    data = placed.read_bytes()
+    forget_mod.forget(root, "old")
+    assert not (root / "old").exists() and placed.read_bytes() == data
+    assert placed.resolve() == (mine / rel).resolve()

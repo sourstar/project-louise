@@ -464,19 +464,10 @@ class ShardIndex:
     uids: dict[str, list[int]]         # uid -> [frame, line]
 
 
-def _seeded(path) -> None:
-    """A part read where her sister holds it (app/hold/seeded.py): refused
-    when her sister has re-issued it. One `lstat` for any other part."""
-    if os.path.islink(path):
-        from ..hold import seeded
-        seeded.check(path)
-
-
 def read_index(path: Path) -> ShardIndex:
     """Parse the trailing skippable frame. Two small reads. A Parquet part's
     index is its row groups (09 §9.5 "The file (B)")."""
     path = Path(path)
-    _seeded(path)
     if is_parquet(path):
         return _parquet_index(path)
     st = path.stat()
@@ -509,7 +500,6 @@ def read_index(path: Path) -> ShardIndex:
 def read_frame(path: Path, index: ShardIndex, k: int) -> list[bytes]:
     """The lines of frame k (one pread + one decompress); of row group k
     for a Parquet part."""
-    _seeded(path)
     if is_parquet(path):
         return _parquet_frame(path, index, k)
     offset, csize, rsize, n, _first = index.frames[k]
@@ -522,7 +512,6 @@ def read_frame_at(path: Path, offset: int, csize: int, rsize: int, n: int, k: in
     held elsewhere (app/hold/claim_index.py's seek table) as from the part's
     own index."""
     path = Path(path)
-    _seeded(path)
     with open(path, "rb") as f:
         f.seek(offset)
         comp = f.read(csize)

@@ -267,10 +267,8 @@ louise hold
               create <to> --shards-from <from>[:<snapshot>] [--snapshot ID]
                                                                        seed the parts from another collection's byte-identical ones — refused unless every field
                                                                        that decides a record (02 §2.7), record_line, facets and the layers' chunkers agree — each
-                                                                       READ WHERE IT LIES, a relative symbolic link to the source's part named in the SHARD's
-            .seeded.json (never a copy nor a hard link, 2026-11-27, operator: "By path"; every read
-            checks it and refuses a part the source has re-issued since; the source's forget hands
-            the parts over, its rename is refused while they are read) and checked against the
+                                                                       COPIED: her own (operator, 2026-11-27, choice B; never a link — a reflink where the
+            filesystem clones blocks), after a preflight of its bytes, and checked against the
             source snapshot's root, the staging
                                                                        claim and build database written as a build would leave them; then the ordinary create, of
                                                                        the source snapshot's period unless --snapshot names one (added 2026-10-09)
@@ -2731,9 +2729,10 @@ re-check's claims, a re-created collection's origin directory (a symbolic
 link, handed over at its holder's forget), a discarded snapshot's part the
 build since shares (kept in place). What becomes another owner's own is
 COPIED, a reflink where the filesystem clones blocks, after a preflight of
-its bytes: a carried bundle tree, an earlier corpus's units. Seeded SHARD
-parts are read where they lie too (relative links named in the SHARD's
-`.seeded.json`, checked at every read, handed over at the source's forget). What an operation consumes is moved: a method's claims. A symbolic
+its bytes: a sister's seeded SHARD parts (her own copy, operator's choice B
+of 2026-11-27; the standard alternative, content-addressed parts, is in
+hold/seed.py), a carried bundle tree, an earlier corpus's units. What an
+operation consumes is moved: a method's claims. A symbolic
 link names a path and deleting it never deletes its target: it is
 allowed. app/file_copy.py; enforced by tests/test_no_hard_links.py.
 

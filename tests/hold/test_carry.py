@@ -65,22 +65,32 @@ def _seeded(root):
 
 # ---- G3: the SHARD seeded from identical parts ------------------------------
 
-def test_the_parts_are_the_sources_read_where_they_lie_and_the_snapshot_names_the_same_parts(pair):
-    """By path (operator, 2026-11-27: "By path"; RULE 1): each part a
-    relative symbolic link to the source's, one name for its bytes — never a
-    copy, never a hard link (tests/hold/test_seed_by_path.py)."""
+def test_the_parts_are_the_sources_copied_and_the_snapshot_names_the_same_parts(pair):
+    """Copied, never hard-linked (operator, 2026-11-27, app/file_copy.py):
+    each SHARD holds its own file of the same bytes."""
     root, old, new = pair
     out, snap = _seeded(root)
     src = sn.load(root / "old" / "shard" / "snapshots" / "2026-08.json")
     assert out["snapshot_id"] == snap.snapshot_id == "2026-08"
     assert [s.to_dict() for s in snap.shards] == [s.to_dict() for s in src.shards]
     assert snap.collection_id == new.collection_id and snap.previous is None
-    assert out["parts"] == {"by_path": len(seed.parts_of(src)), "present": 0}
+    assert out["parts"] == {"copied": len(src.shards), "present": 0}
     for s in snap.shards:
         a, b = root / "old" / "shard" / s.path, root / "new" / "shard" / s.path
-        assert b.is_symlink() and b.resolve() == a.resolve() and os.stat(a).st_nlink == 1
+        assert a.read_bytes() == b.read_bytes()
+        assert os.stat(a).st_ino != os.stat(b).st_ino and os.stat(a).st_nlink == os.stat(b).st_nlink == 1
     claim = json.loads((root / "new" / "state" / "build" / rec.STAGING_CLAIM).read_text())
     assert claim["collection_id"] == new.collection_id
+
+
+def test_a_seed_that_does_not_fit_copies_nothing(pair, monkeypatch):
+    from app import file_copy
+    root, _old, _new = pair
+    monkeypatch.setattr(file_copy, "free_bytes", lambda where: 1)
+    with pytest.raises(file_copy.NoRoom, match="nothing was copied"):
+        seed.seed_shards(root, "new", "old", log=quiet)
+    src = sn.load(root / "old" / "shard" / "snapshots" / "2026-08.json")
+    assert src.shards and not any((root / "new" / "shard" / s.path).exists() for s in src.shards)
 
 
 def test_a_seeded_snapshot_is_byte_for_byte_a_built_one(pair, tmp_path, corpus_dir):
@@ -165,12 +175,12 @@ def test_the_command_seeds_then_freezes(pair, monkeypatch):
     assert snap.collection_id == new.collection_id and snap.records == 3
 
 
-def test_a_holder_reads_the_parts_it_has_by_path_and_keeps_the_snapshot_it_holds(pair, monkeypatch, capsys):
+def test_a_holder_copies_the_parts_it_has_and_keeps_the_snapshot_it_holds(pair, monkeypatch, capsys):
     """Perugia, 2026-10-21: adopting the node's twin, `snapshot create
     --shards-from` refused at the first figures container its gutenberg
     never held (101 GB; its file takes records and vectors). A peer that
     already holds the snapshot (fetched, signed by its creator) is a
-    HOLDER: the parts its source has are read by path, a part neither holds is
+    HOLDER: the parts its source has are copied, a part neither holds is
     absent, and nothing is computed or signed; the creator still needs every
     part."""
     from app import louise
@@ -194,8 +204,7 @@ def test_a_holder_reads_the_parts_it_has_by_path_and_keeps_the_snapshot_it_holds
     assert (root / "new" / "shard" / "snapshots" / f"{snap.snapshot_id}.json").read_bytes() == raw, "kept as fetched"
     # the creator's rule is unchanged: a target without the snapshot needs every part
     with pytest.raises(CodexError, match="the source SHARD does not hold it"):
-        seed_mod._by_path(root / "old" / "shard" / gone_everywhere, root / "elsewhere" / "x", "x",
-                          snap.shards[0].root, "old", {})
+        seed_mod._copy(root / "old" / "shard" / gone_everywhere, root / "elsewhere" / "x", snap.shards[0].root)
 
 
 # ---- G1: carry ----------------------------------------------------------------

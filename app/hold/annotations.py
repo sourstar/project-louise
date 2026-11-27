@@ -2114,8 +2114,7 @@ def _update_finish(plan: _UpdatePlan, *, shards, relations, delta, dropped: Sequ
         if e.path not in listed and p_.is_file():
             dest = shard_mod.superseded_name(p_, prev.snapshot_id)
             if not dest.exists():
-                from . import seeded
-                seeded.move(p_, dest)           # the one move (hold/seeded.py)
+                p_.replace(dest)
     snap = sn.Snapshot(
         collection_id=codex.collection_id, snapshot_id=sid, previous=prev.hash,
         shards=shards, delta=delta, relations=relations, figures=(),

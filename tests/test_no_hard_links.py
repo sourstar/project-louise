@@ -5,7 +5,8 @@ important files because you forgot the hard links"; app/file_copy.py).
 Nothing in app/, tools/ or deploy/ makes a second name for a file: no
 `os.link`, `Path.hardlink_to`/`link_to`, `copy_function=os.link`, `cp -l`/
 `cp -al`/`cp --link`, or `ln` without `-s`. A symbolic link names its
-target's path and is allowed."""
+target's path and is allowed; a sister's seeded SHARD parts are neither: her
+own copy (operator, 2026-11-27, choice B; tests/hold/test_carry.py)."""
 from __future__ import annotations
 
 import ast
