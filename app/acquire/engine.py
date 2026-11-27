@@ -1091,7 +1091,16 @@ def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
 
 
 def _make_worker(transport, collection, spec, manager, ranked, stop, priority):
+    ready = getattr(spec.unit_fetcher, "ready", None) if spec.unit_fetcher is not None else None
+
     def _work(item: _WorkItem) -> list[_FileResult]:
+        if ready is not None and item.data is not None:
+            # what the unit needs first, waited for WITHOUT a slot (eurlex's
+            # pipeline: its listing window); bounded and stop-aware by contract
+            try:
+                ready(item.data, stop)
+            except Exception:   # noqa: BLE001 — an optional wait, never the file's failure
+                pass
         slot = transfer_pool.acquire_endpoint_slot(manager, ranked, spec, stop=stop, priority=priority)
         if slot is None:
             return []
@@ -1439,6 +1448,11 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
         except Exception as e:   # noqa: BLE001 — an optimisation of the pass, never its failure
             db.log_event(con, "warn", "acquire", f"bulk transport not prepared: {type(e).__name__}: {e}"[:400])
     items = _build_work_items(files, pending, spec)
+    # A UNIT FETCHER MAY ORDER THE PASS (spec.UnitFetcher `sort_key`, optional;
+    # eurlex's pipeline: its units in the order their listing windows come)
+    order = getattr(spec.unit_fetcher, "sort_key", None) if spec.unit_fetcher is not None else None
+    if order is not None:
+        items.sort(key=lambda it: order(it.data if it.data is not None else it.sidecar))
 
     manager = get_manager()
     transport = REGISTRY[spec.transport]
