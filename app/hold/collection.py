@@ -844,6 +844,7 @@ def write_calibration(shard_dir_path: Path, codex: Codex, vectors, envelope,
 def derive(root: Path, sister_id: str, *,
            space: Space | None = None,
            space_from: Codex | None = None,
+           encoder_from: Codex | None = None,
            layers: Iterable[Layer] | None = None,
            update: Update | None = None,
            work: Work | None = None,
@@ -900,8 +901,26 @@ def derive(root: Path, sister_id: str, *,
     The CORPUS and COMMUNITY credits do not follow the space and are kept
     on every path: a sister shares the corpus by definition, and a new
     encoder does not unwrite whose text it read.
+
+    `encoder_from` (case J, a sister who changes only her ENCODER SIDE;
+    operator, 2026-11-27, gutenberg-nemo: "Remember the indexing sharing
+    between sisters"): another held Codex's `space` whole — its encoder and
+    engine, dim, dtype, ctx, cut, pooling, instructions, query side,
+    calibration set and reference, tolerance — with HER SISTER'S layers and
+    epoch. Her chunks are her sister's, so her manifest and text index are
+    too (the carry links them, docs/notes/sister-shared-index.md); her
+    reference is that Codex's, carried (RULE 1: the calibration set is the
+    platform's and no layer touches it), so nothing is embedded. Unlike
+    `space_from`, the layers are not copied and `space_from` is not written:
+    her space is no held space's.
     """
     her_sister = read(root, sister_id)
+
+    if encoder_from is not None:
+        if space_from is not None or space is not None or layers is not None:
+            raise CodexError("derive: encoder_from supplies the space and keeps her sister's layers; "
+                             "do not also give space_from, space or layers")
+        space = encoder_from.space
 
     if space_from is not None:
         if space is not None or layers is not None:
@@ -1005,7 +1024,7 @@ def derive(root: Path, sister_id: str, *,
     elif not same_space:
         sister = _replace(sister, credits=_merge_credits(kept, ()))
 
-    sources = (her_sister,) if space_from is None else (her_sister, space_from)
+    sources = (her_sister,) + tuple(s for s in (space_from, encoder_from) if s is not None)
     if plan_only:
         if embed is not None:
             raise CodexError("derive: plan_only computes the Codex and embeds nothing; no `embed`")

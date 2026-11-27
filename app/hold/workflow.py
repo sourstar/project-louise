@@ -127,8 +127,11 @@ CASES: tuple[Case, ...] = (
     # built 2026-11-08 (operator: "Make J, it is time to do it"), pulled
     # forward from phase 4 for normattiva-nemo: the SISTER into a held space —
     # her sister's records, parts, manifest and text index carried, none of
-    # her vectors (hold/carry.py A1i). A sister into a new space, a daughter
-    # and a corrective stay phase 4, refused at resolve
+    # her vectors (hold/carry.py A1i). Since 2026-11-27 (gutenberg-nemo) also
+    # the sister who changes only her encoder side (`--encoder-from`): her
+    # sister's layers, a held collection's encoder side and reference carried,
+    # her index linked into her sister's group. Any other sister into a new
+    # space, a daughter and a corrective stay phase 4, refused at resolve
     Case("J", "Sister, daughter, corrective", "lineage (02 §2.7)",
          ("plugin", "her sister", "the space's collection", "name"),
          ("resolve", "check", "make", "carry", "cpu-reference", "gate"),

@@ -362,3 +362,137 @@ def test_a_layer_param_that_changes_nothing_or_is_unknown_is_refused(fixed_old, 
     assert _new_param(root, *params, extra=extra) == 2
     with pytest.raises(CodexError):
         col.resolve(root, "sis")
+
+
+# ---- a sister who changes only her ENCODER SIDE (--encoder-from) ------------
+# (operator, 2026-11-27, gutenberg-nemo: "Remember the indexing sharing between
+# sisters", "Do it by the books"): her sister's layers, the held collection's
+# encoder side whole, its reference carried; her index linked, one identity
+
+def _nemo(root, name="nemo"):
+    """Another encoder side, cutting OTHERWISE than her sister (as legi's
+    `legal_article` space is to gutenberg's `book`): so a copy of its space
+    would cut again, and only its encoder side is what she takes."""
+    from functools import partial
+    space = {**SPACE, "encoder": {**SPACE["encoder"], "weights": "sha256:" + "ee" * 32},
+             "dim": 1024, "query": {"encoder": None, "instruction": "query: "}}
+    layers = [{"rule": "default", "chunker": {"id": "fixed", "version": 1, "params": {"tokens": 3, "overlap": 0}},
+               "input": {"form": "text"}}]
+    return col.create_from_recipe(root, "gutenberg", recipe(space=space, layers=layers,
+                                                            work={"tokens": 7_000_000}),
+                                  platform_image=PLATFORM, embed=partial(fake_embed, dim=1024),
+                                  name=name, key=KEY, now=NOW)
+
+
+def _ready_nemo(root, old, card):
+    _, n = _ready(root, old, card)
+    nemo = _nemo(root)
+    card["weights"] = nemo.space.encoder.weights
+    return nemo, n
+
+
+def _new_enc(root, *extra, name="sis", source="nemo"):
+    return louise.main(["hold", "collection", "new", "gutenberg", "--root", str(root), "--name", name,
+                        "--sister-of", "old", "--encoder-from", source, "--encoder", "http://localai:8080",
+                        "--api", "vega", "--embed-model", "vega-nemo", "--cpu-model", "vega-nemo-cpu", *extra])
+
+
+def test_an_encoder_sister_keeps_her_sister_s_layers_and_carries_the_held_reference(pair, card, monkeypatch):
+    root, old, _ = pair
+    nemo, n = _ready_nemo(root, old, card)
+    calls = []
+    monkeypatch.setattr(col, "_write_own_calibration", lambda *a, **k: calls.append("embedded"))
+    assert _new_enc(root) == 0
+    _, sister = col.resolve(root, "sis")
+    assert sister.space_id not in (old.space_id, nemo.space_id) and sister.derived_from == old.collection_id
+    assert [l.to_dict()["chunker"] for l in sister.layers] == [l.to_dict()["chunker"] for l in old.layers], \
+        "her sister's layers, not the encoder source's"
+    assert sister.space.encoder == nemo.space.encoder and sister.space.dim == nemo.space.dim
+    assert sister.space.query.instruction == "query: " and sister.space.tolerance == nemo.space.tolerance
+    assert sister.space.calibration.vectors == nemo.space.calibration.vectors, "its reference, carried"
+    assert sister.space.epoch == old.space.epoch and sister.space_from is None
+    assert calls == [], "nothing embedded"
+    con = sqlite3.connect(root / "sis" / "state" / "manifest.sqlite")
+    try:
+        assert con.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == n
+        assert con.execute("SELECT COUNT(*) FROM documents WHERE embed_done>0 OR embed_version<>0"
+                           ).fetchone()[0] == 0, "none of her sister's vectors said held"
+    finally:
+        con.close()
+    assert (root / "sis" / "index" / "words").read_text() == "the text index", "her sister's index, carried"
+    assert not spaces.known_lance_rows(_local(root, "sis").lance_dir)
+    assert card["order"] == [("cpu-reference", "sis"), ("gate", "sis")]
+    from app.hold import workflow as wf
+    prog = json.loads(wf.progress_path("sis").read_text())
+    assert prog["case"] == "J" and set(prog["steps"]) == {"make", "carry", "cpu-reference", "gate"}
+    card["order"].clear()
+    assert _new_enc(root) == 0, "run again: each step kept, the carry checked by its counts"
+    assert card["order"] == [("cpu-reference", "sis"), ("gate", "sis")]
+
+
+def test_an_encoder_sister_has_her_sister_s_index_identity_and_slices(pair, card, monkeypatch):
+    """The share the operator asked for: one identity, so the carry's link
+    is joined (at once, or at the next boot's settle)."""
+    import tomllib
+    from app import collections as collections_mod, text_index
+    from app.hold import deposit
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    path = deposit.held_file(root, "old")
+    if path.is_file():
+        text = path.read_text(encoding="utf-8")
+    else:
+        louise._write_held_file(root, old, "http://localai:8080", api="vega", embed_model="vega-old")
+        text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("slices = []", 'slices = ["lang=en", "lang=it"]'), encoding="utf-8")
+    assert _new_enc(root) == 0
+    with open(deposit.held_file(root, "sis"), "rb") as f:
+        assert tomllib.load(f)["slices"] == ["lang=en", "lang=it"], "her sister's slices, not []"
+    files = deposit.held_file(root, "old"), deposit.held_file(root, "sis")
+    assert root.name == "collections"
+    monkeypatch.setenv("LOUISE_ROOT", str(root.parent))      # the node's layout: <LOUISE_ROOT>/collections
+    a, b = (collections_mod._load_one(f) for f in files)
+    assert text_index.identity(a) is not None and text_index.identity(a) == text_index.identity(b)
+
+
+def test_the_dry_run_names_the_encoder_side_and_makes_nothing(pair, card, capsys):
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    assert _new_enc(root, "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert "case J" in out and "encoder side" in out and "carried" in out and "nothing embedded" in out
+    with pytest.raises(CodexError):
+        col.resolve(root, "sis")
+
+
+@pytest.mark.parametrize("why", ["with-space-from", "with-layer-param", "her-sister-s-own", "unknown",
+                                 "no-sister"])
+def test_what_an_encoder_sister_cannot_be_is_refused_before_anything(pair, card, why):
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    args = ["hold", "collection", "new", "gutenberg", "--root", str(root), "--name", "sis",
+            "--sister-of", "old", "--encoder-from", "nemo", "--encoder", "http://localai:8080", "--api", "vega",
+            "--embed-model", "vega-nemo", "--cpu-model", "vega-nemo-cpu"]
+    if why == "with-space-from":
+        args += ["--space-from", "bge"]
+    elif why == "with-layer-param":
+        args += ["--layer-param", "tokens=4"]
+    elif why == "her-sister-s-own":
+        args[args.index("nemo")] = "old"            # her own encoder side: her sister's space
+    elif why == "unknown":
+        args[args.index("nemo")] = "nobody"
+    else:
+        i = args.index("--sister-of")
+        del args[i:i + 2]
+    assert louise.main(args) == 2
+    with pytest.raises(CodexError):
+        col.resolve(root, "sis")
+    assert card["order"] == []
+
+
+def test_derive_refuses_encoder_from_beside_a_space_or_layers(pair):
+    root, old, _ = pair
+    nemo = _nemo(root)
+    for extra in ({"space_from": nemo}, {"layers": old.layers}, {"space": nemo.space}):
+        with pytest.raises(CodexError, match="encoder_from"):
+            col.derive(root, old.collection_id, encoder_from=nemo, plan_only=True, **extra)
