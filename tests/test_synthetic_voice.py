@@ -59,6 +59,19 @@ class Server:
         monkeypatch.setattr(transcribe, "transcribe", self.transcribe)
         monkeypatch.setattr(speech, "pinned", lambda url, models, holder="speech": nullcontext())
         monkeypatch.setattr(speech, "ping", self.ping)
+        self.loads: list[tuple[str, str]] = []
+        self.refuse_load = False
+        from app import model_load, resident
+
+        def warm(url, model, kind, role):
+            def go():
+                if self.refuse_load:
+                    raise model_load.LoadRefused(f"{model}: no room could be made", model=model)
+                self.loads.append((model, kind))
+            return go
+        monkeypatch.setattr(resident, "_speech_warm", warm)
+        self.oom_at: int | None = None     # the draw (1-based) the card refuses
+        self.draws = 0
 
     def get(self, url, timeout=None, **kw):
         assert url == f"{SERVER}/api/voice-profiles"
@@ -66,6 +79,11 @@ class Server:
 
     def post(self, url, json=None, data=None, files=None, timeout=None, **kw):
         if url == f"{SERVER}/v1/audio/speech":
+            self.draws += 1
+            if self.draws == self.oom_at:
+                return types.SimpleNamespace(status_code=500, content=b"", headers={}, text=(
+                    'rpc error: code = Unavailable desc = error reading from server: EOF '
+                    '(level_zero backend failed with error: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY))'))
             self.speech.append(json)
             clip = self.clips.pop(0) if self.clips else _wav(10.0)
             return types.SimpleNamespace(status_code=200, content=clip, text="", headers={})
@@ -253,3 +271,30 @@ def test_the_command_and_its_route(server, capsys):
     assert a.fn(a) == 0
     assert [m["design"] for m in json.loads(capsys.readouterr().out)["made"]] == [
         "female, elderly, low pitch", "male, elderly"]
+
+
+def test_the_room_is_made_before_any_draw(server):
+    # München, 2026-11-27: a draw on a full card killed the TTS backend
+    sv.make("es", log=lambda m: None)
+    assert server.loads == [(TTS, "tts"), (STT, "stt")]
+
+
+def test_no_room_is_a_deferral_not_an_error(server, capsys):
+    server.refuse_load = True
+    with pytest.raises(sv.Deferred, match="run the same command again"):
+        sv.make("es", log=lambda m: None)
+    assert server.speech == [] and server.posted == []
+    a = louise.build_parser().parse_args(["node", "speech", "synthetic", "es"])
+    assert a.fn(a) == 3                                   # 503 at the route: run again
+    assert "run the same command again" in capsys.readouterr().err
+
+
+def test_a_draw_the_card_refuses_defers_and_names_what_was_made(server):
+    server.oom_at = 2                     # the first candidate made, the second refused
+    with pytest.raises(sv.Deferred, match="Synthetic es A.*next free letters"):
+        sv.make("es", candidates=3, log=lambda m: None)
+    assert [d["name"] for d, _f in server.posted] == ["Synthetic es A"]
+    assert server.line() == {"it": IT}
+    # run again: the rest under the next free letters, A kept
+    out = sv.make("es", candidates=2, log=lambda m: None)
+    assert [m["name"] for m in out["made"]] == ["Synthetic es B", "Synthetic es C"]

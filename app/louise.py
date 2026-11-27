@@ -4073,6 +4073,9 @@ def cmd_node_speech(a) -> int:
                                designs=a.designs.split(";") if a.designs else None, text=a.text, tag=a.tag,
                                log=lambda m: print(m, file=sys.stderr)))
             return 0
+        except sv.Deferred as e:
+            print(f"louise node speech synthetic: {e}", file=sys.stderr)
+            return 3                                  # no room on the card now: a deferral (503)
         except (sv.SyntheticError, *voice.LOAD_ERRORS) as e:
             print(f"louise node speech synthetic: {e}", file=sys.stderr)
             return 2

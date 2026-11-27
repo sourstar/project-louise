@@ -18,6 +18,14 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-27
+
+- **PERUGIA ON A 16 GB CARD, THE TEST PLAN** (operator: "In a few days the node Perugia will be resumed to
+  test the new backend on the AMD RX 9060 XT and, even more important, test the behavior with a 16 GB GPU
+  that is the most common size for consumer market"; "That's the purpose of all those optimizations and
+  the quest for a universal embedder"). Measured on the B70: today's query encoders for one question come
+  to 20.4 GB loaded, against 4.4 GB for one universal embedder. docs/notes/perugia-16gb-test.md.
+
 ### 2026-11-26
 
 - **PARKING SWITCHED ON FOR bge-m3, AND THE THREE DEFECTS THE STEP FOUND (München, 07:59–08:12Z; operator:

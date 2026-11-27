@@ -2,7 +2,8 @@
 // keeps the microphone open, the energy gate cuts each utterance and posts it
 // to /ask/voice/heard, ONE in flight (a newer one replaces a waiting one), an
 // addressed question is asked, a dropped one is not, the name alone opens the
-// continuation window, and a tap on the microphone turns it off.
+// continuation window, and a tap on the microphone turns it off; a long press
+// on it turns hands-free on and off, and a tap stays one spoken question.
 // argv: voice.js utterances.wav — Chromium's fake microphone loops the WAV.
 const fs = require('fs'); const { chromium } = require('playwright');
 const PAGE = '<textarea id="q"></textarea><div id="answer"></div><button id="mic">mic</button>'
@@ -69,6 +70,31 @@ const check = (ok, what, d) => { console.log((ok ? 'PASS ' : 'FAIL ') + what + (
   await p.evaluate(() => document.getElementById('mic').click());
   check(await p.evaluate(() => !louiseVoice.handsFree.on() && !document.getElementById('hands-free').checked),
         '4. a tap on the microphone turns it off');
+
+  // 5. A LONG PRESS turns hands-free on and off (operator, 2026-11-27: "can you
+  //    recognize a long pressure on the mic button?"); a tap stays a tap
+  const box = await p.locator('#mic').boundingBox();
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+  const hold = async (ms, moveBy = 0) => {
+    await p.mouse.move(cx, cy); await p.mouse.down();
+    if (moveBy) { await p.waitForTimeout(100); await p.mouse.move(cx + moveBy, cy); }
+    await p.waitForTimeout(ms); await p.mouse.up(); await p.waitForTimeout(200);
+  };
+  const state = () => p.evaluate(() => ({ on: louiseVoice.handsFree.on(), box: document.getElementById('hands-free').checked,
+                                          rec: document.getElementById('mic').classList.contains('rec') }));
+  await hold(900);
+  let st = await state();
+  check(st.on && st.box && !st.rec, '5. a long press turns hands-free on, and records no question', st);
+  await hold(900);
+  st = await state();
+  check(!st.on && !st.box, '5. a second long press turns it off', st);
+  await hold(900, 40);
+  st = await state();
+  check(!st.on && !st.box, '5. a press that slides off the button does nothing', st);
+  check(await p.evaluate(() => /hold: hands-free/.test(document.getElementById('mic').title)), '5. the button says so');
+  await hold(80);
+  st = await state();
+  check(!st.on && !st.box && st.rec, '5. a tap is still one spoken question', st);
   await b.close();
   console.log(fails ? `${fails} FAILED` : 'ALL PASSED');
   process.exit(fails ? 1 : 0);

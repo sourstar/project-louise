@@ -238,7 +238,9 @@
   #q{resize:none;field-sizing:content;min-height:calc(2lh + 16px);max-height:40vh;overflow-y:auto;line-height:1.4}
   .voice-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px}
   .voice-btn[hidden]{display:none}
-  #mic{flex:0 0 auto;min-width:44px;padding:0 10px}
+  #mic{flex:0 0 auto;min-width:44px;padding:0 10px;
+       /* a long press is the page's (hands-free), not the phone's menu or a selection */
+       touch-action:manipulation;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
   #mic.rec{border-color:var(--err);color:var(--err);animation:mic-pulse 1.2s ease-in-out infinite}
   /* opened and not yet giving sound (a car's Bluetooth switching to its call profile): not red, dashed */
   #mic.waking{border-style:dashed;opacity:.75}
