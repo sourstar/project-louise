@@ -577,24 +577,35 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
                 history = False
             yield RemoteFile(rel_path=rel_path(lang, celex, history), mtime=mtime, remote=encode(celex, lang))
         got += len(rows)
+    from . import backoff
+    # THE ROWS AS UNITS: a row read twice across pages (rows inserted before
+    # the OFFSET between two pages re-read k rows and miss the new ones) is no
+    # whole listing (review of c4b47315, B)
+    distinct = len({(r[0], r[1]) for r in listed})
+    if distinct != len(listed):
+        raise backoff.Deferred(f"cellar: the {year} window ({lang_text}) read {len(listed)} rows of {distinct} "
+                               f"units: rows moved between its pages; listed again")
     if got > want:
         # MORE ROWS THAN ITS COUNT (architecture, 2026-11-27: 2021 nl, 3,063
         # against 3,060): Cellar added rows between the count and the pages,
         # or the count was cut. Counted once more: the same as the pages, the
-        # window is kept with that count, as of the FIRST count's time;
-        # otherwise said as what it is, never "timed out"
+        # window is kept with that count but the FIRST count's `latest` and
+        # time (review of c4b47315, A: the re-count's max, taken after the
+        # pages, would stand over an older row for good — the next pass's
+        # fingerprint matching, the row never re-read); otherwise said as what
+        # it is, an episode (Deferred: read as one, never "timed out")
         recount = sparql(client, base, fingerprint_query(year, languages),
                          what=f"the re-count of {year} ({lang_text})", charge=charge)
         try:
             n2 = int(recount[0]["n"]["value"]) if recount else 0
         except (KeyError, ValueError, IndexError):
-            n2 = -1
+            raise backoff.Deferred(f"cellar: the re-count of {year} ({lang_text}) answered "
+                                   f"{recount!r:.120}, not a count; listed again") from None
         if n2 != got:
-            raise TransportError(f"cellar: the {year} window ({lang_text}) answered {got} rows, more than "
-                                 f"its count {want} (re-counted {n2}): the window changed while it was "
-                                 f"listed; listed again")
-        want = n2
-        latest = (recount[0].get("max") or {}).get("value") if recount else latest
+            raise backoff.Deferred(f"cellar: the {year} window ({lang_text}) answered {got} rows, more than "
+                                   f"its count {want} (re-counted {n2}): the window changed while it was "
+                                   f"listed; listed again")
+        want = n2                           # `latest` stays the first count's
     elif got < want:
         # a Virtuoso answer cut short says nothing: the window is
         # re-listed (worded for engine.transient)
@@ -1559,16 +1570,6 @@ class TreeUnits(CellarUnits):
             return None, None
         at = cover.get((year, unit["lang"]))
         if at is None:
-            with self._lock:
-                failed_at = self._window_failed.get((key, year, unit["lang"]))
-            if failed_at is not None and time.time() - failed_at >= WINDOW_FAILED_HOLD_S:
-                # it failed in prepare and its hold is over: asked again here,
-                # once for all its units (the window's lock, `_refresh_window`)
-                self._refresh_window(key, year, unit["lang"])
-                with self._lock:
-                    at = (self._cover.get(key) or {}).get((year, unit["lang"]))
-                    dates = self._dates.get(key) or {}
-        if at is None:
             raise WindowNotListed(f"cellar: {unit['celex']} ({unit['lang']}): its {year} window is not "
                                   f"known whole since the dump was cut; nothing asked, it waits for the listing")
         when = dates.get((unit["celex"], unit["lang"]))
@@ -1925,12 +1926,6 @@ class TreeUnits(CellarUnits):
                             except TransportError as e:    # the origin's: this window's units wait
                                 with guard:
                                     failed.append((year, sub, f"{type(e).__name__}: {str(e)[:200]}"))
-                                with self._lock:
-                                    # asked again by a fetch thread after the hold
-                                    # (architecture's choice, 2026-11-27: 15 min,
-                                    # not a whole pass)
-                                    for l in sub:
-                                        self._window_failed[(key, year, l)] = time.time()
                                 release(year, sub)             # B2: they go on at once, and wait
                                 continue
                             except BaseException:
@@ -2000,8 +1995,19 @@ class TreeUnits(CellarUnits):
             cover = {k: at for k, at in cover.items() if k not in unlisted}
             with self._lock:
                 self._bulk[key] = bulk
-                self._dates[key] = dates
-                self._cover[key] = cover
+                if background:
+                    # what a fetch thread's inline re-ask set meanwhile stays:
+                    # merged, the newer `at` kept (review of c4b47315)
+                    held_d = self._dates.setdefault(key, {})
+                    held_c = self._cover.setdefault(key, {})
+                    for k, at_k in cover.items():
+                        if at_k >= held_c.get(k, 0.0):
+                            held_c[k] = at_k
+                            held_d.update({u: d for u, d in dates.items()
+                                           if (window_year(u[0]), u[1]) == k})
+                else:
+                    self._dates[key] = dates
+                    self._cover[key] = cover
                 self._after[key] = after
                 self._due[key] = due
                 self._base_url[key] = base_url

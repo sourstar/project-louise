@@ -24,13 +24,18 @@ def _rows(n):
              "last": {"value": "2026-11-20T00:00:00Z"}, "force": {"value": "true"}} for i in range(n)]
 
 
+FIRST_MAX = "2026-11-20T00:00:00Z"
+RECOUNT_MAX = "2026-11-27T09:00:00Z"
+
+
 def _sparql(counts, pages):
     asked = []
+    maxes = [FIRST_MAX, RECOUNT_MAX]
 
     def sparql(client, base, query, *, what="", charge=None):
         asked.append(what)
         if "COUNT(" in query:
-            return [{"n": {"value": str(counts.pop(0))}, "max": {"value": "2026-11-20T00:00:00Z"}}]
+            return [{"n": {"value": str(counts.pop(0))}, "max": {"value": maxes.pop(0)}}]
         return pages.pop(0) if pages else []
     return sparql, asked
 
@@ -44,13 +49,15 @@ def test_more_rows_than_the_count_re_counted_the_same_keep_the_window(tmp_path, 
     assert len(got) == 3063 and any("re-count" in w for w in asked)
     data = json.loads(__import__("gzip").decompress(cellar_listing._path(URL, 2021, ("nl",), True).read_bytes()))
     assert data["n"] == 3063
+    assert data["last"] == FIRST_MAX, "the first count's max: a row changed after its page is listed again"
 
 
 def test_more_rows_than_the_count_re_counted_otherwise_is_said_as_what_it_is(tmp_path, monkeypatch):
     monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
     sparql, _asked = _sparql([3060, 3060], [_rows(3063)])
     monkeypatch.setattr(cellar, "sparql", sparql)
-    with pytest.raises(cellar.TransportError) as e:
+    from app.acquire import backoff
+    with pytest.raises(backoff.Deferred) as e:
         list(cellar._window_files(object(), URL, 2021, ("nl",), CODE_OF, lambda n: None, place=lambda *a: False))
     assert "more than its count 3060 (re-counted 3060)" in str(e.value)
     assert "timed out" not in str(e.value)
@@ -88,25 +95,44 @@ def test_an_answer_virtuoso_cut_by_its_time_limit_is_an_episode_never_bindings(m
     assert "S1TAT" in str(e.value) and len(answers) > 1, "retried as an episode, its 12 never taken"
 
 
-def test_a_window_that_failed_in_prepare_is_asked_again_after_its_hold(tmp_path, monkeypatch):
+def test_a_row_read_twice_across_pages_is_refused(tmp_path, monkeypatch):
+    """Review of c4b47315, B: rows inserted before the OFFSET between pages
+    make a later page re-read rows and miss the new ones."""
+    from app.acquire import backoff
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    monkeypatch.setattr(cellar, "PAGE", 3, raising=False)
+    rows = _rows(4)
+    sparql, _asked = _sparql([4], [rows[:3], [rows[2]]])
+    monkeypatch.setattr(cellar, "sparql", sparql)
+    with pytest.raises(backoff.Deferred, match="rows moved between its pages"):
+        list(cellar._window_files(object(), URL, 2021, ("nl",), CODE_OF, lambda n: None, place=lambda *a: False))
+    assert not cellar_listing._path(URL, 2021, ("nl",), True).exists()
+
+
+def test_a_recount_that_does_not_parse_is_said_as_such(tmp_path, monkeypatch):
+    from app.acquire import backoff
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    answers = [[{"n": {"value": "3060"}, "max": {"value": FIRST_MAX}}], _rows(3063), [{"x": {}}]]
+    monkeypatch.setattr(cellar, "sparql", lambda *a, **k: answers.pop(0))
+    with pytest.raises(backoff.Deferred, match="not a count"):
+        list(cellar._window_files(object(), URL, 2021, ("nl",), CODE_OF, lambda n: None, place=lambda *a: False))
+
+
+def test_a_window_that_failed_in_prepare_waits_for_the_next_pass(tmp_path, monkeypatch):
+    """Architecture's choice B (2026-11-27): no fetch-thread re-ask; its
+    units wait, nothing asked of Cellar for it in this pass."""
     base, corpus, due = _setup(tmp_path, monkeypatch, (1970,))
     calls = []
-    after = int(time.time()) - 10 ** 7
 
     def window(client, url, year, langs, code_of, charge, place=None, learned=None):
         calls.append(year)
-        if len(calls) == 1:
-            raise cellar.TransportError("cellar: 503 to the count of 1970 (an episode)")
-        cellar_listing.keep(url, year, langs, 1, None, [["31970R0001", "it", after, "true"]], force=True)
-        return iter(())
+        raise cellar.TransportError("cellar: 503 to the count of 1970 (an episode)")
     monkeypatch.setattr(cellar, "_window_files", window)
     units = cellar.TreeUnits()
-    units._prepare_bulk(base, corpus, ["it"], due, "eu", URL)                 # 1970 fails
+    units._prepare_bulk(base, corpus, ["it"], due, "eu", URL)
     unit = {"celex": "31970R0001", "lang": "it"}
-    with pytest.raises(cellar.WindowNotListed):
-        units._bulk_of(corpus, unit, due[0], corpus / due[0].rel_path)       # inside the hold: waits
-    assert calls == [1970]
     t = time.time()
     monkeypatch.setattr(time, "time", lambda: t + cellar.WINDOW_FAILED_HOLD_S + 1)
-    assert units._bulk_of(corpus, unit, due[0], corpus / due[0].rel_path)[1] == after, "asked again, listed"
-    assert calls == [1970, 1970]
+    with pytest.raises(cellar.WindowNotListed):
+        units._bulk_of(corpus, unit, due[0], corpus / due[0].rel_path)
+    assert calls == [1970], "asked once, in prepare"
