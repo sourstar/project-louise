@@ -1090,8 +1090,50 @@ def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
                             bytes_now=bytes_now, error=f"{type(e).__name__}: {e}")
 
 
+def _close_fetcher(fetcher, collection) -> None:
+    """A unit fetcher's `close`, for THIS collection where it takes one
+    (eurlex's TREE_UNITS serves every parser-4 collection: a close without it
+    ended every corpus's listing; review of abac25f1)."""
+    close = getattr(fetcher, "close", None) if fetcher is not None else None
+    if close is None:
+        return
+    import inspect
+    try:
+        takes = inspect.signature(close).parameters
+    except (TypeError, ValueError):
+        takes = {}
+    if "collection" in takes:
+        close(collection=collection)
+    else:
+        close()
+
+
 def _make_worker(transport, collection, spec, manager, ranked, stop, priority):
+    ready = getattr(spec.unit_fetcher, "ready", None) if spec.unit_fetcher is not None else None
+    if ready is not None:
+        import inspect
+        try:
+            takes = inspect.signature(ready).parameters
+        except (TypeError, ValueError):
+            takes = None                # its parameters cannot be read: not checked (review of abac25f1)
+        if takes is not None and "collection" not in takes and \
+                not any(p.kind is p.VAR_KEYWORD for p in takes.values()):
+            # said once at the start of the pass, never a wait skipped silently
+            # per unit (review of f69d4bd9)
+            raise TypeError(f"{type(spec.unit_fetcher).__name__}.ready must take `collection` "
+                            f"(spec.UnitFetcher): ready(f, stop, collection=...)")
+    pass_held = getattr(spec.unit_fetcher, "pass_held", None) if spec.unit_fetcher is not None else None
+
     def _work(item: _WorkItem) -> list[_FileResult]:
+        if pass_held is not None and pass_held(collection):
+            return []                   # the pass is held back: nothing more is asked, nothing recorded
+        if ready is not None and item.data is not None:
+            # what the unit needs first, waited for WITHOUT a slot (eurlex's
+            # pipeline: its listing window); bounded and stop-aware by contract
+            try:
+                ready(item.data, stop, collection=collection)
+            except Exception:   # noqa: BLE001 — an optional wait, never the file's failure
+                pass
         slot = transfer_pool.acquire_endpoint_slot(manager, ranked, spec, stop=stop, priority=priority)
         if slot is None:
             return []
@@ -1204,7 +1246,7 @@ def run_acquisition(con, collection, spec: AcquisitionSpec, profile: str,
         # newer dump, its build failed) — the pass ends here, said, nothing
         # asked of the origin's per-unit API; the next pass tries the bulk again
         db.log_event(con, "warn", "acquire", str(e)[:400])
-        return {**_no_counts(), "stopped": str(e)}
+        return {**_no_counts(), "fetched": int(getattr(e, "fetched", 0) or 0), "stopped": str(e)}
     except TransferAborted as e:
         # A STOP BEFORE THE POOL — in the listing, the benchmark, the index
         # resolve or the planning — is a stop, not a failure: it returns
@@ -1432,13 +1474,16 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
                 pending |= more
                 skipped -= len(more)
         except (TransferAborted, HeldBack):
-            close = getattr(spec.unit_fetcher, "close", None)
-            if close is not None:
-                close()             # what it opened for the pass, let go with it
+            _close_fetcher(spec.unit_fetcher, collection)   # what it opened for the pass, let go with it
             raise
         except Exception as e:   # noqa: BLE001 — an optimisation of the pass, never its failure
             db.log_event(con, "warn", "acquire", f"bulk transport not prepared: {type(e).__name__}: {e}"[:400])
     items = _build_work_items(files, pending, spec)
+    # A UNIT FETCHER MAY ORDER THE PASS (spec.UnitFetcher `sort_key`, optional;
+    # eurlex's pipeline: its units in the order their listing windows come)
+    order = getattr(spec.unit_fetcher, "sort_key", None) if spec.unit_fetcher is not None else None
+    if order is not None:
+        items.sort(key=lambda it: order(it.data if it.data is not None else it.sidecar))
 
     manager = get_manager()
     transport = REGISTRY[spec.transport]
@@ -1515,6 +1560,7 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
 
     last_report = [time.monotonic()]
     workers = min(manager.platform.transfer.workers, max(1, len(items)))
+    pass_held = getattr(spec.unit_fetcher, "pass_held", None) if spec.unit_fetcher is not None else None
     # the claim is already held by run_acquisition, covering the whole pass
     try:
         transfer_pool.run_pool(
@@ -1526,6 +1572,24 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
         # before is told, so its scan is asked (app/worker.py)
         e.fetched = counters["fetched"]
         raise
+    finally:
+        if prepare is not None:
+            # what it opened for the pass (a bulk's index, a listing running
+            # beside it) is let go with it, however the pool ended (review of
+            # b797db0e: a busy manifest's retry ran a second listing beside the first)
+            try:
+                _close_fetcher(spec.unit_fetcher, collection)
+            except Exception as e:  # noqa: BLE001 — never masks the pool's own exception
+                db.log_event(con, "warn", "acquire", f"the unit fetcher's close failed: {e}"[:400])
+    # A UNIT FETCHER THAT HELD THE PASS BACK MID-PASS (spec.UnitFetcher
+    # `pass_held(collection)`, optional; eurlex: a local fault in the listing
+    # running beside the fetch) ends it as prepare's HeldBack does, carrying
+    # what landed before it so its scan is asked (review of 0225f33f)
+    why = pass_held(collection) if pass_held is not None else None
+    if why:
+        e = HeldBack(why)
+        e.fetched = counters["fetched"]
+        raise e
 
     _unit_reports(con, spec, last_report, final=True)
     if counters.get("waiting_units"):
@@ -1533,11 +1597,6 @@ def _run_acquisition_claimed(con, collection, spec: AcquisitionSpec, profile: st
                      f"{counters['waiting_units']} unit(s) wait for what the pass could not do first "
                      f"(their listing): nothing asked of the origin; each due again when its "
                      f"wait (60 s to 2 h) ends")
-    if prepare is not None:
-        # what it opened for the pass (a bulk's index) is let go with it
-        close = getattr(spec.unit_fetcher, "close", None)
-        if close is not None:
-            close()
     # a deferred file (its directory unread this pass) is skipped: nothing
     # moved, nothing recorded, the copy stands — not a failure of the file
     return {"fetched": counters["fetched"], "skipped": skipped + counters["deferred"],

@@ -146,6 +146,57 @@ is built once, for both.
 **Recommendation: A, as its own step** (§9, step 3), because the typed
 Ask needs it too. Default: A.
 
+**The operator, 2026-11-27, on what a follow-up may reuse:**
+- NOT the last answer's sources carried into the follow-up's search. The
+  follow-up is searched on its own condensed query alone.
+- Nothing pre-embedded for it: "assume that everything is already
+  embedded".
+- "As a setting option for proactive follow up": Decision 6.
+
+## 6b. Decision 6: proactive follow-ups, a setting (operator, 2026-11-27)
+
+**What it is:** a reader's setting that, when on, has the node guess the
+likely next questions and get their searches ready before they are asked.
+
+How it runs:
+- **THE SETTING:** "suggest follow-up questions", a switch in the Ask
+  page's Settings for an admin and a regular user alike, kept with the
+  account as the voice is, else in this browser. OFF by default, because
+  it spends a chat call and searches on every answer. Nothing asks.
+- **THE SUGGESTIONS:**
+  - When an answer ends (its reading too, where it is read), the chat
+    model proposes 2–3 follow-up questions in the answer's language. Each
+    is written as a STANDALONE question, so it needs no condensing.
+  - They are shown under the answer as buttons. In hands-free, the reading
+    ends with them said once ("Vuoi sapere anche…?"), and "Philippe, la
+    seconda" picks one (a command, §5).
+  - They are the model's guesses and say so; nothing in them is a fact of
+    the collection.
+- **PRE-RUN:**
+  - Each suggestion's search (fts, dense, rerank) runs in the background
+    and is kept for 10 min under the suggestion.
+  - The pre-runs yield to a person: they run at a level below any
+    person's search. A new question cancels every pre-run of the
+    reader's that has not finished. They follow the same quiet rule as the
+    waiting phrases, so none runs beside a person's search or reading
+    (app/fillers.py's quietness, reused).
+- **WHAT IS REUSED, AND ONLY THIS:** the reader PICKS a suggestion (tap, or
+  its spoken number). Its answer then starts from the kept search, saving
+  the search's ~13 s, of which 11.9 s is the rerank. A follow-up the
+  reader words themselves is searched afresh: never matched to a
+  suggestion by likeness, since a near question answered from another
+  question's hits is a wrong answer that passes every check.
+- **WHAT IT COSTS, per answer:** one chat call, and 2–3 searches of the
+  card's time while the reader reads or listens. Measured once it runs:
+  how often a suggestion is picked, the time saved per pick, and the card
+  time spent per answer. If picks are rare, the setting says so.
+
+| choice | pros | cons |
+|---|---|---|
+| **Suggestions shown and pre-run, reused only when picked** (decided) | A picked follow-up answers ~13 s sooner; no wrong reuse | Card time spent on suggestions never picked |
+| Suggestions shown, not pre-run | No card time wasted | No time saved: a pick waits the full search |
+| Status quo | Nothing to build | The reader thinks up every next question |
+
 ## 7. Decision 5: covering the wait
 
 **What it is:** between the end of a question and the first sentence of
@@ -275,9 +326,17 @@ How it runs:
   to in.
 - **THE ECHO GUARD** (Decision 2A) knows the set's texts, so a phrase heard
   back is never taken for the reader.
-- **A PERSONAL CHOICE:** on by default for spoken questions. Settings ›
-  voice turns the phrases off (C's tone instead), with the account, else
-  in this browser. Nothing asks.
+- **A SETTING OF EVERY READER** (operator, 2026-11-27: "the comfort speech
+  shall be a settable option, it goes also in the regular user's settings"):
+  - on by default for spoken questions;
+  - a switch in the Ask page's Settings, beside the voice, for an admin
+    AND a regular user alike; off gives C's tone instead;
+  - kept with the account where the reader has one, as the voice is
+    (POST /ask/voice, app/users.py), so every browser and client of the
+    account follows it; else in this browser;
+  - a regular user hears the phrases in the synthetic voice of the
+    language, as their answers;
+  - nothing asks.
 
 ## 8. What is measured before each step is called done
 
@@ -345,7 +404,9 @@ How it runs:
      - the set file per language;
      - the page's cues in tests/browser/ask_voice.js.
 3. **The follow-up** (Decision 4A), for the typed and the spoken Ask
-   alike.
+   alike: the prior turns sent, the follow-up condensed into a standalone
+   query and searched alone. Then **the proactive follow-ups** (Decision
+   6), the setting, with their pre-runs and the pick that reuses one.
 4. **Only if M2 or M4 fail:** a wake-word model (Decision 1B, openWakeWord
    over Wyoming), a new dependency to ask for first.
 
