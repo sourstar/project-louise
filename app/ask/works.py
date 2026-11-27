@@ -526,8 +526,8 @@ def _ids_of(collection) -> tuple[str, ...]:
     its state directory is its manifest's."""
     from app.hold import carry
     path = getattr(collection, "manifest_path", None)
-    twin = carry.records_twin_of(Path(path).parent) if path else None
-    return tuple(dict.fromkeys(i for i in (collection.codex.collection_id, twin) if i))
+    twins = carry.records_twins_of(Path(path).parent) if path else ()      # a carry's, a refit's (A1l)
+    return tuple(dict.fromkeys(i for i in (collection.codex.collection_id, *twins) if i))
 
 
 def work_relations(collection) -> tuple[str, ...]:

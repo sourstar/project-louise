@@ -1448,10 +1448,18 @@ def _target_names(root: Path, codex: Codex) -> list[str | None]:
     wanted = [t.collection_id for t in targets_of(codex)]
     if not wanted:
         return []
+    from . import carry
     names: dict[str, str] = {}
     for name, held in _held(root):
         if held.collection_id in wanted:
             names[held.collection_id] = name
+    for name, held in _held(root):
+        # a records twin answers for a target it is not itself (a carry's,
+        # a refit's in place: A1f, A1l); the target itself first
+        if getattr(held, "annotates", None) is None:
+            for twin in carry.records_twins_of(root / name / "state"):
+                if twin in wanted:
+                    names.setdefault(twin, name)
     return [names.get(cid) for cid in wanted]
 
 

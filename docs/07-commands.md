@@ -129,7 +129,10 @@ louise hold
                  set aside under <SHARD>/.replaced/<old id>/ and state/.replaced/<old id>/, never deleted. Then
                  the CPU reference and the gate, still paused; then resumed. Resumable (state/refit.json);
                  `--rollback` puts back whatever it changed; `--dry-run` writes nothing and takes no lock.
-                 Anything but the encoder window is refused. POST /api/hold/collection/refit
+                 Anything but the encoder window is refused, a window that cuts nothing otherwise too, and a
+                 collection whose text index is shared. The worker keeps its index writer: exit 3 asks for
+                 `louise node stop` before the switch writes. A refit done and not gated goes straight to its
+                 CPU reference and gate. POST /api/hold/collection/refit
               create <plugin> --recipe FILE --encoder URL [--query-encoder URL] [--api A] [--embed-model M] [--query-model M]
               [--space-from CODEX] [--calibration-set FILE]
                                                                        the model flags: required where a URL names no model (§7.8, amended 2026-10-09)

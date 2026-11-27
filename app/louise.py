@@ -1177,17 +1177,30 @@ def cmd_collection_refit(a) -> int:
         except lock_mod.Held as e:
             _let_worker_back(name, by, paused_here)
             raise _defer(f"{e}. `louise node pause {name}` first; then run this again") from None
+        marked = paused_here or bool((refit_mod.read_marker(root, name) or {}).get("paused_here"))
         try:
             refit_mod.rollback(root, name, log=say)
         finally:
             lk.release()
-        marked = paused_here or bool((refit_mod.read_marker(root, name) or {}).get("paused_here"))
         _let_worker_back(name, by, marked)
         return 0
+    done = refit_mod.read_marker(root, name)
+    if done and done.get("done") and not refit_mod.gated(done) and not a.dry_run:
+        # A REFIT DONE AND NOT GATED goes straight to its CPU reference and
+        # gate, still paused (the independent read of e492ebaf, 4): its params
+        # are now the collection's own, which `_layers_with` would refuse
+        by = f"louise hold collection refit {name} (paused until its gate)"
+        say(f"[refit] {name}: the refit to {done['to']['collection_id'][:23]}… is done and its gate has not "
+            f"passed: its CPU reference and gate now")
+        _hold_off_worker(root, name, by)
+        return _refit_gate(a, root, name, done, by, bool(done.get("paused_here")), say)
     params = _layer_params(a.layer_param)
     if not params:
         raise CodexError("refit: at least one --layer-param KEY=VALUE — the encoder window, "
                          "max_tokens=N and tokenizer=sha256:… together")
+    why = refit_mod.shared_index_refusal(root, name)
+    if why:
+        raise CodexError(f"refit: {why}")
     old = refit_mod.predecessor(root, name)
     layers = _layers_with(old, params)
     refit_mod.new_codex(old, layers)             # refused in words before any pause, lock or write
@@ -1202,11 +1215,14 @@ def cmd_collection_refit(a) -> int:
               + (f": {', '.join(pl['changed_uids'])}{' …' if pl['changed'] > len(pl['changed_uids']) else ''}"
                  if pl["changed"] else "")
               + (f"; {pl['errors']} could not be cut ({pl['first_error']}), reset too" if pl["errors"] else ""))
-        print(f"  their rows  deleted from the vector table and their marks reset; the worker cuts, indexes "
-              f"and embeds them at the new layer. Every other document's vectors, index entries and marks "
-              f"stay where they are")
+        print(f"  compared    every row, {pl['errored']} holding an error and {pl['out_of_scope']} out of scope "
+              f"among them; the changed ones are reset whatever their error or scope")
+        print(f"  their rows  deleted from the vector table ({pl['index_entries']} text-index entr(y/ies) too) and "
+              f"their marks, error and retries reset; the worker cuts, indexes and embeds them at the new layer. "
+              f"Every other document's vectors, index entries and marks stay where they are")
         if pl["snapshot"]:
-            print(f"  parts       {len(pl['parts'])} written again from their own lines"
+            print(f"  parts       {len(pl['parts'])} cut otherwise by the new layers (every part cut again), "
+                  f"written again from their own lines"
                   + (f" ({', '.join(p['path'] for p in pl['parts'][:5])}{' …' if len(pl['parts']) > 5 else ''})"
                      if pl["parts"] else "")
                   + f"; snapshot {pl['snapshot']} for the new Codex, every other part's entry and file kept")
@@ -1240,25 +1256,35 @@ def cmd_collection_refit(a) -> int:
     except BaseException:
         lk.release()
         now_m = refit_mod.read_marker(root, name)
-        if now_m is None or now_m.get("done"):
+        if now_m is None:
             _let_worker_back(name, by, paused_here)            # nothing of the refit begun
         else:
-            say(f"[refit] {name}: stays paused until the refit is finished: run the same command again "
-                f"(it resumes), or `--rollback`")
+            say(f"[refit] {name}: stays paused until the refit and its gate are finished: run the same "
+                f"command again (it resumes), or `--rollback`")
         raise
     lk.release()
     if m.get("stopped"):
         say(f"[refit] {name}: stopped; it stays paused — run the same command again to resume")
         return 130
+    return _refit_gate(a, root, name, m, by, paused_here, say)
+
+
+def _refit_gate(a, root: Path, name: str, m: dict, by: str, paused_here: bool, say) -> int:
+    """A finished refit's CPU reference and gate, still paused, the outcome
+    in its marker; then resumed — unless the CPU reference stopped, when it
+    stays paused and the same command runs them again."""
+    from app.hold import refit as refit_mod
     rc, stopped = _new_reference_and_gate(a, _SaidSteps(say), name, say)
+    refit_mod.note_gate(root, name, rc if not stopped else -1)
     if stopped:
         say(f"[refit] {name}: stays paused: its CPU reference exited {rc}; run the same command again once "
-            f"it can")
+            f"it can (it goes straight to the CPU reference and the gate)")
         return rc
     _let_worker_back(name, by, paused_here)
     say(f"[refit] {name}: resumed — the worker cuts, indexes and embeds the change set "
         f"({m['steps']['changes']['changed']} document(s)) at the new layer"
-        + ("" if rc == 0 else f"; the gate exited {rc}: nothing may be embedded until it passes"))
+        + ("" if rc == 0 else f"; the gate exited {rc}: nothing may be embedded until it passes, and the "
+                              f"same command runs the CPU reference and the gate again"))
     return rc
 
 

@@ -195,18 +195,21 @@ def planned_target(source_coll, planned: Codex):
 # ---- the change set ---------------------------------------------------------
 
 def cut_window(source, target, lo: int, hi: int) -> dict:
-    """One task of the pass: the documents of rowids (lo, hi], each in scope
-    and without an error cut at the SOURCE's and the TARGET's layers, as the
-    stages cut them (`record_source.title_sections_and_source`,
-    `layers.chunks_for_document`). Returns the changed documents (rowid, uid,
-    native id), the count compared and the errors, never a text. A document
-    that cannot be cut is counted CHANGED: nothing proves its vectors are the
-    new layer's, so the worker meets it as by the book. Module-level, so it
-    pickles; reads the manifest read-only."""
+    """One task of the pass: EVERY document of rowids (lo, hi] — whatever its
+    error or its scope: cutting asks no encoder, and a document whose cut
+    moves must be reset and its part written again even when it holds an
+    error or is out of scope now (the independent read of e492ebaf, 1) — cut
+    at the SOURCE's and the TARGET's layers, as the stages cut them
+    (`record_source.title_sections_and_source`, `layers.chunks_for_document`).
+    Returns the changed documents (rowid, uid, native id), the counts, never a
+    text. A document that cannot be cut is counted CHANGED: nothing proves its
+    vectors are the new layer's, so the worker meets it as by the book.
+    Module-level, so it pickles; reads the manifest read-only."""
     from app import db, layers, record_source
     con = db.read_only_connect(source)
     if con is None:
-        return {"changed": [], "documents": 0, "errors": 0, "first_error": None}
+        return {"changed": [], "documents": 0, "errors": 0, "first_error": None, "errored": 0,
+                "out_of_scope": 0}
     try:
         rows = [dict(r) for r in con.execute(
             "SELECT rowid, * FROM documents WHERE rowid > ? AND rowid <= ? ORDER BY rowid", (lo, hi))]
@@ -215,11 +218,11 @@ def cut_window(source, target, lo: int, hi: int) -> dict:
     plugin = source.plugin_instance()
     pair = layers.has_pair_layer(source)
     changed: list[list] = []
-    documents = errors = 0
+    documents = errors = errored = out_of_scope = 0
     first_error = None
     for row in rows:
-        if row.get("error") is not None or not row.get("in_scope"):
-            continue
+        errored += row.get("error") is not None
+        out_of_scope += not row.get("in_scope")
         try:
             title, sections, _src = record_source.title_sections_and_source(source, row, plugin, pair=pair)
             before = [(c["id"], c["text"]) for c in layers.chunks_for_document(source, row, sections, title=title)]
@@ -232,7 +235,8 @@ def cut_window(source, target, lo: int, hi: int) -> dict:
         documents += 1
         if before != after:
             changed.append([int(row["rowid"]), row["uid"], int(row["native_id"])])
-    return {"changed": changed, "documents": documents, "errors": errors, "first_error": first_error}
+    return {"changed": changed, "documents": documents, "errors": errors, "first_error": first_error,
+            "errored": errored, "out_of_scope": out_of_scope}
 
 
 def _changes(s_coll, t_coll, *, start: int, window: int, processes: int | None, stop,
@@ -245,11 +249,7 @@ def _changes(s_coll, t_coll, *, start: int, window: int, processes: int | None, 
     if cores == 0:
         raise CodexError(f"refit: the node allows no core now ({says}); --processes N runs it anyway. "
                          f"Nothing was written")
-    con = sqlite3.connect(f"file:{Path(s_coll.manifest_path).as_posix()}?mode=ro", uri=True)
-    try:
-        top = int(con.execute("SELECT MAX(rowid) FROM documents").fetchone()[0] or 0)
-    finally:
-        con.close()
+    top = _top(s_coll)
     step = max(1, int(window))
     tasks = [(s_coll, t_coll, lo, min(lo + step, top)) for lo in range(int(start), top, step)]
     if not tasks:
@@ -273,24 +273,110 @@ def _changes(s_coll, t_coll, *, start: int, window: int, processes: int | None, 
     return True
 
 
-def parts_holding(shard_dir: Path, snap, uids) -> list[dict]:
-    """The record parts of `snap` holding any of `uids`, from each part's own
-    trailing index (no record decoded), read by threads as a first
-    snapshot's delta reads them: `[{slice, n, path, uids}]` in the
-    snapshot's order."""
-    from concurrent.futures import ThreadPoolExecutor
-    from app.pack import records as pack_records
-    want = set(uids)
-    if not want:
-        return []
+def _top(coll) -> int:
+    """The manifest's MAX(rowid): where the pass ends, and what the switch
+    holds the change set to (a document added since was not compared)."""
+    con = sqlite3.connect(f"file:{Path(coll.manifest_path).as_posix()}?mode=ro", uri=True)
+    try:
+        return int(con.execute("SELECT MAX(rowid) FROM documents").fetchone()[0] or 0)
+    finally:
+        con.close()
 
-    def held(s) -> list[str]:
-        p = Path(shard_dir) / s.path
-        return sorted(want & set(pack_records.read_index(p).uids)) if p.is_file() else []
-    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="refit-parts") as ex:
-        found = list(ex.map(held, snap.shards))
-    return [{"slice": s.slice, "n": int(s.n), "path": s.path, "uids": got}
-            for s, got in zip(snap.shards, found) if got]
+
+def cut_part(s_coll, t_coll, path: str, chunks: int, chunks_root: str) -> dict[str, Any]:
+    """One task of the PARTS pass: the part's own records cut at the new
+    layers and held to its entry (`chunks`, `chunks_root`, which the old
+    layers gave). A part that differs is one the refit writes again, chosen
+    from the parts themselves and not from the manifest alone (the
+    independent read of e492ebaf, 1); its records are then cut at both layers
+    to name the documents whose cut moved. Module-level, so it pickles."""
+    from . import records as hold_records
+    n, blobs = 0, []
+    for _raw, rec, _layer, blob in _lines_at(t_coll, Path(path)):
+        n += int(rec["chunks"])
+        blobs.append(blob)
+    root = hold_records.chunks_root_of(b"".join(blobs))
+    if (n, root) == (int(chunks), chunks_root):
+        return {"differs": False}
+    old = {rec["uid"]: (int(rec["chunks"]), blob) for _raw, rec, _l, blob in _lines_at(s_coll, Path(path))}
+    new = {rec["uid"]: (int(rec["chunks"]), blob) for _raw, rec, _l, blob in _lines_at(t_coll, Path(path))}
+    return {"differs": True, "chunks": n, "chunks_root": root,
+            "uids": sorted(u for u in new if old.get(u) != new[u])}
+
+
+def _parts_pass(s_coll, t_coll, shard_dir: Path, snap, *, start: int, processes: int | None, stop,
+                each: Callable[[int, dict, dict], None], log: Callable[[str], None]) -> bool:
+    """Every record part of `snap` from part `start`, in the parse pool:
+    `each(k, part, got)` per part, in order. False when a stop was honoured
+    between parts."""
+    from app import parallel
+    from . import rechunk
+    cores, says = rechunk._processes(processes)
+    shards = list(snap.shards)[int(start):]
+    if not shards:
+        return True
+    log(f"[refit] {s_coll.name}: {len(shards)} part(s) cut again at the new layers and held to their "
+        f"entries, by at most {cores or parallel.processes()} process(es) ({says})")
+    from app.hold import refit as me
+    tasks = [(s_coll, t_coll, str(Path(shard_dir) / s.path), int(s.chunks), s.chunks_root) for s in shards]
+    results = parallel.each_part(me.cut_part, tasks, limit=cores)
+    try:
+        for k, (s, got) in enumerate(zip(shards, results), int(start) + 1):
+            each(k, {"slice": s.slice, "n": int(s.n), "path": s.path}, got)
+            if stop is not None and stop.is_set() and k < len(snap.shards):
+                log(f"[refit] {s_coll.name}: stopped after part {k}; run it again to resume")
+                return False
+    finally:
+        close = getattr(results, "close", None)
+        if close is not None:
+            close()
+    return True
+
+
+# ---- the change set's file: one validated line a document ------------------------
+
+def _line(c: list) -> str:
+    return json.dumps([int(c[0]), str(c[1]), int(c[2])], separators=(",", ":")) + "\n"
+
+
+def read_changed(path: Path) -> list[list]:
+    """The change set, each line validated: `[rowid, uid, native id]` and a
+    newline. A torn LAST line (a stop inside an append) is dropped — the
+    cursor never counted its window; any other bad line refuses."""
+    if not path.is_file():
+        return []
+    text = path.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    tail = lines.pop()                       # "" when the file ends with its newline
+    out: list[list] = []
+    for k, l in enumerate(lines):
+        try:
+            v = json.loads(l)
+            ok = (isinstance(v, list) and len(v) == 3 and isinstance(v[0], int) and isinstance(v[1], str)
+                  and isinstance(v[2], int))
+        except ValueError:
+            ok = False
+        if not ok:
+            raise CodexError(f"refit: {path} line {k + 1} is not a change-set line ({l[:80]!r}); nothing "
+                             f"more was written")
+        out.append(v)
+    del tail                                 # torn: its window was never counted
+    return out
+
+
+def _write_changed(path: Path, changed: list[list]) -> None:
+    """The whole change set, written beside and renamed over (atomic)."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("".join(_line(c) for c in changed), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _append_changed(path: Path, changed: list[list]) -> None:
+    if changed:
+        with path.open("a", encoding="utf-8") as f:
+            f.write("".join(_line(c) for c in changed))
+            f.flush()
+            os.fsync(f.fileno())
 
 
 # ---- the marker and the folders set aside -------------------------------------
@@ -341,6 +427,11 @@ def predecessor(root, name: str) -> Codex:
         raise CodexError(f"refit: {marker_path(root, name)} names {old_id} and neither {here} nor {aside} "
                          f"holds it; nothing was written")
     return col.read(Path(root), name)
+
+
+def _place(tmp: Path, path: Path) -> None:
+    """A file written beside its path, renamed over it (atomic)."""
+    os.replace(tmp, path)
 
 
 def _rename(src: Path, dst: Path) -> bool:
@@ -493,15 +584,18 @@ def _commit(con, fn) -> None:
 def _reset(con, changed: list[list]) -> int:
     """Step (a): the changed documents' marks emptied as a relayered sister's
     are (hold/carry.py `RELAYERED_MARKS`) and `embed_done` 0 (a declined
-    document's -1 kept); their chunk-hash, imported-chunk and queue rows
-    dropped (their chunks are gone): the worker cuts, indexes and embeds
-    them again. Inside the caller's transaction. Repeatable."""
+    document's -1 kept), their error and retries cleared (a document the
+    refit cuts again is met by the stages afresh, the independent read of
+    e492ebaf, 1); their chunk-hash, imported-chunk and queue rows dropped
+    (their chunks are gone): the worker cuts, indexes and embeds them again.
+    Inside the caller's transaction. Repeatable."""
     from . import carry as carry_mod
     if not changed:
         return 0
     rowids, uids, books = [c[0] for c in changed], [c[1] for c in changed], [c[2] for c in changed]
     n = con.execute(
         f"UPDATE documents SET embed_done=CASE WHEN embed_done>0 THEN 0 ELSE embed_done END, "
+        f"error=NULL, retries=0, "
         f"{carry_mod.RELAYERED_MARKS} WHERE rowid IN ({','.join('?' for _ in rowids)})", rowids).rowcount
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if "chunk_hashes" in tables:
@@ -560,7 +654,147 @@ def _restore_lance(coll, versions: dict[str, int], log) -> dict[str, str]:
     return out
 
 
+# ---- the text index ---------------------------------------------------------------
+
+def shared_index_refusal(root, name: str) -> str | None:
+    """Why the collection cannot be refit in place, or None: a SHARED text
+    index (app/text_index.py `placement`, `.text-index/<identity>`) holds the
+    members' documents once, and its identity includes the layers — a refit
+    of one member would leave the others reading or writing an index cut at
+    another layer (the independent read of e492ebaf, 2). A group refit is not
+    built; none exists on the node (München, 2026-11-27)."""
+    from app import text_index
+    from . import collection as col
+    mine = (text_index.placement(Path(root), name) or {}).get("dir")
+    if not mine:
+        return None
+    others = sorted(n for n, _c in col._held(Path(root))
+                    if n != name and (text_index.placement(Path(root), n) or {}).get("dir") == mine)
+    if not others:
+        return None
+    return (f"{name}'s text index is shared with {', '.join(others)} ({mine}): its identity includes the "
+            f"layers, so a refit of {name} alone would leave {'them' if len(others) > 1 else 'it'} on an index "
+            f"cut at another layer. A refit of a group is not built; nothing was written")
+
+
+def _by_group(coll, changed: list[list]) -> dict[str, list[int]]:
+    """The change set's native ids by the text-index groups each may sit in
+    (`fts.groups_for_lang`, a `mul` record in several)."""
+    from app import fts
+    con = sqlite3.connect(f"file:{Path(coll.manifest_path).as_posix()}?mode=ro", uri=True)
+    try:
+        langs = {}
+        for k in range(0, len(changed), 500):
+            win = [c[0] for c in changed[k:k + 500]]
+            langs.update({int(r[0]): r[1] for r in con.execute(
+                f"SELECT rowid, lang FROM documents WHERE rowid IN ({','.join('?' for _ in win)})", win)})
+    finally:
+        con.close()
+    out: dict[str, list[int]] = {}
+    for c in changed:
+        for g in fts.groups_for_lang(coll, langs.get(int(c[0]))):
+            out.setdefault(g, []).append(int(c[2]))
+    return out
+
+
+def index_held(coll, changed: list[list]) -> int:
+    """How many entries the collection's text index holds for the change set."""
+    from app import fts
+    return sum(fts.books_held(g, ids, coll) for g, ids in _by_group(coll, changed).items())
+
+
+def _index_writers(coll, changed: list[list]) -> list[str]:
+    """The groups holding entries of the change set, each with its writer
+    TAKEN by this process (tantivy: one writer a directory). Refused, exit 3,
+    when another process holds one: the worker keeps its index writers for
+    its life (app/fts.py `_writer`), so the refit asks for a stop, not for
+    code that works around it (CLAUDE.md RULE 1)."""
+    from app import fts
+    groups = [g for g, ids in _by_group(coll, changed).items() if fts.books_held(g, ids, coll)]
+    for g in groups:
+        try:
+            fts._writer((str(fts.base_of(coll)), g), fts.get_index(g, coll))
+        except Exception as e:   # noqa: BLE001 — tantivy's LockBusy, said as the refusal
+            _release_index_writers(coll)
+            err = CodexError(f"refit: {coll.name}'s text index ({g}) is written by another process — the "
+                             f"worker keeps its index writer ({type(e).__name__}: {str(e)[:120]}). The refit "
+                             f"deletes the change set's index entries itself: `louise node stop`, then run "
+                             f"this again (RULE 1: a tool that needs the worker's writers asks for a stop). "
+                             f"Nothing of the switch was written")
+            err.exit_code = 3                     # type: ignore[attr-defined]
+            raise err from None
+    return groups
+
+
+def _drop_index_entries(coll, changed: list[list]) -> int:
+    """The change set's entries gone from the text index (delete by book id,
+    the index stage's own key: its re-index is delete-then-insert by it),
+    through the writers `_index_writers` took. Repeatable."""
+    from app import fts
+    n = 0
+    for g, ids in _by_group(coll, changed).items():
+        if fts.books_held(g, ids, coll):
+            n += fts.delete_books(g, ids, coll)
+    return n
+
+
+def _release_index_writers(coll) -> None:
+    """This process lets go of the collection's index writers, so the worker
+    takes them again once it is resumed (`fts.close_all`'s way, for one
+    collection's directory)."""
+    from app import fts
+    base = str(fts.base_of(coll))
+    with fts._lock:
+        mine = [(k, fts._writers.pop(k)) for k in list(fts._writers) if k[0] == base]
+    for _k, (writer, lock) in mine:
+        with lock:
+            writer.wait_merging_threads()
+
+
+# ---- what other code reads of a refit -----------------------------------------------
+
+def predecessors(state_dir) -> tuple[str, ...]:
+    """The collections whose records this one holds byte for byte BY A REFIT
+    in place: the predecessor `state/refit.json` names while it is not rolled
+    back (from its first step: before the switch it is this collection's own
+    id), and every earlier refit's, kept with what it set aside. An
+    annotations collection about a predecessor applies to these records as a
+    carry's twin's does (hold/carry.py `records_twins_of`, 02 §2.4 A1f; the
+    independent read of e492ebaf, 6: gutenberg-book-editions names
+    gutenberg's pre-refit id)."""
+    state_dir = Path(state_dir)
+    found = [state_dir / MARKER] + sorted(p / MARKER for p in (state_dir / ASIDE).glob("*")
+                                         if p.is_dir() and ".rolled-back-" not in p.name) \
+        if (state_dir / ASIDE).is_dir() else [state_dir / MARKER]
+    out = []
+    for p in found:
+        try:
+            m = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if m.get("kind") == "louise-refit" and not m.get("rolled_back"):
+            out.append(str(m["predecessor"]["collection_id"]))
+    return tuple(dict.fromkeys(out))
+
+
+def gated(m: dict | None) -> bool:
+    """Whether a finished refit's new space passed its gate."""
+    return bool(m) and (m.get("gate") or {}).get("rc") == 0
+
+
+def note_gate(root, name: str, rc: int) -> None:
+    """The CPU reference and gate's outcome, in the marker: a refit done and
+    not gated goes straight to them when the command is run again (the
+    independent read of e492ebaf, 4)."""
+    m = read_marker(root, name)
+    if m is None:
+        return
+    m["gate"] = {"rc": int(rc), "at": int(time.time())}
+    _save(root, name, m)
+
+
 # ---- the parts ----------------------------------------------------------------
+
 
 def _lines_at(t_coll, path: Path):
     """`(raw line, record, layer, chunk contributions)` for every record of the
@@ -625,49 +859,167 @@ def part_chunks(t_coll, path: str) -> tuple[int, str]:
 
 # ---- the dry run ----------------------------------------------------------------
 
+def _old_snapshot(root: Path, name: str, old: Codex):
+    """The old Codex's latest snapshot while it is in place, else None."""
+    from . import seed
+    try:
+        snap = seed.latest_snapshot(root, name)
+    except CodexError:
+        return None
+    return snap if snap.collection_id == old.collection_id else None
+
+
 def plan(root, name: str, layers, *, window: int = WINDOW, processes: int | None = None,
          log: Callable[[str], None] = print) -> dict[str, Any]:
-    """The whole change-set pass and the parts holding it, nothing written,
-    no lock taken: what `refit --dry-run` prints."""
-    from . import records as rec, seed
+    """Both passes — every document cut at both layers, every part cut again
+    — and nothing written, no lock taken: what `refit --dry-run` prints."""
+    from . import collection as col, records as rec
     root = Path(root)
+    why = shared_index_refusal(root, name)
+    if why:
+        raise CodexError(f"refit: {why}")
     old = predecessor(root, name)
     new = new_codex(old, layers)
     s_coll = rec.local_collection(root, name, old)        # its data is used: gated (invariant 9)
     t_coll = planned_target(s_coll, new)
     changed: list[list] = []
-    counts = {"documents": 0, "errors": 0, "first_error": None}
+    counts = {"documents": 0, "errors": 0, "first_error": None, "errored": 0, "out_of_scope": 0}
 
     def each(_hi, got):
         changed.extend(got["changed"])
-        counts["documents"] += int(got["documents"])
-        counts["errors"] += int(got["errors"])
+        for k in ("documents", "errors", "errored", "out_of_scope"):
+            counts[k] += int(got.get(k) or 0)
         counts["first_error"] = counts["first_error"] or got.get("first_error")
     _changes(s_coll, t_coll, start=0, window=window, processes=processes, stop=None, each=each, log=log)
     parts: list[dict] = []
-    snapshot = None
-    try:
-        snap = seed.latest_snapshot(root, name)
-    except CodexError:
-        snap = None
-    if snap is not None and snap.collection_id == old.collection_id:
-        from . import collection as col
-        parts = parts_holding(col.shard_dir_of(root, name), snap, [c[1] for c in changed])
-        snapshot = snap.snapshot_id
+    snap = _old_snapshot(root, name, old)
+    if snap is not None:
+        _parts_pass(s_coll, t_coll, col.shard_dir_of(root, name), snap, start=0, processes=processes,
+                    stop=None, each=lambda _k, p, got: parts.append({**p, **got}) if got["differs"] else None,
+                    log=log)
+    held = {c[1] for c in changed}
     return {"name": name, "from": old.collection_id, "to": new.collection_id, "space_from": old.space_id,
-            "space_to": new.space_id, "version": [old.version, new.version], "documents": counts["documents"],
+            "space_to": new.space_id, "version": [old.version, new.version], **counts,
             "changed": len(changed), "changed_uids": [c[1] for c in changed[:SHOWN]],
-            "errors": counts["errors"], "first_error": counts["first_error"], "parts": parts,
-            "snapshot": snapshot, "shard_aside": str(shard_aside(root, name, old.collection_id)),
+            "parts": parts, "parts_only": sorted({u for p in parts for u in p["uids"]} - held)[:SHOWN],
+            "snapshot": snap.snapshot_id if snap is not None else None,
+            "index_entries": index_held(s_coll, changed),
+            "shard_aside": str(shard_aside(root, name, old.collection_id)),
             "state_aside": str(state_aside(root, name, old.collection_id)), "codex": new}
 
 
 # ---- the run --------------------------------------------------------------------
 
-def _changed(path: Path) -> list[list]:
-    if not path.is_file():
-        return []
-    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+def _abandon(root: Path, name: str, ta: Path) -> None:
+    """A refit that changes nothing leaves nothing: the change-set file, the
+    marker and the folder this run made for them, its own bookkeeping (no
+    byte of the collection was written)."""
+    for p in (ta / "changed.jsonl", ta / "changed.jsonl.tmp"):
+        p.unlink(missing_ok=True)
+    for d in (ta, ta.parent):
+        try:
+            d.rmdir()
+        except OSError:
+            pass
+    marker_path(root, name).unlink(missing_ok=True)
+
+
+def _changes_step(root: Path, name: str, old: Codex, new: Codex, m: dict, *, window: int,
+                  processes: int | None, stop, log) -> list[list] | None:
+    """The `changes` step, from its cursors: the manifest pass, then the
+    parts pass, then the parts' documents joined to the change set. None
+    when a stop was honoured. Refused, leaving nothing, when nothing is cut
+    otherwise."""
+    from . import collection as col, records as rec
+    steps, ta = m["steps"], Path(m["state_aside"])
+    changed_file = ta / "changed.jsonl"
+    ch = steps.get("changes") or {"rowid": 0, "documents": 0, "changed": 0, "errors": 0, "first_error": None,
+                                  "errored": 0, "out_of_scope": 0, "parts_at": 0, "parts": [],
+                                  "manifest_done": False, "done": False}
+    if ch.get("done"):
+        return read_changed(changed_file)
+    if old.collection_id != col.read(root, name).collection_id:
+        raise CodexError("refit: the change set is computed before the switch, and the switch has begun")
+    s_coll = rec.local_collection(root, name, old)
+    t_coll = planned_target(s_coll, new)
+    if not ch.get("manifest_done"):
+        # a resumed pass: the lines its cursor counted, nothing torn (atomic)
+        _write_changed(changed_file, [c for c in read_changed(changed_file) if c[0] <= int(ch["rowid"])])
+
+        def each(hi, got):
+            _append_changed(changed_file, got["changed"])
+            ch.update(rowid=hi, changed=int(ch["changed"]) + len(got["changed"]),
+                      first_error=ch.get("first_error") or got.get("first_error"))
+            for k in ("documents", "errors", "errored", "out_of_scope"):
+                ch[k] = int(ch.get(k) or 0) + int(got.get(k) or 0)
+            steps["changes"] = ch
+            _save(root, name, m)
+        if not _changes(s_coll, t_coll, start=int(ch["rowid"]), window=window, processes=processes,
+                        stop=stop, each=each, log=log):
+            return None
+        ch["manifest_done"] = True
+        steps["changes"] = ch
+        _save(root, name, m)
+    snap = _old_snapshot(root, name, old)
+    if snap is not None and int(ch.get("parts_at") or 0) < len(snap.shards):
+        def each_part(k, part, got):
+            if got["differs"]:
+                ch["parts"] = [*ch["parts"], {**part, **{x: got[x] for x in ("uids", "chunks", "chunks_root")}}]
+            ch["parts_at"] = k
+            steps["changes"] = ch
+            _save(root, name, m)
+        if not _parts_pass(s_coll, t_coll, col.shard_dir_of(root, name), snap, start=int(ch.get("parts_at") or 0),
+                           processes=processes, stop=stop, each=each_part, log=log):
+            return None
+    changed = read_changed(changed_file)
+    # the documents the PARTS name whose cut moved, joined where the manifest
+    # pass did not find them (the parts are what the refit writes again)
+    extra = sorted({u for p in ch["parts"] for u in p["uids"]} - {c[1] for c in changed})
+    found: list[list] = []
+    if extra:
+        con = sqlite3.connect(f"file:{Path(s_coll.manifest_path).as_posix()}?mode=ro", uri=True)
+        try:
+            for k in range(0, len(extra), 500):
+                win = extra[k:k + 500]
+                found += [[int(r[0]), r[1], int(r[2])] for r in con.execute(
+                    f"SELECT rowid, uid, native_id FROM documents WHERE uid IN ({','.join('?' for _ in win)})", win)]
+        finally:
+            con.close()
+        changed = sorted(changed + found)
+        _write_changed(changed_file, changed)
+    if not changed and not ch["parts"]:
+        _abandon(root, name, ta)
+        raise CodexError(f"refit: {name}: the new window cuts no document otherwise ({ch['documents']} compared, "
+                         f"every part cut again the same): there is nothing to refit, and nothing was written")
+    ch.update(done=True, changed=len(changed), shown=[c[1] for c in changed[:SHOWN]],
+              snapshot=snap.snapshot_id if snap is not None else None,
+              from_parts=len(found), parts_only=sorted(set(extra) - {c[1] for c in found})[:SHOWN],
+              # what the switch holds the change set to: a document added or a
+              # row embedded since means it was computed on another collection
+              top=_top(s_coll), lance=lance_versions(s_coll))
+    steps["changes"] = ch
+    _save(root, name, m)
+    log(f"[refit] {name}: {ch['documents']} document(s) compared ({ch.get('errored', 0)} holding an error, "
+        f"{ch.get('out_of_scope', 0)} out of scope, compared all the same), {len(changed)} cut otherwise by the "
+        f"encoder window" + (f" ({', '.join(ch['shown'])}{' …' if len(changed) > SHOWN else ''})" if changed else "")
+        + f"; {len(ch['parts'])} part(s) cut otherwise" + (f"; {ch['errors']} could not be cut "
+                                                         f"({ch['first_error']}): reset too" if ch["errors"] else ""))
+    return changed
+
+
+def _moved_since(root: Path, name: str, old: Codex, ch: dict) -> str | None:
+    """Why the change set is stale, or None: the manifest grew, or a vector
+    table moved, since `changes` ended (a stop, a `node resume`, books
+    embedded at the old layer meanwhile — the independent read of e492ebaf,
+    7)."""
+    from . import records as rec
+    s_coll = rec._local_collection(root, name, old)
+    top, lance = _top(s_coll), lance_versions(s_coll)
+    if top != int(ch.get("top") or 0):
+        return f"the manifest's last rowid moved {ch.get('top')} → {top}"
+    if lance != (ch.get("lance") or {}):
+        return f"the vector table moved {ch.get('lance')} → {lance}"
+    return None
 
 
 def run(root, name: str, layers, *, window: int = WINDOW, processes: int | None = None,
@@ -681,9 +1033,15 @@ def run(root, name: str, layers, *, window: int = WINDOW, processes: int | None 
     from . import carry as carry_mod, codex as cx, collection as col, records as rec
     root = Path(root)
     carry_mod.refuse_without_locks(root, (name,), "hold collection refit")
+    why = shared_index_refusal(root, name)
+    if why:
+        raise CodexError(f"refit: {why}")
+    m = read_marker(root, name)
+    if m is not None and m.get("rolled_back"):
+        _rollback_moves(root, name, m, log)               # a rollback stopped after its last write
+        m = None
     old = predecessor(root, name)
     new = new_codex(old, layers)
-    m = read_marker(root, name)
     if m is not None and m.get("done"):
         if m["to"]["collection_id"] == new.collection_id:
             log(f"[refit] {name}: done already ({new.collection_id[:23]}…)")
@@ -714,124 +1072,101 @@ def run(root, name: str, layers, *, window: int = WINDOW, processes: int | None 
     steps = m["steps"]
     changed_file = ta / "changed.jsonl"
 
-    # ---- changes (the old Codex in place; nothing of the collection written)
-    ch = steps.get("changes") or {"rowid": 0, "documents": 0, "changed": 0, "errors": 0, "first_error": None,
-                                  "done": False}
-    if not ch.get("done"):
-        if old.collection_id != col.read(root, name).collection_id:
-            raise CodexError("refit: the change set is computed before the switch, and the switch has begun")
-        s_coll = rec.local_collection(root, name, old)
-        t_coll = planned_target(s_coll, new)
-        kept = [c for c in _changed(changed_file) if c[0] <= int(ch["rowid"])]
-        changed_file.write_text("".join(json.dumps(c) + "\n" for c in kept), encoding="utf-8")
-
-        def each(hi, got):
-            if got["changed"]:
-                with changed_file.open("a", encoding="utf-8") as f:
-                    f.write("".join(json.dumps(c) + "\n" for c in got["changed"]))
-            ch.update(rowid=hi, documents=int(ch["documents"]) + int(got["documents"]),
-                      changed=int(ch["changed"]) + len(got["changed"]),
-                      errors=int(ch["errors"]) + int(got["errors"]),
-                      first_error=ch.get("first_error") or got.get("first_error"))
-            steps["changes"] = ch
-            _save(root, name, m)
-        whole = _changes(s_coll, t_coll, start=int(ch["rowid"]), window=window, processes=processes,
-                         stop=stop, each=each, log=log)
-        if not whole:
+    # ---- changes (the old Codex in place; nothing of the collection written),
+    # held to the collection as it is when the switch begins
+    while True:
+        changed = _changes_step(root, name, old, new, m, window=window, processes=processes, stop=stop, log=log)
+        if changed is None:
             return {**m, "stopped": True}
-        changed = _changed(changed_file)
-        from . import seed
-        try:
-            snap = seed.latest_snapshot(root, name)
-        except CodexError:
-            snap = None
-        parts = (parts_holding(col.shard_dir_of(root, name), snap, [c[1] for c in changed])
-                 if snap is not None and snap.collection_id == old.collection_id else [])
-        held_uids = {u for p in parts for u in p["uids"]}
-        ch.update(done=True, shown=[c[1] for c in changed[:SHOWN]], parts=parts,
-                  snapshot=snap.snapshot_id if snap is not None else None,
-                  not_in_parts=len([c for c in changed if c[1] not in held_uids]))
-        steps["changes"] = ch
+        if steps.get("switch"):
+            break                                  # the switch began on this change set
+        moved = _moved_since(root, name, old, steps["changes"])
+        if moved is None:
+            break
+        log(f"[refit] {name}: the change set is stale — {moved}; computed again")
+        steps.pop("changes", None)
+        _write_changed(changed_file, [])
         _save(root, name, m)
-        log(f"[refit] {name}: {ch['documents']} document(s) compared, {ch['changed']} cut otherwise by the "
-            f"encoder window" + (f" ({', '.join(ch['shown'])}{' …' if ch['changed'] > SHOWN else ''})"
-                                 if ch["changed"] else "")
-            + f"; {len(parts)} part(s) hold them" + (f"; {ch['errors']} could not be cut ({ch['first_error']}): "
-                                                    f"reset too" if ch["errors"] else ""))
-    changed = _changed(changed_file)
     manifest = Path(root) / name / "state" / "manifest.sqlite"
 
     # ---- switch
     sw = steps.get("switch") or {}
     if not sw.get("done"):
         s_now = rec._local_collection(root, name, old)
-        if not sw.get("saved"):
-            sw["rows"] = _save_rows(manifest, ta / "saved.sqlite", changed, old)
-            sw["lance"] = lance_versions(s_now)
-            sw["saved"] = True
-            steps["switch"] = sw
-            _save(root, name, m)
-            log(f"[refit] {name}: saved before the switch — rows {sw['rows']}, vector table version(s) "
-                f"{sw['lance']}")
-        if not sw.get("codex"):
-            shard = col.shard_dir_of(root, name)
-            here = shard / "codex.json"
-            if here.is_file() and cx.loads(here.read_bytes()).collection_id == old.collection_id:
-                _rename(here, sa / "codex.json")
-            if (shard / "snapshots").exists():
-                _rename(shard / "snapshots", sa / "snapshots")
-            if not here.is_file():
-                tmp = here.with_name("codex.json.refit")
-                tmp.write_bytes(new.canonical())
-                os.replace(tmp, here)
-            if cx.loads(here.read_bytes()).collection_id != new.collection_id:
-                raise CodexError(f"refit: {here} holds {cx.loads(here.read_bytes()).collection_id}, neither "
-                                 f"the old Codex nor the new one; nothing more was written")
-            sw["codex"] = True
-            steps["switch"] = sw
-            _save(root, name, m)
-            log(f"[refit] {name}: the old codex.json and snapshots set aside in {sa}; the new Codex written")
-        if not sw.get("staging"):
-            build = Path(root) / name / rec.STATE / rec.BUILD
-            if build.exists():
-                _rename(build, ta / "build")
-            sw["staging"] = True
-            steps["switch"] = sw
-            _save(root, name, m)
-        if not sw.get("file"):
-            sw["file"] = _recodex_file(root, name, new.collection_id, ta, log)
-            steps["switch"] = sw
-            _save(root, name, m)
-        if not sw.get("repin"):
-            cleared = carry_mod._repin(manifest, old, new)
-            gone = _drop_space_control(manifest)
-            sw["repin"] = {"coverage_rows_cleared": cleared, "control_rows": gone}
-            steps["switch"] = sw
-            _save(root, name, m)
-            log(f"[refit] {name}: the manifest re-pinned to {new.space_id[:23]}…; {cleared} coverage row(s) "
-                f"and {gone} gate, share or publication row(s) of the old space gone (saved)")
-        t_coll = rec._local_collection(root, name, new)
-        at = int(sw.get("reset_at") or 0)
-        con = db.connect(t_coll)
+        # the index writers FIRST, before any write: taken, or refused (exit 3)
+        _index_writers(s_now, changed)
         try:
-            for k in range(at, len(changed), max(1, int(window))):
-                win = changed[k:k + max(1, int(window))]
-                # (a) the marks, (b) the rows, outside any transaction (a Lance
-                # write), (c) the versions: a stop between them finds the window
-                # again, each step repeatable (carry.py `keep_producer`'s order)
-                _commit(con, lambda: _reset(con, win))
-                embeddings.delete_books([c[2] for c in win], t_coll, lock_con=con)
-                _commit(con, lambda: _unversion(con, win))
-                sw["reset_at"] = k + len(win)
+            if not sw.get("saved"):
+                sw["rows"] = _save_rows(manifest, ta / "saved.sqlite", changed, old)
+                sw["lance"] = lance_versions(s_now)
+                sw["saved"] = True
                 steps["switch"] = sw
                 _save(root, name, m)
+                log(f"[refit] {name}: saved before the switch — rows {sw['rows']}, vector table version(s) "
+                    f"{sw['lance']}")
+            if not sw.get("codex"):
+                shard = col.shard_dir_of(root, name)
+                here = shard / "codex.json"
+                if here.is_file() and cx.loads(here.read_bytes()).collection_id == old.collection_id:
+                    _rename(here, sa / "codex.json")
+                if (shard / "snapshots").exists():
+                    _rename(shard / "snapshots", sa / "snapshots")
+                if not here.is_file():
+                    tmp = here.with_name("codex.json.refit")
+                    tmp.write_bytes(new.canonical())
+                    os.replace(tmp, here)
+                if cx.loads(here.read_bytes()).collection_id != new.collection_id:
+                    raise CodexError(f"refit: {here} holds {cx.loads(here.read_bytes()).collection_id}, "
+                                     f"neither the old Codex nor the new one; nothing more was written")
+                sw["codex"] = True
+                steps["switch"] = sw
+                _save(root, name, m)
+                log(f"[refit] {name}: the old codex.json and snapshots set aside in {sa}; the new Codex written")
+            if not sw.get("staging"):
+                build = Path(root) / name / rec.STATE / rec.BUILD
+                if build.exists():
+                    _rename(build, ta / "build")
+                sw["staging"] = True
+                steps["switch"] = sw
+                _save(root, name, m)
+            if not sw.get("file"):
+                sw["file"] = _recodex_file(root, name, new.collection_id, ta, log)
+                steps["switch"] = sw
+                _save(root, name, m)
+            if not sw.get("repin"):
+                cleared = carry_mod._repin(manifest, old, new)
+                gone = _drop_space_control(manifest)
+                sw["repin"] = {"coverage_rows_cleared": cleared, "control_rows": gone}
+                steps["switch"] = sw
+                _save(root, name, m)
+                log(f"[refit] {name}: the manifest re-pinned to {new.space_id[:23]}…; {cleared} coverage "
+                    f"row(s) and {gone} gate, share or publication row(s) of the old space gone (saved)")
+            t_coll = rec._local_collection(root, name, new)
+            at = int(sw.get("reset_at") or 0)
+            con = db.connect(t_coll)
+            try:
+                for k in range(at, len(changed), max(1, int(window))):
+                    win = changed[k:k + max(1, int(window))]
+                    # (a) the marks, (b) the rows and the index entries, outside
+                    # any transaction, (c) the versions: a stop between them
+                    # finds the window again, each step repeatable (carry.py
+                    # `keep_producer`'s order)
+                    _commit(con, lambda: _reset(con, win))
+                    embeddings.delete_books([c[2] for c in win], t_coll, lock_con=con)
+                    sw["index_entries"] = int(sw.get("index_entries") or 0) + _drop_index_entries(t_coll, win)
+                    _commit(con, lambda: _unversion(con, win))
+                    sw["reset_at"] = k + len(win)
+                    steps["switch"] = sw
+                    _save(root, name, m)
+            finally:
+                con.close()
         finally:
-            con.close()
+            _release_index_writers(s_now)
         sw["done"] = True
         steps["switch"] = sw
         _save(root, name, m)
-        log(f"[refit] {name}: {len(changed)} document(s) reset (their marks, chunk hashes and rows): the "
-            f"worker cuts, indexes and embeds them at the new layer")
+        log(f"[refit] {name}: {len(changed)} document(s) reset (their marks, error, chunk hashes, vector rows "
+            f"and text-index entries): the worker cuts, indexes and embeds them at the new layer")
     t_coll = rec.local_collection(root, name, new)
 
     # ---- parts
@@ -867,7 +1202,7 @@ def run(root, name: str, layers, *, window: int = WINDOW, processes: int | None 
         _save(root, name, m)
         log(f"[refit] {name}: proven — {pf['compared']} unchanged embedded document(s) cut to exactly the "
             f"chunks the vector table holds, {pf['parts_compared']} unchanged part(s) to their chunk roots, "
-            f"the change set holding no row")
+            f"the change set holding no vector row and no index entry")
     return m
 
 
@@ -959,9 +1294,14 @@ def _parts(root: Path, name: str, old: Codex, new: Codex, t_coll, *, ch_parts: l
                 raise CodexError(f"refit: {p['path']} written again holds other records ({row['records']}, "
                                  f"{row['records_root'][:23]}…) than the old snapshot lists ({was.records}, "
                                  f"{was.records_root[:23]}…); nothing more was written")
+            if "chunks_root" in p and (row["chunks"], row["chunks_root"]) != (int(p["chunks"]), p["chunks_root"]):
+                tmp.unlink(missing_ok=True)
+                raise CodexError(f"refit: {p['path']} written again cuts {row['chunks']} chunks "
+                                 f"({row['chunks_root'][:23]}…), the parts pass cut {p['chunks']} "
+                                 f"({p['chunks_root'][:23]}…); nothing more was written")
             if not kept.is_file():
                 _rename(here, kept)
-            os.replace(tmp, here)
+            _place(tmp, here)
             con = sqlite3.connect(db_path, isolation_level=None)
             try:
                 con.execute("BEGIN IMMEDIATE")
@@ -1088,6 +1428,15 @@ def _proof(root: Path, name: str, old: Codex, new: Codex, t_coll, changed: list[
     still = [c[1] for c in changed if held is not None and held.of(c[2])]
     if still:
         failures.append(f"{len(still)} changed document(s) still hold rows ({', '.join(still[:5])})")
+    if not docs["compared"]:
+        # a proof that compared nothing proves nothing (the independent read of
+        # e492ebaf, 1): no unchanged embedded document was found to hold to its rows
+        failures.append(f"the proof compared no document ({docs['sampled']} sampled, "
+                        f"{docs['without_vectors']} without vectors): nothing shows the kept rows are the new "
+                        f"layer's")
+    entries = index_held(t_coll, changed) if changed else 0
+    if entries:
+        failures.append(f"the text index still holds {entries} entr(y/ies) of the change set")
     parts_compared = 0
     snap = None
     if (steps.get("parts") or {}).get("snapshot"):
@@ -1097,6 +1446,12 @@ def _proof(root: Path, name: str, old: Codex, new: Codex, t_coll, changed: list[
         rng = random.Random(new.collection_id)
         shard = col.shard_dir_of(root, name)
         picked = rng.sample(pool, min(int(part_sample), len(pool)))
+        if pool and not picked:
+            failures.append("the proof compared no unchanged part")
+        for p in steps["changes"].get("parts") or []:
+            got = next((x for x in snap.shards if (x.slice, int(x.n)) == (p["slice"], int(p["n"]))), None)
+            if got is None or (int(got.chunks), got.chunks_root) != (int(p["chunks"]), p["chunks_root"]):
+                failures.append(f"{p['path']}: the snapshot's entry is not what the parts pass cut")
         from app import parallel
         from app.hold import refit as me                   # by name: a spawned child imports it
         for s, (n, chunks_root) in zip(picked, parallel.each_part(
@@ -1108,61 +1463,116 @@ def _proof(root: Path, name: str, old: Codex, new: Codex, t_coll, changed: list[
     return {"compared": docs["compared"], "sampled": docs["sampled"], "chunks": docs["chunks"],
             "without_vectors": docs["without_vectors"], "mismatched": docs["mismatched"],
             "parts_compared": parts_compared, "changed_without_rows": len(changed) - len(still),
+            "index_entries": entries,
             "failures": failures}
 
 
 # ---- the rollback ---------------------------------------------------------------
 
+def _versions_gone(coll, versions: dict[str, int]) -> list[str]:
+    """The recorded versions a restore needs that a table no longer holds (a
+    maintainer prunes old versions: app/vector_index.py's keep window)."""
+    gone = []
+    for d, t in _tables(coll):
+        want = versions.get(d)
+        if want is None:
+            continue
+        held = {int(v["version"] if isinstance(v, dict) else getattr(v, "version")) for v in t.list_versions()}
+        if int(want) not in held:
+            gone.append(f"{d} version {want}")
+    return gone
+
+
 def rollback(root, name: str, *, log: Callable[[str], None] = print) -> dict[str, Any]:
-    """Everything the refit changed put back, from whatever step it reached:
-    the parts' old versions and the old snapshots, codex.json and staging
-    back by rename (what the new Codex wrote set aside beside them under
-    `rejected/`, never deleted), the vector tables restored to their
-    recorded versions, the saved manifest rows back, the space re-pinned and
-    the collection file's old text. The caller holds the write lock."""
-    from app import collection_file  # noqa: F401 — the file is restored as its writer wrote it
+    """Everything a refit changed put back, from whatever step it reached,
+    RESUMABLE: each sub-step recorded in the marker (`rollback`), the
+    vectors and the manifest's rows FIRST — after checking that every
+    version the restore needs is still held, before anything moves — then
+    the files by rename, each move decided by what lies where, so a re-run
+    finishes a stopped one. What the new Codex wrote is set aside under
+    `rejected/`, never deleted. The change set's index marks are reset, so
+    the worker indexes those documents again at the old layer: the refit
+    deleted their entries, or the worker already indexed them at the new one
+    (the independent read of e492ebaf, 5: reset, not refused). A FINISHED
+    refit is refused once its vector table was written since. The caller
+    holds the write lock."""
     from . import carry as carry_mod, codex as cx, collection as col, deposit, records as rec
     root = Path(root)
     m = read_marker(root, name)
-    if m is None or m.get("rolled_back"):
+    if m is None:
         raise CodexError(f"refit: {name} records no refit to roll back ({marker_path(root, name)})")
+    if m.get("rolled_back"):
+        return _rollback_moves(root, name, m, log)
     carry_mod.refuse_without_locks(root, (name,), "hold collection refit --rollback")
     old_id, new_id = m["predecessor"]["collection_id"], m["to"]["collection_id"]
-    if m.get("done"):
-        # A FINISHED refit is rolled back only while nothing wrote since: the
-        # worker embeds into the new space once it is resumed, and restoring
-        # the tables' versions then would drop its rows under marks that say
-        # embedded
-        now_coll = rec._local_collection(root, name, col.read(root, name))
-        if lance_versions(now_coll) != (m.get("lance_after") or {}):
-            raise CodexError(f"refit --rollback: {name}'s vector table was written since the refit ended "
-                             f"({m.get('lance_after')} → {lance_versions(now_coll)}): rolling back would lose "
-                             f"those rows. A refit back to the old window is the way; nothing was changed")
     sa, ta = Path(m["shard_aside"]), Path(m["state_aside"])
     rejected_s, rejected_t = sa / "rejected", ta / "rejected"
     shard = col.shard_dir_of(root, name)
     steps = m.get("steps") or {}
-    out: dict[str, Any] = {}
-    # the old Codex, from where it is
+    sw = steps.get("switch") or {}
+    rb = m.setdefault("rollback", {})
     here = shard / "codex.json"
     old_cx = cx.loads((sa / "codex.json").read_bytes()) if (sa / "codex.json").is_file() else \
         cx.loads(here.read_bytes())
     if old_cx.collection_id != old_id:
         raise CodexError(f"refit: the Codex set aside is {old_cx.collection_id}, the marker names {old_id}")
-    new_cx = cx.loads(here.read_bytes()) if here.is_file() and \
-        cx.loads(here.read_bytes()).collection_id == new_id else None
-    # the parts
-    for p in sorted((sa / "parts").rglob("*")) if (sa / "parts").is_dir() else []:
-        if not p.is_file():
-            continue
+    coll = rec._local_collection(root, name, old_cx)
+    if not rb.get("checked"):
+        if m.get("done") and lance_versions(coll) != (m.get("lance_after") or {}):
+            # the worker embeds into the new space once resumed: restoring the
+            # tables' versions then would drop its rows under marks that say embedded
+            raise CodexError(f"refit --rollback: {name}'s vector table was written since the refit ended "
+                             f"({m.get('lance_after')} → {lance_versions(coll)}): rolling back would lose "
+                             f"those rows, so {name} is left as it is; nothing was changed")
+        gone = _versions_gone(coll, sw.get("lance") or {})
+        if gone:
+            raise CodexError(f"refit --rollback: the vector table no longer holds the version(s) recorded "
+                             f"before the switch ({', '.join(gone)}: pruned since), so its rows cannot be put "
+                             f"back; nothing was changed")
+        rb["checked"] = True
+        _save(root, name, m)
+    # 1. the vectors, to their recorded versions
+    if sw.get("lance") and not rb.get("lance"):
+        rb["lance_restored"] = _restore_lance(coll, sw["lance"], log)
+        rb["lance"] = True
+        _save(root, name, m)
+    # 2. the manifest's rows, then the change set's index marks
+    if sw.get("saved") and not rb.get("rows"):
+        changed = read_changed(ta / "changed.jsonl")
+        cur = cx.loads(here.read_bytes()) if here.is_file() else None
+        new_cx = cur if cur is not None and cur.collection_id == new_id else \
+            (cx.loads((rejected_s / "codex.json").read_bytes()) if (rejected_s / "codex.json").is_file() else old_cx)
+        manifest = root / name / "state" / "manifest.sqlite"
+        rb["rows_restored"] = _restore_rows(manifest, ta / "saved.sqlite", changed, old_cx, new_cx)
+        rb["index_marks_reset"] = _reset_index_marks(manifest, changed) if sw.get("reset_at") else 0
+        rb["rows"] = True
+        _save(root, name, m)
+    # 3. the ask indexes' marker, 4. the collection file
+    if (ta / "ask-marker.json").is_file() and not rb.get("ask_marker"):
+        from app.ask import facets as ask_facets
+        marker = ask_facets.marker_path(root / name / "index")
+        tmp = marker.with_name(f".{marker.name}.refit")
+        tmp.write_bytes((ta / "ask-marker.json").read_bytes())
+        os.replace(tmp, marker)
+        rb["ask_marker"] = True
+        _save(root, name, m)
+    kept = ta / f"{name}.toml"
+    path = deposit.held_file(root, name)
+    if kept.is_file() and not rb.get("file"):
+        if not path.is_file() or path.read_bytes() != kept.read_bytes():
+            tmp = path.with_name(path.name + ".refit")
+            tmp.write_bytes(kept.read_bytes())
+            os.replace(tmp, path)
+        rb["file"] = True
+        _save(root, name, m)
+    # 5. the files, by rename, each decided by what lies where
+    for p in (steps.get("changes") or {}).get("parts") or []:
+        (shard / p["path"]).with_name(f".{Path(p['path']).name}.refit").unlink(missing_ok=True)   # our own temp
+    for p in sorted(q for q in (sa / "parts").rglob("*") if q.is_file()) if (sa / "parts").is_dir() else []:
         rel = p.relative_to(sa / "parts")
         if (shard / rel).is_file():
             _rename(shard / rel, rejected_s / "parts" / rel)
         _rename(p, shard / rel)
-    for p in (steps.get("changes") or {}).get("parts") or []:
-        (shard / p["path"]).with_name(f".{Path(p['path']).name}.refit").unlink(missing_ok=True)   # our own temp
-    out["parts"] = len(steps.get("parts", {}).get("rebuilt_parts") or [])
-    # the snapshots and the Codex
     if (sa / "snapshots").exists():
         if (shard / "snapshots").exists():
             _rename(shard / "snapshots", rejected_s / "snapshots")
@@ -1171,49 +1581,60 @@ def rollback(root, name: str, *, log: Callable[[str], None] = print) -> dict[str
         if here.is_file():
             _rename(here, rejected_s / "codex.json")
         _rename(sa / "codex.json", here)
-    # the staging build
     build = root / name / rec.STATE / rec.BUILD
-    if (ta / "build").exists():
-        if build.exists():
-            _rename(build, rejected_t / "build")
+    claim = build / rec.STAGING_CLAIM
+    if build.exists() and claim.is_file() and json.loads(claim.read_text(encoding="utf-8")).get("collection_id") \
+            == new_id:
+        _rename(build, rejected_t / "build")               # the new Codex's staging
+    if (ta / "build").exists() and not build.exists():
         _rename(ta / "build", build)
-    elif build.exists() and (steps.get("parts") or {}).get("staging"):
-        _rename(build, rejected_t / "build")
-    # the vectors, the manifest's rows, the pin
-    coll = rec._local_collection(root, name, old_cx)
-    sw = steps.get("switch") or {}
-    if sw.get("lance"):
-        out["lance"] = _restore_lance(coll, sw["lance"], log)
-    manifest = root / name / "state" / "manifest.sqlite"
-    if sw.get("saved") and (ta / "saved.sqlite").is_file():
-        changed = _changed(ta / "changed.jsonl")
-        out["rows"] = _restore_rows(manifest, ta / "saved.sqlite", changed, old_cx,
-                                    new_cx or dataclasses.replace(old_cx))
-    # the ask indexes' marker
-    if (ta / "ask-marker.json").is_file():
-        from app.ask import facets as ask_facets
-        marker = ask_facets.marker_path(root / name / "index")
-        tmp = marker.with_name(f".{marker.name}.refit")
-        tmp.write_bytes((ta / "ask-marker.json").read_bytes())
-        os.replace(tmp, marker)
-        out["ask_marker"] = "restored"
-    # the collection file
-    kept = ta / f"{name}.toml"
-    path = deposit.held_file(root, name)
-    if kept.is_file() and (not path.is_file() or path.read_bytes() != kept.read_bytes()):
-        tmp = path.with_name(path.name + ".refit")
-        tmp.write_bytes(kept.read_bytes())
-        os.replace(tmp, path)
-        out["file"] = "restored"
+    rb["files"] = True
+    rb["parts"] = len(steps.get("parts", {}).get("rebuilt_parts") or [])
+    rb["stamp"] = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     m["rolled_back"] = True
     m["rolled_back_at"] = int(time.time())
-    m["rollback"] = out
     _save(root, name, m)
-    # the folders set aside, and the marker with them, out of the next run's way
-    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
-    for d in (sa, ta):
-        if d.exists():
-            _rename(d, d.with_name(f"{d.name}.rolled-back-{stamp}"))
-    _rename(marker_path(root, name), ta.with_name(f"{ta.name}.rolled-back-{stamp}") / MARKER)
-    log(f"[refit] {name}: rolled back — it holds {old_id[:23]}… as before ({out})")
+    out = _rollback_moves(root, name, m, log)
+    log(f"[refit] {name}: rolled back — it holds {old_id[:23]}… as before ({rb})")
     return out
+
+
+def _rollback_moves(root: Path, name: str, m: dict, log) -> dict[str, Any]:
+    """A finished rollback's last moves: the folders set aside, and the marker
+    with them, out of the next refit's way. Each move skipped where it is
+    done (a re-run finishes a stopped one)."""
+    stamp = m["rollback"]["stamp"]
+    sa, ta = Path(m["shard_aside"]), Path(m["state_aside"])
+    sa2, ta2 = sa.with_name(f"{sa.name}.rolled-back-{stamp}"), ta.with_name(f"{ta.name}.rolled-back-{stamp}")
+    if sa.exists() and not sa2.exists():
+        _rename(sa, sa2)
+    if ta.exists() and not ta2.exists():
+        _rename(ta, ta2)
+    mp = marker_path(root, name)
+    if mp.is_file():
+        _rename(mp, ta2 / MARKER)
+    return m["rollback"]
+
+
+def _reset_index_marks(manifest: Path, changed: list[list]) -> int:
+    """The change set's index marks emptied after the rows came back: the
+    worker indexes them again (delete-then-insert by book) at the old layer.
+    One BEGIN IMMEDIATE. Repeatable."""
+    from app import db
+    con = sqlite3.connect(manifest, timeout=60, isolation_level=None)
+    try:
+        db.wal(con)
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            n = 0
+            for k in range(0, len(changed), 500):
+                rowids = [c[0] for c in changed[k:k + 500]]
+                n += con.execute(f"UPDATE documents SET fts_done=0, fts_version=0, entity_version=0 "
+                                 f"WHERE rowid IN ({','.join('?' for _ in rowids)})", rowids).rowcount
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
+    finally:
+        con.close()
+    return n

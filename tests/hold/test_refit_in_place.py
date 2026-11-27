@@ -92,6 +92,14 @@ def _embed_as_cut(root, name, codex) -> dict[int, dict[str, str]]:
                          "vector": rng.standard_normal(codex.space.dim).astype("float32")})
             held.setdefault(int(d["native_id"]), {})[c["id"]] = c["text"]
     embeddings.upsert_chunks(rows, collection=coll, dtype=codex.space.dtype)
+    # the text index as the index stage writes it: a real one, one group a language
+    from app import fts
+    by_book: dict[int, list[dict]] = {}
+    for r in rows:
+        by_book.setdefault(r["book_id"], []).append({"id": r["id"], "chapter": r["chapter"], "text": r["text"]})
+    langs = {int(d["native_id"]): d["lang"] or "en" for d in docs}
+    fts.index_books([(langs[b], b, chunks) for b, chunks in by_book.items()], coll)
+    fts.close_all()
     m = sqlite3.connect(root / name / "state" / "manifest.sqlite")
     m.execute("UPDATE documents SET embed_done=1, embed_version=7, fts_done=1, fts_version=2, "
               "entity_version=1, chunks=3, tokens=9")
@@ -151,6 +159,13 @@ def _held(root, books) -> dict[int, dict[str, str]]:
     return {b: {cid: v["text"] for cid, v in got.of(b).items()} for b in books}
 
 
+def _reindexed(marks: dict[str, tuple], uid: str) -> dict[str, tuple]:
+    """`marks` with `uid`'s index marks emptied (fts_done, fts_version,
+    entity_version), what a rollback leaves for the worker to index again."""
+    native, done, version, _f, _fv, _e, chunks, tokens = marks[uid]
+    return {**marks, uid: (native, done, version, 0, 0, 0, chunks, tokens)}
+
+
 def _dense_uid(root) -> str:
     return next(uid for uid in _marks(root) if uid.endswith("10002"))
 
@@ -169,9 +184,13 @@ def _pin(root):
 
 
 def _tree(root) -> dict[str, tuple[int, int]]:
-    """Every file under the collection and its file, by path: (size, mtime)."""
+    """Every file under the collection and its file, by path: (size, mtime) —
+    but the write lock's file and SQLite's -wal/-shm, which taking the lock
+    and opening the manifest write."""
     out = {}
     for p in sorted([*(root / NAME).rglob("*"), root / f"{NAME}.toml"]):
+        if p.name == "lock" or p.name.endswith(("-wal", "-shm")):
+            continue
         if p.is_file():
             st = p.stat()
             out[str(p.relative_to(root))] = (st.st_size, st.st_mtime_ns)
@@ -256,7 +275,7 @@ def test_the_dry_run_writes_nothing_and_says_the_change_set(held_gb, capsys):
     assert _refit(root, *FIT, extra=("--dry-run",)) == 0
     out = capsys.readouterr().out
     assert f"change set  1 of " in out and _dense_uid(root) in out
-    assert "1 written again" in out and "set aside" in out
+    assert "1 cut otherwise by the new layers" in out and "set aside" in out
     assert _tree(root) == tree, "not a byte written"
     assert col.read(root, NAME).collection_id == old.collection_id
     assert refit_mod.read_marker(root, NAME) is None
@@ -266,10 +285,12 @@ def test_the_rollback_puts_back_the_codex_the_pin_the_rows_the_marks_and_the_fil
     root, old, held = held_gb
     before, text, snap0 = _marks(root), (root / f"{NAME}.toml").read_text(), _snapshot(root)
     assert _refit(root, *FIT) == 0
+    dense = _dense_uid(root)
     assert _refit(root, extra=("--rollback",)) == 0
     assert col.read(root, NAME).collection_id == old.collection_id
     assert _pin(root) == old.space_id
-    assert _marks(root) == before
+    assert _marks(root) == _reindexed(before, dense), \
+        "every mark back, the change set's index marks emptied: the worker indexes it again (fix 5: reset)"
     assert _held(root, sorted(held)) == held, "the vector table at its recorded version"
     assert _control(root, "embed_gate") == '{"run": "old"}'
     assert (root / f"{NAME}.toml").read_text() == text
@@ -294,7 +315,8 @@ def test_a_failed_proof_rolls_back_by_itself(held_gb, card, monkeypatch):
     monkeypatch.setattr(carry_mod, "_resign_proof", wrong)
     assert _refit(root, *FIT) != 0
     assert col.read(root, NAME).collection_id == old.collection_id
-    assert _marks(root) == before and _held(root, sorted(held)) == held and _pin(root) == old.space_id
+    assert _marks(root) == _reindexed(before, _dense_uid(root))
+    assert _held(root, sorted(held)) == held and _pin(root) == old.space_id
     assert card["order"] == [], "no gate for a refit that did not hold"
     from app import node_state
     assert NAME not in node_state.paused_collections()
@@ -477,3 +499,393 @@ def test_a_later_refit_takes_the_finished_one_as_its_predecessor(held_gb, card):
         "the first refit's record kept with what it set aside"
     assert cx.loads((refit_mod.shard_aside(root, NAME, first.collection_id) / "codex.json").read_bytes()) \
         .collection_id == first.collection_id
+
+
+# ---- the independent read of e492ebaf, fixed one by one -------------------------
+
+def _index_count(root, native: int) -> int:
+    from app import fts
+    coll = _local(root, NAME)
+    return sum(fts.books_held(g, [native], coll) for g in fts.existing_groups(coll))
+
+
+def _set(root, sql: str, *params) -> None:
+    con = sqlite3.connect(root / NAME / "state" / "manifest.sqlite")
+    con.execute(sql, params)
+    con.commit()
+    con.close()
+
+
+def _row(root, uid: str, *cols):
+    con = sqlite3.connect(root / NAME / "state" / "manifest.sqlite")
+    try:
+        return con.execute(f"SELECT {', '.join(cols)} FROM documents WHERE uid=?", (uid,)).fetchone()
+    finally:
+        con.close()
+
+
+def test_1_an_errored_document_is_compared_reset_and_its_part_written_again(held_gb, card):
+    """The dense book holds an error (InputRefused, as an over-window chunk
+    would give an encoder): it is compared all the same, reset with its error
+    cleared, and its part written again."""
+    root, old, _held_ = held_gb
+    dense = _dense_uid(root)
+    _set(root, "UPDATE documents SET error='InputRefused: 8621 tokens', retries=3, embed_done=0 WHERE uid=?",
+         dense)
+    snap0 = _snapshot(root)
+    assert _refit(root, *FIT) == 0
+    m = refit_mod.read_marker(root, NAME)
+    assert m["steps"]["changes"]["shown"] == [dense] and m["steps"]["changes"]["errored"] == 1
+    assert _row(root, dense, "error", "retries") == (None, 0), "met by the stages afresh"
+    (part,) = m["steps"]["changes"]["parts"]
+    assert part["uids"] == [dense], "the part chosen by cutting the part's own records"
+    a = {(s.slice, int(s.n)): s for s in snap0.shards}[(part["slice"], part["n"])]
+    b = {(s.slice, int(s.n)): s for s in _snapshot(root).shards}[(part["slice"], part["n"])]
+    assert b.chunks > a.chunks and b.chunks_root != a.chunks_root
+
+
+def test_1_an_embedded_changed_document_loses_its_rows_and_its_index_entries_the_rest_keep_theirs(held_gb, card):
+    """The node's case (München, 2026-11-27: PG 69207 embedded, 62 rows): its
+    vector rows AND its text-index entries go; the worker cuts, indexes and
+    embeds it again."""
+    root, old, held = held_gb
+    dense = _dense_uid(root)
+    native = int(_marks(root)[dense][0])
+    others = [b for b in held if b != native]
+    assert _index_count(root, native) > 0 and all(_index_count(root, b) > 0 for b in others)
+    assert _refit(root, *FIT) == 0
+    assert _index_count(root, native) == 0, "its entries gone from the text index"
+    assert all(_index_count(root, b) > 0 for b in others), "every other document's kept"
+    assert _held(root, [native])[native] == {}
+    m = refit_mod.read_marker(root, NAME)
+    assert m["steps"]["switch"]["index_entries"] >= 1 and m["steps"]["proof"]["index_entries"] == 0
+
+
+def test_1_a_window_that_cuts_nothing_otherwise_is_refused_and_leaves_nothing(held_gb, capsys):
+    from app import node_state
+    root, old, _held_ = held_gb
+    tree = _tree(root)
+    assert _refit(root, "max_tokens=100000", f"tokenizer={_SHA}") != 0
+    assert "nothing to refit" in capsys.readouterr().err
+    assert _tree(root) == tree and refit_mod.read_marker(root, NAME) is None
+    assert NAME not in node_state.paused_collections()
+
+
+def test_1_a_proof_that_compared_nothing_rolls_back(held_gb, card, capsys):
+    root, old, held = held_gb
+    _set(root, "UPDATE documents SET embed_done=0")           # nothing the proof could compare
+    before = _marks(root)
+    assert _refit(root, *FIT) != 0
+    assert "compared no document" in capsys.readouterr().err
+    assert col.read(root, NAME).collection_id == old.collection_id
+    assert _marks(root) == _reindexed(before, _dense_uid(root)) and _held(root, sorted(held)) == held
+
+
+def test_2_a_shared_text_index_is_refused_naming_its_members(held_gb, monkeypatch, capsys):
+    from app import text_index
+    root, old, _held_ = held_gb
+    monkeypatch.setattr(text_index, "placement", lambda r, n: {"dir": ".text-index/abc", "identity": "abc"})
+    real = col._held
+    monkeypatch.setattr(col, "_held", lambda r: [*real(r), ("gb-sister", old)])
+    tree = _tree(root)
+    assert _refit(root, *FIT) != 0
+    err = capsys.readouterr().err
+    assert "shared with gb-sister" in err and "not built" in err
+    assert _tree(root) == tree
+
+
+def test_2_the_text_index_writer_held_by_the_worker_asks_for_a_stop_before_any_switch_write(held_gb, card,
+                                                                                         monkeypatch, capsys):
+    from app import fts
+    root, old, _held_ = held_gb
+    real = fts._writer
+
+    def busy(key, idx):
+        raise ValueError("Failed to acquire Lockfile: LockBusy")
+    monkeypatch.setattr(fts, "_writer", busy)
+    assert _refit(root, *FIT) == 3
+    assert "louise node stop" in capsys.readouterr().err
+    assert col.read(root, NAME).collection_id == old.collection_id
+    m = refit_mod.read_marker(root, NAME)
+    assert m["steps"]["changes"]["done"] and not m["steps"].get("switch"), "nothing of the switch written"
+    monkeypatch.setattr(fts, "_writer", real)
+    assert _refit(root, *FIT) == 0, "after the stop, the same command resumes"
+
+
+def _crash_rollback(monkeypatch, root, k: int):
+    """A rollback stopped after its k-th marker save, or its k-th rename."""
+    real_save, real_rename = refit_mod._save, refit_mod._rename
+    seen = {"save": 0, "rename": 0}
+
+    def save(r, n, m):
+        real_save(r, n, m)
+        if m.get("rollback") is not None:
+            seen["save"] += 1
+            if seen["save"] == k:
+                raise _Boom(f"rollback save {k}")
+
+    def rename(src, dst):
+        got = real_rename(src, dst)
+        if "rejected" in str(dst) or ".rolled-back-" in str(dst) or str(dst).endswith(("codex.json", "snapshots",
+                                                                                            "build")):
+            seen["rename"] += 1
+            if seen["rename"] == k - 100:
+                raise _Boom(f"rollback rename {k - 100}")
+        return got
+    monkeypatch.setattr(refit_mod, "_save", save)
+    monkeypatch.setattr(refit_mod, "_rename", rename)
+    return real_save, real_rename
+
+
+@pytest.mark.parametrize("k", [1, 2, 3, 4, 5, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110])
+def test_3_a_rollback_stopped_at_any_sub_step_resumes(held_gb, card, monkeypatch, k):
+    root, old, held = held_gb
+    before, text, snap0 = _marks(root), (root / f"{NAME}.toml").read_text(), _snapshot(root)
+    dense = _dense_uid(root)
+    assert _refit(root, *FIT) == 0
+    real_save, real_rename = _crash_rollback(monkeypatch, root, k)
+    lk = lock_mod.take(lock_mod.state_dir(root, NAME), NAME, "test")
+    try:
+        try:
+            refit_mod.rollback(root, NAME, log=quiet)
+        except _Boom:
+            pass
+        monkeypatch.setattr(refit_mod, "_save", real_save)
+        monkeypatch.setattr(refit_mod, "_rename", real_rename)
+        if refit_mod.read_marker(root, NAME) is not None:
+            refit_mod.rollback(root, NAME, log=quiet)
+    finally:
+        lk.release()
+    assert col.read(root, NAME).collection_id == old.collection_id and _pin(root) == old.space_id
+    assert _marks(root) == _reindexed(before, dense) and _held(root, sorted(held)) == held
+    assert (root / f"{NAME}.toml").read_text() == text and _snapshot(root).hash == snap0.hash
+    from app.hold import records as rec
+    claim = json.loads((root / NAME / rec.STATE / rec.BUILD / rec.STAGING_CLAIM).read_text())
+    assert claim["collection_id"] == old.collection_id, "the old staging back, not filed as rejected"
+    assert refit_mod.read_marker(root, NAME) is None
+
+
+def test_3_a_rollback_whose_recorded_version_was_pruned_is_refused_before_anything_moves(held_gb, card, capsys):
+    from datetime import timedelta
+    root, old, _held_ = held_gb
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    for _d, t in refit_mod._tables(_local(root, NAME)):
+        t.cleanup_old_versions(older_than=timedelta(0), delete_unverified=True)
+    tree = _tree(root)
+    assert _refit(root, extra=("--rollback",)) != 0
+    err = capsys.readouterr().err
+    assert "no longer holds the version" in err and "a refit back" not in err
+    assert col.read(root, NAME).collection_id == new.collection_id
+    assert {k: v for k, v in _tree(root).items() if not k.endswith("refit.json")} == \
+        {k: v for k, v in tree.items() if not k.endswith("refit.json")}, "nothing moved"
+
+
+def test_4_a_failed_cpu_reference_leaves_it_paused_and_the_same_command_goes_straight_to_the_gate(
+        held_gb, card, monkeypatch):
+    from app import node_state
+    root, old, _held_ = held_gb
+    calls = {"n": 0}
+
+    def cpu_ref(a):
+        calls["n"] += 1
+        card["order"].append(("cpu-reference", a.collection))
+        return 1 if calls["n"] == 1 else 0
+    monkeypatch.setattr(louise, "cmd_embedder_cpu_reference", cpu_ref)
+    assert _refit(root, *FIT) == 1
+    assert NAME in node_state.paused_collections(), "paused until its gate"
+    assert not refit_mod.gated(refit_mod.read_marker(root, NAME))
+    assert _refit(root, *FIT) == 0, "the params are the collection's own now: straight to the gate"
+    assert card["order"] == [("cpu-reference", NAME), ("cpu-reference", NAME), ("gate", NAME)]
+    assert refit_mod.gated(refit_mod.read_marker(root, NAME))
+    assert NAME not in node_state.paused_collections()
+
+
+def test_5_a_finished_refit_the_worker_indexed_rolls_back_with_its_index_marks_reset(held_gb, card):
+    root, old, held = held_gb
+    before = _marks(root)
+    dense = _dense_uid(root)
+    assert _refit(root, *FIT) == 0
+    _set(root, "UPDATE documents SET fts_done=1, fts_version=2, entity_version=1, chunks=8 WHERE uid=?", dense)
+    assert _refit(root, extra=("--rollback",)) == 0
+    assert _marks(root)[dense][3:6] == (0, 0, 0), "indexed at the new layer: indexed again at the old one"
+    assert {u: v for u, v in _marks(root).items() if u != dense} == {u: v for u, v in before.items() if u != dense}
+
+
+def test_6_annotations_naming_the_pre_refit_id_apply_to_the_refit_collection(held_gb, card):
+    """gutenberg-book-editions names gutenberg's pre-refit id: every reader of
+    an annotations target accepts it, as a carry's twin; a rollback takes it
+    back."""
+    from app.ask import annotations as facts, works
+    from app.hold import annotation_methods, annotations as ann
+    from tests.hold.test_annotations import a_claim, claims_file
+    root, old, _held_ = held_gb
+    uids = sorted(_marks(root))
+    codex, _snap = ann.create(root, "gb-editions", target_ref=NAME, from_snapshot="2026-08",
+                              claims=claims_file(a_claim(uids[0], uids[1], subject_lang="en")),
+                              platform_image=PLATFORM, snapshot_id="2026-09", key=KEY, now=NOW,
+                              nonce="0f" * 16, log=lambda m: None)
+    assert [t.collection_id for t in cx.targets_of(codex)] == [old.collection_id]
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    assert facts.answers_for(root, NAME, new.collection_id) == (new.collection_id, old.collection_id)
+    assert works._ids_of(_local(root, NAME)) == (new.collection_id, old.collection_id)
+    assert ann._target_holder(root, old.collection_id)[0] == NAME, "the update and the cascade's holder"
+    assert col._target_names(root, codex) == [NAME], "`hold collection show` and the Library's card"
+    assert col.show(root, "gb-editions")["targets"][0]["target"] == NAME
+    assert annotation_methods._targets_of(root, "gb-editions")[0][0] == NAME
+    from app.hold import cascade
+    decl = cascade.declarations(root) if hasattr(cascade, "declarations") else None
+    if decl is not None and hasattr(decl, "holders"):
+        assert NAME in decl.holders.get(old.collection_id, ())
+    assert _refit(root, extra=("--rollback",)) == 0
+    assert facts.answers_for(root, NAME, old.collection_id) == (old.collection_id,), "rolled back: its own id"
+
+
+def test_7_a_change_set_gone_stale_before_the_switch_is_computed_again(held_gb, monkeypatch):
+    """A stop after `changes`, then a row embedded at the old layer
+    meanwhile: the switch does not run on a stale set; it is computed again."""
+    from app import embeddings
+    root, old, held = held_gb
+    real = refit_mod._save
+
+    def stop_after_changes(r, n, m):
+        real(r, n, m)
+        if (m["steps"].get("changes") or {}).get("done") and not m["steps"].get("switch"):
+            raise _Boom("after changes")
+    monkeypatch.setattr(refit_mod, "_save", stop_after_changes)
+    _first(root, old)
+    monkeypatch.setattr(refit_mod, "_save", real)
+    # the worker embedding at the old layer meanwhile: a row written again (the
+    # same chunk, as a re-embed writes it), the table's version moved
+    some = sorted(held)[0]
+    cid, text = sorted(held[some].items())[0]
+    embeddings.upsert_chunks([{"id": cid, "book_id": some, "lang": "en", "seq": int(cid.split(":")[2]),
+                               "chapter": "", "text": text, "vector": np.ones(old.space.dim, "float32")}],
+                             collection=_local(root, NAME), dtype=old.space.dtype)
+    logs: list[str] = []
+    lk = lock_mod.take(lock_mod.state_dir(root, NAME), NAME, "resume")
+    try:
+        m = refit_mod.run(root, NAME, louise._layers_with(old, louise._layer_params(list(FIT))), log=logs.append)
+    finally:
+        lk.release()
+    assert any("stale" in line and "vector table moved" in line for line in logs)
+    assert m["done"] and m["steps"]["changes"]["lance"] != {}
+
+
+def test_8_the_change_set_file_is_written_whole_and_a_torn_line_is_dropped(tmp_path):
+    p = tmp_path / "changed.jsonl"
+    refit_mod._write_changed(p, [[1, "gutenberg:1", 1], [5, "gutenberg:5", 5]])
+    refit_mod._append_changed(p, [[9, "gutenberg:9", 9]])
+    assert refit_mod.read_changed(p) == [[1, "gutenberg:1", 1], [5, "gutenberg:5", 5], [9, "gutenberg:9", 9]]
+    with p.open("a", encoding="utf-8") as f:
+        f.write('[12,"gutenberg:1')                             # a stop inside an append
+    assert refit_mod.read_changed(p)[-1] == [9, "gutenberg:9", 9], "the torn last line dropped"
+    p.write_text('[1,"gutenberg:1",1]\n[oops\n[3,"gutenberg:3",3]\n', encoding="utf-8")
+    with pytest.raises(CodexError, match="line 2"):
+        refit_mod.read_changed(p)
+    assert not (tmp_path / "changed.jsonl.tmp").exists()
+
+
+# ---- crashes BETWEEN a write and its marker save ---------------------------------
+
+def _resume(root, old):
+    """The same refit run again (lock held, as the command holds it)."""
+    lk = lock_mod.take(lock_mod.state_dir(root, NAME), NAME, "resume")
+    try:
+        return refit_mod.run(root, NAME, louise._layers_with(refit_mod.predecessor(root, NAME),
+                                                             louise._layer_params(list(FIT))), log=quiet)
+    finally:
+        lk.release()
+
+
+def _first(root, old):
+    lk = lock_mod.take(lock_mod.state_dir(root, NAME), NAME, "first")
+    try:
+        refit_mod.run(root, NAME, louise._layers_with(old, louise._layer_params(list(FIT))), log=quiet)
+    except _Boom:
+        return
+    finally:
+        lk.release()
+    raise AssertionError("the injected crash did not happen")
+
+
+def _ends_as_by_the_book(root, old, held):
+    _, new = col.resolve(root, NAME)
+    dense = _dense_uid(root)
+    native = int(_marks(root)[dense][0])
+    assert new.collection_id != old.collection_id and _pin(root) == new.space_id
+    assert [u for u, v in _marks(root).items() if v[1:] == (0, 0, 0, 0, 0, 0, 0)] == [dense]
+    mine = _held(root, sorted(held))
+    assert mine[native] == {} and all(mine[b] == held[b] for b in held if b != native)
+    assert _index_count(root, native) == 0
+    snap = _snapshot(root)
+    assert snap.collection_id == new.collection_id
+    m = refit_mod.read_marker(root, NAME)
+    assert m["done"] and not m["steps"]["proof"]["failures"]
+    (part,) = m["steps"]["changes"]["parts"]
+    got = {(s.slice, int(s.n)): s for s in snap.shards}[(part["slice"], part["n"])]
+    assert (got.chunks, got.chunks_root) == (part["chunks"], part["chunks_root"])
+
+
+def test_crash_after_the_codex_json_rename(held_gb, monkeypatch):
+    root, old, held = held_gb
+    real = refit_mod._rename
+
+    def rename(src, dst):
+        got = real(src, dst)
+        if dst.name == "codex.json" and refit_mod.ASIDE in str(dst):
+            raise _Boom("after the codex.json rename")
+        return got
+    monkeypatch.setattr(refit_mod, "_rename", rename)
+    _first(root, old)
+    assert not (col.shard_dir_of(root, NAME) / "codex.json").is_file(), "the crash left no codex.json in place"
+    monkeypatch.setattr(refit_mod, "_rename", real)
+    _resume(root, old)
+    _ends_as_by_the_book(root, old, held)
+
+
+def test_crash_between_the_reset_commit_and_delete_books(held_gb, monkeypatch):
+    from app import embeddings
+    root, old, held = held_gb
+    real = embeddings.delete_books
+    monkeypatch.setattr(embeddings, "delete_books", lambda *a, **k: (_ for _ in ()).throw(_Boom("delete")))
+    _first(root, old)
+    monkeypatch.setattr(embeddings, "delete_books", real)
+    _resume(root, old)
+    _ends_as_by_the_book(root, old, held)
+
+
+def test_crash_after_the_part_replace_before_the_build_db_update(held_gb, monkeypatch):
+    root, old, held = held_gb
+    real = refit_mod._place
+
+    def place(tmp, path):
+        real(tmp, path)
+        raise _Boom("after the part replace")
+    monkeypatch.setattr(refit_mod, "_place", place)
+    _first(root, old)
+    monkeypatch.setattr(refit_mod, "_place", real)
+    _resume(root, old)
+    _ends_as_by_the_book(root, old, held)
+
+
+@pytest.mark.parametrize("step", ["parts", "proof"])
+def test_crash_after_parts_done_and_after_proof_done(held_gb, card, monkeypatch, step):
+    root, old, held = held_gb
+    real = refit_mod._save
+
+    def save(r, n, m):
+        real(r, n, m)
+        if (m["steps"].get(step) or {}).get("done"):
+            raise _Boom(f"after {step} done")
+    monkeypatch.setattr(refit_mod, "_save", save)
+    with pytest.raises(_Boom):
+        _refit(root, *FIT)
+    from app import node_state
+    assert NAME in node_state.paused_collections(), "stays paused until its gate"
+    monkeypatch.setattr(refit_mod, "_save", real)
+    assert _refit(root, *FIT) == 0, "the same command finishes it: the proof, or straight to the gate"
+    _ends_as_by_the_book(root, old, held)
+    assert card["order"] == [("cpu-reference", NAME), ("gate", NAME)]
+    assert NAME not in node_state.paused_collections()

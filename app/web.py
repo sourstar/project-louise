@@ -800,7 +800,14 @@ def _ask_annotations() -> list[dict]:
     annotates, so the chip can say what it is about. Never raises: a
     collection whose target this node does not hold is still listed."""
     from .hold.codex import targets_of
-    served = {getattr(c.codex, "collection_id", None): c.name for c in collections_mod.load_all()}
+    from .ask.annotations import answers_for
+    root = collections_mod.louise_root() / "collections"
+    served: dict[str, str] = {}
+    for c in collections_mod.load_all():
+        # a collection answers for its own id and its records twins' (a
+        # carry's, a refit's in place: A1f, A1l), its own id first
+        for i in answers_for(root, c.name, getattr(c.codex, "collection_id", None)):
+            served.setdefault(i, c.name)
     out = []
     for a in collections_mod.load_annotations():
         targets = targets_of(a.codex)

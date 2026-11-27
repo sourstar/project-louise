@@ -90,6 +90,19 @@ def records_twin_of(state_dir) -> str | None:
     return None
 
 
+
+def records_twins_of(state_dir) -> tuple[str, ...]:
+    """Every collection whose records this one holds byte for byte: its
+    carry's (`records_twin_of`) and each one a REFIT IN PLACE replaced here
+    (app/hold/refit.py `predecessors`, amendment A1l: the same records under
+    the same name, a new Codex). An annotations collection naming any of them
+    applies to these records (02 §2.4 A1f; the independent read of e492ebaf,
+    6: gutenberg-book-editions names gutenberg's pre-refit id). Local state,
+    what this peer proved here."""
+    from . import refit
+    return tuple(dict.fromkeys(i for i in (records_twin_of(state_dir), *refit.predecessors(state_dir)) if i))
+
+
 # ---- what must agree -------------------------------------------------------
 
 def space_differences(a: Codex, b: Codex) -> list[str]:

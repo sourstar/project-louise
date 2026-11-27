@@ -95,8 +95,8 @@ def answers_for(root, name: str, collection_id: str | None) -> tuple[str, ...]:
     records from (`carry.records_twin_of`, its own `state/carry.json`) —
     claims about those records are claims about these (02 §2.4 A1f)."""
     from app.hold import carry
-    twin = carry.records_twin_of(Path(root) / name / "state")
-    return tuple(dict.fromkeys(i for i in (collection_id, twin) if i))
+    twins = carry.records_twins_of(Path(root) / name / "state")       # a carry's, a refit's (A1l)
+    return tuple(dict.fromkeys(i for i in (collection_id, *twins) if i))
 
 
 def target_among(codex, ids: Iterable[str]):

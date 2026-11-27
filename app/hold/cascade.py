@@ -456,8 +456,7 @@ def declarations(root, *, methods: Mapping[str, str | None] | None = None,
         if getattr(c, "collection_id", None):
             holders.setdefault(c.collection_id, []).append(n)
         if not is_annotations(c):
-            twin = carry.records_twin_of(root / n / "state")
-            if twin:
+            for twin in carry.records_twins_of(root / n / "state"):     # a carry's, a refit's (A1l)
                 holders.setdefault(twin, []).append(n)
         plugin = getattr(c, "plugin", None)
         if plugin:

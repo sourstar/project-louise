@@ -795,7 +795,19 @@ and credits; the old `collection_id` is recorded as its predecessor in the
 pass's state and names the folder the old Codex, its snapshots and every
 replaced part version are set aside in, never deleted, so a failed proof
 rolls everything back (`louise hold collection refit`). Nothing is copied
-and nothing is linked. It is a re-creation (case F) by RULE 1 that keeps the
+and nothing is linked. EVERY document is compared, whatever its error or
+scope (cutting asks no encoder), and every part is cut again: a part whose
+chunks differ is written again, chosen from the parts' own records; a
+changed document loses its vector rows AND its text-index entries, its
+error and retries cleared. The change set is held to the collection when
+the switch begins (its last rowid, its vector table's version) and computed
+again when either moved. A collection whose text index is shared with
+another is refused (its identity includes the layers). An annotations
+collection naming the old `collection_id` applies to the records as to a
+carry's twin's (`carry.records_twins_of`), until a rollback. The rollback is
+resumable: the vectors and the manifest's rows first (refused when a
+recorded version was pruned), then the files by rename; it empties the
+change set's index marks, so the worker indexes them again. It is a re-creation (case F) by RULE 1 that keeps the
 name in place, for a collection nothing official was published from; the
 gate runs once for the new space. Gutenberg's PG 69207, one chunk of 8,621
 Nemotron tokens in a window of 8,175, is the case.

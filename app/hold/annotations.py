@@ -1683,8 +1683,8 @@ def _target_holder(root: Path, collection_id: str) -> tuple[str, Codex]:
     for n, c in col._held(Path(root)):
         if is_annotations(c):
             continue
-        twin = carry.records_twin_of(Path(root) / n / "state")
-        if collection_id in (c.collection_id, twin):
+        twins = carry.records_twins_of(Path(root) / n / "state")      # a carry's, a refit's (A1l)
+        if collection_id in (c.collection_id, *twins):
             cur = seeder.current_snapshot(col.shard_dir_of(Path(root), n))
             cands.append(((cur.snapshot_id if cur is not None else ""), c.collection_id == collection_id, n, c))
     if not cands:
