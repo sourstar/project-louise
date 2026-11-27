@@ -396,6 +396,17 @@ How it runs:
      20 s at most, at least 300 ms loud; one clip in flight, a newer one
      replacing a waiting one (architecture, 2026-11-27); the screen kept on;
      a tap on the microphone turns it off. Measured next: M1–M4.
+   - *Amended 2026-11-27 (operator: "the activation name can be customized,
+     and every time in the speech there is that name the mic is muted"):*
+     the name is the reader's own (Settings › name, with the account or in
+     the browser; one to three words of letters), the node's `wake_name` by
+     default; while a sentence that holds the name (any of its forms) is
+     read aloud, and 600 ms after, the page's gate hears nothing — the
+     node's own voice can never call it, whatever the echo guard says.
+     THE COST, by the operator's words: an utterance in progress when the
+     mute starts is dropped, so "Philippe, stop" said over a sentence that
+     itself names Philippe is lost — said again once that sentence ends (or
+     a tap on the speaker) it is heard.
    - a hands-free switch beside the microphone;
    - the page keeps the microphone and cuts utterances with its energy
      gate, then `POST /ask/voice/heard`;

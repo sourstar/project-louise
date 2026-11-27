@@ -54,6 +54,7 @@ EXEMPT: dict[str, str] = {
     "app/api.py": f"{MODEL_CALLS} — `GET /v1/models` of the node's model container",
     "app/web.py": f"{MODEL_CALLS} — the System page's health pings of the model endpoints",
     "app/speech.py": f"{MODEL_CALLS} — the speech model and its voice profiles",
+    "app/synthetic_voice.py": f"{MODEL_CALLS} — a synthetic voice made: the speech models and the voice profiles",
     "app/transcribe.py": f"{MODEL_CALLS} — the speech-to-text model and LocalAI's voice-activity /vad",
     "app/voice.py": f"{MODEL_CALLS} — the model server's /v1/models, for `node speech show`",
     "app/resident.py": f"{MODEL_CALLS} — the speech models' one-request preload and the "

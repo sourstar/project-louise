@@ -116,10 +116,32 @@ def take(state: Path, name: str, what: str, *, exit_code: int = 3, file: str = L
     return Lock(name, p, f)
 
 
-def holder(state: Path) -> dict[str, Any] | None:
+#: THE WORKER'S NODE-WIDE LOCK (the independent read of d40a4731, 3): taken
+#: by the worker at boot, before any writer starts, and held for its life
+#: (app/worker.py `main`); an OFFLINE pass (`hold collection refit`) takes it
+#: for its own run, so a free lock means no worker, and a worker the
+#: container's restart policy brings back meanwhile refuses to start (exit 3)
+#: until the pass is done. Under `<LOUISE_ROOT>/state/`, beside node.sqlite.
+WORKER_LOCK = "worker.lock"
+WORKER = "the node (worker)"
+
+
+def worker_state(collections_root: Path) -> Path:
+    """`<LOUISE_ROOT>/state`, from the collections root a command is given
+    (`<LOUISE_ROOT>/collections`, 07 §7.8) — where the worker's lock is."""
+    return Path(collections_root).parent / STATE
+
+
+def take_worker(collections_root: Path, what: str) -> "Lock":
+    """The node-wide worker lock, now, or `Held` naming its holder (exit 3)."""
+    return take(worker_state(collections_root), "the node", what, file=WORKER_LOCK)
+
+
+def holder(state: Path, *, file: str = LOCK) -> dict[str, Any] | None:
     """Who holds the collection's lock now, from its file, or None when
-    nobody does. A probe: it takes and gives back the lock when free."""
-    p = lock_path(state)
+    nobody does. A probe: it takes and gives back the lock when free.
+    `file`: another lock by the same rules (`WORKER_LOCK`)."""
+    p = Path(state) / file
     if not p.exists():
         return None
     with open(p, "a+b") as f:

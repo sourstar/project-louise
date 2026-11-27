@@ -388,7 +388,7 @@ def test_a_user_has_no_voice_to_choose_and_cannot_keep_one(node):
     _, token = users.add("bea")
     h = {"Authorization": f"Bearer {token}"}
     got = c.get("/ask/voices", headers=h).json()
-    assert got == {"voices": [], "default": None, "account": {"name": "bea", "voice": None, "phrases": None},
+    assert got == {"voices": [], "default": None, "account": {"name": "bea", "voice": None, "phrases": None, "wake_name": None},
                    "by_language": ["it", "en"]}
     assert c.post("/ask/voice", headers=h, json={"voice": RECORDED}).status_code == 403
     assert c.post("/ask/voice", headers=h, json={"voice": SYNTH_IT}).status_code == 403

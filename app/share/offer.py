@@ -35,7 +35,9 @@ def held_ids() -> set[str]:
     annotations collections alike."""
     from app import collections as collections_mod
     ids: set[str] = set()
-    for c in list(collections_mod.load_all()) + list(collections_mod.load_annotations()):
+    # an annotations collection left out mid-refit is HELD all the same: never offered as missing
+    for c in [*collections_mod.load_all(), *collections_mod.load_annotations(),
+              *collections_mod.refused_annotations()]:
         codex = getattr(c, "codex", None)
         if codex is not None:
             ids.add(codex.collection_id)

@@ -249,3 +249,60 @@ def test_readers_without_an_account_each_have_their_page_s_slot_under_a_cap(rout
     finally:
         with web._heard_lock:
             web._heard_busy.clear()
+
+
+# ---- the reader's own name (operator, 2026-11-27: "the activation name can be customized") --
+
+@pytest.mark.parametrize("name,ok", [("Louise", True), ("Hey Jarvis", True), ("D'Artagnan", True),
+                                     ("Jean-Luc", True), ("Ana María", True),
+                                     ("", False), ("R2D2", False), ("a, b", False), ("one two three four", False),
+                                     ("x" * 33, False)])
+def test_a_name_is_one_to_three_words_of_letters(name, ok):
+    if ok:
+        assert voice_wake.valid_name(name) == name
+    else:
+        with pytest.raises(voice_wake.NameError_):
+            voice_wake.valid_name(name)
+
+
+def test_a_name_of_two_words_is_matched_whole():
+    assert heard("Hey Jarvis, chi era Garibaldi?", name="Hey Jarvis").text == "chi era Garibaldi?"
+    assert not heard("Jarvis, chi era Garibaldi?", name="Hey Jarvis").addressed
+    assert voice_wake.mentions("and then Louis Philippe abdicated", None)
+    assert not voice_wake.mentions("and then Louis abdicated", None)
+
+
+def test_the_account_keeps_its_name_and_the_clip_is_matched_on_it(route, monkeypatch):
+    from app import users, web
+    c, said = route
+    kept = {}
+    monkeypatch.setattr(users, "set_wake_name", lambda acct, n: kept.update({acct: n}))
+    monkeypatch.setattr(users, "wake_name_of", lambda acct: kept.get(acct) if acct else None)
+    monkeypatch.setattr(web.auth, "account", lambda v: "augusto")
+    assert c.post("/ask/voice/name", json={"name": "Louise"}).json() == {"wake_name": "Louise"}
+    assert c.get("/ask/voice/name").json() == {"wake_name": "Louise", "forms": ["louise"], "mine": True}
+    said["text"] = "Louise, chi era Garibaldi?"
+    assert _post(c).json()["text"] == "chi era Garibaldi?"
+    said["text"] = "Philippe, chi era Garibaldi?"
+    assert not _post(c).json()["addressed"], "the account's name, not the node's"
+    assert c.post("/ask/voice/name", json={"name": "R2D2"}).status_code == 400
+
+
+def test_without_an_account_the_browser_s_name_is_used_and_the_node_s_otherwise(route, monkeypatch):
+    from app import web
+    c, said = route
+    monkeypatch.setattr(web.auth, "account", lambda v: None)
+    assert c.post("/ask/voice/name", json={"name": "Louise"}).status_code == 409, "the browser keeps it"
+    said["text"] = "Louise, chi era Garibaldi?"
+    assert _post(c, name="Louise").json()["text"] == "chi era Garibaldi?"
+    assert not _post(c).json()["addressed"], "no name sent: the node's (Philippe)"
+    assert c.get("/ask/voice/name", params={"asked": "Louise"}).json()["wake_name"] == "Louise"
+    assert c.get("/ask/voice/name").json()["forms"] == list(voice_wake.FORMS["philippe"])
+
+
+def test_users_toml_keeps_the_name(isolated_config, tmp_path, monkeypatch):
+    from app import users
+    u = users.User(name="a", role="user", token_sha256="0" * 64, created="2026-11-27T00:00:00Z", wake_name="Louise")
+    assert users._parse(users._dump([u]))[0].wake_name == "Louise"
+    assert users._parse(users._dump([users.User(name="b", role="user", token_sha256="0" * 64,
+                                                created="2026-11-27T00:00:00Z")]))[0].wake_name is None

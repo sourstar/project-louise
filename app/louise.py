@@ -332,7 +332,11 @@ def cmd_annotations_derive(a) -> int:
     from app import collections as collections_mod
     from app.hold import annotation_methods as am, collection as col
     name, _ = col.resolve(a.root, a.collection)
-    c = next((x for x in collections_mod.load_annotations() if x.name == name), None)
+    served, left_out = collections_mod.annotations_and_refusals()
+    why = next((r.reason for r in left_out if r.name == name), None)
+    if why:
+        raise CodexError(f"{name} is not served now: {why}")
+    c = next((x for x in served if x.name == name), None)
     method = getattr(c, "method", None)
     if not method:
         raise CodexError(f"{name} records no method: its claims are given by hand (`hold annotations "
@@ -1167,6 +1171,78 @@ def _form_text_index(root: Path, her_sister_name: str, name: str, *, probe: bool
     return text_index.share(root, her_sister_name, name, ia, log=lambda m: None)
 
 
+def cmd_collection_refit(a) -> int:
+    """`hold collection refit <collection> --layer-param KEY=VALUE [...]
+    [--dry-run]` — the collection's encoder window changed OFFLINE
+    (app/hold/refit.py; the operator, 2026-11-27: "you fucking stop the node,
+    delete the vectors and the indexing of the only book that is affected by
+    the change, change the chunker offline, rewrite the codex and regenerate
+    the collection's identity, then replace it's identity everywhere. You
+    restart the node and it's done"). Exit 3 while the worker runs. A rerun
+    continues where a crash stopped it. No rollback in code: the ZFS
+    snapshot taken first is the rollback."""
+    from app.hold import refit as refit_mod
+    root = Path(a.root)
+    name = a.collection
+    params = _layer_params(a.layer_param)
+    if not params:
+        raise CodexError("refit: at least one --layer-param KEY=VALUE — the encoder window, "
+                         "max_tokens=N and tokenizer=sha256:… together")
+    old = refit_mod.predecessor(root, name)
+    layers = _layers_with(old, params)
+    refit_mod.new_codex(old, layers)              # refused in words before anything
+    key = None
+    try:
+        from app.bundles import keys as node_keys
+        key = node_keys.load_signing_key()
+    except Exception:   # noqa: BLE001 — no key: the plan refuses it (exit 2), naming where the key is
+        key = None
+    log = lambda m: print(m, flush=True)        # noqa: E731
+    if a.dry_run:
+        pl = refit_mod.plan(root, name, layers, key=key, processes=a.processes, dry=True,
+                            affected_max=a.affected_max, log=log)
+        print(f"refit {name} (a dry run: nothing written)")
+        print(f"  from        {pl['from']}")
+        print(f"  to          {pl['to']}")
+        print(f"  affected    {len(pl['changed'])} of {pl['documents']} document(s) (bound {pl['bound']}): "
+              + (", ".join(c[1] for c in pl["changed"][:10]) + (" …" if len(pl["changed"]) > 10 else "")
+                 if pl["changed"] else "none — nothing to refit"))
+        if pl["uncut"]:
+            print(f"  uncut       {len(pl['uncut'])} document(s) uncut at both layers, holding nothing: unchanged "
+                  f"({', '.join(pl['uncut'][:10])}{' …' if len(pl['uncut']) > 10 else ''}; the first: "
+                  f"{pl['first_uncut']})")
+        if pl["kept_errors"]:
+            print(f"  errors      {len(pl['kept_errors'])} affected document(s) keep their error (only the "
+                  f"encoder's refusal of an over-window input is cleared): {', '.join(pl['kept_errors'][:10])}")
+        print(f"  parts       " + (", ".join(p["path"] for p in pl["parts"]) or "none"))
+        print(f"  others      " + (", ".join(f"{o} → {pl['others_to'][o][:23]}…" for o in pl["others"]) or "none")
+              + " (re-keyed to the new id)")
+        for n, table in pl["sweep"].items():       # every file naming an old id, by what is done with it
+            kinds: dict = {}
+            for rel, (what, said) in sorted(table.items()):
+                kinds.setdefault((what, said), []).append(f"{n}/{rel}")
+            for (what, said), rels in sorted(kinds.items()):
+                print(f"  files       {len(rels)} {what} — {said}: {', '.join(rels[:3])}"
+                      + (f" and {len(rels) - 3} more" if len(rels) > 3 else ""))
+        for line in pl["effects"]:
+            print(f"  changes     {line}")
+        print("  first       take a ZFS snapshot of every dataset holding these — that is the rollback (the "
+              "host's step, the operator's or München's):")
+        for what, path in pl["datasets"]:
+            print(f"                {what}: {path}")
+        print(f"  runs        offline: {refit_mod.STAY_DOWN}")
+        for code, why in pl["refusals"]:
+            print(f"  REFUSED     (exit {code}) {why}")
+        if pl["refusals"]:
+            return pl["refusals"][0][0]
+        print("  steps       reset those documents, write the new Codex, rewrite their parts and the snapshot, "
+              "replace the old id everywhere, re-key the others and platform.toml, attest; then restart the node")
+        return 0
+    refit_mod.run(root, name, layers, key=key, now=_utc_now(), processes=a.processes,
+                  affected_max=a.affected_max, log=log)
+    return 0
+
+
 def _layer_params(given: list[str] | None) -> dict[str, Any]:
     """`["header=false", "max_tokens=512"]` → `{"header": False, "max_tokens": 512}`:
     each value read as JSON, a bare word as a string."""
@@ -1188,29 +1264,65 @@ def _said(params: dict[str, Any]) -> str:
 
 
 def _layers_with(codex, params: dict[str, Any]) -> tuple:
-    """Her sister's layers with `params` changed in every layer whose chunker
-    has them. Only a param the chunker already states, and only to another
-    value: adding one is a chunker's own change (chunking_context, the
-    architecture session's B), and the same value is the same space."""
+    """The collection's layers with `params` changed in every layer whose
+    chunker has them. A param the chunker already states, to another value;
+    or one it TAKES without requiring it (`layers.OPTIONAL_PARAMS`: `fixed`'s
+    encoder window, `max_tokens` with its `tokenizer`, both or neither —
+    operator, 2026-11-27, gutenberg), checked as a Codex would check it
+    (`layers.check_params`). Any other new param is a chunker's own change
+    (chunking_context, the architecture session's B), and the same values
+    are the same space."""
     import dataclasses
+
+    from app import layers as layers_mod
     changed: set[str] = set()
     out = []
-    for layer in codex.layers:
+    for i, layer in enumerate(codex.layers):
         cur = dict(layer.chunker.params or {})
-        mine = {k: v for k, v in params.items() if k in cur}
+        optional = layers_mod.OPTIONAL_PARAMS.get(layer.chunker.id, ())
+        mine = {k: v for k, v in params.items() if k in cur or k in optional}
         for k, v in mine.items():
-            if cur[k] == v:
+            if k not in optional and cur[k] == v:
                 raise CodexError(f"--layer-param {k}={json.dumps(v)}: {layer.chunker.id} has it already; "
                                  f"the same value is the same space")
+        group = {k: v for k, v in mine.items() if k in optional}
+        if group and all(k in cur and cur[k] == v for k, v in group.items()):
+            raise CodexError(f"--layer-param {_said(group)}: {layer.chunker.id} has it already; the same "
+                             f"values are the same space")
         changed |= set(mine)
         cur.update(mine)
+        if group:
+            try:
+                layers_mod.check_params(cur, chunker=layer.chunker.id,
+                                        where=f"--layer-param (layer {i}, {layer.chunker.id})")
+            except layers_mod.LayerError as e:
+                raise CodexError(str(e)) from None
         out.append(dataclasses.replace(layer, chunker=dataclasses.replace(layer.chunker, params=cur)))
     unknown = sorted(set(params) - changed)
     if unknown:
         have = sorted({k for l in codex.layers for k in (l.chunker.params or {})})
+        takes = sorted({k for l in codex.layers for k in layers_mod.OPTIONAL_PARAMS.get(l.chunker.id, ())})
         raise CodexError(f"--layer-param {', '.join(unknown)}: no layer's chunker states it (they state "
-                         f"{', '.join(have) or 'none'}); a new param is the chunker's own change")
+                         f"{', '.join(have) or 'none'}" + (f"; they take {', '.join(takes)}" if takes else "")
+                         + "); a new param is the chunker's own change")
+    _tokenizers_load(out)
     return tuple(out)
+
+
+def _tokenizers_load(layers) -> None:
+    """Every tokenizer the layers pin found and loaded (`TOKENIZERS_DIR`, its
+    sha256 the one named) before anything else: one the cut cannot load made
+    every document a cut error (the second independent read of 5a93b7c7, 1)."""
+    from app.plugins.wikidata import chunker as pinned
+    for i, layer in enumerate(layers):
+        sha = (layer.chunker.params or {}).get("tokenizer")
+        if sha is None:
+            continue
+        try:
+            pinned.tokenizer_for(sha)
+        except Exception as e:   # noqa: BLE001 — TokenizerMissing, ChunkerError, a broken file: refused in words
+            raise CodexError(f"--layer-param tokenizer={sha}: layer {i}'s tokenizer cannot be loaded "
+                             f"({type(e).__name__}: {e}); nothing was written") from None
 
 
 def _encoder_of(root, name: str, fallback: dict) -> dict:
@@ -2938,6 +3050,10 @@ def _refusal_for(name: str) -> str | None:
             for r in collections_mod.refusals():
                 if r.name == name:
                     return r.reason
+            collections_mod.load_annotations()         # an annotations collection mid-refit
+            for r in collections_mod.annotation_refusals():
+                if r.name == name:
+                    return r.reason
             mine = [c for c in loaded if c.name == name and c.codex is not None]
             for _c, reason in spaces.refuse_boot(mine) if mine else []:
                 return reason
@@ -4136,12 +4252,28 @@ def cmd_node_show(a) -> int:
 
 
 def cmd_node_speech(a) -> int:
-    """`node speech show` and `node speech set` (07 §7.3): the Ask page's
+    """`node speech show`, `set` and `synthetic` (07 §7.3): the Ask page's
     voice — its models the node's, in platform.toml's `[speech]` (07 §7.8;
     app/voice.py, the one resolution). `set` is desired state written into
     the file; the page offers what it says at its next load."""
     from app import platform_config, voice
     from app.platform_config import SPEECH_KEYS
+    if a.speech_verb == "synthetic":
+        from app import synthetic_voice as sv
+        try:
+            if a.use is not None:
+                _print(sv.use(a.lang, a.use))
+            else:
+                _print(sv.make(a.lang, candidates=a.candidates,
+                               designs=a.designs.split(";") if a.designs else None, text=a.text, tag=a.tag,
+                               log=lambda m: print(m, file=sys.stderr)))
+            return 0
+        except sv.Deferred as e:
+            print(f"louise node speech synthetic: {e}", file=sys.stderr)
+            return 3                                  # no room on the card now: a deferral (503)
+        except (sv.SyntheticError, *voice.LOAD_ERRORS) as e:
+            print(f"louise node speech synthetic: {e}", file=sys.stderr)
+            return 2
     try:
         if a.speech_verb == "set":
             changes = {k: getattr(a, k) for k in SPEECH_KEYS if getattr(a, k) is not None}
@@ -8110,6 +8242,27 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--name", dest="wake_name", default=None, metavar="NAME",
                    help="the name a hands-free reader calls the page by (\"Philippe, …\"); unset, Philippe")
     q.set_defaults(fn=cmd_node_speech)
+    q = spverbs.add_parser("synthetic", help="make a language's synthetic voice on this node: the text-to-speech "
+                                             "model reads a fixed sentence with no voice, the clip is heard back "
+                                             "by the speech-to-text model, recorded as a voice profile on the "
+                                             "model server and set in [speech] synthetic_voices "
+                                             "(app/synthetic_voice.py)")
+    q.add_argument("lang", help="the language, by its ISO code: es, pt, nl, …")
+    q.add_argument("--candidates", type=int, default=1, metavar="N",
+                   help="make N voices (\"Synthetic es A\", \"B\", …) from the first N of Louise's designs "
+                        "(\"male, middle-aged, low pitch\", …) and set none, to choose one by ear with --use; "
+                        "unset, one voice in the model's own default speaker, made and set")
+    q.add_argument("--designs", default=None, metavar="\"D; D; …\"",
+                   help="the voices to design, separated by \";\" (\"female, middle-aged, low pitch; male, "
+                        "elderly\"): one is made and set, several are candidates")
+    q.add_argument("--use", default=None, metavar="NAME",
+                   help="set the voice profile NAME (or its voice) as the language's synthetic voice; nothing "
+                        "is made")
+    q.add_argument("--text", default=None, metavar="TEXT",
+                   help="the sentence the reference clip reads, for a language Louise has none for")
+    q.add_argument("--tag", default=None, metavar="TAG",
+                   help="the profile's language tag (es-ES); unset, Louise's for the language")
+    q.set_defaults(fn=cmd_node_speech)
 
     p = nverbs.add_parser("title", help="the node's title: the label at the top left of every page and a "
                                         "saved PDF's header, in platform.toml [node] title")
@@ -8336,6 +8489,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="the outcome as one JSON object")
     p.set_defaults(fn=cmd_collection_update)
 
+    p = verbs.add_parser("refit", help="OFFLINE (the app's containers stopped, an operator pass): the "
+                                       "collection's encoder window changed — the documents it cuts otherwise "
+                                       "reset, the Codex rewritten, the new identity replaced everywhere; take a "
+                                       "ZFS snapshot first")
+    root_arg(p)
+    p.add_argument("collection")
+    p.add_argument("--layer-param", dest="layer_param", action="append", default=None, metavar="KEY=VALUE",
+                   help="the `fixed` layer's encoder window: max_tokens=N and tokenizer=sha256:…. Repeatable")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="the affected documents and parts, the collections re-keyed; writes nothing")
+    p.add_argument("--processes", type=int, default=None, metavar="N",
+                   help="at most N processes for the pass (default: the node profile's cores)")
+    p.add_argument("--affected-max", dest="affected_max", type=int, default=None, metavar="N",
+                   help="at most N documents cut otherwise (default: 1%% of the documents, at least 10); "
+                        "a wider change is refused")
+    p.set_defaults(fn=cmd_collection_refit)
     p = verbs.add_parser(
         "migrate", help="add the §9.3 fields a Codex predates, each as null")
     root_arg(p); p.add_argument("name")

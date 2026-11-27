@@ -20,6 +20,11 @@ measured (published figures disagree).
 
 ### 2026-11-27
 
+- **PERUGIA ON A 16 GB CARD, THE TEST PLAN** (operator: "In a few days the node Perugia will be resumed to
+  test the new backend on the AMD RX 9060 XT and, even more important, test the behavior with a 16 GB GPU
+  that is the most common size for consumer market"; "That's the purpose of all those optimizations and
+  the quest for a universal embedder"). Measured on the B70: today's query encoders for one question come
+  to 20.4 GB loaded, against 4.4 GB for one universal embedder. docs/notes/perugia-16gb-test.md.
 - **NO HARD LINKS (operator, verbatim: "Never use hard links, always consciously load from a path. It
   already happened that you deleted important files because you forgot the hard links").** Every
   `os.link` in app/ is gone, and tests/test_no_hard_links.py fails on any new one (Python by AST, shell
