@@ -106,7 +106,8 @@ def test_the_filter_reads_the_candidates_kinds_and_says_what_it_left_out(isolate
     cands = [{"book_id": 2600}, {"book_id": 5}, {"book_id": 151}]
 
     def legs(kind, coll=c, conn=con):
-        lists, catalog, left = retrieval._legs_of_kind(conn, coll, kind, [list(cands)], [], 50, 50)
+        lists, catalog, left = retrieval._legs_of_kind(conn, coll, kind, [list(cands)], [], 50,
+                                                       lambda ls: [h for lst in ls for h in lst], 50)
         return lists[0], left
     kept, left = legs("facts")
     assert [h["book_id"] for h in kept] == [5]

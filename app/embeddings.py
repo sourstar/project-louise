@@ -3034,7 +3034,7 @@ def delete_books(book_ids, collection=None, lock_con=None) -> None:
 
 def search(query: str, k: int = 20, langs: list[str] | None = None, collection=None,
            book_ids: list[int] | None = None, validity: dict | None = None,
-           parts: list[str] | None = None) -> list[dict]:
+           parts: list[str] | None = None, vector=None, kept: dict | None = None) -> list[dict]:
     """book_ids, when given, is a hard prefilter — see fts.search()'s
     docstring for the same note on why retrieval.search() doesn't use it by
     default.
@@ -3046,7 +3046,11 @@ def search(query: str, k: int = 20, langs: list[str] | None = None, collection=N
     names values of the table key directly (`family:` for wikidata). The
     merge is exact: one space, one metric, and the index's refine pass
     returns exact distances, so the union's top k is one exact search's.
-    `book_ids` narrows the parts to theirs."""
+    `book_ids` narrows the parts to theirs. `vector`: the query's vector
+    already embedded (and its run already checked) by an earlier ask of
+    this search — asked again deeper, never embedded again; `kept`, when
+    given, receives it as `kept["vector"]` (app/retrieval.py, the search's
+    kind: architecture's read of a5971abf, C)."""
     collection = _coll(collection)
     split = vector_parts.is_split(collection)
     if split:
@@ -3071,7 +3075,9 @@ def search(query: str, k: int = 20, langs: list[str] | None = None, collection=N
     if not targets:
         return []
     recipe = collections_mod.recipe_for(collection)
-    if _by_run(collection):
+    if vector is not None:
+        pass                       # embedded and checked by this search's first ask
+    elif _by_run(collection):
         # 03 §3.3, searching: "the same runs, validated the same way". The
         # answer's run is checked BEFORE its vector is used; one not yet
         # tested answers no query, one that failed withholds this leg. It
@@ -3082,6 +3088,8 @@ def search(query: str, k: int = 20, langs: list[str] | None = None, collection=N
         run_check.check_query(collection, recipe, seen)
     else:
         vector = embed_query(collection, query, recipe=recipe)
+    if kept is not None:
+        kept["vector"] = vector
     ask = lambda part: _search_table(part, vector, k, langs, book_ids, validity)  # noqa: E731
     if not split:
         rows = ask(targets[0])
@@ -3157,7 +3165,7 @@ def _search_table(collection, vector, k: int, langs, book_ids, validity) -> list
     return hits
 
 def search_records(query: str, depth: int, langs: list[str] | None = None, collection=None,
-                   **restrict) -> list[dict]:
+                   vector=None, kept: dict | None = None, **restrict) -> list[dict]:
     """`search`, deep enough to hold the leg's top `depth` RECORDS (05 §5.1,
     amended 2026-10-10; app/leg_depth.py). It asks for twice the depth in
     chunks, which held 50 records on every query measured (a median 59
@@ -3165,7 +3173,7 @@ def search_records(query: str, depth: int, langs: list[str] | None = None, colle
     short asks again at twice that, bounded."""
     from . import leg_depth
     return leg_depth.to_records(
-        lambda n: search(query, k=n, langs=langs, collection=collection, **restrict),
+        lambda n: search(query, k=n, langs=langs, collection=collection, vector=vector, kept=kept, **restrict),
         depth, first=2 * depth)
 
 

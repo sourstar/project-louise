@@ -71,9 +71,9 @@ def test_literature_keeps_the_literary_works_alone(searched):
     c, con, seen = searched
     out = _search(con, c, kind="literature")
     assert sorted(h["book_id"] for h in out["hits"]) == [151, 2600]
-    # each once, within the normal-depth legs (50 each): the Constitution,
-    # 9001–9047 from "en" and 9051–9100 from "fr", all without a verdict
-    assert out["left_out"] == {"count": 1 + 47 + 50, "by_basis": {"no literary verdict in its record": 98}}
+    # what the reranker would have seen (architecture's read of a5971abf, B):
+    # the top 50 of the unfiltered fusion, less the two literary works
+    assert out["left_out"] == {"count": 48, "by_basis": {"no literary verdict in its record": 48}}
 
 
 def test_all_is_the_search_as_it_was(searched):
@@ -458,3 +458,96 @@ def test_an_answer_whose_search_left_everything_out_says_so(v1):
     assert "[literature only: this search left out 3 other works" in _ask(c, True).text
     state["result"] = {"hits": [_hit(5)], "kind_applied": "literature", "left_out": LEFT}
     assert "literature only" not in _ask(c, False).json()["choices"][0]["message"]["content"]
+
+
+# ---- architecture's read of a5971abf: records, not chunks; what the reranker
+# ---- would have seen; the ANN asked again, never deeper up front -------------
+
+def test_a_leg_of_several_chunks_a_record_under_auto_to_all_is_today_s(searched, monkeypatch):
+    """A: a leg is `limit` RECORDS (leg_depth.cut_at_records); a record
+    brings several chunks, and a cut by chunks fused shallower legs."""
+    c, con, seen = searched
+    from app import leg_depth
+
+    def records(group, q, limit, collection=None, **kw):
+        seen["depth"].append(limit)
+        hits = [{**_hit(n, collection.name), "chunk_id": f"{collection.name}:{n}:0:{j}"}
+                for n in LEGS[group] for j in (1, 2)]
+        return leg_depth.cut_at_records(hits, limit)
+    monkeypatch.setattr(retrieval.fts, "search_records", records)
+    # one text list: the leg is its records (two variants' best ranks would hide a shallow cut)
+    monkeypatch.setattr(retrieval.fts, "existing_groups", lambda c: ["en"])
+    fused = []
+    real = retrieval._merge_rrf
+    monkeypatch.setattr(retrieval, "_merge_rrf", lambda *a, **kw: (lambda m: (fused.append([h["chunk_id"] for h in m]), m)[1])(real(*a, **kw)))
+    plain = _search(con, c, k=10, rerank_depth=20)
+    n = len(fused)
+    late = _search(con, c, k=10, rerank_depth=20, kind=lambda: ("all", "not decided in time"))
+    assert [(h["book_id"], h["chunk_id"]) for h in late["hits"]] == [(h["book_id"], h["chunk_id"]) for h in plain["hits"]]
+    assert fused[-1] == fused[n - 1], "the same fusion, record for record"
+    assert seen["depth"][-1] == 20 * work_kind.OVERFETCH and len(fused[-1]) == 20
+
+
+def test_left_out_is_what_the_reranker_would_have_seen(searched):
+    """B: never above the rerank's slice (`want` = max(4k, depth))."""
+    c, con, _ = searched
+    out = _search(con, c, k=5, rerank_depth=20, kind="literature")
+    assert out["left_out"]["count"] <= 20
+    assert out["left_out"]["count"] == 18, "the top 20 of the unfiltered fusion, less War and Peace and Moby Dick"
+
+
+@pytest.fixture
+def dense(searched, monkeypatch):
+    """A vector leg whose answer depends on k, as an ANN with refine does:
+    asked deeper, its top records are not the same."""
+    c, con, seen = searched
+    seen["dense"] = []
+    monkeypatch.setattr(retrieval.copy_state, "vector_leg_withheld", lambda c: None)
+    monkeypatch.setattr(retrieval.fts, "existing_groups", lambda c: ["en"])
+
+    def search_records(core, depth, collection=None, langs=None, vector=None, kept=None, **kw):
+        seen["dense"].append({"depth": depth, "vector": vector})
+        if kept is not None:
+            kept["vector"] = [0.1, 0.2]
+        pool = (2600, 151, 5) + FILLER
+        order = pool if depth <= 50 else tuple(reversed(pool[:depth // 2])) + pool[depth // 2:]
+        return [{**_hit(n, collection.name), "source": "dense"} for n in order[:depth]]
+    monkeypatch.setattr(retrieval.embeddings, "search_records", search_records)
+    return c, con, seen
+
+
+def _hybrid(con, c, **kw):
+    return retrieval.search(con, "Napoleon", k=kw.pop("k", 10), mode="hybrid", collection=c, translate=False, **kw)
+
+
+def test_auto_resolving_to_all_asks_the_ann_at_today_s_depth(dense):
+    """C: an ANN with refine does not keep its prefix when asked deeper."""
+    c, con, seen = dense
+    plain = _hybrid(con, c)
+    late = _hybrid(con, c, kind=lambda: ("all", "not decided in time"))
+    assert [h["book_id"] for h in late["hits"]] == [h["book_id"] for h in plain["hits"]]
+    assert [d["depth"] for d in seen["dense"]] == [retrieval.RERANK_TOP_N] * 2, "never deeper up front"
+
+
+def test_a_kind_that_thins_the_vector_leg_asks_again_with_the_same_vector(dense):
+    c, con, seen = dense
+    out = _hybrid(con, c, kind="facts")
+    assert [d["depth"] for d in seen["dense"]] == [retrieval.RERANK_TOP_N, retrieval.RERANK_TOP_N * work_kind.OVERFETCH]
+    assert seen["dense"][0]["vector"] is None and seen["dense"][1]["vector"] == [0.1, 0.2], "embedded once"
+    assert all(h["book_id"] not in (2600, 151) for h in out["hits"])
+
+
+@pytest.mark.parametrize("lang,start", [
+    ("it", "[solo letteratura: questa ricerca ha escluso 3 altre opere"),
+    ("fr", "[littérature seulement : cette recherche a écarté 3 autres œuvres"),
+    ("de", "[nur Literatur: diese Suche hat 3 andere Werke ausgelassen"),
+    ("es", "[solo literatura: esta búsqueda dejó fuera 3 otras obras"),
+    ("pt", "[literature only: this search left out 3 other works"),
+])
+def test_the_note_is_in_the_answer_s_language(v1, lang, start):
+    """D: the same class as the Italian-in-French defect."""
+    c, state = v1
+    state["result"] = {"hits": [], "kind_applied": "literature", "kind_by": "the question", "left_out": LEFT}
+    assert _ask(c, False, answer_lang=lang).json()["choices"][0]["message"]["content"].startswith(start)
+    state["result"]["query_lang"] = lang
+    assert _ask(c, False).json()["choices"][0]["message"]["content"].startswith(start), "the question's language"

@@ -1128,15 +1128,24 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
 
     limit = max(k, depth, 20)
     # deeper where the search's kind may thin the legs (fact-fiction-search.md
-    # §3), a kind still being decided included: the legs do not wait for it
-    fetch = limit * (work_kind_mod.OVERFETCH if _kind_may_thin(collection, kind) else 1)
+    # §3), a kind still being decided included: the legs do not wait for it.
+    # THE TEXT LEGS ONLY (architecture's read of a5971abf, C): BM25 is an
+    # exact top-k, so a deeper list's prefix is today's list; the catalogue
+    # stays at its depth (its matches feed a variant of the text leg), and
+    # the vector leg's ANN with refine does NOT keep its prefix when asked
+    # deeper — it is asked at today's depth, and again deeper with the SAME
+    # vector only once the kind is known to thin it (`_vector_again`).
+    thins = _kind_may_thin(collection, kind)
+    fetch = limit * (work_kind_mod.OVERFETCH if thins else 1)
+    dense_at: int | None = None        # where the vector leg is in `lists`
+    dense_kept: dict = {}              # its query vector, for an ask again deeper
     # A leg starts only while the caller is still there (app/cancel.py).
     cancel.checkpoint()
     t0 = time.time()
     # as deep as the text leg's other variants: it is one of them (§5.1)
     text_why = None
     catalog_hits, catalog_why = (
-        catalog_leg(con, core, limit=fetch, langs=limited_langs(collection, plan.only),
+        catalog_leg(con, core, limit=limit, langs=limited_langs(collection, plan.only),
                     collection=collection)
         if mode in ("hybrid", "catalog") else ([], None))
     if book_ids:
@@ -1258,8 +1267,10 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
                 # s at most, on wikipedia); a post-filter would return an
                 # empty leg whenever the top k were in other languages
                 if vector_leg is None:
-                    lists.append(embeddings.search_records(core, fetch, collection=collection,
+                    dense_at = len(lists)
+                    lists.append(embeddings.search_records(core, limit, collection=collection,
                                                            langs=list(limited_langs(collection, plan.only)) or None,
+                                                           **({"kept": dense_kept} if thins else {}),
                                                            **restrict))
         except (hold_runs.RunUnvalidated, hold_runs.RunRefused) as e:
             # the answer named a run not yet tested, or one that failed — or
@@ -1296,9 +1307,13 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
     # the search's kind, leg by leg, before the fusion (architecture's read of
     # 2643e7d8, 2): every leg cut back to its normal depth
     kind_applied, kind_by = _kind_now(kind)
-    lists, catalog_hits, left_out = _legs_of_kind(con, collection, kind_applied, lists, catalog_hits,
-                                                  limit, fetch)
-    merged = _merge_rrf(lists, limit, own=own, query_lang=getattr(plan, "query_lang", None))
+    fuse = lambda ls: _merge_rrf(ls, limit, own=own, query_lang=getattr(plan, "query_lang", None))  # noqa: E731
+    lists, catalog_hits, left_out = _legs_of_kind(
+        con, collection, kind_applied, lists, catalog_hits, limit, fuse, max(k * 4, depth),
+        again=(lambda: _vector_again(collection, core, limit, plan, restrict, dense_kept))
+        if dense_at is not None and dense_kept.get("vector") is not None else None,
+        dense_at=dense_at)
+    merged = fuse(lists)
     # what the reranker will read above each candidate's chunks (05 §5.6)
     if collections_mod.reranker_for(collection) is not None:
         _attach_heads(con, collection, merged[:limit])
@@ -1650,50 +1665,76 @@ def _kind_may_thin(collection, kind) -> bool:
             else work_kind_mod.filters(collection, kind))
 
 
+def _records(hits: list[dict], depth: int) -> list[dict]:
+    """A leg's prefix holding its first `depth` RECORDS — a leg is `depth`
+    records, not chunks (app/leg_depth.py; architecture's read of a5971abf, A)."""
+    from . import leg_depth
+    if all("chunk_id" in h for h in hits):
+        return leg_depth.cut_at_records(hits, depth)
+    return hits[:depth]
+
+
+def _records_in(hits: list[dict]) -> int:
+    """The records a leg holds (a hit without a chunk id is one record)."""
+    from . import leg_depth
+    return len({leg_depth.record_of_chunk(h["chunk_id"]) if "chunk_id" in h else id(h) for h in hits})
+
+
+def _vector_again(collection, core: str, limit: int, plan, restrict: dict, kept: dict) -> list[dict]:
+    """The vector leg asked again `OVERFETCH` deeper with the vector this
+    search already embedded (and checked): the ANN at today's depth gave
+    today's list, and the kind thinned it (architecture's read of a5971abf, C)."""
+    return embeddings.search_records(core, limit * work_kind_mod.OVERFETCH, collection=collection,
+                                     langs=list(limited_langs(collection, plan.only)) or None,
+                                     vector=kept["vector"], **restrict)
+
+
 def _legs_of_kind(con, collection, kind: str, lists: list[list[dict]], catalog_hits: list[dict],
-                  limit: int, fetch: int) -> tuple[list[list[dict]], list[dict], dict]:
-    """Each leg (and the catalogue's matches) of `kind`, cut back to the
-    normal depth `limit`: for all that is exactly today's legs, whatever
-    depth they were fetched at. What is counted as left out is the records,
-    once each, the normal-depth legs (and the catalogue) would have given."""
-    if kind not in ("facts", "literature"):
-        return ([lst[:limit] for lst in lists] if fetch != limit else lists), catalog_hits, \
-            {"count": 0, "by_basis": {}}
-    pool = [h for lst in lists for h in lst] + list(catalog_hits)
+                  limit: int, fuse, want: int, *, again=None,
+                  dense_at: int | None = None) -> tuple[list[list[dict]], list[dict], dict]:
+    """Each leg of `kind`, cut back to its normal depth of `limit` RECORDS
+    before the fusion: for all, exactly today's legs whatever depth the text
+    legs were fetched at. For facts or literature each leg is filtered, then
+    cut — the vector leg asked again deeper (`again`) where the filter left
+    it short. What is counted as left out is what the reranker would have
+    seen: the left-out records within the top `want` of the UNFILTERED
+    fusion of today's legs (architecture's read of a5971abf, B)."""
+    lists = [_records(lst, limit) for lst in lists]
     left: dict = {"count": 0, "by_basis": {}}
+    if kind not in ("facts", "literature"):
+        return lists, catalog_hits, left
+    seen = fuse(lists)[:want]
     if not work_kind_mod.classified(collection):
         if kind == "facts":
             return lists, catalog_hits, left
-        gone = {h.get("book_id") for lst in lists for h in lst[:limit]} | {h.get("book_id") for h in catalog_hits}
-        gone.discard(None)
-        n = len(gone)
+        n = len({h.get("book_id") for h in seen})
         if n:
             left = {"count": n, "by_basis": {"no literary works in this collection": n}}
         return [[] for _ in lists], [], left
+    pool = [h for lst in lists for h in lst] + list(catalog_hits)
     kinds = work_kind_mod.kinds_of(con, collection, (h["book_id"] for h in pool if h.get("book_id") is not None))
-    why_of: dict = {}
 
-    def keep(h) -> bool:
+    def verdict(h):
         k_, basis = kinds.get(h.get("book_id"), (None, None))
-        if work_kind_mod.keep(kind, k_):
-            return True
-        why_of.setdefault(h.get("book_id"), basis or "no literary verdict in its record")
-        return False
-    seen_out: set = set()
-    for lst in lists:
-        for h in lst[:limit]:
-            if not keep(h):
-                seen_out.add(h.get("book_id"))
-    for h in catalog_hits:
-        if not keep(h):
-            seen_out.add(h.get("book_id"))
-    out_lists = [[h for h in lst if keep(h)][:limit] for lst in lists]
-    out_catalog = [h for h in catalog_hits if keep(h)]
-    for b in seen_out:
-        why = why_of[b]
-        left["count"] += 1
-        left["by_basis"][why] = left["by_basis"].get(why, 0) + 1
-    return out_lists, out_catalog, left
+        return work_kind_mod.keep(kind, k_), basis or "no literary verdict in its record"
+
+    counted: set = set()
+    for h in seen:
+        ok, why = verdict(h)
+        if not ok and h.get("book_id") not in counted:
+            counted.add(h.get("book_id"))
+            left["count"] += 1
+            left["by_basis"][why] = left["by_basis"].get(why, 0) + 1
+    out_lists = [[h for h in lst if verdict(h)[0]] for lst in lists]
+    if again is not None and dense_at is not None and \
+            _records_in(out_lists[dense_at]) < limit <= _records_in(lists[dense_at]):
+        deeper = again()
+        missing = {h["book_id"] for h in deeper if h.get("book_id") is not None} - set(kinds)
+        if missing:
+            kinds.update(work_kind_mod.kinds_of(con, collection, missing))
+        out_lists[dense_at] = [h for h in deeper if verdict(h)[0]]
+    out_lists = [_records(lst, limit) for lst in out_lists]
+    return out_lists, [h for h in catalog_hits if verdict(h)[0]], left
 
 
 def _merge_rrf_federated(lists: list[list[dict]]) -> list[dict]:

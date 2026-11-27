@@ -618,9 +618,15 @@ own record states it (a Gutenberg record's headings, category and class,
 kept beside it as `work_kind`) — and keeps a work of opinion or belief,
 attributed; `literature` keeps the literary works alone; `all` is every
 result. A collection whose records carry no kind counts as facts. What a
-kind leaves out goes BEFORE the rerank, the legs of a collection it thins
-going twice as deep; the answer says the kind, how it was decided and how
-many it left out on what basis. `auto`, the default, asks the chat model
+kind leaves out goes BEFORE the fusion and the rerank, leg by leg, each leg
+then cut back to its depth in records. Where a kind may thin a collection's
+legs, its text legs are fetched twice as deep up front (an exact top-k keeps
+its prefix); its vector leg is asked at its depth, and asked again twice as
+deep, with the same query vector, only when the kind is known and has
+thinned it (an ANN with refine does not keep its prefix). So `all`, however
+decided, is the search as it was, record for record. The answer says the
+kind, how it was decided and how many records it left out on what basis:
+those of the top the reranker would have seen without it. `auto`, the default, asks the chat model
 in one short call, after the language plan and beside the legs (2 s from its start, remembered per
 question): unsure or no answer in time is `all`, never a silent narrowing.
 It is a filter, the reader's to see and undo (§5.6, WEIGHTS (4)): the Ask

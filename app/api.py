@@ -1457,18 +1457,44 @@ def louise_kind(result: dict) -> dict:
             "left_out": result.get("left_out") or {"count": 0, "by_basis": {}}}
 
 
-def kind_note(result: dict) -> str:
+#: the note of an answer whose search's kind left out everything it found,
+#: in the answer's language (architecture's read of a5971abf, D): {lang:
+#: (facts, literature)}, each with {n} and the plural's ending
+KIND_NOTES = {
+    "en": ("[facts only: this search left out {n} literary work{s} and found nothing else — "
+           "ask again for literature, or for all]",
+           "[literature only: this search left out {n} other work{s} and found no literary work — "
+           "ask again for facts, or for all]"),
+    "it": ("[solo fatti: questa ricerca ha escluso {n} opere letterarie e non ha trovato altro — "
+           "chiedi di nuovo la letteratura, o tutto]",
+           "[solo letteratura: questa ricerca ha escluso {n} altre opere e non ha trovato opere "
+           "letterarie — chiedi di nuovo i fatti, o tutto]"),
+    "fr": ("[faits seulement : cette recherche a écarté {n} œuvres littéraires et n'a rien trouvé "
+           "d'autre — redemandez la littérature, ou tout]",
+           "[littérature seulement : cette recherche a écarté {n} autres œuvres et n'a trouvé aucune "
+           "œuvre littéraire — redemandez les faits, ou tout]"),
+    "de": ("[nur Fakten: diese Suche hat {n} literarische Werke ausgelassen und nichts anderes "
+           "gefunden — fragen Sie erneut nach Literatur oder nach allem]",
+           "[nur Literatur: diese Suche hat {n} andere Werke ausgelassen und kein literarisches Werk "
+           "gefunden — fragen Sie erneut nach Fakten oder nach allem]"),
+    "es": ("[solo hechos: esta búsqueda dejó fuera {n} obras literarias y no encontró nada más — "
+           "pregunte de nuevo por la literatura, o por todo]",
+           "[solo literatura: esta búsqueda dejó fuera {n} otras obras y no encontró ninguna obra "
+           "literaria — pregunte de nuevo por los hechos, o por todo]"),
+}
+
+
+def kind_note(result: dict, lang: str | None = None) -> str:
     """What the answer says when its search's kind left out everything it
-    found, as the page's chip would; "" otherwise."""
+    found, as the page's chip would, in the answer's language (en, it, fr,
+    de, es; English otherwise); "" otherwise."""
     k = louise_kind(result)
     n = k["left_out"]["count"]
     if result.get("hits") or not n or k["applied"] not in ("facts", "literature"):
         return ""
-    if k["applied"] == "facts":
-        return (f"[facts only: this search left out {n} literary work{'s' if n != 1 else ''} and found "
-                f"nothing else — ask again for literature, or for all]")
-    return (f"[literature only: this search left out {n} other work{'s' if n != 1 else ''} and found "
-            f"no literary work — ask again for facts, or for all]")
+    lang = (lang or result.get("query_lang") or "en").lower()[:2]
+    facts, literature = KIND_NOTES.get(lang, KIND_NOTES["en"])
+    return (facts if k["applied"] == "facts" else literature).format(n=n, s="" if n == 1 else "s")
 
 
 def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None):
@@ -1494,7 +1520,7 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
         # "[3] [4]", not "[3][4]": a client's markdown cleaning reads a pair
         # as a reference link and speaks a number (app/speech.py)
         answer = speech.spaced_citations(text)
-        note = kind_note(result)
+        note = kind_note(result, body.answer_lang)
         if note:
             answer = f"{note}\n\n{answer}"
         _log_reads(con, reads)
@@ -1531,7 +1557,7 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
         tail = ""        # the text so far, for a citation pair split across two deltas
         failed = None
         try:
-            note = kind_note(result)
+            note = kind_note(result, body.answer_lang)
             if note:
                 yield chunk(note + "\n\n")
             for kind, value in parts:
