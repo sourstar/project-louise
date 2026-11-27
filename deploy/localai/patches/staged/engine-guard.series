@@ -1,0 +1,47 @@
+# A CANDIDATE: MEDCPT, AND TWO FIXES FOUND ON THE NODE (2026-11-27), built and gated ONCE
+# (München holds b77c50dd0fbb, built and never gated, for it).
+# engine-pair.series line for line, then:
+#   0035  a refused speech input says why: the pipeline's own reason (a voice design
+#         outside OmniVoice's vocabulary: the item and the valid list), not the fixed
+#         "speed, loudness, cfg_scale or flow_steps".
+#   0036  a full card fails the request inside an op too: within a graph, a refusal of
+#         device memory met by a kernel's launch, a copy or oneMKL's own workspace
+#         fails the graph as the pool's refusal does, where it ended the process
+#         (level_zero error 39 at ggml-sycl.cpp:3828, the speech backend, exit 1).
+#         Anything else, and anything outside a graph, ends it as before.
+#         GGML_SYCL_OP_REFUSE=N, armed by GGML_SYCL_GRAPH_REFUSE_ARM's file, raises
+#         that error for a test.
+#   SERIES_FILE=deploy/localai/patches/staged/engine-guard.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
+# ANOTHER ENGINE: a build and every gate again, MedCPT's reranker pass, and the two
+# fixes' own (docs/notes/localai-bugs.md P33, P34). Without pairs:true, without a
+# refusal, and with a valid speech input, no model's answer can move.
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0009-llama-cpp-omnivoice.patch
+staged/0010-llama-cpp-tts-voice-modes.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch
+staged/0016-llama-cpp-sycl-pool-refuse-switch.patch
+staged/0017-llama-cpp-moe-record.patch
+staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch
+staged/0020-llama-cpp-omnivoice-nothing-kept-between-requests.patch
+staged/0021-llama-cpp-sycl-paging-is-the-default.patch
+staged/0022-llama-cpp-omnivoice-language-tag.patch
+staged/0025-llama-cpp-stream-fails-after-its-first-chunk.patch
+staged/0026-llama-cpp-sycl-graph-refuse-switch.patch
+staged/0023-llama-cpp-park-when-told.patch
+staged/0030-llama-cpp-omnivoice-fade-out-ends-with-the-kept-silence.patch
+staged/0033-llama-cpp-sycl-park-paced-by-the-host-reserve.patch
+staged/0034-llama-cpp-bert-text-pairs.patch
+staged/0035-llama-cpp-speech-refusal-says-why.patch
+staged/0036-llama-cpp-sycl-op-refusal-fails-the-request.patch

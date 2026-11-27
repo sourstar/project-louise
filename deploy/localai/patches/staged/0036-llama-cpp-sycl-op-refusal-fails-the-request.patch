@@ -1,0 +1,735 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 27 Nov 2026 18:54:39 +0000
+Subject: [PATCH] fix(llama-cpp): a full card fails the request inside an op
+ too, instead of ending the process
+
+Carried as a llama.cpp patch beside the others
+(patches/0028-sycl-op-refusal-fails-the-graph.patch), after 0016/0018,
+whose pool refusal it extends to the rest of an op.
+
+A node, 2026-11-27: a speech request on a card at 30.7 of 32 GB ended
+the backend with "level_zero backend failed with error: 39
+(UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)" caught by a matrix product's
+handler, exit 1. Within a graph, a refusal of device memory met by an op -
+a kernel's launch, a copy, oneMKL's own workspace - now fails the graph as
+the pool's refusal does (GGML_STATUS_ALLOC_FAILED): the request fails, the
+process and every model in it stay. Any other exception, and any outside a
+graph, ends the process as before. GGML_SYCL_OP_REFUSE=N (armed by
+GGML_SYCL_GRAPH_REFUSE_ARM's file) raises the node's error for a test.
+
+Checked: a standalone test of 7 cases; the SYCL backend compiles with
+icpx. Not run on a card.
+
+Assisted-by: Claude Code
+---
+ ...0028-sycl-op-refusal-fails-the-graph.patch | 697 ++++++++++++++++++
+ 1 file changed, 697 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0028-sycl-op-refusal-fails-the-graph.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0028-sycl-op-refusal-fails-the-graph.patch b/backend/cpp/llama-cpp/patches/0028-sycl-op-refusal-fails-the-graph.patch
+new file mode 100644
+index 0000000..e70a8a1
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0028-sycl-op-refusal-fails-the-graph.patch
+@@ -0,0 +1,697 @@
++ggml-sycl: a refusal of device memory met inside an op fails the graph, as the pool's does, instead of ending the process
++
++On a card shared with other models a full device is contention: the pool's
++refusal already fails the graph (GGML_STATUS_ALLOC_FAILED) and the process
++goes on. A refusal met anywhere else in an op did not: a kernel's launch, a
++copy or a library call (oneMKL allocates its own workspace) raises a
++sycl::exception, and the op's handler ended the process - its
++function-try-block with std::exit(1), or CHECK_TRY_ERROR around one call
++with an abort. A node, 2026-11-27: a speech request on a card at 30.7 of
++32 GB, "level_zero backend failed with error: 39
++(UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)Exception caught at file:...
++ggml-sycl.cpp, line:3828" (ggml_sycl_op_mul_mat_sycl), exit 1, and LocalAI
++loaded the model again.
++
++The rule (op-refusal.hpp): WITHIN A GRAPH (a flag set while
++ggml_sycl_graph_compute_or_fail() computes one), an exception that says
++the device had no memory - errc::memory_allocation, or the runtime's words
++for it, which come with errc::runtime and the cause in the message alone -
++is thrown on as the pool's refusal (ggml_sycl_out_of_device_memory, moved to
++common.hpp) and fails the graph. Anything else, and anything outside a
++graph (a load, a copy of weights, a SYCL graph's recording), ends the
++process exactly as before: a device that FAILS is no request's to survive.
++The 37 op handlers of ggml-sycl.cpp and mmq.cpp ask it
++(ggml_sycl_op_exception()), and CHECK_TRY_ERROR asks it first
++(ggml_sycl_refusal_from()).
++
++GGML_SYCL_OP_REFUSE=N, armed by GGML_SYCL_GRAPH_REFUSE_ARM's file, makes the
++next N matrix products raise the node's error 39 as the runtime raised it,
++for a test on the card. Without it: one comparison.
++
++Checked: tests/test-sycl-op-refusal.cpp, standard library only, 7 cases
++(the node's words within a graph and outside, errc::memory_allocation, the
++host's memory, a device lost, no words, an older runtime's words); the SYCL
++backend compiles with icpx (oneAPI 2025.3). Not run on a card.
++---
++diff --git a/ggml/src/ggml-sycl/common.hpp b/ggml/src/ggml-sycl/common.hpp
++index 75e783d..22899a4 100644
++--- a/ggml/src/ggml-sycl/common.hpp
+++++ b/ggml/src/ggml-sycl/common.hpp
++@@ -31,6 +31,7 @@
++ #include "type.hpp"
++ #include "sycl_hw.hpp"
++ #include "memtrace.hpp"
+++#include "op-refusal.hpp"
++ 
++ namespace syclexp = sycl::ext::oneapi::experimental;
++ 
++@@ -151,12 +152,40 @@ extern int g_ggml_sycl_memtrace_step;
++ extern int g_ggml_sycl_graph_eviction_timeout;
++ 
++ 
+++// The device refused memory for an op's temporaries. Thrown by the pool and caught by
+++// ggml_backend_sycl_graph_compute(), which fails the GRAPH with GGML_STATUS_ALLOC_FAILED: on a card shared with
+++// other models a refusal is contention, not a fault, and the process - with every other model's work and this
+++// model's weights - must outlive it.
+++//
+++// NOT a sycl::exception and NOT a std::exception, on purpose. Between the pool and the graph's caller stand the ops,
+++// and they end the process on either: their function-try-blocks on a sycl::exception, and CHECK_TRY_ERROR
+++// (common.hpp) on ANY std::exception - it catches one, prints it, and SYCL_CHECK aborts. As a std::runtime_error,
+++// which this was at first, the refusal never reached the graph: the op that had asked for the memory took it
+++// (SYCL_CHECK(CHECK_TRY_ERROR(op(...))) in ggml_sycl_op_mul_mat) and the process ended as it always had. No handler
+++// between an op and ggml_sycl_graph_compute_or_fail() catches (...).
+++struct ggml_sycl_out_of_device_memory {
+++    const char * what;
+++};
+++static_assert(!std::is_base_of<std::exception, ggml_sycl_out_of_device_memory>::value,
+++              "CHECK_TRY_ERROR catches std::exception: the pool's refusal must not be one, or it ends the process");
+++static_assert(!std::is_base_of<sycl::exception, ggml_sycl_out_of_device_memory>::value,
+++              "the ops' function-try-blocks end the process on a sycl::exception: the pool's refusal must not be one");
+++
+++// set while a graph computes (ggml_sycl_graph_compute_or_fail): see op-refusal.hpp
+++extern thread_local bool g_ggml_sycl_in_graph;
+++// an op's sycl::exception: within a graph, a refusal of device memory fails the graph (throws the pool's refusal);
+++// anything else ends the process, as the ops' handlers always did
+++[[noreturn]] void ggml_sycl_op_exception(const sycl::exception & exc, const char * file, int line);
+++// CHECK_TRY_ERROR's: the same rule for an exception one wrapped call raised; returns when it is no refusal
+++void ggml_sycl_refusal_from(const std::exception & e, const char * file, int line);
+++
++ #define CHECK_TRY_ERROR(expr)                                            \
++   [&]() {                                                                \
++     try {                                                                \
++       expr;                                                              \
++       return dpct::success;                                              \
++     } catch (std::exception const& e) {                                  \
+++      ggml_sycl_refusal_from(e, __FILE__, __LINE__);                     \
++       std::cerr << e.what() << "\nException caught at file:" << __FILE__ \
++                 << ", line:" << __LINE__ << ", func:" << __func__        \
++                 << std::endl;                                            \
++diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
++index 016603a..548cb10 100644
++--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
++@@ -124,6 +124,10 @@ std::atomic<int> g_ggml_sycl_pool_refuse{0};
++ // has done its growing before the first token): GGML_SYCL_GRAPH_REFUSE=N with GGML_SYCL_GRAPH_REFUSE_ARM=<file>.
++ // Once that file exists, the next N graphs are abandoned as after a refused pool commit; the device is not asked
++ std::atomic<int> g_ggml_sycl_graph_refuse{0};
+++// the same for the TEST of a refusal met INSIDE an op (op-refusal.hpp): GGML_SYCL_OP_REFUSE=N, armed by the same file
+++// as GGML_SYCL_GRAPH_REFUSE, makes the next N matrix products raise what Level Zero raised on a full card, as the
+++// runtime raises it (errc::runtime, the cause in the words)
+++std::atomic<int> g_ggml_sycl_op_refuse{0};
++ std::string g_ggml_sycl_graph_refuse_arm;
++ // the same for the TEST of a refused UNPARK: GGML_SYCL_PARK_REFUSE=N refuses the next N commits that bring a parked
++ // buffer back, as a device with no room does
++@@ -466,6 +470,7 @@ static void ggml_check_sycl() try {
++         g_ggml_sycl_park_verify = ggml_sycl_get_env("GGML_SYCL_PARK_VERIFY", 0);
++         g_ggml_sycl_pool_refuse = ggml_sycl_get_env("GGML_SYCL_POOL_REFUSE", 0);
++         g_ggml_sycl_graph_refuse = ggml_sycl_get_env("GGML_SYCL_GRAPH_REFUSE", 0);
+++        g_ggml_sycl_op_refuse = ggml_sycl_get_env("GGML_SYCL_OP_REFUSE", 0);
++         if (const char * arm = getenv("GGML_SYCL_GRAPH_REFUSE_ARM")) {
++             g_ggml_sycl_graph_refuse_arm = arm;
++         }
++@@ -638,6 +643,14 @@ static void ggml_check_sycl() try {
++             GGML_LOG_WARN("  GGML_SYCL_POOL_REFUSE: %d - the next commits that grow a pool are REFUSED, for a test\n",
++                           g_ggml_sycl_pool_refuse.load());
++         }
+++        if (g_ggml_sycl_op_refuse > 0) {
+++            if (g_ggml_sycl_graph_refuse_arm.empty()) {
+++                GGML_LOG_WARN("%s", "  GGML_SYCL_OP_REFUSE is set without GGML_SYCL_GRAPH_REFUSE_ARM: nothing is refused\n");
+++            } else {
+++                GGML_LOG_WARN("  GGML_SYCL_OP_REFUSE: %d - once %s exists the next matrix products raise error 39, for a test\n",
+++                              g_ggml_sycl_op_refuse.load(), g_ggml_sycl_graph_refuse_arm.c_str());
+++            }
+++        }
++         if (g_ggml_sycl_graph_refuse > 0) {
++             if (g_ggml_sycl_graph_refuse_arm.empty()) {
++                 GGML_LOG_WARN("%s", "  GGML_SYCL_GRAPH_REFUSE is set without GGML_SYCL_GRAPH_REFUSE_ARM: nothing is refused\n");
++@@ -728,9 +741,7 @@ static void ggml_check_sycl() try {
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ /*
++@@ -763,9 +774,7 @@ GGML_API void ggml_backend_sycl_get_gpu_list(int *id_list, int max_len) try {
++     return;
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ inline void free_aligned_mem_host(void * memblock) {
++@@ -967,9 +976,7 @@ ggml_backend_sycl_buffer_free_buffer(ggml_backend_buffer_t buffer) try {
++     delete ctx;
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void * ggml_backend_sycl_buffer_get_base(ggml_backend_buffer_t buffer) {
++@@ -1028,9 +1035,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
++     return GGML_STATUS_SUCCESS;
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ // allocates the pinned upload staging on first use; returns false if staging is disabled or the allocation failed
++@@ -1096,9 +1101,7 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
++ #endif
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ // Copy n_copies rows in one call. -sm tensor uploads split weights this way; the generic fallback does one set_tensor per row.
++@@ -1140,9 +1143,7 @@ static void ggml_backend_sycl_buffer_set_tensor_2d(ggml_backend_buffer_t buffer,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
++@@ -1163,9 +1164,7 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
++             .wait()));
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
++@@ -1318,9 +1317,7 @@ static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_backend_sycl_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value,
++@@ -1672,9 +1669,7 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
++     return ggml_backend_buffer_init(buft, ggml_backend_sycl_buffer_interface, ctx, size);
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static size_t ggml_backend_sycl_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
++@@ -1971,9 +1966,7 @@ ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_buffer_t buffer,
++     return GGML_STATUS_SUCCESS;
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void
++@@ -2027,9 +2020,7 @@ ggml_backend_sycl_split_buffer_set_tensor(ggml_backend_buffer_t buffer,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void
++@@ -2083,9 +2074,7 @@ ggml_backend_sycl_split_buffer_get_tensor(ggml_backend_buffer_t buffer,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_backend_sycl_split_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
++@@ -2346,25 +2335,7 @@ ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type() {
++ }
++ 
++ // buffer pool for sycl (legacy)
++-// The device refused memory for an op's temporaries. Thrown by the pool and caught by
++-// ggml_backend_sycl_graph_compute(), which fails the GRAPH with GGML_STATUS_ALLOC_FAILED: on a card shared with
++-// other models a refusal is contention, not a fault, and the process - with every other model's work and this
++-// model's weights - must outlive it.
++-//
++-// NOT a sycl::exception and NOT a std::exception, on purpose. Between the pool and the graph's caller stand the ops,
++-// and they end the process on either: their function-try-blocks on a sycl::exception, and CHECK_TRY_ERROR
++-// (common.hpp) on ANY std::exception - it catches one, prints it, and SYCL_CHECK aborts. As a std::runtime_error,
++-// which this was at first, the refusal never reached the graph: the op that had asked for the memory took it
++-// (SYCL_CHECK(CHECK_TRY_ERROR(op(...))) in ggml_sycl_op_mul_mat) and the process ended as it always had. No handler
++-// between an op and ggml_sycl_graph_compute_or_fail() catches (...).
++-struct ggml_sycl_out_of_device_memory {
++-    const char * what;
++-};
++-static_assert(!std::is_base_of<std::exception, ggml_sycl_out_of_device_memory>::value,
++-              "CHECK_TRY_ERROR catches std::exception: the pool's refusal must not be one, or it ends the process");
++-static_assert(!std::is_base_of<sycl::exception, ggml_sycl_out_of_device_memory>::value,
++-              "the ops' function-try-blocks end the process on a sycl::exception: the pool's refusal must not be one");
++-
+++// (the pool's refusal, ggml_sycl_out_of_device_memory: common.hpp)
++ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
++     static const int MAX_SYCL_BUFFERS = 256;
++ 
++@@ -3642,9 +3613,7 @@ static dpct::err0 ggml_sycl_cpy_tensor_2d(void *dst,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ #if GGML_SYCL_DNNL
++@@ -3670,6 +3639,18 @@ inline void ggml_sycl_op_mul_mat_sycl(
++ 
++     const int64_t row_diff = row_high - row_low;
++ 
+++    // the test's refusal (GGML_SYCL_OP_REFUSE): the node's error 39, raised where it was raised. Without the switch:
+++    // one comparison
+++    if (g_ggml_sycl_op_refuse > 0 && !g_ggml_sycl_graph_refuse_arm.empty()) {
+++        if (FILE * armed = fopen(g_ggml_sycl_graph_refuse_arm.c_str(), "rb")) {
+++            fclose(armed);
+++            if (g_ggml_sycl_op_refuse.fetch_sub(1) > 0) {
+++                throw sycl::exception(sycl::make_error_code(sycl::errc::runtime),
+++                                      "level_zero backend failed with error: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)");
+++            }
+++        }
+++    }
+++
++     int id;
++     SYCL_CHECK(
++         CHECK_TRY_ERROR(id = get_current_device_id()));
++@@ -3824,9 +3805,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
++     GGML_UNUSED(src1_padded_row_size);
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ inline void ggml_sycl_op_sum(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
++@@ -4379,9 +4358,7 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_sycl_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
++@@ -4450,9 +4427,7 @@ static void ggml_sycl_mul_mat_vec_p021(ggml_backend_sycl_context & ctx, const gg
++     ggml_mul_mat_p021_f16_f32_sycl(src0_ddq, src1_ddf, dst_ddf, ne00, ne01, ne02, ne12, main_stream);
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_sycl_mul_mat_vec_nc(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
++@@ -4491,9 +4466,7 @@ static void ggml_sycl_mul_mat_vec_nc(ggml_backend_sycl_context & ctx, const ggml
++     ggml_mul_mat_vec_nc_f16_f32_sycl(src0_ddq, src1_ddf, dst_ddf, ne00, ne01, row_stride_x, ne02, ne12, channel_stride_x,channel_stride_y, main_stream);
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void k_compute_batched_ptrs(const sycl::half * src0_as_f16, const sycl::half * src1_as_f16, void * dst,
++@@ -6452,9 +6425,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_sycl_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
++@@ -6539,9 +6510,7 @@ static void ggml_sycl_set_main_device(const int main_device) try {
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
++@@ -6923,9 +6892,7 @@ GGML_API void ggml_backend_sycl_get_device_description(int device, char *descrip
++     snprintf(description, description_size, "%s", prop.get_name());
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ bool sycl_get_mem_info(int device, size_t * free, size_t * total) {
++@@ -6991,9 +6958,7 @@ static void ggml_backend_sycl_set_tensor_async(ggml_backend_t backend,
++         (stream)->memcpy((char *)tensor->data + offset, data, size)));
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t backend,
++@@ -7012,9 +6977,7 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t backend,
++         data, (const char *)tensor->data + offset, size)));
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend,
++@@ -7042,9 +7005,7 @@ static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend,
++     return false;
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
++@@ -7056,9 +7017,7 @@ static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
++     GGML_UNUSED(backend);
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static bool ggml_sycl_is_view_or_noop(const ggml_tensor * t) {
++@@ -7490,6 +7449,30 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
++ }
++ #endif
++ 
+++// set while ggml_sycl_graph_compute_or_fail() computes a graph on this thread: a refusal met by an op then fails
+++// that graph (op-refusal.hpp); outside it, an op's exception ends the process as it always did
+++thread_local bool g_ggml_sycl_in_graph = false;
+++
+++static void ggml_sycl_op_refused(const char * what, const char * file, int line) {
+++    GGML_LOG_ERROR("%s: the device refused memory to an op (%s:%d): %s\n", __func__, file, line, what);
+++    throw ggml_sycl_out_of_device_memory{ "the device refused memory to an op" };
+++}
+++
+++void ggml_sycl_op_exception(const sycl::exception & exc, const char * file, int line) {
+++    if (ggml_sycl_op_refusal(g_ggml_sycl_in_graph, exc.code() == sycl::errc::memory_allocation, exc.what())) {
+++        ggml_sycl_op_refused(exc.what(), file, line);
+++    }
+++    std::cerr << exc.what() << "Exception caught at file:" << file << ", line:" << line << std::endl;
+++    std::exit(1);
+++}
+++
+++void ggml_sycl_refusal_from(const std::exception & e, const char * file, int line) {
+++    const auto * se = dynamic_cast<const sycl::exception *>(&e);
+++    if (ggml_sycl_op_refusal(g_ggml_sycl_in_graph, se != nullptr && se->code() == sycl::errc::memory_allocation, e.what())) {
+++        ggml_sycl_op_refused(e.what(), file, line);
+++    }
+++}
+++
++ // the graph computed, or failed for want of device memory (the pool's refusal): the caller's decode returns an
++ // error for this batch and the process goes on
++ static ggml_status ggml_sycl_graph_compute_or_fail(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
++@@ -7504,7 +7487,12 @@ static ggml_status ggml_sycl_graph_compute_or_fail(ggml_backend_sycl_context * s
++             }
++         }
++     }
+++    struct in_graph {
+++        in_graph() { g_ggml_sycl_in_graph = true; }
+++        ~in_graph() { g_ggml_sycl_in_graph = false; }
+++    };
++     try {
+++        in_graph during;
++         ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
++     } catch (const ggml_sycl_out_of_device_memory & e) {
++         GGML_LOG_ERROR("%s: %s: the graph is abandoned\n", __func__, e.what);
++@@ -8277,9 +8265,7 @@ static void ggml_backend_sycl_device_event_free(ggml_backend_dev_t dev, ggml_bac
++ 
++   delete event;
++ } catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ 
++@@ -8290,9 +8276,7 @@ static void ggml_backend_sycl_device_event_synchronize(ggml_backend_dev_t dev, g
++   sycl::event *sycl_event = static_cast<sycl::event *>(event->context);
++   SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));
++ } catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static const ggml_backend_device_i ggml_backend_sycl_device_interface = {
++diff --git a/ggml/src/ggml-sycl/mmq.cpp b/ggml/src/ggml-sycl/mmq.cpp
++index 68162a8..be254b7 100644
++--- a/ggml/src/ggml-sycl/mmq.cpp
+++++ b/ggml/src/ggml-sycl/mmq.cpp
++@@ -1848,9 +1848,7 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
++@@ -1931,9 +1929,7 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
++@@ -2014,9 +2010,7 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
++@@ -2097,9 +2091,7 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
++@@ -2180,9 +2172,7 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
++@@ -2266,9 +2256,7 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
++@@ -2358,9 +2346,7 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
++ #endif
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
++@@ -2444,9 +2430,7 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
++@@ -2530,9 +2514,7 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
++@@ -2616,9 +2598,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
++     }
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++ 
++ void ggml_sycl_op_mul_mat_q(
++@@ -2686,7 +2666,5 @@ void ggml_sycl_op_mul_mat_q(
++     GGML_UNUSED(src1_ddf_i);
++ }
++ catch (sycl::exception const &exc) {
++-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
++-            << ", line:" << __LINE__ << std::endl;
++-  std::exit(1);
+++  ggml_sycl_op_exception(exc, __FILE__, __LINE__);
++ }
++diff --git a/ggml/src/ggml-sycl/op-refusal.hpp b/ggml/src/ggml-sycl/op-refusal.hpp
++new file mode 100644
++index 0000000..fa331fd
++--- /dev/null
+++++ b/ggml/src/ggml-sycl/op-refusal.hpp
++@@ -0,0 +1,31 @@
+++#pragma once
+++// A DEVICE'S REFUSAL OF MEMORY MET INSIDE AN OP, failed as the pool's refusal is.
+++//
+++// The pool's refusal (ggml_sycl_out_of_device_memory, thrown by the pool and caught by
+++// ggml_sycl_graph_compute_or_fail) fails the graph and the process goes on. A refusal met anywhere else in an op did
+++// not: a kernel's launch, a copy or a library call (oneMKL allocates its own workspace) raises a sycl::exception, and
+++// the op's own handler - its function-try-block, or CHECK_TRY_ERROR around one call - ended the process. On a card
+++// shared with other models that is contention, not a fault: a node, 2026-11-27, a speech request on a card at 30.7
+++// of 32 GB, "level_zero backend failed with error: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)Exception caught at
+++// file:.../ggml-sycl.cpp, line:3828", the backend exited 1 and LocalAI loaded it again.
+++//
+++// The rule: WITHIN A GRAPH, an exception that says the device had no memory - errc::memory_allocation, or the
+++// runtime's words for it, which come with errc::runtime and the cause in the message alone - is answered as the
+++// pool's refusal. Anything else, and anything outside a graph (a load, a copy of weights), ends the process as
+++// before: a device that FAILS is no request's to survive.
+++//
+++// Standard library only (tests/test-sycl-op-refusal.cpp).
+++
+++#include <cstring>
+++
+++// the runtime's words for a refusal of device memory: Level Zero's error 39 as it reaches a sycl::exception
+++// ("level_zero backend failed with error: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)"); the host's own memory
+++// (UR_RESULT_ERROR_OUT_OF_HOST_MEMORY) is not the device's and is not a refusal of it
+++static inline bool ggml_sycl_says_out_of_device_memory(const char * what) {
+++    return what != nullptr && strstr(what, "OUT_OF_DEVICE_MEMORY") != nullptr;
+++}
+++
+++// whether an exception an op met fails the graph (true) or ends the process (false)
+++static inline bool ggml_sycl_op_refusal(bool in_graph, bool memory_allocation, const char * what) {
+++    return in_graph && (memory_allocation || ggml_sycl_says_out_of_device_memory(what));
+++}
++diff --git a/tests/test-sycl-op-refusal.cpp b/tests/test-sycl-op-refusal.cpp
++new file mode 100644
++index 0000000..f226908
++--- /dev/null
+++++ b/tests/test-sycl-op-refusal.cpp
++@@ -0,0 +1,29 @@
+++// A device's refusal of memory met inside an op (ggml/src/ggml-sycl/op-refusal.hpp). Standard library only:
+++//   c++ -std=c++17 -I ggml/src/ggml-sycl tests/test-sycl-op-refusal.cpp && ./a.out
+++
+++#include "op-refusal.hpp"
+++
+++#include <cstdio>
+++
+++static int failures = 0;
+++
+++static void expect(bool ok, const char * what) {
+++    std::printf("%s %s\n", ok ? "ok:  " : "FAIL:", what);
+++    failures += ok ? 0 : 1;
+++}
+++
+++int main() {
+++    // the node's words, 2026-11-27 (LocalAI's log of the backend's stderr)
+++    const char * node = "level_zero backend failed with error: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)";
+++    expect(ggml_sycl_op_refusal(true, false, node), "the node's error 39 within a graph fails the graph");
+++    expect(!ggml_sycl_op_refusal(false, false, node), "the same outside a graph (a load) ends the process as before");
+++    expect(ggml_sycl_op_refusal(true, true, "Native API failed"), "errc::memory_allocation within a graph, whatever the words");
+++    expect(!ggml_sycl_op_refusal(true, false, "level_zero backend failed with error: 38 (UR_RESULT_ERROR_OUT_OF_HOST_MEMORY)"),
+++           "the host's memory is not the device's refusal");
+++    expect(!ggml_sycl_op_refusal(true, false, "level_zero backend failed with error: 20 (UR_RESULT_ERROR_DEVICE_LOST)"),
+++           "a device lost is a failure, not a refusal");
+++    expect(!ggml_sycl_op_refusal(true, false, nullptr), "no words: not a refusal");
+++    expect(ggml_sycl_says_out_of_device_memory("... PI_ERROR_OUT_OF_DEVICE_MEMORY ..."), "an older runtime's words too");
+++    std::printf("%s\n", failures == 0 ? "all passed" : "FAILED");
+++    return failures == 0 ? 0 : 1;
+++}
+-- 
+2.43.0
+

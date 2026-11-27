@@ -1,0 +1,207 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 27 Nov 2026 18:52:11 +0000
+Subject: [PATCH] fix(llama-cpp): a refused speech input says why, not "speed,
+ loudness, cfg_scale or flow_steps"
+
+Carried as a llama.cpp patch beside the others
+(patches/0027-mtmd-gen-audio-says-why-an-input-is-invalid.patch).
+
+Every input the speech pipeline refused was answered with one fixed
+message naming four parameters; a voice design outside OmniVoice's
+vocabulary ("female, purple") was answered with them, though the request
+set none (a node, 2026-11-27). The pipeline now gives its reason
+(mtmd_helper_gen_audio_input_error()) and the server answers "invalid TTS
+input: <the reason>": for that design, the item and the valid list.
+
+Checked: OmniVoice through the gRPC server on CPU: the invalid design
+answered with its reason; a valid design and none synthesised as before.
+
+Assisted-by: Claude Code
+---
+ ...n-audio-says-why-an-input-is-invalid.patch | 173 ++++++++++++++++++
+ 1 file changed, 173 insertions(+)
+ create mode 100644 backend/cpp/llama-cpp/patches/0027-mtmd-gen-audio-says-why-an-input-is-invalid.patch
+
+diff --git a/backend/cpp/llama-cpp/patches/0027-mtmd-gen-audio-says-why-an-input-is-invalid.patch b/backend/cpp/llama-cpp/patches/0027-mtmd-gen-audio-says-why-an-input-is-invalid.patch
+new file mode 100644
+index 0000000..5668591
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0027-mtmd-gen-audio-says-why-an-input-is-invalid.patch
+@@ -0,0 +1,173 @@
++mtmd: a refused speech input says why, and the server answers with it
++
++An input the speech pipeline cannot take returned 2 from
++mtmd_helper_gen_audio_set_input(), its reason in the log alone; the server
++answered every such return with one fixed message, "the model may not
++support speed, loudness, cfg_scale or flow_steps". So a voice design outside
++OmniVoice's vocabulary ("female, purple") was answered with a list of four
++parameters the request never set (a node, 2026-11-27).
++
++mtmd_helper_gen_audio_input_error() (and gen_audio::input_error()) gives
++the reason of the last refusal: each check of set_input() records its own
++words, and a pipeline records its own (OmniVoice: "the voice description:
++Unsupported instruct items found in female, purple: ... Valid English items:
++..."). The server answers "invalid TTS input: <the reason>", and keeps the
++old words where a pipeline gives none.
++
++Checked: OmniVoice Q8_0 through the gRPC server on CPU, seed 1234: "female,
++purple" answered with the instruct item and the valid list; "female,
++middle-aged, low pitch" and no design synthesised as before.
++---
++diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
++index f72b2e7..4f4999a 100644
++--- a/tools/mtmd/mtmd-helper-gen.cpp
+++++ b/tools/mtmd/mtmd-helper-gen.cpp
++@@ -149,7 +149,9 @@ public:
++     // see mtmd_helper_gen_audio_max_frames()
++     virtual int32_t max_frames() const { return 512; }
++     virtual void reset() = 0;
+++    // 2 for an input the model cannot take, its reason in input_error (mtmd_helper_gen_audio_input_error)
++     virtual int32_t set_input(const mtmd_helper_gen_audio_inp * inp) = 0;
+++    std::string input_error;
++     // decodes at most n_batch prompt tokens; returns remaining count (0 = done), <0 on error
++     virtual int32_t step_prompt(int32_t n_batch) = 0;
++     // sampled can be LLAMA_TOKEN_NULL for pipelines with no discrete backbone token,
++@@ -1518,13 +1520,15 @@ public:
++         if (text.compare(0, open.size(), open) == 0) {
++             const size_t end = text.find(close, open.size());
++             if (end == std::string::npos) {
++-                LOG_ERR("mtmd_helper_gen_audio: omnivoice: %s without %s\n", open.c_str(), close.c_str());
+++                input_error = "the voice description opens with " + open + " and never closes";
+++                LOG_ERR("mtmd_helper_gen_audio: omnivoice: %s\n", input_error.c_str());
++                 return 2;
++             }
++             const std::string described = text.substr(open.size(), end - open.size());
++             text.erase(0, end + close.size());
++             std::string err;
++             if (!ov::voice_design_normalize(&voice_design, described, ov::voice_design_has_cjk(text), &instruct, &err)) {
+++                input_error = "the voice description: " + err;
++                 LOG_ERR("mtmd_helper_gen_audio: omnivoice: %s\n", err.c_str());
++                 return 2;
++             }
++@@ -5990,8 +5994,16 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
++ struct mtmd_helper_gen_audio {
++     llama_context * lctx = nullptr;
++     std::unique_ptr<mtmd_gen_audio_pipeline> pipeline;
+++    std::string input_error; // why the last set_input() returned 2
++ };
++ 
+++// an input the model cannot take: logged, and said to the caller (mtmd_helper_gen_audio_input_error)
+++static int32_t gen_audio_invalid(mtmd_helper_gen_audio * ctx, const char * why) {
+++    LOG_ERR("mtmd_helper_gen_audio: %s\n", why);
+++    ctx->input_error = why;
+++    return 2;
+++}
+++
++ mtmd_helper_gen_audio * mtmd_helper_gen_audio_init(struct llama_context * lctx, struct mtmd_context * mctx) {
++     auto * ctx = new mtmd_helper_gen_audio();
++     ctx->lctx     = lctx;
++@@ -6032,6 +6044,7 @@ struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void) {
++ }
++ 
++ int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_helper_gen_audio_inp * inp) {
+++    ctx->input_error.clear();
++     if (!ctx->pipeline) {
++         LOG_ERR("mtmd_helper_gen_audio: unsupported or missing gen-audio pipeline\n");
++         return 1;
++@@ -6041,35 +6054,38 @@ int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_
++         return 1;
++     }
++     if (!std::isfinite(inp->speed) || inp->speed <= 0.0f || !std::isfinite(inp->loudness) || inp->loudness > 0.0f) {
++-        LOG_ERR("mtmd_helper_gen_audio: speed must be > 0 and loudness < 0 LUFS (0 = model default)\n");
++-        return 2;
+++        return gen_audio_invalid(ctx, "speed must be > 0 and loudness < 0 LUFS (0 = model default)");
++     }
++     if (inp->speed != 1.0f && !ctx->pipeline->supports_speed()) {
++-        LOG_ERR("mtmd_helper_gen_audio: the model does not support speed\n");
++-        return 2;
+++        return gen_audio_invalid(ctx, "the model does not support speed");
++     }
++     if (inp->loudness != 0.0f && !ctx->pipeline->supports_delivery()) {
++-        LOG_ERR("mtmd_helper_gen_audio: the model does not support loudness\n");
++-        return 2;
+++        return gen_audio_invalid(ctx, "the model does not support loudness");
++     }
++     if (!std::isfinite(inp->cfg_scale) || inp->cfg_scale < 0.0f) {
++-        LOG_ERR("mtmd_helper_gen_audio: cfg_scale must be > 0 (0 = model default)\n");
++-        return 2;
+++        return gen_audio_invalid(ctx, "cfg_scale must be > 0 (0 = model default)");
++     }
++     if (inp->cfg_scale != 0.0f && !ctx->pipeline->supports_cfg()) {
++-        LOG_ERR("mtmd_helper_gen_audio: the model does not support cfg_scale\n");
++-        return 2;
+++        return gen_audio_invalid(ctx, "the model does not support cfg_scale");
++     }
++     if (inp->flow_steps < 0 || inp->flow_steps > 1024) {
++-        LOG_ERR("mtmd_helper_gen_audio: flow_steps must be in [1, 1024] (0 = model default)\n");
++-        return 2;
+++        return gen_audio_invalid(ctx, "flow_steps must be in [1, 1024] (0 = model default)");
++     }
++     if (inp->flow_steps != 0 && !ctx->pipeline->supports_flow_steps()) {
++-        LOG_ERR("mtmd_helper_gen_audio: the model does not support flow_steps\n");
++-        return 2;
+++        return gen_audio_invalid(ctx, "the model does not support flow_steps");
++     }
++     ctx->pipeline->logit_bias.clear();
++-    return ctx->pipeline->set_input(inp);
+++    ctx->pipeline->input_error.clear();
+++    const int32_t ret = ctx->pipeline->set_input(inp);
+++    if (ret == 2) {
+++        ctx->input_error = ctx->pipeline->input_error.empty() ? "the model cannot take this input (see the log)"
+++                                                              : ctx->pipeline->input_error;
+++    }
+++    return ret;
+++}
+++
+++const char * mtmd_helper_gen_audio_input_error(const mtmd_helper_gen_audio * ctx) {
+++    return ctx ? ctx->input_error.c_str() : "";
++ }
++ 
++ int32_t mtmd_helper_gen_audio_step_prompt(mtmd_helper_gen_audio * ctx, int32_t n_batch) {
++diff --git a/tools/mtmd/mtmd-helper.h b/tools/mtmd/mtmd-helper.h
++index 5bc5b01..87335e7 100644
++--- a/tools/mtmd/mtmd-helper.h
+++++ b/tools/mtmd/mtmd-helper.h
++@@ -357,6 +357,10 @@ MTMD_API int32_t mtmd_helper_gen_audio_set_input(
++                         mtmd_helper_gen_audio * ctx,
++                         const struct mtmd_helper_gen_audio_inp * inp);
++ 
+++// why the last mtmd_helper_gen_audio_set_input() returned 2, in words a caller can answer with ("" otherwise);
+++// valid until the next call on ctx
+++MTMD_API const char * mtmd_helper_gen_audio_input_error(const mtmd_helper_gen_audio * ctx);
+++
++ // processes at most n_batch prompt tokens per call, n_batch must not exceed llama_n_batch() of the context
++ // returns: >0 = number of prompt tokens remaining, 0 = done, <0 = error
++ MTMD_API int32_t mtmd_helper_gen_audio_step_prompt(
++@@ -487,6 +491,9 @@ struct gen_audio {
++     int32_t set_input(const struct mtmd_helper_gen_audio_inp * inp) {
++         return mtmd_helper_gen_audio_set_input(ctx.get(), inp);
++     }
+++    const char * input_error() const {
+++        return mtmd_helper_gen_audio_input_error(ctx.get());
+++    }
++     int32_t step_prompt(int32_t n_batch) {
++         return mtmd_helper_gen_audio_step_prompt(ctx.get(), n_batch);
++     }
++diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
++index 7971e68..12381fc 100644
++--- a/tools/server/server-context.cpp
+++++ b/tools/server/server-context.cpp
++@@ -2610,7 +2610,12 @@ private:
++             task.tts_inp.data.seq_id = slot.id;
++             const int32_t ret = slot.tts.ctx.set_input(task.tts_inp.get());
++             if (ret == 2) {
++-                send_error(task, "invalid TTS input: the model may not support \"speed\", \"loudness\", \"cfg_scale\" or \"flow_steps\", see the server log", ERROR_TYPE_INVALID_REQUEST);
+++                // the pipeline's own reason (an unsupported parameter, a voice description outside the model's
+++                // vocabulary), where it gave one
+++                const std::string why = slot.tts.ctx.input_error();
+++                send_error(task, why.empty()
+++                    ? "invalid TTS input: the model may not support \"speed\", \"loudness\", \"cfg_scale\" or \"flow_steps\", see the server log"
+++                    : "invalid TTS input: " + why, ERROR_TYPE_INVALID_REQUEST);
++                 return false;
++             }
++             if (ret != 0) {
+-- 
+2.43.0
+

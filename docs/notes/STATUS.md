@@ -1326,6 +1326,12 @@ measured (published figures disagree).
   median, exact over 3 fresh loads and 300 fresh contexts. No park by the keeper yet. A ROLLBACK HAS ONE STEP MORE: `619655e5833b`
   does not park, and with the three lines left in a model's file the gate refuses its run ("the runner will not park it") — take
   them out first.
+- **TWO DEFECTS FROM THE NODE, STAGED WITH MEDCPT (2026-11-27; `engine-guard.series` = engine-pair + 0035 + 0036, `4b0da8dfcd96`; München
+  holds `b77c50dd0fbb` and gates once):** (P34) a speech request on a card at 30.7 of 32 GB ended the backend - "level_zero backend
+  failed with error: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)" caught by a matrix product's handler, exit 1: within a graph a
+  refusal met inside an op now fails the request as the pool's does, the process stays; (P33) an invalid voice design was answered
+  "speed, loudness, cfg_scale or flow_steps": now the pipeline's own reason. And measured by München the same day: the port DOES
+  read `instructions` (the pitch of the designs: 240/232 Hz female, 98 Hz "very low", 108 Hz undesigned).
 - **MEDCPT ON OUR LLAMA.CPP — STAGED, NOT BUILT (2026-11-27; the operator's "Move both"; medcpt-on-llama-cpp.md):** staged 0034,
   `engine-pair.series` = engine-pace + 0034 (`b77c50dd0fbb`): `pairs:true` builds HF's `[CLS] a [SEP] b [SEP]` (longest-first cut) for an
   embedding and a rerank, the second segment on token-type row 1; `rerank_score:sigmoid`; the converter keeps a BERT classifier's
