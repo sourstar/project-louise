@@ -137,8 +137,12 @@ built with `GGML_NATIVE=OFF` and AVX, AVX2, AVX-512, FMA, F16C and BMI2 off
 ("CPU : SSE3 = 1 | SSSE3 = 1 | LLAMAFILE = 1 | REPACK = 1"): a `gpu_layers 0`
 twin on a SYCL image runs baseline x86-64. The CPU reference engine
 `louise-cpu-llama-cpp-ea2417d91dcc` is built with `GGML_CPU_ALL_VARIANTS` and
-picks one of fourteen at its first load by the host's flags (zen4 by ggml's
-scoring, not read from a log).
+picks one of fourteen at its first load by the host's flags. MEASURED on the
+node (München, each variant's own `ggml_backend_score()` with the engine's
+libggml-base: zen4 1984, cooperlake 1728, icelake 1472, … x64 1; alderlake and
+sapphirerapids 0): it loads `libggml-cpu-zen4.so` (AVX-512). Every CPU reference
+stored on the node by that engine is the zen4 variant's: reproducible on a host
+that selects zen4, not on another CPU.
 
 The baseline built here the same way (everything off), the f16 erf GGUF, 67 pairs:
 
