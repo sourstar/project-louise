@@ -136,3 +136,43 @@ def test_a_window_that_failed_in_prepare_waits_for_the_next_pass(tmp_path, monke
     with pytest.raises(cellar.WindowNotListed):
         units._bulk_of(corpus, unit, due[0], corpus / due[0].rel_path)
     assert calls == [1970], "asked once, in prepare"
+
+
+def test_a_repeat_inside_one_page_is_kept_a_repeat_across_pages_refused(tmp_path, monkeypatch):
+    from app.acquire import backoff
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    rows = _rows(3)
+    inner = rows + [rows[1]]                                      # two terms of one text, one page
+    sparql, _ = _sparql([4], [inner])
+    monkeypatch.setattr(cellar, "sparql", sparql)
+    assert len(list(cellar._window_files(object(), URL, 2021, ("nl",), CODE_OF, lambda n: None,
+                                         place=lambda *a: False))) == 4
+    sparql, _ = _sparql([4], [rows[:2], [rows[1], rows[2]]])
+    monkeypatch.setattr(cellar, "sparql", sparql)
+    with pytest.raises(backoff.Deferred, match="on two pages"):
+        list(cellar._window_files(object(), URL, 2022, ("nl",), CODE_OF, lambda n: None, place=lambda *a: False))
+
+
+def test_the_background_end_drops_a_due_unit_the_newest_window_lacks(tmp_path, monkeypatch):
+    """Review of b96023cb, 1: another process keeps (1970, it) anew, newer
+    and without U, while the background listing runs; at its end U must have
+    no date (Cellar's tree), not its old one (the bulk's)."""
+    from tests.acquire.test_eurlex_pipeline import _gated
+    base, corpus, due = _setup(tmp_path, monkeypatch, (1970, 1971))
+    gates = {1970: threading.Event(), 1971: threading.Event()}
+    _gated(monkeypatch, gates)
+    units = cellar.TreeUnits()
+    units._prepare_bulk(base, corpus, ["it"], due, "eu", URL, background=True)
+    gates[1970].set()
+    units.ready(due[0], None)
+    key = str(corpus.resolve())
+    assert ("31970R0001", "it") in units._dates[key]
+    time.sleep(0.05)
+    cellar_listing.keep(URL, 1970, ("it",), 0, None, [], force=True, at=time.time() + 5)   # newer, without U
+    gates[1971].set()
+    thread, _e, _p = units._runs[key]
+    thread.join(10)
+    u = {"celex": "31970R0001", "lang": "it"}
+    assert units._bulk_of(corpus, u, due[0], corpus / due[0].rel_path) == (None, None), \
+        "absent from the newest window: Cellar's tree"
+    units.close()

@@ -555,7 +555,9 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
         return
     listed: list = []
     got = 0
+    starts: list[int] = []                  # where each page's rows begin in `listed`
     while got < want:
+        starts.append(len(listed))
         t_q = time.monotonic()
         rows = sparql(client, base, page_query(year, languages, got, force),
                       what=f"the {year} page at offset {got} ({lang_text})", charge=charge)
@@ -581,10 +583,20 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     # THE ROWS AS UNITS: a row read twice across pages (rows inserted before
     # the OFFSET between two pages re-read k rows and miss the new ones) is no
     # whole listing (review of c4b47315, B)
-    distinct = len({(r[0], r[1]) for r in listed})
-    if distinct != len(listed):
-        raise backoff.Deferred(f"cellar: the {year} window ({lang_text}) read {len(listed)} rows of {distinct} "
-                               f"units: rows moved between its pages; listed again")
+    # — only a unit first seen on an EARLIER page: a repeat inside one page is
+    # structural (two terms of one text and another datatype, which Virtuoso
+    # groups apart and the count counts too) and kept as it was (review of
+    # b96023cb, 2)
+    seen: set[tuple[str, str]] = set()
+    again = 0
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(listed)
+        page = {(r[0], r[1]) for r in listed[start:end]}
+        again += len(page & seen)
+        seen |= page
+    if again:
+        raise backoff.Deferred(f"cellar: the {year} window ({lang_text}) read {again} unit(s) on two pages: "
+                               f"rows moved between its pages; listed again")
     if got > want:
         # MORE ROWS THAN ITS COUNT (architecture, 2026-11-27: 2021 nl, 3,063
         # against 3,060): Cellar added rows between the count and the pages,
@@ -1997,14 +2009,18 @@ class TreeUnits(CellarUnits):
                 self._bulk[key] = bulk
                 if background:
                     # what a fetch thread's inline re-ask set meanwhile stays:
-                    # merged, the newer `at` kept (review of c4b47315)
+                    # merged, the newer `at` kept (review of c4b47315); a window
+                    # taken from the newest file REPLACES its units' dates — a
+                    # due unit that file lacks has none (N2; review of b96023cb, 1)
                     held_d = self._dates.setdefault(key, {})
                     held_c = self._cover.setdefault(key, {})
                     for k, at_k in cover.items():
                         if at_k >= held_c.get(k, 0.0):
-                            held_c[k] = at_k
+                            for u in by_window.get(k, ()):
+                                held_d.pop(u, None)
                             held_d.update({u: d for u, d in dates.items()
                                            if (window_year(u[0]), u[1]) == k})
+                            held_c[k] = at_k
                 else:
                     self._dates[key] = dates
                     self._cover[key] = cover
