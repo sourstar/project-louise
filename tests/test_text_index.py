@@ -607,3 +607,18 @@ def test_an_index_the_manifest_marks_populated_is_never_made_empty(tmp_path):
     acon.commit()
     fts._marked_groups.clear()
     assert fts.get_index(group, a) is not None, "a group not marked yet is the writer's to make"
+
+
+def test_a_marked_multilingual_document_marks_every_group_its_sections_can_be_in(tmp_path, monkeypatch):
+    """Gap 7 of the fourth read: a `mul` document marked indexed marks each
+    declared section language's group (and `other`): a read never makes an
+    empty index there."""
+    root, [(a, acon), (_b, _)] = _discovered(tmp_path)
+    monkeypatch.setattr(fts, "section_languages", lambda collection: ("en", "de"))
+    acon.execute("UPDATE documents SET lang=?, fts_done=0", (fts.MULTILINGUAL,))
+    acon.execute("UPDATE documents SET fts_done=1 WHERE rowid=(SELECT MIN(rowid) FROM documents)")
+    acon.commit()
+    for group in fts.groups_for_lang(a, fts.MULTILINGUAL):
+        with pytest.raises(fts.IndexMissing, match="none is made"):
+            fts.get_index(group, a)
+        assert not (fts.base_of(a) / group / "meta.json").exists(), group

@@ -144,9 +144,12 @@ _marked_groups: set[tuple[str, str]] = set()
 
 def _marked_in(collection, group: str) -> bool:
     """Whether the collection's manifest marks a document of `group`
-    indexed (`fts_done=1`; a multilingual document's sections go to their
-    own groups, so `mul` says nothing of one). Read only where the group's
-    index is missing: never on the hot path."""
+    indexed (`fts_done=1`): a document of one language marks its language's
+    group; a marked multilingual (`mul`) document marks every group its
+    sections can be in — each declared section language's and `other`
+    (`groups_for_lang`, as `delete_book` deletes it; the fourth read of
+    cf91b9ac). Read only where the group's index is missing: never on the
+    hot path."""
     import sqlite3
     from pathlib import Path
     manifest = getattr(collection, "manifest_path", None)
@@ -163,7 +166,7 @@ def _marked_in(collection, group: str) -> bool:
             con.close()
     except sqlite3.Error:
         return False
-    hit = any(group_for(l) == group for l in langs if (l or "") != MULTILINGUAL)
+    hit = any(group in groups_for_lang(collection, l) for l in langs)
     if hit:
         _marked_groups.add(key)
     return hit
