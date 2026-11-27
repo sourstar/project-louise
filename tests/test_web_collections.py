@@ -254,6 +254,46 @@ def test_grow_run_declares_the_profile_and_preserves_the_whole_toml(client):
                        json={"profile": "gigantic"}).status_code == 400
 
 
+def test_grow_is_refused_for_a_sister_whose_sister_acquires_their_corpus(client, monkeypatch):
+    """gutenberg-nemo (2026-11-27): a case-J sister's origin is her sister's;
+    growing her would turn on a second fetch into that one folder under
+    another manifest's claim. Refused in words, the file untouched."""
+    import dataclasses
+    from app import web as web_mod
+    collection = collections_mod.by_name("gutenberg")
+    # her sister: a held collection reading the same origin, its id the one she derives from
+    from types import SimpleNamespace
+    owner = SimpleNamespace(name="owner", corpus_dir=collection.corpus_dir, acquire_enabled=True,
+                            acquire_stated=True, acquire_by=None,
+                            codex=SimpleNamespace(collection_id="sha256:" + "ab" * 32, derived_from=None))
+    sister = dataclasses.replace(collection, acquire_enabled=True, acquire_stated=False,
+                                 codex=dataclasses.replace(collection.codex,
+                                                           derived_from=owner.codex.collection_id))
+    monkeypatch.setattr(collections_mod, "load_all",
+                        lambda *a, **k: ([owner, sister], []) if k.get("skip_unreadable") else [owner, sister])
+    monkeypatch.setattr(web_mod, "_collection_or_404", lambda name: sister)
+    toml_path = collections_mod.config_toml_path("gutenberg")
+    before = toml_path.read_text(encoding="utf-8")
+    from app.acquire import spec as acquire_spec
+    from app.acquire.specs import ACQUIRE_REGISTRY
+    everything = acquire_spec.everything_profile(ACQUIRE_REGISTRY["gutenberg"])
+    for route in ("run", "plan"):
+        r = client.post(f"/admin/library/gutenberg/grow/{route}", json={"profile": everything})
+        assert r.status_code == 409 and "sister" in r.json()["detail"], r.text
+    assert toml_path.read_text(encoding="utf-8") == before
+    # a sister who acquires (Normattiva, once normattiva-nemo) is not refused
+    # one who took over (Normattiva, once normattiva-nemo): her ancestor no longer acquires
+    took_over = dataclasses.replace(sister, acquire_enabled=True, acquire_stated=True)
+    retired = SimpleNamespace(**{**vars(owner), "acquire_enabled": False})
+    assert collections_mod.sister_refusal(took_over, held=[retired, took_over]) is None
+    # a sister whose default is off (slices = []) is refused too: a grow would state true
+    off_by_default = dataclasses.replace(sister, acquire_enabled=False)
+    assert "grow owner" in collections_mod.sister_refusal(off_by_default, held=[owner, off_by_default])
+    idle = SimpleNamespace(**{**vars(owner), "acquire_enabled": False})
+    assert collections_mod.sister_refusal(sister, held=[idle, sister]) is None, \
+        "her sister acquires nothing: she is not refused"
+
+
 def test_embed_mode_is_a_per_collection_control(client):
     r = client.post("/admin/library/gutenberg/embed-mode", json={"mode": "all"})
     assert r.status_code == 200

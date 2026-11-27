@@ -100,6 +100,27 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _layer_key(layer: Any) -> Any:
+    """A layer as its index reads it: a text input stated (Codex version 5
+    and later) or absent (below 5, read as text, codex.Layer.form) is the
+    same cut, the same chunks and the same index. Absent is kept, so a
+    collection below version 5 hashes as it did (gutenberg-nemo, 2026-11-27:
+    a sister written at version 11 of an older sister would otherwise never
+    share her index)."""
+    plain = _plain(layer)
+    if isinstance(plain, dict) and plain.get("input") == {"form": "text"}:
+        plain = {**plain, "input": None}
+    return plain
+
+
+def _slicing_key(slicing: Any) -> Any:
+    """The slicing as its index reads it: `container = "jsonl"` stated (Codex
+    version 9 and later) or absent (below 9, which means JSONL) is the same
+    parts — `codex.parts_slicing`, the one answer the carry uses too."""
+    from .hold import codex as cx
+    return cx.parts_slicing(_plain(slicing))
+
+
 def identity(collection) -> str | None:
     """The index identity: BLAKE2b-128 over the canonical JSON of what
     decides the text index's bytes — the records' lineage (02 §2.7's fields
@@ -122,8 +143,8 @@ def identity(collection) -> str | None:
         "platform_image": getattr(codex.toolchain, "platform_image", None),
         "parser": _plain(codex.parser),
         "cleaning_version": codex.cleaning_version,
-        "slicing": _plain(codex.slicing),
-        "layers": _plain(codex.layers),
+        "slicing": _slicing_key(codex.slicing),
+        "layers": [_layer_key(l) for l in codex.layers],
         "update": _plain(codex.update),
         "slices": list(held) if held is not None else getattr(collection, "slices", "all"),
         "validity": validity.declared(collection) is not None,

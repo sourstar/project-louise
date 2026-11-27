@@ -14,7 +14,7 @@ The operator's question was: "2 or more sisters share the same corpus but not th
 
 ## Who shares: the index identity (computed, RULE 2)
 
-Two held collections share an index when their **index identity** is equal. The identity is a BLAKE2b-128 over the canonical JSON of:
+Two held collections share an index when their **index identity** is equal. A layer's text input stated (Codex version 5 and later) or absent (below 5, read as text), and a slicing's JSONL container stated (version 9 and later) or absent (below 9, which means JSONL), hash the same: the same chunks and the same parts (2026-11-27, gutenberg-nemo, a version-11 sister of an older sister; `text_index._layer_key`, `_slicing_key`). The identity is a BLAKE2b-128 over the canonical JSON of:
 
 | part | why |
 |---|---|

@@ -429,6 +429,12 @@ class Collection:
     # deployment (no collections/*.toml, or a TOML predating P0.4) sees zero
     # behavior change and no surprise outbound network access on restart.
     acquire_enabled: bool = False
+    # whether the FILE states acquire_enabled (else the Codex's default, and,
+    # for a sister reading her held sister's origin, off: `_one_acquirer`)
+    acquire_stated: bool = field(default=False, compare=False)
+    # the held collection that acquires the origin folder this one reads,
+    # where that is why this one does not (`_one_acquirer`); None otherwise
+    acquire_by: str | None = field(default=None, compare=False)
     license_ack: str | None = None   # "<iso8601>/<sha256-of-terms-text>", Tier-2 only (invariant 10)
     embed: EmbedRecipe | None = None  # [embed] block; None = env fallback
     # [reranker] block (05 §5.6); None = RERANK_URL, else no reranking
@@ -779,6 +785,7 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
         fts_dir=d / "index",
         lance_dir=lance,
         acquire_enabled=acquire,
+        acquire_stated="acquire_enabled" in raw,
         license_ack=_codex_ack(codex, d / "state"),
         embed=_codex_encoder(raw.get("embed_recipe") or raw.get("encoder"),
                              codex, where),
@@ -1004,6 +1011,39 @@ def codex_at(name: str):
 
 def _credited_archives(codex) -> list[str]:
     return [c.archive for c in codex.credits if c.kind == "archive" and c.archive]
+
+
+def sister_refusal(collection, held=None) -> str | None:
+    """Why growing `collection` is refused, or None: a case-J sister that
+    does not acquire because an ancestor held here acquires the origin
+    folder they both read (`_one_acquirer`, the one rule). Growing her (the
+    Library's grow, `hold records fetch`) would make her a second fetch into
+    that folder (gutenberg-nemo, 2026-11-27). A sister who took over
+    (Normattiva, once normattiva-nemo), one whose sister is gone (legi_F),
+    whose sister does not acquire, or reading her own folder grows as any
+    collection does. `held`: the loaded collections (default `load_all()`)."""
+    if not getattr(getattr(collection, "codex", None), "derived_from", None):
+        return None
+    try:
+        # as the worker reads them: another file's fault is not hers
+        held = list(held) if held is not None else load_all(skip_unreadable=True)[0]
+    except Exception as e:  # noqa: BLE001 — unsure who acquires: no second writer
+        return (f"{collection.name}: whether the collection she derives from acquires their corpus "
+                f"could not be read ({type(e).__name__}: {e}); nothing changed")
+    # judged AS GROWN: a grow states `acquire_enabled = true` (web grow_run,
+    # `hold records fetch`), so she is judged on with nothing stated — a
+    # sister whose default is off (`slices = []`) is refused too while an
+    # ancestor acquires her folder (re-read of d927e4ad)
+    import dataclasses
+    grown = dataclasses.replace(collection, acquire_enabled=True, acquire_stated=False, acquire_by=None) \
+        if dataclasses.is_dataclass(collection) else collection
+    mine = [c for c in held if c.name != collection.name] + [grown]
+    me = next(c for c in _one_acquirer(mine) if c.name == collection.name)
+    if not getattr(me, "acquire_by", None):
+        return None
+    by = me.acquire_by
+    return (f"{collection.name} is {by}'s sister (02 §2.7): she holds {by}'s records and reads its "
+            f"origin, and {by} takes them from the origin; grow {by}, not her")
 
 
 def codex_defaults(codex, name: str, slices, kinds, source: str = "origin") -> dict[str, Any]:
@@ -1327,8 +1367,71 @@ def load_all(*, skip_unreadable: bool = False):
             refused.append(Refusal(name, p, NO_ENCODER))
             continue
         served.append(c)
+    served = _one_acquirer(served)
     _REFUSALS = tuple(refused)
     return (served, unreadable) if skip_unreadable else served
+
+
+def _one_acquirer(held: list) -> list:
+    """ONE ACQUIRER A FOLDER (gutenberg-nemo, 2026-11-27; the independent
+    reads of b28b0feb, 48e1496c and 82d3e9cd; München's check of the node's
+    sisters the same day). A case-J sister (`derived_from`, 02 §2.7) whose
+    file states no `acquire_enabled` defaults OFF while an ancestor of hers
+    held here — her sister, or her sister's sister — reads the same physical
+    origin directory AND acquires it: that ancestor fetches the folder, and a
+    second fetch there would run under another manifest's claim
+    (acquire/claim.py's lock is beside each manifest). An ancestor that does
+    not acquire (a stated `false`, `slices = []`) leaves her her own default,
+    so a folder is never left to nobody; a chain leaves exactly one. A file
+    that STATES the key is the operator's word, and it wins (EUR-Lex5.next's
+    `true` beside EUR-Lex5's `false`); a sister whose ancestors are not held
+    (legi_F) or whose origin is her own folder acquires by the Codex's
+    default. Keyed on the folder's physical identity, never on a name
+    (CLAUDE.md). Idempotent: a collection already turned off here
+    (`acquire_by`) is judged on its default again."""
+    import dataclasses
+
+    def cid(c):
+        return getattr(getattr(c, "codex", None), "collection_id", None)
+
+    def parent(c):
+        return by_id.get(getattr(getattr(c, "codex", None), "derived_from", None) or None)
+
+    by_id = {cid(c): c for c in held if cid(c)}
+    memo: dict[int, tuple[bool, str | None]] = {}
+
+    def effective(c) -> tuple[bool, str | None]:
+        key = id(c)
+        if key in memo:
+            return memo[key]
+        base = bool(getattr(c, "acquire_enabled", False) or getattr(c, "acquire_by", None))
+        memo[key] = (base, None)                         # provisional: a cycle reads the default
+        result = (base, None)
+        if base and not getattr(c, "acquire_stated", False):
+            seen, a = {key}, parent(c)
+            while a is not None and id(a) not in seen:
+                seen.add(id(a))
+                if _same_folder(a.corpus_dir, c.corpus_dir) and effective(a)[0]:
+                    result = (False, a.name)
+                    break
+                a = parent(a)
+        memo[key] = result
+        return result
+
+    out = []
+    for c in held:
+        on, by = effective(c)
+        if (on, by) != (bool(getattr(c, "acquire_enabled", False)), getattr(c, "acquire_by", None)):
+            c = dataclasses.replace(c, acquire_enabled=on, acquire_by=by)
+        out.append(c)
+    return out
+
+
+def _same_folder(a, b) -> bool:
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except (OSError, TypeError, RuntimeError):
+        return False
 
 
 def is_private(collection) -> bool:
