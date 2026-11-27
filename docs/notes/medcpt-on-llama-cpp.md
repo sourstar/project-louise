@@ -231,12 +231,22 @@ reranks of 4 queries, f16, erf GELU, `pairs:true rerank_score:sigmoid`:
 
 ## 6. For München: convert, load, gate
 
-Convert both with the PATCHED converter — the llama.cpp checkout of the
-engine build after its patches (`backend/cpp/llama-cpp/llama.cpp` once
-`prepare.sh` has run), from `ncbi/MedCPT-Article-Encoder` and
-`ncbi/MedCPT-Cross-Encoder`:
+Convert both with the engine's own converter, ONE command (München, 2026-11-27: the
+patched checkout lived only inside the build container): `deploy/localai/llama-cpp/convert.sh`
+builds llama.cpp's tree from the series as `build.sh` and LocalAI's `prepare.sh` do,
+stages the model's files under the repository's name (no README.md, which the converter
+would read as metadata; safetensors over pytorch_model.bin), converts, and writes
+`<out>.lock` (the series, llama.cpp's version, every input's sha256, the GGUF's):
 
-    python convert_hf_to_gguf.py <hf dir> --outtype f16 --outfile <name>-f16.gguf
+    sh deploy/localai/llama-cpp/convert.sh deploy/localai/patches/staged/engine-guard.series \
+        <hf snapshot, or a models--ncbi--<name> cache directory> <name>-f16.gguf --outtype f16
+
+MEASURED here from `engine-guard.series` (a fresh LocalAI and llama.cpp, nothing local):
+`MedCPT-Article-Encoder-f16.gguf` sha256
+`62d0e7b9bd70ec2155c641d5fa858d66a3a6a8bcd689b36a04254a7a4cadd7f5` and
+`MedCPT-Cross-Encoder-f16.gguf` `078f8cde6ed112c106208846b4da85c54a936097979ad38678e3acb8c8bf640e`
+(the latter from a cache directory with a README, links resolved) — the bytes of §3's
+runs. The query encoder converts the same way.
 
 Check both GGUFs hold `bert.hidden_activation = "gelu"`, and the
 cross-encoder's `cls.weight` and `cls.bias` (the pooler) as well as
