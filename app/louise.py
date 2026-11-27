@@ -1140,7 +1140,7 @@ def cmd_collection_refit(a) -> int:
     restart the node and it's done"). Exit 3 while the worker runs. A rerun
     continues where a crash stopped it. No rollback in code: the ZFS
     snapshot taken first is the rollback."""
-    from app.hold import lock as lock_mod, refit as refit_mod
+    from app.hold import refit as refit_mod
     root = Path(a.root)
     name = a.collection
     params = _layer_params(a.layer_param)
@@ -1150,37 +1150,45 @@ def cmd_collection_refit(a) -> int:
     old = refit_mod.predecessor(root, name)
     layers = _layers_with(old, params)
     refit_mod.new_codex(old, layers)              # refused in words before anything
+    key = None
+    try:
+        from app.bundles import keys as node_keys
+        key = node_keys.load_signing_key()
+    except Exception:   # noqa: BLE001 — no key: the plan refuses it (exit 2), naming where the key is
+        key = None
+    log = lambda m: print(m, flush=True)        # noqa: E731
     if a.dry_run:
-        pl = refit_mod.plan(root, name, layers, processes=a.processes, log=lambda m: print(m, flush=True))
+        pl = refit_mod.plan(root, name, layers, key=key, processes=a.processes, dry=True, log=log)
         print(f"refit {name} (a dry run: nothing written)")
         print(f"  from        {pl['from']}")
         print(f"  to          {pl['to']}")
         print(f"  affected    {len(pl['changed'])} document(s): "
               + (", ".join(c[1] for c in pl["changed"][:20]) or "none — nothing to refit"))
         print(f"  parts       " + (", ".join(p["path"] for p in pl["parts"]) or "none"))
-        print(f"  others      " + (", ".join(pl["others"]) or "none") + " (re-keyed to the new id)")
-        print(f"  worker      {pl['worker'] or 'not running'}")
-        print("  first       take a ZFS snapshot of /data and the SHARD dataset first: that is the rollback "
-              "(the host's step, the operator's or München's)")
+        print(f"  others      " + (", ".join(f"{o} → {pl['others_to'][o][:23]}…" for o in pl["others"]) or "none")
+              + " (re-keyed to the new id)")
+        for n, table in pl["sweep"].items():       # every file naming an old id, by what is done with it
+            kinds: dict = {}
+            for rel, (what, said) in sorted(table.items()):
+                kinds.setdefault((what, said), []).append(f"{n}/{rel}")
+            for (what, said), rels in sorted(kinds.items()):
+                print(f"  files       {len(rels)} {what} — {said}: {', '.join(rels[:3])}"
+                      + (f" and {len(rels) - 3} more" if len(rels) > 3 else ""))
+        for line in pl["effects"]:
+            print(f"  changes     {line}")
+        print("  first       take a ZFS snapshot of every dataset holding these — that is the rollback (the "
+              "host's step, the operator's or München's):")
+        for what, path in pl["datasets"]:
+            print(f"                {what}: {path}")
+        print(f"  runs        offline: {refit_mod.STAY_DOWN}")
+        for code, why in pl["refusals"]:
+            print(f"  REFUSED     (exit {code}) {why}")
+        if pl["refusals"]:
+            return pl["refusals"][0][0]
         print("  steps       reset those documents, write the new Codex, rewrite their parts and the snapshot, "
-              "replace the old id everywhere, attest; then restart the node")
+              "replace the old id everywhere, re-key the others and platform.toml, attest; then restart the node")
         return 0
-    refit_mod._refuse_running(root, name)
-    try:
-        lk = lock_mod.take(lock_mod.state_dir(root, name), name, f"louise hold collection refit {name}")
-    except lock_mod.Held as e:
-        raise _defer(f"{e}. `louise node stop` first; then run this again") from None
-    key = None
-    try:
-        from app.bundles import keys as node_keys
-        key = node_keys.load_signing_key()
-    except Exception:   # noqa: BLE001 — no key: unsigned, and said
-        print("no node key: the new snapshot is unsigned and no attestation is written", file=sys.stderr)
-    try:
-        refit_mod.run(root, name, layers, key=key, now=_utc_now(), processes=a.processes,
-                      log=lambda m: print(m, flush=True))
-    finally:
-        lk.release()
+    refit_mod.run(root, name, layers, key=key, now=_utc_now(), processes=a.processes, log=log)
     return 0
 
 

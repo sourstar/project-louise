@@ -786,8 +786,11 @@ and marks; their parts are written again, the rest kept; the new Codex is a
 new identity, replaced everywhere the old one was named, an annotations
 collection naming it re-keyed in its turn (`louise hold collection refit`).
 Every collection on this node has been shared for testing only (RULE 1), so
-what was shared is superseded; an official publication refuses. The rollback
-is the host's ZFS snapshot, taken first.
+what was shared is superseded; an official publication refuses. Everything
+that can refuse is decided before the first write. It runs where the worker's
+key is, under the worker's node-wide lock — the app's containers stopped, as
+an operator pass. The rollback is the host's ZFS snapshot of every dataset it
+writes, taken first.
 
 The **calibration** block is the contract for anyone who wants to
 contribute vectors. The calibration set is corpus-independent: a fixed
