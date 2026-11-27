@@ -95,8 +95,10 @@ def _echo(words: list[str], said: str) -> bool:
 
 
 def _run(words: list[str], said: str) -> bool:
-    """Whether `words` are an unbroken run of the words of `said`."""
-    if not said or not words:
+    """Whether `words` are an unbroken run of the words of `said`, of at
+    least ECHO_MIN_WORDS: "Philippe." over "Louis Philippe abdicated" is the
+    name alone, never an echo (architecture's read of 3e13830d, 1)."""
+    if not said or len(words) < ECHO_MIN_WORDS:
         return False
     read = fold(said).split()
     n = len(words)

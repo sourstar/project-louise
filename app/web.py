@@ -1541,10 +1541,13 @@ def _as_question(fn, job, arg):
 HEARD_SAID_CHARS = 4000
 #: a clip this long at most (hands-free cuts at 20 s): 16 kHz mono 16-bit
 HEARD_MAX_BYTES = 2 * 1024 * 1024
-#: the VAD's and the STT's bound for a hands-free clip: the page gives up at
-#: 15 s (voice.js HF_CLIP_MAX_MS), and so does the server (architecture's
-#: read of 394fbc0e, A)
-HEARD_TIMEOUT_S = 15.0
+#: ONE deadline for a hands-free clip's VAD and STT together, under the
+#: page's 15 s (voice.js HF_CLIP_MAX_MS): the slot is free before the page's
+#: next clip comes (architecture's reads of 394fbc0e, A, and 3e13830d, 2)
+HEARD_DEADLINE_S = 12.0
+#: the pages without an account written down at once, each by its own id
+#: (architecture's read of 3e13830d, 3: two phones in one house)
+HEARD_PAGES_MAX = 4
 #: the viewers whose clip is being written down now: ONE at a time each — a
 #: clip arriving meanwhile answers 429, and the page keeps listening (a slow
 #: STT would otherwise get ~12 calls a page on the shared thread pool)
@@ -1593,12 +1596,19 @@ async def ask_voice_heard(request: Request):
         lang = str(form.get("language") or "").strip()[:8]
         follow = str(form.get("follow") or "") == "1"
         said = str(form.get("said") or "")[:HEARD_SAID_CHARS]
+        page = re.sub(r"[^A-Za-z0-9-]", "", str(form.get("page") or ""))[:64]
     finally:
         await form.close()
     seconds = max(0.0, (len(audio) - 44) / 32000.0)
     fields = [("response_format", "json")] + ([("language", lang)] if lang else [])
     who = _relay_owner(request)
+    if who == "nobody":
+        who = "page:" + (page or "none")             # a reader without an account: each page its own slot
     with _heard_lock:
+        if who.startswith("page:") and sum(w.startswith("page:") for w in _heard_busy) >= HEARD_PAGES_MAX:
+            print(f"{time.strftime('%H:%M:%S')} [voice] heard {seconds:.1f} s: dropped (the pages' slots taken)",
+                  flush=True)
+            raise HTTPException(429, "the node is writing down as many clips as it takes")
         if who in _heard_busy:
             print(f"{time.strftime('%H:%M:%S')} [voice] heard {seconds:.1f} s: dropped (one being written down)",
                   flush=True)
@@ -1606,7 +1616,7 @@ async def ask_voice_heard(request: Request):
         _heard_busy.add(who)
     try:
         got = await run_in_threadpool(transcribe.transcribe, audio, "utterance.wav", "audio/wav", fields,
-                                      None, HEARD_TIMEOUT_S)
+                                      None, HEARD_DEADLINE_S)
     finally:
         with _heard_lock:
             _heard_busy.discard(who)

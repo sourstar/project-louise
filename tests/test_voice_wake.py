@@ -76,8 +76,8 @@ def route(isolated_config, monkeypatch):
     from app.rage import dispatch
     said = {"text": "", "status": 200, "claims": 0}
 
-    def fake(audio, filename, ctype, fields, url=None, timeout_s=None):
-        said["timeout_s"] = timeout_s
+    def fake(audio, filename, ctype, fields, url=None, deadline_s=None):
+        said["timeout_s"] = deadline_s
         if said.get("gate") is not None:
             said["gate"].wait(10)
         return transcribe.Answer(said["status"], json.dumps({"text": said["text"]}).encode(), "application/json",
@@ -181,7 +181,8 @@ def test_an_upload_over_the_bound_is_refused_before_the_form_is_read(route):
 def test_a_true_echo_name_included_is_dropped_and_the_same_words_out_of_order_are_taken():
     """The operator's default: a contiguous run of the reading, name included."""
     said = "As the king said: Philippe, stop the army at the river."
-    assert heard("Philippe, stop", said=said).dropped == "echo", "the node reading it aloud"
+    assert heard("Philippe, stop the army", said=said).dropped == "echo", "the node reading it aloud"
+    assert heard("Philippe, stop", said=said).command == "stop", "two words: never an echo (ECHO_MIN_WORDS)"
     assert heard("stop, Philippe", said=said).dropped == "not addressed"
     assert heard("Philippe stop", said="Philippe went home. Stop the army.").command == "stop", "not unbroken"
     assert heard("Philippe, please stop", said=said).command is None and \
@@ -207,7 +208,7 @@ def test_one_clip_a_reader_is_written_down_at_a_time_and_the_others_answer_429(r
     said["gate"].set()
     t.join(10)
     assert others == [429, 429, 429] and first["r"].status_code == 200
-    assert said["timeout_s"] == 15.0, "the server gives up when the page does"
+    assert said["timeout_s"] == 12.0, "one deadline, under the page's 15 s"
     said["gate"] = None
     assert _post(c).status_code == 200, "free again once it ended"
 
@@ -219,3 +220,32 @@ def test_a_clip_without_content_length_is_refused_before_it_is_parsed(route):
         yield b"x" * 1024
     r = c.post("/ask/voice/heard", content=chunks(), headers={"content-type": "multipart/form-data; boundary=b"})
     assert r.status_code == 411
+
+
+
+@pytest.mark.parametrize("text,said,follow,want", [
+    ("Philippe.", "Louis Philippe abdicated in 1848.", False, "listen"),
+    ("Stop.", "Nothing could stop the advance of the army.", True, "stop"),
+])
+def test_one_word_is_never_an_echo(text, said, follow, want):
+    """Architecture's read of 3e13830d, 1."""
+    assert heard(text, said=said, follow=follow).command == want
+
+
+def test_readers_without_an_account_each_have_their_page_s_slot_under_a_cap(route, monkeypatch):
+    """Architecture's read of 3e13830d, 3: two phones in one house."""
+    from app import web
+    c, said = route
+    said["text"] = "Philippe, chi era Garibaldi?"
+    monkeypatch.setattr(web, "_relay_owner", lambda request: "nobody")
+    with web._heard_lock:
+        web._heard_busy.add("page:phone-a")
+    try:
+        assert _post(c, page="phone-b").status_code == 200, "another page: its own slot"
+        assert _post(c, page="phone-a").status_code == 429, "the same page: one at a time"
+        with web._heard_lock:
+            web._heard_busy.update({"page:p1", "page:p2", "page:p3"})
+        assert _post(c, page="phone-c").status_code == 429, "at most HEARD_PAGES_MAX pages at once"
+    finally:
+        with web._heard_lock:
+            web._heard_busy.clear()

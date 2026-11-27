@@ -1261,6 +1261,7 @@
   const HF_FOLLOW_MS = 5000, HF_SAID_MS = 30000;
   // the longest a clip may be in flight: a hung node lets the next one go
   let HF_CLIP_MAX_MS = 15000;
+  const HF_PAGE = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Math.random()).slice(2);
   const hfBox = document.getElementById('hands-free'), hfChoice = document.getElementById('hands-free-choice');
   let hf = null;
   function hfSaid() {
@@ -1297,6 +1298,7 @@
     const lang = pageLang(); if (lang) fd.append('language', lang);
     if (performance.now() < h.followUntil) fd.append('follow', '1');
     const said = hfSaid(); if (said) fd.append('said', said);
+    fd.append('page', HF_PAGE);                       // this page's own slot on the node, without an account
     // BOUNDED (architecture's read of 535b2f68, 3): a hung node or network
     // would hold the one clip in flight, and hands-free would hear nothing
     // new — a passenger's clip then replacing a waiting "Philippe, stop"

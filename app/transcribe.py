@@ -205,12 +205,21 @@ def _error(status: int, message: str, vad: str) -> Answer:
 
 
 def transcribe(audio: bytes, filename: str, content_type: str, fields: list[tuple[str, str]],
-               url: str | None = None, timeout_s: float | None = None) -> Answer:
+               url: str | None = None, deadline_s: float | None = None) -> Answer:
     """An OpenAI transcription request — the file and the form's other
-    fields — relayed to the model server after the VAD's trim. `timeout_s`:
-    the VAD's and the STT's bound each, where a caller gives up sooner than
-    VAD_TIMEOUT_S / CALL_TIMEOUT_S (a hands-free clip: app/web.py)."""
+    fields — relayed to the model server after the VAD's trim. `deadline_s`:
+    ONE deadline for the whole clip, from this call, where a caller gives up
+    sooner than VAD_TIMEOUT_S + CALL_TIMEOUT_S (a hands-free clip,
+    app/web.py): the STT is given what the VAD left of it (architecture's
+    read of 3e13830d, 2: httpx's timeout is per call)."""
     clock = _Clock()
+    until = None if deadline_s is None else time.monotonic() + deadline_s
+
+    def left(default: float | None = None) -> float | None:
+        """What is left of the deadline (at least a token 0.05 s), else `default`."""
+        if until is None:
+            return default
+        return max(0.05, until - time.monotonic())
     url = (url or voice.server()).rstrip("/")
     try:
         node = voice.settings()
@@ -245,7 +254,7 @@ def transcribe(audio: bytes, filename: str, content_type: str, fields: list[tupl
             else:
                 n = len(frames) // 2
                 try:
-                    spans = segments(url, node.vad_model, frames, clock, timeout_s) if n else []
+                    spans = segments(url, node.vad_model, frames, clock, left()) if n else []
                 except VadFailed as e:
                     vad = f"failed: {e}"
                     model_pins.node_event("warn", f"voice activity: {node.vad_model} at {url} failed ({e}); "
@@ -264,7 +273,7 @@ def transcribe(audio: bytes, filename: str, content_type: str, fields: list[tupl
         try:
             r = httpc.post(f"{url}/v1/audio/transcriptions",
                            files={"file": (filename or "audio", send, content_type or "application/octet-stream")},
-                           data=form, timeout=CALL_TIMEOUT_S if timeout_s is None else timeout_s)
+                           data=form, timeout=left(CALL_TIMEOUT_S))
         except Exception as e:   # noqa: BLE001 — said to the reader, in plain words
             return _error(502, f"the speech-to-text model at {url} did not answer "
                                f"({type(e).__name__})", vad)
