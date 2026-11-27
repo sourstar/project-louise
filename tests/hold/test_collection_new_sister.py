@@ -490,7 +490,8 @@ def test_her_text_index_and_her_sister_s_are_one_group_formed_by_rename(pair, ca
     ino = (g / "seg.store").stat().st_ino
     monkeypatch.setattr(louise, "_index_identities", lambda root, a, b: ("id1", "id1"))
     assert _new_enc(root) == 0
-    rel = f"{text_index.SHARED}/id1"
+    rel = text_index.placement(root, "old")["dir"]
+    assert text_index.folder_identity(root, rel) == "id1"
     for n in ("old", "sis"):
         assert text_index.placement(root, n)["dir"] == rel, n
     assert (root / rel / "en" / "seg.store").stat().st_ino == ino, "renamed: no byte copied"

@@ -96,7 +96,7 @@ LOCK_SUFFIX = ".lock"
 #: a placement's key: what the group's index CONTENT was built for (the
 #: identity without the slices held and `update`, which add or drop
 #: documents but never change how one is indexed), so a member whose content
-#: changed is never given another's copy (`content_key`, `_move_into`)
+#: changed is never given another's copy (`content_key`, `_plan`)
 CONTENT = "content"
 #: a reader's queue of uids to copy: beyond this, the queue is dropped and
 #: a walk of its pending rows is due instead (memory stays bounded)
@@ -813,50 +813,154 @@ def _same_fs(a: Path, b: Path) -> None:
         raise OSError(errno.EXDEV, f"{a} and {b} are on two filesystems")
 
 
-def _move_into(root: Path, name: str, shared: Path) -> str:
-    """`name`'s index into `shared` (which must not exist yet): its own
-    group directories renamed (one filesystem: free), or, placed in another
-    shared directory, that directory renamed when nobody else is placed
-    there. THE ONE COPY (never a hard link: app/file_copy.py): `name` is
-    placed in a group that KEEPS other members, its identity now another
-    collection's (its slices or `update` changed: the documents it holds
-    differ, how each is indexed does not — `_source` takes no member whose
-    content key changed), and it is the new group's fullest: the old group's
-    index is copied for the new one, the old one stays its members'."""
+#: a group folder's own record: the identity and content key it holds
+GROUP = "group.json"
+
+
+def new_rel() -> str:
+    """A NEW group folder's name: a unique id made once, never an identity
+    key, so a folder's name is never reused for another group (the third
+    read of 74c95825, finding 1)."""
+    import uuid
+    return f"{SHARED}/{uuid.uuid4().hex}"
+
+
+def folder_identity(root: Path, rel: str) -> str | None:
+    """The identity a group folder holds (`GROUP`), or — a folder made
+    before 2026-11-27, named by its identity — its name."""
+    try:
+        got = json.loads((Path(root) / rel / GROUP).read_text(encoding="utf-8"))
+        return got.get("identity")
+    except (OSError, ValueError, AttributeError):
+        return Path(rel).name if is_shared(rel) else None
+
+
+def _tag(root: Path, rel: str, ident: str, content: str | None) -> None:
+    _write_json(Path(root) / rel / GROUP, {"identity": ident, "content": content})
+
+
+def _place(root: Path, name: str, rel: str, ident: str, content: str | None, w: str,
+           log: Callable[[str], None]) -> int:
+    """`name` placed in `rel`, written by `w`, through THE ONE
+    RECONCILIATION (a group formed at boot or at a carry, joined, alike):
+    its marks reset where they differ from the writer's — all of them where
+    its content key changed — then the placement written, then its own
+    copy removed, and a folder it leaves that nobody reads any more removed.
+    The documents reset."""
     root = Path(root)
     pl = placement(root, name)
-    src = root / name / "index" if pl is None else root / pl["dir"]
-    _same_fs(src, shared.parent)
-    shared.parent.mkdir(parents=True, exist_ok=True)
-    tmp = shared.with_name(f".{shared.name}.forming")
-    if tmp.exists():
-        shutil.rmtree(tmp)
-    if pl is None:
-        tmp.mkdir(parents=True)
-        for g in group_dirs(src):
-            os.rename(g, tmp / g.name)
-        os.rename(tmp, shared)
-        return "renamed"
-    if [m for m in members(root, pl["dir"]) if m != name]:
-        try:
-            tmp.mkdir(parents=True, exist_ok=True)
-            for g in group_dirs(src):
-                copy_tree(g, tmp / g.name, f"text index: {name}'s copy of {pl['dir']}")
-        except BaseException:
-            shutil.rmtree(tmp, ignore_errors=True)
-            raise
-        os.rename(tmp, shared)
-        return "copied"
-    os.rename(src, shared)
-    (shared / WRITER).unlink(missing_ok=True)
-    return "renamed"
-
-
-def _copy_bytes(root: Path, name: str) -> int:
-    """The bytes `_move_into` would copy for `name` (0 where it renames)."""
-    pl = placement(root, name)
-    if pl is None or not [m for m in members(root, pl["dir"]) if m != name]:
+    if pl is not None and pl["dir"] == rel:
         return 0
+    if name == w:
+        reset = 0 if _content_valid(root, name, content) else _reset_all(_manifest(root, name))
+    elif not _content_valid(root, name, content):
+        reset = _reset_all(_manifest(root, name))
+    else:
+        reset = reset_differing(_manifest(root, name), _manifest(root, w), log=log)
+    write_placement(root, name, rel, ident, content=content)
+    log(f"text index: {name} placed in {rel} (written by {w}); {reset} document(s) reset")
+    if pl is not None and is_shared(pl["dir"]) and not members(root, pl["dir"]):
+        old = root / pl["dir"]
+        if old.is_dir():
+            shutil.rmtree(old)
+            log(f"text index: {pl['dir']}, read by nobody now, removed")
+    _remove_groups(root / name / "index")
+    return reset
+
+
+def _journal_dir(root: Path) -> Path:
+    return Path(root) / SHARED / ".forming"
+
+
+def _form(root: Path, *, source: Path | None, copy: bool, ident: str, content: str | None,
+          writer_name: str, place: list[str], log: Callable[[str], None]) -> str:
+    """A NEW group folder (`new_rel`) formed, JOURNALED before its first
+    rename or copy (the source's groups, the folder, the members to place),
+    then completed by `_finish` — which a retry or the boot runs again from
+    the journal, forward, never deleting what moved."""
+    root = Path(root)
+    rel = new_rel()
+    groups = [g.name for g in group_dirs(source)] if source is not None else []
+    if source is not None:
+        _same_fs(source, root / SHARED if (root / SHARED).exists() else root)
+    jd = _journal_dir(root)
+    jd.mkdir(parents=True, exist_ok=True)
+    journal = jd / f"{Path(rel).name}.json"
+    _write_json(journal, {"rel": rel, "source": str(source) if source is not None else None,
+                          "groups": groups, "copy": copy, "identity": ident, "content": content,
+                          "writer": writer_name, "place": list(place)})
+    return _finish(root, journal, log)
+
+
+def _finish(root: Path, journal: Path, log: Callable[[str], None]) -> str:
+    """A forming completed from its journal: each group not yet in the
+    folder renamed (or copied) into it, the folder tagged, its writer
+    named, every member placed (`_place`), the journal removed. Repeatable
+    at any cut."""
+    root = Path(root)
+    j = json.loads(journal.read_text(encoding="utf-8"))
+    rel, target = j["rel"], root / j["rel"]
+    target.mkdir(parents=True, exist_ok=True)
+    src = Path(j["source"]) if j.get("source") else None
+    for g in j["groups"]:
+        if (target / g).exists() or src is None or not (src / g).exists():
+            continue
+        if j["copy"]:
+            copy_tree(src / g, target / g, f"text index: the copy of {src} for {rel}")
+        else:
+            os.rename(src / g, target / g)
+    _tag(root, rel, j["identity"], j.get("content"))
+    if not (target / WRITER).is_file():
+        _write_json(target / WRITER, {"writer": j["writer"], "since": int(time.time())})
+    w = writer(root, rel, None) if members(root, rel) else j["writer"]
+    for n in [j["writer"], *[m for m in j["place"] if m != j["writer"]]]:
+        _place(root, n, rel, j["identity"], j.get("content"), w, log)
+    invalidate()
+    journal.unlink(missing_ok=True)
+    return rel
+
+
+def resume_forming(root: Path, log: Callable[[str], None] = print) -> list[str]:
+    """Every forming a cut left (its journal), finished forward."""
+    jd = _journal_dir(root)
+    return [_finish(root, j, log) for j in sorted(jd.glob("*.json"))] if jd.is_dir() else []
+
+
+def _reusable(root: Path, names: list[str], contents: dict[str, str | None]) -> str | None:
+    """A folder some of `names` are placed in whose EVERY member is among
+    them and still indexes as it does (its content key): the group keeps it,
+    retagged — nothing moved or copied (finding 4) — the fullest first."""
+    found = []
+    for rel in sorted({(placement(root, n) or {}).get("dir") for n in names} - {None}):
+        if not is_shared(rel) or not (Path(root) / rel).is_dir():
+            continue
+        ms = members(root, rel)
+        if ms and set(ms) <= set(names) and all(_content_valid(root, m, contents.get(m)) for m in ms):
+            found.append(rel)
+    if not found:
+        return None
+    return sorted(found, key=lambda r: (-max(_indexed_count(_manifest(root, m)) for m in members(root, r)), r))[0]
+
+
+def _plan(root: Path, names: list[str], contents: dict[str, str | None]) -> tuple[str, Any]:
+    """How the group of `names` is made: ("keep", folder), ("copy", source
+    folder), ("rename", member), or ("new", None)."""
+    keep = _reusable(root, names, contents)
+    if keep is not None:
+        return "keep", keep
+    src = _source(root, names, contents)
+    if src is None:
+        return "new", None
+    pl = placement(root, src)
+    if pl is not None and is_shared(pl["dir"]):
+        # THE ONE COPY: its folder keeps members that STAY there (another
+        # identity now), so its index is copied for the new group
+        return "copy", src
+    return "rename", src
+
+
+def _copy_bytes(root: Path, src: str) -> int:
+    pl = placement(root, src)
     return sum(f.stat().st_size for g in group_dirs(Path(root) / pl["dir"])
                for f in g.rglob("*") if f.is_file())
 
@@ -882,41 +986,35 @@ def _drop_gone(root: Path, collections: list, log: Callable[[str], None], report
                 f"be dropped: {e}")
 
 
-def _set_aside(root: Path, rel: str, log: Callable[[str], None]) -> None:
-    """A shared directory that exists with nobody placed in it holds an index
-    no manifest's marks describe: never adopted. Moved aside (kept, named in
-    `orphans`), never deleted here."""
-    d = Path(root) / rel
-    aside = d.with_name(f".stale-{d.name}-{int(time.time())}")
-    os.rename(d, aside)
-    log(f"text index: {rel} existed with no member placed in it; set aside as {aside.name}")
-
-
 def settle(root: Path, collections: list, *, log: Callable[[str], None] = print) -> dict[str, Any]:
     """Place every held collection's text index by its identity — the
-    worker's boot, before any stage (module docstring). Idempotent; each
-    step is complete or redone: the marks are reset before the placement
-    is written, and a member's own copy is removed only after it.
+    worker's boot, before any stage (module docstring). Idempotent; every
+    forming is journaled and finished forward (`resume_forming`).
 
     - A placement naming a directory that is gone: dropped, marks reset
       (`_drop_gone`).
-    - ONE member of an identity: its own `<name>/index`, as every collection
-      without a sister — or, placed in a group, it STAYS there (its
-      placement's identity brought up to date): no copy back.
-    - TWO OR MORE: `.text-index/<identity>`. Formed from the member holding
-      the most whose index still describes it (renamed, or copied out of a
-      group that keeps other members: `_move_into`); every other member's
-      marks reset where they differ from the writer's — all of them where
-      its content key changed — its placement written, then its own copy
-      removed.
+    - ONE member of an identity: its own `<name>/index`, or — placed in a
+      group — it STAYS there (the folder retagged where it is the only one
+      placed in it): no copy back.
+    - TWO OR MORE: one folder (`_plan`): a folder all of whose members are
+      among them KEPT, retagged; else a NEW folder (a unique id, never an
+      identity key) formed from the member holding the most that still
+      indexes as it did — its own groups renamed in, or, its folder keeping
+      members that stay, copied (THE ONE COPY) — every member placed through
+      `_place`'s reconciliation.
 
-    The copies are counted once, before the first, against the free space
-    of the shared folder: short, each identity needing one is skipped and
-    said (as a move across filesystems is), and the rest goes on."""
+    The copies are counted once, before the first, against the shared
+    folder's free space: short, each identity needing one is skipped and
+    said (as a move across filesystems is), and the rest goes on. A folder
+    some held collection is placed in is never set aside."""
     from .file_copy import NoRoom, free_bytes
     root = Path(root)
     report: dict[str, Any] = {"groups": [], "freed": 0, "skipped": []}
-    by_name = {c.name: c for c in collections}
+    try:
+        resume_forming(root, log)
+    except Exception as e:   # noqa: BLE001 — said, never the boot's end
+        report["skipped"].append(("forming", f"{type(e).__name__}: {e}"))
+        log(f"text index: a forming cut short could not be finished: {e}")
     _drop_gone(root, collections, log, report)
     by_ident: dict[str, list] = {}
     contents: dict[str, str | None] = {}
@@ -930,13 +1028,9 @@ def settle(root: Path, collections: list, *, log: Callable[[str], None] = print)
         if ident is not None:
             by_ident.setdefault(ident, []).append(c.name)
     invalidate()
-    # the copies this settle would make, counted once, before the first
-    copies: dict[str, int] = {}
-    for ident, names in by_ident.items():
-        if len(names) > 1 and not (root / SHARED / ident).exists():
-            src = _source(root, sorted(names), contents)
-            if src is not None and _copy_bytes(root, src):
-                copies[ident] = _copy_bytes(root, src)
+    plans = {ident: _plan(root, sorted(names), contents) for ident, names in by_ident.items()
+             if len(names) > 1}
+    copies = {ident: _copy_bytes(root, v) for ident, (how, v) in plans.items() if how == "copy"}
     short: set[str] = set()
     if copies:
         free = free_bytes(root / SHARED if (root / SHARED).exists() else root)
@@ -946,61 +1040,36 @@ def settle(root: Path, collections: list, *, log: Callable[[str], None] = print)
                 f"and {free / 2**30:.2f} GiB is free under {root / SHARED}: not formed this boot")
     for ident, names in sorted(by_ident.items()):
         names = sorted(names)
-        rel = f"{SHARED}/{ident}"
-        shared = root / rel
         if ident in short:
             report["skipped"].append((",".join(names), "no room for the copy of its index"))
             continue
         try:
             if len(names) == 1:
                 pl = placement(root, names[0])
-                if pl is not None and pl.get("identity") != ident:
-                    # alone in its group: it stays placed (no copy back)
-                    write_placement(root, names[0], pl["dir"], ident, content=contents.get(names[0]))
+                if pl is not None and members(root, pl["dir"]) == names:
+                    if folder_identity(root, pl["dir"]) != ident or pl.get("identity") != ident:
+                        _tag(root, pl["dir"], ident, contents.get(names[0]))
+                        write_placement(root, names[0], pl["dir"], ident, content=contents.get(names[0]))
                 continue
-            placed = [n for n in names if (placement(root, n) or {}).get("dir") == rel]
-            how = "kept"
-            if shared.exists() and not placed:
-                _set_aside(root, rel, log)
-            if not shared.exists():
-                src = _source(root, names, contents)
-                if src is None:
-                    shared.mkdir(parents=True, exist_ok=True)
-                    how, src = "new", names[0]
-                    if not _content_valid(root, src, contents.get(src)):
-                        _reset_all(_manifest(root, src))
-                else:
-                    how = _move_into(root, src, shared)
-                write_placement(root, src, rel, ident, content=contents.get(src))
-                _write_json(shared / WRITER, {"writer": src, "since": int(time.time())})
-                placed = [src]
-            w = writer(root, rel, placed)
-            for n in names:
-                pl = placement(root, n)
-                if pl is None or pl["dir"] != rel:
-                    if not _content_valid(root, n, contents.get(n)):
-                        reset = _reset_all(_manifest(root, n))
-                        why = "all of them: how it indexes changed"
-                    else:
-                        reset = reset_differing(_manifest(root, n), _manifest(root, w), log=log)
-                        why = f"those whose marks differed from {w}'s"
-                    write_placement(root, n, rel, ident, content=contents.get(n))
-                    log(f"text index: {n} joins {rel} (written by {w}); {reset} document(s) reset, "
-                        f"{why}, to be copied as {w} indexes them")
-                    if pl is not None and is_shared(pl["dir"]) and not members(root, pl["dir"]):
-                        old = root / pl["dir"]
-                        if old.is_dir():
-                            freed = sum(f.stat().st_size for f in old.rglob("*") if f.is_file())
-                            shutil.rmtree(old)
-                            report["freed"] += freed
-                            log(f"text index: {pl['dir']}, read by nobody now, removed "
-                                f"({freed / 2**30:.2f} GiB)")
-                freed = _remove_groups(root / n / "index")
-                if freed:
-                    report["freed"] += freed
-                    log(f"text index: {n}'s own copy removed, {freed / 2**30:.2f} GiB freed")
+            how, v = _plan(root, names, contents)
+            if how == "keep":
+                _tag(root, v, ident, contents.get(names[0]))
+                w = writer(root, v)
+                for n in names:
+                    _place(root, n, v, ident, contents.get(n), w, log)
+                rel = v
+            elif how == "copy":
+                pl = placement(root, v)
+                rel = _form(root, source=root / pl["dir"], copy=True, ident=ident, content=contents.get(v),
+                            writer_name=v, place=names, log=log)
+            elif how == "rename":
+                rel = _form(root, source=root / v / "index", copy=False, ident=ident,
+                            content=contents.get(v), writer_name=v, place=names, log=log)
+            else:
+                rel = _form(root, source=None, copy=False, ident=ident, content=contents.get(names[0]),
+                            writer_name=names[0], place=names, log=log)
             invalidate()
-            report["groups"].append({"identity": ident, "members": names,
+            report["groups"].append({"identity": ident, "members": names, "dir": rel,
                                      "writer": writer(root, rel, names), "how": how})
         except NoRoom as e:
             report["skipped"].append((",".join(names), str(e)))
@@ -1017,7 +1086,6 @@ def settle(root: Path, collections: list, *, log: Callable[[str], None] = print)
     for o in report["orphans"]:
         log(f"text index: {o['dir']} is placed by no held collection ({o['bytes'] / 2**30:.2f} GiB); "
             f"`hold collection forget` of a group's last member removes its directory")
-    del by_name
     return report
 
 
@@ -1027,7 +1095,7 @@ def orphans(root: Path) -> list[dict[str, Any]]:
     out = []
     shared_root = root / SHARED
     for d in sorted(shared_root.iterdir()) if shared_root.is_dir() else []:
-        if not d.is_dir() or d.name.endswith(".forming"):
+        if not d.is_dir() or d.name.endswith(".forming") or d.name == ".forming":
             continue
         rel = f"{SHARED}/{d.name}"
         if d.name.startswith(".stale-") or not members(root, rel):
@@ -1038,22 +1106,23 @@ def orphans(root: Path) -> list[dict[str, Any]]:
 def form_at_carry(root: Path, from_name: str, to_name: str, ident_from: str | None,
                   ident_to: str | None, *, content: str | None = None) -> str | None:
     """A sister carried from `from_name` (`hold collection new --sister-of`,
-    case J), their identities equal, joins her sister's index NOW: her
-    manifest is a copy of her sister's, so every mark she holds is the
-    writer's, and nothing is copied or reset. Her sister's index shared
-    already: she is placed in that directory. Her sister on her own: the
-    group is FORMED — her sister's group directories RENAMED into
-    `.text-index/<identity>` (one filesystem), both placed, her sister its
+    case J), their identities equal, joins her sister's index NOW. Her
+    sister placed in a group already: she JOINS it through `_place`'s
+    reconciliation (her marks against its writer's; its writer kept). Her
+    sister on her own: a NEW group is formed (`_form`, journaled): her
+    sister's group directories RENAMED in, both placed, her sister its
     writer. Raises WriterHeld, renaming nothing, when another process holds
     one of her sister's index writers (the running worker: `louise node
-    stop` first). Returns the directory, or None: their identities differ."""
+    stop` first). Returns the folder, or None: their identities differ."""
     if ident_from is None or ident_from != ident_to:
         return None
     root = Path(root)
     invalidate()
+    resume_forming(root, lambda m: None)
     pl = placement(root, from_name)
-    if pl is not None:
-        write_placement(root, to_name, pl["dir"], ident_to, content=content)
+    if pl is not None and (root / pl["dir"]).is_dir():
+        w = writer(root, pl["dir"]) or from_name
+        _place(root, to_name, pl["dir"], ident_to, content, w, lambda m: None)
         return pl["dir"]
     held = writer_held(root / from_name / "index")
     if held is not None:
@@ -1061,16 +1130,8 @@ def form_at_carry(root: Path, from_name: str, to_name: str, ident_from: str | No
                          f"running worker keeps its index writers for its life): forming {from_name} and "
                          f"{to_name}'s shared index renames it, so nothing was renamed. `louise node "
                          f"stop`, then run this again (CLAUDE.md RULE 1)")
-    rel = f"{SHARED}/{ident_from}"
-    shared = root / rel
-    if shared.exists() and not members(root, rel):
-        _set_aside(root, rel, lambda m: None)
-    if not shared.exists():
-        _move_into(root, from_name, shared)
-    write_placement(root, from_name, rel, ident_from, content=content)
-    _write_json(shared / WRITER, {"writer": from_name, "since": int(time.time())})
-    write_placement(root, to_name, rel, ident_to, content=content)
-    return rel
+    return _form(root, source=root / from_name / "index", copy=False, ident=ident_from, content=content,
+                 writer_name=from_name, place=[from_name, to_name], log=lambda m: None)
 
 
 def leave_at_forget(root: Path, name: str, *, dry_run: bool = False) -> dict[str, Any] | None:

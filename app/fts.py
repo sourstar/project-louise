@@ -137,6 +137,38 @@ class IndexMissing(RuntimeError):
     not there: refused, never made empty where it should be."""
 
 
+#: (manifest, group) a get_index found marked and holding no index: refused
+#: for this process's life (a writer makes a group's index before it marks)
+_marked_groups: set[tuple[str, str]] = set()
+
+
+def _marked_in(collection, group: str) -> bool:
+    """Whether the collection's manifest marks a document of `group`
+    indexed (`fts_done=1`; a multilingual document's sections go to their
+    own groups, so `mul` says nothing of one). Read only where the group's
+    index is missing: never on the hot path."""
+    import sqlite3
+    from pathlib import Path
+    manifest = getattr(collection, "manifest_path", None)
+    if manifest is None or not Path(manifest).is_file():
+        return False
+    key = (str(manifest), group)
+    if key in _marked_groups:
+        return True
+    try:
+        con = sqlite3.connect(f"file:{manifest}?mode=ro", uri=True, timeout=30)
+        try:
+            langs = [r[0] for r in con.execute("SELECT DISTINCT lang FROM documents WHERE fts_done=1")]
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+    hit = any(group_for(l) == group for l in langs if (l or "") != MULTILINGUAL)
+    if hit:
+        _marked_groups.add(key)
+    return hit
+
+
 def _refuse_missing(collection, root, group: str) -> None:
     """A collection whose placement names an index directory that does not
     exist is refused in words, never given an empty one made there: it
@@ -156,7 +188,30 @@ def _refuse_missing(collection, root, group: str) -> None:
                            f"its boot places the index again")
 
 
+#: set while a WRITE opens its index (`_for_write`): only a write makes an
+#: index where the manifest marks the group indexed. A thread's own flag, so
+#: the signature every caller (and every test's stand-in) uses is unchanged
+_writing = threading.local()
+
+
+def _for_write(group: str, collection=None) -> tantivy.Index:
+    """`get_index` for a write (`index_books`, `rewrite_without`): it makes
+    the group's index where it is missing — the write puts its data there."""
+    _writing.on = True
+    try:
+        return get_index(group, collection)
+    finally:
+        _writing.on = False
+
+
 def get_index(group: str, collection=None) -> tantivy.Index:
+    """The group's index, opened once per process. A WRITE (`_for_write`:
+    `index_books`, `rewrite_without`) makes it where it is missing. A READ
+    never makes an empty index where the collection's manifest marks a
+    document of the group indexed (third read of 74c95825, 2026-11-27: a
+    search while a group is being formed made one, which would answer nothing
+    for them): it refuses in words (`IndexMissing`). A delete opens none that
+    is missing (`delete_book`, `delete_books`: nothing is held there)."""
     if collection is None:
         collection = collections_mod.default_collection()
     # Keyed on the physical path, not collection.name: two different
@@ -180,6 +235,13 @@ def get_index(group: str, collection=None) -> tantivy.Index:
             if key in _indexes:
                 return _indexes[key]             # opened while this caller waited
         path = root / group
+        if not getattr(_writing, "on", False) and not (path / "meta.json").is_file() \
+                and _marked_in(collection, group):
+            raise IndexMissing(f"{getattr(collection, 'name', '?')}: its manifest marks documents of the "
+                               f"{group!r} text index indexed, and {path} holds no index: none is made "
+                               f"empty there (it would answer nothing for them). The worker's boot "
+                               f"places the index again (`louise node restart`); a lost one is rebuilt "
+                               f"by `louise dev reindex`")
         path.mkdir(parents=True, exist_ok=True)
         from app import validity as validity_mod
         with_validity = validity_mod.declared(collection) is not None
@@ -528,7 +590,7 @@ def index_books(entries, collection=None) -> None:
                 if g not in reached:
                     by_group.setdefault(g, []).append((MULTILINGUAL, book_id, [], None, None))
     for group, items in by_group.items():
-        idx = get_index(group, collection)
+        idx = _for_write(group, collection)
         algorithm = pystem_algorithm(group)
         writer, lock = _writer((str(base_of(collection)), group), idx)
         with lock:
@@ -739,6 +801,8 @@ def delete_book(lang: str, book_id: int, collection=None):
     if (lang or "") == MULTILINGUAL:
         groups = list(dict.fromkeys([group_for(l) for l in section_languages(collection)] + groups))
     for group in groups:
+        if not (base / group / "meta.json").is_file():
+            continue                    # nothing held there, and a delete makes no index
         idx = get_index(group, collection)
         writer, lock = _writer((str(base), group), idx)
         with lock:
@@ -773,6 +837,8 @@ def delete_books(group: str, book_ids, collection=None) -> int:
         return 0
     if not text_index.writes(collection):
         return len(ids)             # its writer deletes them (`delete_book`)
+    if not (base_of(collection) / group / "meta.json").is_file():
+        return len(ids)             # nothing held there, and a delete makes no index
     idx = get_index(group, collection)
     writer, lock = _writer((str(base_of(collection)), group), idx)
     with lock:
@@ -805,7 +871,7 @@ def rewrite_without(group: str, collection=None) -> int:
                            f"its records, never rewritten from its stored fields")
     if collection is not None and not text_index.writes(collection):
         raise ReaderWrite(f"{collection.name} reads a shared text index: its writer rewrites it")
-    idx = get_index(group, collection)
+    idx = _for_write(group, collection)
     writer, lock = _writer((str(base_of(collection)), group), idx)
     algorithm = pystem_algorithm(group)
     with lock:
