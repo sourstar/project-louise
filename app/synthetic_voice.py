@@ -93,6 +93,32 @@ class SyntheticError(ValueError):
     but the profiles it names."""
 
 
+class Deferred(SyntheticError):
+    """The card had no room for a speech model now: nothing more was drawn,
+    and the same command later goes on (exit 3, a deferral, never an error)."""
+
+
+#: what the model server says when a backend found no room on the card
+#: (München, 2026-11-27: "level_zero backend failed with error: 39
+#: (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)", then the backend's EOF)
+_NO_ROOM = re.compile(r"OUT_OF_DEVICE_MEMORY|out of (device )?memory|no_room_on_device|"
+                      r"code = Unavailable", re.IGNORECASE)
+
+
+def _loaded(url: str, model: str, kind: str) -> None:
+    """THE ROOM IS MADE BEFORE A DRAW (München, 2026-11-27: the command asked
+    omnivoice to draw on a card at 30.7 GB of 32 right after a deploy, and
+    the backend died of OUT_OF_DEVICE_MEMORY): the model loaded the way the
+    resident set loads the speech models, through `model_load.ensure_loaded`,
+    which unloads the models used longest ago until it fits."""
+    from app import model_load, resident
+    try:
+        resident._speech_warm(url, model, kind, f"synthetic voice ({kind})")()
+    except (model_load.LoadRefused, model_load.LoadTimeout) as e:
+        raise Deferred(f"{model} could not be loaded on the card now ({e}); nothing more was drawn: "
+                       f"run the same command again") from None
+
+
 def _words(text: str) -> list[str]:
     return [w.casefold() for w in _WORD.findall(text or "")]
 
@@ -155,6 +181,9 @@ def _draw(url: str, model: str, text: str, lang: str, design: str | None = None)
         except Exception as e:  # noqa: BLE001 — said in words
             raise SyntheticError(f"{model} at {url} did not answer ({type(e).__name__})") from None
     if r.status_code != 200:
+        if r.status_code in (500, 503) and _NO_ROOM.search(r.text or ""):
+            raise Deferred(f"{model} at {url} found no room on the card ({r.status_code}: {r.text[:200]}); "
+                           f"nothing more was drawn: run the same command again")
         raise SyntheticError(f"{model} at {url} answered {r.status_code}: {r.text[:200]}")
     return r.content
 
@@ -251,6 +280,8 @@ def make(lang: str, *, candidates: int = 1, designs: list[str] | None = None, te
     if taken:
         raise SyntheticError(f"the model server already holds {', '.join(repr(n) for n in taken)}; nothing "
                              f"was made. Set it with `louise node speech synthetic {lang} --use \"{taken[0]}\"`")
+    _loaded(url, tts, "tts")
+    _loaded(url, stt, "stt")
     made: list[dict[str, Any]] = []
     discarded: list[dict[str, Any]] = []
     try:
@@ -258,8 +289,10 @@ def make(lang: str, *, candidates: int = 1, designs: list[str] | None = None, te
                   tag=tag, log=log)
     except SyntheticError as e:
         if made:
-            raise SyntheticError(f"{e}; made before it, kept on the model server and set nowhere: "
-                                 f"{', '.join(m['name'] for m in made)}") from None
+            again = (f"; the command run again makes the rest under the next free letters"
+                     if isinstance(e, Deferred) and len(plan) > 1 else "")
+            raise type(e)(f"{e}; made before it, kept on the model server and set nowhere: "
+                          f"{', '.join(m['name'] for m in made)}{again}") from None
         raise
     draws = len(made) + len(discarded)
     out: dict[str, Any] = {"language": lang, "tag": tag, "model": tts, "heard_by": stt, "sentence": text,
