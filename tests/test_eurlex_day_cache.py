@@ -53,3 +53,45 @@ def test_a_cache_that_does_not_open_is_no_cache(tmp_path, monkeypatch):
     _lay(tmp_path, "31972R1473")
     monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("x")))
     assert len(_ids(tmp_path)) == 1
+
+
+def test_every_app_module_the_day_is_derived_through_is_in_the_digest():
+    """Architecture's read of 2fdd1e31, 1: notice.py was left out."""
+    import importlib
+    import sys
+    importlib.import_module("app.plugins.eurlex.source")
+    hashed = {p.resolve() for p in src._day_modules()}
+    used = {f"app/plugins/eurlex/{m}.py" for m in ("source", "formex", "from_tree", "rdf", "notice")}
+    from pathlib import Path
+    root = Path(src.__file__).resolve().parents[3]
+    for m, mod in list(sys.modules.items()):
+        f = getattr(mod, "__file__", None)
+        if f and (m.startswith("app.plugins.eurlex") or m in ("app.plugins.eli", "app.plugins.base")):
+            assert Path(f).resolve() in hashed, f"{m} derives the day and is not hashed"
+    assert all((root / u).resolve() in hashed for u in used)
+
+
+def test_a_transient_read_error_is_never_kept(tmp_path, monkeypatch):
+    """Architecture's read of 2fdd1e31, 2: EIO on a first walk was kept as
+    the unit's error and the unit stayed out of every walk."""
+    _lay(tmp_path, "31972R1473")
+    real = src._unit_day
+    monkeypatch.setattr(src, "_unit_day", lambda *a, **k: (_ for _ in ()).throw(OSError(5, "Input/output error")))
+    assert _ids(tmp_path) == []
+    monkeypatch.setattr(src, "_unit_day", real)
+    assert len(_ids(tmp_path)) == 1, "healthy again: read again, not the kept error"
+
+
+def test_a_corrupt_cache_is_said_and_made_anew(tmp_path, capsys):
+    _lay(tmp_path, "31972R1473")
+    _ids(tmp_path)
+    db = next(tmp_path.rglob("days.sqlite"))
+    for side in db.parent.glob("days.sqlite-*"):
+        side.unlink()
+    db.write_bytes(b"not a database at all" * 100)
+    src._SAID.clear()
+    assert len(_ids(tmp_path)) == 1
+    assert "does not open" in capsys.readouterr().out
+    assert list(db.parent.glob("days.bad.*.sqlite")), "moved aside"
+    import sqlite3
+    assert sqlite3.connect(db).execute("SELECT count(*) FROM day").fetchone()[0] == 1, "made anew, and kept"

@@ -53,3 +53,24 @@ def test_the_walk_says_where_it_is(tmp_path):
     said = []
     list(SOURCE.discover(DiscoverState(corpus_root=tmp_path, say=said.append)))
     assert said and said[0].startswith("walking lang=it/1972")
+
+
+def test_an_act_with_text_reads_its_source_no_second_time(tmp_path, monkeypatch):
+    """Architecture's read of 2fdd1e31, 3: every Formex act paid a second
+    full parse of its body (40 MB: 3.74 s against 3.1 s)."""
+    _lay(tmp_path, "31972R1473")
+    monkeypatch.setattr(src, "_formex_title_only", lambda *a: (_ for _ in ()).throw(AssertionError("read")))
+    (_ref, doc), = _docs(SOURCE, tmp_path).values()
+    assert "title-only" not in [i.code for i in doc.issues]
+
+
+def test_an_enacting_terms_that_is_only_an_inclusion_is_not_title_only(tmp_path, monkeypatch):
+    unit = _lay(tmp_path, "31972R1473")
+    b = unit / BODY
+    data = b.read_bytes()
+    data = re.sub(rb"<PREAMBLE>.*?</PREAMBLE>", b"<PREAMBLE/>", data, flags=re.S)
+    data = re.sub(rb"<ENACTING\.TERMS>.*?</ENACTING\.TERMS>",
+                  b'<ENACTING.TERMS><INCL.ELEMENT FILEREF="x.xml" TYPE="OTHER"/></ENACTING.TERMS>', data, flags=re.S)
+    b.write_bytes(data)
+    (_ref, doc), = _docs(SOURCE, tmp_path).values()
+    assert "title-only" not in [i.code for i in doc.issues]

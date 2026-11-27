@@ -208,6 +208,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 import re
 from pathlib import Path
 from typing import Any
@@ -654,19 +655,49 @@ def _lone_wrapper_head(entries: list[os.DirEntry]) -> bytes | None:
 DAY_CACHE_KIND = "eurlex-unit-days"
 
 
+#: the modules a unit's day is derived through, hashed whole (architecture's
+#: read of 2fdd1e31: notice.py was left out — LANGUAGES, the Notice the tree
+#: builds, work_day). The plugin package entire, and what it imports from the
+#: platform to name an id; tests/test_eurlex_day_cache.py fails when the
+#: derivation imports a module of the app this list does not hold.
+DAY_MODULES_DIRS = ("app/plugins/eurlex",)
+DAY_MODULES = ("app/plugins/eli.py", "app/plugins/base.py")
+
+
+def _day_modules() -> list[Path]:
+    app_root = Path(__file__).resolve().parents[3]
+    out: list[Path] = []
+    for d in DAY_MODULES_DIRS:
+        out += sorted((app_root / d).glob("*.py"))
+    out += [app_root / m for m in DAY_MODULES]
+    return out
+
+
 def _day_code_digest() -> str:
-    """A digest of EVERY module the day is derived through, whole (not a list
-    of functions, which a helper's rule change would slip past): any edit to
-    one walks every unit once again — correct, and one walk per such deploy."""
+    """A digest of EVERY module the day is derived through, whole, and of the
+    interpreter and the XML parser that read the files: any edit walks every
+    unit once again — correct, and one walk per such deploy."""
     import hashlib
-    from . import formex as _fx, from_tree as _ft, rdf as _rdf
-    h = hashlib.sha256()
-    for mod in (__import__(__name__, fromlist=["_"]), _fx, _ft, _rdf):
+    import pyexpat
+    import sys
+    h = hashlib.sha256(f"{sys.version}|{pyexpat.EXPAT_VERSION}".encode())
+    for path in _day_modules():
+        h.update(path.name.encode())
         try:
-            h.update(Path(mod.__file__).read_bytes())
-        except (OSError, TypeError, AttributeError):
-            h.update(repr(mod).encode())
+            h.update(path.read_bytes())
+        except OSError:
+            h.update(b"?")
     return h.hexdigest()[:16]
+
+
+_SAID: set[str] = set()
+
+
+def _say_once(message: str) -> None:
+    key = message.split(" (", 1)[0]
+    if key not in _SAID:
+        _SAID.add(key)
+        print(message, flush=True)
 
 
 def _formex_title_only(view: dict, act) -> bool:
@@ -681,8 +712,10 @@ def _formex_title_only(view: dict, act) -> bool:
         return False
     for el in body.iter():
         tag = el.tag.rsplit("}", 1)[-1] if isinstance(el.tag, str) else ""
-        if tag in ("PREAMBLE", "ENACTING.TERMS") and text(el):
-            return False
+        if tag in ("PREAMBLE", "ENACTING.TERMS") and (
+                text(el) or any(isinstance(c.tag, str) and c.tag.rsplit("}", 1)[-1] == "INCL.ELEMENT"
+                                for c in el.iter())):
+            return False                    # text, or an inclusion that holds it
     try:
         annexes = formex.annex_names(formex._parse(view[act.wrapper_file], act.wrapper_file))
     except (KeyError, formex.FormexError):
@@ -710,22 +743,42 @@ class _DayCache:
         self.pending: list[tuple[str, str, str | None, str | None]] = []
         self.con = None
         place = derived.place_kept(DAY_CACHE_KIND, root) or (root / derived.BESIDE / DAY_CACHE_KIND)
+        self.path = place / "days.sqlite"
+        self.con = self._open()
+        if self.con is None and self.path.exists():
+            # derived data: a cache that does not open is moved aside and made
+            # anew (review of 2fdd1e31, 4: a corrupt one never healed)
+            try:
+                self.path.replace(self.path.with_name(f"days.bad.{int(time.time())}.sqlite"))
+            except OSError:
+                pass
+            self.con = self._open()
+
+    def _open(self):
+        import sqlite3
+        con = None
         try:
-            place.mkdir(parents=True, exist_ok=True)
-            con = sqlite3.connect(place / "days.sqlite", timeout=30, check_same_thread=False)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            con = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("CREATE TABLE IF NOT EXISTS day(path TEXT PRIMARY KEY, sig TEXT NOT NULL, "
                         "day TEXT, err TEXT)")
-            self.con = con
-        except (OSError, sqlite3.Error):
-            self.con = None
+            con.execute("SELECT count(*) FROM day WHERE 0").fetchone()
+            return con
+        except (OSError, sqlite3.Error) as e:
+            if con is not None:
+                con.close()
+            _say_once(f"[eurlex] the unit-day cache {self.path} does not open ({type(e).__name__}: {e}): "
+                      f"every unit is read this walk")
+            return None
 
     def sig(self, entries) -> str:
-        parts = [self.code]
+        import hashlib
+        h = hashlib.sha256(self.code.encode())
         for e in entries:
             st = e.stat()
-            parts.append(f"{e.name}:{st.st_size}:{st.st_mtime_ns}")
-        return "|".join(parts)
+            h.update(f"|{e.name}:{st.st_size}:{st.st_mtime_ns}:{st.st_ino}".encode())
+        return h.hexdigest()[:32]
 
     def get(self, path: str, sig: str):
         if self.con is None:
@@ -750,8 +803,8 @@ class _DayCache:
             with self.con:
                 self.con.executemany("INSERT OR REPLACE INTO day(path, sig, day, err) VALUES(?,?,?,?)",
                                      self.pending)
-        except Exception:   # noqa: BLE001 — a cache that cannot be written is no cache
-            pass
+        except Exception as e:   # noqa: BLE001 — a cache that cannot be written is no cache, said once
+            _say_once(f"[eurlex] the unit-day cache {self.path} is not written ({type(e).__name__}: {e})")
         self.pending.clear()
 
     def close(self) -> None:
@@ -977,14 +1030,18 @@ class EurlexSource:
                     if kept is not None:
                         day, err = kept
                     else:
+                        transient = False
                         try:
                             day = _unit_day(unit, celex, entries, self.TREE_FACTS)
-                        except (OSError, ValueError) as e:
-                            day, err = None, str(e)
+                        except OSError as e:
+                            day, err, transient = None, str(e), True     # a read that may heal: never kept
+                        except ValueError as e:
+                            day, err = None, str(e)                      # the content's own fault
                         else:
                             err = None if day is not None else \
                                 "no consolidation date in its CELEX and no OJ date in its wrapper"
-                        days.put(str(unit), sig, day, err)
+                        if not transient:
+                            days.put(str(unit), sig, day, err)
                     if day is None:
                         yield DocRef(source_id=self.source_id, native_id=celex, locator=str(unit),
                                      scope="container", error=f"{unit_rel(lang, celex)}: {err}"[:200])
@@ -1418,7 +1475,8 @@ class EurlexSource:
         if own_eli and own_eli != work_eli:
             keys.add(PROFILE.key(own_eli))
         sections = formex.sections(act)
-        if act.rendered_sections is None and _formex_title_only(view, act):
+        if act.rendered_sections is None and not any(text.strip() for _, text in sections) \
+                and _formex_title_only(view, act):
             # A CHUNKLESS DOCUMENT STATES WHY (lesson E1, 2026-11-25: 41 Formex
             # acts whose source holds only a title; app/build_check.py refuses
             # a chunkless document that states none). Decided from the SOURCE,
