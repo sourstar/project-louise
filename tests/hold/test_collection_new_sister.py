@@ -581,3 +581,20 @@ def test_one_acquirer_a_folder_and_the_file_s_own_word_wins(tmp_path):
     # idempotent: run again over its own answer
     again = collections_mod._one_acquirer(chain)
     assert [(x.acquire_enabled, x.acquire_by) for x in again] == [(x.acquire_enabled, x.acquire_by) for x in chain]
+
+
+def test_a_sister_s_room_counts_what_her_carry_copies(pair, card):
+    """gutenberg-nemo's dry run (2026-11-27) said 73.1 GiB: gutenberg's 54-GB
+    index, which her carry links, and its 19-GiB vector table, which a
+    sister never carries. Counted as copied: her sister's manifest, and the
+    index only where it is not linked."""
+    from app.hold import recreate
+    root, old, _ = pair
+    _ready(root, old, card)
+    full = recreate.to_copy(root, "old", "sis")
+    assert full.get("lance", 0) > 0, "her sister holds vectors"
+    mine = recreate.to_copy(root, "old", "sis", linked_index=True, parts=recreate.SISTER_PARTS)
+    assert "lance" not in mine and mine["state/manifest.sqlite"] == full["state/manifest.sqlite"]
+    assert set(recreate.to_copy(root, "old", "sis", parts=recreate.RECUT_SISTER_PARTS)) == {"state/manifest.sqlite"}
+    need, _ = recreate.room(root, "old", "sis", make=False, linked_index=True, parts=recreate.SISTER_PARTS)
+    assert need < sum(full.values())
