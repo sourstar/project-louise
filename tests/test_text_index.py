@@ -371,7 +371,8 @@ def _tree(root):
     """Every file under `root`: its path, inode, size and mtime — what a boot
     that moves, copies or resets nothing leaves as it was."""
     return {str(p.relative_to(root)): (p.stat().st_ino, p.stat().st_size, p.stat().st_mtime_ns)
-            for p in sorted(root.rglob("*")) if p.is_file() and not p.name.endswith(("-wal", "-shm"))}
+            for p in sorted(root.rglob("*")) if p.is_file() and not p.name.endswith(("-wal", "-shm"))
+            and not (p.name == "lock" and p.parent.name == "state")}      # her lock, taken to check
 
 
 def test_the_share_reads_her_sister_s_own_index_her_marks_reconciled_once(tmp_path):
@@ -636,12 +637,141 @@ def test_a_forget_cut_short_is_finished_after_a_boot_withheld_her(tmp_path, monk
     assert (b.fts_dir / "en" / "seg.store").read_bytes() == b"alpha" and not (root / "alpha").exists()
 
 
-def test_retiring_a_collection_lets_go_of_its_text_index_writers(tmp_path, monkeypatch):
-    """A routed forget renames the folder: the worker's tantivy writer on it
-    is let go first (its writer lock with it)."""
-    root, [(a, _), (_b, _)] = _discovered(tmp_path)
-    monkeypatch.setattr(collections_mod, "louise_root", lambda: root.parent)
+def test_a_forget_lets_go_of_its_index_writers_before_the_rename_and_a_pause_does_not(tmp_path, monkeypatch):
+    """The writer's tantivy writer is let go only where a rename follows (a
+    forget handing the folder to her), never at every pause."""
+    from app.hold import forget as forget_mod
+    root, [(a, acon), (b, bcon)] = _discovered(tmp_path)
+    acon.close(), bcon.close()
     fts.index_book("en", 1, [{"id": "x:0:1", "chapter": "", "text": "a b c"}], a)
-    assert text_index.writer_held(a.fts_dir), "the writer this process holds"
+    assert text_index.writer_held(a.fts_dir) == "en"
     worker.retire_collection("alpha", timeout=1.0)
-    assert text_index.writer_held(a.fts_dir) is None
+    assert text_index.writer_held(a.fts_dir) == "en", "a pause keeps it"
+    _share(root, ["alpha", "beta"], "alpha")
+    assert forget_mod.forget(root, "alpha")["text_index"]["to"] == "beta"
+    assert text_index.writer_held(b.fts_dir) is None and (b.fts_dir / "en" / "meta.json").is_file()
+
+
+def test_her_run_is_her_sister_s_when_the_carry_compares_their_identities(tmp_path, monkeypatch):
+    """The read of e52138ee, 3: before her seed her own run is her Codex's
+    first; she seeds from her sister's latest, so that is the one compared —
+    as the dry run does."""
+    from app import louise
+    c = _codex()
+    sister = collections_mod.Collection(name="old", plugin="gutenberg", profile=None, embed_mode_default=None,
+                                        corpus_dir=tmp_path, manifest_path=tmp_path / "m", fts_dir=tmp_path / "i",
+                                        lance_dir=tmp_path / "l", snapshot="20261201", codex=c)
+    her = collections_mod.Collection(name="sis", plugin="gutenberg", profile=None, embed_mode_default=None,
+                                     corpus_dir=tmp_path, manifest_path=tmp_path / "m2", fts_dir=tmp_path / "i2",
+                                     lance_dir=tmp_path / "l2", snapshot="20261101", codex=c)
+    monkeypatch.setattr(collections_mod, "_load_one", lambda p: sister if "old" in str(p) else her)
+    a, b = louise._index_identities(tmp_path, "old", "sis")
+    assert a is not None and a == b
+    assert text_index.identity(sister) != text_index.identity(her), "her own run differs before the seed"
+
+
+def test_the_check_never_writes_a_placement_another_process_holds(tmp_path, monkeypatch):
+    """The read of e52138ee, 4: her lock held by another process (a
+    concurrent `unshare`): not re-checked, nothing written; held by this
+    process (the worker runs her): checked."""
+    import time
+    from app.hold import lock as lock_mod
+    root, [(a, _), (b, _)] = _discovered(tmp_path)
+    _share(root, ["alpha", "beta"], "alpha")
+    _with_identity(monkeypatch, {"alpha": "id1", "beta": "id2"})
+    before = text_index.placement_file(root, "beta").read_bytes()
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        lk = lock_mod.take(lock_mod.state_dir(root, "beta"), "beta", "hold collection unshare")
+        os.write(w, b"1")
+        time.sleep(30)
+        lk.release()
+        os._exit(0)
+    try:
+        os.read(r, 1)
+        out = text_index.settle(root, [a, b], log=lambda m: None)
+        assert out["skipped"] == ["beta"] and text_index.placement_file(root, "beta").read_bytes() == before
+    finally:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        os.close(r), os.close(w)
+    mine = lock_mod.take(lock_mod.state_dir(root, "beta"), "beta", "the node (worker)")
+    try:
+        text_index.settle(root, [a, b], log=lambda m: None)
+        assert "no longer matches" in text_index.withheld(b)
+    finally:
+        mine.release()
+
+
+def test_a_forget_run_again_passes_only_her_sister_is_not_held(tmp_path):
+    """The read of e52138ee, 5: once this one's held file is gone, a reader
+    withheld for another reason (her identity) still refuses the forget."""
+    from app.hold import forget as forget_mod
+    from app.hold.codex import CodexError
+    root, [(a, acon), (b, bcon)] = _discovered(tmp_path)
+    acon.close(), bcon.close()
+    _fake_group(a.fts_dir, "en", b"alpha")
+    text_index.write_placement(root, "beta", "alpha/index", "x", writer="alpha",
+                               withheld="her index identity no longer matches alpha's: `louise hold collection "
+                                        "unshare beta`")
+    (root / "alpha.toml").unlink()
+    with pytest.raises(CodexError, match="unshare beta"):
+        forget_mod.forget(root, "alpha")
+    assert text_index.not_held("her sister alpha, whose index she reads, is not held or not served here", "alpha")
+
+
+def test_unshare_refused_names_node_pause(tmp_path, monkeypatch, capsys):
+    import time
+    from app import louise
+    from app.hold import lock as lock_mod
+    root, [(a, _), (b, _)] = _discovered(tmp_path)
+    _share(root, ["alpha", "beta"], "alpha")
+    monkeypatch.setattr(louise.col, "name_of", lambda r, n: n)
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        lk = lock_mod.take(lock_mod.state_dir(root, "beta"), "beta", "the node (worker)")
+        os.write(w, b"1")
+        time.sleep(30)
+        lk.release()
+        os._exit(0)
+    try:
+        os.read(r, 1)
+        assert louise.main(["hold", "collection", "unshare", "beta", "--root", str(root)]) == 3
+        assert "`louise node pause beta`" in capsys.readouterr().err
+    finally:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        os.close(r), os.close(w)
+
+
+def test_a_hand_over_s_reset_takes_her_lock(tmp_path):
+    """Her marks are reset under HER lock: held by another process, nothing
+    is reset and the forget, resumable, says who holds her."""
+    import time
+    from app.hold import forget as forget_mod, lock as lock_mod
+    from app.hold.codex import CodexError
+    root, [(a, acon), (b, bcon)] = _discovered(tmp_path)
+    bcon.execute("UPDATE documents SET fts_done=1")
+    bcon.commit()
+    acon.close()
+    _share(root, ["alpha", "beta"], "alpha")                 # alpha's index holds no group her marks name
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        lk = lock_mod.take(lock_mod.state_dir(root, "beta"), "beta", "hold collection unshare")
+        os.write(w, b"1")
+        time.sleep(30)
+        lk.release()
+        os._exit(0)
+    try:
+        os.read(r, 1)
+        with pytest.raises(CodexError):
+            forget_mod.forget(root, "alpha")
+        assert bcon.execute("SELECT COUNT(*) FROM documents WHERE fts_done=1").fetchone()[0] == 3, "not reset"
+    finally:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        os.close(r), os.close(w)
+    assert forget_mod.forget(root, "alpha")["text_index"]["reset"] == 3, "run again: done"

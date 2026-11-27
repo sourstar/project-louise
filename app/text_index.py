@@ -865,7 +865,11 @@ def hand_over(root: Path, name: str, *, dry_run: bool = False) -> dict[str, Any]
     claimed = _marked_groups(_manifest(root, r))
     missing = sorted(claimed - {g.name for g in group_dirs(dst)})
     if missing:
-        out["reset"] = _reset_all(_manifest(root, r))
+        with _her_lock(root, r, "forget: the text index handed to her") as mine:
+            if not mine:
+                from .hold.lock import Held
+                raise Held(r, {"what": "another process"}, exit_code=3)
+            out["reset"] = _reset_all(_manifest(root, r))
         out["says"] = (f"{r}'s marks name {', '.join(missing)}, not in the index it receives: its "
                        f"{out['reset']} indexed document(s) reset, to be indexed again")
     placement_file(root, r).unlink(missing_ok=True)
@@ -905,14 +909,25 @@ def settle(root: Path, collections: list, *, log: Callable[[str], None] = print)
             f"collection placed there is withheld until `louise hold collection unshare <name>`")
     by_name = {c.name: c for c in collections}
     for c in collections:
-        pl = placement(root, c.name)
-        if pl is None:
+        if placement(root, c.name) is None:
             continue
         try:
-            why = _why(root, c, pl, by_name)
-            if why != pl.get("withheld") and not str(pl["dir"]).startswith(EARLIER + "/"):
-                write_placement(root, c.name, pl["dir"], pl.get("identity"),
-                                writer=pl.get("writer") or Path(pl["dir"]).parts[0], withheld=why)
+            # HER LOCK while her placement is read and written: a concurrent
+            # `unshare` (which holds it) is never undone; held by another
+            # process, she is not re-checked now, said
+            with _her_lock(root, c.name, "text index: the placement check") as mine:
+                if not mine:
+                    report.setdefault("skipped", []).append(c.name)
+                    log(f"text index: {c.name}'s placement not re-checked now: another process holds it")
+                    continue
+                invalidate()
+                pl = placement(root, c.name)
+                if pl is None:
+                    continue
+                why = _why(root, c, pl, by_name)
+                if why != pl.get("withheld") and not str(pl["dir"]).startswith(EARLIER + "/"):
+                    write_placement(root, c.name, pl["dir"], pl.get("identity"),
+                                    writer=pl.get("writer") or Path(pl["dir"]).parts[0], withheld=why)
         except Exception as e:   # noqa: BLE001 — that collection's, said; never the boot's
             why = f"its placement could not be checked ({type(e).__name__}: {e})"
         if why:
@@ -921,6 +936,37 @@ def settle(root: Path, collections: list, *, log: Callable[[str], None] = print)
         else:
             report["served"].append(c.name)
     return report
+
+
+class _her_lock:
+    """`name`'s write lock for a short read-and-write of her state: taken
+    when free, kept as it is when THIS process holds it (the worker runs
+    her); `as` gives False when another process holds it (skip her)."""
+
+    def __init__(self, root: Path, name: str, what: str) -> None:
+        self.root, self.name, self.what, self.lock = Path(root), name, what, None
+
+    def __enter__(self) -> bool:
+        from .hold import lock as lock_mod
+        state = lock_mod.state_dir(self.root, self.name)
+        who = lock_mod.holder(state)
+        if who is not None:
+            return who.get("pid") == os.getpid()
+        try:
+            self.lock = lock_mod.take(state, self.name, self.what)
+        except lock_mod.Held:
+            return False
+        return True
+
+    def __exit__(self, *exc) -> None:
+        if self.lock is not None:
+            self.lock.release()
+
+
+def not_held(why: str | None, sister: str) -> bool:
+    """Whether `why` is the check's "her sister is not held" (a forget cut
+    short), the one withheld reason a forget run again completes over."""
+    return bool(why) and why.startswith(f"her sister {sister}, whose index she reads, is not held")
 
 
 def _why(root: Path, c, pl: dict, by_name: dict) -> str | None:

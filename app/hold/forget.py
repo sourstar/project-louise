@@ -548,7 +548,8 @@ def _forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     sisters = text_index.readers(root, name)
     # a forget cut short, re-run after a boot: this one no longer held, her
     # placement withheld for that reason alone — the hand-over completes
-    if len(sisters) > 1 or (held.exists() and any(text_index.withheld_at(root, r) for r in sisters)):
+    if len(sisters) > 1 or any(text_index.withheld_at(root, r) and not (
+            not held.exists() and text_index.not_held(text_index.withheld_at(root, r), name)) for r in sisters):
         raise CodexError(f"forget {name}: {', '.join(sisters)} read its text index ({name}/index), and "
                          f"only one sister whose index identity still matches can be handed it. Nothing "
                          f"was removed. First, for each: " + "; ".join(
@@ -597,6 +598,11 @@ def _forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     origin_to = hand_over_origin(root, name)
     # 2c. its text index, to the one sister that reads it: renamed into hers,
     #     who writes it from now on (app/text_index.py `hand_over`)
+    if text_index.readers(root, name):
+        # the rename follows: this process's writers on the folder let go
+        # first (the worker's, for a routed forget; the tantivy lock with them)
+        from app import fts
+        fts.release_under(Path(root) / name / "index")
     shared = text_index.hand_over(root, name)
     # 3. a never-share collection: every deposit erased, no trace (02 §2.9)
     erased = 0

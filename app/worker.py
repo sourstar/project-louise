@@ -8463,12 +8463,10 @@ def retire_collection(name: str, timeout: float = 60.0) -> None:
             thread.join(timeout=max(0.0, deadline - time.time()))
     # its catalog writer too, held by path: the directory goes, and a
     # collection made again under this name would inherit a writer on
-    # deleted files (`catalog.release_under`); and its text index's writers,
-    # before the forget renames that folder to a sister who reads it
-    # (`text_index.hand_over`: the tantivy writer lock goes with them)
+    # deleted files (`catalog.release_under`). Its text index's writers are
+    # let go by the forget itself, only where a rename follows (`hand_over`)
     try:
         from . import catalog
-        fts.release_under(collections_mod.louise_root() / "collections" / name / "index")
         catalog.release_under(collections_mod.louise_root() / "collections" / name)
     except Exception:   # noqa: BLE001 — the forget goes on; the next start holds nothing
         pass

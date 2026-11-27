@@ -1117,11 +1117,16 @@ def _new_reference_and_gate(a, run, name: str, say) -> tuple[int, bool]:
 def _index_identities(root: Path, her_sister_name: str, name: str) -> tuple[str | None, str | None]:
     """The two collections' text-index identities (app/text_index.py), from
     their held files; (None, None) where either cannot be read."""
+    import dataclasses
     from app import collections as collections_mod, text_index
     from app.hold import deposit
     try:
         a = collections_mod._load_one(deposit.held_file(root, her_sister_name))
         b = collections_mod._load_one(deposit.held_file(root, name))
+        # HER RUN IS HER SISTER'S: she seeds from her sister's latest snapshot,
+        # so before the seed her own (the Codex's first run) is not what she
+        # will hold — and the dry run, which takes her sister's, agrees
+        b = dataclasses.replace(b, snapshot=a.snapshot)
         return text_index.identity(a), text_index.identity(b)
     except Exception:   # noqa: BLE001 — unknown: she is given her own copy
         return None, None
@@ -3108,9 +3113,14 @@ def cmd_collection_unshare(a) -> int:
     takes HER lock only (exit 3 while the worker runs her: `node pause
     <collection>` first) and needs no node stop; routed (07 §7.3)."""
     from app import text_index
+    from app.hold import lock as lock_mod
     name = col.name_of(a.root, a.collection)
     root = Path(a.root) if a.root else _default_root()
-    _take_write_lock(a.root, name, "hold collection unshare")
+    try:
+        _take_write_lock(a.root, name, "hold collection unshare")
+    except lock_mod.Held as e:
+        raise _defer(f"{e}. `louise node pause {name}`, then run this again, then `louise node resume "
+                     f"{name}`") from None
     _print(text_index.unshare(root, name, log=lambda m: None))
     return 0
 

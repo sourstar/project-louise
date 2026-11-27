@@ -444,24 +444,26 @@ def _release_index_writers(coll) -> None:
 
 
 def shared_index_refusal(root, name: str) -> str | None:
-    """Why the collection cannot be refit in place, or None: a SHARED text
-    index (app/text_index.py `placement`, `.text-index/<identity>`) holds the
-    members' documents once, and its identity includes the layers — a refit
-    of one member would leave the others reading or writing an index cut at
-    another layer (the independent read of e492ebaf, 2). A group refit is not
-    built; none exists on the node (München, 2026-11-27)."""
+    """Why the collection cannot be refit in place, or None: a text index
+    another reads (app/text_index.py, the static share) — its identity
+    includes the layers, so a refit of the writer would leave each sister
+    reading an index cut at another layer, and a refit of a sister would
+    leave her reading her sister's, cut at the old one. `unshare` first."""
     from app import text_index
-    from . import collection as col
-    mine = (text_index.placement(Path(root), name) or {}).get("dir")
-    if not mine:
-        return None
-    others = sorted(n for n, _c in col._held(Path(root))
-                    if n != name and (text_index.placement(Path(root), n) or {}).get("dir") == mine)
-    if not others:
-        return None
-    return (f"{name}'s text index is shared with {', '.join(others)} ({mine}): its identity includes the "
-            f"layers, so a refit of {name} alone would leave {'them' if len(others) > 1 else 'it'} on an index "
-            f"cut at another layer. A refit of a group is not built; nothing was written")
+    root = Path(root)
+    text_index.invalidate()
+    mine = text_index.placement(root, name)
+    if mine is not None:
+        return (f"{name} reads {mine['dir']}: its identity includes the layers, so a refit of {name} would "
+                f"leave her reading an index cut at the old ones. First: `louise hold collection unshare "
+                f"{name}`; nothing was written")
+    reads = text_index.readers(root, name)
+    if reads:
+        return (f"{', '.join(reads)} read {name}'s text index ({name}/index): its identity includes the "
+                f"layers, so a refit of {name} would leave {'them' if len(reads) > 1 else 'her'} on an index "
+                f"cut at another layer. First, for each: " + "; ".join(
+                    f"`louise hold collection unshare {r}`" for r in reads) + "; nothing was written")
+    return None
 
 
 def official_publication(root, name: str, codex: Codex) -> str | None:
