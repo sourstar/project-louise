@@ -331,9 +331,13 @@ class SpeechConfig:
     #: model's own default (OmniVoice: 32). The node's choice, never a
     #: reader's (operator, 2026-11-25: "add the steps to the admin settings")
     tts_steps: str | None = None
+    #: the name a hands-free reader calls the page by ("Philippe, …"):
+    #: unset, app/voice_wake.py's DEFAULT_NAME (docs/notes/hands-free-voice.md §3)
+    wake_name: str | None = None
 
 
-SPEECH_KEYS = ("stt_model", "vad_model", "tts_model", "tts_voice", "synthetic_voices", "tts_steps")
+SPEECH_KEYS = ("stt_model", "vad_model", "tts_model", "tts_voice", "synthetic_voices", "tts_steps",
+               "wake_name")
 #: `[speech] tts_steps`: the range a synthesis is asked for (the model's
 #: default is 32, and 16 and 32 are what was measured; the bounds only refuse a typo)
 TTS_STEPS = (4, 64)

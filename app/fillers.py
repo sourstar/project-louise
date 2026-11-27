@@ -56,9 +56,14 @@ WHERE: derived, re-creatable data, under LOUISE_CACHE_DIR through
 app/derived.py (invariant 6). No fast drive named: nothing is kept, nothing
 offered — the page's tone covers the wait, as for a pool that is short.
 
-WHEN, MADE: (a) LAZILY, when `GET /ask/voice/fillers` is asked for a voice
-and language whose pool is short; (b) after a report of used clips, the used
-kinds. ONE worker thread a process (the web's), one synthesis at a time, at
+WHEN, MADE: (a) AHEAD (operator, 2026-11-27, "Make ahead", after the
+first spoken questions after a deploy found every pool empty and played the
+tone): the web process asks itself, every AHEAD_S, for each of LANGUAGES in
+the voice a reader is read to in (`ahead`), so a pool emptied by a deploy or
+an engine swap is made up while the node is idle, before anyone asks; (b)
+when `GET /ask/voice/fillers` is asked for a voice and language whose pool
+is short (an admin's own voice, for one); (c) after a report of used clips,
+the used kinds. ONE worker thread a process (the web's), one synthesis at a time, at
 most one job per pool queued. A synthesis STARTS only while nothing holds
 the card for a person (`_busy`): no search, no step of a question and no
 interactive call in this process for QUIET_S (`dispatch.quiet_s`; every
@@ -159,6 +164,9 @@ POLL_S = 1.0
 RETRY_AFTER_S = 60.0
 #: the worker ends after this long with nothing to do
 IDLE_EXIT_S = 5.0
+#: how often the web asks itself for the pools ahead (`ahead`): a tick that
+#: finds every pool full costs a directory read per language
+AHEAD_S = 60.0
 #: at most this many ids in one report
 MOST_IDS = 16
 #: at most this many syntheses in one job: one a kind, twice over
@@ -427,7 +435,7 @@ _swept: list[tuple[str, str, str] | None] = [None]
 
 
 def ready(lang: Any, *, asked: Any = None, account_voice: str | None = None,
-          admin: bool = True) -> dict[str, Any]:
+          admin: bool = True, ahead: bool = False) -> dict[str, Any]:
     """`GET /ask/voice/fillers?lang=`: `{"lang", "voice", "ready": [{"id",
     "kind", "url"}]}` — the clips ready in the voice this reader's answer
     would be read in (`speech.reader_voice`) for `lang`, short first; `voice`
@@ -466,7 +474,13 @@ def ready(lang: Any, *, asked: Any = None, account_voice: str | None = None,
     out["ready"] = [{"id": have[k]["id"], "kind": k, "url": f"{ROUTE}/{have[k]['id']}"}
                     for k in KINDS if k in have]
     if len(have) < len(KINDS):
-        schedule(want)
+        if ahead:
+            with _lock:
+                back = _ahead_failed.get(want)
+            if back is None or time.monotonic() >= back[0]:
+                schedule(want)
+        else:
+            schedule(want)
     return out
 
 
@@ -650,6 +664,71 @@ def _drain() -> None:
             _worker = None
 
 
+#: the pools whose making failed: {want: (when ahead may ask again, the
+#: delay that set it)} — a BACKOFF, doubling from AHEAD_BACKOFF_S to
+#: AHEAD_BACKOFF_MAX_S, so a model that fails is not asked every minute
+#: with nobody asking, and the pools refill by themselves once it works
+#: (the operator's default; architecture's read of 535b2f68, 1). A success
+#: clears it.
+_ahead_failed: dict = {}
+AHEAD_BACKOFF_S = 60.0
+AHEAD_BACKOFF_MAX_S = 3600.0
+
+
+def ahead() -> int:
+    """The pools of every language in LANGUAGES, in the voice a reader is
+    read to in, asked for as a page would (`ready`): what is short is made in
+    the background, at idle, as any ask's. The number of languages asked;
+    a language that cannot be asked (no model, no voice, no engine read) is
+    skipped, and the next tick asks again. NOTHING IS MADE WHILE THE SPEECH
+    MODEL IS NOT LOADED (the keeper preloads it for Ask, and evicts it when
+    space is claimed): ahead never loads it into a full card — it makes up
+    the pools once a reader's question has loaded it. A pool that failed is
+    asked again only after its backoff (`_ahead_failed`)."""
+    from app import model_load, voice as node_voice
+    # nothing kept, or no speech model: nothing to make, nothing asked of the model server
+    node = node_voice.settings_or_none()
+    if _root() is None or not node.tts_model:
+        return 0
+    # not loaded: never loaded for this (the listing is cached, no load asked)
+    if model_load.backend_of(node_voice.server(), node.tts_model) is None:
+        return 0
+    asked = 0
+    for code in LANGUAGES:
+        try:
+            ready(code, admin=False, ahead=True)
+            asked += 1
+        except Exception as e:   # noqa: BLE001 — ahead is a convenience, never in a question's way
+            _say("warn", f"speech fillers: the pools ahead for {code} could not be asked ({type(e).__name__}: {e})")
+    return asked
+
+
+_ahead: list[threading.Thread | None] = [None]
+
+
+def start_ahead(first_s: float = 30.0) -> bool:
+    """The web's own ask for the pools ahead, every AHEAD_S from `first_s`
+    after the start (the question path's models load first, app/warmup.py);
+    one thread a process, ended at a stop. False when it already runs, or
+    when the web's background warm is switched off (`LOUISE_WARMUP=0`, the
+    test suite's: app/warmup.py)."""
+    import os
+    if os.getenv("LOUISE_WARMUP", "1") == "0":
+        return False
+    t = _ahead[0]
+    if t is not None and t.is_alive():
+        return False
+
+    def loop() -> None:
+        wait = first_s
+        while not _stop.wait(wait):
+            ahead()
+            wait = AHEAD_S
+    _ahead[0] = threading.Thread(target=loop, name="speech-fillers-ahead", daemon=True)
+    _ahead[0].start()
+    return True
+
+
 def _sweep_for(job: Sweep) -> None:
     root = _root()
     if root is None:
@@ -662,8 +741,16 @@ def _sweep_for(job: Sweep) -> None:
 
 
 def _fail(want: Want, why: str) -> None:
+    """A synthesis that failed: kept for RETRY_AFTER_S, and SAID ONCE AN
+    EPISODE (architecture's read of 535b2f68, 1) — until the pool is made,
+    a failure again is not a line again."""
     with _lock:
+        again = want in _failed
         _failed[want] = time.monotonic()
+        delay = min(AHEAD_BACKOFF_MAX_S, 2 * _ahead_failed[want][1]) if want in _ahead_failed else AHEAD_BACKOFF_S
+        _ahead_failed[want] = (time.monotonic() + delay, delay)
+    if again:
+        return
     _say("warn", f"speech fillers: {_voice_said(want)} ({want.lang}) not made — {why}; asked again at the "
                  f"next ask, {RETRY_AFTER_S:.0f} s from now at the earliest")
 
@@ -736,6 +823,7 @@ def _fill(want: Want) -> None:
             missing = [k for k in KINDS if k not in have]
             if not missing:
                 _failed.pop(want, None)
+                _ahead_failed.pop(want, None)
                 return
             kind = missing[0]
             text = _draw(want.lang, kind, _avoid(pool, kind, have))
@@ -776,6 +864,7 @@ def _fill(want: Want) -> None:
                 _write_atomic(pool / f"{clip_id}.json",
                               json.dumps(meta, ensure_ascii=False, sort_keys=True).encode("utf-8"))
                 _failed.pop(want, None)
+                _ahead_failed.pop(want, None)
             except OSError as e:
                 unwritten = e
         if unwritten is not None:
@@ -813,6 +902,7 @@ def reset() -> None:
                 break
         _pending.clear()
         _failed.clear()
+        _ahead_failed.clear()
         _worker = None
         _swept[0] = None
     _stop.clear()

@@ -1348,7 +1348,10 @@ def _sister_new(a, say) -> int:
         run.at("check", f"{a.name} is new")
     if run.dry:
         src = recreate.counts(root, her_sister_name, write_free=True)
-        need, free = recreate.room(root, her_sister_name, a.name, make=False)
+        # what the carry will copy, counted as it will copy it: no vector, and
+        # the index linked (same layers) or not copied at all (re-cut)
+        need, free = recreate.room(root, her_sister_name, a.name, make=False, linked_index=not recut,
+                                   parts=recreate.RECUT_SISTER_PARTS if recut else recreate.SISTER_PARTS)
         print(f"dry run: case J, a sister of {her_sister_name}: {a.name}; it stops before make, writes "
               f"nothing and takes no lock")
         if layer_params:
@@ -1457,7 +1460,7 @@ def _sister_new(a, say) -> int:
                 # 2026-11-08)
                 # and her own snapshot made. The worker indexes every document.
                 from app.hold import records as rec_mod, snapshot as sn_mod
-                need, free = recreate.room(root, her_sister_name, name)
+                need, free = recreate.room(root, her_sister_name, name, parts=recreate.RECUT_SISTER_PARTS)
                 if free < need:
                     raise CodexError(recreate.no_room(her_sister_name, name, need, free))
                 out = carry_mod.carry(root, her_sister_name, name, copy=True, apply=True, sister=True,
@@ -1502,7 +1505,8 @@ def _sister_new(a, say) -> int:
                                 f"worker indexes every document with her own layer")
             else:
                 parts = recreate.seed_parts(root, her_sister_name, name, now=_utc_now(), log=say)
-                need, free = recreate.room(root, her_sister_name, name, linked_index=True)
+                need, free = recreate.room(root, her_sister_name, name, linked_index=True,
+                                           parts=recreate.SISTER_PARTS)
                 if free < need:
                     raise CodexError(recreate.no_room(her_sister_name, name, need, free))
                 out = carry_mod.carry(root, her_sister_name, name, copy=True, apply=True, sister=True, log=say)
@@ -4063,7 +4067,7 @@ def cmd_node_speech(a) -> int:
         if a.speech_verb == "set":
             changes = {k: getattr(a, k) for k in SPEECH_KEYS if getattr(a, k) is not None}
             if not changes:
-                print("louise node speech set: nothing to set — give --stt, --vad, --tts, --voice, --synthetic or --steps "
+                print("louise node speech set: nothing to set — give --stt, --vad, --tts, --voice, --synthetic, --steps or --name "
                       "(an empty value removes one)", file=sys.stderr)
                 return 2
             out = voice.write(platform_config.platform_path(), changes)
@@ -8024,6 +8028,8 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--steps", dest="tts_steps", default=None, metavar="N",
                    help="the steps of one synthesis (4 to 64): fewer are faster and coarser; unset, the "
                         "model's own default (32)")
+    q.add_argument("--name", dest="wake_name", default=None, metavar="NAME",
+                   help="the name a hands-free reader calls the page by (\"Philippe, …\"); unset, Philippe")
     q.set_defaults(fn=cmd_node_speech)
 
     p = nverbs.add_parser("title", help="the node's title: the label at the top left of every page and a "

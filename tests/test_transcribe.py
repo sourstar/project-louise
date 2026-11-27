@@ -331,3 +331,27 @@ def test_each_step_is_timed_and_said_in_server_timing(node, platform, server):  
 
 def test_server_timing_is_the_w3c_form():
     assert transcribe.server_timing([("a", 1.0), ("b-c", 12.5)]) == "a;dur=1.0, b-c;dur=12.5"
+
+
+def test_one_deadline_for_the_whole_clip_the_stt_given_what_the_vad_left(platform, server, monkeypatch):
+    """Architecture's read of 3e13830d, 2: httpx's timeout is per call, so a
+    15 s bound on each let a clip run 30 s while the page gave up at 15."""
+    import time
+    platform(stt_model="whisper-large-v3", vad_model="silero-vad")
+    state, calls, _ = server
+    state["vad"] = R(data={"segments": [{"start": 0.5, "end": 1.0}]})
+    real = transcribe.httpc.post
+
+    def slow(url, **kw):
+        time.sleep(0.3 if url.endswith("/vad") else 0.0)
+        return real(url, **kw)
+    monkeypatch.setattr(transcribe.httpc, "post", slow)
+    got = transcribe.transcribe(clip(SAMPLES), "u.wav", "audio/wav", [("response_format", "json")],
+                                url="http://ai:8080", deadline_s=1.0)
+    assert got.status == 200
+    vad_timeout = next(kw["timeout"] for url, kw in calls if url.endswith("/vad"))
+    stt_timeout = stt_calls(calls)[0]["timeout"]
+    assert vad_timeout <= 1.0 and stt_timeout <= 1.0 - 0.3 + 0.05, (vad_timeout, stt_timeout)
+    calls.clear()
+    transcribe.transcribe(clip(SAMPLES), "u.wav", "audio/wav", [("response_format", "json")], url="http://ai:8080")
+    assert stt_calls(calls)[0]["timeout"] == transcribe.CALL_TIMEOUT_S, "no deadline: the calls' own bounds"

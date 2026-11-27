@@ -63,7 +63,16 @@ def timeout_s() -> float:
         return DEFAULT_S
 
 
+#: Ask paths that are no question of themselves: a hands-free utterance
+#: counts only when it was addressed (app/web.py `ask_voice_heard` notes it),
+#: or a radio near the phone keeps the web from ever trimming — "an open
+#: microphone is not activity" (architecture's read of 535b2f68, 4)
+NOT_QUESTIONS = ("/ask/voice/heard",)
+
+
 def is_question(path: str) -> bool:
+    if path in NOT_QUESTIONS:
+        return False
     return any(path == p or path.startswith(p if p.endswith("/") else p + "/") or
                (p.endswith("/") and path == p[:-1]) for p in QUESTION_PATHS)
 

@@ -418,6 +418,10 @@ def _bytes_under(path: Path) -> int:
 
 #: what the carry copies and `room` counts, by its path in the collection
 COPIED = ("lance", "index", "state/manifest.sqlite")
+#: what a case-J sister's carry copies: no vector of her sister's
+SISTER_PARTS = ("index", "state/manifest.sqlite")
+#: and a re-cut (relayered) sister's: no text index either, the worker builds hers
+RECUT_SISTER_PARTS = ("state/manifest.sqlite",)
 
 
 def sample_seed(request_digest: str, runs) -> bytes:
@@ -437,14 +441,19 @@ def _tree(root: Path, name: str, rel: str) -> Path:
     return vector_place.table_dir(root, name) if rel == "lance" else Path(root) / name / rel
 
 
-def to_copy(root: Path, pred_name: str, name: str, *, linked_index: bool = False) -> dict[str, int]:
-    """The bytes of each of `COPIED` the target does not hold yet (a resumed
-    carry counts only what is left), counted from the predecessor's files by
-    their size. `linked_index`: a sister's text index, whose language groups
-    are hard-linked (carry `_sister_index`): only the rest of it counts."""
+def to_copy(root: Path, pred_name: str, name: str, *, linked_index: bool = False,
+            parts: tuple[str, ...] = COPIED) -> dict[str, int]:
+    """The bytes of each of `parts` (of `COPIED`) the target does not hold
+    yet (a resumed carry counts only what is left), counted from the
+    predecessor's files by their size. `linked_index`: a sister's text
+    index, whose language groups are hard-linked (carry `_sister_index`):
+    only the rest of it counts. `parts`: what the carry copies — a case-J
+    sister copies no vector table (`SISTER_PARTS`), a re-cut one no text
+    index either (`RECUT_SISTER_PARTS`); gutenberg-nemo's dry run counted
+    gutenberg's 54-GB index and 19-GiB table it never copies (2026-11-27)."""
     from app import text_index
     out: dict[str, int] = {}
-    for rel in COPIED:
+    for rel in parts:
         there, src = _tree(root, name, rel), _tree(root, pred_name, rel)
         if not there.exists() or (there.is_dir() and not any(there.iterdir())):
             out[rel] = _bytes_under(src) if src.exists() else 0
@@ -470,7 +479,7 @@ def _lands(root: Path, name: str, rel: str) -> Path:
 
 
 def rooms(root: Path, pred_name: str, name: str, *, make: bool = True,
-          linked_index: bool = False) -> list[dict[str, Any]]:
+          linked_index: bool = False, parts: tuple[str, ...] = COPIED) -> list[dict[str, Any]]:
     """`[{where, need, free}]`, one per filesystem the carry writes to: the
     predecessor's vector table, text index and manifest, each counted only
     where the target does not hold it yet (a resumed carry), on the
@@ -480,11 +489,11 @@ def rooms(root: Path, pred_name: str, name: str, *, make: bool = True,
     makes nothing: the free space is read where the target would be made."""
     import shutil
     dst = Path(root) / name
-    sizes = to_copy(root, pred_name, name, linked_index=linked_index)
+    sizes = to_copy(root, pred_name, name, linked_index=linked_index, parts=parts)
     if make:
         dst.mkdir(parents=True, exist_ok=True)
     by_fs: dict[int, dict[str, Any]] = {}
-    for rel in COPIED:
+    for rel in parts:
         where = _lands(root, name, rel)
         while not where.exists() and where != where.parent:
             where = where.parent
@@ -495,11 +504,11 @@ def rooms(root: Path, pred_name: str, name: str, *, make: bool = True,
 
 
 def room(root: Path, pred_name: str, name: str, *, make: bool = True,
-         linked_index: bool = False) -> tuple[int, int]:
+         linked_index: bool = False, parts: tuple[str, ...] = COPIED) -> tuple[int, int]:
     """`(bytes the carry's copy needs, bytes free where it writes)` on the
     filesystem with the least to spare (`rooms`): one that cannot hold its
     share refuses the whole carry."""
-    worst = min(rooms(root, pred_name, name, make=make, linked_index=linked_index),
+    worst = min(rooms(root, pred_name, name, make=make, linked_index=linked_index, parts=parts),
                 key=lambda r: r["free"] - r["need"])
     return worst["need"], worst["free"]
 
