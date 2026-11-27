@@ -1407,9 +1407,11 @@ def _sister_new(a, say) -> int:
                                                                     enc_codex if encoder_from else source)))
         # HER SLICES ARE HER SISTER'S (RULE 2; gutenberg-nemo, 2026-11-27): she
         # holds her sister's records, part for part, so her file holds the same
-        # slices — never `slices = []`, which left normattiva-nemo's to be set
-        # by hand and would give a same-layers sister another index identity
-        # (app/text_index.py: the slices held are part of it)
+        # slices — never the `slices = []` a new file is written with, which
+        # holds nothing until a hand sets it (as gutenberg.next's file had to
+        # be, 2026-11-19, hold/carry.py `carry_file`) and would give a
+        # same-layers sister another index identity (app/text_index.py: the
+        # slices held are part of it)
         her_slices = _file_slices(root, her_sister_name)
         if her_slices:
             _set_held_selection(held, her_slices, ())
