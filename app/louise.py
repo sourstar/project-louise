@@ -1597,11 +1597,11 @@ def _sister_selection(root, her_sister_name: str) -> str:
     hold/carry.py `carry_file`) and would give a same-layers sister another
     index identity (app/text_index.py: the slices held are part of it).
 
-    And `acquire_enabled = false`: her corpus is her sister's (the carry
-    links her origin to it), and her sister acquires it. Without the line her
-    slices would turn on her own fetch and update plan (collections
-    `codex_defaults`), a second writer into the one origin folder, under
-    another manifest's claim (independent read of b28b0feb, 1)."""
+    No `acquire_enabled` line: who acquires the origin folder she shares
+    with her sister is the loader's (`collections._one_acquirer`): her sister
+    while it is held here, she once it is not, with no edit to her file
+    (independent read of b28b0feb, 1; München's check, 2026-11-27: legi_F,
+    whose sister is gone, must acquire)."""
     from app.hold import deposit
     path = deposit.held_file(Path(root), her_sister_name)
     raw = {}
@@ -1614,7 +1614,7 @@ def _sister_selection(root, her_sister_name: str) -> str:
         line = f"profile = {json.dumps(raw['profile'])}\n"
     else:
         line = "slices = []\n"
-    return line + "acquire_enabled = false\n"
+    return line
 
 
 def _encoder_from_source(root, name: str):
@@ -2425,8 +2425,7 @@ def _write_held_file(root, codex, encoder: str | None = None,
                    # a re-creation's interim name: the predecessor's title (07 §7.8)
                    + recreate.display_lines(root, col.name_of(root, codex.collection_id),
                                             lambda m: print(f"note: {m}", file=sys.stderr))
-                   # a case-J sister's: her sister's selection, and no acquisition
-                   # of her own (`_sister_selection`)
+                   # a case-J sister's: her sister's selection (`_sister_selection`)
                    + (selection if selection is not None else "slices = []\n")
                    # an annotations collection has relations and no vectors (02 §2.10)
                    + ('kinds = ["records", "relations"]\n' if cx.is_annotations(codex)

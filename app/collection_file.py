@@ -125,6 +125,12 @@ def _codex_toml_text(path: Path, *, codex: str, profile: str | None,
             profile == collections_mod.codex_defaults(cx, name, None, kinds)["everything"]:
         slices = "all"
     derived = collections_mod.codex_defaults(cx, name, slices, kinds, source or "origin")
+    # A SISTER'S STATED acquire_enabled is kept even where it equals the
+    # Codex's default: for her the default also depends on what else is held
+    # (collections._one_acquirer), so EUR-Lex5.next's `true` beside
+    # EUR-Lex5's `false` must survive any rewrite, or nobody fetches their
+    # folder (2026-11-27)
+    keep_acquire = acquire_enabled is not None and bool(getattr(cx, "derived_from", None))
     if acquire_enabled is None:
         acquire_enabled = derived["acquire_enabled"]
     lines = [f'codex = "{codex}"']
@@ -167,7 +173,7 @@ def _codex_toml_text(path: Path, *, codex: str, profile: str | None,
     if method is not None:
         lines.append(f"method = {_toml_scalar(method)}")
     kept = []
-    if bool(acquire_enabled) != derived["acquire_enabled"]:
+    if keep_acquire or bool(acquire_enabled) != derived["acquire_enabled"]:
         kept.append(f"acquire_enabled = {'true' if acquire_enabled else 'false'}")
     if (genesis_archive or None) != derived["genesis_archive"]:
         kept.append(f"genesis_archive = {_toml_scalar(genesis_archive or '')}")

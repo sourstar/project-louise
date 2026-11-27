@@ -444,20 +444,35 @@ def test_an_encoder_sister_has_her_sister_s_index_identity_and_slices(pair, card
     else:
         louise._write_held_file(root, old, "http://localai:8080", api="vega", embed_model="vega-old")
         text = path.read_text(encoding="utf-8")
-    path.write_text(text.replace("slices = []", 'slices = ["lang=en", "lang=it"]'), encoding="utf-8")
+    path.write_text(text.replace("slices = []", 'slices = "all"\nacquire_enabled = true'),
+                    encoding="utf-8")
+    # her sister's origin is a link to the node's corpus folder, as gutenberg's is
+    import shutil
+    src, target = root / "old" / "origin", root.parent / "corpora-old"
+    if src.exists():
+        shutil.move(str(src), str(target))
+    else:
+        target.mkdir()
+    src.symlink_to(target)
     assert _new_enc(root) == 0
+    assert (root / "sis" / "origin").resolve() == target.resolve(), "her origin is her sister's folder"
     with open(deposit.held_file(root, "sis"), "rb") as f:
         held = tomllib.load(f)
-    assert held["slices"] == ["lang=en", "lang=it"], "her sister's slices, not []"
-    assert held["acquire_enabled"] is False, "her sister acquires their one corpus; she never does"
+    assert held["slices"] == "all", "her sister's slices, not []"
+    assert "acquire_enabled" not in held, "who acquires is the loader's, not a line in her file"
     files = deposit.held_file(root, "old"), deposit.held_file(root, "sis")
     assert root.name == "collections"
     monkeypatch.setenv("LOUISE_ROOT", str(root.parent))      # the node's layout: <LOUISE_ROOT>/collections
-    a, b = (collections_mod._load_one(f) for f in files)
+    a, b = collections_mod._one_acquirer([collections_mod._load_one(f) for f in files])
     assert text_index.identity(a) is not None and text_index.identity(a) == text_index.identity(b)
-    assert b.acquire_enabled is False and a.slices == b.slices
-    assert collections_mod.sister_refusal(a) is None
-    assert "sister" in collections_mod.sister_refusal(b), "growing her is refused: her sister acquires"
+    assert a.slices == b.slices
+    assert a.acquire_enabled and not b.acquire_enabled and b.acquire_by == "old", \
+        "one acquirer a folder: her sister, while it is held and they read one folder"
+    assert collections_mod.sister_refusal(a, held=[a, b]) is None
+    assert "grow old" in collections_mod.sister_refusal(b, held=[a, b]), "growing her is refused"
+    alone = collections_mod._one_acquirer([collections_mod._load_one(files[1])])[0]
+    assert alone.acquire_enabled and alone.acquire_by is None, "her sister gone (legi_F): she acquires"
+    assert collections_mod.sister_refusal(alone, held=[alone]) is None
 
 
 def test_a_sister_of_a_file_spelling_profile_holds_that_profile_and_acquires_nothing(pair, card, monkeypatch):
@@ -474,7 +489,7 @@ def test_a_sister_of_a_file_spelling_profile_holds_that_profile_and_acquires_not
     assert _new_enc(root) == 0
     with open(deposit.held_file(root, "sis"), "rb") as f:
         held = tomllib.load(f)
-    assert held.get("profile") == "full" and "slices" not in held and held["acquire_enabled"] is False
+    assert held.get("profile") == "full" and "slices" not in held and "acquire_enabled" not in held
 
 
 def test_the_dry_run_names_the_encoder_side_and_makes_nothing(pair, card, capsys):
@@ -527,3 +542,32 @@ def test_derive_refuses_encoder_from_beside_a_space_or_layers(pair):
     for extra in ({"space_from": nemo}, {"layers": old.layers}, {"space": nemo.space}):
         with pytest.raises(CodexError, match="encoder_from"):
             col.derive(root, old.collection_id, encoder_from=nemo, plan_only=True, **extra)
+
+
+def test_one_acquirer_a_folder_and_the_file_s_own_word_wins(tmp_path):
+    """München's check of the node, 2026-11-27: legi_F (her sister gone)
+    acquires; EUR-Lex5.next acquires by its stated `true` while EUR-Lex5's
+    file says `false`; a sister reading her OWN folder acquires."""
+    import dataclasses
+    from types import SimpleNamespace
+    from app import collections as collections_mod
+    shared, own = tmp_path / "corpus", tmp_path / "own"
+    shared.mkdir()
+    own.mkdir()
+
+    def c(name, cid, sister=None, acquire=True, stated=False, folder=shared):
+        return collections_mod.Collection(
+            name=name, plugin="gutenberg", profile=None, embed_mode_default=None, corpus_dir=folder,
+            manifest_path=tmp_path / name / "m.sqlite", fts_dir=tmp_path / name / "i",
+            lance_dir=tmp_path / name / "l", acquire_enabled=acquire, acquire_stated=stated,
+            codex=SimpleNamespace(collection_id=cid, derived_from=sister))
+    root = c("root", "R")
+    sister = c("sis", "S", sister="R")
+    out = collections_mod._one_acquirer([root, sister])
+    assert out[0].acquire_enabled and not out[1].acquire_enabled and out[1].acquire_by == "root"
+    assert collections_mod._one_acquirer([sister])[0].acquire_enabled, "her sister not held"
+    stated = c("next", "N", sister="R", stated=True)
+    assert collections_mod._one_acquirer([c("root", "R", acquire=False, stated=True), stated])[1].acquire_enabled, \
+        "a file's own true wins"
+    assert collections_mod._one_acquirer([root, c("weekly", "W", sister="R", folder=own)])[1].acquire_enabled, \
+        "her own folder: her own fetch"

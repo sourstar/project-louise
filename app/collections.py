@@ -429,6 +429,12 @@ class Collection:
     # deployment (no collections/*.toml, or a TOML predating P0.4) sees zero
     # behavior change and no surprise outbound network access on restart.
     acquire_enabled: bool = False
+    # whether the FILE states acquire_enabled (else the Codex's default, and,
+    # for a sister reading her held sister's origin, off: `_one_acquirer`)
+    acquire_stated: bool = field(default=False, compare=False)
+    # the held collection that acquires the origin folder this one reads,
+    # where that is why this one does not (`_one_acquirer`); None otherwise
+    acquire_by: str | None = field(default=None, compare=False)
     license_ack: str | None = None   # "<iso8601>/<sha256-of-terms-text>", Tier-2 only (invariant 10)
     embed: EmbedRecipe | None = None  # [embed] block; None = env fallback
     # [reranker] block (05 §5.6); None = RERANK_URL, else no reranking
@@ -779,6 +785,7 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
         fts_dir=d / "index",
         lance_dir=lance,
         acquire_enabled=acquire,
+        acquire_stated="acquire_enabled" in raw,
         license_ack=_codex_ack(codex, d / "state"),
         embed=_codex_encoder(raw.get("embed_recipe") or raw.get("encoder"),
                              codex, where),
@@ -1006,19 +1013,30 @@ def _credited_archives(codex) -> list[str]:
     return [c.archive for c in codex.credits if c.kind == "archive" and c.archive]
 
 
-def sister_refusal(collection) -> str | None:
-    """Why `collection` takes no records from the origin, or None. A case-J
-    SISTER (`derived_from`, 02 §2.7) holds her sister's records part for
-    part, her origin linked to her sister's: her sister acquires their one
-    corpus. A fetch of hers would be a second writer into that folder under
-    another manifest's claim (gutenberg-nemo, 2026-11-27; the independent
-    read of b28b0feb), so growing her is refused and her file says
-    `acquire_enabled = false`."""
-    sister = getattr(getattr(collection, "codex", None), "derived_from", None)
-    if not sister:
+def sister_refusal(collection, held=None) -> str | None:
+    """Why growing `collection` is refused, or None: a case-J sister that
+    does not acquire because the held collection she derives from acquires
+    the origin folder they both read (`_one_acquirer`). Growing her (the
+    Library's grow, `hold records fetch`) would make her a second fetch into
+    that folder (gutenberg-nemo, 2026-11-27). A sister who took over
+    (Normattiva, once normattiva-nemo), one whose sister is gone (legi_F) or
+    one reading her own folder grows as any collection does. `held`: the
+    loaded collections (default `load_all()`)."""
+    sister_id = getattr(getattr(collection, "codex", None), "derived_from", None)
+    if not sister_id or getattr(collection, "acquire_enabled", True):
         return None
-    return (f"{collection.name} is a sister (02 §2.7): she holds the records of {str(sister)[:23]}…, whose "
-            f"origin she shares, and that collection takes them from the origin; grow it, not her")
+    try:
+        held = list(held) if held is not None else load_all()
+    except Exception as e:  # noqa: BLE001 — unsure who acquires: no second writer
+        return (f"{collection.name}: whether the collection she derives from acquires their corpus "
+                f"could not be read ({type(e).__name__}: {e}); nothing changed")
+    owner = next((c for c in held if c is not collection and getattr(getattr(c, "codex", None),
+                                                                      "collection_id", None) == sister_id),
+                 None)
+    if owner is None or not _same_folder(owner.corpus_dir, collection.corpus_dir):
+        return None
+    return (f"{collection.name} is {owner.name}'s sister (02 §2.7): she holds {owner.name}'s records and "
+            f"reads its origin, and {owner.name} takes them from the origin; grow {owner.name}, not her")
 
 
 def codex_defaults(codex, name: str, slices, kinds, source: str = "origin") -> dict[str, Any]:
@@ -1342,8 +1360,42 @@ def load_all(*, skip_unreadable: bool = False):
             refused.append(Refusal(name, p, NO_ENCODER))
             continue
         served.append(c)
+    served = _one_acquirer(served)
     _REFUSALS = tuple(refused)
     return (served, unreadable) if skip_unreadable else served
+
+
+def _one_acquirer(held: list) -> list:
+    """ONE ACQUIRER A FOLDER (gutenberg-nemo, 2026-11-27; the independent
+    reads of b28b0feb and 48e1496c; München's check of the node's sisters
+    the same day). A case-J sister (`derived_from`, 02 §2.7) whose file
+    states no `acquire_enabled` defaults OFF while the collection she derives
+    from is held here and both read one physical origin directory (the carry
+    links her origin to her sister's): her sister acquires it, and a second
+    fetch into that folder would run under another manifest's claim
+    (acquire/claim.py's lock is beside each manifest). A sister whose sister
+    is not held (legi_F) or whose origin is her own folder acquires by the
+    Codex's default; a file that STATES the key (EUR-Lex5.next's `true`,
+    EUR-Lex5's `false`) is the operator's, and it wins. Keyed on the folder's
+    physical identity, never on a name (CLAUDE.md)."""
+    import dataclasses
+    by_id = {getattr(getattr(c, "codex", None), "collection_id", None): c for c in held}
+    out = []
+    for c in held:
+        sister_id = getattr(getattr(c, "codex", None), "derived_from", None)
+        owner = by_id.get(sister_id) if sister_id else None
+        if (owner is not None and owner is not c and c.acquire_enabled and not c.acquire_stated
+                and _same_folder(owner.corpus_dir, c.corpus_dir)):
+            c = dataclasses.replace(c, acquire_enabled=False, acquire_by=owner.name)
+        out.append(c)
+    return out
+
+
+def _same_folder(a, b) -> bool:
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except (OSError, TypeError, RuntimeError):
+        return False
 
 
 def is_private(collection) -> bool:

@@ -198,6 +198,21 @@ def test_a_rewrite_keeps_what_the_codex_cannot_say(node):
     assert collections_mod._load_one(path) == before
 
 
+def test_a_sister_s_stated_acquisition_survives_a_rewrite(node, monkeypatch):
+    """EUR-Lex5.next's `acquire_enabled = true` beside EUR-Lex5's `false`
+    (2026-11-27): for a sister the default also depends on what else is held
+    (collections._one_acquirer), so her stated word is kept even where it
+    equals the Codex's default."""
+    import dataclasses
+    _, make, load = node
+    cx = make()
+    path, before = load(f'codex = "{cx.collection_id}"\nprofile = "full"\nacquire_enabled = true\n')
+    sister_cx = dataclasses.replace(cx, derived_from="sha256:" + "ab" * 32)
+    monkeypatch.setattr(collections_mod, "codex_at", lambda name: sister_cx)
+    rewrite(path, before)
+    assert "acquire_enabled = true" in path.read_text(encoding="utf-8")
+
+
 def test_the_new_shape_survives_a_rewrite(node):
     _, make, load = node
     cx = make()

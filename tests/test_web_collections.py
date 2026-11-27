@@ -261,8 +261,13 @@ def test_grow_is_refused_for_a_sister_whose_sister_acquires_their_corpus(client,
     import dataclasses
     from app import web as web_mod
     collection = collections_mod.by_name("gutenberg")
-    sister = dataclasses.replace(collection, codex=dataclasses.replace(collection.codex,
-                                                                       derived_from="sha256:" + "ab" * 32))
+    # her sister: a held collection reading the same origin, its id the one she derives from
+    from types import SimpleNamespace
+    owner = SimpleNamespace(name="owner", corpus_dir=collection.corpus_dir,
+                            codex=SimpleNamespace(collection_id="sha256:" + "ab" * 32))
+    sister = dataclasses.replace(collection, acquire_enabled=False, codex=dataclasses.replace(
+        collection.codex, derived_from=owner.codex.collection_id))
+    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: [owner, sister])
     monkeypatch.setattr(web_mod, "_collection_or_404", lambda name: sister)
     toml_path = collections_mod.config_toml_path("gutenberg")
     before = toml_path.read_text(encoding="utf-8")
@@ -273,6 +278,9 @@ def test_grow_is_refused_for_a_sister_whose_sister_acquires_their_corpus(client,
         r = client.post(f"/admin/library/gutenberg/grow/{route}", json={"profile": everything})
         assert r.status_code == 409 and "sister" in r.json()["detail"], r.text
     assert toml_path.read_text(encoding="utf-8") == before
+    # a sister who acquires (Normattiva, once normattiva-nemo) is not refused
+    took_over = dataclasses.replace(sister, acquire_enabled=True)
+    assert collections_mod.sister_refusal(took_over, held=[owner, took_over]) is None
 
 
 def test_embed_mode_is_a_per_collection_control(client):
