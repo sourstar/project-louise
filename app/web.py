@@ -454,6 +454,11 @@ RESULT_LANGUAGES = (
 )
 
 
+def _wake_default() -> str:
+    from . import voice_wake
+    return voice_wake.DEFAULT_NAME
+
+
 @ask_router.get("/ask", response_class=HTMLResponse)
 def ask_page(request: Request):
     from . import auth, voice
@@ -464,6 +469,8 @@ def ask_page(request: Request):
         # (app/voice.py `offered`): a voice not offered has no button — for a
         # reader who is not an admin, one with no synthetic voice set
         "voice": voice.offered(admin=auth.admin(getattr(request.state, "viewer", None))),
+        # the name hands-free is called by (`[speech] wake_name`; app/voice_wake.py)
+        "wake_name": voice.settings_or_none().wake_name or _wake_default(),
         "result_languages": RESULT_LANGUAGES,
         "default_results": retrieval.DEFAULT_RESULTS,
         "default_rerank_depth": retrieval.RERANK_TOP_N,
@@ -1510,6 +1517,69 @@ def _as_question(fn, job, arg):
     from .rage import dispatch
     with dispatch.question():
         return fn(job, arg)
+
+
+#: what the page sends of the sentences just read, for the echo guard
+HEARD_SAID_CHARS = 4000
+#: a clip this long at most (hands-free cuts at 20 s): 16 kHz mono 16-bit
+HEARD_MAX_BYTES = 2 * 1024 * 1024
+
+
+@ask_router.post("/ask/voice/heard")
+async def ask_voice_heard(request: Request):
+    """HANDS-FREE, ONE UTTERANCE (docs/notes/hands-free-voice.md step 1;
+    operator, 2026-11-27: 1A, 2A, 3): multipart `file` (the page's 16 kHz
+    WAV), `language` (the page's), `follow` ("1" within the continuation
+    window), `said` (the sentences just read, for the echo guard). The
+    node's VAD and STT write it (app/transcribe.py) and app/voice_wake.py
+    says what it is: `{addressed, command, text}`.
+
+    PRIVACY: an utterance not addressed is answered with no text, and its
+    words are never logged, kept or traced — nor on the error path. The one
+    line a clip writes (`[voice] heard …`) carries its length, the VAD's
+    outcome, the STT's seconds and the outcome: counts München reads by the
+    hour, never words. An addressed utterance keeps the question open
+    (/ask/active's claim); an open microphone alone never does."""
+    from starlette.concurrency import run_in_threadpool
+    from . import transcribe, voice as node_voice, voice_wake
+    from .rage import dispatch
+    if not request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
+        raise HTTPException(400, "the upload is multipart/form-data with a `file` field")
+    form = await request.form()
+    try:
+        up = form.get("file")
+        if up is None or isinstance(up, str):
+            raise HTTPException(400, "the upload has no `file`")
+        audio = await up.read(HEARD_MAX_BYTES + 1)
+        if len(audio) > HEARD_MAX_BYTES:
+            raise HTTPException(413, f"an utterance is at most {HEARD_MAX_BYTES >> 20} MB")
+        lang = str(form.get("language") or "").strip()[:8]
+        follow = str(form.get("follow") or "") == "1"
+        said = str(form.get("said") or "")[:HEARD_SAID_CHARS]
+    finally:
+        await form.close()
+    seconds = max(0.0, (len(audio) - 44) / 32000.0)
+    fields = [("response_format", "json")] + ([("language", lang)] if lang else [])
+    got = await run_in_threadpool(transcribe.transcribe, audio, "utterance.wav", "audio/wav", fields)
+    stt_s = round(sum(d for n, d in got.timing if n == "stt") / 1000.0, 2)
+    vad = got.vad.split(":")[0]
+    if got.status != 200:
+        print(f"{time.strftime('%H:%M:%S')} [voice] heard {seconds:.1f} s, vad {vad}, stt {stt_s} s: "
+              f"failed (HTTP {got.status})", flush=True)
+        raise HTTPException(502, f"the utterance could not be written down (HTTP {got.status})")
+    try:
+        text = str(json.loads(got.body or b"{}").get("text") or "")
+    except ValueError:
+        text = ""
+    out = voice_wake.heard(text, name=node_voice.settings_or_none().wake_name, follow=follow, said=said)
+    outcome = (f"addressed ({out.command or 'question'})" if out.addressed
+               else f"dropped ({out.dropped})")
+    print(f"{time.strftime('%H:%M:%S')} [voice] heard {seconds:.1f} s, vad {vad}, stt {stt_s} s: {outcome}",
+          flush=True)
+    if out.addressed:
+        with dispatch.question():
+            pass
+    return out.as_dict()
 
 
 @ask_router.post("/ask/active")

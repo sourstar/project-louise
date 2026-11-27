@@ -522,7 +522,11 @@
   if (mic) {
     if (window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && AC) {
       mic.hidden = false;
-      mic.addEventListener('click', () => { if (busy || (questionOn && !rec)) return; rec ? stop() : start(); });
+      mic.addEventListener('click', () => {
+        // hands-free on: the tap turns it off (one microphone at a time)
+        if (hf) { if (hfBox) { hfBox.checked = false; hfBox.dispatchEvent(new Event('change')); } else hfStop(); return; }
+        if (busy || (questionOn && !rec)) return; rec ? stop() : start();
+      });
     } else {
       mic.remove();
       console.info('Louise: no microphone on this page — a browser opens one only for an https page or localhost');
@@ -1227,6 +1231,149 @@
     } catch (e) { /* never in the way */ }
   }
 
+
+  // ---- HANDS-FREE: the microphone left on, the page called by name ------
+  //
+  // docs/notes/hands-free-voice.md step 1 (operator, 2026-11-26: "keep the
+  // mic on, summoning the chat by starting a phrase with its name
+  // 'Philippe...'"; decided 2026-11-27: 1A, 2A, 3). The switch keeps the
+  // microphone open; the energy gate cuts each utterance (HF_PRE_MS before
+  // its first loud window, to HF_QUIET_MS of quiet after it, HF_MAX_MS at
+  // most), and each goes to POST /ask/voice/heard, which answers what it was
+  // ({addressed, command, text}): a question is asked as a dictated one is, a
+  // command pauses, resumes or stops the reading (stop also aborts an answer
+  // still written), the name alone opens the continuation window
+  // (HF_FOLLOW_MS) and pauses a reading. The microphone stays open while the
+  // answer is read (2A): the node drops what it hears of its own voice, from
+  // the sentences read in the last HF_SAID_MS (`said`).
+  // - ONE CLIP IN FLIGHT (architecture, 2026-11-27): an utterance cut while
+  //   one is being written down waits, and a newer one replaces it.
+  // - AN OPEN MICROPHONE IS NOT ACTIVITY: only an addressed utterance (the
+  //   node marks it) and the reading keep the question open (/ask/active).
+  // - The screen is kept on (Screen Wake Lock) while it listens: Android may
+  //   take the microphone from a page whose screen is off.
+  const HF_KEY = 'louise-hands-free';
+  const HF_PRE_MS = 300, HF_QUIET_MS = 1500, HF_MAX_MS = 20000, HF_MIN_MS = 300;
+  const HF_FOLLOW_MS = 5000, HF_SAID_MS = 30000;
+  const hfBox = document.getElementById('hands-free'), hfChoice = document.getElementById('hands-free-choice');
+  let hf = null;
+  function hfSaid() {
+    const r = reading; if (!r) return '';
+    const since = now() - HF_SAID_MS;
+    return r.items.filter(it => it.t.play != null && (it.t.end == null || it.t.end >= since))
+                  .map(it => it.text).join(' ').slice(-4000);
+  }
+  function hfSay(text) { if (status) { status.textContent = text || ''; status.hidden = !text; } }
+  function hfWindow(h, buf, rate) {
+    let e = 0; for (let i = 0; i < buf.length; i++) e += buf[i] * buf[i];
+    const rms = Math.sqrt(e / (buf.length || 1)), ms = buf.length * 1000 / rate;
+    const loud = rms > Math.max(FLOOR_MIN, FLOOR_X * (h.floor === null ? 0 : h.floor));
+    h.floor = h.floor === null ? rms : Math.min(h.floor, rms);
+    if (!h.utt) {
+      h.pre.push(buf); h.preMs += ms;
+      while (h.pre.length > 1 && h.preMs - h.pre[0].length * 1000 / rate >= HF_PRE_MS) { h.preMs -= h.pre[0].length * 1000 / rate; h.pre.shift(); }
+      if (loud) { h.utt = { chunks: h.pre.slice(), ms: h.preMs, quiet: 0, loud: ms }; h.pre = []; h.preMs = 0; }
+      return;
+    }
+    const u = h.utt; u.chunks.push(buf); u.ms += ms;
+    if (loud) { u.quiet = 0; u.loud += ms; } else u.quiet += ms;
+    if (u.quiet >= HF_QUIET_MS || u.ms >= HF_MAX_MS) {
+      h.utt = null;
+      if (u.loud >= HF_MIN_MS) hfSend(h, downsample(u.chunks, rate, RATE));
+      h.floor = null;                          // the room's level, learnt again
+    }
+  }
+  function hfSend(h, pcm) {
+    if (h.inflight) { h.waiting = pcm; return; }      // one in flight; the newest waits, replacing any other
+    h.inflight = true;
+    const fd = new FormData();
+    fd.append('file', new Blob([wavBytes(pcm)], { type: 'audio/wav' }), 'utterance.wav');
+    const lang = pageLang(); if (lang) fd.append('language', lang);
+    if (performance.now() < h.followUntil) fd.append('follow', '1');
+    const said = hfSaid(); if (said) fd.append('said', said);
+    fetch('/ask/voice/heard', { method: 'POST', body: fd })
+      .then(r => r.ok ? r.json() : null).then(d => { if (d && hf === h) hfAct(h, d); })
+      .catch(() => {})
+      .finally(() => {
+        h.inflight = false;
+        if (hf === h && h.waiting) { const next = h.waiting; h.waiting = null; hfSend(h, next); }
+      });
+  }
+  function hfAct(h, d) {
+    h.counts[d.addressed ? 'addressed' : 'dropped']++;
+    if (!d.addressed) return;
+    h.followUntil = performance.now() + HF_FOLLOW_MS;
+    const c = d.command;
+    if (c === 'listen') { if (reading && !reading.paused) pauseReading(); hfSay('listening — say the question'); return; }
+    if (c === 'wait') { if (reading && !reading.paused) pauseReading(); return; }
+    if (c === 'resume') { if (reading && reading.paused) resumeReading(); return; }
+    if (c === 'stop') {
+      stopReading();
+      if (writing && typeof window.abortAsk === 'function') window.abortAsk();
+      return;
+    }
+    if (!d.text) return;
+    // a question: as a dictated one is asked (the answer read by itself),
+    // a reading or an answer still written ended first
+    stopReading();
+    if (writing && typeof window.abortAsk === 'function') window.abortAsk();
+    const q = document.getElementById('q');
+    q.value = d.text;
+    if (typeof window.fitQuestion === 'function') window.fitQuestion();
+    dictated = q.value.trim();
+    hfSay('');
+    if (typeof window.go === 'function') window.go();
+  }
+  async function hfLock(h) {
+    try { if (navigator.wakeLock && document.visibilityState === 'visible') h.lock = await navigator.wakeLock.request('screen'); }
+    catch (e) { h.lock = null; }
+  }
+  async function hfStart() {
+    if (hf) return;
+    const h = { stream: null, ctx: null, src: null, node: null, rate: 0, floor: null, pre: [], preMs: 0, utt: null,
+                inflight: false, waiting: null, followUntil: 0, lock: null, counts: { addressed: 0, dropped: 0 } };
+    hf = h;
+    try {
+      h.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true,
+                                                                       noiseSuppression: true, autoGainControl: true } });
+      if (hf !== h) { h.stream.getTracks().forEach(t => t.stop()); return; }
+      h.ctx = new AC(); h.rate = h.ctx.sampleRate;
+      h.src = h.ctx.createMediaStreamSource(h.stream);
+      const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
+      try { await h.ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+      h.node = new AudioWorkletNode(h.ctx, 'louise-capture', { numberOfOutputs: 1, outputChannelCount: [1] });
+      h.node.port.onmessage = e => { if (hf === h) hfWindow(h, e.data, h.rate); };
+      h.src.connect(h.node); h.node.connect(h.ctx.destination);
+      if (h.ctx.state === 'suspended') await h.ctx.resume().catch(() => {});
+    } catch (e) {
+      hfStop();
+      if (hfBox) hfBox.checked = false;
+      say('hands-free could not open the microphone (' + ((e && (e.name || e.message)) || e) + ')');
+      return;
+    }
+    hfLock(h);
+    if (mic) mic.classList.add('hands-free');
+    hfSay('hands-free: say "' + (window.louiseWakeName || 'Philippe') + '" and the question');
+  }
+  function hfStop() {
+    const h = hf; if (!h) return;
+    hf = null;
+    try { if (h.src) h.src.disconnect(); if (h.node) h.node.disconnect(); } catch (e) { /* already */ }
+    if (h.ctx) h.ctx.close().catch(() => {});
+    if (h.stream) h.stream.getTracks().forEach(t => t.stop());
+    if (h.lock) h.lock.release().catch(() => {});
+    if (mic) mic.classList.remove('hands-free');
+    hfSay('');
+  }
+  document.addEventListener('visibilitychange', () => { if (hf && !hf.lock && document.visibilityState === 'visible') hfLock(hf); });
+  if (hfBox && mic && !mic.hidden) {
+    if (hfChoice) hfChoice.hidden = false;
+    hfBox.addEventListener('change', () => {
+      try { localStorage.setItem(HF_KEY, hfBox.checked ? 'on' : 'off'); } catch (e) {}
+      if (hfBox.checked) { unlock(); toneUnlock(); hfStart(); } else hfStop();
+    });
+  }
+
   function startReading() {
     if (!player) player = new Audio();
     let r;
@@ -1356,6 +1503,8 @@
     sentences, cut, downsample, wavBytes, phrasesOn,
     // the cue plan, for a test: a question taken as a spoken one is, the long cue's delay, what was cued
     cueQuestion: () => cueQuestion(), setLongCue(ms) { LONG_CUE_MS = ms; },
+    // hands-free, for a test: on, off, and what it counted (never what was said)
+    handsFree: { start: () => hfStart(), stop: () => hfStop(), on: () => !!hf, counts: () => (hf ? { ...hf.counts } : null) },
     cues: () => (times.cues || []).map(c => c.kind), split, budget, trimWav, rates: () => ({ ...rates }),
     // a test's or an operator's rates, kept as measured ones are
     setRates(k) { rates = { ...RATES0, ...k }; answerRates = null; outlier = false; try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {} },

@@ -58,9 +58,9 @@ from app.platform_config import SPEECH_KEYS, SpeechConfig
 
 #: the command line's word for each key (`node speech set --stt …`)
 FLAGS = {"stt_model": "--stt", "vad_model": "--vad", "tts_model": "--tts", "tts_voice": "--voice",
-         "synthetic_voices": "--synthetic", "tts_steps": "--steps"}
+         "synthetic_voices": "--synthetic", "tts_steps": "--steps", "wake_name": "--name"}
 #: the keys that name no model: `show` does not look them up on the server
-NOT_MODELS = ("tts_voice", "synthetic_voices", "tts_steps")
+NOT_MODELS = ("tts_voice", "synthetic_voices", "tts_steps", "wake_name")
 #: `GET /v1/models` of the model server, for `show`: a typo is seen at once
 LIST_TIMEOUT_S = 5.0
 #: what the browser needs before it lets a page open the microphone
