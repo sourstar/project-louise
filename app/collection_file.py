@@ -740,7 +740,18 @@ def _apply(c, raw: dict[str, Any], path: Path, parsed: dict[str, Any], *,
             "also": also,
             "embed": None if annotations else _file_embed(written),
             "share": bool(written.get("share", False)),
-            "acquire_enabled": back.acquire_enabled, "profile": back.profile}
+            "acquire_enabled": _effective_acquire(back), "profile": back.profile}
+
+
+def _effective_acquire(back) -> bool:
+    """The value the worker uses (invariant 10: shown from the same
+    resolution): the file's, through the one-acquirer rule over what is held
+    (collections._one_acquirer)."""
+    try:
+        held = [x for x in collections_mod.load_all() if x.name != back.name] + [back]
+        return next(x for x in collections_mod._one_acquirer(held) if x.name == back.name).acquire_enabled
+    except Exception:   # noqa: BLE001 — another file's fault: this one's own value
+        return back.acquire_enabled
 
 
 def _shown(key: str, v: Any) -> Any:

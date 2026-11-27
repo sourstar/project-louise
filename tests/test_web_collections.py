@@ -263,10 +263,12 @@ def test_grow_is_refused_for_a_sister_whose_sister_acquires_their_corpus(client,
     collection = collections_mod.by_name("gutenberg")
     # her sister: a held collection reading the same origin, its id the one she derives from
     from types import SimpleNamespace
-    owner = SimpleNamespace(name="owner", corpus_dir=collection.corpus_dir,
-                            codex=SimpleNamespace(collection_id="sha256:" + "ab" * 32))
-    sister = dataclasses.replace(collection, acquire_enabled=False, codex=dataclasses.replace(
-        collection.codex, derived_from=owner.codex.collection_id))
+    owner = SimpleNamespace(name="owner", corpus_dir=collection.corpus_dir, acquire_enabled=True,
+                            acquire_stated=True, acquire_by=None,
+                            codex=SimpleNamespace(collection_id="sha256:" + "ab" * 32, derived_from=None))
+    sister = dataclasses.replace(collection, acquire_enabled=True, acquire_stated=False,
+                                 codex=dataclasses.replace(collection.codex,
+                                                           derived_from=owner.codex.collection_id))
     monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: [owner, sister])
     monkeypatch.setattr(web_mod, "_collection_or_404", lambda name: sister)
     toml_path = collections_mod.config_toml_path("gutenberg")
@@ -279,8 +281,11 @@ def test_grow_is_refused_for_a_sister_whose_sister_acquires_their_corpus(client,
         assert r.status_code == 409 and "sister" in r.json()["detail"], r.text
     assert toml_path.read_text(encoding="utf-8") == before
     # a sister who acquires (Normattiva, once normattiva-nemo) is not refused
-    took_over = dataclasses.replace(sister, acquire_enabled=True)
+    took_over = dataclasses.replace(sister, acquire_enabled=True, acquire_stated=True)
     assert collections_mod.sister_refusal(took_over, held=[owner, took_over]) is None
+    idle = SimpleNamespace(**{**vars(owner), "acquire_enabled": False})
+    assert collections_mod.sister_refusal(sister, held=[idle, sister]) is None, \
+        "her sister acquires nothing: she is not refused"
 
 
 def test_embed_mode_is_a_per_collection_control(client):

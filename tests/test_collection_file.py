@@ -213,6 +213,23 @@ def test_a_sister_s_stated_acquisition_survives_a_rewrite(node, monkeypatch):
     assert "acquire_enabled = true" in path.read_text(encoding="utf-8")
 
 
+def test_the_value_reported_after_a_write_is_the_worker_s(monkeypatch, tmp_path):
+    """invariant 10: `hold config apply` and the web's writes report the
+    acquisition the worker uses, the one-acquirer rule over what is held."""
+    from types import SimpleNamespace
+    from app import collection_file
+    owner = SimpleNamespace(name="owner", corpus_dir=tmp_path, acquire_enabled=True, acquire_stated=True,
+                            acquire_by=None, codex=SimpleNamespace(collection_id="R", derived_from=None))
+    back = collections_mod.Collection(
+        name="sis", plugin="gutenberg", profile=None, embed_mode_default=None, corpus_dir=tmp_path,
+        manifest_path=tmp_path / "m", fts_dir=tmp_path / "i", lance_dir=tmp_path / "l",
+        acquire_enabled=True, codex=SimpleNamespace(collection_id="S", derived_from="R"))
+    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: [owner])
+    assert collection_file._effective_acquire(back) is False
+    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: [])
+    assert collection_file._effective_acquire(back) is True, "her sister not held: her own"
+
+
 def test_the_new_shape_survives_a_rewrite(node):
     _, make, load = node
     cx = make()

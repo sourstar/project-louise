@@ -1015,28 +1015,27 @@ def _credited_archives(codex) -> list[str]:
 
 def sister_refusal(collection, held=None) -> str | None:
     """Why growing `collection` is refused, or None: a case-J sister that
-    does not acquire because the held collection she derives from acquires
-    the origin folder they both read (`_one_acquirer`). Growing her (the
+    does not acquire because an ancestor held here acquires the origin
+    folder they both read (`_one_acquirer`, the one rule). Growing her (the
     Library's grow, `hold records fetch`) would make her a second fetch into
     that folder (gutenberg-nemo, 2026-11-27). A sister who took over
-    (Normattiva, once normattiva-nemo), one whose sister is gone (legi_F) or
-    one reading her own folder grows as any collection does. `held`: the
-    loaded collections (default `load_all()`)."""
-    sister_id = getattr(getattr(collection, "codex", None), "derived_from", None)
-    if not sister_id or getattr(collection, "acquire_enabled", True):
+    (Normattiva, once normattiva-nemo), one whose sister is gone (legi_F),
+    whose sister does not acquire, or reading her own folder grows as any
+    collection does. `held`: the loaded collections (default `load_all()`)."""
+    if not getattr(getattr(collection, "codex", None), "derived_from", None):
         return None
     try:
         held = list(held) if held is not None else load_all()
     except Exception as e:  # noqa: BLE001 — unsure who acquires: no second writer
         return (f"{collection.name}: whether the collection she derives from acquires their corpus "
                 f"could not be read ({type(e).__name__}: {e}); nothing changed")
-    owner = next((c for c in held if c is not collection and getattr(getattr(c, "codex", None),
-                                                                      "collection_id", None) == sister_id),
-                 None)
-    if owner is None or not _same_folder(owner.corpus_dir, collection.corpus_dir):
+    mine = [c for c in held if c.name != collection.name] + [collection]
+    me = next(c for c in _one_acquirer(mine) if c.name == collection.name)
+    if not getattr(me, "acquire_by", None):
         return None
-    return (f"{collection.name} is {owner.name}'s sister (02 §2.7): she holds {owner.name}'s records and "
-            f"reads its origin, and {owner.name} takes them from the origin; grow {owner.name}, not her")
+    by = me.acquire_by
+    return (f"{collection.name} is {by}'s sister (02 §2.7): she holds {by}'s records and reads its "
+            f"origin, and {by} takes them from the origin; grow {by}, not her")
 
 
 def codex_defaults(codex, name: str, slices, kinds, source: str = "origin") -> dict[str, Any]:
@@ -1367,26 +1366,55 @@ def load_all(*, skip_unreadable: bool = False):
 
 def _one_acquirer(held: list) -> list:
     """ONE ACQUIRER A FOLDER (gutenberg-nemo, 2026-11-27; the independent
-    reads of b28b0feb and 48e1496c; München's check of the node's sisters
-    the same day). A case-J sister (`derived_from`, 02 §2.7) whose file
-    states no `acquire_enabled` defaults OFF while the collection she derives
-    from is held here and both read one physical origin directory (the carry
-    links her origin to her sister's): her sister acquires it, and a second
-    fetch into that folder would run under another manifest's claim
-    (acquire/claim.py's lock is beside each manifest). A sister whose sister
-    is not held (legi_F) or whose origin is her own folder acquires by the
-    Codex's default; a file that STATES the key (EUR-Lex5.next's `true`,
-    EUR-Lex5's `false`) is the operator's, and it wins. Keyed on the folder's
-    physical identity, never on a name (CLAUDE.md)."""
+    reads of b28b0feb, 48e1496c and 82d3e9cd; München's check of the node's
+    sisters the same day). A case-J sister (`derived_from`, 02 §2.7) whose
+    file states no `acquire_enabled` defaults OFF while an ancestor of hers
+    held here — her sister, or her sister's sister — reads the same physical
+    origin directory AND acquires it: that ancestor fetches the folder, and a
+    second fetch there would run under another manifest's claim
+    (acquire/claim.py's lock is beside each manifest). An ancestor that does
+    not acquire (a stated `false`, `slices = []`) leaves her her own default,
+    so a folder is never left to nobody; a chain leaves exactly one. A file
+    that STATES the key is the operator's word, and it wins (EUR-Lex5.next's
+    `true` beside EUR-Lex5's `false`); a sister whose ancestors are not held
+    (legi_F) or whose origin is her own folder acquires by the Codex's
+    default. Keyed on the folder's physical identity, never on a name
+    (CLAUDE.md). Idempotent: a collection already turned off here
+    (`acquire_by`) is judged on its default again."""
     import dataclasses
-    by_id = {getattr(getattr(c, "codex", None), "collection_id", None): c for c in held}
+
+    def cid(c):
+        return getattr(getattr(c, "codex", None), "collection_id", None)
+
+    def parent(c):
+        return by_id.get(getattr(getattr(c, "codex", None), "derived_from", None) or None)
+
+    by_id = {cid(c): c for c in held if cid(c)}
+    memo: dict[int, tuple[bool, str | None]] = {}
+
+    def effective(c) -> tuple[bool, str | None]:
+        key = id(c)
+        if key in memo:
+            return memo[key]
+        base = bool(getattr(c, "acquire_enabled", False) or getattr(c, "acquire_by", None))
+        memo[key] = (base, None)                         # provisional: a cycle reads the default
+        result = (base, None)
+        if base and not getattr(c, "acquire_stated", False):
+            seen, a = {key}, parent(c)
+            while a is not None and id(a) not in seen:
+                seen.add(id(a))
+                if _same_folder(a.corpus_dir, c.corpus_dir) and effective(a)[0]:
+                    result = (False, a.name)
+                    break
+                a = parent(a)
+        memo[key] = result
+        return result
+
     out = []
     for c in held:
-        sister_id = getattr(getattr(c, "codex", None), "derived_from", None)
-        owner = by_id.get(sister_id) if sister_id else None
-        if (owner is not None and owner is not c and c.acquire_enabled and not c.acquire_stated
-                and _same_folder(owner.corpus_dir, c.corpus_dir)):
-            c = dataclasses.replace(c, acquire_enabled=False, acquire_by=owner.name)
+        on, by = effective(c)
+        if (on, by) != (bool(getattr(c, "acquire_enabled", False)), getattr(c, "acquire_by", None)):
+            c = dataclasses.replace(c, acquire_enabled=on, acquire_by=by)
         out.append(c)
     return out
 

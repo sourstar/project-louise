@@ -571,3 +571,13 @@ def test_one_acquirer_a_folder_and_the_file_s_own_word_wins(tmp_path):
         "a file's own true wins"
     assert collections_mod._one_acquirer([root, c("weekly", "W", sister="R", folder=own)])[1].acquire_enabled, \
         "her own folder: her own fetch"
+    # her sister acquires nothing (a stated false, or slices = []): she keeps her own, never nobody
+    assert collections_mod._one_acquirer([c("root", "R", acquire=False, stated=True), sister])[1].acquire_enabled
+    assert collections_mod._one_acquirer([c("root", "R", acquire=False), sister])[1].acquire_enabled
+    # a chain S1 -> S2 -> S3 in one folder: exactly one acquirer
+    s2, s3 = c("s2", "S2", sister="R"), c("s3", "S3", sister="S2")
+    chain = collections_mod._one_acquirer([root, s2, s3])
+    assert [x.acquire_enabled for x in chain] == [True, False, False] and chain[2].acquire_by == "root"
+    # idempotent: run again over its own answer
+    again = collections_mod._one_acquirer(chain)
+    assert [(x.acquire_enabled, x.acquire_by) for x in again] == [(x.acquire_enabled, x.acquire_by) for x in chain]
