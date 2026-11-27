@@ -438,7 +438,7 @@ def _copy_tree(src: Path, dst: Path) -> None:
     copy; `dst` must not exist."""
     cp = shutil.which("cp")
     if cp:
-        r = subprocess.run([cp, "-a", "--reflink=auto", str(src), str(dst)],
+        r = subprocess.run([cp, "-a", "--no-preserve=links", "--reflink=auto", str(src), str(dst)],
                            capture_output=True, text=True)
         if r.returncode == 0:
             return
@@ -457,7 +457,7 @@ def _sister_index(src: Path, dst: Path, *, groups: bool = True) -> str:
     her sister's own directory or the shared one her sister reads,
     app/text_index.py — copied too with `groups` (their identities differ:
     she holds her own), else NOT AT ALL: she reads them where they lie
-    (`text_index.join_at_carry`, which the caller writes). Never a hard link
+    (`text_index.form_at_carry`, which the caller runs). Never a hard link
     (operator, 2026-11-27, app/file_copy.py). Whole or not at all,
     repeatable, like `_transfer`."""
     from app import text_index
@@ -818,13 +818,6 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     # which names no run to read it in (09 §9.5, §9.17; München, 2026-11-17)
     from . import origin_run
     origin_run.refuse_without_run(to, f"carry into {to_name} (nothing was written)")
-    if not copy:
-        # a carry that MOVES the source's index takes it from under a sister
-        # that reads it where it lies (app/text_index.py `reads`): refused,
-        # nothing moved — copy, or restart the worker first so its boot
-        # shares that index (hold/forget.py `refuse_while_read`)
-        from .forget import refuse_while_read
-        refuse_while_read(root, from_name, "carry")
     if rechunked and (sister or relayered or unembedded or resliced or rebuilt or keep or recut):
         raise CodexError("carry --rechunked moves the layers' version alone: no --sister, --relayered, "
                          "--unembedded, --resliced, --rebuilt, --keep or --recut with it")
@@ -1065,7 +1058,7 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
             # WHERE IT LIES, never copied nor linked (operator, 2026-11-10:
             # sisters share one text index; 2026-11-27: no hard link,
             # app/text_index.py) — `index_groups` False, the caller places
-            # her (`text_index.join_at_carry`); True, their identities
+            # her (`text_index.form_at_carry`); True, their identities
             # differ and she holds a copy of her own
             done[k] = _sister_index(sp[k], tp[k], groups=index_groups)
             continue

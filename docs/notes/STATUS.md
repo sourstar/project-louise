@@ -24,8 +24,12 @@ measured (published figures disagree).
   already happened that you deleted important files because you forgot the hard links").** Every
   `os.link` in app/ is gone, and tests/test_no_hard_links.py fails on any new one (Python by AST, shell
   scripts by command). What two collections use is read where it lies, by its path:
-  - a case-J sister's text index: her placement names her sister's own index (`reads`) until the
-    worker's boot shares it by rename; that sister is not forgotten or renamed before the boot;
+  - a case-J sister's text index: one group with her sister's, formed at her creation by RENAME
+    (`text_index.form_at_carry`; with the worker running, `louise node stop` first, exit 3 — RULE 1
+    decided it: the `reads` placement of 8beffe40–c275217b is gone, second read's findings A and G with it); a
+    member left alone in a group stays placed (no 54 GB copy back), a placement whose directory is
+    gone is dropped at the boot with its marks reset, a boot's copies are counted once and skipped
+    when they do not fit;
   - a re-check's claims, with an identity check at each pass;
   - a re-created collection's origin directory, through a symbolic link, handed over at its holder's
     forget;

@@ -215,8 +215,7 @@ def rename(root: Path, old: str, new: str, *, dry_run: bool = False) -> dict[str
         # what another collection reads where it lies, by a path under this
         # directory, is not moved from under it (never a hard link:
         # operator, 2026-11-27): its text index, its origin directory
-        from .forget import origin_heirs, refuse_while_read
-        refuse_while_read(root, old, "rename")
+        from .forget import origin_heirs
         heirs = origin_heirs(root, old)
         if heirs:
             raise CodexError(f"rename {old}: {', '.join(heirs)} reads its origin directory where it "

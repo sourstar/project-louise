@@ -15,7 +15,7 @@ the archived current engine, and carry its vectors over unchanged".
 
 What this module gives the workflow's two steps of its own:
 
-  carry  `seed_parts` (the predecessor's parts, linked and checked against
+  carry  `seed_parts` (the predecessor's parts, COPIED and checked against
          their roots, the snapshot frozen again: hold/seed.py's G3),
          `share_origin` (the origin read where it lies), `sample` (N chunks
          of the records re-encoded by the new engine's run and held to the
@@ -444,6 +444,11 @@ COPIED = ("lance", "index", "state/manifest.sqlite")
 #: SHARD's parts, seeded from her sister's (`seed_parts`, COPIED: choice B)
 SHARD_PARTS = "shard"
 SISTER_PARTS = (SHARD_PARTS, "index", "state/manifest.sqlite")
+#: what a re-creation (case A) copies: its vector table, text index and
+#: manifest, its SHARD's parts (seeded, copied: choice B) and its bundle tree
+#: (copied in a same-space carry; counted always: the room is not short)
+BUNDLES = "state/bundles"
+RECREATE_PARTS = COPIED + (SHARD_PARTS, BUNDLES)
 #: and a re-cut (relayered) sister's: no text index either, the worker builds hers
 RECUT_SISTER_PARTS = ("state/manifest.sqlite",)
 
@@ -471,7 +476,7 @@ def to_copy(root: Path, pred_name: str, name: str, *, index_by_path: bool = Fals
     yet (a resumed carry counts only what is left), counted from the
     predecessor's files by their size. `index_by_path`: a sister's text
     index, whose language groups she reads where they lie (carry
-    `_sister_index`, `text_index.join_at_carry`; never a hard link): only
+    `_sister_index`, `text_index.form_at_carry`; never a hard link): only
     the rest of it counts. `parts`: what the carry copies — a case-J
     sister copies no vector table (`SISTER_PARTS`), a re-cut one no text
     index either (`RECUT_SISTER_PARTS`); gutenberg-nemo's dry run counted
@@ -516,14 +521,15 @@ def _lands(root: Path, name: str, rel: str) -> Path:
     placed there (`vector_place.place_new`), and, before it is made (the dry
     run), where `new` will place it."""
     from app import vector_place
-    if rel == SHARD_PARTS:
-        # the SHARD's own filesystem (a link to `SHARDS_ROOT/<name>`, the
-        # bulk storage), and, before it is made, where `create` will link it
-        link = Path(root) / name / "shard"
-        if link.exists():
-            return link.resolve()
-        shards = os.getenv("SHARDS_ROOT", "").strip()
-        return Path(shards) / name if shards else link
+    for kind, sub, env in ((SHARD_PARTS, "shard", "SHARDS_ROOT"), (BUNDLES, BUNDLES, "BUNDLES_ROOT")):
+        if rel == kind:
+            # its own filesystem (a link to `<ROOT>/<name>`, the bulk
+            # storage), and, before it is made, where `create` will link it
+            link = Path(root) / name / sub
+            if link.exists():
+                return link.resolve()
+            shared = os.getenv(env, "").strip()
+            return Path(shared) / name if shared else link
     if rel != "lance":
         return Path(root) / name / rel
     link = vector_place.table_dir(root, name)

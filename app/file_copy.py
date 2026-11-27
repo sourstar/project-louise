@@ -117,7 +117,7 @@ def _cp(src: Path, dst: Path) -> None:
     a reflink where the filesystem has one, else a byte copy."""
     cp = shutil.which("cp")
     if cp:
-        r = subprocess.run([cp, "-a", "--reflink=auto", str(src), str(dst)],
+        r = subprocess.run([cp, "-a", "--no-preserve=links", "--reflink=auto", str(src), str(dst)],
                            capture_output=True, text=True)
         if r.returncode == 0:
             return
@@ -153,3 +153,24 @@ def copy_tree(src: Path | str, dst: Path | str) -> int:
         raise FileExistsError(f"{dst} exists: a copy never writes over a directory")
     copy_file(src, dst)
     return sum(len(files) for _b, _d, files in os.walk(dst))
+
+
+class HardLinkMember(Exception):
+    """An archive member that is a hard link: never made (operator,
+    2026-11-27: "Never use hard links")."""
+
+
+def refuse_hard_links(base: str = "data"):
+    """A tarfile extraction filter: tarfile's own `base` filter ("data", or
+    "tar" where symbolic links must stay as they are), and a HARD-LINK
+    member refused in words — both of tarfile's filters let one through
+    ("data" one whose target is inside the destination)."""
+    import tarfile
+    inner = {"data": tarfile.data_filter, "tar": tarfile.tar_filter}[base]
+
+    def keep(member, path):
+        if member.islnk():
+            raise HardLinkMember(f"{member.name} is a hard link to {member.linkname} in the archive: "
+                                 f"never made (no hard links); nothing more is extracted")
+        return inner(member, path)
+    return keep

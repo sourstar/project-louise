@@ -1144,16 +1144,36 @@ def _planned_identities_equal(root: Path, her_sister_name: str, name: str, her_s
     return a is not None and a == b
 
 
-def _join_text_index(root: Path, her_sister_name: str, name: str) -> str | None:
+def _form_text_index(root: Path, her_sister_name: str, name: str, *, probe: bool = False) -> str | None:
     """A sister carried beside her sister joins her sister's text index NOW,
-    by path, when their index identities are equal (app/text_index.py
-    `join_at_carry`): placed in its shared directory, or reading her
-    sister's own where it lies until the worker's next boot shares it. Her
+    when their index identities are equal (app/text_index.py
+    `form_at_carry`): placed in its shared directory, or the group FORMED by
+    renaming her sister's own directories into one, both placed. Her
     manifest is her sister's copy, so every mark is the writer's and nothing
-    is reset or copied. None: their identities differ (she holds a copy)."""
-    from app import text_index
+    is reset or copied. None: their identities differ (she holds a copy).
+    A writer of her sister's index another process holds (the running
+    worker) defers, exit 3 (route 503), asking for `louise node stop`
+    (CLAUDE.md RULE 1). `probe`: only that check, nothing written."""
+    from app import collections as collections_mod, text_index
+    from app.hold import deposit
+    if probe:
+        if text_index.placement(root, her_sister_name) is None:
+            held = text_index.writer_held(Path(root) / her_sister_name / "index")
+            if held is not None:
+                raise _defer(f"{her_sister_name}'s text index ({held}) has its writer held by another "
+                             f"process (the running worker keeps its index writers): {name} shares it, "
+                             f"which renames it into one group. `louise node stop`, then run this "
+                             f"again: it resumes where it stopped (CLAUDE.md RULE 1)")
+        return None
     ia, ib = _index_identities(root, her_sister_name, name)
-    joined = text_index.join_at_carry(root, her_sister_name, name, ia, ib)
+    try:
+        content = text_index.content_key(collections_mod._load_one(deposit.held_file(root, her_sister_name)))
+    except Exception:   # noqa: BLE001 — recorded as unknown
+        content = None
+    try:
+        joined = text_index.form_at_carry(root, her_sister_name, name, ia, ib, content=content)
+    except text_index.WriterHeld as e:
+        raise _defer(str(e)) from None
     if joined:
         text_index._remove_groups(Path(root) / name / "index")     # an earlier carry's copy
     return joined
@@ -1234,9 +1254,10 @@ def _sister_new(a, say) -> int:
       make      `derive` (the space and layers copied, the reference
                 inherited, never re-embedded); paused until the carry ends, so
                 the worker writes nothing into the manifest the carry copies.
-      carry     her parts seeded from her sister's latest snapshot (hard
-                links, each checked against its root), her sister's origin
-                shared, then her manifest and text index copied (hold/carry.py
+      carry     her parts seeded from her sister's latest snapshot (her own
+                copy, each checked against its root), her sister's origin
+                shared, then her manifest copied and her text index shared or
+                copied (hold/carry.py
                 A1i: every mark, queue, chunk-hash and bundle of her sister's
                 vectors emptied in the copy) and proven (documents counted,
                 the index byte for byte); the licence ack carried where the
@@ -1412,7 +1433,8 @@ def _sister_new(a, say) -> int:
             print(f"  to carry    {src['documents'] if src['documents'] is not None else '?'} documents' "
                   f"manifest and the text index's catalogue, no vector ({her_sister_name} keeps its "
                   f"{src['vectors'] if src['vectors'] is not None else '?'}); her text index "
-                  + (f"read where {her_sister_name}'s lies, never copied or linked" if by_path else
+                  + (f"shared with {her_sister_name}'s (one group, formed by rename: `louise node "
+                     f"stop` first), never copied or linked" if by_path else
                      f"COPIED: her index identity is not {her_sister_name}'s (or could not be read)"))
         print(f"  room        {recreate.human(need)} needed, {recreate.human(free)} free: "
               + ("enough" if free >= need else "SHORT, the carry refuses"))
@@ -1539,14 +1561,16 @@ def _sister_new(a, say) -> int:
                                 f"{parts['records']} records), origin {origin}, licence ack {ack}; the "
                                 f"worker indexes every document with her own layer")
             else:
-                # her text index is her sister's, read WHERE IT LIES when their
-                # identities are equal (never copied or hard-linked: operator,
-                # 2026-11-27); otherwise a copy of her own. The room counts
-                # everything she copies first — her SHARD's parts (her own
-                # copy, choice B), her index's catalogue, her manifest —
-                # each on the filesystem it lands on, before any is copied
+                # her text index is her sister's, SHARED when their identities
+                # are equal (one group, formed by rename; never copied or
+                # hard-linked: operator, 2026-11-27); otherwise a copy of her
+                # own. The room counts everything she copies first — her
+                # SHARD's parts (her own copy, choice B), her index's
+                # catalogue, her manifest — each on the filesystem it lands on
                 ia, ib = _index_identities(root, her_sister_name, name)
                 by_path = ia is not None and ia == ib
+                if by_path:
+                    _form_text_index(root, her_sister_name, name, probe=True)   # before anything
                 need, free = recreate.room(root, her_sister_name, name, index_by_path=by_path,
                                            parts=recreate.SISTER_PARTS)
                 if free < need:
@@ -1560,12 +1584,12 @@ def _sister_new(a, say) -> int:
                                                 f"{her_sister_name} "
                                                 f"{recreate.counts(root, her_sister_name)['documents']}")
                 # placed first, so the proof reads her index as she will
-                joined = _join_text_index(root, her_sister_name, name) if by_path else None
+                joined = _form_text_index(root, her_sister_name, name) if by_path else None
                 if by_path and not joined:
-                    raise recreate.CopyMismatch(f"carry: {name} could not be placed to read "
-                                                f"{her_sister_name}'s text index; nothing of it was copied")
+                    raise recreate.CopyMismatch(f"carry: {name} could not be placed in "
+                                                f"{her_sister_name}'s text index group; nothing of it was copied")
                 if joined:
-                    say(f"[carry] {name} reads {her_sister_name}'s text index where it lies ({joined})")
+                    say(f"[carry] {name} shares {her_sister_name}'s text index ({joined})")
                 # the index AS EACH ONE READS IT (app/text_index.py)
                 from app import text_index
                 a_idx = text_index.index_digest(root, her_sister_name)
@@ -1885,9 +1909,9 @@ def _new_dry_run(a, run, recipe: dict, pred, dry, changed: list[str], existing, 
         else:
             t0 = time_mod.monotonic()
             src = recreate.counts(a.root, a.name, write_free=True)
-            sizes = recreate.to_copy(a.root, a.name, target)
-            fs = recreate.rooms(a.root, a.name, target, make=False)
-            need, free = recreate.room(a.root, a.name, target, make=False)
+            sizes = recreate.to_copy(a.root, a.name, target, parts=recreate.RECREATE_PARTS)
+            fs = recreate.rooms(a.root, a.name, target, make=False, parts=recreate.RECREATE_PARTS)
+            need, free = recreate.room(a.root, a.name, target, make=False, parts=recreate.RECREATE_PARTS)
             took = time_mod.monotonic() - t0
             out(f"  to carry    {num(src['documents'])} documents, {num(src['vectors'])} vector rows; "
                 f"{recreate.human(sum(sizes.values()))} to copy ("
@@ -2124,6 +2148,12 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
         # the pass over the parts (the snapshot's roots, the sample's cuts) on
         # the whole CPU quota, as `hold snapshot create --shards-from` runs it
         _whole_quota()
+        # the room for everything the re-creation copies — its SHARD's parts
+        # (the seed is a copy), bundle tree, vector table, text index and
+        # manifest — before any of it is copied (finding E)
+        need, free = recreate.room(root, a.name, name, parts=recreate.RECREATE_PARTS)
+        if free < need:
+            raise CodexError(recreate.no_room(a.name, name, need, free))
         parts = recreate.seed_parts(root, a.name, name, now=_utc_now(), log=say)
         origin = recreate.share_origin(root, a.name, name)
         local = rec.local_collection(root, a.name, pred)
@@ -2168,9 +2198,6 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
             say(f"[carry] sample: {checked['exact']} of {checked['checked']} byte-identical, {checked['near']} "
                 f"more within cos {recreate.NEAR}, worst {checked['worst']:.10f} (tolerance "
                 f"{codex.space.tolerance}), over {len(checked['parts'])} part(s)")
-        need, free = recreate.room(root, a.name, name)
-        if free < need:
-            raise CodexError(recreate.no_room(a.name, name, need, free))
         out = carry_mod.carry(root, a.name, name, copy=True, apply=True, unembedded=vectorless, log=say)
         proof = recreate.prove_copy(root, a.name, name, vectors=not vectorless,
                                     dropped=(out.get("done") or {}).get("dropped") or ())

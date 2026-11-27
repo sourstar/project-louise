@@ -78,7 +78,7 @@ for m in $SYCL; do
 done
 
 say "5. vega-llama-cpp saved, then rebuilt in front of $NAME at the staged commit"
-test -e "$SAVED/vega-llama-cpp" || { mkdir -p "$SAVED" && cp -a "$BK/vega-llama-cpp" "$SAVED/"; }
+test -e "$SAVED/vega-llama-cpp" || { mkdir -p "$SAVED" && cp -a --no-preserve=links "$BK/vega-llama-cpp" "$SAVED/"; }
 # built already at this commit in front of $NAME: kept — another build is another
 # tree, so another run to gate
 if [ "$(cat "$BK/vega-llama-cpp/REVISION" 2>/dev/null)" = "$(cat "$STAGE/src/REVISION")" ] \

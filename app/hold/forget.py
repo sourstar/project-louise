@@ -253,20 +253,6 @@ def shared_folders(root: Path, name: str) -> tuple[list[Path], list[Path]]:
     return removed, kept
 
 
-def refuse_while_read(root: Path, name: str, what: str) -> None:
-    """Raise CodexError when another held collection reads `name`'s OWN
-    text index where it lies (a sister made before the worker's boot shared
-    them, app/text_index.py `join_at_carry`): removing or moving `name`'s
-    directory would take her index with it. The boot shares it, after which
-    `name` goes like any member of a shared index."""
-    from app import text_index
-    readers = text_index.readers_of_own(root, name)
-    if readers:
-        raise CodexError(f"{what} {name}: {', '.join(readers)} reads its text index where it lies "
-                         f"until the worker's next boot shares it; restart the worker (`louise node "
-                         f"restart`), then run this again — nothing was changed")
-
-
 #: a hand-over's half-way name, beside the link it replaces
 def _half(link: Path) -> Path:
     return link.with_name(f".{link.name}.handover")
@@ -364,11 +350,45 @@ def _resume_origin(root: Path, journal: Path) -> None:
         for o in heirs[1:]:
             if not (o.is_symlink() and o.resolve() == first.resolve()):
                 _relative_link(first, o)
+        _move_caches(own, first)
     journal.unlink()
+
+
+def _move_caches(own: Path, first: Path) -> None:
+    """The derived caches keyed on the origin's resolved path (a plugin's
+    pack, the files cache: app/derived.py) moved to its new place's key, as
+    a rename moves them (`rename._cache_moves`): rebuilt never, carried.
+    One at both keys is left; a cache is re-creatable, so none stops the
+    hand-over."""
+    from .rename import _cache_moves, _move
+    for a, b in _cache_moves({"origin": [str(own), str(first)]}):
+        if a.exists() and b.exists():
+            continue
+        try:
+            _move(a, b)
+        except CodexError:
+            pass
 
 
 def _device(path: Path) -> int:
     return os.stat(path).st_dev
+
+
+def _take_heir_locks(root: Path, name: str) -> list:
+    """The write lock of every collection `name`'s origin hand-over moves
+    things under, taken now — or Held (exit 3), naming the holder: `louise
+    node pause <heir>` first."""
+    from . import lock as lock_mod
+    locks: list = []
+    try:
+        for h in origin_heirs(root, name):
+            locks.append(lock_mod.take(lock_mod.state_dir(root, h), h,
+                                       f"forget {name}: its origin directory handed over to {h}"))
+    except BaseException:
+        for lk in locks:
+            lk.release()
+        raise
+    return locks
 
 
 def origin_moves_cross(root: Path, name: str) -> str | None:
@@ -463,6 +483,20 @@ def ack_heirs(root: Path, name: str, *, dry_run: bool = False) -> list[str]:
 
 def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
            retire: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """`_forget`, holding the write lock of every collection its origin
+    hand-over moves things under (finding H of the second read): taken
+    before anything is removed — one held refuses (exit 3), nothing done —
+    and let go when it ends."""
+    locks = [] if (dry_run or kinds) else _take_heir_locks(Path(root), name)
+    try:
+        return _forget(root, name, kinds=kinds, dry_run=dry_run, retire=retire)
+    finally:
+        for lk in locks:
+            lk.release()
+
+
+def _forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
+            retire: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Remove the copy at `<root>/<name>` and its held file — or, with
     `kinds`, only those members — and say what went. `retire` is the
     worker's hook that stops the collection's threads before anything under
@@ -485,7 +519,6 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
         codex = None                        # half gone already: finish the job
     if kinds:
         return _forget_vectors(root, name, codex, base, kinds=kinds, dry_run=dry_run)
-    refuse_while_read(root, name, "forget")
     crossing = origin_moves_cross(root, name)          # before step 1, the dry run too
     if crossing:
         raise CodexError(crossing)

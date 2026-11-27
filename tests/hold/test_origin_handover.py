@@ -131,3 +131,33 @@ def test_a_hand_over_across_filesystems_is_refused_before_anything(tmp_path, mon
             forget_mod.forget(root, "p", dry_run=dry)
     assert (root / "p.toml").is_file() and origin.is_dir() and (root / "q" / "origin").is_symlink(), \
         "nothing was done"
+
+
+# ---- finding H: the heir's write lock; the caches keyed on the origin ------------
+
+def test_the_hand_over_takes_the_heir_s_write_lock_before_anything(tmp_path):
+    from app.hold import lock as lock_mod
+    root, origin = _pair(tmp_path)
+    recreate.share_origin(root, "p", "q")
+    held = lock_mod.take(lock_mod.state_dir(root, "q"), "q", "the worker")
+    try:
+        with pytest.raises(lock_mod.Held):
+            forget_mod.forget(root, "p")
+        assert (root / "p.toml").is_file() and origin.is_dir(), "nothing removed"
+    finally:
+        held.release()
+    forget_mod.forget(root, "p")
+    assert (root / "q" / "origin").is_dir() and not (root / "q" / "origin").is_symlink()
+
+
+def test_the_caches_keyed_on_the_origin_move_with_it(tmp_path, monkeypatch):
+    from app import derived
+    root, origin = _pair(tmp_path)
+    recreate.share_origin(root, "p", "q")
+    cache = tmp_path / "cache" / "pack" / derived.key(origin.resolve())
+    cache.mkdir(parents=True)
+    (cache / "built").write_bytes(b"c")
+    monkeypatch.setattr(derived, "held", lambda: [p for p in (tmp_path / "cache" / "pack").iterdir()])
+    forget_mod.forget(root, "p")
+    moved = tmp_path / "cache" / "pack" / derived.key((root / "q" / "origin").resolve())
+    assert not cache.exists() and (moved / "built").read_bytes() == b"c", "carried, never rebuilt"

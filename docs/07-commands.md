@@ -107,7 +107,7 @@ louise hold
                 (a sister who changes only her ENCODER SIDE: S's layers, cleaning and records in a new space with
                  C's encoder side whole — encoder and engine, dim, dtype, ctx, cut, pooling, instructions, query
                  side, calibration set, reference and tolerance, carried, nothing embedded; her endpoint and model
-                 C's file's; her manifest and text index S's, her manifest copied and her text index S's read where it lies (never copied nor hard-linked, 2026-11-27), one index identity, so she joins S's group
+                 C's file's; her manifest and text index S's, her manifest copied and her text index ONE GROUP with S's, formed by rename at her carry (never copied nor hard-linked; with the worker running, `louise node stop` first, exit 3; 2026-11-27), one index identity, so she joins S's group
                  (docs/notes/sister-shared-index.md); her slices S's. gutenberg-nemo, 2026-11-27)
                                                                        case J, a SISTER INTO A HELD SPACE (added 2026-11-08, normattiva-nemo): `derive` of her sister S
                                                                        into C's space and layers; carry — her parts seeded from S's snapshot, S's manifest and text index
@@ -2723,9 +2723,9 @@ collection is another name.
 hard links, always consciously load from a path. It already happened that
 you deleted important files because you forgot the hard links"). Nothing
 makes a second name for a file. What two collections both use is read
-WHERE IT LIES, by its path: a sister's text index (her placement names
-her sister's own index, `reads`, until the worker's boot shares it), a
-re-check's claims, a re-created collection's origin directory (a symbolic
+WHERE IT LIES, by its path: a sister's text index (one group with her
+sister's, formed by rename at her creation: `louise node stop` first while
+the worker holds its writers), a re-check's claims, a re-created collection's origin directory (a symbolic
 link, handed over at its holder's forget), a discarded snapshot's part the
 build since shares (kept in place). What becomes another owner's own is
 COPIED, a reflink where the filesystem clones blocks, after a preflight of

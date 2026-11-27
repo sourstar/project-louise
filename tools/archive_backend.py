@@ -175,11 +175,33 @@ def write_archive(directory: Path, out: Path) -> None:
             tar.add(directory / entry, arcname=entry, recursive=True, filter=_anonymous)
 
 
+class HardLinkMember(Exception):
+    """An archive member that is a hard link: never made (operator,
+    2026-11-27: "Never use hard links")."""
+
+
+def refuse_hard_links(base: str = "data"):
+    """A tarfile extraction filter: tarfile's own `base` filter ("data", or
+    "tar" where symbolic links must stay as they are), and a HARD-LINK
+    member refused in words — both of tarfile's filters let one through
+    ("data" one whose target is inside the destination)."""
+    import tarfile
+    inner = {"data": tarfile.data_filter, "tar": tarfile.tar_filter}[base]
+
+    def keep(member, path):
+        if member.islnk():
+            raise HardLinkMember(f"{member.name} is a hard link to {member.linkname} in the archive: "
+                                 f"never made (no hard links); nothing more is extracted")
+        return inner(member, path)
+    return keep
+
+
 def unpack(archive: Path, into: Path) -> None:
     with _zstd_reader(archive) as r, tarfile.open(fileobj=r, mode="r|") as tar:
-        # "tar": links kept as they are (a venv's absolute interpreter link is
-        # the backend's own), paths kept inside `into`, setuid bits dropped
-        tar.extractall(into, filter="tar")
+        # "tar": symbolic links kept as they are (a venv's absolute interpreter
+        # link is the backend's own), paths kept inside `into`, setuid bits
+        # dropped; a HARD-link member refused in words (no hard links)
+        tar.extractall(into, filter=refuse_hard_links("tar"))
 
 
 def verify(archive: Path, want: str, scratch: Path) -> str:
