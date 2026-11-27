@@ -4,14 +4,16 @@ The operator, on OpenVINO's GPU default: "HALF FUCKING PRECISION AS A DEFAULT!!!
 defect. What follows is read from the code that runs today, and from one measurement
 on a CPU; what only the node can read back is said so, with the command that reads it.
 
-## 1. The Python encoders (louise-python)
+## 1. MedCPT on OpenVINO (louise-python)
+
+Not vega-dar-legal-it (the operator, 2026-11-27, through München: "Don't fucking touch dar
+legal"): neither read here nor measured.
 
 | model | engine | what the code asks | what that gives |
 |---|---|---|---|
 | `vega-medcpt-article-ov` (pubmed, 4.58 M vectors) | OpenVINO 2026.3.1, GPU plugin | `compile_model(xml, "GPU", {"CACHE_DIR": …})` — no `INFERENCE_PRECISION_HINT` (deploy/medcpt-rerank/server.py `_compile`) | the GPU plugin's default inference precision, f16 (to read back on the node, §3); the IR's weights are f32 (`compress_to_fp16=False`) |
 | `vega-medcpt-article-ov-cpu` | OpenVINO, CPU plugin | the same, `"CPU"` | the CPU plugin's default: **bf16** on a CPU with AVX512_BF16 or AMX — MEASURED here (an Intel Xeon with both): `INFERENCE_PRECISION_HINT` read back `bfloat16`, cosine 0.99995 to torch fp32 at worst over 12 pubmed pairs; with the f32 hint, 1 − 1.7e-12. The node's Ryzen 5 7600 (Zen 4) has AVX512_BF16: its CPU twin is very likely bf16 too |
 | `louise-rerank-medcpt` | OpenVINO, GPU plugin | the same, no hint | f16 compute; AND its IR's weights are f16 in the file (deploy/medcpt-rerank/convert.py: `compress_to_fp16=True`) |
-| `vega-dar-legal-it` (normattiva) | torch 2.14.0+xpu, sentence-transformers 5.1.0, transformers 4.55.4 | `SentenceTransformer(dir, device="xpu", model_kwargs={"attn_implementation": "sdpa"})` — no `torch_dtype` | transformers 4.x loads float32 by default: f32 weights. The float32 matmul precision on the card (torch's `get_float32_matmul_precision()`, oneDNN's `fp32_precision`) is torch's default, not set: read back on the node (§3) |
 
 ## 2. Our llama.cpp on the card (the `sycl_f16` build, live and candidate alike)
 
@@ -55,16 +57,13 @@ for its K·Q and accumulates V in f32.
 louise-python's own directory with its own interpreter. It does not run inside the live
 process: it compiles as the live backend compiles, so it reads the same plugin's answer
 for the same config. Per arm it reads back `INFERENCE_PRECISION_HINT` and
-`EXECUTION_MODE_HINT` (or torch's dtype and float32 settings), embeds the collection's
+`EXECUTION_MODE_HINT`, embeds the collection's
 sample, and compares the result with the STORED vectors and with the f32 CPU arm:
 
     python -m tools.cross_device_check pubmed --export /tmp/pubmed-sample.json
     D=<LocalAI's backends dir>/louise-python
     $D/python/bin/python3 -B -E -s tools/measure/encoder_precision.py --backend-dir $D \
         ov --model-dir <models>/weights/medcpt/medcpt-article-ov --sample /tmp/pubmed-sample.json --context 512
-    python -m tools.cross_device_check normattiva --export /tmp/normattiva-sample.json
-    LOUISE_TORCH_DETERMINISTIC=1 $D/python/bin/python3 -B -E -s tools/measure/encoder_precision.py \
-        --backend-dir $D torch --model-dir <models>/weights/dar-legal-it --sample /tmp/normattiva-sample.json --context 8192
 
 For llama.cpp, path 1 and 2's switch is measured on a twin with
 `GGML_SYCL_DYNAMIC_PRECISION=F32` in its env (the rerank parity and vega_repro_check,
@@ -72,6 +71,6 @@ as for any setting: measuring.md).
 
 So that a run SAYS its precision rather than leaving it to be read back: each backend's
 load reply names it. OpenVINO's `compiled.get_property("INFERENCE_PRECISION_HINT")`;
-torch's dtype; llama.cpp's own startup lines already print `GGML_SYCL_F16: yes` and
+llama.cpp's own startup lines already print `GGML_SYCL_F16: yes` and
 `GGML_SYCL_DYNAMIC_PRECISION: F16`, which no gate reads today. Which precision a space
 admits is the architecture's rule ("precision stated and gated").

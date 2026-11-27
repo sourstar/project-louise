@@ -70,23 +70,8 @@ def test_the_arms_are_the_live_compile_f32_and_the_cpu_twins():
     assert ep.OV_PROPERTIES == ("INFERENCE_PRECISION_HINT", "EXECUTION_MODE_HINT")
 
 
-def test_torch_settings_read_back_what_this_torch_has():
-    class Matmul:
-        fp32_precision = "ieee"
-
-    class Mkldnn:
-        matmul = Matmul()
-
-    class Backends:
-        mkldnn = Mkldnn()
-
-    class Torch:
-        __version__ = "2.14.0+xpu"
-        backends = Backends()
-
-        @staticmethod
-        def get_float32_matmul_precision():
-            return "highest"
-    got = ep.torch_settings(Torch())
-    assert got == {"float32_matmul_precision": "highest", "mkldnn.matmul.fp32_precision": "ieee",
-                   "torch": "2.14.0+xpu"}
+def test_dar_legal_it_is_not_measured_here():
+    import inspect
+    source = inspect.getsource(ep)
+    assert "dar_legal_it" not in source and "torch_arms" not in source
+    assert "Don't fucking touch dar legal" in source

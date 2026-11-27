@@ -1,4 +1,4 @@
-"""What precision a Python encoder computes in on the card, and what f32 changes
+"""What precision MedCPT's OpenVINO encoder computes in on the card, and what f32 changes
 (München for the operator, 2026-11-27, on OpenVINO's GPU default: "HALF FUCKING
 PRECISION AS A DEFAULT!!!"; docs/notes/encoder-precision.md).
 
@@ -12,9 +12,9 @@ to torch fp32 by convert_article.py):
 
     ov     GPU as the live backend compiles it, GPU f32, CPU as it compiles by
            default, CPU f32 (the IR's own weights: their element types counted)
-    torch  the live task's own encoder (dar_legal_it.build_encoder) on the card,
-           and the same model on the CPU; the weights' dtype and torch's float32
-           matmul settings read back
+
+MedCPT only. vega-dar-legal-it is not measured here (the operator, 2026-11-27,
+through München: "Don't fucking touch dar legal").
 
 Runs INSIDE the backend's own directory, with its own interpreter, so the
 libraries and the task code are the live ones (no venv: run.sh's python):
@@ -24,13 +24,8 @@ libraries and the task code are the live ones (no venv: run.sh's python):
     $D/python/bin/python3 -B -E -s tools/measure/encoder_precision.py --backend-dir $D \\
         ov --model-dir <models>/weights/medcpt/medcpt-article-ov --sample /tmp/pubmed-sample.json \\
         --context 512 --out medcpt-article-precision.json
-    LOUISE_TORCH_DETERMINISTIC=1 $D/python/bin/python3 -B -E -s tools/measure/encoder_precision.py --backend-dir $D \\
-        torch --model-dir <models>/weights/dar-legal-it --sample /tmp/normattiva-sample.json \\
-        --context 8192 --out dar-legal-it-precision.json
 
-The torch arm runs with the live model's env (LOUISE_TORCH_DETERMINISTIC=1, as
-vega-dar-legal-it.yaml sets it): build_encoder reads it. A diagnostic: nothing is
-written but its report. Each arm loads the model once
+A diagnostic: nothing is written but its report. Each arm loads the model once
 more (the GPU arms on the card: a card at its limit refuses them, which the
 report says).
 """
@@ -44,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-# an arm: its name, the device and the compile config (OpenVINO), or the device (torch)
+# an arm: its name, the device and the compile config
 OV_ARMS = (("gpu-live", "GPU", {}), ("gpu-f32", "GPU", {"INFERENCE_PRECISION_HINT": "f32"}),
            ("cpu-default", "CPU", {}), ("cpu-f32", "CPU", {"INFERENCE_PRECISION_HINT": "f32"}))
 REFERENCE_ARM = "cpu-f32"
@@ -171,51 +166,12 @@ def ov_arms(model_dir: Path, context: int):
     return [(name, build(device, cfg)) for name, device, cfg in OV_ARMS], extra
 
 
-# ---- torch (dar-legal-it) -------------------------------------------------------------------------
-
-def torch_settings(torch: Any) -> dict[str, str]:
-    out = {"float32_matmul_precision": str(torch.get_float32_matmul_precision())}
-    mkldnn = getattr(torch.backends, "mkldnn", None)
-    for path in ("matmul.fp32_precision", "conv.fp32_precision", "fp32_precision"):
-        obj = mkldnn
-        for part in path.split("."):
-            obj = getattr(obj, part, None)
-        if obj is not None:
-            out[f"mkldnn.{path}"] = str(obj)
-    out["torch"] = str(torch.__version__)
-    return out
-
-
-def torch_arms(model_dir: Path, context: int):
-    import torch
-    import dar_legal_it                              # the live task's own code (deploy/dar-legal-it/server.py)
-    from sentence_transformers import SentenceTransformer
-
-    def live(device: str):
-        def make():
-            encode, _ = dar_legal_it.build_encoder(str(model_dir), device, context)
-            back = torch_settings(torch)
-            back["device"] = device
-            return back, lambda item: encode([item])[0]
-        return make
-
-    def cpu_dtype_read():
-        # the same load as build_encoder's, on the CPU, to read the weights' dtype back
-        model = SentenceTransformer(str(model_dir), device="cpu", trust_remote_code=True,
-                                    model_kwargs={"attn_implementation": "sdpa"},
-                                    config_kwargs={"use_memory_efficient_attention": False, "unpad_inputs": False})
-        return str(next(model.parameters()).dtype)
-
-    arms = [("xpu-live", live("xpu")), ("cpu", live("cpu"))]
-    return arms, {"weights_dtype": cpu_dtype_read(), "settings": torch_settings(torch)}
-
-
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="encoder_precision")
     p.add_argument("--backend-dir", type=Path, required=True,
                    help="louise-python's directory: its task modules are imported from there")
     sub = p.add_subparsers(dest="engine", required=True)
-    for name in ("ov", "torch"):
+    for name in ("ov",):
         s = sub.add_parser(name)
         s.add_argument("--model-dir", type=Path, required=True)
         s.add_argument("--sample", type=Path, required=True, help="tools.cross_device_check --export's file")
@@ -224,8 +180,8 @@ def main(argv: list[str] | None = None) -> int:
     a = p.parse_args(argv)
     sys.path.insert(0, str(a.backend_dir))
     inputs, stored = read_sample(a.sample)
-    arms, extra = (ov_arms if a.engine == "ov" else torch_arms)(a.model_dir, a.context)
-    result = report(run_arms(arms, inputs), stored, REFERENCE_ARM if a.engine == "ov" else "cpu", extra)
+    arms, extra = ov_arms(a.model_dir, a.context)
+    result = report(run_arms(arms, inputs), stored, REFERENCE_ARM, extra)
     text = json.dumps(result, indent=2)
     if a.out:
         a.out.write_text(text + "\n", encoding="utf-8")
