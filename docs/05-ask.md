@@ -589,8 +589,11 @@ platform image and change only with it:
 
 ```
 louise_search(query, collections?, annotations?, space?, filters?, limit?,
-              rerank_depth?, as_of?, freshness?, history?, translate?, all_languages?)
+              rerank_depth?, as_of?, freshness?, history?, translate?, all_languages?,
+              kind?)   -- kind: auto (default) | facts | literature | all (amended 2026-11-27)
     → {lists: [{space_id, question, hits: [<result, §5.3>]}],   -- question is "relevance" (§5.1)
+       kind_applied, kind_by,     -- the kind the search applied, and "the reader" | "the question" | "not decided in time" | "not decided"
+       left_out: {count, by_basis: {<basis>: n}},   -- facts | literature only: what it left out before the rerank, and why
        facts: [<fact, §5.3>], unresolved: [<canonical id>],
        withheld: [{collection_id, shards, reason}],
        legs_withheld: [{collection_id, leg, reason}],     -- leg is "vector", "catalog" or "text"; the copy IS searched, on its other legs (§5.3, amended 2026-11-23)
@@ -606,6 +609,22 @@ louise_traverse(id, relation?, depth?, resolve_in?)   -- resolve_in: the collect
     → {edges: [{from, to, type, snapshot, collection_id,
                 resolved, needs: {collection_id, shard} | null}]}
 ```
+
+*Amended 2026-11-27* (operator: "The search itself shouldn't return
+novels when I'm looking only for facts and vice versa";
+docs/notes/fact-fiction-search.md). A search has a KIND. `facts` leaves
+out every literary work — a novel, a poem, a play, a tale retold, as its
+own record states it (a Gutenberg record's headings, category and class,
+kept beside it as `work_kind`) — and keeps a work of opinion or belief,
+attributed; `literature` keeps the literary works alone; `all` is every
+result. A collection whose records carry no kind counts as facts. What a
+kind leaves out goes BEFORE the rerank, the legs of a collection it thins
+going twice as deep; the answer says the kind, how it was decided and how
+many it left out on what basis. `auto`, the default, asks the chat model
+in one short call beside the legs (2 s from its start, remembered per
+question): unsure or no answer in time is `all`, never a silent narrowing.
+It is a filter, the reader's to see and undo (§5.6, WEIGHTS (4)): the Ask
+page shows it and one tap re-runs the question with another kind.
 
 *Amended 2026-11-11* (operator: the Ask page's saved PDF "available
 through the other interfaces too"). An MCP client is also offered one tool

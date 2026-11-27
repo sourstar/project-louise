@@ -48,6 +48,11 @@ TOOLS: list[dict[str, Any]] = [
          "filters": {"type": "object", "description": "{facet field: value | {not: value}}; a range "
                                                       "facet's value is FROM..TO, either end omitted "
                                                       "for open (2000.., ..1999)"},
+         "kind": {"type": "string", "enum": ["auto", "facts", "literature", "all"], "default": "auto",
+                  "description": "facts: no literary work (a novel, a poem, a play) among the results; "
+                                 "literature: literary works only; all: every result; auto: decided "
+                                 "from the query. The answer's kind_applied says which, left_out what "
+                                 "it left out and why"},
          "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
          "rerank_depth": {"type": "integer", "minimum": 1, "maximum": 300, "default": 50},
          "as_of": {"type": "string", "description": "YYYY-MM-DD: the snapshot current at that date"},
@@ -131,7 +136,8 @@ def _call_tool(name: str, args: dict[str, Any]) -> Any:
                               rerank_depth=int(args.get("rerank_depth") or results.DEFAULT_DEPTH),
                               as_of=args.get("as_of"), freshness=bool(args.get("freshness")),
                               translate=bool(args.get("translate")), all_languages=bool(args.get("all_languages")),
-                              annotations=args.get("annotations"), history=bool(args.get("history")))
+                              annotations=args.get("annotations"), history=bool(args.get("history")),
+                              kind=str(args.get("kind") or "auto"))
     if name == "louise_lookup":
         return lookup.lookup(str(args["id"]))
     if name == "louise_traverse":

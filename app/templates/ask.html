@@ -322,8 +322,19 @@ function count(id){
   if(!ok)el.value=el.dataset.default;
   return ok?n:+el.dataset.default;
 }
+// THE SEARCH'S KIND (docs/notes/fact-fiction-search.md): auto — the node
+// decides from the question and says so — until the reader taps another
+// kind for THIS question; a new question is auto again
+let searchKind={q:null,kind:'auto'};
+function kindFor(q){return searchKind.q===q?searchKind.kind:'auto'}
 function counts(){return {limit:count('limit'),rerank_depth:count('rerank-depth'),
-                         all_languages:document.getElementById('all-langs').checked}}
+                         all_languages:document.getElementById('all-langs').checked,
+                         kind:kindFor(document.getElementById('q').value.trim())}}
+document.addEventListener('click',e=>{
+  const b=e.target.closest&&e.target.closest('.kind-tap'); if(!b)return;
+  searchKind={q:document.getElementById('q').value.trim(),kind:b.dataset.kind};
+  search();
+});
 // remembered in this browser only; a private window starts from the defaults
 function rememberCounts(){try{localStorage.setItem('ask.counts',JSON.stringify(counts()))}catch(e){}}
 (function restoreCounts(){

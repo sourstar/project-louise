@@ -88,6 +88,10 @@ def recording(seen: dict[str, Any]):
 
     def call(name: str, args: dict[str, Any]) -> Any:
         got = mcp._call_tool(name, args)
+        if isinstance(got, dict) and "kind_applied" in got:
+            # the search's kind (docs/notes/fact-fiction-search.md), per search the answer made
+            seen.setdefault("_kinds", []).append({"kind": got["kind_applied"], "by": got.get("kind_by"),
+                                                  "left_out": (got.get("left_out") or {}).get("count", 0)})
         for lst in (got or {}).get("lists", []) if isinstance(got, dict) else []:
             for h in lst.get("hits", []):
                 if h.get("uid"):
@@ -104,16 +108,35 @@ def run(out: Path, runs: int, label: str, collections: list[str]) -> None:
                 try:
                     seen: dict[str, Any] = {}
                     got = chat.ask(question, collections=collections, call=recording(seen))
+                    kinds = seen.pop("_kinds", [])
                     sources = [{**s, "work": s.get("work") or seen.get(s.get("uid"))} for s in got.get("sources") or []]
                     row = {"label": label, "run": r, "id": qid, "kind": kind, "question": question,
                            "about_the_work": kind == "control_about_work",
-                           "answer": got.get("answer"), "sources": sources}
+                           "answer": got.get("answer"), "sources": sources, "search_kinds": kinds}
                 except Exception as e:   # noqa: BLE001 — said in the file, the run goes on
                     row = {"label": label, "run": r, "id": qid, "kind": kind, "question": question,
                            "error": f"{type(e).__name__}: {e}"}
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
                 f.flush()
                 print(f"{label} run {r} {qid}: {'error' if 'error' in row else 'ok'}", file=sys.stderr)
+
+
+def kind_missed(row: dict[str, Any], want: str) -> int:
+    """1 when a run that records its searches' kinds (an "after" build) did
+    not search `want` first: step 1's done-test (fact-fiction-search.md §4,
+    "the about-the-work questions get literature"); 0 for a "before" file."""
+    kinds = row.get("search_kinds")
+    return int(bool(kinds) and kinds[0]["kind"] != want)
+
+
+def kinds_said(row: dict[str, Any], want: str | None) -> str:
+    kinds = row.get("search_kinds")
+    if not kinds:
+        return ""
+    line = ", ".join(f"{k['kind']} by {k['by']}" + (f" ({k['left_out']} left out)" if k["left_out"] else "")
+                     for k in kinds)
+    miss = want is not None and kinds[0]["kind"] != want
+    return f"; searched {line}" + (f" — WANTED {want}" if miss else "")
 
 
 def check(files: list[Path]) -> int:
@@ -130,12 +153,17 @@ def check(files: list[Path]) -> int:
                 # judged by reading; the reader's verdict is recorded in the file
                 # (`verdict_by_reading`), the checker does not apply
                 said = row.get("verdict_by_reading") or "NOT YET READ"
-                print(f"  {row['id']} run {row['run']} (about the work): judged by reading: {said}")
+                print(f"  {row['id']} run {row['run']} (about the work): judged by reading: {said}"
+                      f"{kinds_said(row, 'literature')}")
+                bad += kind_missed(row, "literature")
                 continue
             flagged = as_evidence(row["answer"], row["sources"], row.get("question", ""))
             lit = sorted(literary_ns(row["sources"]))
             mark = "LITERARY AS EVIDENCE" if flagged else "ok"
-            print(f"  {row['id']} run {row['run']} ({row['kind']}): {mark}; literary sources {lit}")
+            print(f"  {row['id']} run {row['run']} ({row['kind']}): {mark}; literary sources {lit}"
+                  f"{kinds_said(row, 'facts' if row['kind'] == 'fact_with_fiction' else None)}")
+            if row["kind"] == "fact_with_fiction":
+                bad += kind_missed(row, "facts")
             for s in flagged:
                 print(f"      | {s}")
             bad += bool(flagged)

@@ -33,11 +33,12 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 from . import (cancel, catalog, collections as collections_mod, config, copy_state, db,
                embeddings, model_load, fts, httpc, language_plan, refs, work_dedup)
+from . import work_kind as work_kind_mod
 # the refusal check by its own name: a test that swaps `httpc` for an httpx
 # client (tests/test_localai_backends.py) keeps it (#798, 2026-11-22)
 from .httpc import raise_for_status as _raise_for_status
@@ -1525,7 +1526,7 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
            translate: bool = True, collection=None,
            rerank_depth: int = RERANK_TOP_N, all_languages: bool = False,
            book_ids: set[int] | None = None, show_in: str | None = None,
-           as_of: int | None = None, annotations=None) -> dict:
+           as_of: int | None = None, annotations=None, kind: "str | Callable[[], tuple[str, str]]" = "all") -> dict:
     """mode: hybrid | fts | dense | catalog. Single collection — unchanged
     behavior/signature from pre-P0.5. See federated_search() for N&gt;1.
     `k` results after the reranker, which orders the top `rerank_depth`;
@@ -1545,10 +1546,16 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
     plan = language_plan.plan(query, [collection], translate, every=all_languages)
     plan_ms = round((time.time() - t0) * 1000, 1)
     partial = _search_one_collection(con, collection, query, k, mode, translate,
-                                     [e.entity_id for e in resolved], plan, rerank_depth,
+                                     [e.entity_id for e in resolved], plan,
+                                     _leg_depth(collection, kind, rerank_depth),
                                      **({"book_ids": book_ids} if book_ids is not None else {}),
                                      **({"as_of": as_of} if as_of is not None else {}))
     timings = {"languages": plan_ms, **partial["timings"]}
+    # the search's kind (docs/notes/fact-fiction-search.md): the candidates
+    # it leaves out go BEFORE the rerank, and the result says how many and why
+    want = max(k * 4, rerank_depth)
+    kind, kind_by = _kind_now(kind)
+    merged, left_out = work_kind_mod.filter_candidates(con, collection, partial["merged"], kind, want)
 
     cancel.checkpoint()
     t0 = time.time()
@@ -1556,7 +1563,7 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
     # (`_attach_work_fields`) lost the work the reader wanted on 21 of 451
     # queries and found it on 2 (docs/notes/one-language-per-work.md) —
     # editions are grouped after the reranker instead, never dropped.
-    candidates = partial["merged"][: max(k * 4, rerank_depth)]
+    candidates = merged[:want]
 
     def _rerank_and_group():
         ranked, reranked, rerank_why = _reranked(plan.core, candidates,
@@ -1585,7 +1592,10 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
               "facts": [asdict(f) for f in facts] + _article_facts(query, [collection], facts, as_of, store,
                                                                    plan.query_lang),
               "facts_withheld": facts_withheld,
-              "timings": timings, "reranked": reranked}
+              "timings": timings, "reranked": reranked,
+              "kind_applied": kind, "kind_by": kind_by}
+    if kind in ("facts", "literature"):
+        result["left_out"] = left_out
     withheld = _legs_withheld(collection, partial)
     if withheld:
         result["legs_withheld"] = withheld
@@ -1594,6 +1604,34 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
     if partial.get("filtered") is not None:
         result["filtered"] = {collection.name: partial["filtered"]}
     return result
+
+
+def _kind_now(kind) -> tuple[str, str]:
+    """(the kind applied, how it was decided): a kind given ("the reader"),
+    or the question's kind resolved now (app/question_kind.py `start`'s
+    resolver, which ran beside the legs). Anything else is all."""
+    if callable(kind):
+        got, by = kind()
+    else:
+        got, by = kind, "the reader"
+    return (got, by) if got in ("facts", "literature") else ("all", by)
+
+
+def _leg_depth(collection, kind, rerank_depth: int) -> int:
+    """How deep a collection's legs go: the rerank depth, `OVERFETCH` times
+    that where the search's kind may thin them (fact-fiction-search.md §3) —
+    a kind still being decided may, since the legs do not wait for it."""
+    thins = (work_kind_mod.classified(collection) if callable(kind)
+             else work_kind_mod.filters(collection, kind))
+    return rerank_depth * (work_kind_mod.OVERFETCH if thins else 1)
+
+
+def _federated_want(n: int, k: int, rerank_depth: int) -> int:
+    """The candidates one collection's list keeps for the reranker: what the
+    federation's cut and the rerank's slice below would take of it."""
+    cut = max(config.FEDERATION_CANDIDATE_BUDGET, rerank_depth) if n > 1 else None
+    want = max(k * 4, rerank_depth)
+    return want if cut is None else min(cut, want)
 
 
 def _merge_rrf_federated(lists: list[list[dict]]) -> list[dict]:
@@ -1676,7 +1714,8 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
                       translate: bool = True, rerank_depth: int = RERANK_TOP_N,
                       all_languages: bool = False, book_ids_for=None,
                       show_in: str | None = None, as_of: int | None = None,
-                      annotations=None, keep_lists: bool = False) -> dict:
+                      annotations=None, keep_lists: bool = False,
+                      kind: "str | Callable[[], tuple[str, str]]" = "all") -> dict:
     """Query-time federation across N collections (architecture-v2.md §3/§4).
     Entity resolution/PinnedFacts happen ONCE, collection-agnostic — never
     multiplied per collection (CLAUDE.md invariant 4). Each collection's
@@ -1686,7 +1725,9 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
     search fails is isolated (logged, contributes no candidates) rather than
     failing the whole query. With exactly one collection this degenerates to
     the same candidate order search() itself produces — see
-    config.FEDERATION_CANDIDATE_BUDGET, which only applies when len(collections)>1."""
+    config.FEDERATION_CANDIDATE_BUDGET, which only applies when len(collections)>1.
+    `kind` (facts | literature | all): what the search leaves out of every
+    collection's candidates before its rerank (fact-fiction-search.md)."""
     t_total = time.time()
 
     # The same entity step as search(), through the same helper: the two paths
@@ -1712,9 +1753,13 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
         try:
             admitted = book_ids_for(collection) if book_ids_for else None
             partial = _search_one_collection(con, collection, query, k, mode, translate,
-                                              entity_ids, plan, rerank_depth,
+                                              entity_ids, plan, _leg_depth(collection, kind, rerank_depth),
                                               **({"book_ids": admitted} if admitted is not None else {}),
                                               **({"as_of": as_of} if as_of is not None else {}))
+            # the search's kind, before the cut and the rerank (fact-fiction-search.md)
+            partial["merged"], partial["left_out"] = work_kind_mod.filter_candidates(
+                con, collection, partial["merged"], _kind_now(kind)[0],
+                _federated_want(len(collections), k, rerank_depth))
             for h in partial["merged"]:
                 h["source_collection"] = collection.name
             return collection, partial, None
@@ -1744,9 +1789,11 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
     legs_withheld: list[dict] = []
     catalog: list[dict] = []
     filtered: dict[str, int] = {}         # 05 §5.2: records a filter admitted, per collection
+    left_out: dict = {"count": 0, "by_basis": {}}
     for collection, partial, err in outcomes:
         if partial is None:
             continue
+        work_kind_mod.add_left(left_out, partial["left_out"])
         if partial.get("filtered") is not None:
             filtered[collection.name] = partial["filtered"]
         merged = partial["merged"]
@@ -1850,7 +1897,10 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
               "facts": [asdict(f) for f in facts] + _article_facts(query, collections, facts, as_of, store,
                                                                    plan.query_lang),
               "facts_withheld": facts_withheld,
-              "timings": timings, "reranked": reranked, "merged_by": merged_by}
+              "timings": timings, "reranked": reranked, "merged_by": merged_by,
+              **dict(zip(("kind_applied", "kind_by"), _kind_now(kind)))}
+    if result["kind_applied"] in ("facts", "literature"):
+        result["left_out"] = left_out
     if legs_withheld:
         result["legs_withheld"] = legs_withheld
     if rerank_withheld:

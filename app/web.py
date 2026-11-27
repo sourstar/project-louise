@@ -22,6 +22,7 @@ one-click calls with no CLI-equivalent string in their modal, rather than
 fabricating one.
 """
 import asyncio
+from typing import Literal
 import contextlib
 import json
 import re
@@ -408,6 +409,10 @@ class AskQueryBody(BaseModel):
     # work's one hit is shown in it where one of its editions in it was
     # found (05 §5.3, amended 2026-10-09)
     show_in: str | None = Field(None, max_length=8)
+    # the search's kind (docs/notes/fact-fiction-search.md): facts leave out
+    # literary works, literature keeps them alone, all is every result; auto
+    # (the default) decides from the question, and the result says which
+    kind: Literal["auto", "facts", "literature", "all"] = "auto"
     # which annotations collections this search consults (05 §5.3, amended
     # 2026-10-19): None = every one held, [] = none, names = those. Not a
     # search leg (invariant 4): it decides whether their work claims group
@@ -1256,7 +1261,8 @@ async def ask_query(request: Request, body: AskQueryBody):
         trace.mark("search_done")
         trace.search_id = sid
         trace.note(speed=body.speed, collections=body.collections, timings=result.get("timings"),
-                   results=query_trace.hits_of(result))
+                   results=query_trace.hits_of(result),
+                   **query_trace.kind_of(result))
         trace.end()
     resp = TEMPLATES.TemplateResponse(request, "_ask_results.html", {"result": result})
     resp.headers["X-Louise-Search"] = sid
@@ -1391,7 +1397,8 @@ def _relay_search(job: relay.Job, body: AskQueryBody, admin: bool | None = None)
     if trace is not None:
         trace.note(speed=body.speed, collections=body.collections, timings=result.get("timings"),
                    reranked=result.get("reranked"), rerank_withheld=result.get("rerank_withheld"),
-                   results=query_trace.hits_of(result))
+                   results=query_trace.hits_of(result),
+                   **query_trace.kind_of(result))
         trace.end()
 
 
@@ -1454,13 +1461,15 @@ def _relay_answer(job: relay.Job, chat, trace=None) -> None:
         result = api._run_search(
             api.collections_for_model(chat.model, chat.collections), query, chat.limit, "hybrid", True,
             verify=chat.verify, rerank_depth=chat.rerank_depth, all_languages=chat.all_languages,
+            kind=chat.kind,
             **({"show_in": chat.answer_lang} if chat.answer_lang else {}),
             **({"annotations": chat.annotations} if chat.annotations is not None else {}))
     if trace is not None:
         trace.mark("search_done")
         trace.note(search_reused=kept is not None, model=chat.model, collections=chat.collections,
                    answer_lang=chat.answer_lang, timings=result.get("timings"),
-                   results=query_trace.hits_of(result))
+                   results=query_trace.hits_of(result),
+                   **query_trace.kind_of(result))
     job.touch("answer: waiting for the model")
     with contextlib.closing(api.answer_parts(chat, query, result, t0)) as parts:
         for kind, value in parts:
@@ -1638,7 +1647,7 @@ def _ask_result(body: AskQueryBody) -> dict:
     with language_plan.quick(body.quick):
         result = query_service.run_search(body.collections, body.query, body.limit, body.mode, True,
                                           rerank_depth=body.rerank_depth,
-                                          all_languages=body.all_languages,
+                                          all_languages=body.all_languages, kind=body.kind,
                                           **({"show_in": body.show_in} if body.show_in else {}),
                                           **chosen)
     # every hit names its COLLECTION for the reader panel: federated hits

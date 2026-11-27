@@ -52,3 +52,26 @@ def test_a_literary_work_the_question_names_is_not_evidence_misused():
                 {"n": 8, "title": "Richelieu", "work": None}]
     assert wf.as_evidence("He is described as showing great courage during the siege [5][8].", rochelle,
                           "What did Cardinal Richelieu do at the siege of La Rochelle?") != []
+
+
+def test_an_after_run_wants_facts_for_a_fact_and_literature_for_a_work(tmp_path, capsys):
+    """Step 1's done-test (docs/notes/fact-fiction-search.md §4): a fact
+    question's first search is facts, an about-the-work question's is
+    literature; a "before" file, which records no kinds, is not judged on it."""
+    import json
+    f = tmp_path / "after.jsonl"
+    rows = [{"label": "after", "run": 0, "id": "napoleon-death", "kind": "fact_with_fiction",
+             "question": "When did Napoleon die?", "answer": "On 5 May 1821 [1].",
+             "sources": [{"n": 1, "title": "Life", "work": None}],
+             "search_kinds": [{"kind": "all", "by": "not decided in time", "left_out": 0}]},
+            {"label": "after", "run": 0, "id": "cinque-maggio", "kind": "control_about_work",
+             "about_the_work": True, "verdict_by_reading": "ok", "question": "q", "answer": "a", "sources": [],
+             "search_kinds": [{"kind": "literature", "by": "the question", "left_out": 4}]}]
+    f.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert wf.check([f]) == 1
+    out = capsys.readouterr().out
+    assert "searched all by not decided in time — WANTED facts" in out
+    assert "searched literature by the question (4 left out)" in out
+    rows[0]["search_kinds"][0] = {"kind": "facts", "by": "the question", "left_out": 3}
+    f.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert wf.check([f]) == 0

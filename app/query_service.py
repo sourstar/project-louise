@@ -5,7 +5,7 @@ circular import (api.py mounts web.py's routers).
 """
 from fastapi import HTTPException
 
-from . import cancel, collections as collections_mod, db, retrieval
+from . import cancel, collections as collections_mod, db, question_kind, retrieval
 from .rage import dispatch
 
 
@@ -181,7 +181,8 @@ def run_search(collection_names: list[str] | None, query: str, k: int, mode: str
                rerank_depth: int = retrieval.RERANK_TOP_N,
                all_languages: bool = False, private: bool = False,
                filters: dict | None = None, show_in: str | None = None,
-               as_of: int | None = None, annotations: list[str] | None = None) -> dict:
+               as_of: int | None = None, annotations: list[str] | None = None,
+               kind: str = "all") -> dict:
     """`verify` opts this query into blocking verify-on-use: every imported
     chunk among the results is recomputed locally before the answer is given
     (architecture-v2.md §6 T4). Off by default — it costs an embed call per
@@ -191,8 +192,14 @@ def run_search(collection_names: list[str] | None, query: str, k: int, mode: str
     language the reader asked results in (the Ask page's "show results
     in"), which a work's one hit is shown in where it can be (05 §5.3).
     `annotations`: the annotations collections consulted for that grouping
-    (`resolve_annotations`; None = all held)."""
+    (`resolve_annotations`; None = all held). `kind`: facts | literature |
+    all, or auto — the question's own, decided beside the legs
+    (app/question_kind.py; docs/notes/fact-fiction-search.md)."""
+    if kind not in ("facts", "literature", "all", "auto"):
+        raise ValueError(f"kind must be auto, facts, literature or all, not {kind!r}")
     shown = {"show_in": show_in} if show_in else {}
+    if kind != "all":
+        shown["kind"] = question_kind.start(query) if kind == "auto" else kind
     if annotations is not None:
         shown["annotations"] = resolve_annotations(annotations)
     participants = resolve_collections(collection_names, private=private)

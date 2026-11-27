@@ -20,6 +20,7 @@ read/query endpoints (status/stats/events/books/search/chat) stay open —
 "Ask is LAN-open read-only" (architecture-v2.md §15).
 """
 import contextvars
+from typing import Literal
 import dataclasses
 import json
 import queue
@@ -1027,6 +1028,10 @@ class SearchBody(BaseModel):
     # 05 §5.6: how many of each list the reranker orders — 50 by default
     rerank_depth: int = Field(retrieval.RERANK_TOP_N, ge=1, le=retrieval.MAX_RERANK_DEPTH)
     all_languages: bool = False            # every language held, not only the main ones
+    # the search's kind (docs/notes/fact-fiction-search.md): facts leave out
+    # literary works, literature keeps them alone, all is every result; auto
+    # (the default) decides from the question, and the result says which
+    kind: Literal["auto", "facts", "literature", "all"] = "auto"
     # the annotations collections consulted (05 §5.3, amended 2026-10-19):
     # None = every one held, [] = none, names = those
     annotations: list[str] | None = None
@@ -1040,7 +1045,7 @@ def _search_and_log(body: SearchBody) -> dict:
     result = _run_search(body.collections, body.query, body.k, body.mode, body.translate,
                          **({"annotations": body.annotations} if body.annotations is not None else {}),
                           verify=body.verify, rerank_depth=body.rerank_depth,
-                          all_languages=body.all_languages)
+                          all_languages=body.all_languages, kind=body.kind)
     con = _con()   # query_log lives in the default collection's manifest regardless
     db.log_query(con, "search", body.query, body.mode, body.k, result["timings"],
                  len(result["hits"]), _source_qualified_ids(result["hits"]))
@@ -1126,6 +1131,10 @@ class ChatBody(BaseModel):
     limit: int = Field(retrieval.DEFAULT_RESULTS, ge=1, le=retrieval.MAX_RESULTS)
     rerank_depth: int = Field(retrieval.RERANK_TOP_N, ge=1, le=retrieval.MAX_RERANK_DEPTH)
     all_languages: bool = False            # the page's own choice, so both searches match
+    # the search's kind (docs/notes/fact-fiction-search.md): facts leave out
+    # literary works, literature keeps them alone, all is every result; auto
+    # (the default) decides from the question, and the result says which
+    kind: Literal["auto", "facts", "literature", "all"] = "auto"
     # the page's choice of annotations collections, so the answer's [n] are
     # the page's hits (05 §5.3, amended 2026-10-19); None = every one held
     annotations: list[str] | None = None
@@ -1183,7 +1192,7 @@ async def chat_completions(body: ChatBody, request: Request):
             request, functools.partial(reading.under, not body.speed, _run_search),
             searched, query, body.limit, "hybrid", True,
             verify=body.verify, rerank_depth=body.rerank_depth,
-            all_languages=body.all_languages,
+            all_languages=body.all_languages, kind=body.kind,
             # the page's own "show results in", so a work's one hit is the
             # same edition in the answer's [n] as on the page
             **({"show_in": body.answer_lang} if body.answer_lang else {}),
@@ -1207,7 +1216,8 @@ def _chat_answer_traced(body: "ChatBody", query: str, result: dict, t0: float, t
     from . import query_trace
     trace.mark("search_done")
     trace.note(search_reused=reused, model=body.model, collections=body.collections, stream=body.stream,
-               answer_lang=body.answer_lang, timings=result.get("timings"), results=query_trace.hits_of(result))
+               answer_lang=body.answer_lang, timings=result.get("timings"), results=query_trace.hits_of(result),
+                   **query_trace.kind_of(result))
     try:
         out = _chat_answer(body, query, result, t0, trace=trace)
     except BaseException as e:

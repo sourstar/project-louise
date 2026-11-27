@@ -150,23 +150,45 @@ def keep(kind_asked: str, work_kind: str | None) -> bool:
     return True
 
 
-def filter_candidates(con, collection, candidates: list[dict], kind_asked: str) -> tuple[list[dict], dict[str, Any]]:
+#: the search kinds (decision 1); "auto" is resolved from the question first
+SEARCH_KINDS = ("facts", "literature", "all")
+#: how much deeper the legs go when a filter will thin them (docs/notes/
+#: fact-fiction-search.md §3: "it over-fetches where the filter thins a leg,
+#: so the reranker still sees its depth"). Up front, not a second pass: a
+#: second pass would embed the query again. To be measured on the judged set.
+OVERFETCH = 2
+
+
+def filters(collection, kind_asked: str) -> bool:
+    """Whether a `kind_asked` search thins this collection's legs (and so
+    fetches them `OVERFETCH` deeper)."""
+    return kind_asked in ("facts", "literature") and classified(collection)
+
+
+def filter_candidates(con, collection, candidates: list[dict], kind_asked: str,
+                      want: int | None = None) -> tuple[list[dict], dict[str, Any]]:
     """The candidates a `kind_asked` search keeps, in their order, and what
-    was left out: {count, by_basis}. A collection whose records carry no
-    kind counts as facts (decision 3): kept by facts, left out of literature."""
-    left = {"count": 0, "by_basis": {}}
+    was left out: {count, by_basis}. With `want`, the walk stops once that
+    many are kept: what is counted as left out is what the reranker would
+    have seen, not what the deeper legs brought. A collection whose records
+    carry no kind counts as facts (decision 3): kept by facts, left out of
+    literature."""
+    left: dict[str, Any] = {"count": 0, "by_basis": {}}
     if kind_asked not in ("facts", "literature"):
         return candidates, left
     if not classified(collection):
         if kind_asked == "literature":
-            left["count"] = len(candidates)
-            if candidates:
-                left["by_basis"]["no literary works in this collection"] = len(candidates)
+            n = len(candidates) if want is None else min(len(candidates), want)
+            left["count"] = n
+            if n:
+                left["by_basis"]["no literary works in this collection"] = n
             return [], left
         return candidates, left
     kinds = kinds_of(con, collection, (h.get("book_id") for h in candidates if h.get("book_id") is not None))
     kept = []
     for h in candidates:
+        if want is not None and len(kept) >= want:
+            break
         kind, basis = kinds.get(h.get("book_id"), (None, None))
         if keep(kind_asked, kind):
             kept.append(h)
@@ -175,3 +197,12 @@ def filter_candidates(con, collection, candidates: list[dict], kind_asked: str) 
             why = basis or "no literary verdict in its record"
             left["by_basis"][why] = left["by_basis"].get(why, 0) + 1
     return kept, left
+
+
+def add_left(total: dict[str, Any], one: dict[str, Any]) -> dict[str, Any]:
+    """Two left-out tallies summed (a federated search's collections)."""
+    total["count"] = total.get("count", 0) + one["count"]
+    by = total.setdefault("by_basis", {})
+    for why, n in one["by_basis"].items():
+        by[why] = by.get(why, 0) + n
+    return total
