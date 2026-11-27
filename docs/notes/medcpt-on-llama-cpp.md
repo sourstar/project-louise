@@ -112,10 +112,28 @@ creating a space (docs/notes/new-collection.md), and on it:
   within the new space's tolerance; otherwise a re-embedding.
 
 **The operator's decision (2026-11-27):** "f16 as planned; if the
-tollerance is within the multi peer rollerance there is no need to re-embed,
-rule 1." So: the new space on the f16 GGUF (erf GELU declared); the vectors
+tollerance is within the multi peer tollerance there is no need to re-embed,
+rule 1." (corrected by the operator: "rollerance" was "tollerance") So: the new space on the f16 GGUF (erf GELU declared); the vectors
 pubmed holds are carried wherever they are within the space's tolerance
 between peers (03 §3.1), and re-embedded only where they are not.
+
+**The golden vectors on the CPU only (the operator, 2026-11-27: "Recalculate
+the golden samples in CPU only").** Measured here on the f16 GGUF, erf GELU:
+
+| | the same bytes? |
+|---|---|
+| 1, 3 and 4 threads; fresh loads | yes, 67 of 67, flash attention on and off |
+| the same tree built for AVX2 against built for AVX-512 (this machine) | NO, 0 of 67: 1 − 1.6e-13 at worst with flash attention off, 1 − 6.8e-9 with it on |
+| against torch | AVX2: 1 − 4.0e-8 (FA off), 1 − 1.2e-7 (FA on) |
+
+So a CPU reference reproduces bit for bit on CPUs of one instruction set and
+build, not on any CPU: the reference engine's device must name it (02 §2.4
+calls a mismatch with the engine as written a determinism defect). With
+flash attention OFF the reference is nearer NCBI's model and moves least
+between instruction sets. The tolerance `calibrate` writes must be measured
+against every engine whose vectors are carried (OpenVINO's 4.58 M, NCBI's
+35.4 M: torch as its stand-in) and the B70's run, or it comes out too tight
+for the carry.
 
 **Why the GELU is decided now.** The new space's CPU twin computes what its
 card does, so with the tanh GELU the gate would never see the gap — but the
