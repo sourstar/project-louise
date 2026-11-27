@@ -57,13 +57,14 @@ measured (published figures disagree).
   `unpack_archive`, `cp -d`/`--preserve=links|all`, `rsync -H`, `link`, `cpio -l`, `bsdtar`,
   continued lines, scripts in strings and tests_campaign/; the room check before every seed is
   checked by source order.
-  **Fourth read of cf91b9ac:** a folder stays its writer's — a member whose identity differs
-  LEAVES, with a copy of the groups it shares (what it does not hold deleted from it) or, short of
-  room, an empty folder and its marks reset; the boot skips what another process holds or has no
-  manifest yet, catches each identity and journal, finishes only its own journals, never creates
-  a manifest, syncs `group.json` and the journal; a marked `mul` document marks every group it can
-  be in; each named `tar -x` is exactly one line with its own probe; an old archive's link entry is
-  copied in its place in the member order.
+  **Fourth read of cf91b9ac, round 5:** a folder stays its writer's; a member that diverges (or a
+  writer whose content changed) re-indexes into its own folder, every mark reset, said — nothing
+  copied, nothing pruned (the coordinator's default while the operator decides); the journal is
+  for forming by rename only, holds its collections' fts stage while open, and goes only after
+  every placement is synced; the boot skips what another process holds or has no manifest yet,
+  catches each identity and journal, finishes only its own journals, never creates a manifest; a
+  marked `mul` document marks every group it can be in; each named `tar -x` is exactly one line
+  with its own probe; an old archive's link entry is copied in its place in the member order.
 
 ### 2026-11-26
 

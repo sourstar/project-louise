@@ -950,6 +950,19 @@ def _reads_shared(collection) -> bool:
         return False
 
 
+def _fts_held(collection) -> bool:
+    """No fts work is selected here: a reader (its writer indexes), or a
+    collection an unfinished forming names — its groups are being renamed
+    into a shared folder, and nothing is indexed until that is finished
+    (app/text_index.py `forming`; round 5, item 3)."""
+    if _reads_shared(collection):
+        return True
+    try:
+        return collection is not None and text_index.forming(collection)
+    except Exception:   # noqa: BLE001 — a doubt holds nothing
+        return False
+
+
 def _fts_copy_round(con, collection) -> bool:
     """A reader's index stage: the writer's marks and tags copied onto this
     collection's documents where the writer holds the same record indexed
@@ -1557,7 +1570,7 @@ def _archive_yields(con, collection) -> bool:
     the encoder's. Running fts is never wasted work for either of them,
     which is what makes this safe without modelling who needs what.
     """
-    if config.PHASE_EMBED_LOW <= 0 or _reads_shared(collection):
+    if config.PHASE_EMBED_LOW <= 0 or _fts_held(collection):
         return False                 # a reader's writer indexes: nothing here to yield to
     ready = con.execute(_FTS_BACKLOG, (config.MAX_RETRIES, 1)).fetchone()[0]
     if not ready:
@@ -1996,7 +2009,7 @@ def _ingest_pending(con, collection=None) -> bool:
     index has no fts work of its own: its writer indexes."""
     if con.execute(_RDF_PENDING, (config.MAX_RETRIES,)).fetchone() is not None:
         return True
-    if _reads_shared(collection):
+    if _fts_held(collection):
         return False
     return con.execute(_FTS_FRESH, (config.MAX_RETRIES,)).fetchone() is not None
 
@@ -2042,7 +2055,7 @@ def _next_book(con, scope, embed_allowed=True, collection=None):
     # indexes, and `_fts_copy_round` copies the marks as it does
     # (app/text_index.py). Its documents waiting on the writer are deferred,
     # never re-selected round after round.
-    reader = _reads_shared(collection)
+    reader = _fts_held(collection)
     fts_row = None if reader else con.execute(_FTS_FRESH, (config.MAX_RETRIES,)).fetchone()
     if fts_row is not None:
         # the watermark is what fts will ACTUALLY take (app/sizing.py), not
@@ -5357,6 +5370,11 @@ def _run_step(con, collection, stage, row) -> bool:
             db.log_event(con, "warn", stage,
                          f"{stage} deferred — manifest busy ({e}); "
                          f"the document is untouched and will be retried")
+            return False
+        if isinstance(e, fts.FormingOpen):
+            # its index is being formed into a shared group: held, never an
+            # error on a document (round 5, item 3)
+            db.log_event(con, "info", stage, f"{stage} deferred — {e}"[:500])
             return False
         if isinstance(e, catalog.CatalogUnavailable):
             # the catalog index could not take the batch's entries: the
