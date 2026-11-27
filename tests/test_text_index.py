@@ -648,6 +648,13 @@ def test_a_forget_lets_go_of_its_index_writers_before_the_rename_and_a_pause_doe
     worker.retire_collection("alpha", timeout=1.0)
     assert text_index.writer_held(a.fts_dir) == "en", "a pause keeps it"
     _share(root, ["alpha", "beta"], "alpha")
+    # a sister reads it now: the WORKER's retirement lets go of its writer,
+    # since a routed forget runs in a child process that holds none of them
+    with monkeypatch.context() as m:              # the worker's root is this test's
+        m.setenv("LOUISE_ROOT", str(root.parent))
+        worker.retire_collection("alpha", timeout=1.0)
+    assert text_index.writer_held(a.fts_dir) is None, "retired with a reader: let go in the worker"
+    fts.index_book("en", 1, [{"id": "x:0:1", "chapter": "", "text": "a b c"}], a)
     assert forget_mod.forget(root, "alpha")["text_index"]["to"] == "beta"
     assert text_index.writer_held(b.fts_dir) is None and (b.fts_dir / "en" / "meta.json").is_file()
 

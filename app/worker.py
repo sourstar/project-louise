@@ -8463,11 +8463,22 @@ def retire_collection(name: str, timeout: float = 60.0) -> None:
             thread.join(timeout=max(0.0, deadline - time.time()))
     # its catalog writer too, held by path: the directory goes, and a
     # collection made again under this name would inherit a writer on
-    # deleted files (`catalog.release_under`). Its text index's writers are
-    # let go by the forget itself, only where a rename follows (`hand_over`)
+    # deleted files (`catalog.release_under`). Its text index's writers too,
+    # where a sister reads that index (`text_index.readers`): a forget then
+    # renames the folder to her, and a routed forget runs in a child process,
+    # so only THIS process can let go of the writer (and its tantivy lock)
+    # it holds there — only there: elsewhere a pause waits on no merge
     try:
-        from . import catalog
-        catalog.release_under(collections_mod.louise_root() / "collections" / name)
+        from . import catalog, text_index
+        held_at = collections_mod.louise_root() / "collections"
+        # any placement naming this index, held or not (a few dozen folders):
+        # letting go of a writer no one then needs costs nothing
+        rel = f"{name}/index"
+        if any((text_index.placement(held_at, d.name) or {}).get("dir") == rel
+               for d in (held_at.iterdir() if held_at.is_dir() else ())
+               if d.is_dir() and not d.name.startswith(".")):
+            fts.release_under(held_at / name / "index")
+        catalog.release_under(held_at / name)
     except Exception:   # noqa: BLE001 — the forget goes on; the next start holds nothing
         pass
     _gone.pop(name, None)
