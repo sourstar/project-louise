@@ -25,7 +25,8 @@ git archive --format=tar "$rev" \
   deploy/madlad-translate/server.py deploy/medcpt-rerank/server.py deploy/dar-legal-it/server.py \
   deploy/medcpt-rerank/convert_article.py \
   app/vega/client.py tools/__init__.py tools/vega_repro_check.py tools/vega_cut_scan.py \
-  calibration/text.jsonl deploy/localai/patches/series | tar -x -C "$tmp"
+  calibration/text.jsonl deploy/localai/patches/series \
+  deploy/localai-nvidia/models deploy/localai-desktop/models | tar -x -C "$tmp"
 git rev-parse "$rev" > "$tmp/REVISION"
 mkdir -p "$tmp/deploy/vega/stage"
 cp -r deploy/vega/stage/. "$tmp/deploy/vega/stage/"

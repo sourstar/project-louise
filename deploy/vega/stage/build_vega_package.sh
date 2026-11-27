@@ -8,8 +8,19 @@
 #   docker run --rm -e PKG=vega-louise-llama-cpp -e BACKEND=intel-sycl-f16-llama-cpp \
 #     -e SOCKET=/backends/vega-louise-llama-cpp/run/receipts.sock \
 #     -v /mnt/tank/apps/localai/backends/vega-louise-llama-cpp:/backends/vega-louise-llama-cpp \
+#     -v /mnt/ssd5/apps/localai/models:/models -e MODELS=/models \
 #     -v /tmp/vega-stage/src:/src:ro -v /tmp/vega-stage/cache:/cache:ro \
 #     python@sha256:54c85f3c… sh /src/deploy/vega/stage/build_vega_package.sh
+#
+# THE PACKAGE AND ITS MODEL FILES, TOGETHER (compute precision, stated;
+# docs/notes/approved-encoders.md): the wrapper states no run for a model file
+# that does not say what it computes in, so a wrapper built before its files
+# would be an outage. MODELS (LocalAI's models directory, mounted read-write)
+# is required: install_model_files.py writes the staged statement into every
+# file behind PKG that lacks it, FIRST, and refuses — before anything of the
+# package is touched — when one cannot state it. STAGED names the repo's model
+# files and gallery entries (default the node's; a peer passes its own, e.g.
+# -e STAGED=/src/deploy/localai-nvidia/models).
 #
 # `-e CUTS=context_size` for vega-louise-python: its tasks cut every input at
 # the model's context_size themselves; llama.cpp cuts nothing, so the default,
@@ -40,6 +51,11 @@ NVIDIA_SMI=${NVIDIA_SMI:-}
 OWNER=${OWNER:-568:0}
 P=/backends/$PKG
 test -d "$P"
+: "${MODELS:?MODELS: LocalAI's models directory, mounted (-v <models>:/models -e MODELS=/models): the package is installed with its model files}"
+STAGED=${STAGED:-/src/deploy/vega/stage/models /src/deploy/vega/stage/gallery}
+# shellcheck disable=SC2046  # one --staged per directory
+python /src/deploy/vega/stage/install_model_files.py --package "$PKG" --backend "$BACKEND" \
+  --models "$MODELS" $(for d in $STAGED; do printf -- '--staged %s ' "$d"; done)
 find "$P" -mindepth 1 -maxdepth 1 ! -name run ! -name neo-cache ! -name file-digests.json -exec rm -rf {} +
 
 # the portable Python, as LocalAI's python backends carry it (libbackend.sh)

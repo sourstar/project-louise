@@ -32,6 +32,7 @@ ubuntu nvidia-smi` must list the card first.
      -e CARDS='{"0000:01:00.0": "NVIDIA GeForce RTX 4090"}' \
      -e NVIDIA_SMI=/usr/bin/nvidia-smi -e OWNER=0:0 \
      -v localai_backends:/backends -v <src>:/src:ro -v <cache>:/cache:ro \
+     -v <LocalAI's models directory>:/models -e MODELS=/models -e STAGED=/src/deploy/localai-nvidia/models \
      python@sha256:54c85f3c… sh /src/deploy/vega/stage/build_vega_package.sh
    ```
    `RUNTIME_PACKAGES` stays unset: on NVIDIA the run states the CUDA

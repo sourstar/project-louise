@@ -25,6 +25,7 @@ The dev PC's RX 9060 XT (gfx1200), 2026-10-18. The Louise node itself is
      -e RUNTIME_PACKAGES='["hip-runtime-amd", "hsa-rocr", "rocm-core", "rocdxg-roct"]' \
      -e AMD_SMI=/opt/rocm-wsl/bin/amd-smi -e OWNER=0:0 \
      -v localai_backends:/backends -v <src>:/src:ro -v <cache>:/cache:ro \
+     -v <LocalAI's models directory>:/models -e MODELS=/models -e STAGED=/src/deploy/localai-desktop/models \
      python@sha256:54c85f3c… sh /src/deploy/vega/stage/build_vega_package.sh
    ```
    The card's address comes from `amd-smi static --bus` inside the
