@@ -197,7 +197,8 @@ def test_federated_a_collection_without_kinds_is_facts(isolated_config, monkeypa
     assert facts["left_out"]["count"] == 2 and facts["kind_applied"] == "facts"
     lit = retrieval.federated_search([c, other], "Napoleon", k=200, mode="fts", translate=False, kind="literature")
     assert {h["source_collection"] for h in lit["hits"]} == {"gutenberg"}
-    assert lit["left_out"]["by_basis"]["no literary works in this collection"] == 103
+    # what the federation's cut leaves of its list for the reranker: max(budget 40, depth 50)
+    assert lit["left_out"]["by_basis"]["no literary works in this collection"] == 50
 
 
 # ---- the question's kind: one short call, bounded, cached --------------------
@@ -551,3 +552,79 @@ def test_the_note_is_in_the_answer_s_language(v1, lang, start):
     assert _ask(c, False, answer_lang=lang).json()["choices"][0]["message"]["content"].startswith(start)
     state["result"]["query_lang"] = lang
     assert _ask(c, False).json()["choices"][0]["message"]["content"].startswith(start), "the question's language"
+
+
+# ---- architecture's read of f21e98e3 -----------------------------------------
+
+@pytest.mark.parametrize("kind", ["facts", "literature"])
+def test_a_vector_ask_that_kept_its_vector_then_failed_leaves_the_text_leg(dense, monkeypatch, kind):
+    """1: the leg and its vector are the search's only once the ask answered."""
+    c, con, seen = dense
+
+    def failing(core, depth, collection=None, langs=None, vector=None, kept=None, **kw):
+        if kept is not None:
+            kept["vector"] = [0.1, 0.2]
+        raise OSError("the table could not be read")
+    monkeypatch.setattr(retrieval.embeddings, "search_records", failing)
+    out = _hybrid(con, c, kind=kind)
+    assert out["kind_applied"] == kind
+    assert all(h.get("source") != "dense" for h in out["hits"])
+
+
+def test_a_deeper_vector_ask_that_fails_keeps_the_leg_at_its_depth(dense, monkeypatch):
+    """2: caught like the first ask; the normal-depth leg answers."""
+    c, con, seen = dense
+    real = retrieval.embeddings.search_records
+
+    def deeper_fails(core, depth, vector=None, **kw):
+        if vector is not None:
+            raise OSError("Lance said no")
+        return real(core, depth, vector=vector, **kw)
+    monkeypatch.setattr(retrieval.embeddings, "search_records", deeper_fails)
+    out = _hybrid(con, c, kind="facts")
+    assert out["hits"] and all(h["book_id"] not in (2600, 151) for h in out["hits"])
+    assert [d["depth"] for d in seen["dense"]] == [retrieval.RERANK_TOP_N]
+
+
+def test_a_crowded_leg_under_auto_to_all_is_today_s(searched, monkeypatch):
+    """3: a few long books fill today's chunk cap (limit × CHUNK_CAP): today's
+    leg holds fewer than `limit` records, and the deeper fetch cut at records
+    must stop where today's did."""
+    c, con, seen = searched
+    from app import leg_depth
+    monkeypatch.setattr(retrieval.fts, "existing_groups", lambda c: ["en"])
+
+    def records(group, q, limit, collection=None, **kw):
+        # five long books, 100 chunks each, then one chunk a book
+        hits = [{**_hit(n, collection.name), "chunk_id": f"{collection.name}:{n}:0:{j}"}
+                for n in FILLER[:5] for j in range(100)]
+        hits += [_hit(n, collection.name) for n in FILLER[5:]]
+        return leg_depth.to_records(lambda m: hits[:m], limit)
+    monkeypatch.setattr(retrieval.fts, "search_records", records)
+    fused = []
+    real = retrieval._merge_rrf
+    monkeypatch.setattr(retrieval, "_merge_rrf", lambda *a, **kw: (lambda m: (fused.append([h["chunk_id"] for h in m]), m)[1])(real(*a, **kw)))
+    _search(con, c, k=10, rerank_depth=20)
+    n = len(fused)
+    _search(con, c, k=10, rerank_depth=20, kind=lambda: ("all", "not decided in time"))
+    assert fused[-1] == fused[n - 1]
+
+
+def test_federated_left_out_counts_what_the_federation_s_cut_leaves(monkeypatch):
+    from app import config
+    monkeypatch.setattr(config, "FEDERATION_CANDIDATE_BUDGET", 40)
+    assert retrieval._federated_want(2, 20, 50) == 50, "max(40, depth) of max(80, 50)"
+    assert retrieval._federated_want(1, 20, 50) == 80
+
+
+@pytest.mark.parametrize("lang,start", [
+    ("spa", "[solo literatura: esta búsqueda dejó fuera 1 otra obra"),
+    (" IT ", "[solo letteratura: questa ricerca ha escluso 1 altra opera"),
+    ("fr", "[littérature seulement : cette recherche a écarté 1 autre œuvre"),
+    ("de", "[nur Literatur: diese Suche hat 1 anderes Werk"),
+    ("en", "[literature only: this search left out 1 other work and"),
+])
+def test_the_note_takes_the_language_whole_and_says_one_in_the_singular(lang, start):
+    from app import api
+    r = {"hits": [], "kind_applied": "literature", "left_out": {"count": 1, "by_basis": {"x": 1}}}
+    assert api.kind_note(r, lang).startswith(start)

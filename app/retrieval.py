@@ -1086,7 +1086,7 @@ FTS_THREADS = max(2, min(16, os.cpu_count() or 4))
 def _search_one_collection(con, collection, query: str, k: int, mode: str, translate: bool,
                             entity_ids: list[str], plan: LanguagePlan | None = None,
                             depth: int = 0, book_ids: set[int] | None = None,
-                            as_of: int | None = None, kind="all") -> dict:
+                            as_of: int | None = None, kind="all", want: int | None = None) -> dict:
     """catalog + fts fan-out + dense + intra-collection RRF —
     the per-collection core, extracted so search() (one collection) and
     federated_search() (N collections) share identical logic. `plan` is the
@@ -1267,11 +1267,17 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
                 # s at most, on wikipedia); a post-filter would return an
                 # empty leg whenever the top k were in other languages
                 if vector_leg is None:
+                    # the leg and its vector are this search's only once the
+                    # ask ANSWERED: an ask that kept the vector and then failed
+                    # leaves neither (architecture's read of f21e98e3, 1)
+                    asked: dict = {}
+                    got = embeddings.search_records(core, limit, collection=collection,
+                                                    langs=list(limited_langs(collection, plan.only)) or None,
+                                                    **({"kept": asked} if thins else {}),
+                                                    **restrict)
                     dense_at = len(lists)
-                    lists.append(embeddings.search_records(core, limit, collection=collection,
-                                                           langs=list(limited_langs(collection, plan.only)) or None,
-                                                           **({"kept": dense_kept} if thins else {}),
-                                                           **restrict))
+                    lists.append(got)
+                    dense_kept.update(asked)
         except (hold_runs.RunUnvalidated, hold_runs.RunRefused) as e:
             # the answer named a run not yet tested, or one that failed — or
             # VeGa's receipt did not fit it (embeddings.ReceiptRefused): its
@@ -1309,7 +1315,8 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
     kind_applied, kind_by = _kind_now(kind)
     fuse = lambda ls: _merge_rrf(ls, limit, own=own, query_lang=getattr(plan, "query_lang", None))  # noqa: E731
     lists, catalog_hits, left_out = _legs_of_kind(
-        con, collection, kind_applied, lists, catalog_hits, limit, fuse, max(k * 4, depth),
+        con, collection, kind_applied, lists, catalog_hits, limit, fuse,
+        want if want is not None else max(k * 4, depth),
         again=(lambda: _vector_again(collection, core, limit, plan, restrict, dense_kept))
         if dense_at is not None and dense_kept.get("vector") is not None else None,
         dense_at=dense_at)
@@ -1670,7 +1677,9 @@ def _records(hits: list[dict], depth: int) -> list[dict]:
     records, not chunks (app/leg_depth.py; architecture's read of a5971abf, A)."""
     from . import leg_depth
     if all("chunk_id" in h for h in hits):
-        return leg_depth.cut_at_records(hits, depth)
+        # today's chunk cap first: a leg fetched deeper reaches past the chunks
+        # today's would have stopped at (architecture's read of f21e98e3, 3)
+        return leg_depth.cut_at_records(hits[:depth * leg_depth.CHUNK_CAP], depth)
     return hits[:depth]
 
 
@@ -1726,15 +1735,29 @@ def _legs_of_kind(con, collection, kind: str, lists: list[list[dict]], catalog_h
             left["count"] += 1
             left["by_basis"][why] = left["by_basis"].get(why, 0) + 1
     out_lists = [[h for h in lst if verdict(h)[0]] for lst in lists]
+    deeper = None
     if again is not None and dense_at is not None and \
             _records_in(out_lists[dense_at]) < limit <= _records_in(lists[dense_at]):
-        deeper = again()
+        cancel.checkpoint()
+        try:
+            deeper = again()
+        except Exception as e:   # noqa: BLE001 — as the first ask: the leg at its depth stays
+            db.log_event(con, "warn", "dense", f"the vector leg's deeper ask failed, its normal depth kept: {e}")
+            deeper = None
+    if deeper is not None:
         missing = {h["book_id"] for h in deeper if h.get("book_id") is not None} - set(kinds)
         if missing:
             kinds.update(work_kind_mod.kinds_of(con, collection, missing))
         out_lists[dense_at] = [h for h in deeper if verdict(h)[0]]
     out_lists = [_records(lst, limit) for lst in out_lists]
     return out_lists, [h for h in catalog_hits if verdict(h)[0]], left
+
+
+def _federated_want(n: int, k: int, rerank_depth: int) -> int:
+    """What a federated search's reranker sees of one collection's list: the
+    federation's cut (more than one collection), then the rerank's slice."""
+    want = max(k * 4, rerank_depth)
+    return min(want, max(config.FEDERATION_CANDIDATE_BUDGET, rerank_depth)) if n > 1 else want
 
 
 def _merge_rrf_federated(lists: list[list[dict]]) -> list[dict]:
@@ -1861,7 +1884,8 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
                                               entity_ids, plan, rerank_depth,
                                               **({"book_ids": admitted} if admitted is not None else {}),
                                               **({"as_of": as_of} if as_of is not None else {}),
-                                              **({"kind": kind} if kind != "all" else {}))
+                                              **({"kind": kind, "want": _federated_want(len(collections), k, rerank_depth)}
+                                                 if kind != "all" else {}))
             partial.setdefault("left_out", {"count": 0, "by_basis": {}})
             for h in partial["merged"]:
                 h["source_collection"] = collection.name

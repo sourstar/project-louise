@@ -1459,29 +1459,31 @@ def louise_kind(result: dict) -> dict:
 
 #: the note of an answer whose search's kind left out everything it found,
 #: in the answer's language (architecture's read of a5971abf, D): {lang:
-#: (facts, literature)}, each with {n} and the plural's ending
+#: ((facts one, many), (literature one, many))}, each with {n}
 KIND_NOTES = {
-    "en": ("[facts only: this search left out {n} literary work{s} and found nothing else — "
-           "ask again for literature, or for all]",
-           "[literature only: this search left out {n} other work{s} and found no literary work — "
-           "ask again for facts, or for all]"),
-    "it": ("[solo fatti: questa ricerca ha escluso {n} opere letterarie e non ha trovato altro — "
-           "chiedi di nuovo la letteratura, o tutto]",
-           "[solo letteratura: questa ricerca ha escluso {n} altre opere e non ha trovato opere "
-           "letterarie — chiedi di nuovo i fatti, o tutto]"),
-    "fr": ("[faits seulement : cette recherche a écarté {n} œuvres littéraires et n'a rien trouvé "
-           "d'autre — redemandez la littérature, ou tout]",
-           "[littérature seulement : cette recherche a écarté {n} autres œuvres et n'a trouvé aucune "
-           "œuvre littéraire — redemandez les faits, ou tout]"),
-    "de": ("[nur Fakten: diese Suche hat {n} literarische Werke ausgelassen und nichts anderes "
-           "gefunden — fragen Sie erneut nach Literatur oder nach allem]",
-           "[nur Literatur: diese Suche hat {n} andere Werke ausgelassen und kein literarisches Werk "
-           "gefunden — fragen Sie erneut nach Fakten oder nach allem]"),
-    "es": ("[solo hechos: esta búsqueda dejó fuera {n} obras literarias y no encontró nada más — "
-           "pregunte de nuevo por la literatura, o por todo]",
-           "[solo literatura: esta búsqueda dejó fuera {n} otras obras y no encontró ninguna obra "
-           "literaria — pregunte de nuevo por los hechos, o por todo]"),
+    "en": (("[facts only: this search left out {n} literary work and found nothing else — ask again for literature, or for all]",
+            "[facts only: this search left out {n} literary works and found nothing else — ask again for literature, or for all]"),
+           ("[literature only: this search left out {n} other work and found no literary work — ask again for facts, or for all]",
+            "[literature only: this search left out {n} other works and found no literary work — ask again for facts, or for all]")),
+    "it": (("[solo fatti: questa ricerca ha escluso {n} opera letteraria e non ha trovato altro — chiedi di nuovo la letteratura, o tutto]",
+            "[solo fatti: questa ricerca ha escluso {n} opere letterarie e non ha trovato altro — chiedi di nuovo la letteratura, o tutto]"),
+           ("[solo letteratura: questa ricerca ha escluso {n} altra opera e non ha trovato opere letterarie — chiedi di nuovo i fatti, o tutto]",
+            "[solo letteratura: questa ricerca ha escluso {n} altre opere e non ha trovato opere letterarie — chiedi di nuovo i fatti, o tutto]")),
+    "fr": (("[faits seulement : cette recherche a écarté {n} œuvre littéraire et n'a rien trouvé d'autre — redemandez la littérature, ou tout]",
+            "[faits seulement : cette recherche a écarté {n} œuvres littéraires et n'a rien trouvé d'autre — redemandez la littérature, ou tout]"),
+           ("[littérature seulement : cette recherche a écarté {n} autre œuvre et n'a trouvé aucune œuvre littéraire — redemandez les faits, ou tout]",
+            "[littérature seulement : cette recherche a écarté {n} autres œuvres et n'a trouvé aucune œuvre littéraire — redemandez les faits, ou tout]")),
+    "de": (("[nur Fakten: diese Suche hat {n} literarisches Werk ausgelassen und nichts anderes gefunden — fragen Sie erneut nach Literatur oder nach allem]",
+            "[nur Fakten: diese Suche hat {n} literarische Werke ausgelassen und nichts anderes gefunden — fragen Sie erneut nach Literatur oder nach allem]"),
+           ("[nur Literatur: diese Suche hat {n} anderes Werk ausgelassen und kein literarisches Werk gefunden — fragen Sie erneut nach Fakten oder nach allem]",
+            "[nur Literatur: diese Suche hat {n} andere Werke ausgelassen und kein literarisches Werk gefunden — fragen Sie erneut nach Fakten oder nach allem]")),
+    "es": (("[solo hechos: esta búsqueda dejó fuera {n} obra literaria y no encontró nada más — pregunte de nuevo por la literatura, o por todo]",
+            "[solo hechos: esta búsqueda dejó fuera {n} obras literarias y no encontró nada más — pregunte de nuevo por la literatura, o por todo]"),
+           ("[solo literatura: esta búsqueda dejó fuera {n} otra obra y no encontró ninguna obra literaria — pregunte de nuevo por los hechos, o por todo]",
+            "[solo literatura: esta búsqueda dejó fuera {n} otras obras y no encontró ninguna obra literaria — pregunte de nuevo por los hechos, o por todo]")),
 }
+#: the 639-2/3 codes the answer path may carry for those five
+_NOTE_LANG = {"eng": "en", "ita": "it", "fra": "fr", "fre": "fr", "deu": "de", "ger": "de", "spa": "es"}
 
 
 def kind_note(result: dict, lang: str | None = None) -> str:
@@ -1492,9 +1494,13 @@ def kind_note(result: dict, lang: str | None = None) -> str:
     n = k["left_out"]["count"]
     if result.get("hits") or not n or k["applied"] not in ("facts", "literature"):
         return ""
-    lang = (lang or result.get("query_lang") or "en").lower()[:2]
+    # as the answer path takes it (architecture's read of f21e98e3): an ISO
+    # code whole, never its first two letters ("spa" is not "sp")
+    lang = ((lang or "").strip().lower() or (result.get("query_lang") or "").strip().lower() or "en")
+    lang = _NOTE_LANG.get(lang, lang)
     facts, literature = KIND_NOTES.get(lang, KIND_NOTES["en"])
-    return (facts if k["applied"] == "facts" else literature).format(n=n, s="" if n == 1 else "s")
+    one, many = facts if k["applied"] == "facts" else literature
+    return (one if n == 1 else many).format(n=n)
 
 
 def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None):
