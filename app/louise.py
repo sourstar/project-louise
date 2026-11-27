@@ -1348,7 +1348,10 @@ def _sister_new(a, say) -> int:
         run.at("check", f"{a.name} is new")
     if run.dry:
         src = recreate.counts(root, her_sister_name, write_free=True)
-        need, free = recreate.room(root, her_sister_name, a.name, make=False)
+        # what the carry will copy, counted as it will copy it: no vector, and
+        # the index linked (same layers) or not copied at all (re-cut)
+        need, free = recreate.room(root, her_sister_name, a.name, make=False, linked_index=not recut,
+                                   parts=recreate.RECUT_SISTER_PARTS if recut else recreate.SISTER_PARTS)
         print(f"dry run: case J, a sister of {her_sister_name}: {a.name}; it stops before make, writes "
               f"nothing and takes no lock")
         if layer_params:
@@ -1457,7 +1460,7 @@ def _sister_new(a, say) -> int:
                 # 2026-11-08)
                 # and her own snapshot made. The worker indexes every document.
                 from app.hold import records as rec_mod, snapshot as sn_mod
-                need, free = recreate.room(root, her_sister_name, name)
+                need, free = recreate.room(root, her_sister_name, name, parts=recreate.RECUT_SISTER_PARTS)
                 if free < need:
                     raise CodexError(recreate.no_room(her_sister_name, name, need, free))
                 out = carry_mod.carry(root, her_sister_name, name, copy=True, apply=True, sister=True,
@@ -1502,7 +1505,8 @@ def _sister_new(a, say) -> int:
                                 f"worker indexes every document with her own layer")
             else:
                 parts = recreate.seed_parts(root, her_sister_name, name, now=_utc_now(), log=say)
-                need, free = recreate.room(root, her_sister_name, name, linked_index=True)
+                need, free = recreate.room(root, her_sister_name, name, linked_index=True,
+                                           parts=recreate.SISTER_PARTS)
                 if free < need:
                     raise CodexError(recreate.no_room(her_sister_name, name, need, free))
                 out = carry_mod.carry(root, her_sister_name, name, copy=True, apply=True, sister=True, log=say)
