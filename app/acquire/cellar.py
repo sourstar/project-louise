@@ -1852,7 +1852,13 @@ class TreeUnits(CellarUnits):
                                 _stop_check()
                                 slot = transfer_pool.acquire_endpoint_slot(
                                     mgr, ranked, EURLEX_SPEC, stop=phase, bound_s=5.0,
-                                    priority=Priority.INTERACTIVE, busy_bound_s=5.0)
+                                    busy_bound_s=5.0, ahead_of_fetch=True)
+                                if slot is None:
+                                    # Cellar cooled past the bound, or every slot busy:
+                                    # wait (the phase's stop asked), never a busy loop
+                                    # (review of f69d4bd9: 205,986 requests in 1 s)
+                                    cooled = max((mgr.cooled_for(k) for k, _e in ranked), default=0.0)
+                                    phase.wait(min(max(cooled, 0.05), 1.0))
                             if phase.is_set():                 # a fault or a stop while it waited
                                 slot[2].release()
                                 raise TransferAborted("cellar: stopped between requests")

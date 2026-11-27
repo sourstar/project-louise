@@ -118,7 +118,8 @@ def _paced(manager, key: str, spec, stop, sem, bound_s: float, sleep=time.sleep)
 
 
 def acquire_endpoint_slot(manager, ranked, spec, stop: threading.Event | None = None, *,
-                          bound_s: float | None = None, priority=None, busy_bound_s: float | None = None):
+                          bound_s: float | None = None, priority=None, busy_bound_s: float | None = None,
+                          ahead_of_fetch: bool = False):
     """`_acquire_slot`, in the priority order of the endpoint's connections:
     an INTERACTIVE caller (a fetch a query triggers) is registered as waiting
     (`manager.urgent`) and every other caller leaves the next free slot to it
@@ -135,17 +136,26 @@ def acquire_endpoint_slot(manager, ranked, spec, stop: threading.Event | None = 
     if priority is not None and Priority(priority) is Priority.INTERACTIVE and urgent is not None:
         with urgent([k for k, _e in ranked]):
             return _acquire_slot(manager, ranked, spec, stop, bound_s=bound_s, yields=False,
-                                 busy_bound_s=busy_bound_s)
+                                 busy_bound_s=busy_bound_s, rank=0)
+    if ahead_of_fetch and urgent is not None:
+        # the MIDDLE rank (review of f69d4bd9): the regular fetch yields to it,
+        # it yields to a person's lookup
+        with urgent([k for k, _e in ranked], rank=1):
+            return _acquire_slot(manager, ranked, spec, stop, bound_s=bound_s, yields=True,
+                                 busy_bound_s=busy_bound_s, rank=1)
     return _acquire_slot(manager, ranked, spec, stop, bound_s=bound_s, yields=True, busy_bound_s=busy_bound_s)
 
 
-def _yields(manager, key: str, yields: bool) -> bool:
+def _yields(manager, key: str, yields: bool, rank: int = 2) -> bool:
     ask = getattr(manager, "urgent_waiting", None) if yields else None
-    return bool(ask is not None and ask(key))
+    if ask is None:
+        return False
+    return bool(ask(key) if rank >= 2 else ask(key, rank))
 
 
 def _acquire_slot(manager, ranked, spec, stop: threading.Event | None = None, *,
-                  bound_s: float | None = None, yields: bool = True, busy_bound_s: float | None = None):
+                  bound_s: float | None = None, yields: bool = True, busy_bound_s: float | None = None,
+                  rank: int = 2):
     """Take a per-endpoint concurrency slot, preferring the fastest mirror that
     has one free right now and is not cooling down.
 
@@ -165,7 +175,7 @@ def _acquire_slot(manager, ranked, spec, stop: threading.Event | None = None, *,
     # First pass: a free slot on the fastest-measured mirror not cooling down,
     # without blocking.
     for key, endpoint in ranked:
-        if manager.cooled_for(key) > 0 or _yields(manager, key, yields):
+        if manager.cooled_for(key) > 0 or _yields(manager, key, yields, rank):
             continue
         sem = manager.endpoint_semaphore(key, manager.endpoint_slots(endpoint, spec))
         if sem.acquire(blocking=False):
@@ -188,11 +198,11 @@ def _acquire_slot(manager, ranked, spec, stop: threading.Event | None = None, *,
             return None
         if busy_until is not None and time.monotonic() > busy_until:
             return None
-        if _yields(manager, key, yields):
+        if _yields(manager, key, yields, rank):
             time.sleep(0.1)                 # an INTERACTIVE caller waits: the next slot is its
             continue
         if sem.acquire(timeout=0.1):
-            if _yields(manager, key, yields):
+            if _yields(manager, key, yields, rank):
                 sem.release()               # it began waiting meanwhile: handed over
                 continue
             if _paced(manager, key, spec, stop, sem, bound):

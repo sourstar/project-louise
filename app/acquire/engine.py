@@ -1092,6 +1092,17 @@ def _fetch_one_file(transport, endpoint, f: RemoteFile, collection,
 
 def _make_worker(transport, collection, spec, manager, ranked, stop, priority):
     ready = getattr(spec.unit_fetcher, "ready", None) if spec.unit_fetcher is not None else None
+    if ready is not None:
+        import inspect
+        try:
+            takes = inspect.signature(ready).parameters
+        except (TypeError, ValueError):
+            takes = {}
+        if "collection" not in takes and not any(p.kind is p.VAR_KEYWORD for p in takes.values()):
+            # said once at the start of the pass, never a wait skipped silently
+            # per unit (review of f69d4bd9)
+            raise TypeError(f"{type(spec.unit_fetcher).__name__}.ready must take `collection` "
+                            f"(spec.UnitFetcher): ready(f, stop, collection=...)")
     pass_held = getattr(spec.unit_fetcher, "pass_held", None) if spec.unit_fetcher is not None else None
 
     def _work(item: _WorkItem) -> list[_FileResult]:

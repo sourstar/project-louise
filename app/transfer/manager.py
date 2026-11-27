@@ -263,7 +263,7 @@ class TransferManager:
                 self._cool[key] = (end, reason)
 
     @contextmanager
-    def urgent(self, keys):
+    def urgent(self, keys, rank: int = 0):
         """An INTERACTIVE caller waits for a slot of these endpoints: while it
         does, `urgent_waiting` tells every other caller to leave the next free
         slot to it (operator, 2026-11-16: a fetch a query triggers goes before
@@ -271,23 +271,32 @@ class TransferManager:
         first (bucket.py, strict priority); this is the same order for the
         endpoint's connections, which a plain semaphore does not keep."""
         keys = list(keys)
+        # RANK 1, BETWEEN A PERSON AND THE WORKER (review of f69d4bd9): a
+        # background caller the regular fetch must yield to, which itself
+        # yields to a person (rank 0) — eurlex's listing beside its own fetch
+        table = self._urgent if rank == 0 else self.__dict__.setdefault("_urgent_mid", {})
         with self._lock:
             for k in keys:
-                self._urgent[k] = self._urgent.get(k, 0) + 1
+                table[k] = table.get(k, 0) + 1
         try:
             yield
         finally:
             with self._lock:
                 for k in keys:
-                    n = self._urgent.get(k, 0) - 1
+                    n = table.get(k, 0) - 1
                     if n > 0:
-                        self._urgent[k] = n
+                        table[k] = n
                     else:
-                        self._urgent.pop(k, None)
+                        table.pop(k, None)
 
-    def urgent_waiting(self, key: str) -> bool:
+    def urgent_waiting(self, key: str, rank: int = 2) -> bool:
+        """Does a caller of a HIGHER rank than `rank` wait for this endpoint?
+        rank 2 (the regular fetch): anyone waiting; rank 1 (the eurlex
+        listing): only a person (rank 0)."""
         with self._lock:
-            return self._urgent.get(key, 0) > 0
+            if self._urgent.get(key, 0) > 0:
+                return True
+            return rank > 1 and self.__dict__.get("_urgent_mid", {}).get(key, 0) > 0
 
     def cooled_for(self, key: str) -> float:
         """Seconds left in the endpoint's cool-down; 0 when none runs."""

@@ -361,3 +361,121 @@ def test_a_held_back_pass_carries_what_it_fetched():
     e = HeldBack("x")
     e.fetched = 7
     assert int(getattr(e, "fetched", 0)) == 7 and "fetched" in engine._no_counts()
+
+
+# ---- architecture's probes for f69d4bd9 ----------------------------------------------------
+
+def test_a_person_s_lookup_goes_before_the_background_listing():
+    import random
+    from app.acquire import specs
+    from app.transfer import pool as transfer_pool
+    spec = specs.EURLEX_SPEC
+    mgr = get_manager()
+    ranked = mgr.rank_endpoints([(e.url, e) for e in spec.endpoints])
+    key, endpoint = ranked[0]
+    sem = mgr.endpoint_semaphore(key, mgr.endpoint_slots(endpoint, spec))
+    lost = 0
+    n = mgr.endpoint_slots(endpoint, spec)
+    for _ in range(40):
+        for _i in range(n):
+            assert sem.acquire(timeout=2)
+        got = {}
+
+        def ask(who, kw):
+            s = transfer_pool.acquire_endpoint_slot(mgr, ranked, spec, stop=None, bound_s=5.0, **kw)
+            got[who] = (time.monotonic(), s)
+        tl = threading.Thread(target=ask, args=("listing", {"ahead_of_fetch": True}))
+        tl.start()
+        time.sleep(0.15)
+        tp = threading.Thread(target=ask, args=("person", {"priority": Priority.INTERACTIVE}))
+        tp.start()
+        time.sleep(0.15 + random.random() * 0.1)
+        sem.release()
+        time.sleep(0.4)
+        winner = next(iter(got))
+        lost += winner == "listing"
+        got[winner][1][2].release()
+        tl.join(5)
+        tp.join(5)
+        other = "person" if winner == "listing" else "listing"
+        got[other][1][2].release()
+        for _i in range(n - 1):
+            sem.release()
+    assert lost == 0, f"the background listing took the freed slot ahead of a person's lookup {lost} of 40 times"
+
+
+def test_the_listing_goes_before_the_regular_fetch():
+    from app.acquire import specs
+    from app.transfer import pool as transfer_pool
+    spec = specs.EURLEX_SPEC
+    mgr = get_manager()
+    ranked = mgr.rank_endpoints([(e.url, e) for e in spec.endpoints])
+    key, endpoint = ranked[0]
+    sem = mgr.endpoint_semaphore(key, mgr.endpoint_slots(endpoint, spec))
+    n = mgr.endpoint_slots(endpoint, spec)
+    for _i in range(n):
+        assert sem.acquire(timeout=2)
+    got = []
+
+    def ask(who, kw):
+        s = transfer_pool.acquire_endpoint_slot(mgr, ranked, spec, stop=None, bound_s=5.0, **kw)
+        got.append((who, s))
+    tf = threading.Thread(target=ask, args=("fetch", {}))
+    tf.start()
+    time.sleep(0.15)
+    tl = threading.Thread(target=ask, args=("listing", {"ahead_of_fetch": True}))
+    tl.start()
+    time.sleep(0.2)
+    sem.release()
+    time.sleep(0.4)
+    assert got and got[0][0] == "listing"
+    got[0][1][2].release()
+    tf.join(5)
+    tl.join(5)
+    for who, s in got[1:]:
+        s[2].release()
+    for _i in range(n - 1):
+        sem.release()
+
+
+def test_a_cooled_endpoint_does_not_spin_the_listing(tmp_path, monkeypatch):
+    from app.acquire import specs
+    from app.transfer import pool as transfer_pool
+    spec = specs.EURLEX_SPEC
+    base, corpus, due = _setup(tmp_path, monkeypatch, (1970,))
+    monkeypatch.setattr(cellar, "_window_files", lambda *a, **k: iter(()))
+    calls = [0]
+    real = transfer_pool.acquire_endpoint_slot
+
+    def counting(*a, **k):
+        calls[0] += 1
+        return real(*a, **k)
+    monkeypatch.setattr(transfer_pool, "acquire_endpoint_slot", counting)
+    mgr = get_manager()
+    key = mgr.rank_endpoints([(e.url, e) for e in spec.endpoints])[0][0]
+    mgr.cool_down(key, 1.5 + 5.0, "a fetch's 503")
+    units = cellar.TreeUnits()
+    stop = threading.Event()
+    try:
+        with get_manager().bind(Priority.BACKFILL, Direction.DOWN, stop=stop):
+            units._prepare_bulk(base, corpus, ["it"], due, "eu", URL, background=True)
+        time.sleep(1.0)
+        n = calls[0]
+    finally:
+        stop.set()
+        units.close()
+        with mgr._lock:
+            mgr._cool.pop(key, None)
+    assert n <= 5, f"{n} slot requests in 1 s while Cellar is cooled (a busy loop)"
+
+
+def test_a_ready_without_collection_is_said_at_the_start_of_the_pass():
+    from types import SimpleNamespace
+    from app.acquire import engine
+
+    class Old:
+        def ready(self, f, stop):
+            pass
+    with pytest.raises(TypeError, match="collection"):
+        engine._make_worker(None, None, SimpleNamespace(unit_fetcher=Old()), None, [], threading.Event(),
+                            Priority.BACKFILL)
