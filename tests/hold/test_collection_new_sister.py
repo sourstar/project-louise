@@ -475,6 +475,43 @@ def test_an_encoder_sister_has_her_sister_s_index_identity_and_slices(pair, card
     assert collections_mod.sister_refusal(alone, held=[alone]) is None
 
 
+def test_her_text_index_is_her_sister_s_own_read_where_it_lies(pair, card, monkeypatch):
+    """Their index identities equal (the node computes them from the held
+    files): her language groups are never copied nor hard-linked (operator,
+    2026-11-27) — she reads her sister's own index where it lies until the
+    worker's next boot shares it, and the carry's proof reads it so."""
+    from app import text_index
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    g = root / "old" / "index" / "en"
+    g.mkdir(parents=True, exist_ok=True)
+    (g / "meta.json").write_text("{}", encoding="utf-8")
+    (g / "seg.store").write_bytes(b"the index")
+    monkeypatch.setattr(louise, "_index_identities", lambda root, a, b: ("id1", "id1"))
+    assert _new_enc(root) == 0
+    assert text_index.placement(root, "sis") == {"dir": "old/index", "identity": "id1", "reads": "old"}
+    assert text_index.base(root / "sis" / "index") == root / "old" / "index"
+    assert not text_index.group_dirs(root / "sis" / "index"), "no language group copied"
+    assert text_index.index_digest(root, "sis")["sha256"] == text_index.index_digest(root, "old")["sha256"]
+    assert not [f for f in root.rglob("*") if f.is_file() and not f.is_symlink() and f.stat().st_nlink > 1], \
+        "no hard link anywhere"
+
+
+def test_her_text_index_is_copied_where_the_identities_differ(pair, card, monkeypatch):
+    from app import text_index
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    g = root / "old" / "index" / "en"
+    g.mkdir(parents=True, exist_ok=True)
+    (g / "meta.json").write_text("{}", encoding="utf-8")
+    (g / "seg.store").write_bytes(b"the index")
+    monkeypatch.setattr(louise, "_index_identities", lambda root, a, b: ("id1", "id2"))
+    assert _new_enc(root) == 0
+    assert text_index.placement(root, "sis") is None
+    mine = root / "sis" / "index" / "en" / "seg.store"
+    assert mine.read_bytes() == b"the index" and mine.stat().st_ino != (g / "seg.store").stat().st_ino
+
+
 def test_a_sister_of_a_file_spelling_profile_holds_that_profile_and_acquires_nothing(pair, card, monkeypatch):
     """The older spelling (`profile`, as the node's gutenberg file had it):
     hers says the same, never `slices = []` beside it."""
@@ -593,8 +630,8 @@ def test_a_sister_s_room_counts_what_her_carry_copies(pair, card):
     _ready(root, old, card)
     full = recreate.to_copy(root, "old", "sis")
     assert full.get("lance", 0) > 0, "her sister holds vectors"
-    mine = recreate.to_copy(root, "old", "sis", linked_index=True, parts=recreate.SISTER_PARTS)
+    mine = recreate.to_copy(root, "old", "sis", index_by_path=True, parts=recreate.SISTER_PARTS)
     assert "lance" not in mine and mine["state/manifest.sqlite"] == full["state/manifest.sqlite"]
     assert set(recreate.to_copy(root, "old", "sis", parts=recreate.RECUT_SISTER_PARTS)) == {"state/manifest.sqlite"}
-    need, _ = recreate.room(root, "old", "sis", make=False, linked_index=True, parts=recreate.SISTER_PARTS)
+    need, _ = recreate.room(root, "old", "sis", make=False, index_by_path=True, parts=recreate.SISTER_PARTS)
     assert need < sum(full.values())

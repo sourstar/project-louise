@@ -107,7 +107,7 @@ louise hold
                 (a sister who changes only her ENCODER SIDE: S's layers, cleaning and records in a new space with
                  C's encoder side whole — encoder and engine, dim, dtype, ctx, cut, pooling, instructions, query
                  side, calibration set, reference and tolerance, carried, nothing embedded; her endpoint and model
-                 C's file's; her manifest and text index S's, linked, one index identity, so she joins S's group
+                 C's file's; her manifest and text index S's, her manifest copied and her text index S's read where it lies (never copied nor hard-linked, 2026-11-27), one index identity, so she joins S's group
                  (docs/notes/sister-shared-index.md); her slices S's. gutenberg-nemo, 2026-11-27)
                                                                        case J, a SISTER INTO A HELD SPACE (added 2026-11-08, normattiva-nemo): `derive` of her sister S
                                                                        into C's space and layers; carry — her parts seeded from S's snapshot, S's manifest and text index
@@ -267,7 +267,8 @@ louise hold
               create <to> --shards-from <from>[:<snapshot>] [--snapshot ID]
                                                                        seed the parts from another collection's byte-identical ones — refused unless every field
                                                                        that decides a record (02 §2.7), record_line, facets and the layers' chunkers agree — each
-                                                                       linked (a copy across devices) and checked against the source snapshot's root, the staging
+                                                                       COPIED (a reflink where the filesystem clones blocks; never a hard link, 2026-11-27), after a
+            preflight of its bytes, and checked against the source snapshot's root, the staging
                                                                        claim and build database written as a build would leave them; then the ordinary create, of
                                                                        the source snapshot's period unless --snapshot names one (added 2026-10-09)
               delta <collection> <from> <to>                           what changed between two snapshots
@@ -279,7 +280,8 @@ louise hold
                                                                        record lines, cut afresh, and parses only what it did not list (added 2026-10-30,
                                                                        RULE 1: wikipedia-v8's 2026-09 listed 21.9 M twins of archive pages). Each part's OWN
                                                                        version moves: under its superseded name where a records build since put a newer one at
-                                                                       the path, which stays; a part that build left as it was is linked aside and kept
+                                                                       the path, which stays; a part that build left as it was stays at its path, named in the
+            discarded folder's kept-in-place.json beside a symbolic link (never a hard link, 2026-11-27)
                                                                        (2026-11-16, NeuRIS5). --repair: after a discard made before that, which moved the
                                                                        build's parts — the latest snapshot's come back, the discarded one's go aside; a dry run
                                                                        without --yes
@@ -544,7 +546,7 @@ louise dev                                                             operator 
                                                                        pooling, normalise, query, epoch) is equal, the target's latest snapshot names the source's
                                                                        parts, and the target is empty; re-pins the space row to the target's Codex and clears the
                                                                        source's coverage rows — but in the SAME space keeps them under their own part ids, as
-                                                                       provenance (never the target's coverage), hard-links the bundle tree with --copy and names
+                                                                       provenance (never the target's coverage), copies the bundle tree with --copy (never hard-links it, 2026-11-27) and names
                                                                        the predecessors in the carry marker (04 §4.5, 2026-10-22); --predecessor-rows does that
                                                                        after a same-space carry made before. --keep: then only the rows that archive produced (chunk_verification
                                                                        imported or verified) stay; every other is deleted and its document embedded again, a window
@@ -621,7 +623,7 @@ louise dev                                                             operator 
                                                                        again; each language stamped once used whole, before which the collection asks Cellar nothing
                                                                        per unit (bulk first). --dump: the dump's folder (default EURLEX_DATADUMP_DIR); --languages:
                                                                        comma-separated codes (default the collection's slices); --carry-from: an earlier eurlex corpus,
-                                                                       its units the dump did not give linked in without their notice, in the base or the history
+                                                                       its units the dump did not give copied in (never hard-linked, 2026-11-27) without their notice, in the base or the history
                                                                        slice (RULE 1). Writes (2026-11-15)
 ```
 
@@ -2715,6 +2717,21 @@ collection is another name.
 └── keys/                    the peer key, at NODE_KEY_PATH
 ```
 
+
+**No hard links** (*amended 2026-11-27*, operator, verbatim: "Never use
+hard links, always consciously load from a path. It already happened that
+you deleted important files because you forgot the hard links"). Nothing
+makes a second name for a file. What two collections both use is read
+WHERE IT LIES, by its path: a sister's text index (her placement names
+her sister's own index, `reads`, until the worker's boot shares it), a
+re-check's claims, a re-created collection's origin directory (a symbolic
+link, handed over at its holder's forget), a discarded snapshot's part the
+build since shares (kept in place). What becomes another owner's own is
+COPIED, a reflink where the filesystem clones blocks, after a preflight of
+its bytes: seeded SHARD parts, a carried bundle tree, an earlier corpus's
+units. What an operation consumes is moved: a method's claims. A symbolic
+link names a path and deleting it never deletes its target: it is
+allowed. app/file_copy.py; enforced by tests/test_no_hard_links.py.
 
 One mount per kind, a folder per collection (amended 2026-10-12, operator):
 with `SHARDS_ROOT` and `ORIGINS_ROOT` set (environment: this node's

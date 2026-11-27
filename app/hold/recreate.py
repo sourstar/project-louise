@@ -183,7 +183,8 @@ def seed_parts(root: Path, pred_name: str, name: str, *, now: str,
                log: Callable[[str], None]) -> dict[str, Any]:
     """`name`'s SHARD seeded from the predecessor's latest snapshot (hold/
     seed.py's G3, what `hold snapshot create --shards-from` does): its parts
-    hard-linked and checked against their roots, its build database a
+    copied (never hard-linked: app/file_copy.py) and checked against their
+    roots, its build database a
     build's, the snapshot frozen again and its parts held to the source's
     (`same_parts_or_withdraw`), signed where this peer has a key. A target
     already holding a snapshot of the same parts is nothing to do. The
@@ -226,9 +227,13 @@ def share_origin(root: Path, pred_name: str, name: str) -> str:
     target to `name`'s link, so `forget` keeps the folder (another held
     collection links it) and the manifest's stored paths resolve after the
     swap; `name`'s own empty folder there goes. An origin that is a directory
-    inside the predecessor is hard-linked file by file (hold/carry.py
-    `_link_tree`), so its forget frees none of it."""
-    from .carry import _link_tree
+    inside the predecessor is read WHERE IT LIES too: `name`'s `origin` is a
+    symbolic link to it (it was hard-linked file by file, so that the
+    predecessor's forget freed none of it; never a hard link now: operator,
+    2026-11-27, app/file_copy.py), and the predecessor's forget HANDS the
+    directory over to the collection whose link reads it instead of removing
+    it (hold/forget.py `origin_heirs`). A target already holding a directory
+    of files there (an earlier carry's) is left as it is."""
     src, dst = Path(root) / pred_name / "origin", Path(root) / name / "origin"
     if src.is_symlink():
         target = os.readlink(src)
@@ -255,8 +260,24 @@ def share_origin(root: Path, pred_name: str, name: str) -> str:
         os.replace(tmp, dst)
         return f"linked to {target}"
     if src.is_dir():
-        got = _link_tree(src, dst)
-        return f"hard-linked ({got['linked']} linked, {got['copied']} copied, {got['present']} present)"
+        target = src.resolve()
+        relative = os.path.relpath(src, dst.parent)        # moves with the root
+        if dst.is_symlink():
+            if dst.resolve() == target:
+                return f"reads {target} (already)"
+            raise CodexError(f"{dst} links to {dst.resolve()}: a re-created collection reads its "
+                             f"predecessor's origin, and nothing is linked over another")
+        if dst.is_dir():
+            if any(dst.iterdir()):
+                return "its own directory of files (an earlier carry's), left as it is"
+            dst.rmdir()
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_name("origin.recreate")
+        if tmp.is_symlink():
+            tmp.unlink()
+        tmp.symlink_to(relative, target_is_directory=True)
+        os.replace(tmp, dst)
+        return f"reads {target} where it lies (handed over at {pred_name}'s forget)"
     return "none (the predecessor holds no origin)"
 
 
@@ -441,13 +462,14 @@ def _tree(root: Path, name: str, rel: str) -> Path:
     return vector_place.table_dir(root, name) if rel == "lance" else Path(root) / name / rel
 
 
-def to_copy(root: Path, pred_name: str, name: str, *, linked_index: bool = False,
+def to_copy(root: Path, pred_name: str, name: str, *, index_by_path: bool = False,
             parts: tuple[str, ...] = COPIED) -> dict[str, int]:
     """The bytes of each of `parts` (of `COPIED`) the target does not hold
     yet (a resumed carry counts only what is left), counted from the
-    predecessor's files by their size. `linked_index`: a sister's text
-    index, whose language groups are hard-linked (carry `_sister_index`):
-    only the rest of it counts. `parts`: what the carry copies — a case-J
+    predecessor's files by their size. `index_by_path`: a sister's text
+    index, whose language groups she reads where they lie (carry
+    `_sister_index`, `text_index.join_at_carry`; never a hard link): only
+    the rest of it counts. `parts`: what the carry copies — a case-J
     sister copies no vector table (`SISTER_PARTS`), a re-cut one no text
     index either (`RECUT_SISTER_PARTS`); gutenberg-nemo's dry run counted
     gutenberg's 54-GB index and 19-GiB table it never copies (2026-11-27)."""
@@ -457,7 +479,7 @@ def to_copy(root: Path, pred_name: str, name: str, *, linked_index: bool = False
         there, src = _tree(root, name, rel), _tree(root, pred_name, rel)
         if not there.exists() or (there.is_dir() and not any(there.iterdir())):
             out[rel] = _bytes_under(src) if src.exists() else 0
-            if rel == "index" and linked_index and src.is_dir():
+            if rel == "index" and index_by_path and src.is_dir():
                 out[rel] -= sum(_bytes_under(g) for g in text_index.group_dirs(src))
     return out
 
@@ -479,7 +501,7 @@ def _lands(root: Path, name: str, rel: str) -> Path:
 
 
 def rooms(root: Path, pred_name: str, name: str, *, make: bool = True,
-          linked_index: bool = False, parts: tuple[str, ...] = COPIED) -> list[dict[str, Any]]:
+          index_by_path: bool = False, parts: tuple[str, ...] = COPIED) -> list[dict[str, Any]]:
     """`[{where, need, free}]`, one per filesystem the carry writes to: the
     predecessor's vector table, text index and manifest, each counted only
     where the target does not hold it yet (a resumed carry), on the
@@ -489,7 +511,7 @@ def rooms(root: Path, pred_name: str, name: str, *, make: bool = True,
     makes nothing: the free space is read where the target would be made."""
     import shutil
     dst = Path(root) / name
-    sizes = to_copy(root, pred_name, name, linked_index=linked_index, parts=parts)
+    sizes = to_copy(root, pred_name, name, index_by_path=index_by_path, parts=parts)
     if make:
         dst.mkdir(parents=True, exist_ok=True)
     by_fs: dict[int, dict[str, Any]] = {}
@@ -504,11 +526,11 @@ def rooms(root: Path, pred_name: str, name: str, *, make: bool = True,
 
 
 def room(root: Path, pred_name: str, name: str, *, make: bool = True,
-         linked_index: bool = False, parts: tuple[str, ...] = COPIED) -> tuple[int, int]:
+         index_by_path: bool = False, parts: tuple[str, ...] = COPIED) -> tuple[int, int]:
     """`(bytes the carry's copy needs, bytes free where it writes)` on the
     filesystem with the least to spare (`rooms`): one that cannot hold its
     share refuses the whole carry."""
-    worst = min(rooms(root, pred_name, name, make=make, linked_index=linked_index, parts=parts),
+    worst = min(rooms(root, pred_name, name, make=make, index_by_path=index_by_path, parts=parts),
                 key=lambda r: r["free"] - r["need"])
     return worst["need"], worst["free"]
 
@@ -666,15 +688,20 @@ def human(n: int | None) -> str:
 def forget_plan(root: Path, name: str) -> dict[str, Any]:
     """What `hold collection forget <name>` would remove (its own dry run,
     app/hold/forget.py) and its size: every inode counted once, and FREED
-    only where every link to it is among what goes — the parts and bundles
-    the re-created collection hard-linked stay on disk."""
+    only where every name it has is among what goes — a part an earlier
+    carry hard-linked (before 2026-11-27; never since: app/file_copy.py)
+    stays on disk — and never the origin directory its forget hands over to
+    the collection that reads it (`forget.hand_over_origin`)."""
     from .forget import forget
     plan = forget(Path(root), name, dry_run=True)
+    handed = (plan.get("origin_handed_to") or {}).get("origin")
     seen: dict[tuple[int, int], list[int]] = {}
     for p in plan.get("would_remove") or ():
         p = Path(p)
         walk = [(str(p.parent), [], [p.name])] if not p.is_dir() or p.is_symlink() else os.walk(p)
-        for base, _dirs, names in walk:
+        for base, dirs, names in walk:
+            if handed:
+                dirs[:] = [d for d in dirs if str(Path(base) / d) != handed]
             for nm in names:
                 try:
                     st = os.lstat(Path(base) / nm)

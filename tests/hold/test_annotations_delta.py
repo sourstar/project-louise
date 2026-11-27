@@ -193,12 +193,12 @@ def test_a_methods_output_ahead_of_the_snapshot_set_aside_then_brought_in(tmp_pa
 
     def path(r):
         return r / "method.jsonl"
-    (_, first, dropped, _, _), _form = same(roots, None, path=path, unheld="drop", private=True)
+    (_, first, dropped, _, _), _form = same(roots, None, path=path, unheld="drop", hand_over=True)
     assert first["dropped_count"] == len(ahead) and all("pubmed:24" in d for d in dropped)
     for r in roots.values():
         (r / "method.jsonl").write_bytes(lines)          # the method's next run: the same output
         wide_move(r, "2026-09", changed=range(4, 2400, 23), added=range(2401, 2411))
-    (_, then, dropped, _, _), form = same(roots, None, path=path, unheld="drop", private=True, clock=NOVEMBER)
+    (_, then, dropped, _, _), form = same(roots, None, path=path, unheld="drop", hand_over=True, clock=NOVEMBER)
     assert then["dropped_count"] == 0 and then["added"] == len(ahead), "the claims set aside come in"
     (t,) = form["targets"].values()
     assert t["from"] == TARGET_SNAPSHOT and t["to"] == "2026-09"

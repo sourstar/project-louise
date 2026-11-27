@@ -11,6 +11,7 @@ import json
 import random
 from datetime import datetime, timezone
 import tracemalloc
+import os
 from pathlib import Path
 
 import pytest
@@ -257,7 +258,9 @@ def test_the_claims_held_are_read_as_held_claims_reads_them(tmp_path, monkeypatc
     assert [raw[16 * j:16 * j + 16] for j in range(900)] == sorted(want)
 
 
-def test_a_re_check_links_the_claims_file_and_copies_nothing(tmp_path, monkeypatch):
+def test_a_re_check_reads_the_claims_file_where_it_lies_and_copies_nothing(tmp_path, monkeypatch):
+    """By its path: no copy and no second name in the workspace (never a
+    hard link: operator, 2026-11-27, app/file_copy.py)."""
     a_target(tmp_path)
     create(tmp_path, claims_file(a_claim(), a_claim("pubmed:3", "pubmed:1")))
     target_next(tmp_path, col.read(tmp_path, "pubmed"), {"pubmed:2": "two, revised"})
@@ -267,11 +270,34 @@ def test_a_re_check_links_the_claims_file_and_copies_nothing(tmp_path, monkeypat
 
     def spy(path, work):
         src = real(path, work)
-        seen.append((Path(work) / st.COPY).stat().st_ino == origin.stat().st_ino)
+        seen.append((src.path == origin, (Path(work) / st.COPY).exists()))
         return src
     monkeypatch.setattr(st, "linked_source", spy)
     got = ann.update(tmp_path, NAME, key=KEY, now=NOW, log=lambda m: None, clock=OCTOBER)
-    assert got.changed == 2 and seen == [True] and origin.stat().st_nlink == 1, "both re-pinned to 2026-09"
+    assert got.changed == 2 and seen == [(True, False)] and origin.stat().st_nlink == 1, \
+        "both re-pinned to 2026-09"
+
+
+def test_a_claims_file_replaced_during_a_re_check_refuses_it(tmp_path, monkeypatch):
+    """Read where it lies, the file is checked before each pass and at the
+    end: one replaced while the update read it writes no snapshot."""
+    a_target(tmp_path)
+    create(tmp_path, claims_file(a_claim(), a_claim("pubmed:3", "pubmed:1")))
+    target_next(tmp_path, col.read(tmp_path, "pubmed"), {"pubmed:2": "two, revised"})
+    origin = tmp_path / NAME / "origin" / "claims.jsonl"
+    before = sorted(p.name for p in (col.shard_dir_of(tmp_path, NAME) / "snapshots").iterdir())
+    real = st.survey
+
+    def survey_then_replace(*args, **kwargs):
+        got = real(*args, **kwargs)
+        tmp = origin.with_name("claims.jsonl.new")
+        tmp.write_bytes(origin.read_bytes())
+        os.replace(tmp, origin)                         # the same bytes, another file
+        return got
+    monkeypatch.setattr(st, "survey", survey_then_replace)
+    with pytest.raises(ann.AnnotationsError, match="changed while it was read"):
+        ann.update(tmp_path, NAME, key=KEY, now=NOW, log=lambda m: None, clock=OCTOBER)
+    assert sorted(p.name for p in (col.shard_dir_of(tmp_path, NAME) / "snapshots").iterdir()) == before
 
 
 # ---- the memory ---------------------------------------------------------------------------

@@ -106,6 +106,26 @@ class ClaimsSource:
             self._fd = os.open(self.path, os.O_RDONLY)
         #: a private copy this create made, which `install` moves into place
         self.owned = owned
+        #: the file as it was opened (app/file_copy.py): a pass's children
+        #: open it by its path, so `still` checks the path names it yet
+        self.ident = None
+        if self._fd is not None:
+            from ..file_copy import fd_identity
+            self.ident = fd_identity(self._fd)
+
+    def still(self, what: str = "the claims") -> None:
+        """Raise AnnotationsError unless the file this source opened is
+        still the one at its path, unchanged — before each pass and at the
+        end of one that reads it WHERE IT LIES (`linked_source`, never a
+        copy). Bytes in memory cannot change."""
+        if self.path is None or self.ident is None:
+            return
+        from ..file_copy import Changed, check
+        try:
+            check(self.path, self.ident, what)
+        except Changed as e:
+            from .annotations import AnnotationsError
+            raise AnnotationsError(str(e)) from None
 
     def close(self) -> None:
         if self._fd is not None:
@@ -310,43 +330,52 @@ def workspace(root: Path, tag: str) -> Iterator[Path]:
         _drop(lock, fd)
 
 
-def private_source(claims: bytes | str | os.PathLike, work: Path, *, link: bool = False) -> ClaimsSource:
+def private_source(claims: bytes | str | os.PathLike, work: Path, *, hand_over: bool = False) -> ClaimsSource:
     """The source a create reads: a COPY of the claims, in the workspace —
     of a file, so that every pass reads the very bytes the first checked and
     the origin installed is those bytes whatever happens to the file given
     meanwhile; of bytes, so that the pool's children can read them too.
-    `link`: the file is the caller's own and nobody writes it again (a
-    node's method, app/hold/annotation_methods.py) — a hard link holds the
-    very bytes, at no copy (RULE 1); copied where no link can be made."""
+    `hand_over`: the file is the caller's own and consumed by this update —
+    a node's method writes it in its own workspace, removed when the step
+    ends (app/hold/annotation_methods.py) — so it is MOVED into this
+    workspace (app/file_copy.py's (M): wikipedia's is 4.2 GB), copied where
+    a rename cannot reach (another filesystem). Never a hard link (operator,
+    2026-11-27)."""
     copy = Path(work) / COPY
     if isinstance(claims, (bytes, bytearray, memoryview)):
         copy.write_bytes(claims)
-    elif link:
+    elif hand_over:
         try:
-            os.link(claims, copy)
-        except OSError:
-            shutil.copyfile(claims, copy)
+            os.replace(claims, copy)
+        except OSError as e:
+            import errno
+            if e.errno != errno.EXDEV:
+                raise
+            _copy_claims(Path(claims), copy)
     else:
-        shutil.copyfile(claims, copy)
+        _copy_claims(Path(claims), copy)
     return ClaimsSource(copy, owned=True)
+
+
+def _copy_claims(src: Path, copy: Path) -> None:
+    from ..file_copy import preflight
+    preflight(src.stat().st_size, copy.parent, f"the claims file {src}")
+    shutil.copyfile(src, copy)
 
 
 def linked_source(path: Path, work: Path) -> ClaimsSource:
     """The source an update RE-CHECKS: the collection's own claims file
-    (`origin/claims.jsonl`), as a hard link in the workspace. That file is
-    only ever replaced whole (`create` moves it into place, `update` writes
-    a new one beside it and renames), never written in place, so the link
-    holds the very bytes the first pass checks — and costs no copy of
-    wikipedia's 4 GB (RULE 1: provably identical bytes, reused). Copied
-    where no link can be made (another filesystem)."""
-    copy = Path(work) / COPY
-    try:
-        os.link(path, copy)
-    except FileNotFoundError:
-        raise
-    except OSError:
-        shutil.copyfile(path, copy)
-    return ClaimsSource(copy)
+    (`origin/claims.jsonl`), READ WHERE IT LIES, by its path — no copy (RULE
+    1: wikipedia's is 4 GB) and no second name (never a hard link: operator,
+    2026-11-27, app/file_copy.py). The file is only ever replaced whole
+    (`create` moves it into place, `update` writes a new one beside it and
+    renames) and a re-check installs none, so the update checks it is still
+    the file it opened before each pass and at the end (`ClaimsSource.still`):
+    a file replaced meanwhile refuses the update, never a mix of two.
+    `work` is the update's workspace, unused here."""
+    if not Path(path).is_file():
+        raise FileNotFoundError(str(path))
+    return ClaimsSource(path)
 
 
 # --------------------------------------------------------------------------

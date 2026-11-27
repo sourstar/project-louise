@@ -314,30 +314,31 @@ def _rekey_union(share: Path, old_prefix: str, new_prefix: str) -> int:
 # collection, never announced, read by the held path (contribute.claimed_uids)
 # as provenance — which uids another producer's accepted bundle already holds.
 
-def _link_tree(src: Path, dst: Path) -> dict[str, int]:
-    """Every file under `src` HARD-LINKED at the same relative path under
-    `dst` — the bundles' bytes held once (RULE 1), each bundle's
-    possession.json readable at the path its row names. An existing file is
-    left as it is; across filesystems a link cannot be made and the file is
-    copied."""
-    out = {"linked": 0, "copied": 0, "present": 0}
+def _copy_files(src: Path, dst: Path, what: str = "the carry") -> dict[str, int]:
+    """Every file under `src` COPIED at the same relative path under `dst`
+    (never hard-linked: operator, 2026-11-27, app/file_copy.py; a reflink
+    where the filesystem clones blocks) — each bundle's possession.json
+    readable at the path its row names. An existing file is left as it is;
+    the bytes of the others are checked against the free space first, and
+    each file lands under a hidden name, renamed into place."""
+    from app.file_copy import copy_file, preflight
+    out = {"copied": 0, "present": 0}
     src = src.resolve() if src.exists() else src
     if not src.is_dir():
         return out
+    todo: list[tuple[Path, Path]] = []
     for base, _dirs, files in os.walk(src):
         rel = Path(base).relative_to(src)
         for f in files:
             s, d = Path(base) / f, dst / rel / f
             if d.exists():
                 out["present"] += 1
-                continue
-            d.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                os.link(s, d)
-                out["linked"] += 1
-            except OSError:
-                shutil.copy2(s, d)
-                out["copied"] += 1
+            else:
+                todo.append((s, d))
+    preflight(sum(s.stat().st_size for s, _d in todo), dst, what)
+    for s, d in todo:
+        copy_file(s, d)
+        out["copied"] += 1
     return out
 
 
@@ -357,7 +358,7 @@ def keep_predecessor_rows(root, from_ref: str, to_ref: str, *, apply: bool = Fal
                           log: Callable[[str], None] = print) -> dict[str, Any]:
     """For a same-space carry that ran before provenance was kept (gutenberg
     p9 → p10, 2026-10-22): the source's coverage rows copied UNKEYED into the
-    target's manifest, its bundle tree hard-linked into the target's, and the
+    target's manifest, its bundle tree copied into the target's, and the
     carry marker naming the predecessors. Repeatable."""
     from . import collection as col
     root = Path(root)
@@ -381,7 +382,7 @@ def keep_predecessor_rows(root, from_ref: str, to_ref: str, *, apply: bool = Fal
     plan = {"from": from_name, "to": to_name, "rows": len(rows), "apply": apply}
     if not apply:
         log(f"[carry] would keep {len(rows)} coverage row(s) of {from_name} in {to_name}, unkeyed "
-            f"(provenance, not coverage), and link its bundle tree (--yes)")
+            f"(provenance, not coverage), and copy its bundle tree (--yes)")
         return plan
     tcon = sqlite3.connect(tp["manifest"], timeout=60, isolation_level=None)
     try:
@@ -399,7 +400,8 @@ def keep_predecessor_rows(root, from_ref: str, to_ref: str, *, apply: bool = Fal
         raise
     finally:
         tcon.close()
-    plan["bundles"] = _link_tree(sp["state"] / "bundles", tp["state"] / "bundles")
+    plan["bundles"] = _copy_files(sp["state"] / "bundles", tp["state"] / "bundles",
+                                  f"copying {from_name}'s bundle tree into {to_name}")
     marker.write_text(json.dumps({**held, "same_space": True,
                                   "predecessors": _predecessors_of(sp["state"], src.collection_id)},
                                  sort_keys=True), encoding="utf-8")
@@ -448,41 +450,41 @@ def _copy_tree(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
-def _sister_index(src: Path, dst: Path) -> str:
-    """Her sister's index directory for a sister (case J, same layers): its
-    language-group indexes HARD-LINKED from wherever they are (her sister's
-    own directory, or the shared one her sister reads, app/text_index.py) —
-    no byte copied; tantivy never rewrites a file, so the two diverge safely
-    — and the rest of it (the catalogue, keyed on the manifest copied with
-    it; the facets) copied. Whole or not at all, repeatable, like
-    `_transfer`; a copy where the filesystems differ."""
+def _sister_index(src: Path, dst: Path, *, groups: bool = True) -> str:
+    """Her sister's index directory for a sister (case J, same layers): the
+    rest of it (the catalogue, keyed on the manifest copied with it; the
+    facets) COPIED, and its language-group indexes — from wherever they are,
+    her sister's own directory or the shared one her sister reads,
+    app/text_index.py — copied too with `groups` (their identities differ:
+    she holds her own), else NOT AT ALL: she reads them where they lie
+    (`text_index.join_at_carry`, which the caller writes). Never a hard link
+    (operator, 2026-11-27, app/file_copy.py). Whole or not at all,
+    repeatable, like `_transfer`."""
     from app import text_index
     if dst.exists() and not _empty_dir(dst):
         return "present"
     if not src.exists():
         return "absent"
     groups_at = text_index.base(src)
-    groups = {g.name: g for g in text_index.group_dirs(groups_at)}
+    found = {g.name: g for g in text_index.group_dirs(groups_at)}
     tmp = dst.with_name(f".{dst.name}.carry")
     if tmp.exists():
         shutil.rmtree(tmp)
     tmp.mkdir(parents=True)
-    linked = 0
     for entry in sorted(src.iterdir()):
-        if entry.name in groups:
+        if entry.name in found:
             continue
         _copy_tree(entry, tmp / entry.name)
-    for name, g in sorted(groups.items()):
-        try:
-            text_index.link_tree(g, tmp / name)
-            linked += 1
-        except OSError:
-            shutil.rmtree(tmp / name, ignore_errors=True)
-            _copy_tree(g, tmp / name)
+    if groups:
+        for name, g in sorted(found.items()):
+            text_index.copy_tree(g, tmp / name, f"carry: her sister's text index ({name})")
     if dst.exists():
         dst.rmdir()                                   # empty: db.connect makes them
     os.replace(tmp, dst)
-    return f"linked ({linked} language group(s), no byte copied)" if linked else "copied"
+    if not found:
+        return "copied"
+    return (f"copied ({len(found)} language group(s))" if groups else
+            f"its catalogue copied; {len(found)} language group(s) read where they lie")
 
 
 def _transfer(src: Path, dst: Path, *, copy: bool) -> str:
@@ -729,7 +731,7 @@ def carry_file(root, from_name: str, to_name: str, collection_id: str, *,
 def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool = False,
           keep: str | None = None, rebuilt: bool = False, recut: bool = False,
           resliced: bool = False, unembedded: bool = False, sister: bool = False,
-          relayered: bool = False, rechunked: bool = False,
+          relayered: bool = False, rechunked: bool = False, index_groups: bool = True,
           log: Callable[[str], None] = print) -> dict[str, Any]:
     """Carry `from_ref`'s manifest, text index and vector table into `to_ref`
     (G1). `apply=False` checks everything and writes nothing.
@@ -1052,10 +1054,13 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     # (A1k: the re-key writes the target's, row by row; its text index is cut again)
     for k in (() if relayered or rechunked else ("index",) if unembedded or sister else ("lance", "index")):
         if k == "index" and sister:
-            # a sister's text index is her sister's byte for byte: LINKED,
-            # never copied (operator, 2026-11-10: sisters share one text
-            # index, app/text_index.py) — the worker's next boot groups them
-            done[k] = _sister_index(sp[k], tp[k])
+            # a sister's text index is her sister's byte for byte: READ
+            # WHERE IT LIES, never copied nor linked (operator, 2026-11-10:
+            # sisters share one text index; 2026-11-27: no hard link,
+            # app/text_index.py) — `index_groups` False, the caller places
+            # her (`text_index.join_at_carry`); True, their identities
+            # differ and she holds a copy of her own
+            done[k] = _sister_index(sp[k], tp[k], groups=index_groups)
             continue
         done[k] = _transfer(sp[k], tp[k], copy=copy)
     if "index" in done and [f.to_dict() for f in src.facets] != [f.to_dict() for f in to.facets]:
@@ -1159,7 +1164,8 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     elif same and not sister:
         sb, tb = sp["state"] / "bundles", tp["state"] / "bundles"
         done["bundles"] = (_move_state(sb, tb) if not copy
-                           else "linked " + json.dumps(_link_tree(sb, tb), sort_keys=True))
+                           else "copied " + json.dumps(_copy_files(sb, tb, f"copying {from_name}'s bundle "
+                                                                      f"tree into {to_name}"), sort_keys=True))
     cleared = _repin(tp["manifest"], src, to, keep_coverage=shares, keep_unkeyed=same and not shares)
     plan.update(done=done, coverage_rows_cleared=cleared, documents=_documents(tp["manifest"]))
     final = {**claim, "done": True}

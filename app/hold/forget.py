@@ -253,6 +253,84 @@ def shared_folders(root: Path, name: str) -> tuple[list[Path], list[Path]]:
     return removed, kept
 
 
+def refuse_while_read(root: Path, name: str, what: str) -> None:
+    """Raise CodexError when another held collection reads `name`'s OWN
+    text index where it lies (a sister made before the worker's boot shared
+    them, app/text_index.py `join_at_carry`): removing or moving `name`'s
+    directory would take her index with it. The boot shares it, after which
+    `name` goes like any member of a shared index."""
+    from app import text_index
+    readers = text_index.readers_of_own(root, name)
+    if readers:
+        raise CodexError(f"{what} {name}: {', '.join(readers)} reads its text index where it lies "
+                         f"until the worker's next boot shares it; restart the worker (`louise node "
+                         f"restart`), then run this again — nothing was changed")
+
+
+#: an origin directory being handed over, under its heir's directory
+HANDOVER = ".origin.handover"
+
+
+def origin_heirs(root: Path, name: str) -> list[str]:
+    """The held collections whose `origin` is a symbolic link to `name`'s
+    own origin DIRECTORY (a re-creation or a sister reads it where it lies,
+    `recreate.share_origin`), by name."""
+    from . import deposit
+    root = Path(root)
+    own = root / name / "origin"
+    if own.is_symlink() or not own.is_dir():
+        return []
+    target = own.resolve()
+    out = []
+    for d in sorted(root.iterdir()) if root.is_dir() else []:
+        if d.name == name or d.name.startswith(".") or not d.is_dir():
+            continue
+        link = d / "origin"
+        try:
+            held = deposit.held_file(root, d.name).is_file()
+        except Exception:   # noqa: BLE001 — not a held collection's directory
+            held = False
+        if held and link.is_symlink() and link.resolve() == target:
+            out.append(d.name)
+    return out
+
+
+def hand_over_origin(root: Path, name: str, *, dry_run: bool = False) -> dict[str, Any] | None:
+    """`name`'s origin directory, read by other held collections through
+    their links, MOVED to the first of them by name (never deleted with
+    `name`, never a hard link: operator, 2026-11-27, app/file_copy.py); the
+    others' links are pointed at it there. Resumable: a move cut short is
+    finished (`HANDOVER`). None when nobody reads it."""
+    root = Path(root)
+    own = root / name / "origin"
+    for d in sorted(root.iterdir()) if root.is_dir() else []:
+        half = d / HANDOVER
+        if half.is_dir() and not dry_run:          # a hand-over cut short: finished
+            link = d / "origin"
+            if link.is_symlink():
+                link.unlink()
+            os.rename(half, link)
+    heirs = origin_heirs(root, name)
+    if not heirs:
+        return None
+    heir, others = heirs[0], heirs[1:]
+    out = {"origin": str(own), "to": heir, "relinked": others, "moved": not dry_run}
+    if dry_run:
+        return out
+    dst = root / heir / "origin"
+    os.rename(own, root / heir / HANDOVER)
+    dst.unlink()
+    os.rename(root / heir / HANDOVER, dst)
+    for o in others:
+        link = root / o / "origin"
+        tmp = link.with_name("origin.handover-link")
+        if tmp.is_symlink():
+            tmp.unlink()
+        tmp.symlink_to(os.path.relpath(dst, link.parent), target_is_directory=True)
+        os.replace(tmp, link)
+    return out
+
+
 def ack_heirs(root: Path, name: str, *, dry_run: bool = False) -> list[str]:
     """The held collections that pin the terms `name`'s acknowledgement
     records and hold no record of their own — each given a copy of it
@@ -307,6 +385,7 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
         codex = None                        # half gone already: finish the job
     if kinds:
         return _forget_vectors(root, name, codex, base, kinds=kinds, dry_run=dry_run)
+    refuse_while_read(root, name, "forget")
     plan = [p for p in (held, base) if p.exists()]
     readers = read_through(root, name)
     if readers:
@@ -324,10 +403,15 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     # carries it (`recreate.carry_ack`), so nothing is left unacknowledged
     # by a forget (invariant 9)
     handed = ack_heirs(root, name, dry_run=dry_run)
+    # an origin DIRECTORY another held collection reads through its link
+    # goes to it, never with this one (`hand_over_origin`, after its threads
+    # stopped; a forget cut short finishes it when run again)
+    origin_to = hand_over_origin(root, name, dry_run=True) if dry_run else None
     if dry_run:
         out: dict[str, Any] = {"collection": name, "dry_run": True,
                                "would_remove": [str(p) for p in plan], "removed": [],
-                               **({"ack_carried_to": handed} if handed else {})}
+                               **({"ack_carried_to": handed} if handed else {}),
+                               **({"origin_handed_to": origin_to} if origin_to else {})}
         # a text index shared with sisters stays while one of them is held,
         # and goes with its last member (app/text_index.py)
         shared = text_index.leave_at_forget(root, name, dry_run=True)
@@ -351,6 +435,8 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     # 2. its threads, when this runs in the worker
     if retire is not None:
         retire(name)
+    # 2b. its origin directory, to the collection that reads it through a link
+    origin_to = hand_over_origin(root, name)
     # 3. a never-share collection: every deposit erased, no trace (02 §2.9)
     erased = 0
     if codex is not None and deposit.is_deposit(codex) and base.exists():
@@ -383,6 +469,8 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     out = {"collection": name, "erased_deposits": erased, "removed": removed}
     if handed:
         out["ack_carried_to"] = handed
+    if origin_to:
+        out["origin_handed_to"] = origin_to
     if shared is not None:
         out["text_index"] = shared
     return out

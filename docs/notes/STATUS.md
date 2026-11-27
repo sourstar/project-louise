@@ -18,6 +18,26 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-27
+
+- **NO HARD LINKS (operator, verbatim: "Never use hard links, always consciously load from a path. It
+  already happened that you deleted important files because you forgot the hard links").** Every
+  `os.link` in app/ is gone, and tests/test_no_hard_links.py fails on any new one (Python by AST, shell
+  scripts by command). What two collections use is read where it lies, by its path:
+  - a case-J sister's text index: her placement names her sister's own index (`reads`) until the
+    worker's boot shares it by rename; that sister is not forgotten or renamed before the boot;
+  - a re-check's claims, with an identity check at each pass;
+  - a re-created collection's origin directory, through a symbolic link, handed over at its holder's
+    forget;
+  - a discarded snapshot's part that the build since shares (kept in place).
+
+  What becomes another owner's own is copied, a reflink where the filesystem clones blocks, after a
+  preflight: seeded SHARD parts, a carried bundle tree, an earlier corpus's units. A method's claims
+  are moved. Symbolic links are allowed. Not changed: the engine's voice-profile leases
+  (deploy/localai patches 0010/0019, hard links made by the engine's Go code: Tensor's), and the hard
+  links already on the node, which `find -links +1` lists (the app makes none from now on).
+  docs/07 §7.8, app/file_copy.py.
+
 ### 2026-11-26
 
 - **PARKING SWITCHED ON FOR bge-m3, AND THE THREE DEFECTS THE STEP FOUND (München, 07:59–08:12Z; operator:

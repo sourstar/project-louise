@@ -1110,23 +1110,31 @@ def _new_reference_and_gate(a, run, name: str, say) -> tuple[int, bool]:
 
 # ---- case J, a sister (docs/notes/new-collection.md; 02 §2.7) ----
 
-def _join_text_index(root: Path, her_sister_name: str, name: str) -> str | None:
-    """A sister carried beside a sister whose text index is already SHARED
-    (app/text_index.py) joins it now, when their index identities are equal:
-    her manifest is her sister's copy, so every mark is the writer's and
-    nothing is reset or copied; her linked copy goes. Otherwise None, and the
-    worker's next boot groups them. Never fails the carry."""
+def _index_identities(root: Path, her_sister_name: str, name: str) -> tuple[str | None, str | None]:
+    """The two collections' text-index identities (app/text_index.py), from
+    their held files; (None, None) where either cannot be read."""
     from app import collections as collections_mod, text_index
     from app.hold import deposit
     try:
         a = collections_mod._load_one(deposit.held_file(root, her_sister_name))
         b = collections_mod._load_one(deposit.held_file(root, name))
-        joined = text_index.join_at_carry(root, her_sister_name, name,
-                                          text_index.identity(a), text_index.identity(b))
-    except Exception:   # noqa: BLE001 — the boot's settle groups them instead
-        return None
+        return text_index.identity(a), text_index.identity(b)
+    except Exception:   # noqa: BLE001 — unknown: she is given her own copy
+        return None, None
+
+
+def _join_text_index(root: Path, her_sister_name: str, name: str) -> str | None:
+    """A sister carried beside her sister joins her sister's text index NOW,
+    by path, when their index identities are equal (app/text_index.py
+    `join_at_carry`): placed in its shared directory, or reading her
+    sister's own where it lies until the worker's next boot shares it. Her
+    manifest is her sister's copy, so every mark is the writer's and nothing
+    is reset or copied. None: their identities differ (she holds a copy)."""
+    from app import text_index
+    ia, ib = _index_identities(root, her_sister_name, name)
+    joined = text_index.join_at_carry(root, her_sister_name, name, ia, ib)
     if joined:
-        text_index._remove_groups(Path(root) / name / "index")
+        text_index._remove_groups(Path(root) / name / "index")     # an earlier carry's copy
     return joined
 
 
@@ -1349,8 +1357,8 @@ def _sister_new(a, say) -> int:
     if run.dry:
         src = recreate.counts(root, her_sister_name, write_free=True)
         # what the carry will copy, counted as it will copy it: no vector, and
-        # the index linked (same layers) or not copied at all (re-cut)
-        need, free = recreate.room(root, her_sister_name, a.name, make=False, linked_index=not recut,
+        # the index read where it lies (same layers) or not copied at all (re-cut)
+        need, free = recreate.room(root, her_sister_name, a.name, make=False, index_by_path=not recut,
                                    parts=recreate.RECUT_SISTER_PARTS if recut else recreate.SISTER_PARTS)
         print(f"dry run: case J, a sister of {her_sister_name}: {a.name}; it stops before make, writes "
               f"nothing and takes no lock")
@@ -1377,8 +1385,9 @@ def _sister_new(a, say) -> int:
                   f"{src['vectors'] if src['vectors'] is not None else '?'})")
         else:
             print(f"  to carry    {src['documents'] if src['documents'] is not None else '?'} documents' "
-                  f"manifest and text index, no vector ({her_sister_name} keeps its "
-                  f"{src['vectors'] if src['vectors'] is not None else '?'})")
+                  f"manifest and the text index's catalogue, no vector ({her_sister_name} keeps its "
+                  f"{src['vectors'] if src['vectors'] is not None else '?'}); her text index read "
+                  f"where {her_sister_name}'s lies, never copied or linked")
         print(f"  room        {recreate.human(need)} needed, {recreate.human(free)} free: "
               + ("enough" if free >= need else "SHORT, the carry refuses"))
         print(f"  locks       the carry takes {her_sister_name}'s and {a.name}'s write locks: "
@@ -1505,28 +1514,36 @@ def _sister_new(a, say) -> int:
                                 f"worker indexes every document with her own layer")
             else:
                 parts = recreate.seed_parts(root, her_sister_name, name, now=_utc_now(), log=say)
-                need, free = recreate.room(root, her_sister_name, name, linked_index=True,
+                # her text index is her sister's, read WHERE IT LIES when their
+                # identities are equal (never copied or hard-linked: operator,
+                # 2026-11-27); otherwise a copy of her own
+                ia, ib = _index_identities(root, her_sister_name, name)
+                by_path = ia is not None and ia == ib
+                need, free = recreate.room(root, her_sister_name, name, index_by_path=by_path,
                                            parts=recreate.SISTER_PARTS)
                 if free < need:
                     raise CodexError(recreate.no_room(her_sister_name, name, need, free))
-                out = carry_mod.carry(root, her_sister_name, name, copy=True, apply=True, sister=True, log=say)
+                out = carry_mod.carry(root, her_sister_name, name, copy=True, apply=True, sister=True,
+                                      index_groups=not by_path, log=say)
                 counts = recreate.counts(root, name)
                 if counts["documents"] != recreate.counts(root, her_sister_name)["documents"]:
                     raise recreate.CopyMismatch(f"carry: {name} holds {counts['documents']} documents and "
                                                 f"{her_sister_name} "
                                                 f"{recreate.counts(root, her_sister_name)['documents']}")
-                # the index AS EACH ONE READS IT (app/text_index.py): hers is
-                # linked from wherever her sister's language groups are
+                # placed first, so the proof reads her index as she will
+                joined = _join_text_index(root, her_sister_name, name) if by_path else None
+                if by_path and not joined:
+                    raise recreate.CopyMismatch(f"carry: {name} could not be placed to read "
+                                                f"{her_sister_name}'s text index; nothing of it was copied")
+                if joined:
+                    say(f"[carry] {name} reads {her_sister_name}'s text index where it lies ({joined})")
+                # the index AS EACH ONE READS IT (app/text_index.py)
                 from app import text_index
                 a_idx = text_index.index_digest(root, her_sister_name)
                 b_idx = text_index.index_digest(root, name)
                 if a_idx != b_idx:
                     raise recreate.CopyMismatch(f"carry: {name}'s text index is not {her_sister_name}'s "
                                                 f"({b_idx['sha256']} against {a_idx['sha256']})")
-                joined = _join_text_index(root, her_sister_name, name)
-                if joined:
-                    say(f"[carry] {name} reads the text index {her_sister_name}'s group shares "
-                        f"({joined}); her linked copy is let go of")
                 ack = recreate.carry_ack(root, her_sister_name, name, sister)
                 run.record("carry", {"from": {"name": her_sister_name, "collection_id": her_sister.collection_id},
                                      "parts": parts, "origin": origin, "carried": out.get("done"),
@@ -2193,8 +2210,8 @@ def _recreate_swap(a, run, name: str, codex, say) -> int:
                        f"the operator has forgotten it. Nothing was deleted")
         say(f"  forget, with the operator's yes:  {forget}   (with --here when no worker runs)")
         say(f"  it removes {recreate.human(plan['bytes'])} in {plan['files']} file(s), of which "
-            f"{recreate.human(plan['freed'])} is freed (the rest: the parts and bundles {name} "
-            f"hard-linked, which stay):")
+            f"{recreate.human(plan['freed'])} is freed (the rest: what has another name on disk, "
+            f"which stays):")
         for p in plan["would_remove"]:
             say(f"    {p}")
         for p in plan["kept"]:
