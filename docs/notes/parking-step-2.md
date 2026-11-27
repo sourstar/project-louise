@@ -1652,3 +1652,24 @@ once more on `qual-bge-m3-paced` and `qual-bge-m3-nores`. A fail stops it, 0032
 comes out first, and `zfs_arc_sys_free` stays at 14 GiB. The ARC's size and the
 disk's hit rate are watched for a day after.
 
+
+**The run (München, 2026-11-27 21:49–21:51Z, engine `95d9f59679df` + server 0032, the node
+paused and the web stopped; MemAvailable at rest 44,735 MiB).**
+
+| run | what was held | result |
+|---|---|---|
+| R0 `qual-bge-m3-paced` | nothing | 5 of 5 the same bytes; 5 parks and 5 returns in one process, one VeGa run (`sha256:f2433dba…`), `canary_failed` 0; a park 143.3 ms median, a return with its sixteen sentences 240.5 ms |
+| R1 | 10 GiB (MemAvailable 32,497 MiB) | paced 5 of 5 the same bytes (park 182.0 ms, return 380.7 ms); `nores` 5 of 5 (185.7 / 379.1 ms); no OOM |
+| R2 `-wait` | 37,239 MiB (MemAvailable 13,114 MiB) | THE SERVER REFUSED, case (c), with its reading: `412 host_memory_floor`, 12,383 MiB available, 577 MiB to park, a floor of 12,288 MiB; cgroup room 22,567 MiB; ZFS ARC 2,922 MiB, its floor 1,980 MiB, evictable 2 MiB, 0 counted. The model kept answering; no OOM in the kernel log |
+
+ALL THREE PASS. R2 did not reach the engine's wait: the ARC had almost nothing to give
+back (2 MiB evictable), so the server's floor answered first — the order the two halves
+are meant to have. The acceptance script read R2 as a fail (it looked for the refusal in
+LocalAI's log; `park_http.py` answers it over HTTP and exits 1) and rolled the server back
+to 0031 at 21:51:38Z, before the `zfs_arc_sys_free` lowering. Next, as decided: 0032 again,
+then the lowering and R1 once more.
+
+The engine's own park lines ("… parked, N MiB to the host in M ms", `GGML_LOG_INFO`) are
+on the backend's stderr, which LocalAI 5.0.1 logs at DEBUG only (`pkg/model/process.go`:
+`xlog.Debug("GRPC stderr", …)`) and keeps per model for `GET /api/backend-logs/<model>`
+(admin): read them there, not in `docker logs`.
