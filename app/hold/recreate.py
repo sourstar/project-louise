@@ -183,7 +183,8 @@ def seed_parts(root: Path, pred_name: str, name: str, *, now: str,
                log: Callable[[str], None]) -> dict[str, Any]:
     """`name`'s SHARD seeded from the predecessor's latest snapshot (hold/
     seed.py's G3, what `hold snapshot create --shards-from` does): its parts
-    copied (never hard-linked: app/file_copy.py) and checked against their
+    read where they lie (relative links, hold/seeded.py: never a copy nor a
+    hard link) and checked against their
     roots, its build database a
     build's, the snapshot frozen again and its parts held to the source's
     (`same_parts_or_withdraw`), signed where this peer has a key. A target
@@ -690,18 +691,17 @@ def forget_plan(root: Path, name: str) -> dict[str, Any]:
     app/hold/forget.py) and its size: every inode counted once, and FREED
     only where every name it has is among what goes — a part an earlier
     carry hard-linked (before 2026-11-27; never since: app/file_copy.py)
-    stays on disk — and never the origin directory its forget hands over to
-    the collection that reads it (`forget.hand_over_origin`)."""
-    from .forget import forget
+    stays on disk — and never what its forget hands over to the collection
+    that reads it: its origin directory, its seeded parts
+    (`forget.handed_inodes`)."""
+    from .forget import forget, handed_inodes
     plan = forget(Path(root), name, dry_run=True)
-    handed = (plan.get("origin_handed_to") or {}).get("origin")
+    handed = handed_inodes(Path(root), name)
     seen: dict[tuple[int, int], list[int]] = {}
     for p in plan.get("would_remove") or ():
         p = Path(p)
         walk = [(str(p.parent), [], [p.name])] if not p.is_dir() or p.is_symlink() else os.walk(p)
         for base, dirs, names in walk:
-            if handed:
-                dirs[:] = [d for d in dirs if str(Path(base) / d) != handed]
             for nm in names:
                 try:
                     st = os.lstat(Path(base) / nm)
@@ -710,6 +710,8 @@ def forget_plan(root: Path, name: str) -> dict[str, Any]:
                 if not stat.S_ISREG(st.st_mode):
                     continue
                 key = (st.st_dev, st.st_ino)
+                if key in handed:
+                    continue                        # handed over to its reader, never freed
                 if key in seen:
                     seen[key][2] += 1
                 else:

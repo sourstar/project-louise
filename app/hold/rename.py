@@ -217,6 +217,12 @@ def rename(root: Path, old: str, new: str, *, dry_run: bool = False) -> dict[str
         # operator, 2026-11-27): its text index, its origin directory
         from .forget import origin_heirs, refuse_while_read
         refuse_while_read(root, old, "rename")
+        from .seeded import readers as part_readers
+        reading = part_readers(root, old)
+        if reading:
+            raise CodexError(f"rename {old}: {', '.join(reading)} reads its SHARD parts where they lie "
+                             f"(a sister's seed); forget {old} first — its forget hands the parts over — "
+                             f"or rename them after; nothing was changed")
         heirs = origin_heirs(root, old)
         if heirs:
             raise CodexError(f"rename {old}: {', '.join(heirs)} reads its origin directory where it "

@@ -68,6 +68,7 @@ is 43 seconds against 105 for 0.17 percentage points.
 from __future__ import annotations
 
 import hashlib
+import os
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -206,8 +207,17 @@ def write_frames(path: Path, frames: Iterable[tuple[str, int, bytes]]) -> Contai
                          stored=stored, sha256="sha256:" + sha.hexdigest())
 
 
+def _seeded(path) -> None:
+    """A container read where her sister holds it (hold/seeded.py): refused
+    when her sister has re-issued it. One `lstat` for any other."""
+    if os.path.islink(path):
+        from . import seeded
+        seeded.check(path)
+
+
 def read_index(path: Path) -> dict[str, Entry]:
     """{hash hex: Entry} — what the container holds and where."""
+    _seeded(path)
     path = Path(path)
     size = path.stat().st_size
     with open(path, "rb") as f:
@@ -258,6 +268,7 @@ def read_figure(path: Path, sha256: str) -> bytes:
     """One plate's bytes, by hash. Raises FigureError when the container
     does not hold it, or when what it holds does not hash to its key —
     the check `hold check`'s `figures` row runs over every entry."""
+    _seeded(path)
     want = bare(sha256)
     entry = read_index(path).get(want)
     if entry is None:
@@ -322,6 +333,7 @@ def stream_figure(path: Path, sha256: str, chunk: int = STREAM_CHUNK) -> Iterato
     it; the first cut handed every piece on and raised after the last, and a
     damaged plate of the right length arrived whole with status 200). One
     that decompresses PAST its length raises at the piece that passes it."""
+    _seeded(path)
     want = bare(sha256)
     entry = read_index(path).get(want)
     if entry is None:
@@ -362,6 +374,7 @@ def walk(path: Path) -> Iterator[tuple[str, bytes]]:
     """Every plate in the container, in hash order. One open, one pass —
     the shape a check wants, where `read_figure` is the shape a reader
     serving one plate wants."""
+    _seeded(path)
     index = sorted(read_index(path).items())
     codec = _codec()
     with open(path, "rb") as f:
@@ -390,6 +403,7 @@ def verify(path: Path) -> tuple[int, list[str]]:
     whoever receives it, and neither may stop the pass: a container with
     one damaged picture must still report the other two hundred as sound.
     """
+    _seeded(path)
     index = sorted(read_index(path).items())
     codec = _codec()
     read, failed = 0, []

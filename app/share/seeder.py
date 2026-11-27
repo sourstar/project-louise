@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app import db
-from app.hold import shard as shard_mod, snapshot as sn
+from app.hold import seeded as seeded_mod, shard as shard_mod, snapshot as sn
 from app.hold.codex import lineage_id as _lineage_id
 from app.share import members as mem
 
@@ -317,6 +317,12 @@ def publish(collection, snapshot: sn.Snapshot, shard_dir: Path, state_dir: Path,
             if alignment is not None and member.listed_by_a_snapshot \
                     and not alignment.file(t.path, t.root, t.length):
                 withheld += 1                            # frozen: this file changed upstream
+                continue
+            try:
+                seeded_mod.check(base / t.path)
+            except seeded_mod.Reissued as e:
+                withheld += 1                            # read by path, re-issued by her sister
+                print(f"[share] {getattr(collection, 'name', '?')}: {e}", flush=True)
                 continue
             old = previous.get((member.name, t.path))
             if old is not None and old.get("info_hash") == t.infohash[7:] \

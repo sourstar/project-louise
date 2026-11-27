@@ -594,6 +594,12 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
               bytes=r["bytes"], toolchain="own",
               writer=before.get((r["slice"], r["n"], r["root"]), pack_records.WRITER))
         for r in rows)
+    # a part read where her sister holds it (hold/seeded.py) is still the one
+    # it was seeded as: refused, naming her sister's newer snapshot, if not
+    from . import seeded
+    for s_ in shards:
+        if (shard_dir / s_.path).is_symlink():
+            seeded.check(shard_dir / s_.path)
     # EVERY PART IT LISTS IS IN THE SHARD, at its path and its size (München,
     # 2026-11-16, NeuRIS5: a discard had moved the build's parts aside, and a
     # FIRST snapshot — no previous to compare its parts with — froze 161 the
