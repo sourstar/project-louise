@@ -588,15 +588,18 @@ def _window_files(client, base: str, year: int, languages: tuple[str, ...], code
     # groups apart and the count counts too) and kept as it was (review of
     # b96023cb, 2)
     seen: set[tuple[str, str]] = set()
-    again = 0
+    again: list[tuple[str, str]] = []
     for i, start in enumerate(starts):
         end = starts[i + 1] if i + 1 < len(starts) else len(listed)
         page = {(r[0], r[1]) for r in listed[start:end]}
-        again += len(page & seen)
+        again += sorted(page & seen)
         seen |= page
     if again:
-        raise backoff.Deferred(f"cellar: the {year} window ({lang_text}) read {again} unit(s) on two pages: "
-                               f"rows moved between its pages; listed again")
+        # the keys said: a structural pair straddling a page boundary would
+        # refuse its window every pass, and is then seen (review of ea6c550a)
+        shown = ", ".join(f"{c} ({l})" for c, l in again[:5]) + (" …" if len(again) > 5 else "")
+        raise backoff.Deferred(f"cellar: the {year} window ({lang_text}) read {len(again)} unit(s) on two "
+                               f"pages ({shown}): rows moved between its pages; listed again")
     if got > want:
         # MORE ROWS THAN ITS COUNT (architecture, 2026-11-27: 2021 nl, 3,063
         # against 3,060): Cellar added rows between the count and the pages,
@@ -2005,6 +2008,13 @@ class TreeUnits(CellarUnits):
             elif missing:
                 unlisted = {(y, l) for y, ls in missing.items() for l in ls}
             cover = {k: at for k, at in cover.items() if k not in unlisted}
+            # the dates grouped by window ONCE, outside the lock (review of
+            # ea6c550a: per window over every date, ~0.06 s a window at 122 k,
+            # with every fetch thread waiting on the lock)
+            dates_by_window: dict[tuple[int, str], dict] = {}
+            if background:
+                for u, d in dates.items():
+                    dates_by_window.setdefault((window_year(u[0]), u[1]), {})[u] = d
             with self._lock:
                 self._bulk[key] = bulk
                 if background:
@@ -2018,8 +2028,7 @@ class TreeUnits(CellarUnits):
                         if at_k >= held_c.get(k, 0.0):
                             for u in by_window.get(k, ()):
                                 held_d.pop(u, None)
-                            held_d.update({u: d for u, d in dates.items()
-                                           if (window_year(u[0]), u[1]) == k})
+                            held_d.update(dates_by_window.get(k, {}))
                             held_c[k] = at_k
                 else:
                     self._dates[key] = dates

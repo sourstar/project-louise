@@ -176,3 +176,39 @@ def test_the_background_end_drops_a_due_unit_the_newest_window_lacks(tmp_path, m
     assert units._bulk_of(corpus, u, due[0], corpus / due[0].rel_path) == (None, None), \
         "absent from the newest window: Cellar's tree"
     units.close()
+
+
+def test_the_background_merge_groups_the_dates_once(tmp_path, monkeypatch):
+    """Review of ea6c550a: O(dates) window_year calls at the merge, not
+    O(windows x dates) under the lock."""
+    from tests.acquire.test_eurlex_pipeline import _gated
+    years = range(1950, 1990)
+    base, corpus, due = _setup(tmp_path, monkeypatch, years)
+    gates = {y: threading.Event() for y in years}
+    for g in gates.values():
+        g.set()
+    _gated(monkeypatch, gates)
+    calls = [0]
+    real = cellar.window_year
+
+    def counting(celex):
+        calls[0] += 1
+        return real(celex)
+    monkeypatch.setattr(cellar, "window_year", counting)
+    units = cellar.TreeUnits()
+    units._prepare_bulk(base, corpus, ["it"], due, "eu", URL, background=True)
+    thread, _e, _p = units._runs[str(corpus.resolve())]
+    thread.join(20)
+    units.close()
+    windows, n = len(years), len(due)
+    assert calls[0] < windows * n / 2, f"{calls[0]} window_year calls for {windows} windows of {n} units"
+
+
+def test_a_repeat_across_pages_names_its_units(tmp_path, monkeypatch):
+    from app.acquire import backoff
+    monkeypatch.setattr(cellar_listing, "_base", lambda: tmp_path / "listing")
+    rows = _rows(3)
+    sparql, _ = _sparql([4], [rows[:2], [rows[1], rows[2]]])
+    monkeypatch.setattr(cellar, "sparql", sparql)
+    with pytest.raises(backoff.Deferred, match=r"32021R0001 \(nl\)"):
+        list(cellar._window_files(object(), URL, 2022, ("nl",), CODE_OF, lambda n: None, place=lambda *a: False))
