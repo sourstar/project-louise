@@ -128,7 +128,32 @@ the golden samples in CPU only").** Measured here on the f16 GGUF, erf GELU:
 
 So a CPU reference reproduces bit for bit on CPUs of one instruction set and
 build, not on any CPU: the reference engine's device must name it (02 §2.4
-calls a mismatch with the engine as written a determinism defect). With
+calls a mismatch with the engine as written a determinism defect) — or the
+engine must have no instruction-set-dependent code at all.
+
+**The node's engines (München, 2026-11-27).** The node's CPU is an AMD Ryzen 5
+7600 (Zen 4, AVX-512, no AMX). The SYCL images' CPU code is `llama-cpp-fallback`,
+built with `GGML_NATIVE=OFF` and AVX, AVX2, AVX-512, FMA, F16C and BMI2 off
+("CPU : SSE3 = 1 | SSSE3 = 1 | LLAMAFILE = 1 | REPACK = 1"): a `gpu_layers 0`
+twin on a SYCL image runs baseline x86-64. The CPU reference engine
+`louise-cpu-llama-cpp-ea2417d91dcc` is built with `GGML_CPU_ALL_VARIANTS` and
+picks one of fourteen at its first load by the host's flags (zen4 by ggml's
+scoring, not read from a log).
+
+The baseline built here the same way (everything off), the f16 erf GGUF, 67 pairs:
+
+| | |
+|---|---|
+| baseline against this machine's AVX-512 build | 0 of 67 the same bytes; 1 − 2.2e-13 (FA off), 1 − 9.4e-9 (FA on) |
+| baseline against torch | 1 − 4.0e-8 (FA off), 1 − 1.2e-7 (FA on): as near as any build |
+| time, 4 threads | 49 s against 5.9 s (8×): the 512 calibration pairs in ~6 min |
+
+A baseline build has no code that depends on the CPU it runs on, so its bytes
+should be the same on every x86-64 CPU: the one reference engine for golden
+vectors a peer of any kind can reproduce, at a cost that for MedCPT is minutes.
+EXPECTED, NOT MEASURED across CPUs: the same binary on an Intel and an AMD CPU
+gives one fingerprint — München can measure it with the image's CPU twin on
+the node (Zen 4) and on a peer of another CPU. With
 flash attention OFF the reference is nearer NCBI's model and moves least
 between instruction sets. The tolerance `calibrate` writes must be measured
 against every engine whose vectors are carried (OpenVINO's 4.58 M, NCBI's
