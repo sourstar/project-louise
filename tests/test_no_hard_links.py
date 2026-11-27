@@ -305,11 +305,45 @@ def shell_hard_links(text: str) -> list[int]:
     return [i for i, line in _numbered(text) if text_issue(line)]
 
 
+_REFUSAL = re.compile(r"tar -tv\w* .*\| *grep -q '\^h'")
+
+
+def named_extractions(rel: str, text: str, allow=None, third_party=None) -> tuple[set[int], list[str]]:
+    """The `tar -x` lines of `rel` the list names, and what is wrong.
+
+    An entry names EXACTLY ONE line: one that matches two lines names
+    neither (a second `tar -x` added after the named one is not named;
+    the fourth read of cf91b9ac). A third party's extraction is named only
+    with a refusal of hard-link members (`tar -tv… | grep -q '^h'`, then
+    `exit 1`) between it and any extraction before it: a probe before EACH
+    one."""
+    allow = TAR_EXTRACTIONS if allow is None else allow
+    third_party = THIRD_PARTY if third_party is None else third_party
+    lines = _numbered(text)
+    extracting = [(i, line) for i, line in lines if text_issue(line) == "tar extracting"]
+    named: set[int] = set()
+    wrong: list[str] = []
+    for r, part in allow:
+        if r != rel:
+            continue
+        hit = [i for i, line in extracting if part in line]
+        if len(hit) != 1:
+            wrong.append(f"{part!r} matches {len(hit)} extraction lines, not one")
+            continue
+        at = hit[0]
+        if (r, part) in third_party:
+            since = max([i for i, _ in extracting if i < at], default=0)
+            probe = [i for i, line in lines if since < i < at and _REFUSAL.search(line)]
+            if not probe or not any("exit 1" in line for i, line in lines if probe[-1] <= i < at):
+                wrong.append(f"{part!r}: no hard-link refusal between it and the extraction before it")
+                continue
+        named.add(at)
+    return named, wrong
+
+
 def _named_extraction(rel: str, line: str) -> bool:
-    """A `tar -x` the list names, by its file AND its line (a second one in
-    the same file is not named)."""
-    return text_issue(line) == "tar extracting" and \
-        any(r == rel and part in line for r, part in TAR_EXTRACTIONS)
+    """`line` alone, as the one line of its file (the self-test's form)."""
+    return bool(named_extractions(rel, line)[0])
 
 
 def test_no_hard_link_is_made_in_python():
@@ -331,9 +365,10 @@ def test_no_hard_link_is_made_in_shell_dockerfiles_or_compose_files():
     for p in _files(".sh") + _deploy_texts():
         rel = str(p.relative_to(ROOT))
         text = p.read_text(encoding="utf-8", errors="replace")
-        lines = [i for i, line in _numbered(text) if text_issue(line) and not _named_extraction(rel, line)]
-        if lines:
-            found[rel] = lines
+        named, wrong = named_extractions(rel, text)
+        lines = [i for i, line in _numbered(text) if text_issue(line) and i not in named]
+        if lines or wrong:
+            found[rel] = lines + wrong
     assert not found, f"hard links (operator, 2026-11-27: never; app/file_copy.py): {found}"
 
 
@@ -341,15 +376,10 @@ def test_the_named_extractions_are_still_there_a_third_party_s_after_its_links_a
     """Each named `tar -x` line is still there (the list names only what the
     deploy runs), and a third party's archive is extracted only after a
     refusal of its hard-link members (`tar -tv… | grep -q '^h'`)."""
-    refusal = re.compile(r"tar -tv\w* .*\| *grep -q '\^h'")
-    for rel, part in TAR_EXTRACTIONS:
-        lines = [line for _, line in _numbered((ROOT / rel).read_text(encoding="utf-8", errors="replace"))]
-        at = [i for i, line in enumerate(lines) if part in line and text_issue(line) == "tar extracting"]
-        assert at, (rel, part)
-        if (rel, part) in THIRD_PARTY:
-            before = lines[:at[0]]
-            hit = [i for i, line in enumerate(before) if refusal.search(line)]
-            assert hit and any("exit 1" in line for line in before[hit[-1]:]), (rel, "no hard-link refusal before it")
+    for rel in sorted({r for r, _ in TAR_EXTRACTIONS}):
+        named, wrong = named_extractions(rel, (ROOT / rel).read_text(encoding="utf-8", errors="replace"))
+        assert not wrong, (rel, wrong)
+        assert len(named) == sum(1 for r, _ in TAR_EXTRACTIONS if r == rel), rel
 
 
 def test_the_guard_finds_what_it_is_for():
@@ -404,6 +434,16 @@ def test_the_guard_finds_what_it_is_for():
     assert python_hard_links('def f():\n    """cp -a a b, say"""\n    return pdf.extract(data)\n') == []
     assert _named_extraction("deploy/vega/stage/stage_src.sh", 'tar -x -C "$tmp"')
     assert not _named_extraction("deploy/vega/stage/stage_src.sh", "tar -xf /other.tar"), "named by its line"
+    one = {("x.sh", "tar -xzf /a.tgz")}
+    assert named_extractions("x.sh", "tar -xzf /a.tgz -C d\n", one, set()) == ({1}, [])
+    twice = named_extractions("x.sh", "tar -xzf /a.tgz -C d\ntar -xzf /a.tgz -C e\n", one, set())
+    assert twice[0] == set() and "matches 2" in twice[1][0], "a second line after the named one"
+    probe = "if tar -tvzf /a.tgz | grep -q '^h'; then\n  exit 1\nfi\n"
+    assert named_extractions("x.sh", probe + "tar -xzf /a.tgz -C d\n", one, one) == ({4}, [])
+    assert named_extractions("x.sh", "tar -xzf /b.tgz -C d\ntar -xzf /a.tgz -C d\n", one, one)[0] == set()
+    two = {("x.sh", "tar -xzf /a.tgz"), ("x.sh", "tar -xzf /b.tgz")}
+    got = named_extractions("x.sh", probe + "tar -xzf /a.tgz -C d\ntar -xzf /b.tgz -C e\n", two, two)
+    assert got[0] == {4} and "no hard-link refusal" in got[1][0], "a probe before EACH extraction"
     assert python_hard_links("def f(link, src, stage):\n    return link, src, stage\n") == []
     assert python_hard_links("import zipfile\nwith zipfile.ZipFile(p) as zf:\n    zf.extractall(d)\n") == []
     for bad in ("RUN cp -al /a /b", "command: rsync --link-dest=/x a b", 'RUN ["ln", "a", "b"]',
