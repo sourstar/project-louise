@@ -26,8 +26,11 @@ Read first: `CLAUDE.md` (the rules), `docs/notes/STATUS.md` (where things stand)
   2.4.4). Linux's MemAvailable does not count the ARC.
   - **Persistent ONLY through TrueNAS's post-init command** (a write to
     `/sys/module/zfs/parameters` is lost at a reboot). It is set and checked
-    through TrueNAS's own API:
-    - set: `midclt call initshutdownscript.create '{"type": "COMMAND", "command": "echo 15032385536 > /sys/module/zfs/parameters/zfs_arc_sys_free", "when": "POSTINIT", "enabled": true, "timeout": 10, "comment": "Louise: ZFS keeps 14 GiB of RAM free"}'`;
+    through TrueNAS's own API. In place since 2026-11-27 07:00Z as post-init
+    command id 7, enabled, comment "louise: ZFS ARC keeps 14 GiB free for
+    model parking (operator 2026-11-27, option A)"; checked the same day at
+    15032385536:
+    - set (only where `query` shows none): `midclt call initshutdownscript.create '{"type": "COMMAND", "command": "echo 15032385536 > /sys/module/zfs/parameters/zfs_arc_sys_free", "when": "POSTINIT", "enabled": true, "timeout": 10, "comment": "Louise: ZFS keeps 14 GiB of RAM free"}'`;
     - check that it exists: `midclt call initshutdownscript.query`;
     - check the value in force: `cat /sys/module/zfs/parameters/zfs_arc_sys_free`.
   - **After any reboot or reinstall, read the value back**: on a fresh
