@@ -1594,3 +1594,53 @@ engine's reserve (counted on MemAvailable alone).
 | the engine built and gated | MEASURED (München, 2026-11-27): `95d9f59679df` LIVE since 14:45:24Z, byte check identical, five gates exact, fingerprints unchanged |
 | a park paced on the card, the ARC giving back under it, with the env and without it | NOT measured: the gate that goes with the server's 0032 — München's |
 
+### 15.1 The paced-park acceptance (both halves live: engine `95d9f59679df` 14:45:24Z, server 0032 15:51:21Z)
+
+ON QUAL TWINS ONLY, the node paused (no live park competes with the readings).
+Three twins of `vega-bge-m3`, its YAML as it is (`park: true`,
+`GGML_SYCL_PARKABLE=1`, context on demand, `context_canary:true`) plus
+`GGML_SYCL_PARK_VERIFY=1`, and in `env`:
+
+| twin | `GGML_SYCL_PARK_HOST_RESERVE` | what it shows |
+|---|---|---|
+| `qual-bge-m3-paced` | `2147483648` (2 GiB) | the operator's gate: a paced park under 10 GiB |
+| `qual-bge-m3-nores` | absent | architecture's: the default reserve (2 GiB) paces it all the same |
+| `qual-bge-m3-wait` | `13958643712` (13 GiB, under `zfs_arc_sys_free` 14 GiB) | the wait itself, and the ARC giving back under it |
+
+THE ALLOCATION: anonymous memory touched page by page, held, in its own
+container whose memory limit is the allocation + 1 GiB (so nothing but it can
+be the kernel's choice), e.g. `stress-ng --vm 1 --vm-bytes <N> --vm-keep
+--vm-hang 0`. A SAMPLER beside it, every second: the time, `MemAvailable`, and
+`size`, `c_min` and the four `*_evictable_*` lines of
+`/proc/spl/kstat/zfs/arcstats`.
+
+THE PARK: `tools/measure/park_http.py cycles SERVER <twin> -n 5 --return request
+--vega --receipts <VeGa receipts URL>` — each cycle parks (`POST /backend/park`),
+reads `/system`, returns by the next request, and compares the sixteen vectors
+bit for bit.
+
+| run | the allocation | expected | PASS |
+|---|---|---|---|
+| R0 | none | each park line without a wait | 5 of 5 cycles bit-identical |
+| R1 | 10 GiB | `qual-bge-m3-paced` and `qual-bge-m3-nores`: parks, no wait expected (MemAvailable ~23 GiB under it, §14) | 5 of 5 each, bit-identical; no OOM |
+| R2 | MemAvailable at rest − 12.5 GiB (MemAvailable ≈ 12.5 GiB) | `qual-bge-m3-wait`: admitted by 0032 only with the ARC counted (12.5 GiB + the ARC's counted part ≥ the model + the 12 GiB floor), then the engine waits while MemAvailable < 13.25 GiB and ZFS gives back | either a park with `N ms of it waiting` (N > 0) and a bit-identical return, or the reserve warning with the weights left on the device and the model answering after; or the server's refusal with its reading. Never an OOM |
+
+THE LINES THAT DECIDE:
+- the engine (the backend's log): `ggml_backend_sycl_buffer_park: … parked, … MiB
+  to the host in … ms (the copy …[, N ms of it waiting for the host's reserve],
+  the release …)…; park K`, or `ggml_backend_sycl_buffer_park: the host stayed
+  under its reserve of M MiB for T ms while S MiB of … were copied to it: it
+  stays on the device`;
+- the server: `A park was refused: it would leave the host under its memory
+  floor`, with `available_mib`, `parking_by_others_mib`, `to_park_mib`,
+  `floor_mib` and `read` (`…; ZFS ARC … MiB, its floor … MiB, evictable … MiB,
+  … MiB of it counted for a park (not in MemAvailable)`);
+- the kernel: no `oom-kill` naming LocalAI, a backend, the worker or VeGa
+  (`journalctl -k`); the allocator's own memcg is the only one allowed near its
+  limit;
+- `park_http.py`: every return bit-identical, the receipts naming the run of
+  before the park.
+
+A FAIL of any kind (an OOM above all) stops it there, and 0032 comes out
+(back to 0031) before anything else: the rule of the README.
+
