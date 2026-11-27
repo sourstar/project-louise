@@ -114,17 +114,21 @@ def preflight(need: int, where: Path | str, what: str) -> None:
 
 def _cp(src: Path, dst: Path) -> None:
     """`src` (a file or a directory) copied to `dst`, which must not exist:
-    a reflink where the filesystem has one, else a byte copy."""
+    a reflink where the filesystem has one, else a byte copy — the bytes,
+    never a link: a symbolic link is followed (`-L`), and hard links among
+    what is copied are not kept (`--no-preserve=links`)."""
     cp = shutil.which("cp")
     if cp:
-        r = subprocess.run([cp, "-a", "--no-preserve=links", "--reflink=auto", str(src), str(dst)],
+        # -L: a symbolic link is copied as the bytes it reaches (a seeded
+        # part a link once named is copied whole, finding 8 of the third read)
+        r = subprocess.run([cp, "-a", "-L", "--no-preserve=links", "--reflink=auto", str(src), str(dst)],
                            capture_output=True, text=True)
         if r.returncode == 0:
             return
         if dst.exists() or dst.is_symlink():
             shutil.rmtree(dst) if dst.is_dir() and not dst.is_symlink() else dst.unlink()
     if src.is_dir():
-        shutil.copytree(src, dst, symlinks=True)
+        shutil.copytree(src, dst, symlinks=False)
     else:
         shutil.copy2(src, dst)
 

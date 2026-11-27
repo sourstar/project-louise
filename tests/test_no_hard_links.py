@@ -11,9 +11,15 @@ file — makes a second name for a file:
   with a link flag (`-l`, `-al`, `--link`), `ln` without `-s`/`--symbolic`,
   rsync's `--link-dest`, or `tar` extracting files (an archive's hard-link
   members are made as links) — the extractions the deploy needs are named
-  below, each with its reason;
-- `cp -a`/`--archive` without `--no-preserve=links` (it keeps the links
-  among what it copies).
+  below LINE by line, each with its reason, a third party's archive only
+  after a refusal of its hard-link members;
+- `cp -a`/`--archive`/`-d`/`--preserve=links|all` without
+  `--no-preserve=links` (it keeps the links among what it copies),
+  `rsync -H`, the `link` command, `cpio -l`, `bsdtar` extracting;
+- Python's `extractall`/`extract` with no filter or another filter than
+  ours, `shutil.unpack_archive`;
+- across a backslash-continued command, and in a multi-line string (a
+  script) but not a docstring. tests_campaign/ too.
 
 A symbolic link names its target's path and is allowed; a sister's seeded
 SHARD parts are neither: her own copy (operator, 2026-11-27, choice B;
@@ -29,21 +35,27 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-DIRS = ("app", "tools", "deploy")
+DIRS = ("app", "tools", "deploy", "tests_campaign")
 
 #: shell `tar -x` the deploy runs, each named: they unpack build inputs into
 #: a fresh tree (an interpreter, a source stage), never the node's data, so
 #: no file the platform holds gets a second name. A new one is reviewed here.
 TAR_EXTRACTIONS = {
-    "deploy/vega/switch/rollout-p2.sh": "the staged source tree, into a new stage directory",
-    "deploy/vega/stage/stage_src.sh": "the source tree, into a temporary stage",
-    "deploy/vega/stage/build_louise_backend.sh": "the python-build-standalone runtime, into the package",
-    "deploy/vega/stage/build_vega_package.sh": "the python-build-standalone runtime, into the package",
-    "deploy/16f/deploy-louise-madlad-t5.sh": "the release tarball, into a new src directory",
-    "deploy/localai/backends/louise-python/Dockerfile": "the python-build-standalone runtime, in an image layer",
-    "deploy/vega/switch/backend_files.sh": "a copy through a pipe whose creating side dereferences hard "
-                                           "links (--hard-dereference): no link member reaches it",
+    ("deploy/vega/switch/rollout-p2.sh", 'tar -xzf "$SRC_STAGE"'): "the staged source tree, into a new stage directory",
+    ("deploy/vega/stage/stage_src.sh", 'tar -x -C "$tmp"'): "the source tree, into a temporary stage",
+    ("deploy/vega/stage/build_louise_backend.sh", "tar -xzf /cache/python.tgz"):
+        "the python-build-standalone runtime, into the package (its hard-link members refused first)",
+    ("deploy/vega/stage/build_vega_package.sh", "tar -xzf /cache/python.tgz"):
+        "the python-build-standalone runtime, into the package (its hard-link members refused first)",
+    ("deploy/16f/deploy-louise-madlad-t5.sh", 'tar -xzf "$TGZ"'): "the release tarball, into a new src directory",
+    ("deploy/localai/backends/louise-python/Dockerfile", "tar -xzf /python.tgz"):
+        "the python-build-standalone runtime, in an image layer (its hard-link members refused first)",
+    ("deploy/vega/switch/backend_files.sh", "--hard-dereference -cf - ."):
+        "a copy through a pipe whose creating side dereferences hard links: no link member reaches it",
 }
+#: archives made by a third party: each extraction follows a refusal of any
+#: hard-link member in it (`tar -tv… | grep -q '^h'`, exit 1)
+THIRD_PARTY = frozenset(k for k in TAR_EXTRACTIONS if "python.tgz" in k[1])
 
 
 def _files(suffix: str) -> list[Path]:
@@ -70,13 +82,17 @@ def _cp_links(args: list[str]) -> bool:
     return any(a == "--link" or "l" in _short(a) for a in flags)
 
 
+def _values(a: str) -> set[str]:
+    return set(a.split("=", 1)[1].split(",")) if "=" in a else set()
+
+
 def _cp_keeps_links(args: list[str]) -> bool:
-    """`cp -a`/`--archive` keeps the hard links among the files it copies,
-    unless `--no-preserve=links` is given."""
+    """`cp` keeping the hard links among the files it copies — `-a`/
+    `--archive`, `-d`, `--preserve=links|all` — unless `--no-preserve=links`."""
     flags = [a for a in args[1:] if a.startswith("-")]
-    archive = any(a == "--archive" or "a" in _short(a) for a in flags)
-    return archive and not any(a.startswith("--no-preserve=") and "links" in a.split("=", 1)[1].split(",")
-                               for a in flags)
+    keeps = any(a == "--archive" or {"a", "d"} & set(_short(a))
+                or (a.startswith("--preserve=") and {"links", "all"} & _values(a)) for a in flags)
+    return keeps and not any(a.startswith("--no-preserve=") and {"links", "all"} & _values(a) for a in flags)
 
 
 def _ln_hard(args: list[str]) -> bool:
@@ -115,11 +131,17 @@ def command_issue(words: list[str]) -> str | None:
     if head == "cp" and _cp_links(words):
         return "cp with a link flag"
     if head == "cp" and _cp_keeps_links(words):
-        return "cp -a without --no-preserve=links"
+        return "cp keeping links without --no-preserve=links"
     if head == "ln" and _ln_hard(words):
         return "ln without -s"
-    if head == "tar" and _tar_extracts(words):
+    if head in ("tar", "bsdtar") and _tar_extracts(words):
         return "tar extracting"
+    if head == "rsync" and any(w == "--hard-links" or "H" in _short(w) for w in words[1:]):
+        return "rsync -H"
+    if head == "link" and len([w for w in words[1:] if not w.startswith("-")]) == 2:
+        return "the link command"
+    if head == "cpio" and any(w == "--link" or "l" in _short(w) for w in words[1:]):
+        return "cpio -l"
     return None
 
 
@@ -129,11 +151,29 @@ _SPLIT = re.compile(r"&&|\|\||[;&|()]|\$\(|`")
 _PREFIX = re.compile(r"^\s*(?:-\s+|RUN\s+|command:\s*|entrypoint:\s*)")
 
 
+def _numbered(text: str) -> list[tuple[int, str]]:
+    """Each line as (its number, its text), a backslash-continued command
+    joined into one and named by its first line."""
+    out: list[tuple[int, str]] = []
+    cur, start = "", 0
+    for i, line in enumerate(text.splitlines(), 1):
+        if not cur:
+            start = i
+        if line.rstrip().endswith("\\") and not line.lstrip().startswith("#"):
+            cur += line.rstrip()[:-1] + " "
+            continue
+        out.append((start, cur + line))
+        cur = ""
+    if cur:
+        out.append((start, cur))
+    return out
+
+
 def _commands(text: str) -> list[list[str]]:
     """Each command of a text, as its words: JSON-style lists (`RUN [...]`,
     compose's `["ln", …]`) and shell lines alike."""
     out: list[list[str]] = []
-    for line in text.splitlines():
+    for _, line in _numbered(text):
         if line.lstrip().startswith("#"):
             continue
         body = _PREFIX.sub("", line, count=1)
@@ -184,14 +224,31 @@ def _const_words(node: ast.AST) -> list[str] | None:
             words.append(str(e.args[0].value))           # `shutil.which("cp")`
         else:
             words.append("X")
+    if not isinstance(node.elts[0], ast.Constant) and \
+            not any(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts[1:]):
+        return None                                      # `(link, src, stage)`: names, no command
     return words
 
 
+def _receiver(node: ast.Call) -> str:
+    r = node.func.value
+    return (r.id if isinstance(r, ast.Name) else getattr(r, "attr", "")).lower()
+
+
 def _tar_call(node: ast.Call) -> bool:
-    """An `extractall`/`extract` whose filter is not `refuse_hard_links(...)`."""
+    """An archive's `extractall`/`extract` whose filter is not
+    `refuse_hard_links(...)` — none at all included: tarfile's default makes
+    an archive's hard-link members as links. A zip's `extractall` (zip holds
+    no hard link) and an `extract` of something that is no archive (a PDF's)
+    are not one."""
+    name = _receiver(node)
+    if "zip" in name or name in ("z", "zf"):
+        return False
+    if node.func.attr == "extract" and not re.search(r"tar|archive|^tf$|^t$", name):
+        return False
     flt = next((kw.value for kw in node.keywords if kw.arg == "filter"), None)
     if flt is None:
-        return False                                     # no tarfile filter named (a zip, a PDF's `extract`)
+        return True
     return not (isinstance(flt, ast.Call) and getattr(flt.func, "attr", getattr(flt.func, "id", None))
                 == "refuse_hard_links")
 
@@ -206,9 +263,15 @@ def python_hard_links(source: str) -> list[int]:
         elif isinstance(node, ast.ImportFrom) and node.module == "os":
             link_names |= {a.asname or a.name for a in node.names if a.name == "link"}
     os_n, link_n = frozenset(os_names), frozenset(link_names)
+    docstrings = {id(n.body[0].value) for n in ast.walk(tree)
+                  if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                  and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
     out = []
     for node in ast.walk(tree):
-        if _is_os_link(node, os_n, link_n) and not (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)):
+        if isinstance(node, ast.Call) and \
+                getattr(node.func, "attr", getattr(node.func, "id", None)) == "unpack_archive":
+            out.append(node.lineno)                      # shutil's unpacking makes an archive's links
+        elif _is_os_link(node, os_n, link_n) and not (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)):
             out.append(node.lineno)                      # called or handed on (`copy_function`)
         elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
                 and node.func.attr in ("hardlink_to", "link_to"):
@@ -227,9 +290,9 @@ def python_hard_links(source: str) -> list[int]:
             for w in words[1:]:
                 if " " in w and text_hard_links(w):      # `["bash", "-c", "ln a b"]`
                     out.append(node.lineno)
-        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and "\n" not in node.value \
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings \
                 and text_hard_links(node.value):
-            out.append(node.lineno)                      # `shell=True`, `os.system`
+            out.append(node.lineno)                      # `shell=True`, `os.system`, a script
         elif isinstance(node, ast.JoinedStr):
             text = "".join(v.value if isinstance(v, ast.Constant) else " X " for v in node.values)
             if text_hard_links(text):
@@ -239,11 +302,14 @@ def python_hard_links(source: str) -> list[int]:
 
 def shell_hard_links(text: str) -> list[int]:
     """The lines of a shell script that make a hard link (`text_issue`)."""
-    return [i for i, line in enumerate(text.splitlines(), 1) if text_issue(line)]
+    return [i for i, line in _numbered(text) if text_issue(line)]
 
 
 def _named_extraction(rel: str, line: str) -> bool:
-    return rel in TAR_EXTRACTIONS and text_issue(line) == "tar extracting"
+    """A `tar -x` the list names, by its file AND its line (a second one in
+    the same file is not named)."""
+    return text_issue(line) == "tar extracting" and \
+        any(r == rel and part in line for r, part in TAR_EXTRACTIONS)
 
 
 def test_no_hard_link_is_made_in_python():
@@ -265,19 +331,25 @@ def test_no_hard_link_is_made_in_shell_dockerfiles_or_compose_files():
     for p in _files(".sh") + _deploy_texts():
         rel = str(p.relative_to(ROOT))
         text = p.read_text(encoding="utf-8", errors="replace")
-        lines = [i for i, line in enumerate(text.splitlines(), 1)
-                 if text_issue(line) and not _named_extraction(rel, line)]
+        lines = [i for i, line in _numbered(text) if text_issue(line) and not _named_extraction(rel, line)]
         if lines:
             found[rel] = lines
     assert not found, f"hard links (operator, 2026-11-27: never; app/file_copy.py): {found}"
 
 
-def test_the_named_extractions_are_still_there():
-    """A named `tar -x` that is gone is taken off the list (it names only
-    what the deploy runs)."""
-    for rel in TAR_EXTRACTIONS:
-        text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
-        assert any(text_issue(line) == "tar extracting" for line in text.splitlines()), rel
+def test_the_named_extractions_are_still_there_a_third_party_s_after_its_links_are_refused():
+    """Each named `tar -x` line is still there (the list names only what the
+    deploy runs), and a third party's archive is extracted only after a
+    refusal of its hard-link members (`tar -tv… | grep -q '^h'`)."""
+    refusal = re.compile(r"tar -tv\w* .*\| *grep -q '\^h'")
+    for rel, part in TAR_EXTRACTIONS:
+        lines = [line for _, line in _numbered((ROOT / rel).read_text(encoding="utf-8", errors="replace"))]
+        at = [i for i, line in enumerate(lines) if part in line and text_issue(line) == "tar extracting"]
+        assert at, (rel, part)
+        if (rel, part) in THIRD_PARTY:
+            before = lines[:at[0]]
+            hit = [i for i, line in enumerate(before) if refusal.search(line)]
+            assert hit and any("exit 1" in line for line in before[hit[-1]:]), (rel, "no hard-link refusal before it")
 
 
 def test_the_guard_finds_what_it_is_for():
@@ -301,6 +373,14 @@ def test_the_guard_finds_what_it_is_for():
         "import subprocess\nsubprocess.run(['ln', '--force', 'a', 'b'])\n": [2],
         "import subprocess\nsubprocess.run(['cp', '--archive', '--link', 'a', 'b'])\n": [2],
     }
+    bad_py.update({
+        "import tarfile\nwith tarfile.open(p) as tar:\n    tar.extractall(d)\n": [3],
+        "import tarfile\nwith tarfile.open(p) as tf:\n    tf.extract(m, d)\n": [3],
+        "import tarfile\nwith tarfile.open(p) as tar:\n    tar.extractall(d, filter='data')\n": [3],
+        "import shutil\nshutil.unpack_archive('a.tar', 'd')\n": [2],
+        "import subprocess\nlink = 'ln'\nsubprocess.run([link, 'a', 'b'])\n": [3],
+        "s = \"\"\"set -e\nln a b\n\"\"\"\n": [1],
+    })
     for src, want in bad_py.items():
         assert python_hard_links(src) == want, src
     for ok in ("from pathlib import Path\nPath('b').symlink_to('a')\n",
@@ -315,6 +395,17 @@ def test_the_guard_finds_what_it_is_for():
     assert shell_hard_links("ln -s a b\nln -sfn \"$a\" b\nln -f -s a b\ncp -a --no-preserve=links a b\n"
                             "# ln a b\ntar -xOf a.tar m.json\ntar -czf a.tgz b\n") == []
     assert shell_hard_links("cp -a a b\n") == [1], "keeps the links among what it copies"
+    assert shell_hard_links("cp -d a b\ncp --preserve=links a b\ncp -r --preserve=all a b\nrsync -aH a b\n"
+                            "link a b\nfind . | cpio -pdl d\nbsdtar -xf a.tar\nrsync --hard-links a b\n") \
+        == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert shell_hard_links("echo start && \\\n  ln a b\nmkdir x\n") == [1], "a backslash-continued command"
+    assert shell_hard_links("rsync -a a b\ncpio -o < l\nbsdtar -tf a.tar\ncp -P a b\n"
+                            "cp -a --no-preserve=links a b\ncp --preserve=mode a b\n") == []
+    assert python_hard_links('def f():\n    """cp -a a b, say"""\n    return pdf.extract(data)\n') == []
+    assert _named_extraction("deploy/vega/stage/stage_src.sh", 'tar -x -C "$tmp"')
+    assert not _named_extraction("deploy/vega/stage/stage_src.sh", "tar -xf /other.tar"), "named by its line"
+    assert python_hard_links("def f(link, src, stage):\n    return link, src, stage\n") == []
+    assert python_hard_links("import zipfile\nwith zipfile.ZipFile(p) as zf:\n    zf.extractall(d)\n") == []
     for bad in ("RUN cp -al /a /b", "command: rsync --link-dest=/x a b", 'RUN ["ln", "a", "b"]',
                 '    command: ["ln", "a", "b"]', "  - ln a b", 'RUN ["bash", "-c", "ln a b"]'):
         assert text_hard_links(bad), bad
@@ -343,10 +434,71 @@ def test_an_archive_s_hard_link_member_is_refused_in_words(tmp_path):
         tar.addfile(link)
     with tarfile.open(arc) as tar, pytest.raises(file_copy.HardLinkMember, match="g is a hard link to f"):
         tar.extractall(tmp_path / "out", filter=file_copy.refuse_hard_links("data"))
+    assert python_hard_links("import tarfile\nt.extractall(d, filter='data')\n") == [2]
+    assert python_hard_links("t.extractall(d, filter=file_copy.refuse_hard_links('data'))\n") == []
+
+
+def _archive_backend():
+    import importlib.util
     spec = importlib.util.spec_from_file_location("archive_backend", ROOT / "tools" / "archive_backend.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    with tarfile.open(arc) as tar, pytest.raises(mod.HardLinkMember):
-        tar.extractall(tmp_path / "out2", filter=mod.refuse_hard_links("tar"))
-    assert python_hard_links("import tarfile\nt.extractall(d, filter='data')\n") == [2]
-    assert python_hard_links("t.extractall(d, filter=file_copy.refuse_hard_links('data'))\n") == []
+    return mod
+
+
+def test_archive_backend_writes_files_sharing_an_inode_whole_and_unpacks_old_links_as_copies(tmp_path):
+    """Finding 6 of the third read: its writer made hard-link entries that its
+    reader refused. Now each such file is written whole; an older archive's
+    hard-link entry is unpacked as a COPY of its target, never a link."""
+    import io
+    import os
+    import tarfile
+    mod = _archive_backend()
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "a").write_bytes(b"same bytes")
+    os.link(tree / "a", tree / "b")                         # the input's own link, as a venv may hold
+    if not hasattr(mod, "_zstd_writer"):
+        pytest.skip("no zstd writer")
+    try:
+        mod.write_archive(tree, tmp_path / "t.tar.zst")
+    except FileNotFoundError:
+        pytest.skip("zstd is not installed here")
+    with mod._zstd_reader(tmp_path / "t.tar.zst") as r, tarfile.open(fileobj=r, mode="r|") as tar:
+        kinds = {m.name: m.type for m in tar}
+    assert kinds["a"] == kinds["b"] == tarfile.REGTYPE, "written whole, no hard-link entry"
+    mod.unpack(tmp_path / "t.tar.zst", tmp_path / "out")
+    assert (tmp_path / "out" / "b").read_bytes() == b"same bytes" and (tmp_path / "out" / "b").stat().st_nlink == 1
+    # an archive written before: its hard-link entry becomes a copy
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tar:
+        info = tarfile.TarInfo("f")
+        info.size = 3
+        tar.addfile(info, io.BytesIO(b"abc"))
+        link = tarfile.TarInfo("g")
+        link.type, link.linkname = tarfile.LNKTYPE, "f"
+        tar.addfile(link)
+    with mod._zstd_writer(tmp_path / "old.tar.zst") as w:
+        w.write(raw.getvalue())
+    mod.unpack(tmp_path / "old.tar.zst", tmp_path / "old")
+    g = tmp_path / "old" / "g"
+    assert g.read_bytes() == b"abc" and g.stat().st_nlink == 1 and (tmp_path / "old" / "f").stat().st_nlink == 1
+
+
+def test_a_copy_holds_the_bytes_of_a_symbolic_link_never_the_link(tmp_path):
+    """Finding 8 of the third read: the seed's copy of a part a symbolic
+    link names holds the part's bytes."""
+    import os
+    from app import file_copy
+    real = tmp_path / "real.part"
+    real.write_bytes(b"the part")
+    link = tmp_path / "link.part"
+    link.symlink_to(real)
+    file_copy.copy_file(link, tmp_path / "copy.part")
+    got = tmp_path / "copy.part"
+    assert not got.is_symlink() and got.read_bytes() == b"the part" and os.stat(got).st_nlink == 1
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "p").symlink_to(real)
+    file_copy.copy_tree(tree, tmp_path / "tree2")
+    assert not (tmp_path / "tree2" / "p").is_symlink() and (tmp_path / "tree2" / "p").read_bytes() == b"the part"

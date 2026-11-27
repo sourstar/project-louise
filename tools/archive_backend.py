@@ -166,42 +166,64 @@ def _anonymous(info: tarfile.TarInfo) -> tarfile.TarInfo:
     return info
 
 
+class _NoInodes(dict):
+    """tarfile's table of the inodes it wrote, kept EMPTY: a file sharing an
+    inode with one written before is written whole, a plain file, never a
+    hard-link entry (operator, 2026-11-27: "Never use hard links")."""
+
+    def __contains__(self, key) -> bool:
+        return False
+
+    def __setitem__(self, key, value) -> None:
+        pass
+
+
 def write_archive(directory: Path, out: Path) -> None:
     """`directory`'s tree as a stream tar in zstd, its entries relative to it
-    and in name order (tarfile sorts a directory's entries)."""
+    and in name order (tarfile sorts a directory's entries). Files sharing
+    an inode are each written as a plain file (`_NoInodes`)."""
     with _zstd_writer(out) as w, tarfile.open(fileobj=w, mode="w|",
                                               format=tarfile.PAX_FORMAT) as tar:
+        tar.inodes = _NoInodes()
         for entry in sorted(os.listdir(directory)):
             tar.add(directory / entry, arcname=entry, recursive=True, filter=_anonymous)
 
 
-class HardLinkMember(Exception):
-    """An archive member that is a hard link: never made (operator,
-    2026-11-27: "Never use hard links")."""
-
-
-def refuse_hard_links(base: str = "data"):
-    """A tarfile extraction filter: tarfile's own `base` filter ("data", or
-    "tar" where symbolic links must stay as they are), and a HARD-LINK
-    member refused in words — both of tarfile's filters let one through
-    ("data" one whose target is inside the destination)."""
-    import tarfile
+def refuse_hard_links(base: str = "tar"):
+    """tarfile's own `base` filter, and a hard-link member refused in words
+    (`unpack` makes those copies before any reaches here)."""
     inner = {"data": tarfile.data_filter, "tar": tarfile.tar_filter}[base]
 
     def keep(member, path):
         if member.islnk():
-            raise HardLinkMember(f"{member.name} is a hard link to {member.linkname} in the archive: "
-                                 f"never made (no hard links); nothing more is extracted")
+            raise tarfile.TarError(f"{member.name} is a hard link to {member.linkname}: never made")
         return inner(member, path)
     return keep
 
 
 def unpack(archive: Path, into: Path) -> None:
+    """`archive` into `into`, by tarfile's "tar" filter: symbolic links kept
+    as they are (a venv's absolute interpreter link is the backend's own),
+    paths kept inside `into`, setuid bits dropped. A HARD-LINK entry (an
+    archive written before 2026-11-27) is made a COPY of its target, never
+    a link."""
+    links: list[tarfile.TarInfo] = []
+    into = Path(into)
     with _zstd_reader(archive) as r, tarfile.open(fileobj=r, mode="r|") as tar:
-        # "tar": symbolic links kept as they are (a venv's absolute interpreter
-        # link is the backend's own), paths kept inside `into`, setuid bits
-        # dropped; a HARD-link member refused in words (no hard links)
-        tar.extractall(into, filter=refuse_hard_links("tar"))
+        for m in tar:
+            if m.islnk():
+                tarfile.tar_filter(m, str(into))           # its own path checked as any member's
+                links.append(m)
+                continue
+            tar.extract(m, into, filter=refuse_hard_links("tar"))
+    root = into.resolve()
+    for m in links:
+        src, dst = (into / m.linkname).resolve(), (into / m.name).resolve()
+        if root not in src.parents or root not in dst.parents or not src.is_file():
+            raise tarfile.TarError(f"{m.name}: a hard-link entry to {m.linkname}, outside {into} or "
+                                   f"not a file it holds")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
 
 
 def verify(archive: Path, want: str, scratch: Path) -> str:
