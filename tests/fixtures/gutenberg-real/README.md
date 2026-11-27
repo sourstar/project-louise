@@ -48,3 +48,11 @@ the same way, byte for byte, from the node's mirror:
 - 14165 Punch ("English wit and humor -- Periodicals"), 43814 Blackwood's
   ("Scotland -- Periodicals", "England -- Periodicals"), 56022 The Catholic World
   ("Catholic Church -- Periodicals") — mixed magazines: no verdict.
+
+## Added 2026-11-27 (pg-rdf-fixtures-5, 5c30b8ac)
+
+- 63399, 62744 The Glebe: "American poetry -- 20th century" / "American drama --
+  20th century" beside "Literature, Modern -- 20th century -- Periodicals" — every
+  other heading literary: literary.
+- 71448 Fire!!: literary headings and "African American art -- 20th century", a
+  topic: the periodicals veto holds, none.

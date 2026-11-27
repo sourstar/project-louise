@@ -126,6 +126,9 @@ REAL = {
     # periodicals (architecture, 2026-11-27): a genre's periodical is fiction, a mixed magazine no one kind
     68190: "a literary work", 68937: "a literary work",              # Lord Lister: "Detective and mystery stories -- Periodicals"
     14165: None, 43814: None, 56022: None,                          # Punch, Blackwood's, The Catholic World
+    # an issue that is one work: every other heading literary (architecture, 2026-11-27)
+    63399: "a literary work", 62744: "a literary work",             # The Glebe: American poetry, American drama
+    71448: None,                                     # Fire!!: "African American art -- 20th century" is a topic
 }
 
 
@@ -151,8 +154,8 @@ def test_a_real_records_verdict(n):
     assert got == REAL[n], said[:240]
 
 
-def test_all_37_real_records_are_judged():
-    assert len(REAL) == 37
+def test_all_40_real_records_are_judged():
+    assert len(REAL) == 40
 
 
 def test_a_verdict_says_its_basis():

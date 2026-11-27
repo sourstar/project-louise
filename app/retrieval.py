@@ -2057,7 +2057,13 @@ def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -
     periodicals = [x for x in subjects if any(p.strip().rstrip(".").casefold() == "periodicals"
                                               for p in x.split("--")[1:])]
     if periodicals:
-        if any(literary(_main_heading(x)) for x in periodicals):
+        # ...or when EVERY other heading is literary — a form subdivision or a
+        # genre heading: an issue that is one work (architecture, 2026-11-27:
+        # 63399 "American poetry -- 20th century"); one topic heading beside
+        # them keeps the veto (Punch's "Wit and humor", Fire!!'s "African
+        # American art -- 20th century")
+        others = [x for x in subjects if x not in periodicals]
+        if any(literary(_main_heading(x)) for x in periodicals) or (others and all(literary(x) for x in others)):
             return ("a literary work", "by its subject headings")
         return None
     studied = any(p.strip().rstrip(".").casefold() in CRITICISM_SUBDIVISIONS
