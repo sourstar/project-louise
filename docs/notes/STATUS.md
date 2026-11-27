@@ -1339,7 +1339,8 @@ measured (published figures disagree).
   **THE MEDCPT BACKEND SWITCH IS ON HOLD INDEFINITELY; THE CURRENT BACKENDS STAY** (the operator, 2026-11-27: "MedCpt
   backend switch stays on hold indefinitely, keep the current one"): the reranker and the article encoder stay on OpenVINO,
   the query encoder where it is; no new pubmed space. **Legal benchmarking is postponed to next weekend** (the operator, the
-  same day).
+  same day, to this session) — then, as München reports, the operator told München directly, both relays before them:
+  "Architecture is in charge"; architecture's order runs the benchmark tonight after the refit, and München proceeds on it.
   **ALL MEDCPT WORK HELD until Gutenberg's Nemotron run is done** (the operator, 2026-11-27, through München: "Don't touch
   medcpt until Gutenberg nemo is done"): the reranker swap, the OpenVINO precision arms, the `GGML_SYCL_DYNAMIC_PRECISION=F32`
   twin, the article and query encoders' port and new space. `engine-upstream.series` may be BUILT; its gates (which include
