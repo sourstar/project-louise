@@ -293,6 +293,9 @@ def _one(root: Path, a: str, decl, *, now: datetime, failed: dict, log, run, sto
     from . import collection as col
     from . import snapshot as sn
     from .annotations import CLAIMS_FILE, AnnotationsError, update_snapshot_id
+    from . import refit
+    if refit.boot_refusal(root / a / "state"):
+        return None                         # mid-refit: not run, as not served (app/hold/refit.py)
     method = decl.methods.get(a)
     if method is None and not (root / a / "origin" / CLAIMS_FILE).is_file():
         return None                         # held from a peer: it takes its publisher's snapshots

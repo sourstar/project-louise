@@ -3698,7 +3698,8 @@ def library_page(request: Request):
     # `load_all` leaves them out and the shelf's stages do not apply. Shown
     # on their own cards: a collection the Ask tab attaches claims from
     # must be visible where the operator looks for collections (2026-10-19).
-    annotations = [_annotations_shelf(a, collections) for a in collections_mod.load_annotations()]
+    held_annotations, left_out = collections_mod.annotations_and_refusals()
+    annotations = [_annotations_shelf(a, collections) for a in held_annotations]
     # 04 §4.2: the OFFER — what neighbours announce and this node does not
     # hold; the operator chooses what to take (operator, 2026-10-20)
     try:
@@ -3709,7 +3710,7 @@ def library_page(request: Request):
     # RULE 2: a collection held but not served — its file names no encoder
     # this node runs, or another refusal — is shown HERE with the reason in
     # plain words, where the operator looks, not only on the System page
-    refused = [{"name": r.name, "reason": r.reason} for r in collections_mod.refusals()]
+    refused = [{"name": r.name, "reason": r.reason} for r in [*collections_mod.refusals(), *left_out]]
     return TEMPLATES.TemplateResponse(request, "library.html", {
         "active": "library",
         "refused": refused,

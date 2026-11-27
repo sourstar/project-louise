@@ -520,8 +520,12 @@ def platform_path() -> Path:
 
 def toml_literal(value: Any) -> str:
     """A TOML value as written in the file: a string (JSON's escapes are
-    TOML's basic string's), or a {str: str} inline table."""
+    TOML's basic string's), a list of strings, or a {str: str} inline table."""
     import json
+    if isinstance(value, (list, tuple)):
+        # a list of strings (`[node] quarantine_in_use_before`): JSON's array
+        # of strings is TOML's
+        return "[" + ", ".join(json.dumps(str(v), ensure_ascii=False) for v in value) + "]"
     if isinstance(value, dict):
         if not value:
             return "{}"

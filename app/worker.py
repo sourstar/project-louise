@@ -8335,6 +8335,24 @@ def main() -> int:
     from . import log_lines
     log_lines.install()
     _warn_if_pid1()
+    # THE NODE-WIDE LOCK, before any writer starts and for the worker's life
+    # (app/hold/lock.py `WORKER_LOCK`): an offline pass holding it (`hold
+    # collection refit`) keeps the worker down until it is done — the restart
+    # policy brings it back, and it starts once the lock is free
+    from . import config
+    from .hold import lock as lock_mod
+    try:
+        node_lock = lock_mod.take_worker(config.louise_root() / "collections", lock_mod.WORKER)
+    except lock_mod.Held as e:
+        print(f"REFUSED TO START (deferred): {e}", file=sys.stderr, flush=True)
+        return 3
+    try:
+        return _main_locked()
+    finally:
+        node_lock.release()
+
+
+def _main_locked() -> int:
     # the public key the web process recognises must be this key's half
     # (app/identity.py): a node whose two processes disagree about who it is
     # refuses to start, with the reason

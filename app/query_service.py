@@ -9,6 +9,28 @@ from . import cancel, collections as collections_mod, db, question_kind, retriev
 from .rage import dispatch
 
 
+#: what the boot check refused in THIS process (`refuse_at_start`), by the
+#: collection's state directory — its physical identity, never its name
+_refused_at_start: dict[str, str] = {}
+
+
+def _state_of(collection) -> str:
+    from pathlib import Path
+    return str(Path(collection.manifest_path).parent)
+
+
+def refuse_at_start(collections) -> list[tuple]:
+    """THE WEB'S BOOT CHECK, the worker's own (`spaces.refuse_boot`,
+    invariant 1): each collection it refuses is not served — left out of the
+    federated set and refused by name (`withheld_reason`) — and the others
+    are (the third read of 141b1d2e, 3: the web only printed it)."""
+    from . import spaces
+    refused = spaces.refuse_boot(collections)
+    _refused_at_start.clear()
+    _refused_at_start.update({_state_of(c): why for c, why in refused})
+    return refused
+
+
 def withheld_reason(collection) -> str | None:
     """Why this collection may not be SEARCHED, or None.
 
@@ -31,6 +53,19 @@ def withheld_reason(collection) -> str | None:
         # is withheld until it can.
         return (f"license state cannot be judged ({type(e).__name__}: {e}); "
                 f"withheld until it can (invariant 9)")
+    # invariant 1: what the boot check refused is not served — and a refit
+    # begun since, read now (the check's own function, app/hold/refit.py) —
+    # FAIL CLOSED, as the licence gate above: a state that cannot be read
+    # withholds (the fourth read of caa9fd8f, 2)
+    try:
+        why = _refused_at_start.get(_state_of(collection))
+        if why is None:
+            from .hold import refit
+            why = refit.boot_refusal(_state_of(collection))
+    except Exception as e:  # noqa: BLE001
+        why = f"whether it is served cannot be judged ({type(e).__name__}: {e})"
+    if why:
+        return f"not served: {why}"
     # 03 §3.6: a copy in quarantine — not yet tested on THIS peer — enters no
     # list, in either leg. Only once the node enforces it (copy_state.enforced:
     # the first deploy computes and shows the states and withholds nothing).
@@ -90,7 +125,12 @@ def resolve_annotations(names: list[str] | None) -> list | None:
     the hits. An unknown name is the caller's error, said at once."""
     if names is None:
         return None
-    held = {a.name: a for a in collections_mod.load_annotations()}
+    served, left_out = collections_mod.annotations_and_refusals()
+    held = {a.name: a for a in served}
+    refused = {r.name: r.reason for r in left_out}
+    named = [n for n in names if n in refused]
+    if named:
+        raise HTTPException(403, "; ".join(f"{n}: not served: {refused[n]}" for n in named))
     unknown = [n for n in names if n not in held]
     if unknown:
         raise HTTPException(400, f"unknown annotations collection(s): {', '.join(unknown)}; "

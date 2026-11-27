@@ -118,6 +118,51 @@ louise hold
                                                                        Every case keeps the new collection PAUSED from before her file exists until her gate has run
                                                                        (added 2026-11-08: legi's gate lost her writer to the worker), then resumes her, unless the operator
                                                                        had paused her; a worker already holding her writer is waited for, at most 600 s
+              refit <collection> --layer-param KEY=VALUE [--layer-param …] [--processes N] [--affected-max N] [--dry-run]
+                (amendment A1l, OFFLINE, 2026-11-27; the operator: "you fucking stop the node, delete the vectors
+                 and the indexing of the only book that is affected by the change, change the chunker offline,
+                 rewrite the codex and regenerate the collection's identity, then replace it's identity
+                 everywhere. You restart the node and it's done"): the `fixed` layer's encoder window
+                 (max_tokens=N with tokenizer=sha256:…) set or changed. OFFLINE: it takes the worker's node-wide
+                 lock (held by the worker from boot; a worker restarted meanwhile waits, exit 3) and every affected
+                 collection's, sorted — exit 2 while the worker runs (never 3: supervise-pass would retry it into an
+                 unattended start). A collection with a refit begun and not finished (state/refit.json, or an
+                 annotations collection's state/refit-target.json, written with the refit's first write) is refused
+                 at boot, alone (invariant 1) — by the worker and by the web, which leaves it out of every search,
+                 and an annotations collection by every reader of one (`load_annotations`: the seeder, the cascade,
+                 a question) — until the refit is run again to its end. `node stop` alone is not the way (the
+                 restart policy brings the worker back): `midclt call app.stop louise-rag`, then the refit as an
+                 operator pass with the worker's mounts and key (deploy/supervise-pass.sh), then `app.start`.
+                 Not routed (the worker cannot run it). EVERYTHING THAT CAN REFUSE IS DECIDED BEFORE THE FIRST
+                 WRITE (exit 2): no node key (it signs), an official publication, a shared text index, every
+                 file naming an old id — the collection's and each annotations collection's — known (re-keyed,
+                 signed again or set aside: bundles and refused bundles set aside, exported again under the new
+                 id), RAGE settings it cannot sign, an update under way, parts built since the latest snapshot
+                 ("publish or discard them first"), an annotations collection on an older snapshot or with claims
+                 on a chunk of a document cut otherwise, a platform.toml its writer cannot rewrite; a held
+                 index writer exits 3. A tokenizer that cannot be loaded refuses before anything; each document is
+                 judged by its OLD cut and its NEW (the old layers' tokenizers loaded too, refused by name): uncut
+                 at the old layers while it holds vector rows or index entries it refuses; holding nothing, it is
+                 unchanged and named when the new layers cannot cut it either, a change when they can; cut at
+                 the old and not at the new it refuses (never counted a change: the count and the first error
+                 said). The reset clears one error only, the encoder's refusal of an input as the embed stages
+                 write it (`embed: [InputRefused: ]embed server HTTP 400|413|422|500`, the 500 a llama-server,
+                 LocalAI or VeGa window refusal); every other (a retraction, a parse error, a NaN answer) is
+                 kept, the document deleted and cut again all the same. What is set aside goes under
+                 .replaced/<old id>[.<n>], so a refit back to an earlier Codex works; a change
+                 wider than 1 % of the documents (at least 10) refuses unless --affected-max N states it; Parquet
+                 parts and a collection file its writer cannot rewrite (tried on a copy) refuse. Then: the documents
+                 the window cuts otherwise found in the parse pool (refused if none), their vector rows, index entries and marks reset; the new Codex written in one
+                 rename, the old one and its snapshots set aside; their parts written again and the latest
+                 snapshot made again under its id and signed; the old id replaced everywhere — file, pins,
+                 coverage rows deleted, this node's attestations of the latest snapshot signed again (others set
+                 aside), RAGE settings, carry records, the published marker and the publisher's row — and in every
+                 annotations collection naming it, re-keyed in its turn with its cascade record; platform.toml's
+                 quarantine_in_use_before re-keyed through its writer. At restart search is withheld until the
+                 gate passes for the new space where quarantine enforces (where it reports, search goes on and
+                 `show` reads quarantine until then). Resumable by its marker. No rollback in code: the dry run names
+                 every dataset it writes by its real path and the host's source and mount point holding it
+                 (/proc/self/mountinfo) — snapshot those (ZFS) first.
               create <plugin> --recipe FILE --encoder URL [--query-encoder URL] [--api A] [--embed-model M] [--query-model M]
               [--space-from CODEX] [--calibration-set FILE]
                                                                        the model flags: required where a URL names no model (§7.8, amended 2026-10-09)
