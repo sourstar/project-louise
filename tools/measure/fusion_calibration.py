@@ -91,9 +91,10 @@ UMBRELA = (
 
 
 def read_jsonl(path: Path) -> list[dict]:
+    # "\n" alone ends a JSON line: str.splitlines() also breaks at U+2028/U+2029, which a JSON string holds unescaped
     if not Path(path).exists():
         return []
-    return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in Path(path).read_text(encoding="utf-8").split("\n")
             if line.strip()]
 
 

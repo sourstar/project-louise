@@ -74,3 +74,18 @@ def test_the_calibration_s_difference_is_reported_not_a_line():
 def test_fresh_loads_need_an_unload():
     with pytest.raises(ValueError):
         rp.run(PAIRS, _scorer(REF), _scorer(REF), loads=2, reload=None)
+
+
+def test_a_capture_whose_documents_hold_line_and_paragraph_separators_is_read_whole(tmp_path):
+    """JSON keeps U+2028 and U+2029 unescaped inside a string; PubMed's abstracts hold them (München, 2026-11-27)."""
+    import json
+    from tools.measure import rerank_bench as rb
+    from tools.measure.nemotron_rerank_parity import pairs_from_capture
+    doc = "Background. Methods: a trial. Results: none.\x85End"
+    rows = [{"header": {"tool": "rerank_bench"}},
+            {"key": "k1", "candidates": [{"query_sent": "q", "chunks": [{"text": doc}, {"text": "second"}]}]}]
+    f = tmp_path / "set.jsonl"
+    f.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    assert " " in f.read_text(encoding="utf-8"), "written unescaped, as the capture writes it"
+    assert pairs_from_capture(f, 10, 10) == [{"query": "q", "documents": [doc, "second"]}]
+    assert [r.get("key") for r in rb.read_jsonl(f)] == [None, "k1"]

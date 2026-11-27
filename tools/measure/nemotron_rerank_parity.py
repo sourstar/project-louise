@@ -154,7 +154,9 @@ def pairs_from_capture(path: Path, queries: int, per_query: int) -> list[dict[st
     """The first `queries` rows of a rerank_bench capture: each row's query as
     sent and up to `per_query` of its candidates' chunk texts."""
     out: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    # split on "\n" alone: str.splitlines() also breaks at U+2028/U+2029 (and \x0b, \x0c, \x1c-\x1e, \x85), which a
+    # JSON string holds unescaped - PubMed's abstracts do (München, 2026-11-27: one capture line cut at column 1,678)
+    for line in path.read_text(encoding="utf-8").split("\n"):
         if not line.strip():
             continue
         row = json.loads(line)

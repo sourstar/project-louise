@@ -289,7 +289,8 @@ def _data_rows(path: Path) -> list[dict[str, Any]]:
             return list(json.loads(body))
         except json.JSONDecodeError:
             return list(ast.literal_eval(body.strip()))
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
+    # "\n" alone ends a JSON line: str.splitlines() also breaks at U+2028/U+2029, which a JSON string holds unescaped
+    return [json.loads(line) for line in text.split("\n") if line.strip()]
 
 
 def load_gutenberg(sources: Sequence[Path], *, works: Path | None = None,
