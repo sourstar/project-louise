@@ -1591,5 +1591,6 @@ engine's reserve (counted on MemAvailable alone).
 | the server: the evictable part read, counted with its margin and its cap, nothing added under a cgroup limit, a park admitted on the ARC | MEASURED, `pkg/xsysinfo` and `pkg/model` (279 of 279); the new spec fails when the park ignores the ARC |
 | the engine: the wait (unset and 0: the default reserve of 2 GiB; room: at once; under it: steps until back; never back: refused after exactly the bound, the park's bound; unreadable: goes) | MEASURED, `tests/test-sycl-park-pace.cpp`, 12 of 12 |
 | the engine compiles | MEASURED: `ggml-sycl.cpp` with icpx (oneAPI 2025.3); the inner patch applies on the very file the live series produces |
-| a park paced on the card, the ARC giving back under it, with the env and without it | NOT measured: a build, a gate, and a copy of a model with the reserve set and of one without — München's |
+| the engine built and gated | MEASURED (München, 2026-11-27): `95d9f59679df` LIVE since 14:45:24Z, byte check identical, five gates exact, fingerprints unchanged |
+| a park paced on the card, the ARC giving back under it, with the env and without it | NOT measured: the gate that goes with the server's 0032 — München's |
 

@@ -57,7 +57,7 @@ def test_the_readme_and_the_status_say_what_is_live_and_what_a_rollback_puts_bac
     assert (f"Live 2026-11-25 15:18:30Z to 23:45:20Z, engine `{LIVE}`: `engine-canary.series`** "
             "(the rollback engine until 2026-11-26 23:32Z)") in readme
     assert readme.count("and the engine a rollback puts back") == 1, "one engine is the rollback engine"
-    assert "engine `ed93e3c1b2e2`, and the engine a rollback puts back: `engine-park.series`" in readme
+    assert "engine `aea955022a8f`, and the engine a rollback puts back: `engine-fade.series`" in readme
     assert "`792f050e318e`, built 09:58:24Z, never gated, not swapped" in readme
     assert readme.count("LIVE since ") == 1, "one engine is live"
     status = (ROOT / "docs" / "notes" / "STATUS.md").read_text(encoding="utf-8")

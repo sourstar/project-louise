@@ -19,7 +19,7 @@ SERIES = PATCHES / "staged" / "engine-park.series"
 STREAM = PATCHES / "staged" / "engine-stream.series"
 ROLLBACK = PATCHES / "staged" / "engine-canary.series"
 BUILD = ROOT / "deploy" / "localai" / "llama-cpp" / "build.sh"
-LIVE = "ed93e3c1b2e2"   # live until 2026-11-26 23:32Z; the rollback engine since (tests/test_localai_engine_fade_series.py)
+LIVE = "ed93e3c1b2e2"   # live until 2026-11-26 23:32Z; the rollback engine until 2026-11-27 14:45:24Z
 PARK = "staged/0023-llama-cpp-park-when-told.patch"
 CANARY = "staged/0028-llama-cpp-context-canary-refused-for-memory.patch"
 
@@ -51,12 +51,12 @@ def test_it_is_the_stream_series_and_parking_which_stands_in_for_the_canary_patc
 
 def test_the_readme_and_the_status_say_what_is_live_and_what_a_rollback_puts_back():
     readme = (PATCHES / "staged" / "README.md").read_text(encoding="utf-8")
-    assert f"Live 2026-11-25 23:45:20Z to 2026-11-26 23:32Z, engine `{LIVE}`, and the engine a rollback puts back: `engine-park.series`" in readme
+    assert f"Live 2026-11-25 23:45:20Z to 2026-11-26 23:32Z, engine `{LIVE}`: `engine-park.series`** (the rollback engine until 2026-11-27 14:45:24Z)" in readme
     assert "`v5.0.1-6-gffb10fdf3` = the node's tree + staged 0024, 0027, 0029" in readme
     assert "engine `619655e5833b`: `engine-canary.series`** (the rollback engine until 2026-11-26 23:32Z)" in readme
     assert readme.count("LIVE since ") == 1, "one engine is live"
     status = (ROOT / "docs" / "notes" / "STATUS.md").read_text(encoding="utf-8")
-    assert f"Live 2026-11-25 23:45:20Z to 2026-11-26 23:32Z, and the engine a rollback puts back: engine `{LIVE}`" in status
+    assert f"Live 2026-11-25 23:45:20Z to 2026-11-26 23:32Z, and the rollback engine until 2026-11-27 14:45:24Z: engine `{LIVE}`" in status
     assert status.count("and the engine a rollback puts back") == 1
     assert "every fingerprint identical to before" in status and "20 × exit 0" in status
     # what the swap did NOT do
@@ -102,7 +102,7 @@ def test_a_staged_model_that_parks_is_one_the_engine_can_park():
     assert PARK in _lines(SERIES) and PARK not in _lines(ROLLBACK), "a rollback puts back an engine that does not park"
     # ... which is why a rollback has a step more since a real model parks: said where a rollback is read
     readme = (PATCHES / "staged" / "README.md").read_text(encoding="utf-8")
-    assert "A ROLLBACK to THIS engine keeps parking (it is\nthe one that parks); one further back, to `619655e5833b`, which does not park, takes the three lines out of every parking model's file\nfirst" in readme
+    assert "A ROLLBACK to THIS engine keeps parking (it is\nthe one that parks), unpaced, so without the server's 0032; one further back, to `619655e5833b`, which does not park, takes the three lines out of every parking model's file\nfirst" in readme
     note = (ROOT / "docs" / "notes" / "parking-step-2.md").read_text(encoding="utf-8")
     section = note[note.index("## 13. The first real model parks: vega-bge-m3 (2026-11-26 08:18Z)"):]
     for said in ("THE SAME RUN ID AS THE COPIES", "parking 64 park cycles, each counted by the engine; closest 1.0000000",

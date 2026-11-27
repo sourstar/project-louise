@@ -130,4 +130,4 @@ def test_the_notes_say_the_constraint_and_what_was_not_measured():
                  "15,032,385,536", "| a park paced on the card, the ARC giving back under it, with the env and without it | NOT measured"):
         assert said in section, said
     readme = (STAGED / "README.md").read_text(encoding="utf-8")
-    assert f"**A candidate after the live engine, a park paced by the host: `engine-pace.series`** (`{NAME}`;" in readme
+    assert f"**LIVE since 2026-11-27 14:45:24Z, engine `{NAME}`: `engine-pace.series`**" in readme

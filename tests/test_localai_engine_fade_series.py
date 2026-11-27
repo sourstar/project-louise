@@ -1,12 +1,12 @@
-"""The LIVE engine, aea955022a8f (München, 2026-11-26 23:32Z; the operator's yes): the
-park engine's series, then a clip's last word kept (0030)
-(deploy/localai/patches/staged/engine-fade.series).
+"""The engine a ROLLBACK puts back since 2026-11-27 14:45:24Z, aea955022a8f (live from
+2026-11-26 23:32Z, München; the operator's yes): the park engine's series, then a clip's last
+word kept (0030) (deploy/localai/patches/staged/engine-fade.series).
 
 An engine's name is the digest of its series file and of every patch in it,
 comments included. Held here: that the file and its patches still name the
-engine that is running, that it is the one a rollback puts back plus 0030,
-that the notes say which engine is live, and that the node's speech model
-names it. What 0030 is and how it was measured is
+engine a rollback puts back, that it is the engine before it plus 0030, and
+that the notes say it is the rollback - and that a rollback to it, which parks
+and paces nothing, takes the server's 0032 out first. What 0030 is and how it was measured is
 tests/test_localai_staged_omnivoice_fade_out.py's."""
 import os
 import subprocess
@@ -17,7 +17,7 @@ PATCHES = ROOT / "deploy" / "localai" / "patches"
 SERIES = PATCHES / "staged" / "engine-fade.series"
 ROLLBACK = PATCHES / "staged" / "engine-park.series"
 BUILD = ROOT / "deploy" / "localai" / "llama-cpp" / "build.sh"
-LIVE = "aea955022a8f"
+LIVE = "aea955022a8f"   # live 2026-11-26 23:32Z to 2026-11-27 14:45:24Z; the rollback engine since
 FADE = "staged/0030-llama-cpp-omnivoice-fade-out-ends-with-the-kept-silence.patch"
 
 
@@ -31,8 +31,8 @@ def test_the_file_and_its_patches_still_name_the_engine_that_runs():
                           env=dict(os.environ, SERIES_FILE=str(SERIES), NAME_ONLY="1"), cwd=ROOT)
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == LIVE, (
-        "engine-fade.series or one of its patches changed: that is ANOTHER engine than the live one. "
-        "Build it, gate every run on it, and only then change the name here and in the staged README")
+        "engine-fade.series or one of its patches changed: that is ANOTHER engine than the one a rollback puts "
+        "back, and the live engine's series starts with its lines")
 
 
 def test_it_is_the_rollback_engine_and_the_fade():
@@ -42,22 +42,19 @@ def test_it_is_the_rollback_engine_and_the_fade():
         assert not any(absent in line for line in _lines(SERIES)), f"{absent}: the server's, in no engine"
 
 
-def test_the_readme_and_the_status_say_what_is_live():
+def test_the_readme_and_the_status_say_it_is_the_rollback_and_how_a_rollback_goes():
     readme = (PATCHES / "staged" / "README.md").read_text(encoding="utf-8")
-    assert f"**LIVE since 2026-11-26 23:32Z, engine `{LIVE}`: `engine-fade.series`**" in readme
+    assert (f"**Live 2026-11-26 23:32Z to 2026-11-27 14:45:24Z, engine `{LIVE}`, and the engine a rollback puts back: "
+            "`engine-fade.series`**") in readme
+    assert readme.count("and the engine a rollback puts back") == 1, "one engine is the rollback engine"
     assert readme.count("LIVE since ") == 1, "one engine is live"
     assert "the five llama.cpp gates\nexact with every fingerprint unchanged" in readme
+    # it parks and paces nothing: with the server's 0032 a rollback to it would copy every ARC-counted park at full speed
+    assert ("**A ROLLBACK to `aea955022a8f` (it parks, and paces nothing) takes the server's 0032 out FIRST, back to 0031: left in,\n"
+            "every park admitted on the ARC copies at full speed.**") in readme
     status = (ROOT / "docs" / "notes" / "STATUS.md").read_text(encoding="utf-8")
-    assert f"**LIVE since 2026-11-26 23:32Z: engine `{LIVE}`" in status
-    assert "the\n  rollback engine is `ed93e3c1b2e2` (it parks, so a rollback keeps parking)" in status
+    assert f"**Live 2026-11-26 23:32Z to 2026-11-27 14:45:24Z, and the engine a rollback puts back: engine `{LIVE}`" in status
+    assert "ONCE THE SERVER'S 0032 IS LIVE A ROLLBACK TAKES 0032 OUT FIRST" in status
     bugs = (ROOT / "docs" / "notes" / "localai-bugs.md").read_text(encoding="utf-8")
-    assert f"**LIVE in engine `{LIVE}` since 2026-11-26 23:32Z**" in next(
+    assert f"in engine `{LIVE}` to 2026-11-27 14:45:24Z" in next(
         line for line in bugs.splitlines() if line.startswith("| **P28 (staged)** |"))
-
-
-def test_the_staged_speech_model_names_the_live_engine():
-    """The node's direct models' files are moved to the new engine's backend at each swap (München). The stack is
-    the park engine's (intel-stack-2026-11c.conf and its layer unchanged), so the name differs in the engine alone."""
-    text = (ROOT / "deploy" / "vega" / "stage" / "models" / "louise-tts-omnivoice.yaml").read_text(encoding="utf-8")
-    assert f'"backend": "louise-sycl-f16-llama-cpp-{LIVE}-stack-7c301a7ba437"' in text
-    assert "d531d5d804f1" in text, "the engine its card rows were taken on is still said, as what it was"

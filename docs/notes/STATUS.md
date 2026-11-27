@@ -1266,7 +1266,7 @@ measured (published figures disagree).
 
 ### 2026-11-24
 
-- **Live 2026-11-25 23:45:20Z to 2026-11-26 23:32Z, and the engine a rollback puts back: engine `ed93e3c1b2e2`** (`engine-park.series`: `792f050e318e`'s series + 0023, parking when told;
+- **Live 2026-11-25 23:45:20Z to 2026-11-26 23:32Z, and the rollback engine until 2026-11-27 14:45:24Z: engine `ed93e3c1b2e2`** (`engine-park.series`: `792f050e318e`'s series + 0023, parking when told;
   the operator: "Do parking."), on LocalAI's server `v5.0.1-6-gffb10fdf3` (the node's tree + staged 0024, 0027, 0029), swapped first
   in the same pass (started 22:46Z, the node paused). München: the server's settings check clean, `/system` unchanged for every model,
   the seven run ids the same; the readiness poll's row, three cold loads of one model: 4.84 / 4.48 / 4.45 s before, 2.98 / 2.83 /
@@ -1334,7 +1334,7 @@ measured (published figures disagree).
   within 0.00063. THE ARTICLE ENCODER IS A NEW PUBMED SPACE (a GGUF is other weights than the OV IR): its own CPU reference,
   calibration and golden vectors, then a measured carry — the operator's word first. The reranker (not a space) goes to its
   gate; batching it is faster but makes scores depend on batch-mates (CPU: 174 of 192 moved), not admitted.
-- **THE ZFS ARC COUNTED, THE COPY PACED — STAGED, NOT BUILT (2026-11-26; the operator's "C" and "Both go tonight"; parking-step-2.md
+- **THE ZFS ARC COUNTED, THE COPY PACED — THE ENGINE LIVE (95d9f59679df, 2026-11-27 14:45:24Z), THE SERVER'S 0032 NEXT (2026-11-26; the operator's "C" and "Both go tonight"; parking-step-2.md
   §15):** A is München's (`zfs_arc_sys_free` 15,032,385,536 B, live). B: staged 0032, the SERVER after 0031 (tree `1222e361…`) —
   a park counts MemAvailable plus the ARC's evictable part less 1 GiB; and staged 0033, the ENGINE (`engine-pace.series` =
   the live series + 0033, `95d9f59679df`) — EVERY park's copy to host memory goes in 256 MiB pieces and waits, bounded, while
@@ -1346,7 +1346,14 @@ measured (published figures disagree).
   after 0029 (tree `ab5de7ad…`): one reading — MemAvailable, each cgroup's limit, working set and room, the ZFS ARC where present —
   the park decided on it as before, a refusal logged with every figure and its answer ending with them. The ARC is said, NOT
   counted: that is for München's quiet-node reading and the next refusal's numbers.
-- **LIVE since 2026-11-26 23:32Z: engine `aea955022a8f` (`engine-fade.series`: the live park series + 0030), A CLIP'S LAST WORD IS KEPT.**
+- **LIVE since 2026-11-27 14:45:24Z: engine `95d9f59679df` (`engine-pace.series`: the fade series + 0033), EVERY PARK PACED BY THE HOST.**
+  München: the byte check VEGA/1 against VEGA/2 identical (bge-m3, nemotron, qwen3-4b); five gates exact, fingerprints identical to
+  before (wikipedia worst 0.999939, pubmed query 0.999994, NeuRIS 1.000000); twenty unloads clean; step 5 as before (MADLAD T4 375/379,
+  the known FAIL; nemotron-1b rerank 20/20 equal; chat 9B 78.1 tok/s); the node paused 5,755 s. The 20 OOM lines step 5 counted were
+  München's own token-count container in its 8 GB memcg, no LocalAI or worker process. The rollback engine is `aea955022a8f`: it parks
+  and paces nothing, so ONCE THE SERVER'S 0032 IS LIVE A ROLLBACK TAKES 0032 OUT FIRST. Next: main's deploy, then 0032 with the
+  paced-park gate (bge-m3 with the reserve, and a `park: true` twin without it, under a 10 GiB allocation).
+- **Live 2026-11-26 23:32Z to 2026-11-27 14:45:24Z, and the engine a rollback puts back: engine `aea955022a8f` (`engine-fade.series`: the live park series + 0030), A CLIP'S LAST WORD IS KEPT.**
   München: the byte check identical, five gates exact with every fingerprint unchanged, twenty unloads clean, step 5 as before; the
   rollback engine is `ed93e3c1b2e2` (it parks, so a rollback keeps parking). ON THE CARD: three sentences through the web all end
   in sound with NO FADE ON SPEECH (the cut one: the last 5 ms -36.5 dBFS). And (b): the model's OWN length ends inside the last word

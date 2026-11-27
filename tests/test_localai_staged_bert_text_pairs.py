@@ -170,7 +170,7 @@ def test_the_candidate_is_the_pace_engine_plus_this_patch_and_its_name_is_held()
     assert done.returncode == 0, done.stderr
     assert done.stdout.strip() == NAME
     readme = (STAGED / "README.md").read_text(encoding="utf-8")
-    assert f"**A candidate after the pace one, MedCPT on our llama.cpp: `engine-pair.series`** (`{NAME}`;" in readme
+    assert f"**A candidate after the live engine, MedCPT on our llama.cpp: `engine-pair.series`** (`{NAME}`;" in readme
 
 
 def test_the_note_says_what_was_measured_and_what_was_not():

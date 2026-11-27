@@ -20,18 +20,18 @@ while still staged here — the backend qualification's finding F4 — and are n
 0006's llama.cpp patch has 4 rejected hunks: each is rebased onto the series
 and passes its CPU tests again before its card gates.
 
-**Live 2026-11-25 23:45:20Z to 2026-11-26 23:32Z, engine `ed93e3c1b2e2`, and the engine a rollback puts back: `engine-park.series`** (the operator: "Do parking."), on LocalAI's server
+**Live 2026-11-25 23:45:20Z to 2026-11-26 23:32Z, engine `ed93e3c1b2e2`: `engine-park.series`** (the rollback engine until 2026-11-27 14:45:24Z) (the operator: "Do parking."), on LocalAI's server
 `v5.0.1-6-gffb10fdf3` = the node's tree + staged 0024, 0027, 0029, swapped first in the same pass. München: the byte check VEGA/1 against
 VEGA/2 all identical; the five llama.cpp gates passed, each "exact, 3 fresh load(s)", every fingerprint identical to before; twenty unloads
 of qwen3-embedding-4b through the rebuilt wrapper at exit 0, none of a second or more. ONE vega package rebuilt for it,
 `vega-louise-llama-cpp`, with the wrapper's part for a return through it (#882). THE FILE AND ITS PATCHES ARE THE LIVE ENGINE'S NAME:
-nothing in them changes while it is the engine a rollback puts back; tests/test_localai_engine_park_series.py holds it. What it is:
+nothing in them changes, as for every engine that ran; tests/test_localai_engine_park_series.py holds it. What it is:
 `engine-stream.series` line for line, then 0023 — parking when told, which carries 0028's fix in its own form (the series does not list
 0028 and must not). PARKING IS OFF until a model's file says `park: true` with `GGML_SYCL_PARKABLE=1` AND the host's floor is above 0:
 no model file does, and a test holds the staged ones to it. THE FLOOR IS THE KEEPER'S since main a2b5935b: Louise's worker holds it to
 `[models] page_floor_gib` while a loaded model says it parks, so the first such model file turns parking on by itself. THE FIRST DOES since 2026-11-26
 08:18Z: vega-bge-m3 (main #926; its gate with 64 counted park cycles passed). A ROLLBACK to THIS engine keeps parking (it is
-the one that parks); one further back, to `619655e5833b`, which does not park, takes the three lines out of every parking model's file
+the one that parks), unpaced, so without the server's 0032; one further back, to `619655e5833b`, which does not park, takes the three lines out of every parking model's file
 first: left in, the gate refuses that model's run (parking-step-2.md §13). ON THE CARD, ON COPIES (München, the same pass, ended 2026-11-26
 00:19:39Z): 20 of 20 park cycles the same bytes by a request and 20 of 20 by `/backend/load`, a park 142 ms, a return with sixteen
 sentences 228 ms, 996 of 1,315 MiB of the card given back for 577 MiB of host memory; a model at work refused 409 `model_busy`; a
@@ -58,10 +58,26 @@ docs/notes/parking-step-2.md §6a, §6b.
     SERIES_FILE=deploy/localai/patches/staged/engine-canary.series \
       sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
 
-**LIVE since 2026-11-26 23:32Z, engine `aea955022a8f`: `engine-fade.series`** (the operator's yes, relayed by München; the architecture
+**LIVE since 2026-11-27 14:45:24Z, engine `95d9f59679df`: `engine-pace.series`** (the operator's "C" and "Both go tonight", relayed by
+München; architecture's catch, every park paced). München: the byte check VEGA/1 against VEGA/2 identical (bge-m3, nemotron, qwen3-4b);
+the five llama.cpp gates exact with every fingerprint identical to before (wikipedia worst 0.999939, pubmed query 0.999994, NeuRIS
+1.000000); twenty unloads of qwen3-4b clean; step 5 as the passes before (MADLAD T4 375/379 against P3's slot, the known FAIL, and
+379/379 against the 11-22 rebuilt engine; T3 623/626; nemotron-1b rerank 20/20 lists equal; chat 9B 78.1 tok/s; OCR answered); the node
+paused 5,755 s. THE FILE AND ITS PATCHES ARE THE LIVE ENGINE'S NAME: nothing in them changes without a new build and every gate again;
+tests/test_localai_engine_pace_series.py holds it. What it is: `engine-fade.series` (`aea955022a8f`) line for line, then 0033: every
+park's copy to host memory in 256 MiB pieces, each waiting, bounded, while MemAvailable is under the reserve plus the piece
+(`GGML_SYCL_PARK_HOST_RESERVE`, 2 GiB unset). Its partner, the server's 0032 (the ARC counted for every park), goes live only AFTER
+this engine. **A ROLLBACK to `aea955022a8f` (it parks, and paces nothing) takes the server's 0032 out FIRST, back to 0031: left in,
+every park admitted on the ARC copies at full speed.** NOT yet measured: a paced park under a 10 GiB allocation, with the env and
+without it (the gate that goes with 0032). parking-step-2.md §15.
+
+    SERIES_FILE=deploy/localai/patches/staged/engine-pace.series \
+      sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
+
+**Live 2026-11-26 23:32Z to 2026-11-27 14:45:24Z, engine `aea955022a8f`, and the engine a rollback puts back: `engine-fade.series`** (the operator's yes, relayed by München; the architecture
 session's design, 2026-11-26), on LocalAI's server `v5.0.1-6-gffb10fdf3`. München: the byte check identical; the five llama.cpp gates
 exact with every fingerprint unchanged; twenty unloads clean; step 5 as the night before. THE FILE AND ITS PATCHES ARE THE LIVE ENGINE'S
-NAME: nothing in them changes without a new build and every gate again; tests/test_localai_engine_fade_series.py holds it. What it is:
+NAME: nothing in them changes while it is the engine a rollback puts back; tests/test_localai_engine_fade_series.py holds it. What it is:
 `engine-park.series` (`ed93e3c1b2e2`) line for line, then 0030: the speech port's fade-out lasts as long as the trailing silence the trim kept,
 at most 100 ms, never under 5 ms, where it faded the last 100 ms whatever they held (30 of 40 clips read aloud faded speech). A clip with
 100 ms of its own silence is the same bytes as before. The app keys its kept clips on the engine (main #937), so no clip of the old
@@ -70,11 +86,8 @@ engine is served since the swap. docs/notes/omnivoice-on-our-backend.md §15.
     SERIES_FILE=deploy/localai/patches/staged/engine-fade.series \
       sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # with the live engine's INTEL_STACK
 
-**A candidate after the pace one, MedCPT on our llama.cpp: `engine-pair.series`** (`b77c50dd0fbb`; the operator, 2026-11-26:
+**A candidate after the live engine, MedCPT on our llama.cpp: `engine-pair.series`** (`b77c50dd0fbb`; the operator, 2026-11-26:
 "Move both"). `engine-pace.series` line for line, then 0034 (above). MedCPT's GGUFs are converted with this tree. Not built.
-
-**A candidate after the live engine, a park paced by the host: `engine-pace.series`** (`95d9f59679df`; the operator's "C",
-2026-11-26). `engine-fade.series` (the live `aea955022a8f`) line for line, then 0033 (above). With it the server's 0032. Not built.
 
 **A candidate after the paging one, the speech port's language tags: `engine-lang.series`** (`aa88ab5c356a`; the operator,
 2026-11-25: "the language/country tag must be aligned to the language to speak, otherwise the voice has always a thick italian
