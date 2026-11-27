@@ -111,6 +111,12 @@ creating a space (docs/notes/new-collection.md), and on it:
   4.58 M embedded on OpenVINO, all with the erf GELU — only where measured
   within the new space's tolerance; otherwise a re-embedding.
 
+**The operator's decision (2026-11-27):** "f16 as planned; if the
+tollerance is within the multi peer rollerance there is no need to re-embed,
+rule 1." So: the new space on the f16 GGUF (erf GELU declared); the vectors
+pubmed holds are carried wherever they are within the space's tolerance
+between peers (03 §3.1), and re-embedded only where they are not.
+
 **Why the GELU is decided now.** The new space's CPU twin computes what its
 card does, so with the tanh GELU the gate would never see the gap — but the
 carry is measured against the erf vectors, and the gap would take ~1.2e-5 of
@@ -178,5 +184,5 @@ The cross-encoder is gated against `louise-rerank-medcpt`'s scores and order on
 the same (query, document) sets, its scores across fresh loads and
 batch-mates (OpenVINO's #112 measurement), its latency against OpenVINO's,
 and any calibration fitted on its scores compared before and after. The
-article encoder waits for the operator's word on the new space (§4). A model
+article encoder goes as §4 says, on the operator's decision there. A model
 that fails stays on OpenVINO.
