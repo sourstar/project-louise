@@ -279,7 +279,7 @@ def test_a_long_wait_leaves_the_windows_left_to_the_next_pass_in_one_line(tmp_pa
     said = []
     monkeypatch.setattr(cellar, "_say_cellar", lambda name: said.append)
     cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
-    lines = [m for m in said if "asked the listing to wait" in m]
+    lines = [m for m in said if "the listing is cooled" in m]
     assert len(lines) == 1 and "8 window(s) left" in lines[0]
     assert not [m for m in said if "is not listed" in m], "never one line a window"
 

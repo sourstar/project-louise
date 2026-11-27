@@ -71,6 +71,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -963,6 +964,13 @@ def _say_cellar(name: str) -> Callable[[str], None]:
     return lambda message: print(f"{time.strftime('%H:%M:%S')} [{name} info:cellar] {message}", flush=True)
 
 
+#: the listing runs beside the fetch (the pipeline); False: before it, whole
+PIPELINE = True
+#: a unit whose window is being listed waits for it at most this long, its
+#: slot not held, then goes on (its window unlisted: it waits for the next pass)
+READY_WAIT_S = 6 * 3600.0
+
+
 #: the listing phase's windows at once, at most (the endpoint's etiquette
 #: decides below it: TransferManager.endpoint_slots)
 LISTING_SLOTS = 4
@@ -974,7 +982,10 @@ LISTING_COOL_WAIT_S = 120.0
 #: the listing phase's own endpoint key: its episodes cool the listing
 #: threads (review of a69741dd, S2), never the fetch threads (Z2)
 LISTING_KEY = "cellar-listing"
-#: languages a listing-phase window starts with (see `_prepare_bulk`)
+#: languages a listing-phase window starts with (see `_prepare_bulk`). At 1
+#: a window is never split. ABOVE 1, a window `_window_files` splits keeps its
+#: halves' files, so the pipeline's `publish` (the window's own file) finds
+#: nothing and its units wait for the next pass: publish the halves first
 LISTING_START_GROUP = 1
 
 
@@ -1200,6 +1211,9 @@ class CellarUnits:
         self._base_url: dict[str, str | None] = {}  # corpus root → Cellar's base, for a window asked again
         self._window_locks: dict[tuple, Any] = {}   # (root, year, lang) → one refresher at a time
         self._window_failed: dict[tuple, float] = {}  # (root, year, lang) → when its re-ask failed
+        self._runs: dict[str, tuple] = {}           # corpus root → (the listing thread, {(year, lang): Event})
+        self._order: dict[str, dict] = {}           # corpus root → {(year, lang): its place in the listing}
+        self._held: dict[str, str] = {}             # corpus root → why the pass is held back mid-pass
 
     def _count(self, got: "Fetched") -> None:
         with self._lock:
@@ -1406,6 +1420,85 @@ class TreeUnits(CellarUnits):
         self._count(got)
         return got.moved
 
+    def sort_key(self, f: RemoteFile):
+        """The engine's order of the pass's units (spec.UnitFetcher, optional):
+        a unit whose window is known whole first, then by its window's place in
+        the listing, so the fetch follows the listing (the pipeline)."""
+        if not is_unit(f):
+            return (0, -1, f.rel_path)
+        u = unit_of(f)
+        year = window_year(u["celex"])
+        with self._lock:
+            for order in self._order.values():
+                i = order.get((year, u["lang"]))
+                if i is not None:
+                    return (1, i, f.rel_path)
+        return (0, -1, f.rel_path)
+
+    def ready(self, f: RemoteFile, stop=None, collection=None) -> None:
+        """Called by the engine BEFORE it takes an endpoint slot for `f`
+        (spec.UnitFetcher, optional): a unit whose window the pipeline's
+        listing has still to list waits for it here, holding no slot, the
+        stop asked each second, at most READY_WAIT_S and never once the
+        listing has ended. Then `fetch` decides as before."""
+        if not is_unit(f):
+            return
+        u = unit_of(f)
+        year = window_year(u["celex"])
+        key = self._key_of(collection)
+        with self._lock:
+            run = self._runs.get(key) if key is not None else \
+                (next(iter(self._runs.values())) if len(self._runs) == 1 else None)
+        if run is None:
+            return
+        thread, events, _phase = run
+        ev = events.get((year, u["lang"]))
+        if ev is None:
+            return
+        t0 = time.monotonic()
+        while not ev.is_set() and thread.is_alive() and time.monotonic() - t0 < READY_WAIT_S:
+            if (stop is not None and stop.is_set()) or self.pass_held(collection):
+                return
+            ev.wait(1.0)
+
+    @staticmethod
+    def _key_of(collection) -> str | None:
+        corpus = getattr(collection, "corpus_dir", None) if collection is not None else None
+        return str(Path(corpus).resolve()) if corpus is not None else None
+
+    def pass_held(self, collection=None) -> str | None:
+        """Why THIS collection's pass is held back mid-pass, or None
+        (spec.UnitFetcher, optional: the engine asks nothing more and ends the
+        pass HeldBack). Keyed on the corpus root: TREE_UNITS serves every
+        parser-4 EUR-Lex collection (review of 0225f33f: B's pass was held
+        back by A's fault)."""
+        key = self._key_of(collection)
+        with self._lock:
+            if key is not None:
+                return self._held.get(key)
+            return next(iter(self._held.values()), None) if len(self._held) == 1 else None
+
+    def close(self, collection=None) -> None:
+        """THIS collection's pass ended: its pipelined listing still running
+        ends at its next request (its windows are kept as listed; the rest wait
+        for the next pass). Keyed by the corpus root, as `ready` and
+        `pass_held` are (review of abac25f1: A's close stopped B's listing);
+        no collection: every corpus's (a process ending)."""
+        key = self._key_of(collection)
+        with self._lock:
+            if key is None:
+                runs = list(self._runs.items())
+                self._runs.clear()
+                self._order.clear()
+            else:
+                runs = [(key, self._runs.pop(key))] if key in self._runs else []
+                self._order.pop(key, None)
+        for _key, (thread, events, phase) in runs:
+            phase.set()                     # the listing ends at its next request (review of b797db0e)
+            for ev in events.values():
+                ev.set()
+            thread.join(timeout=5.0)
+
     def _bulk_of(self, root: Path | None, unit: dict, remote: RemoteFile, dest: Path):
         """The bulk's tree source for this unit and the date it must reach
         (architecture's decision, 2026-11-26):
@@ -1504,9 +1597,12 @@ class TreeUnits(CellarUnits):
             except (TransportError, OSError) as e:
                 # an episode, a window that moved between its count and its
                 # pages, or the listing not written (ENOSPC): remembered, so the
-                # window's other units wait at once (Z1, Z5, Z3); said once
+                # window's other units wait at once (Z1, Z5, Z3); said once. A
+                # LOCAL fault (OSError) holds the window until the next prepare,
+                # which holds the pass back if it lasts (review of 556d3a15, N1:
+                # it read as a Cellar episode and was re-paged every 15 min)
                 with self._lock:
-                    self._window_failed[(key, year, lang)] = time.time()
+                    self._window_failed[(key, year, lang)] = float("inf") if isinstance(e, OSError) else time.time()
                 _say_cellar(Path(key).name)(f"the {year} window ({lang}) was not asked again "
                                             f"({type(e).__name__}: {str(e)[:200]}): its units wait")
                 return
@@ -1574,7 +1670,7 @@ class TreeUnits(CellarUnits):
         name = getattr(collection, "name", "eurlex")
         try:
             self._prepare_bulk(dump_base, Path(collection.corpus_dir), langs, pending, name,
-                               getattr(endpoint, "url", None))
+                               getattr(endpoint, "url", None), background=PIPELINE)
         except (TransferAborted, HeldBack):
             raise
         except Exception as e:  # noqa: BLE001 — whatever stopped the bulk, Cellar waits for it
@@ -1582,7 +1678,7 @@ class TreeUnits(CellarUnits):
                            f"{str(e)[:300]}); bulk first, so Cellar is not asked for them until they are") from e
 
     def _prepare_bulk(self, dump_base: Path, corpus: Path, langs: list[str], pending: list[RemoteFile],
-                      name: str, base_url: str | None = None) -> None:
+                      name: str, base_url: str | None = None, *, background: bool = False) -> None:
         """The trees the bulk holds, ready BEFORE the pass (bulk first,
         2026-11-26): each language's MTD — the one of the dump stamped into
         the corpus — indexed by CELEX, the stop asked between chunks. Then
@@ -1632,174 +1728,288 @@ class TreeUnits(CellarUnits):
                 stale += at is not None and lang not in missing.get(year, set())
                 missing.setdefault(year, set()).add(lang)
         unlisted: set[tuple[int, str]] = set()
-        if missing and base_url:
-            t0, asked = time.monotonic(), 0
-            code_of = {v: k for k, v in LANGUAGES.items()}
-            say(f"listing what changed since the dump: {sum(len(v) for v in missing.values())} "
-                f"(year, language) window(s) of {len(missing)} year(s), {stale} of them known whole more "
-                f"than a day ago, before any unit is built from it")
-            # THE LISTING PHASE IN PARALLEL (architecture, 2026-11-26, on the
-            # live pass: one query at a time on one connection, py-spy reading
-            # "the 1993 page at offset 5000 (6 languages)" — a 13-language
-            # count had timed out and been halved — while Cellar's endpoint
-            # allows LISTING_SLOTS; CLAUDE.md "Multi-threading is a must").
-            # Windows start ONE language wide (LISTING_START_GROUP: a grouped
-            # count is what times out, 900 s, before it is split; a single
-            # language answered in 26-235 s, 11-14), up to LISTING_SLOTS at
-            # once, each on its own client, in the pass's context (its stop,
-            # keyless as before); the split, should one still be needed, is
-            # learned once for all (`_Learned`, under a lock)
-            import contextvars
-            import threading
-            from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
-            from . import backoff
-            from ..transfer.bucket import Priority
-            from ..transfer.manager import Direction, current_handle, get_manager
-            from .specs import EURLEX_SPEC
-            mgr = get_manager()
-            # ONE SOURCE OF TRUTH for the slots (review of a69741dd, S1): the
-            # endpoint's etiquette, at most LISTING_SLOTS
-            slots = max(1, min(LISTING_SLOTS, mgr.endpoint_slots(EURLEX_SPEC.endpoints[0], EURLEX_SPEC)))
-            learned = _Learned(LISTING_START_GROUP, say=say)
-            outer = current_handle()
-            # THE PHASE'S OWN STOP (B1): set by the pass's stop or by a local
-            # fault, so the windows in flight end at their next request and none
-            # begins after it
-            phase = threading.Event()
-            failed: list[tuple[int, tuple[str, ...], str]] = []
-            guard = threading.Lock()
-
-            cooled_out: list[tuple[int, tuple[str, ...]]] = []
-            gave_up = threading.Event()
-            gave_up_why: list[str] = []
-
-            def wait_cool() -> bool:
-                """Cellar asked the listing to wait (a 429, a 503, a
-                Retry-After: LISTING_KEY cooled). Waited out, stop-aware, up
-                to LISTING_COOL_WAIT_S; beyond it the phase gives up ONCE —
-                the windows left wait for the next pass (review of 8a31ed06,
-                B2: one 5-s 503 left 8 of 12 windows unlisted)."""
-                while True:
-                    if gave_up.is_set():
-                        return False
-                    left = mgr.cooled_for(LISTING_KEY)
-                    if left <= 0:
-                        return True
-                    if left > LISTING_COOL_WAIT_S:
-                        with guard:
-                            if not gave_up.is_set():
-                                gave_up_why.append(f"{left:.0f}")
-                                gave_up.set()
-                        return False
-                    backoff._sleep_stop_aware(min(left, 1.0), phase, time.sleep)
-                    _stop_check()
-
-            def one_window(year: int, window: tuple[str, ...]) -> int:
-                """One window — split here into the learned group's width when
-                a split was learned after it was queued — bound to the phase's
-                stop under the LISTING key: Cellar's overload answers cool the
-                listing threads, never the fetch threads (Z2)."""
-                n_listed = 0
-                bound = mgr.bind(outer.priority if outer is not None else Priority.BACKFILL, Direction.DOWN,
-                                 stop=phase, endpoint_key=LISTING_KEY)
-                with bound:
-                    group = learned.group
-                    for sub in (tuple(window[i:i + group]) for i in range(0, len(window), group)):
-                        _stop_check()
-                        if not wait_cool():
-                            with guard:
-                                cooled_out.append((year, sub))
-                            continue
-                        t1 = time.monotonic()
-                        try:
-                            with httpx.Client(timeout=TIMEOUT_S) as client:
-                                n = sum(1 for _ in _window_files(client, base_url, year, sub, code_of,
-                                                                 budget.acquire_bytes, place=lambda *a: False,
-                                                                 learned=learned))
-                        except TransferAborted:
-                            raise
-                        except TransportError as e:    # the origin's: this window's units wait
-                            with guard:
-                                failed.append((year, sub, f"{type(e).__name__}: {str(e)[:200]}"))
-                            continue
-                        except BaseException:
-                            phase.set()                # a LOCAL fault: every other window ends now
-                            raise
-                        say(f"cellar: listed {year} ({', '.join(sub)}): {n} units in "
-                            f"{time.monotonic() - t1:.0f} s")
-                        n_listed += 1
-                return n_listed
-
-            # WINDOWS, not years, are the pool's tasks (review of 8a31ed06, S5:
-            # one year's 4 languages ran one at a time)
-            windows = [(year, tuple(langs_y[i:i + learned.group]))
-                       for year in sorted(missing) for langs_y in [sorted(missing[year])]
-                       for i in range(0, len(langs_y), learned.group)]
-            pool = ThreadPoolExecutor(max_workers=slots, thread_name_prefix="cellar-listing")
-            ended: BaseException | None = None
-            try:
-                pending_f = {pool.submit(contextvars.copy_context().run, one_window, y, w) for y, w in windows}
-                while pending_f:
-                    done, pending_f = wait(pending_f, timeout=0.2, return_when=FIRST_EXCEPTION)
-                    for fut in done:
-                        if fut.cancelled():
-                            continue
-                        e = fut.exception()
-                        if e is None:
-                            asked += fut.result()
-                        elif ended is None or isinstance(ended, TransferAborted) and not isinstance(e, TransferAborted):
-                            ended = e                  # a local fault outranks the stop it caused
-                    if ended is not None or (outer is not None and outer.stop is not None and outer.stop.is_set()):
-                        phase.set()
-                        for fut in pending_f:
-                            fut.cancel()
-                        if ended is None:
-                            ended = TransferAborted("cellar: stopped between requests")
-            finally:
-                if ended is not None:
-                    phase.set()
-                pool.shutdown(wait=True, cancel_futures=True)
-            if ended is not None:
-                raise ended
-            for year, window, why in failed:
-                unlisted |= {(year, l) for l in window}
-                say(f"cellar: the {year} window ({', '.join(window)}) is not listed ({why}): its units wait")
-            if cooled_out:
-                for year, window in cooled_out:
-                    unlisted |= {(year, l) for l in window}
-                say(f"cellar: Cellar asked the listing to wait {gave_up_why[0] if gave_up_why else '?'} s more: "
-                    f"the {len(cooled_out)} window(s) left wait for the next pass")
-            dates, cover = cellar_listing.coverage(due, after, base_url)
-            # only the windows LISTED this pass end their units' wait (review
-            # of d863230c, Y1: a re-listing that failed reset it; Y2: every
-            # covered window's units were marked, ~122k marks a pass)
-            now_listed = {(y, l) for y, ls in missing.items() for l in ls} - unlisted
-            waiting = {(l, c) for l, units_ in eurlex_dump.incomplete(corpus).items()
-                       for c, e in units_.items() if isinstance(e, dict) and e.get("waiting")}
-            back = [(l, c) for c, l in due if (window_year(c), l) in now_listed and (window_year(c), l) in cover
-                    and (l, c) in waiting]          # only a unit that waits (review of 6f6e72ab, 3)
-            if back:
-                eurlex_dump.mark_listed(corpus, back)       # their wait is over: n from 0
-            say(f"listed {asked} window(s) in {time.monotonic() - t0:.0f} s")
-        elif missing:
-            unlisted = {(y, l) for y, ls in missing.items() for l in ls}
-        cover = {k: at for k, at in cover.items() if k not in unlisted}
         key = str(corpus.resolve())
+        events = {(y, l): threading.Event() for y, ls in missing.items() for l in ls} if missing else {}
+        # THE LISTING'S OWN STOP, here so `close` can end it with the pass
+        # (review of b797db0e): set by the pass's stop, a local fault, or close
+        phase = threading.Event()
+        by_window: dict[tuple[int, str], set] = {}
+        for u in due:
+            by_window.setdefault((window_year(u[0]), u[1]), set()).add(u)
+
+        def release(year: int, window: tuple[str, ...]) -> None:
+            for l in window:
+                ev = events.get((year, l))
+                if ev is not None:
+                    ev.set()
+
+        def publish(year: int, window: tuple[str, ...]) -> None:
+            """A window just listed: its units' dates and its cover, for the
+            fetch threads now (the pipeline, architecture 2026-11-27). Its own
+            file and its own units only (review of b797db0e: every kept file
+            and all 122 k units on each window): the window just kept is the
+            newest of its (year, language)s by its `at`."""
+            mine = set().union(*(by_window.get((year, l), set()) for l in window))
+            d, c = cellar_listing.coverage(mine, after, base_url,
+                                           paths=[cellar_listing._path(base_url, year, window, True)])
+            with self._lock:
+                held_d = self._dates.setdefault(key, {})
+                for u in mine:
+                    held_d.pop(u, None)
+                held_d.update(d)                                # the dates before the cover
+                for l in window:
+                    if (year, l) in c:
+                        self._cover.setdefault(key, {})[(year, l)] = c[(year, l)]
+            release(year, window)
+
+        def run_listing() -> None:
+            nonlocal dates, cover, unlisted
+            if missing and base_url:
+                t0, asked = time.monotonic(), 0
+                code_of = {v: k for k, v in LANGUAGES.items()}
+                say(f"listing what changed since the dump: {sum(len(v) for v in missing.values())} "
+                    f"(year, language) window(s) of {len(missing)} year(s), {stale} of them known whole more "
+                    f"than a day ago, before any unit is built from it")
+                # THE LISTING PHASE IN PARALLEL (architecture, 2026-11-26, on the
+                # live pass: one query at a time on one connection, py-spy reading
+                # "the 1993 page at offset 5000 (6 languages)" — a 13-language
+                # count had timed out and been halved — while Cellar's endpoint
+                # allows LISTING_SLOTS; CLAUDE.md "Multi-threading is a must").
+                # Windows start ONE language wide (LISTING_START_GROUP: a grouped
+                # count is what times out, 900 s, before it is split; a single
+                # language answered in 26-235 s, 11-14), up to LISTING_SLOTS at
+                # once, each on its own client, in the pass's context (its stop,
+                # keyless as before); the split, should one still be needed, is
+                # learned once for all (`_Learned`, under a lock)
+                import contextvars
+                import threading
+                from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
+                from . import backoff
+                from ..transfer.bucket import Priority
+                from ..transfer.manager import Direction, current_handle, get_manager
+                from .specs import EURLEX_SPEC
+                mgr = get_manager()
+                # ONE SOURCE OF TRUTH for the slots (review of a69741dd, S1): the
+                # endpoint's etiquette, at most LISTING_SLOTS
+                slots = max(1, min(LISTING_SLOTS, mgr.endpoint_slots(EURLEX_SPEC.endpoints[0], EURLEX_SPEC)))
+                from ..transfer import pool as transfer_pool
+                ranked = mgr.rank_endpoints([(e.url, e) for e in EURLEX_SPEC.endpoints])
+                if background:
+                    slots = max(1, slots - 1)          # the fetch keeps a slot while the listing runs
+                learned = _Learned(LISTING_START_GROUP, say=say)
+                outer = current_handle()
+                # THE PHASE'S OWN STOP (B1): the outer `phase` — set by the pass's
+                # stop, a local fault or close, so the windows in flight end at
+                # their next request and none begins after it
+                failed: list[tuple[int, tuple[str, ...], str]] = []
+                guard = threading.Lock()
+
+                cooled_out: list[tuple[int, tuple[str, ...]]] = []
+                gave_up = threading.Event()
+                gave_up_why: list[str] = []
+
+                def wait_cool() -> bool:
+                    """Cellar asked the listing to wait (a 429, a 503, a
+                    Retry-After: LISTING_KEY cooled). Waited out, stop-aware, up
+                    to LISTING_COOL_WAIT_S; beyond it the phase gives up ONCE —
+                    the windows left wait for the next pass (review of 8a31ed06,
+                    B2: one 5-s 503 left 8 of 12 windows unlisted)."""
+                    while True:
+                        if gave_up.is_set():
+                            return False
+                        left = mgr.cooled_for(LISTING_KEY)
+                        if left <= 0:
+                            return True
+                        if left > LISTING_COOL_WAIT_S:
+                            with guard:
+                                if not gave_up.is_set():
+                                    gave_up_why.append(f"{left:.0f}")
+                                    gave_up.set()
+                            return False
+                        backoff._sleep_stop_aware(min(left, 1.0), phase, time.sleep)
+                        _stop_check()
+
+                def one_window(year: int, window: tuple[str, ...]) -> int:
+                    """One window — split here into the learned group's width when
+                    a split was learned after it was queued — bound to the phase's
+                    stop under the LISTING key: Cellar's overload answers cool the
+                    listing threads, never the fetch threads (Z2)."""
+                    n_listed = 0
+                    bound = mgr.bind(outer.priority if outer is not None else Priority.BACKFILL, Direction.DOWN,
+                                     stop=phase, endpoint_key=LISTING_KEY)
+                    with bound:
+                        group = learned.group
+                        for sub in (tuple(window[i:i + group]) for i in range(0, len(window), group)):
+                            _stop_check()
+                            if not wait_cool():
+                                with guard:
+                                    cooled_out.append((year, sub))
+                                release(year, sub)                 # B2
+                                continue
+                            # ITS SLOT FROM THE ENDPOINT'S OWN POOL, the fetch's
+                            # (review of b797db0e, B1: 3 listing queries + 4 fetch
+                            # slots = 7 at once on Cellar, which allows 4)
+                            # AHEAD OF THE FETCH (review of 0225f33f, L1: beside busy
+                            # fetchers it got no slot in 30 s): the next free slot is
+                            # the listing's, as an INTERACTIVE caller's is
+                            # (`manager.urgent`); at most N-1 listing threads, so the
+                            # fetch keeps one; the wait for a busy slot bounded,
+                            # stop-aware, then retried
+                            slot = None
+                            while slot is None:
+                                _stop_check()
+                                slot = transfer_pool.acquire_endpoint_slot(
+                                    mgr, ranked, EURLEX_SPEC, stop=phase, bound_s=5.0,
+                                    busy_bound_s=5.0, ahead_of_fetch=True)
+                                if slot is None:
+                                    # Cellar cooled past the bound, or every slot busy:
+                                    # wait (the phase's stop asked), never a busy loop
+                                    # (review of f69d4bd9: 205,986 requests in 1 s)
+                                    cooled = max((mgr.cooled_for(k) for k, _e in ranked), default=0.0)
+                                    phase.wait(min(max(cooled, 0.05), 1.0))
+                            if phase.is_set():                 # a fault or a stop while it waited
+                                slot[2].release()
+                                raise TransferAborted("cellar: stopped between requests")
+                            t1 = time.monotonic()
+                            try:
+                                with httpx.Client(timeout=TIMEOUT_S) as client:
+                                    n = sum(1 for _ in _window_files(client, base_url, year, sub, code_of,
+                                                                     budget.acquire_bytes, place=lambda *a: False,
+                                                                     learned=learned))
+                            except TransferAborted:
+                                raise
+                            except TransportError as e:    # the origin's: this window's units wait
+                                with guard:
+                                    failed.append((year, sub, f"{type(e).__name__}: {str(e)[:200]}"))
+                                release(year, sub)             # B2: they go on at once, and wait
+                                continue
+                            except BaseException:
+                                phase.set()                # a LOCAL fault: every other window ends now
+                                raise
+                            finally:
+                                slot[2].release()
+                            say(f"cellar: listed {year} ({', '.join(sub)}): {n} units in "
+                                f"{time.monotonic() - t1:.0f} s")
+                            n_listed += 1
+                            publish(year, sub)
+                    return n_listed
+
+                # WINDOWS, not years, are the pool's tasks (review of 8a31ed06, S5:
+                # one year's 4 languages ran one at a time)
+                windows = [(year, tuple(langs_y[i:i + learned.group]))
+                           for year in sorted(missing) for langs_y in [sorted(missing[year])]
+                           for i in range(0, len(langs_y), learned.group)]
+                pool = ThreadPoolExecutor(max_workers=slots, thread_name_prefix="cellar-listing")
+                ended: BaseException | None = None
+                try:
+                    pending_f = {pool.submit(contextvars.copy_context().run, one_window, y, w) for y, w in windows}
+                    while pending_f:
+                        done, pending_f = wait(pending_f, timeout=0.2, return_when=FIRST_EXCEPTION)
+                        for fut in done:
+                            if fut.cancelled():
+                                continue
+                            e = fut.exception()
+                            if e is None:
+                                asked += fut.result()
+                            elif ended is None or isinstance(ended, TransferAborted) and not isinstance(e, TransferAborted):
+                                ended = e                  # a local fault outranks the stop it caused
+                        if ended is not None or (outer is not None and outer.stop is not None and outer.stop.is_set()):
+                            phase.set()
+                            for fut in pending_f:
+                                fut.cancel()
+                            if ended is None:
+                                ended = TransferAborted("cellar: stopped between requests")
+                finally:
+                    if ended is not None:
+                        phase.set()
+                    pool.shutdown(wait=True, cancel_futures=True)
+                if ended is not None:
+                    raise ended
+                for year, window, why in failed:
+                    unlisted |= {(year, l) for l in window}
+                    say(f"cellar: the {year} window ({', '.join(window)}) is not listed ({why}): its units wait")
+                if cooled_out:
+                    for year, window in cooled_out:
+                        unlisted |= {(year, l) for l in window}
+                    say(f"cellar: the listing is cooled {gave_up_why[0] if gave_up_why else '?'} s more after Cellar's overload answers: "
+                        f"the {len(cooled_out)} window(s) left wait for the next pass")
+                dates, cover = cellar_listing.coverage(due, after, base_url)
+                # only the windows LISTED this pass end their units' wait (review
+                # of d863230c, Y1: a re-listing that failed reset it; Y2: every
+                # covered window's units were marked, ~122k marks a pass)
+                now_listed = {(y, l) for y, ls in missing.items() for l in ls} - unlisted
+                waiting = {(l, c) for l, units_ in eurlex_dump.incomplete(corpus).items()
+                           for c, e in units_.items() if isinstance(e, dict) and e.get("waiting")}
+                back = [(l, c) for c, l in due if (window_year(c), l) in now_listed and (window_year(c), l) in cover
+                        and (l, c) in waiting]          # only a unit that waits (review of 6f6e72ab, 3)
+                if back:
+                    eurlex_dump.mark_listed(corpus, back)       # their wait is over: n from 0
+                say(f"listed {asked} window(s) in {time.monotonic() - t0:.0f} s")
+            elif missing:
+                unlisted = {(y, l) for y, ls in missing.items() for l in ls}
+            cover = {k: at for k, at in cover.items() if k not in unlisted}
+            with self._lock:
+                self._bulk[key] = bulk
+                self._dates[key] = dates
+                self._cover[key] = cover
+                self._after[key] = after
+                self._due[key] = due
+                self._base_url[key] = base_url
+                for k in [k for k in self._window_failed if k[0] == key]:
+                    del self._window_failed[k]              # a new prepare asks every window afresh
+            changed = sum(1 for k, d in dates.items() if d > after.get(k[1], float("inf")))
+            unchanged = len(dates) - changed
+            say(f"trees from the bulk: {', '.join(sorted(bulk)) or 'no language'}; of {len(due)} unit(s) asked first, "
+                f"{unchanged} unchanged since the dump (its tree), {changed} changed (Cellar's), "
+                f"{len(due) - len(dates)} not vouched for (Cellar's, or waiting: {len(unlisted)} window(s) unlisted)")
+
+
+        if not (background and missing and base_url):
+            run_listing()
+            return
+        # THE PIPELINE (architecture, 2026-11-27: a big year's one-language
+        # window costs ~300 s, 338 windows over 4 slots ~7 h before the first
+        # unit was built). The pass starts NOW: what is known is published,
+        # the windows to list are not in the cover (their units wait for
+        # them, `ready`, holding no slot), and the listing runs beside the
+        # fetch on all but one of the endpoint's slots; each window is
+        # published as it is listed, its units fetched at once.
         with self._lock:
             self._bulk[key] = bulk
-            self._dates[key] = dates
-            self._cover[key] = cover
+            self._dates[key] = dict(dates)
+            self._cover[key] = {k: at for k, at in cover.items()
+                                if not (k[0] in missing and k[1] in missing[k[0]])}
             self._after[key] = after
             self._due[key] = due
             self._base_url[key] = base_url
             for k in [k for k in self._window_failed if k[0] == key]:
-                del self._window_failed[k]              # a new prepare asks every window afresh
-        changed = sum(1 for k, d in dates.items() if d > after.get(k[1], float("inf")))
-        unchanged = len(dates) - changed
-        say(f"trees from the bulk: {', '.join(sorted(bulk)) or 'no language'}; of {len(due)} unit(s) asked first, "
-            f"{unchanged} unchanged since the dump (its tree), {changed} changed (Cellar's), "
-            f"{len(due) - len(dates)} not vouched for (Cellar's, or waiting: {len(unlisted)} window(s) unlisted)")
+                del self._window_failed[k]
+            self._order[key] = {k: i for i, k in enumerate(sorted(events))}
+            self._held.pop(key, None)
+        import contextvars
 
+        def background_run() -> None:
+            try:
+                run_listing()
+            except TransferAborted:
+                say("cellar: the listing was stopped; the windows left wait for the next pass")
+            except BaseException as e:  # noqa: BLE001 — said; its windows' units wait, never the bulk on silence
+                # A LOCAL FAULT (an OSError writing a window: ENOSPC) HOLDS THE
+                # PASS BACK, as it does before the pass (read of 7eb82ba1, 1;
+                # of b797db0e, B3): the engine asks `held_back` and ends it
+                with self._lock:
+                    self._held[key] = (f"{name}: the listing beside the fetch met a local fault "
+                                       f"({type(e).__name__}: {str(e)[:300]}); bulk first, so Cellar is "
+                                       f"not asked for the trees the bulk holds until it is mended")
+                say(f"cellar: the listing ended ({type(e).__name__}: {str(e)[:200]}): the pass is held back")
+            finally:
+                for ev in events.values():
+                    ev.set()
+        thread = threading.Thread(target=contextvars.copy_context().run, args=(background_run,),
+                                  name="cellar-listing-phase", daemon=True)
+        with self._lock:
+            self._runs[key] = (thread, events, phase)
+        thread.start()
 
 def _corpus_of(dest: Path, remote: RemoteFile) -> Path | None:
     """The corpus root a unit's file lands under: `dest` less its rel_path."""

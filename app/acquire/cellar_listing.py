@@ -135,7 +135,8 @@ def vouched(endpoint: str, year: int, languages: tuple[str, ...], n: int, last: 
 
 
 def coverage(wanted: set[tuple[str, str]], after: dict[str, float],
-             endpoint: str) -> tuple[dict[tuple[str, str], int], dict[tuple[int, str], float]]:
+             endpoint: str, *, paths: list[Path] | None = None
+             ) -> tuple[dict[tuple[str, str], int], dict[tuple[int, str], float]]:
     """WHAT THE KEPT LISTING VOUCHES FOR SINCE THE DUMP (architecture's decision,
     2026-11-26, on EUR-Lex5.next's 122,317 units asked first): a window is a
     whole enumeration of a (CELEX year, language set) with each unit's
@@ -163,7 +164,7 @@ def coverage(wanted: set[tuple[str, str]], after: dict[str, float],
     # per file kept: its (year, fresh languages, at) and only the wanted rows
     # (`wanted` is the units due, not the corpus: memory stays the pass's)
     seen: list[tuple[int, set[str], float, list[tuple[tuple[str, str], int]]]] = []
-    for p in sorted(_base().glob("*/*.json.gz")):
+    for p in (sorted(_base().glob("*/*.json.gz")) if paths is None else paths):
         try:
             data = json.loads(gzip.decompress(p.read_bytes()))
             year, langs = int(data["year"]), tuple(data["languages"])
