@@ -12,7 +12,7 @@ def test_the_page_sends_its_picker_and_the_search_receives_it(client, monkeypatc
     seen = {}
 
     def fake_run_search(names, query, k, mode, translate, verify=False, rerank_depth=50,
-                        all_languages=False, show_in=None):
+                        all_languages=False, show_in=None, kind="all"):
         seen["show_in"] = show_in
         return {"hits": [], "timings": {}, "facts": [], "catalog": []}
     monkeypatch.setattr(web.query_service, "run_search", fake_run_search)
@@ -26,7 +26,7 @@ def test_the_answer_s_search_prefers_the_answer_s_language(client, monkeypatch):
     seen = {}
 
     def fake_run_search(names, query, k, mode, translate, verify=False, rerank_depth=50,
-                        all_languages=False, show_in=None):
+                        all_languages=False, show_in=None, kind="all"):
         seen["show_in"] = show_in
         return {"hits": [], "timings": {"total": 1.0}, "facts": [], "catalog": []}
     monkeypatch.setattr(api, "_run_search", fake_run_search)
@@ -138,7 +138,7 @@ def test_the_choice_reaches_the_search_and_the_facts(client, monkeypatch):  # no
     seen = {}
 
     def fake_run_search(names, query, k, mode, translate, verify=False, rerank_depth=50,
-                        all_languages=False, show_in=None, **kw):
+                        all_languages=False, show_in=None, kind="all", **kw):
         seen["run"] = kw
         return {"hits": [{"chunk_id": "gutenberg:6150:3:1", "book_id": 6150, "lang": "en",
                           "title": "The Iliad", "text": "…", "source_collection": "gutenberg"}],

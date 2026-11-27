@@ -120,6 +120,17 @@ REAL = {
     # Cheyne's Job and Solomon: a study (its criticism headings), on a Philosophy & Ethics shelf — opinion by
     # that shelf, exactly as the probe's Bible criticism on a Philosophy shelf (#45475; architecture, 2026-11-26)
     65866: "a work of opinion or belief",
+    # Famous Islands and Memorable Voyages: "Voyages and travels -- Juvenile literature", LCC PZ — non-fiction
+    # for children; PZ alone had made it literary (München's judged run, 2026-11-27)
+    25882: None,
+    # periodicals (architecture, 2026-11-27): a genre's periodical is fiction, a mixed magazine no one kind
+    68190: "a literary work", 68937: "a literary work",              # Lord Lister: "Detective and mystery stories -- Periodicals"
+    14165: None, 43814: None, 56022: None,                          # Punch, Blackwood's, The Catholic World
+    # an issue that is one work: every other heading literary (architecture, 2026-11-27)
+    63399: "a literary work", 62744: "a literary work",             # The Glebe: American poetry, American drama
+    71448: None,                                     # Fire!!: "African American art -- 20th century" is a topic
+    # a bare genre's periodical, studied (architecture's read of ec572c91, D1; München's fixture)
+    64919: None,                                     # The Fantasy Fan: "Fantasy fiction -- History and criticism -- Periodicals"
 }
 
 
@@ -145,8 +156,8 @@ def test_a_real_records_verdict(n):
     assert got == REAL[n], said[:240]
 
 
-def test_all_31_real_records_are_judged():
-    assert len(REAL) == 31
+def test_all_41_real_records_are_judged():
+    assert len(REAL) == 41
 
 
 def test_a_verdict_says_its_basis():
@@ -286,3 +297,52 @@ def test_the_other_answer_path_frames_a_source_alike(monkeypatch):
         pass
     assert retrieval.WORK_RULE in seen.get("system", ""), "the rule goes to the model on this path too"
     assert "work_said" in mcp.TOOLS[0]["description"], "an MCP client is told how to read it"
+
+
+def test_the_framing_not_shipped_is_not_in_the_prompt():
+    """Architecture, 2026-11-27: the note beside a literary source and the
+    WORK_RULE sentence did not stop the 35B; reverted to what is live, the
+    judged set kept (tools/measure/work_framing.py)."""
+    system, user = _sources(NAPOLEON, HISTORY)
+    assert "not evidence of what happened" not in user
+    assert "never count it among a fact's confirmations" not in system
+
+
+def test_a_periodical_states_no_one_kind_unless_its_heading_is_a_genre():
+    w = retrieval._work_said
+    for subj, shelf in (("English wit and humor -- Periodicals | AP", "Category: Humour"),
+                        ("Catholic Church -- Periodicals | BX", "Category: Essays, Letters & Speeches"),
+                        ("English literature -- Periodicals | AP", "Category: Novels")):
+        said = w({"subjects": subj, "bookshelves": shelf})
+        assert "a literary work" not in said and "opinion" not in said, (subj, said)
+    for subj in ("Detective and mystery stories -- Periodicals | PT", "Dime novels -- Periodicals | PS",
+                 "Short stories -- Periodicals | PZ", "American poetry -- Periodicals | PS"):
+        assert w({"subjects": subj}).startswith(" — a literary work (by its subject headings)"), subj
+    # architecture, 2026-11-27: a BARE genre's periodical is a topic (The Mirror of Taste, Poet-Lore),
+    # and a periodical that states criticism is a study (The Fantasy Fan)
+    for subj in ("Poetry -- Periodicals | PN", "Drama -- Periodicals | PN",
+                 "Fantasy fiction -- History and criticism -- Periodicals | Fan magazines | "
+                 "Fantasy fiction -- Periodicals | PN"):
+        said = w({"subjects": subj})
+        assert "a literary work" not in said and "opinion" not in said, (subj, said)
+
+
+def test_juvenile_literature_and_periodicals_veto_lcc_pz_alone():
+    """Architecture, 2026-11-27: LCSH's "-- Juvenile literature" (non-fiction
+    for children) and "-- Periodicals" veto the PZ rule — and only it; a tale
+    retold for children with neither mark stays literary by PZ."""
+    w = retrieval._work_said
+    assert "a literary work" not in w({"subjects": "Islands -- Juvenile literature | PZ"})
+    assert "a literary work" not in w({"subjects": "Girls -- Periodicals | PZ"})
+    assert w({"subjects": "Russia -- Social life and customs | PZ"}).startswith(
+        " — a literary work (by its Library of Congress class)"), "no mark: PZ still says it"
+    assert w({"subjects": "Animals -- Juvenile fiction | PZ"}).startswith(" — a literary work"), "fiction stays"
+    # architecture, 2026-11-27: a periodical states no one kind, whatever its shelf;
+    # non-fiction for children on the Essays shelf is an essay (21973, 45390)
+    for shelf in ("Category: Essays, Letters & Speeches", "Category: Novels", ""):
+        said = w({"subjects": "Girls -- Periodicals | PZ", "bookshelves": shelf})
+        assert "opinion" not in said and "a literary work" not in said, ("a periodical: none", said)
+    assert w({"subjects": "Animals -- Juvenile literature | PZ",
+              "bookshelves": "Category: Essays, Letters & Speeches"}).startswith(" — a work of opinion or belief")
+    assert w({"subjects": "Animals -- Juvenile literature | QL", "bookshelves": "Category: Short Stories"}) \
+        .startswith(" — a literary work (by its Gutenberg category)"), "only PZ is vetoed: a form shelf still says it"

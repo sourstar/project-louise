@@ -157,7 +157,7 @@ class Sources:
         n = len(self.entries) + 1
         self._n[key] = n
         self.entries.append({k: hit.get(k) for k in ("uid", "title", "authors", "lang", "collection_id",
-                                                    "snapshot_id", "chunk_id", "origin_url")}
+                                                    "snapshot_id", "chunk_id", "origin_url", "work")}
                             | {"n": n})
         self.passages[n] = {"text": hit.get("text"), "chapter": hit.get("chapter")}
         return n, True

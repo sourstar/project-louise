@@ -52,6 +52,18 @@
   {% elif result.language and result.language.status == 'unavailable' %}
   <span class="badge err" title="no model could translate the question: every language was searched with it as typed">languages: query not translated</span>
   {% endif %}
+  {# THE SEARCH'S KIND, SAID AND ONE TAP FROM CHANGED (docs/notes/
+     fact-fiction-search.md; operator, 2026-11-27): facts leave the literary
+     works out, literature keeps them alone. A filter is the reader's to see
+     and undo (invariant 4): how many it left out, on what basis, and the
+     other kinds a tap away. #}
+  {% if result.kind_applied is defined %}{% set ko = result.left_out or {} %}
+  <span id="search-kind" data-kind="{{ result.kind_applied }}">
+  <span class="badge {{ 'brass' if result.kind_applied != 'all' else '' }}"
+        title="{% for why, n in (ko.by_basis or {}).items() %}{{ n }} {{ why }}{{ '; ' if not loop.last }}{% endfor %}">{{ {'facts': 'facts only', 'literature': 'literature only', 'all': 'facts and literature'}[result.kind_applied] }}{% if result.kind_by == 'the question' %}, by the question{% elif result.kind_by and result.kind_by != 'the reader' %} ({{ result.kind_by }}){% endif %}{% if ko.count %}: {{ ko.count }} {{ ('literary work' if ko.count == 1 else 'literary works') if result.kind_applied == 'facts' else ('other work' if ko.count == 1 else 'other works') }} left out{% endif %}</span>
+  {% for k in ('facts', 'literature', 'all') if k != result.kind_applied %}<button type="button" class="kind-tap" data-kind="{{ k }}">{{ {'facts': 'facts only', 'literature': 'literature only', 'all': 'all'}[k] }}</button>{% endfor %}
+  </span>
+  {% endif %}
 </div>
 {# HISTORY ON REQUEST, NEVER SILENT (operator, 2026-11-16: "Return in the
    answer if a fetch was not successful and why"; app/ask/history.py): every

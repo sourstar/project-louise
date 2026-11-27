@@ -106,7 +106,7 @@ def test_the_search_answer_carries_the_field_and_names_a_failure_to_attach(tmp_p
     monkeypatch.setattr(results, "_layer", lambda c, h: "abstract")
     monkeypatch.setattr(collections_mod, "load_annotations", lambda: [held])
 
-    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None):
+    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None, kind="all"):
         return {"hits": [{"chunk_id": "pubmed:1:0:1", "book_id": 1, "source_collection": "pubmed",
                           "text": "one", "leg_ranks": {"text": 1}, "title": "T1", "lang": "la"}]}
     out = results.search("one", root=tmp_path, run=run)

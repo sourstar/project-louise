@@ -1368,7 +1368,7 @@ def test_the_ask_page_sets_how_many_before_and_after_reranking(client, monkeypat
     seen = {}
 
     def fake_run_search(names, query, k, mode, translate, verify=False, rerank_depth=50,
-                        all_languages=False):
+                        all_languages=False, kind="all"):
         seen.update(k=k, rerank_depth=rerank_depth, all_languages=all_languages)
         return {"hits": [], "timings": {}, "facts": [], "catalog": []}
     monkeypatch.setattr(web.query_service, "run_search", fake_run_search)
@@ -1388,7 +1388,7 @@ def test_the_answers_search_takes_the_same_counts(client, monkeypatch):
     seen = {}
 
     def fake_run_search(names, query, k, mode, translate, verify=False, rerank_depth=50,
-                        all_languages=False):
+                        all_languages=False, kind="all"):
         seen.update(k=k, rerank_depth=rerank_depth)
         return {"hits": [], "timings": {"total": 1.0}, "facts": [], "catalog": []}
     monkeypatch.setattr(api, "_run_search", fake_run_search)

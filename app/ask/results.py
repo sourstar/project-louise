@@ -259,7 +259,7 @@ def search(query: str, *, collections: list[str] | None = None, space: str | Non
            rerank_depth: int = DEFAULT_DEPTH, as_of: str | None = None, freshness: bool = False,
            translate: bool = False, all_languages: bool = False, root: Path | None = None,
            now: float | None = None, run=None, annotations: list[str] | None = None,
-           history: bool = False) -> dict[str, Any]:
+           history: bool = False, kind: str = "auto") -> dict[str, Any]:
     """05 §5.4's `louise_search`: `{lists, facts, unresolved, withheld,
     legs_withheld, translations}`. `run` is query_service.run_search unless
     a test gives another. `annotations`: the annotations collections
@@ -334,7 +334,8 @@ def search(query: str, *, collections: list[str] | None = None, space: str | Non
         result = run(names, query, limit, "hybrid", translate, rerank_depth=rerank_depth,
                      all_languages=all_languages, filters=filters or None,
                      **({"as_of": validity_mod.day_int(day)} if day is not None and by_validity else {}),
-                     **({"annotations": annotations} if annotations is not None else {}))
+                     **({"annotations": annotations} if annotations is not None else {}),
+                     **({"kind": kind} if kind != "all" else {}))
     else:
         # nothing to search — everything withheld, or no collection dated as
         # asked: said so, never a request for "no collections" one layer down
@@ -467,6 +468,10 @@ def search(query: str, *, collections: list[str] | None = None, space: str | Non
         "freshness": fresh_summary,
         "history": history_summary,
         "timings": result.get("timings", {}),
+        # the search's kind and what it left out (docs/notes/fact-fiction-search.md)
+        "kind_applied": result.get("kind_applied", "all"),
+        "kind_by": result.get("kind_by", "the reader"),
+        **({"left_out": result["left_out"]} if "left_out" in result else {}),
     }
     if space_as_collection:
         out["space_read_as_collections"] = space_as_collection

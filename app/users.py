@@ -62,6 +62,9 @@ class User:
     expires: str | None = None       # ISO 8601 UTC; None = never
     revoked: str | None = None       # when it was revoked; None = not
     voice: str | None = None         # the voice the answer is read in; None = the node's
+    #: the phrases that cover the wait (docs/notes/hands-free-voice.md §7): False
+    #: = turned off, the tone instead; None = not chosen, on by default
+    phrases: bool | None = None
 
     def state(self, now: dt.datetime | None = None) -> str:
         if self.revoked:
@@ -73,7 +76,7 @@ class User:
     def public(self, seen: dict[str, str] | None = None) -> dict:
         """What may be shown: everything but the token's hash."""
         return {"name": self.name, "role": self.role, "created": self.created, "expires": self.expires,
-                "revoked": self.revoked, "state": self.state(), "voice": self.voice,
+                "revoked": self.revoked, "state": self.state(), "voice": self.voice, "phrases": self.phrases,
                 "last_seen": (seen or {}).get(self.name)}
 
 
@@ -146,6 +149,8 @@ def _dump(users: list[User]) -> bytes:
             out.append(f"revoked = {_q(u.revoked)}")
         if u.voice:
             out.append(f"voice = {_q(u.voice)}")
+        if u.phrases is not None:
+            out.append(f"phrases = {'true' if u.phrases else 'false'}")
         out.append("")
     return "\n".join(out).encode("utf-8")
 
@@ -162,7 +167,8 @@ def _parse(raw: bytes) -> list[User]:
             raise UserError(f"{path()}: user {row.get('name')!r} has role {role!r}; roles: {', '.join(ROLES)}")
         out.append(User(name=str(row["name"]), role=role, token_sha256=str(row["token_sha256"]),
                         created=str(row.get("created") or ""), expires=row.get("expires") or None,
-                        revoked=row.get("revoked") or None, voice=str(row.get("voice") or "") or None))
+                        revoked=row.get("revoked") or None, voice=str(row.get("voice") or "") or None,
+                        phrases=row["phrases"] if isinstance(row.get("phrases"), bool) else None))
     return out
 
 
@@ -277,6 +283,27 @@ def set_voice(name: str, voice: str | None) -> User:
         i = _index(users, name)
         users[i] = replace(users[i], voice=voice)
         return users[i]
+
+
+def set_phrases(name: str, on: bool | None) -> User:
+    """Whether this user hears the phrases that cover the wait; None: the default (on)."""
+    if on is not None and not isinstance(on, bool):
+        raise UserError("phrases is on or off")
+    with _editing() as users:
+        i = _index(users, name)
+        users[i] = replace(users[i], phrases=on)
+        return users[i]
+
+
+def phrases_of(name: str | None) -> bool | None:
+    """The account's choice of the phrases, None for no account or none made;
+    a users file that does not read gives None, never an error."""
+    if not name:
+        return None
+    try:
+        return next((u.phrases for u in load() if u.name == name), None)
+    except UserError:
+        return None
 
 
 def voice_of(name: str | None) -> str | None:
