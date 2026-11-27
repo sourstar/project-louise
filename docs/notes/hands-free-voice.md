@@ -387,6 +387,15 @@ How it runs:
 ## 9. The steps
 
 1. **Hands-free, the name and the commands** (Decisions 1A, 2A, 3):
+   - *As built (2026-11-27, operator: "Build: 1A, 2A, 3"):* app/voice_wake.py
+     (the name's forms, the commands, continuation, the echo guard: a share
+     of 0.8 of the utterance's words among those read in the last 30 s, never
+     under three words); `POST /ask/voice/heard` (app/web.py); the page's
+     "hands-free" switch beside the microphone (app/static/voice.js
+     "HANDS-FREE"): 300 ms before the first loud window to 1.5 s of quiet,
+     20 s at most, at least 300 ms loud; one clip in flight, a newer one
+     replacing a waiting one (architecture, 2026-11-27); the screen kept on;
+     a tap on the microphone turns it off. Measured next: M1–M4.
    - a hands-free switch beside the microphone;
    - the page keeps the microphone and cuts utterances with its energy
      gate, then `POST /ask/voice/heard`;

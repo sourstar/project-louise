@@ -454,6 +454,11 @@ RESULT_LANGUAGES = (
 )
 
 
+def _wake_default() -> str:
+    from . import voice_wake
+    return voice_wake.DEFAULT_NAME
+
+
 @ask_router.get("/ask", response_class=HTMLResponse)
 def ask_page(request: Request):
     from . import auth, voice
@@ -464,6 +469,8 @@ def ask_page(request: Request):
         # (app/voice.py `offered`): a voice not offered has no button — for a
         # reader who is not an admin, one with no synthetic voice set
         "voice": voice.offered(admin=auth.admin(getattr(request.state, "viewer", None))),
+        # the name hands-free is called by (`[speech] wake_name`; app/voice_wake.py)
+        "wake_name": voice.settings_or_none().wake_name or _wake_default(),
         "result_languages": RESULT_LANGUAGES,
         "default_results": retrieval.DEFAULT_RESULTS,
         "default_rerank_depth": retrieval.RERANK_TOP_N,
@@ -544,6 +551,20 @@ def _filler_reader(request: Request) -> tuple[bool, str | None]:
     return admin, (users.voice_of(auth.account(v)) if admin else None)
 
 
+class FillersAskBody(BaseModel):
+    lang: str = Field("", max_length=16)
+    voice: str | None = Field(None, max_length=512)
+    text: str = Field("", max_length=2000)
+
+
+@ask_router.post("/ask/voice/fillers")
+def ask_voice_fillers_for(request: Request, body: FillersAskBody):
+    """`GET /ask/voice/fillers` for a SPOKEN question, its text in the body —
+    never in the URL, which the access log writes (architecture's read of
+    535b2f68, 5)."""
+    return _fillers_ready(request, body.lang, body.voice, body.text)
+
+
 @ask_router.get("/ask/voice/fillers")
 def ask_voice_fillers(request: Request, lang: str = "", voice: str | None = None):
     """THE PHRASES THAT COVER THE WAIT (docs/notes/hands-free-voice.md §7,
@@ -552,10 +573,18 @@ def ask_voice_fillers(request: Request, lang: str = "", voice: str | None = None
     would be read in (`voice`, the page's choice, counts for an admin only)
     for `lang`, one of the five main languages; another gets none. A pool
     short of a kind is made in the background, and this answers at once
-    with what is ready, possibly nothing (app/fillers.py)."""
-    from . import fillers
+    with what is ready, possibly nothing (app/fillers.py). `text`: the
+    spoken question, when there is one — its own language wins over the
+    page's (operator, 2026-11-27: a question asked in Italian on a browser
+    set to English was covered in English; `speech.language`, no model)."""
+    return _fillers_ready(request, lang, voice, "")
+
+
+def _fillers_ready(request: Request, lang: str, voice: str | None, text: str):
+    from . import fillers, speech
     admin, mine = _filler_reader(request)
-    return fillers.ready(lang, asked=voice, account_voice=mine, admin=admin)
+    said = speech.language(text[:500]) if text else None
+    return fillers.ready(said or lang, asked=voice, account_voice=mine, admin=admin)
 
 
 @ask_router.get("/ask/voice/fillers/{clip_id}")
@@ -1506,6 +1535,112 @@ def _as_question(fn, job, arg):
     from .rage import dispatch
     with dispatch.question():
         return fn(job, arg)
+
+
+#: what the page sends of the sentences just read, for the echo guard
+HEARD_SAID_CHARS = 4000
+#: a clip this long at most (hands-free cuts at 20 s): 16 kHz mono 16-bit
+HEARD_MAX_BYTES = 2 * 1024 * 1024
+#: ONE deadline for a hands-free clip's VAD and STT together, under the
+#: page's 15 s (voice.js HF_CLIP_MAX_MS): the slot is free before the page's
+#: next clip comes (architecture's reads of 394fbc0e, A, and 3e13830d, 2)
+HEARD_DEADLINE_S = 12.0
+#: the pages without an account written down at once, each by its own id
+#: (architecture's read of 3e13830d, 3: two phones in one house)
+HEARD_PAGES_MAX = 4
+#: the viewers whose clip is being written down now: ONE at a time each — a
+#: clip arriving meanwhile answers 429, and the page keeps listening (a slow
+#: STT would otherwise get ~12 calls a page on the shared thread pool)
+_heard_busy: set[str] = set()
+_heard_lock = threading.Lock()
+
+
+@ask_router.post("/ask/voice/heard")
+async def ask_voice_heard(request: Request):
+    """HANDS-FREE, ONE UTTERANCE (docs/notes/hands-free-voice.md step 1;
+    operator, 2026-11-27: 1A, 2A, 3): multipart `file` (the page's 16 kHz
+    WAV), `language` (the page's), `follow` ("1" within the continuation
+    window), `said` (the sentences just read, for the echo guard). The
+    node's VAD and STT write it (app/transcribe.py) and app/voice_wake.py
+    says what it is: `{addressed, command, text}`.
+
+    PRIVACY: an utterance not addressed is answered with no text, and its
+    words are never logged, kept or traced — nor on the error path. The one
+    line a clip writes (`[voice] heard …`) carries its length, the VAD's
+    outcome, the STT's seconds and the outcome: counts München reads by the
+    hour, never words. An addressed utterance keeps the question open
+    (/ask/active's claim); an open microphone alone never does."""
+    from starlette.concurrency import run_in_threadpool
+    from . import transcribe, voice as node_voice, voice_wake
+    from .rage import dispatch
+    if not request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
+        raise HTTPException(400, "the upload is multipart/form-data with a `file` field")
+    try:
+        declared = int(request.headers.get("content-length") or -1)
+    except ValueError:
+        declared = -1
+    if declared < 0:
+        # a chunked upload would be spooled whatever its size: a browser always says it
+        raise HTTPException(411, "a hands-free clip says its Content-Length")
+    if declared > HEARD_MAX_BYTES + HEARD_SAID_CHARS * 4 + 4096:
+        # refused before the form is spooled to disk
+        raise HTTPException(413, f"an utterance is at most {HEARD_MAX_BYTES >> 20} MB")
+    form = await request.form()
+    try:
+        up = form.get("file")
+        if up is None or isinstance(up, str):
+            raise HTTPException(400, "the upload has no `file`")
+        audio = await up.read(HEARD_MAX_BYTES + 1)
+        if len(audio) > HEARD_MAX_BYTES:
+            raise HTTPException(413, f"an utterance is at most {HEARD_MAX_BYTES >> 20} MB")
+        lang = str(form.get("language") or "").strip()[:8]
+        follow = str(form.get("follow") or "") == "1"
+        said = str(form.get("said") or "")[:HEARD_SAID_CHARS]
+        page = re.sub(r"[^A-Za-z0-9-]", "", str(form.get("page") or ""))[:64]
+    finally:
+        await form.close()
+    seconds = max(0.0, (len(audio) - 44) / 32000.0)
+    fields = [("response_format", "json")] + ([("language", lang)] if lang else [])
+    who = _relay_owner(request)
+    if who == "nobody":
+        who = "page:" + (page or "none")             # a reader without an account: each page its own slot
+    with _heard_lock:
+        if who.startswith("page:") and sum(w.startswith("page:") for w in _heard_busy) >= HEARD_PAGES_MAX:
+            print(f"{time.strftime('%H:%M:%S')} [voice] heard {seconds:.1f} s: dropped (the pages' slots taken)",
+                  flush=True)
+            raise HTTPException(429, "the node is writing down as many clips as it takes")
+        if who in _heard_busy:
+            print(f"{time.strftime('%H:%M:%S')} [voice] heard {seconds:.1f} s: dropped (one being written down)",
+                  flush=True)
+            raise HTTPException(429, "this reader's last clip is still being written down")
+        _heard_busy.add(who)
+    try:
+        got = await run_in_threadpool(transcribe.transcribe, audio, "utterance.wav", "audio/wav", fields,
+                                      None, HEARD_DEADLINE_S)
+    finally:
+        with _heard_lock:
+            _heard_busy.discard(who)
+    stt_s = round(sum(d for n, d in got.timing if n == "stt") / 1000.0, 2)
+    vad = got.vad.split(":")[0]
+    if got.status != 200:
+        print(f"{time.strftime('%H:%M:%S')} [voice] heard {seconds:.1f} s, vad {vad}, stt {stt_s} s: "
+              f"failed (HTTP {got.status})", flush=True)
+        raise HTTPException(502, f"the utterance could not be written down (HTTP {got.status})")
+    try:
+        text = str(json.loads(got.body or b"{}").get("text") or "")
+    except ValueError:
+        text = ""
+    out = voice_wake.heard(text, name=node_voice.settings_or_none().wake_name, follow=follow, said=said)
+    outcome = (f"addressed ({out.command or 'question'})" if out.addressed
+               else f"dropped ({out.dropped})")
+    print(f"{time.strftime('%H:%M:%S')} [voice] heard {seconds:.1f} s, vad {vad}, stt {stt_s} s: {outcome}",
+          flush=True)
+    if out.addressed:
+        from . import idle_trim
+        idle_trim.note()                             # a question, for the web's idle clock too
+        with dispatch.question():
+            pass
+    return out.as_dict()
 
 
 @ask_router.post("/ask/active")

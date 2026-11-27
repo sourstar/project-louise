@@ -433,7 +433,7 @@ louise node
   speech show                                                          the Ask page's voice: the speech models as the node resolves them (platform.toml `[speech]`, §7.8),
                                                                        the model server they run on, what the page offers and why not, whether the server lists each
                                                                        model (`GET /v1/models`) (added 2026-11-07, operator)
-  speech set [--stt M] [--vad M] [--tts M] [--voice V]                 the models into `[speech]`, every other line of the file kept; an empty value removes one, and its
+  speech set [--stt M] [--vad M] [--tts M] [--voice V] [--name N]      the models into `[speech]`, every other line of the file kept; an empty value removes one, and its
                                                                        voice is no longer offered; nothing given is exit 2, and a file the result would not load is
                                                                        refused, unchanged (exit 2)
   pins                                                                 the models Louise holds pinned in LocalAI now, with their holders, the restores left failing and the pin failures (state/model-pins.json); read-only (added 2026-11-09)
@@ -1823,6 +1823,21 @@ interactive call is live on the node. `GET /ask/voice/fillers/{id}` → the
 clip's audio (404: gone, in a voice the reader is not read to in, or not
 made under the key the answer would be made under now — the model, its
 steps, the voice's recording and the speech engine, which must be known).
+*Amended 2026-11-27 (operator: "Make ahead"; the spoken question's
+language):* the web asks for every language's pools itself, every 60 s, so
+they are made at idle before anyone asks; `GET /ask/voice/fillers` takes
+`text=` (the spoken question), whose own language wins over `lang`.
+**HANDS-FREE** (*added 2026-11-27*, operator: 1A, 2A, 3;
+docs/notes/hands-free-voice.md step 1): `POST /ask/voice/heard`, multipart
+`file` (the page's 16 kHz WAV of one utterance), `language`, `follow` ("1"
+within the continuation window), `said` (the sentences just read, for the
+echo guard) → `{addressed, command, text}`: `command` is `wait`, `resume`,
+`stop` or `listen` (the name alone), `text` the question without the name.
+An utterance not addressed is answered with no text, and its words are never
+logged, kept or traced; each clip writes one `[voice] heard <s> s, vad …, stt
+<s> s: addressed (…) | dropped (…) | failed (HTTP …)` line, counts only. An
+addressed one keeps the question open; an open microphone does not. The
+name is `[speech] wake_name` (`node speech set --name`; unset, Philippe).
 `POST /ask/voice/fillers/used` `{ids}` (at most 16) → `{removed}`: a clip
 is played once; each reported goes, and its kind is remade from another
 text, as a new synthesis, never a kept clip. The pools are derived data
@@ -2457,6 +2472,8 @@ variable, a file, a log line or a message.
              # A reading's pieces are made at half of it, then 4 more a piece up to it (16, 20, 24, 28, 32;
              # amended 2026-11-26, operator; 7.4); unset, from half the model's own 32, nothing sent at 32.
              # The node's choice, never a reader's: `node speech set --steps N`, or the System page's Models panel
+             # `wake_name` (added 2026-11-27, operator): the name a hands-free reader calls the page by
+             # ("Philippe, …"; docs/notes/hands-free-voice.md); unset, Philippe. `node speech set --name N`
 [certifier]  valid_from = "2026-10-07T00:00:00Z"        # this node as a certifier (09 §9.11): from when its own key certifies, and
              # revoked_at = "…"                          # when it was revoked — the anchor document it serves at
                                                         # /.well-known/louise-certifier.json says so; the collections listed there are

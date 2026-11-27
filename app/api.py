@@ -78,6 +78,10 @@ async def lifespan(app: FastAPI):
     # operator, 2026-10-27): the first question after a restart waited ~65 s
     from . import warmup
     warmup.start()
+    # the phrases that cover a spoken question's wait, made AHEAD for every
+    # language at idle (app/fillers.py `ahead`; operator, 2026-11-27)
+    from . import fillers
+    fillers.start_ahead()
     # the question's own model lines (unloaded before / after the search,
     # loading ahead) into the node's event log, as the worker's are — where
     # an admin's query trace reads them (app/query_trace.py)

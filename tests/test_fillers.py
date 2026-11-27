@@ -707,3 +707,114 @@ def test_the_engine_is_read_from_the_models_config_without_a_load(monkeypatch):
     monkeypatch.setattr(model_load.httpc, "get", lambda url, **kw: (_ for _ in ()).throw(OSError("down")))
     monkeypatch.setattr(model_load, "backend_of", lambda url, model, max_age_s=None: None)
     assert model_load.configured_backend("http://other:8080", "omnivoice-cpp") is None
+
+
+# ---- made AHEAD (operator, 2026-11-27: "Make ahead") ---------------------------------------
+
+def test_ahead_makes_every_language_s_pool_before_anyone_asks(node, tmp_path):
+    """After a deploy or an engine swap every pool is empty, and the first
+    spoken questions played the tone: the web asks for them itself."""
+    assert not _clip_jsons(tmp_path)
+    assert fillers.ahead() == len(fillers.LANGUAGES)
+    node.filled()
+    assert {c.get("language") for c in node.calls} == set(fillers.LANGUAGES), node.calls[:2]
+    assert len(_clip_jsons(tmp_path)) == 2 * len(fillers.LANGUAGES), _clip_jsons(tmp_path)
+    assert len(node.calls) == 2 * len(fillers.LANGUAGES), "one synthesis a kind a language, no more"
+    # full: a second tick makes nothing
+    fillers.ahead()
+    node.filled()
+    assert len(node.calls) == 2 * len(fillers.LANGUAGES)
+
+
+def test_ahead_asks_nothing_without_a_fast_drive_or_a_speech_model(node, monkeypatch):
+    monkeypatch.setattr(fillers, "_root", lambda: None)
+    assert fillers.ahead() == 0 and not node.calls
+
+
+def test_the_ahead_thread_runs_once_a_process_and_is_off_in_the_suite(monkeypatch):
+    assert fillers.start_ahead() is False, "LOUISE_WARMUP=0: the suite's switch"
+    monkeypatch.setenv("LOUISE_WARMUP", "1")
+    ticks = []
+    monkeypatch.setattr(fillers, "ahead", lambda: ticks.append(1) or 0)
+    monkeypatch.setattr(fillers, "AHEAD_S", 0.05)
+    fillers._stop.clear()
+    try:
+        assert fillers.start_ahead(first_s=0.0) is True
+        assert fillers.start_ahead(first_s=0.0) is False, "one a process"
+        import time
+        time.sleep(0.3)
+        assert len(ticks) >= 2
+    finally:
+        fillers._stop.set()
+        fillers._ahead[0].join(2)
+        fillers._stop.clear()
+    assert not fillers._ahead[0].is_alive(), "ended at a stop"
+
+
+def test_the_spoken_question_s_language_picks_the_phrases_not_the_browser_s(node, tmp_path):
+    """Operator, 2026-11-27: the node saw only `lang=en` while the
+    questions were spoken in Italian (the browser's language)."""
+    c = TestClient(api.app)
+    got = c.post("/ask/voice/fillers", json={"lang": "en", "text": "Quando è finita la prima guerra mondiale?"},
+                 headers=ADMIN).json()
+    assert got["lang"] == "it"
+    unsure = c.post("/ask/voice/fillers", json={"lang": "en", "text": "Napoleon"}, headers=ADMIN).json()
+    assert unsure["lang"] == "en", "a text too short to tell: the page's language"
+    # never in the URL (architecture's read of 535b2f68, 5): the GET takes no text
+    assert c.get("/ask/voice/fillers", params={"lang": "en", "text": "Quando è finita la prima guerra mondiale?"},
+                 headers=ADMIN).json()["lang"] == "en"
+
+
+def test_the_page_sends_the_spoken_question_with_its_ask_for_phrases():
+    page = (Path(__file__).parent.parent / "app" / "static" / "voice.js").read_text(encoding="utf-8")
+    assert "prefetchFillers(dictated || '').then(() => { if (cue === c) playCue('short'); });" in page
+    assert "'&text='" not in page, "the question's text is never put in a URL"
+    assert "body: JSON.stringify({ lang, voice: voice || null, text: text.slice(0, 500) })" in page
+
+
+def test_the_waiting_tone_is_loud_enough_to_hear_and_the_ready_ping_keeps_its_level():
+    """Operator, 2026-11-27: "either the tone was very low or it did not play"."""
+    import re
+    page = (Path(__file__).parent.parent / "app" / "static" / "voice.js").read_text(encoding="utf-8")
+    cue = re.search(r"CUE_TONE_HZ = (\d+), CUE_TONE_MS = (\d+), CUE_TONE_GAIN = ([\d.]+);", page)
+    assert cue and float(cue.group(3)) >= 0.3 and int(cue.group(2)) >= 250
+    assert "linearRampToValueAtTime(CUE_TONE_GAIN" in page, "the waiting tone plays at its own level"
+    assert "TONE_MS = 160, TONE_HZ = 880, TONE_GAIN = 0.12;" in page, "the microphone's ping: unchanged"
+
+
+def test_ahead_never_loads_the_speech_model(node):
+    """Architecture's read of 535b2f68, 1: the keeper preloads it, and may
+    evict it; ahead makes nothing until a reader's question loaded it."""
+    node.engine[0] = None
+    assert fillers.ahead() == 0 and not node.calls
+
+
+def test_a_model_that_fails_is_asked_by_ahead_at_a_doubling_backoff(node, monkeypatch):
+    """Probe: a 500 from the model gave 15 calls and 15 warns in three
+    ticks. The operator's default: 60 s, 2 min, 4 min … 1 h per pool, one
+    warn an episode, a success resetting it."""
+    clock = [1000.0]
+    monkeypatch.setattr(fillers.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(fillers, "RETRY_AFTER_S", 0.0)
+    node.status = 500
+    warns = lambda: [t for lv, t in node.lines if lv == "warn" and "not made" in t]  # noqa: E731
+
+    def tick(at):
+        clock[0] = 1000.0 + at
+        before = len(node.calls)
+        fillers.ahead()
+        node.filled()
+        return len(node.calls) > before
+    made = [at for at in range(0, 60 * 16, 30) if tick(at)]
+    # asked at 0, then 60 s after, then 120 s after that, then 240 s …
+    assert made == [0, 60, 180, 420, 900], made
+    assert len({w for w in warns()}) == len(warns()) and len(warns()) == len(fillers.LANGUAGES), \
+        "one line an episode a pool"
+    w = next(iter(fillers._ahead_failed))
+    assert fillers._ahead_failed[w][1] == 960.0
+    node.status = 200                                   # the model works again
+    clock[0] += 960.0
+    fillers.ahead()
+    node.filled()
+    assert not fillers._ahead_failed, "a success resets the backoff"
+    assert all(d <= fillers.AHEAD_BACKOFF_MAX_S for _, d in fillers._ahead_failed.values())
