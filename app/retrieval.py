@@ -1086,7 +1086,7 @@ FTS_THREADS = max(2, min(16, os.cpu_count() or 4))
 def _search_one_collection(con, collection, query: str, k: int, mode: str, translate: bool,
                             entity_ids: list[str], plan: LanguagePlan | None = None,
                             depth: int = 0, book_ids: set[int] | None = None,
-                            as_of: int | None = None) -> dict:
+                            as_of: int | None = None, kind="all") -> dict:
     """catalog + fts fan-out + dense + intra-collection RRF —
     the per-collection core, extracted so search() (one collection) and
     federated_search() (N collections) share identical logic. `plan` is the
@@ -1094,8 +1094,13 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
     this collection plans alone. Each leg goes at least `depth` deep, so a
     reranker asked for its top N has N candidates to order. `entity_ids`,
     the entities the query names, change no rank and restrict nothing
-    (05 §5.2, amended 2026-10-25); the `keys` filter arrives as `book_ids`. Returns
-    {"catalog", "merged", "translations", "timings", "scope"}."""
+    (05 §5.2, amended 2026-10-25); the `keys` filter arrives as `book_ids`.
+    `kind` (fact-fiction-search.md): where it may thin this collection's legs
+    they are fetched `OVERFETCH` deeper, then each leg is filtered and cut
+    back to its normal depth BEFORE the fusion — so all is today's search
+    exactly, and facts or literature fuse what the filter kept at that depth.
+    Returns {"catalog", "merged", "translations", "timings", "scope",
+    "kind_applied", "kind_by", "left_out"}."""
     timings: dict[str, float] = {}
     vector_leg: str | None = None      # why the vector leg was withheld, if it was
     scope = db.get_scope(con)
@@ -1121,13 +1126,17 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
     if window:
         restrict = dict(restrict, validity=window)
 
+    limit = max(k, depth, 20)
+    # deeper where the search's kind may thin the legs (fact-fiction-search.md
+    # §3), a kind still being decided included: the legs do not wait for it
+    fetch = limit * (work_kind_mod.OVERFETCH if _kind_may_thin(collection, kind) else 1)
     # A leg starts only while the caller is still there (app/cancel.py).
     cancel.checkpoint()
     t0 = time.time()
     # as deep as the text leg's other variants: it is one of them (§5.1)
     text_why = None
     catalog_hits, catalog_why = (
-        catalog_leg(con, core, limit=max(k, depth, 20), langs=limited_langs(collection, plan.only),
+        catalog_leg(con, core, limit=fetch, langs=limited_langs(collection, plan.only),
                     collection=collection)
         if mode in ("hybrid", "catalog") else ([], None))
     if book_ids:
@@ -1141,7 +1150,6 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
 
     lists: list[list[dict]] = []
     own: set[int] = set()              # the lists run with the query as typed
-    limit = max(k, depth, 20)
     if mode in ("hybrid", "fts"):
         t0 = time.time()
         # 05 §5.2 (amended 2026-10-10): the main languages, the query's own,
@@ -1170,7 +1178,7 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
             # deep enough to hold `limit` RECORDS, not chunks (05 §5.1,
             # amended 2026-10-10: app/leg_depth.py)
             try:
-                return fts.search_records(group, q, limit, collection=collection,
+                return fts.search_records(group, q, fetch, collection=collection,
                                           langs=plan.lang_filter(group), raise_errors=True, **restrict)
             except fts.TextLegError as e:
                 text_failed.setdefault(group, str(e))
@@ -1198,7 +1206,7 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
             # limited to some (fts.search_names) — longest name, then most
             # linked, first. A list of the text leg, as the catalogue's is.
             cancel.checkpoint()
-            by_name = fts.search_names(collection, core, limit, langs=list(plan.only) or None, **restrict)
+            by_name = fts.search_names(collection, core, fetch, langs=list(plan.only) or None, **restrict)
             if by_name:
                 own.add(len(lists))
                 lists.append(by_name)
@@ -1250,7 +1258,7 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
                 # s at most, on wikipedia); a post-filter would return an
                 # empty leg whenever the top k were in other languages
                 if vector_leg is None:
-                    lists.append(embeddings.search_records(core, limit, collection=collection,
+                    lists.append(embeddings.search_records(core, fetch, collection=collection,
                                                            langs=list(limited_langs(collection, plan.only)) or None,
                                                            **restrict))
         except (hold_runs.RunUnvalidated, hold_runs.RunRefused) as e:
@@ -1285,6 +1293,11 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
             db.log_event(con, "warn", "dense", f"dense search failed: {e}")
         timings["dense"] = round((time.time() - t0) * 1000, 1)
 
+    # the search's kind, leg by leg, before the fusion (architecture's read of
+    # 2643e7d8, 2): every leg cut back to its normal depth
+    kind_applied, kind_by = _kind_now(kind)
+    lists, catalog_hits, left_out = _legs_of_kind(con, collection, kind_applied, lists, catalog_hits,
+                                                  limit, fetch)
     merged = _merge_rrf(lists, limit, own=own, query_lang=getattr(plan, "query_lang", None))
     # what the reranker will read above each candidate's chunks (05 §5.6)
     if collections_mod.reranker_for(collection) is not None:
@@ -1300,7 +1313,8 @@ def _search_one_collection(con, collection, query: str, k: int, mode: str, trans
     return {"catalog": catalog_hits[:CATALOG_PROMPT], "merged": merged, "translations": plan.translations,
             "timings": timings, "scope": scope, "vector_leg": vector_leg,
             "catalog_leg": catalog_why, "text_leg": text_why,
-            "filtered": len(book_ids) if book_ids is not None else None}
+            "filtered": len(book_ids) if book_ids is not None else None,
+            "kind_applied": kind_applied, "kind_by": kind_by, "left_out": left_out}
 
 
 def _leg_withheld(collection, reason: str, leg: str = "vector") -> dict:
@@ -1546,17 +1560,19 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
     plan = language_plan.plan(query, [collection], translate, every=all_languages)
     plan_ms = round((time.time() - t0) * 1000, 1)
     _begin_kind(kind)
+    # the search's kind (docs/notes/fact-fiction-search.md): what it leaves
+    # out goes leg by leg, before the fusion and the rerank, and the result
+    # says how many and why. A search that asks no kind calls the legs as before.
     partial = _search_one_collection(con, collection, query, k, mode, translate,
-                                     [e.entity_id for e in resolved], plan,
-                                     _leg_depth(collection, kind, rerank_depth),
+                                     [e.entity_id for e in resolved], plan, rerank_depth,
                                      **({"book_ids": book_ids} if book_ids is not None else {}),
-                                     **({"as_of": as_of} if as_of is not None else {}))
+                                     **({"as_of": as_of} if as_of is not None else {}),
+                                     **({"kind": kind} if kind != "all" else {}))
     timings = {"languages": plan_ms, **partial["timings"]}
-    # the search's kind (docs/notes/fact-fiction-search.md): the candidates
-    # it leaves out go BEFORE the rerank, and the result says how many and why
     want = max(k * 4, rerank_depth)
-    kind, kind_by = _kind_now(kind)
-    merged, left_out = work_kind_mod.filter_candidates(con, collection, partial["merged"], kind, want)
+    kind, kind_by = partial.get("kind_applied", "all"), partial.get("kind_by", "the reader")
+    left_out = partial.get("left_out") or {"count": 0, "by_basis": {}}
+    merged = partial["merged"]
 
     cancel.checkpoint()
     t0 = time.time()
@@ -1627,21 +1643,57 @@ def _kind_now(kind) -> tuple[str, str]:
     return (got, by) if got in ("facts", "literature") else ("all", by)
 
 
-def _leg_depth(collection, kind, rerank_depth: int) -> int:
-    """How deep a collection's legs go: the rerank depth, `OVERFETCH` times
-    that where the search's kind may thin them (fact-fiction-search.md §3) —
-    a kind still being decided may, since the legs do not wait for it."""
-    thins = (work_kind_mod.classified(collection) if callable(kind)
-             else work_kind_mod.filters(collection, kind))
-    return rerank_depth * (work_kind_mod.OVERFETCH if thins else 1)
+def _kind_may_thin(collection, kind) -> bool:
+    """Whether the search's kind may thin this collection's legs: a kind
+    still being decided may, since the legs do not wait for it."""
+    return (work_kind_mod.classified(collection) if callable(kind)
+            else work_kind_mod.filters(collection, kind))
 
 
-def _federated_want(n: int, k: int, rerank_depth: int) -> int:
-    """The candidates one collection's list keeps for the reranker: what the
-    federation's cut and the rerank's slice below would take of it."""
-    cut = max(config.FEDERATION_CANDIDATE_BUDGET, rerank_depth) if n > 1 else None
-    want = max(k * 4, rerank_depth)
-    return want if cut is None else min(cut, want)
+def _legs_of_kind(con, collection, kind: str, lists: list[list[dict]], catalog_hits: list[dict],
+                  limit: int, fetch: int) -> tuple[list[list[dict]], list[dict], dict]:
+    """Each leg (and the catalogue's matches) of `kind`, cut back to the
+    normal depth `limit`: for all that is exactly today's legs, whatever
+    depth they were fetched at. What is counted as left out is the records,
+    once each, the normal-depth legs (and the catalogue) would have given."""
+    if kind not in ("facts", "literature"):
+        return ([lst[:limit] for lst in lists] if fetch != limit else lists), catalog_hits, \
+            {"count": 0, "by_basis": {}}
+    pool = [h for lst in lists for h in lst] + list(catalog_hits)
+    left: dict = {"count": 0, "by_basis": {}}
+    if not work_kind_mod.classified(collection):
+        if kind == "facts":
+            return lists, catalog_hits, left
+        gone = {h.get("book_id") for lst in lists for h in lst[:limit]} | {h.get("book_id") for h in catalog_hits}
+        gone.discard(None)
+        n = len(gone)
+        if n:
+            left = {"count": n, "by_basis": {"no literary works in this collection": n}}
+        return [[] for _ in lists], [], left
+    kinds = work_kind_mod.kinds_of(con, collection, (h["book_id"] for h in pool if h.get("book_id") is not None))
+    why_of: dict = {}
+
+    def keep(h) -> bool:
+        k_, basis = kinds.get(h.get("book_id"), (None, None))
+        if work_kind_mod.keep(kind, k_):
+            return True
+        why_of.setdefault(h.get("book_id"), basis or "no literary verdict in its record")
+        return False
+    seen_out: set = set()
+    for lst in lists:
+        for h in lst[:limit]:
+            if not keep(h):
+                seen_out.add(h.get("book_id"))
+    for h in catalog_hits:
+        if not keep(h):
+            seen_out.add(h.get("book_id"))
+    out_lists = [[h for h in lst if keep(h)][:limit] for lst in lists]
+    out_catalog = [h for h in catalog_hits if keep(h)]
+    for b in seen_out:
+        why = why_of[b]
+        left["count"] += 1
+        left["by_basis"][why] = left["by_basis"].get(why, 0) + 1
+    return out_lists, out_catalog, left
 
 
 def _merge_rrf_federated(lists: list[list[dict]]) -> list[dict]:
@@ -1763,14 +1815,13 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
             return collection, None, e
         try:
             admitted = book_ids_for(collection) if book_ids_for else None
+            # the search's kind, leg by leg before the fusion (fact-fiction-search.md)
             partial = _search_one_collection(con, collection, query, k, mode, translate,
-                                              entity_ids, plan, _leg_depth(collection, kind, rerank_depth),
+                                              entity_ids, plan, rerank_depth,
                                               **({"book_ids": admitted} if admitted is not None else {}),
-                                              **({"as_of": as_of} if as_of is not None else {}))
-            # the search's kind, before the cut and the rerank (fact-fiction-search.md)
-            partial["merged"], partial["left_out"] = work_kind_mod.filter_candidates(
-                con, collection, partial["merged"], _kind_now(kind)[0],
-                _federated_want(len(collections), k, rerank_depth))
+                                              **({"as_of": as_of} if as_of is not None else {}),
+                                              **({"kind": kind} if kind != "all" else {}))
+            partial.setdefault("left_out", {"count": 0, "by_basis": {}})
             for h in partial["merged"]:
                 h["source_collection"] = collection.name
             return collection, partial, None

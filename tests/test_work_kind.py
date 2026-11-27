@@ -101,15 +101,20 @@ def test_what_each_kind_of_search_keeps(asked, kind, keep):
 
 
 def test_the_filter_reads_the_candidates_kinds_and_says_what_it_left_out(isolated_config, tmp_path):
+    from app import retrieval
     c, con = _staged(tmp_path)
     cands = [{"book_id": 2600}, {"book_id": 5}, {"book_id": 151}]
-    kept, left = work_kind.filter_candidates(con, c, cands, "facts")
+
+    def legs(kind, coll=c, conn=con):
+        lists, catalog, left = retrieval._legs_of_kind(conn, coll, kind, [list(cands)], [], 50, 50)
+        return lists[0], left
+    kept, left = legs("facts")
     assert [h["book_id"] for h in kept] == [5]
     assert left == {"count": 2, "by_basis": {"by its subject headings": 1, "by its Gutenberg category": 1}}
-    kept, left = work_kind.filter_candidates(con, c, cands, "literature")
+    kept, left = legs("literature")
     assert [h["book_id"] for h in kept] == [2600, 151] and left["count"] == 1
-    assert work_kind.filter_candidates(con, c, cands, "all") == (cands, {"count": 0, "by_basis": {}})
+    assert legs("all") == (cands, {"count": 0, "by_basis": {}})
     other = SimpleNamespace(plugin="eurlex")
-    assert work_kind.filter_candidates(None, other, cands, "facts")[0] == cands, "no kind: facts"
-    kept, left = work_kind.filter_candidates(None, other, cands, "literature")
+    assert legs("facts", other, None)[0] == cands, "no kind: facts"
+    kept, left = legs("literature", other, None)
     assert kept == [] and left["count"] == 3

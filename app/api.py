@@ -1449,6 +1449,28 @@ def _answer_messages(body: ChatBody, query: str, result: dict,
     return p.messages
 
 
+def louise_kind(result: dict) -> dict:
+    """The search's kind as every /v1 answer carries it (architecture's read
+    of 2643e7d8, 3: a filter nobody can see is what invariant 4 forbids):
+    {applied, by, left_out: {count, by_basis}}."""
+    return {"applied": result.get("kind_applied", "all"), "by": result.get("kind_by", "the reader"),
+            "left_out": result.get("left_out") or {"count": 0, "by_basis": {}}}
+
+
+def kind_note(result: dict) -> str:
+    """What the answer says when its search's kind left out everything it
+    found, as the page's chip would; "" otherwise."""
+    k = louise_kind(result)
+    n = k["left_out"]["count"]
+    if result.get("hits") or not n or k["applied"] not in ("facts", "literature"):
+        return ""
+    if k["applied"] == "facts":
+        return (f"[facts only: this search left out {n} literary work{'s' if n != 1 else ''} and found "
+                f"nothing else — ask again for literature, or for all]")
+    return (f"[literature only: this search left out {n} other work{'s' if n != 1 else ''} and found "
+            f"no literary work — ask again for facts, or for all]")
+
+
 def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None):
     con = _con()   # query_log lives in the default collection's manifest regardless
     prompt = _fit_answer(body, query, result)
@@ -1472,6 +1494,9 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
         # "[3] [4]", not "[3][4]": a client's markdown cleaning reads a pair
         # as a reference link and speaks a number (app/speech.py)
         answer = speech.spaced_citations(text)
+        note = kind_note(result)
+        if note:
+            answer = f"{note}\n\n{answer}"
         _log_reads(con, reads)
         result["timings"]["llm"] = round((time.time() - t0) * 1000 - result["timings"]["total"], 1)
         result["timings"]["total"] = round((time.time() - t0) * 1000, 1)
@@ -1482,6 +1507,7 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
             "model": body.model,
             "choices": [{"index": 0, "finish_reason": "stop",
                          "message": {"role": "assistant", "content": answer}}],
+            "louise_kind": louise_kind(result),
         }
         if body.sources:
             out["louise_sources"] = source_entries(result["hits"], reads, prompt.used)
@@ -1505,6 +1531,9 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
         tail = ""        # the text so far, for a citation pair split across two deltas
         failed = None
         try:
+            note = kind_note(result)
+            if note:
+                yield chunk(note + "\n\n")
             for kind, value in parts:
                 if kind == "sources":
                     # before the first word: an OpenAI client ignores the extra key
@@ -1537,7 +1566,9 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
                         "louise_pdf": value}) + "\n\n"
             done = {"id": rid, "object": "chat.completion.chunk",
                     "created": int(time.time()), "model": body.model,
-                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    # the search's kind, on the final chunk whatever `sources` says
+                    "louise_kind": louise_kind(result)}
             yield f"data: {json.dumps(done)}\n\n"
             yield "data: [DONE]\n\n"
         except BaseException as e:

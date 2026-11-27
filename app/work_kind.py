@@ -129,20 +129,26 @@ def maintain(con, collection, *, may_continue=lambda: True, budget_s: float | No
 CHUNK = 500
 
 
-def kinds_of(con, collection, book_ids: Iterable[int]) -> dict[int, tuple[str, str | None]]:
-    """{book_id: (kind, basis)} of the candidates that have a kind — read for
-    them alone (`native_id IN (…)`, the (source, native_id) key), never a scan."""
+def kinds_of(con, collection, book_ids: Iterable[int]) -> dict[int, tuple[str | None, str | None]]:
+    """{book_id: (kind, basis)} of the candidates — read for them alone
+    (`native_id IN (…)`, the (source, native_id) key), never a scan. THE
+    COLUMN IS A CACHE, THE READ IS THE TRUTH (architecture's read of
+    2643e7d8, 1): a row the maintainer has not walked for this rules version
+    — every row after the ALTER, every row after a bump, every row of a
+    node whose maintainer does not run (query mode, acquire-only, paused) —
+    has its verdict computed here, from its own subjects and shelves."""
     if not classified(collection):
         return {}
     ids = [str(i) for i in dict.fromkeys(book_ids)]
-    out: dict[int, tuple[str, str | None]] = {}
+    out: dict[int, tuple[str | None, str | None]] = {}
     for i in range(0, len(ids), CHUNK):
         part = ids[i:i + CHUNK]
         for r in con.execute(
-                f"SELECT native_id, work_kind, work_kind_basis FROM documents WHERE source=? "
-                f"AND native_id IN ({','.join('?' * len(part))}) AND work_kind IS NOT NULL",
+                f"SELECT native_id, work_kind, work_kind_basis, work_kind_v, subjects, bookshelves "
+                f"FROM documents WHERE source=? AND native_id IN ({','.join('?' * len(part))})",
                 [collection.plugin] + part):
-            out[int(r[0])] = (r[1], r[2])
+            kind, basis = (r[1], r[2]) if r[3] == RULES_VERSION else compute(r[4], r[5])
+            out[int(r[0])] = (kind, basis)
     return out
 
 
@@ -168,42 +174,9 @@ OVERFETCH = 2
 
 def filters(collection, kind_asked: str) -> bool:
     """Whether a `kind_asked` search thins this collection's legs (and so
-    fetches them `OVERFETCH` deeper)."""
+    fetches them `OVERFETCH` deeper; app/retrieval.py `_legs_of_kind` filters
+    them and cuts them back to their normal depth before the fusion)."""
     return kind_asked in ("facts", "literature") and classified(collection)
-
-
-def filter_candidates(con, collection, candidates: list[dict], kind_asked: str,
-                      want: int | None = None) -> tuple[list[dict], dict[str, Any]]:
-    """The candidates a `kind_asked` search keeps, in their order, and what
-    was left out: {count, by_basis}. With `want`, the walk stops once that
-    many are kept: what is counted as left out is what the reranker would
-    have seen, not what the deeper legs brought. A collection whose records
-    carry no kind counts as facts (decision 3): kept by facts, left out of
-    literature."""
-    left: dict[str, Any] = {"count": 0, "by_basis": {}}
-    if kind_asked not in ("facts", "literature"):
-        return candidates, left
-    if not classified(collection):
-        if kind_asked == "literature":
-            n = len(candidates) if want is None else min(len(candidates), want)
-            left["count"] = n
-            if n:
-                left["by_basis"]["no literary works in this collection"] = n
-            return [], left
-        return candidates, left
-    kinds = kinds_of(con, collection, (h.get("book_id") for h in candidates if h.get("book_id") is not None))
-    kept = []
-    for h in candidates:
-        if want is not None and len(kept) >= want:
-            break
-        kind, basis = kinds.get(h.get("book_id"), (None, None))
-        if keep(kind_asked, kind):
-            kept.append(h)
-        else:
-            left["count"] += 1
-            why = basis or "no literary verdict in its record"
-            left["by_basis"][why] = left["by_basis"].get(why, 0) + 1
-    return kept, left
 
 
 def add_left(total: dict[str, Any], one: dict[str, Any]) -> dict[str, Any]:

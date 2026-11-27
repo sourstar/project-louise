@@ -54,6 +54,18 @@ SHOTS = (
 )
 
 
+def _remember(query: str, fut: Future) -> None:
+    """An answer kept per question, whenever it arrives (a failure is not)."""
+    if fut.cancelled() or fut.exception() is not None:
+        return
+    got = fut.result()
+    if got in KINDS:
+        with _lock:
+            if query not in _cache and len(_cache) >= _CACHE_MAX:
+                _cache.pop(next(iter(_cache)))
+            _cache[query] = got
+
+
 def reset() -> None:
     with _lock:
         _cache.clear()
@@ -93,6 +105,10 @@ def start(query: str) -> Callable[[], tuple[str, str]]:
         return lambda: (hit, "the question")
     deadline = time.monotonic() + TIMEOUT_S
     fut: Future = _pool.submit(ask, query)
+    # A LATE ANSWER IS REMEMBERED (architecture's read of 2643e7d8, 4): with a
+    # chat model slower than the bound, this search goes on as all, and the
+    # next one with the same question has its kind
+    fut.add_done_callback(lambda f: _remember(query, f))
     done: list[tuple[str, str]] = []
     once = threading.Lock()
 
@@ -103,12 +119,11 @@ def start(query: str) -> Callable[[], tuple[str, str]]:
             try:
                 got = fut.result(timeout=max(0.0, deadline - time.monotonic()))
             except Exception:
+                # a call still queued behind another never runs: it would
+                # compete with real answers on the one chat model
+                fut.cancel()
                 got = "late"
             if got in KINDS:
-                with _lock:
-                    if len(_cache) >= _CACHE_MAX:
-                        _cache.pop(next(iter(_cache)))
-                    _cache[query] = got
                 done.append((got, "the question"))
             else:
                 done.append(("all", "not decided in time" if got == "late" else "not decided"))

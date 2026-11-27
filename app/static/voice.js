@@ -1238,7 +1238,16 @@
         const url = await r.items[i].p;
         if (reading !== r) return;
         // the phrase that covers the wait plays to its end first, never cut
-        if (cue && cue.playing) await Promise.race([cue.playing, new Promise(ok => setTimeout(ok, cueBound()))]);
+        if (cue && cue.playing) {
+          // the bound won (a phrase paused past it, one that never ends): the
+          // phrase is ENDED, its handlers off the shared player — else play()
+          // took the player under it, `cue.playing` never settled, and every
+          // later sentence waited the bound (architecture's read of 2643e7d8, 5)
+          let settled = false;
+          const c = cue;
+          await Promise.race([c.playing.then(() => { settled = true; }), new Promise(ok => setTimeout(ok, cueBound()))]);
+          if (!settled && cue === c) endCue();
+        }
         if (reading !== r) return;
         await whilePaused(r);
         if (reading !== r) return;
