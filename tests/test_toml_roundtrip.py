@@ -250,6 +250,10 @@ _UNPOPULATED: dict[str, str] = {
                    "never a file key",
     "method": "an annotations collection's key alone (07 §7.8, 2026-11-12), refused in a records "
               "collection's file; its round trip is tests/hold/test_annotation_methods.py's",
+    "acquire_by": "derived at load by the one-acquirer rule over what else is held "
+                  "(collections._one_acquirer, 2026-11-27): a sister's ancestor acquiring her folder; "
+                  "never a file key, and one collection alone has no ancestor to name; its tests are "
+                  "tests/hold/test_collection_new_sister.py's",
 }
 
 
