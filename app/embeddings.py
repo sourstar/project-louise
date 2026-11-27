@@ -3173,7 +3173,10 @@ def search_records(query: str, depth: int, langs: list[str] | None = None, colle
     short asks again at twice that, bounded."""
     from . import leg_depth
     return leg_depth.to_records(
-        lambda n: search(query, k=n, langs=langs, collection=collection, vector=vector, kept=kept, **restrict),
+        # a search that asks nothing of the vector calls `search` as before
+        lambda n: search(query, k=n, langs=langs, collection=collection,
+                         **({"vector": vector} if vector is not None else {}),
+                         **({"kept": kept} if kept is not None else {}), **restrict),
         depth, first=2 * depth)
 
 
