@@ -301,6 +301,17 @@ latency (p50, p95, warm) and the largest difference of calibrated relevance. And
 judged quality, both arms on the same lists: `rerank_bench rerank` per arm, then
 `rerank_bench score --arms OV,LC --base OV`.
 
+**The first run (München, 2026-11-27, 48 questions × 50 documents, FA off).** Order
+identical (same first 48 of 48, top-10 share 1.0, tau 0.997); the candidate the same bits
+reversed, seven at a time and over three fresh loads; the largest score difference
+0.0102, over the proposed 0.01; 50 documents in 309 ms (p50) against OpenVINO's 112 ms,
+2.8× slower. The 0.01 was a line drawn before any run. OpenVINO on the card is not the
+model either (its GPU plugin computes in f16 by default), so the delta is read next against
+the model's own scores (`--torch-cross <the cross-encoder's HF snapshot>`: transformers,
+float32, CPU, the card's pair tokenization) and the line becomes: the candidate no farther
+from the model than OpenVINO is, or within 0.01. Said here as a revision made AFTER the
+first result, and why.
+
 **The calibration's name.** A calibration names the model it was fitted for, and under
 another name it is not used: the merge falls back to rank (`merge_withheld`). Either the
 model keeps its name (`louise-rerank-medcpt`, its backend moved) and its calibration

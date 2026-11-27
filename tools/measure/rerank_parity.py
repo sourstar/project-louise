@@ -26,6 +26,17 @@ p50 and p95. `--calibration A,B`: the collection's Platt calibration
 (app/collections.py `Calibration`) applied to both, the largest difference of
 calibrated relevance.
 
+THE MODEL'S OWN SCORES (`--torch-cross <hf snapshot>`, a cross-encoder): the
+same lists scored as the model card scores them - transformers'
+AutoModelForSequenceClassification, float32 on the CPU, the pair tokenized
+(query, document) with truncation to 512, the logit's sigmoid - so each
+engine's distance to the model is read, not only their distance to each
+other. Then the delta line asks the candidate to be no farther from the model
+than the reference is (or within MAX_DELTA of it): an engine is held to the
+model, not to the error of the engine it replaces (2026-11-27: llama.cpp
+against OpenVINO on the card 0.0102, over the first line, measured before the
+model's own scores were in the run).
+
 THE PASS LINES ARE PROPOSED here, not measured before (measuring.md: say
 which): the first document the same for every query; the median top-10 share
 >= 0.9; the largest score difference <= 0.01; the candidate reproducing itself
@@ -67,6 +78,8 @@ class QueryResult:
     candidate_ms: float = 0.0
     reference_ms: float = 0.0
     max_calibrated_delta: float | None = None
+    candidate_vs_model: float | None = None
+    reference_vs_model: float | None = None
     notes: list[str] = field(default_factory=list)
 
 
@@ -128,11 +141,18 @@ def verdict(results: Sequence[QueryResult]) -> dict[str, Any]:
     cal = [r.max_calibrated_delta for r in results if r.max_calibrated_delta is not None]
     if cal:
         out["max_calibrated_delta"] = max(cal)
+    delta_ok = out["max_abs_delta"] is not None and out["max_abs_delta"] <= MAX_DELTA
+    if results and all(r.candidate_vs_model is not None for r in results):
+        out["candidate_vs_model"] = max(r.candidate_vs_model for r in results)
+        out["reference_vs_model"] = max(r.reference_vs_model for r in results)
+        # held to the model: no farther from it than the engine it replaces, or within the line
+        delta_ok = out["candidate_vs_model"] <= max(out["reference_vs_model"], MAX_DELTA)
     out["pass"] = (bool(results) and out["same_top1"] == 1.0 and out["median_top10_share"] >= MIN_TOP10_SHARE
-                   and out["max_abs_delta"] is not None and out["max_abs_delta"] <= MAX_DELTA
-                   and out["candidate_reproduces"])
+                   and delta_ok and out["candidate_reproduces"])
     out["lines"] = {"same_top1": 1.0, "median_top10_share": MIN_TOP10_SHARE, "max_abs_delta": MAX_DELTA,
                     "candidate_reproduces": True, "status": "proposed, not measured before"}
+    if "candidate_vs_model" in out:
+        out["lines"]["delta"] = "candidate_vs_model <= max(reference_vs_model, the max_abs_delta line)"
     return out
 
 
@@ -150,7 +170,8 @@ def in_pieces(score: Scorer, query: str, docs: list[str], k: int) -> list[float]
 
 
 def run(pairs: list[dict[str, Any]], reference: Scorer, candidate: Scorer, *, loads: int = 1, cut_by: int = 0,
-        reload: Callable[[], None] | None = None, calibration: tuple[float, float] | None = None) -> list[QueryResult]:
+        reload: Callable[[], None] | None = None, calibration: tuple[float, float] | None = None,
+        model: Scorer | None = None) -> list[QueryResult]:
     """Every query asked of both; the candidate's reruns asked as `compare` reads them. The fresh loads come after
     the first pass: `reload()` unloads the candidate, and each query's first answer after it is that load's."""
     docs_of = [[cut(d) for d in p["documents"]] for p in pairs]
@@ -174,11 +195,34 @@ def run(pairs: list[dict[str, Any]], reference: Scorer, candidate: Scorer, *, lo
         for p, docs, extra in zip(pairs, docs_of, reruns):
             extra[f"load {n}"] = candidate(p["query"], docs)
     results = []
-    for p, ref, cand, extra, mc, mr in zip(pairs, refs, firsts, reruns, ms_c, ms_r):
+    for p, docs, ref, cand, extra, mc, mr in zip(pairs, docs_of, refs, firsts, reruns, ms_c, ms_r):
         r = compare(p["query"], ref, cand, extra, calibration)
         r.candidate_ms, r.reference_ms = round(mc, 1), round(mr, 1)
+        if model is not None:
+            truth = model(p["query"], docs)
+            r.candidate_vs_model = round(max(abs(x - y) for x, y in zip(cand, truth)), 6)
+            r.reference_vs_model = round(max(abs(x - y) for x, y in zip(ref, truth)), 6)
         results.append(r)
     return results
+
+
+def cross_encoder_scorer(hf_dir: str, max_length: int = 512) -> Scorer:
+    '''The model card's own scoring of a cross-encoder: float32 on the CPU, one pair at a time, the logit's sigmoid
+    (as `rerank_score:sigmoid` and the OpenVINO backend answer).'''
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    torch.use_deterministic_algorithms(True)
+    tok = AutoTokenizer.from_pretrained(hf_dir)
+    m = AutoModelForSequenceClassification.from_pretrained(hf_dir, torch_dtype=torch.float32).eval()
+
+    def score(query: str, docs: list[str]) -> list[float]:
+        out = []
+        with torch.inference_mode():
+            for d in docs:
+                enc = tok([[query, d]], truncation=True, max_length=max_length, return_tensors="pt")
+                out.append(platt(1.0, 0.0, float(m(**enc).logits.view(-1)[0])))
+        return out
+    return score
 
 
 def unloader(url: str, model: str, timeout: float = 120.0) -> Callable[[], None]:
@@ -204,12 +248,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--loads", type=int, default=3, help="fresh loads of the candidate, the first included")
     ap.add_argument("--cut", type=int, default=7, help="also send the documents this many at a time (0: not)")
     ap.add_argument("--calibration", help="A,B: the collection's Platt calibration, applied to both")
+    ap.add_argument("--torch-cross", help="the cross-encoder's HF snapshot: the model's own scores beside both")
     ap.add_argument("--out", type=Path)
     a = ap.parse_args(argv)
     calibration = tuple(float(x) for x in a.calibration.split(",")) if a.calibration else None
     pairs = pairs_from_capture(a.capture, a.queries, a.per_query)
     results = run(pairs, engine_scorer(a.reference_url or a.url, a.reference_model), engine_scorer(a.url, a.model),
-                  loads=a.loads, cut_by=a.cut, reload=unloader(a.url, a.model), calibration=calibration)
+                  loads=a.loads, cut_by=a.cut, reload=unloader(a.url, a.model), calibration=calibration,
+                  model=cross_encoder_scorer(a.torch_cross) if a.torch_cross else None)
     report = {"verdict": verdict(results), "queries": [r.__dict__ for r in results]}
     if a.out:
         a.out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")

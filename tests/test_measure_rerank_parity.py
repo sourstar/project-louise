@@ -89,3 +89,20 @@ def test_a_capture_whose_documents_hold_line_and_paragraph_separators_is_read_wh
     assert " " in f.read_text(encoding="utf-8"), "written unescaped, as the capture writes it"
     assert pairs_from_capture(f, 10, 10) == [{"query": "q", "documents": [doc, "second"]}]
     assert [r.get("key") for r in rb.read_jsonl(f)] == [None, "k1"]
+
+
+def test_held_to_the_model_a_candidate_nearer_it_than_the_reference_passes_the_delta():
+    truth = dict(REF)
+    reference = {k: v + 0.012 for k, v in REF.items()}      # the engine replaced: 0.012 from the model
+    candidate = {k: v + 0.002 for k, v in REF.items()}      # the candidate: 0.002 from it, 0.010 from the reference
+    res = rp.run(PAIRS, _scorer(reference), _scorer(candidate), loads=1, cut_by=0, model=_scorer(truth))
+    v = rp.verdict(res)
+    assert v["max_abs_delta"] == pytest.approx(0.01) and v["candidate_vs_model"] == pytest.approx(0.002)
+    assert v["reference_vs_model"] == pytest.approx(0.012) and v["pass"]
+
+
+def test_held_to_the_model_a_candidate_farther_than_the_reference_and_the_line_fails():
+    reference = {k: v + 0.001 for k, v in REF.items()}
+    candidate = {k: v + 0.02 for k, v in REF.items()}
+    res = rp.run(PAIRS, _scorer(reference), _scorer(candidate), loads=1, cut_by=0, model=_scorer(dict(REF)))
+    assert not rp.verdict(res)["pass"]
