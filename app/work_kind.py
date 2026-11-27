@@ -22,6 +22,13 @@ A rule change bumps RULES_VERSION and the maintainer recomputes by itself —
 plug and play, no command. Only for CLASSIFIED_PLUGINS (Gutenberg): every
 other collection's records carry no kind, and count as facts.
 
+MEASURED (München, 2026-11-27, a copy of the live gutenberg manifest,
+79,866 rows): a window plans as the INTEGER PRIMARY KEY range, 6.7 ms at
+most per 5,000 rows pending (92 ms for all 16), 4.5 ms with none; one
+window's write in its BEGIN IMMEDIATE 176 ms. The filter's read of 500
+candidates plans on idx_documents_native, 3.4 ms median, 4.0 ms max. The
+three ALTERs 580 + 150 + 132 ms, once.
+
 Derived and re-creatable (invariant 6): an ALTER adds the columns, no rowid
 moves, nothing is VACUUMed; the record itself is not touched.
 """
