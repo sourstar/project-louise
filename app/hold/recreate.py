@@ -480,8 +480,15 @@ def to_copy(root: Path, pred_name: str, name: str, *, index_by_path: bool = Fals
         there, src = _tree(root, name, rel), _tree(root, pred_name, rel)
         if not there.exists() or (there.is_dir() and not any(there.iterdir())):
             out[rel] = _bytes_under(src) if src.exists() else 0
-            if rel == "index" and index_by_path and src.is_dir():
-                out[rel] -= sum(_bytes_under(g) for g in text_index.group_dirs(src))
+            if rel == "index" and src.is_dir():
+                # her sister's language groups are where her placement puts
+                # them — `<pred>/index` itself, or a shared `.text-index/`
+                # directory: read there by path (0), or copied from THERE
+                here = sum(_bytes_under(g) for g in text_index.group_dirs(src))
+                at = text_index.base(src)
+                out[rel] -= here
+                if not index_by_path:
+                    out[rel] += here if at == src else sum(_bytes_under(g) for g in text_index.group_dirs(at))
     return out
 
 

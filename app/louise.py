@@ -1123,6 +1123,27 @@ def _index_identities(root: Path, her_sister_name: str, name: str) -> tuple[str 
         return None, None
 
 
+def _planned_identities_equal(root: Path, her_sister_name: str, name: str, her_sister, planned) -> bool:
+    """The dry run's answer to what the carry compares (`_index_identities`):
+    her text-index identity, computed from the Codex she would be — her
+    sister's with the planned space (`--space-from`) or the planned Codex
+    itself (`--encoder-from`, layer params) — and her sister's file (its
+    slices, which she takes) against her sister's own. False where either
+    cannot be computed: the room then counts the copy."""
+    import dataclasses
+    from app import collections as collections_mod, text_index
+    from app.hold import deposit
+    try:
+        mine = collections_mod._load_one(deposit.held_file(root, her_sister_name))
+        planned = planned if getattr(planned, "derived_from", None) == her_sister.collection_id \
+            else dataclasses.replace(her_sister, space=planned.space)
+        theirs = dataclasses.replace(mine, name=name, codex=planned)
+        a, b = text_index.identity(mine), text_index.identity(theirs)
+    except Exception:   # noqa: BLE001 — unknown: counted as a copy
+        return False
+    return a is not None and a == b
+
+
 def _join_text_index(root: Path, her_sister_name: str, name: str) -> str | None:
     """A sister carried beside her sister joins her sister's text index NOW,
     by path, when their index identities are equal (app/text_index.py
@@ -1357,8 +1378,12 @@ def _sister_new(a, say) -> int:
     if run.dry:
         src = recreate.counts(root, her_sister_name, write_free=True)
         # what the carry will copy, counted as it will copy it: no vector, and
-        # the index read where it lies (same layers) or not copied at all (re-cut)
-        need, free = recreate.room(root, her_sister_name, a.name, make=False, index_by_path=not recut,
+        # the index read where it lies where her index identity is her
+        # sister's (compared, as the carry compares them: a copy otherwise),
+        # or not copied at all (re-cut)
+        by_path = not recut and _planned_identities_equal(root, her_sister_name, a.name, her_sister,
+                                                           source)
+        need, free = recreate.room(root, her_sister_name, a.name, make=False, index_by_path=by_path,
                                    parts=recreate.RECUT_SISTER_PARTS if recut else recreate.SISTER_PARTS)
         print(f"dry run: case J, a sister of {her_sister_name}: {a.name}; it stops before make, writes "
               f"nothing and takes no lock")
@@ -1386,8 +1411,9 @@ def _sister_new(a, say) -> int:
         else:
             print(f"  to carry    {src['documents'] if src['documents'] is not None else '?'} documents' "
                   f"manifest and the text index's catalogue, no vector ({her_sister_name} keeps its "
-                  f"{src['vectors'] if src['vectors'] is not None else '?'}); her text index read "
-                  f"where {her_sister_name}'s lies, never copied or linked")
+                  f"{src['vectors'] if src['vectors'] is not None else '?'}); her text index "
+                  + (f"read where {her_sister_name}'s lies, never copied or linked" if by_path else
+                     f"COPIED: her index identity is not {her_sister_name}'s (or could not be read)"))
         print(f"  room        {recreate.human(need)} needed, {recreate.human(free)} free: "
               + ("enough" if free >= need else "SHORT, the carry refuses"))
         print(f"  locks       the carry takes {her_sister_name}'s and {a.name}'s write locks: "

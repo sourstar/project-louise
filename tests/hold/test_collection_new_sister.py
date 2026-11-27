@@ -635,3 +635,19 @@ def test_a_sister_s_room_counts_what_her_carry_copies(pair, card):
     assert set(recreate.to_copy(root, "old", "sis", parts=recreate.RECUT_SISTER_PARTS)) == {"state/manifest.sqlite"}
     need, _ = recreate.room(root, "old", "sis", make=False, index_by_path=True, parts=recreate.SISTER_PARTS)
     assert need < sum(full.values())
+
+
+@pytest.mark.parametrize("equal", [True, False])
+def test_the_dry_run_compares_the_index_identities_before_it_counts_the_room(pair, card, capsys,
+                                                                               monkeypatch, equal):
+    """Finding 8: the dry run says by path only where her index identity is
+    her sister's (as the carry compares them), a copy otherwise."""
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    seen = []
+    monkeypatch.setattr(louise, "_planned_identities_equal",
+                        lambda *a: seen.append(a[:3]) or equal)
+    assert _new_enc(root, "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert seen and seen[0][1:3] == ("old", "sis")
+    assert ("read where old's lies" in out) is equal and ("COPIED: her index identity" in out) is not equal

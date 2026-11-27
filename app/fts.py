@@ -132,6 +132,30 @@ def manual_reader(idx: tantivy.Index) -> tantivy.Index:
     return idx
 
 
+class IndexMissing(RuntimeError):
+    """A text index read elsewhere (a placement, app/text_index.py) that is
+    not there: refused, never made empty where it should be."""
+
+
+def _refuse_missing(collection, root, group: str) -> None:
+    """A collection whose placement names an index directory that does not
+    exist is refused in words, never given an empty one made there: it
+    would answer every search with nothing while its marks say every
+    document is indexed (a carry that moved the index it reads, 2026-11-27).
+    A group missing INSIDE an existing directory is its writer's to make,
+    as it always was."""
+    from pathlib import Path
+    own = Path(getattr(collection, "fts_dir", root))
+    root = Path(root)
+    if root == own:
+        return
+    name = getattr(collection, "name", "?")
+    if not root.is_dir():
+        raise IndexMissing(f"{name}: its text index is read at {root} (state/text-index.json), which does "
+                           f"not exist; nothing is made there. Restart the worker (`louise node restart`): "
+                           f"its boot places the index again")
+
+
 def get_index(group: str, collection=None) -> tantivy.Index:
     if collection is None:
         collection = collections_mod.default_collection()
@@ -147,6 +171,7 @@ def get_index(group: str, collection=None) -> tantivy.Index:
             return _indexes[key]
         gate = _opening.setdefault(key, threading.Lock())
         epoch = _forgotten.get(key[0], 0)
+    _refuse_missing(collection, root, group)
     # THE OPEN IS OUTSIDE THE MODULE'S LOCK, under this index's own: two
     # callers of one index still open it once, and the open of another index
     # waits for nobody (`_opening`)

@@ -330,22 +330,80 @@ def origin_heirs(root: Path, name: str) -> list[str]:
     return out
 
 
+#: the origin hand-over's journal, at the collections root: written before
+#: its first rename, removed after its last relink
+def _journal(root: Path, name: str) -> Path:
+    return Path(root) / f".origin-handover.{name}.json"
+
+
+def _resume_origin(root: Path, journal: Path) -> None:
+    """A hand-over the journal names, completed from wherever it was cut:
+    the directory into the first heir's place (`_finish_half`, or the whole
+    move where nothing moved yet), then every other heir linked to it
+    there — each step repeatable — then the journal removed."""
+    import json
+    from .seeded import relative_link
+    j = json.loads(journal.read_text(encoding="utf-8"))
+    own, heirs = Path(j["origin"]), [Path(h) for h in j["heirs"]]
+    first = heirs[0]
+    _finish_half(first)
+    if first.is_symlink() and own.is_dir() and not own.is_symlink():
+        _hand_over(own, heirs)
+    if first.is_dir() and not first.is_symlink():
+        for o in heirs[1:]:
+            if not (o.is_symlink() and o.resolve() == first.resolve()):
+                relative_link(first, o)
+    journal.unlink()
+
+
+def _device(path: Path) -> int:
+    return os.stat(path).st_dev
+
+
+def origin_moves_cross(root: Path, name: str) -> str | None:
+    """Why `name`'s origin hand-over cannot be a rename — its directory and
+    its first heir's on two filesystems — in words, or None. Asked before
+    anything of the forget is done, in its dry run too."""
+    heirs = origin_heirs(root, name)
+    if not heirs:
+        return None
+    own, dst = Path(root) / name / "origin", Path(root) / heirs[0]
+    if _device(own) != _device(dst):
+        return (f"forget {name}: its origin directory {own} is read by {', '.join(heirs)}, and {heirs[0]}'s "
+                f"directory {dst} is on another filesystem: the hand-over is a rename and cannot cross "
+                f"one (nothing is copied). Nothing was removed; move {own} onto {dst}'s filesystem "
+                f"first, or forget {', '.join(heirs)} first")
+    return None
+
+
 def hand_over_origin(root: Path, name: str, *, dry_run: bool = False) -> dict[str, Any] | None:
     """`name`'s origin directory, read by other held collections through
     their links, handed over (`_hand_over`) to the first of them by name —
-    never deleted with `name`; the others' links point at it there. A
-    hand-over cut short is finished first. None when nobody reads it."""
+    never deleted with `name`; the others' links point at it there.
+    JOURNALED: the heirs are written down before the first rename, so a
+    hand-over cut at any step is completed by the next forget (`_resume_origin`),
+    every heir relinked. Journals left by any cut hand-over are completed
+    first. None when nobody reads it."""
+    import json
     root = Path(root)
     own = root / name / "origin"
-    for d in sorted(root.iterdir()) if root.is_dir() else []:
-        if not dry_run and d.is_dir() and not d.name.startswith("."):
-            _finish_half(d / "origin")
+    if not dry_run:
+        for j in sorted(root.glob(".origin-handover.*.json")):
+            _resume_origin(root, j)
+        for d in sorted(root.iterdir()) if root.is_dir() else []:
+            if d.is_dir() and not d.name.startswith("."):
+                _finish_half(d / "origin")           # one cut before journals were written
     heirs = origin_heirs(root, name)
     if not heirs:
         return None
     out = {"origin": str(own), "to": heirs[0], "relinked": heirs[1:], "moved": not dry_run}
     if not dry_run:
-        _hand_over(own, [root / h / "origin" for h in heirs])
+        journal = _journal(root, name)
+        tmp = journal.with_name(journal.name + ".tmp")
+        tmp.write_text(json.dumps({"origin": str(own), "heirs": [str(root / h / "origin") for h in heirs]}),
+                       encoding="utf-8")
+        os.replace(tmp, journal)
+        _resume_origin(root, journal)
     return out
 
 
@@ -483,6 +541,9 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     if kinds:
         return _forget_vectors(root, name, codex, base, kinds=kinds, dry_run=dry_run)
     refuse_while_read(root, name, "forget")
+    crossing = origin_moves_cross(root, name)          # before step 1, the dry run too
+    if crossing:
+        raise CodexError(crossing)
     plan = [p for p in (held, base) if p.exists()]
     readers = read_through(root, name)
     if readers:

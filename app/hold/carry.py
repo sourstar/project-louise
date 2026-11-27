@@ -818,6 +818,13 @@ def carry(root, from_ref: str, to_ref: str, *, copy: bool = False, apply: bool =
     # which names no run to read it in (09 §9.5, §9.17; München, 2026-11-17)
     from . import origin_run
     origin_run.refuse_without_run(to, f"carry into {to_name} (nothing was written)")
+    if not copy:
+        # a carry that MOVES the source's index takes it from under a sister
+        # that reads it where it lies (app/text_index.py `reads`): refused,
+        # nothing moved — copy, or restart the worker first so its boot
+        # shares that index (hold/forget.py `refuse_while_read`)
+        from .forget import refuse_while_read
+        refuse_while_read(root, from_name, "carry")
     if rechunked and (sister or relayered or unembedded or resliced or rebuilt or keep or recut):
         raise CodexError("carry --rechunked moves the layers' version alone: no --sister, --relayered, "
                          "--unembedded, --resliced, --rebuilt, --keep or --recut with it")
