@@ -208,6 +208,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 import re
 from pathlib import Path
 from typing import Any
@@ -312,6 +313,8 @@ ISSUES = {
                     "no text and in no alternative (operator, 2026-11-26)",
     "item-not-its-form": "an item the origin lists under a manifestation is not of that form (a TIFF "
                          "page image declared application/pdf): held in the unit, not read as that form",
+    "title-only": "the act's source holds no text but its title (an empty PREAMBLE and ENACTING.TERMS, no "
+                  "annex): the record is held with its title and has no chunk",
     "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
                      "unit, its text is what the other pages give",
     "start-from-document-date": "no publication and no entry into force is stated: the act's own date "
@@ -639,6 +642,187 @@ def _lone_wrapper_head(entries: list[os.DirEntry]) -> bytes | None:
     return view[wrappers[0]][:_HEAD] if len(wrappers) == 1 else None
 
 
+#: THE UNIT'S DAY, KEPT BY PHYSICAL IDENTITY (lessons C1/C4, 2026-11-25: the
+#: startup scan read every unit, ~970 k on one thread, 791-963 s on the node,
+#: and an interrupted walk started again from zero). A unit's day is a pure
+#: function of its files and of the code that derives it, so it is kept in
+#: the derived cache keyed on the unit's path and its files' (name, size,
+#: mtime_ns), and on a digest of that code: an unchanged unit is only listed
+#: and statted. Derived, re-creatable, never exchanged (invariant 6).
+#: THE STANDARD, NOT ADOPTED: a make-style dependency cache (ccache, Bazel's
+#: action cache) keys the same way, on inputs and the tool's version; one
+#: SQLite table is that, for one function.
+DAY_CACHE_KIND = "eurlex-unit-days"
+
+
+#: the modules a unit's day is derived through, hashed whole (architecture's
+#: read of 2fdd1e31: notice.py was left out — LANGUAGES, the Notice the tree
+#: builds, work_day). The plugin package entire, and what it imports from the
+#: platform to name an id; tests/test_eurlex_day_cache.py fails when the
+#: derivation imports a module of the app this list does not hold.
+DAY_MODULES_DIRS = ("app/plugins/eurlex",)
+DAY_MODULES = ("app/plugins/eli.py", "app/plugins/base.py")
+
+
+def _day_modules() -> list[Path]:
+    app_root = Path(__file__).resolve().parents[3]
+    out: list[Path] = []
+    for d in DAY_MODULES_DIRS:
+        out += sorted((app_root / d).glob("*.py"))
+    out += [app_root / m for m in DAY_MODULES]
+    return out
+
+
+def _day_code_digest() -> str:
+    """A digest of EVERY module the day is derived through, whole, and of the
+    interpreter and the XML parser that read the files: any edit walks every
+    unit once again — correct, and one walk per such deploy."""
+    import hashlib
+    import pyexpat
+    import sys
+    h = hashlib.sha256(f"{sys.version}|{pyexpat.EXPAT_VERSION}".encode())
+    for path in _day_modules():
+        h.update(path.name.encode())
+        try:
+            h.update(path.read_bytes())
+        except OSError:
+            h.update(b"?")
+    return h.hexdigest()[:16]
+
+
+_SAID: set[str] = set()
+
+
+def _say_once(message: str) -> None:
+    key = message.split(" (", 1)[0]
+    if key not in _SAID:
+        _SAID.add(key)
+        print(message, flush=True)
+
+
+def _formex_title_only(view: dict, act) -> bool:
+    """Does the Formex SOURCE hold no text but the title: its body's
+    PREAMBLE and ENACTING.TERMS (absent or empty) and every annex the
+    wrapper names hold no text? Read from the files, not from the parse."""
+    def text(el) -> str:
+        return "".join(el.itertext()).strip()
+    try:
+        body = formex._parse(view[act.body_file], act.body_file)
+    except (KeyError, formex.FormexError):
+        return False
+    for el in body.iter():
+        tag = el.tag.rsplit("}", 1)[-1] if isinstance(el.tag, str) else ""
+        if tag in ("PREAMBLE", "ENACTING.TERMS") and (
+                text(el) or any(isinstance(c.tag, str) and c.tag.rsplit("}", 1)[-1] == "INCL.ELEMENT"
+                                for c in el.iter())):
+            return False                    # text, or an inclusion that holds it
+    try:
+        annexes = formex.annex_names(formex._parse(view[act.wrapper_file], act.wrapper_file))
+    except (KeyError, formex.FormexError):
+        return False
+    for name in annexes:
+        if name in view:
+            try:
+                if text(formex._parse(view[name], name)):
+                    return False
+            except formex.FormexError:
+                return False
+    return True
+
+
+class _DayCache:
+    """{unit path: (signature, day or error)} in one SQLite table under the
+    derived cache. Lookups one SELECT a unit; writes batched, committed every
+    BATCH and at the end; a cache that does not open is no cache."""
+    BATCH = 5000
+
+    def __init__(self, root: Path, tree_facts: bool) -> None:
+        import sqlite3
+        from app import derived
+        self.code = f"{_day_code_digest()}|{int(tree_facts)}"
+        self.pending: list[tuple[str, str, str | None, str | None]] = []
+        self.con = None
+        place = derived.place_kept(DAY_CACHE_KIND, root) or (root / derived.BESIDE / DAY_CACHE_KIND)
+        self.path = place / "days.sqlite"
+        self._corrupt = False
+        self.con = self._open()
+        if self.con is None and self._corrupt and self.path.exists():
+            # derived data: a CORRUPT cache (SQLITE_NOTADB / SQLITE_CORRUPT) is
+            # moved aside with its -wal and -shm and made anew (review of
+            # 2fdd1e31, 4); any other error (too many open files, a lock)
+            # leaves the file alone: no cache this walk, said once (review of
+            # ac45c617, 2: one EMFILE moved a healthy cache aside)
+            stamp = int(time.time())
+            for suffix in ("", "-wal", "-shm"):
+                f = self.path.with_name(self.path.name + suffix)
+                try:
+                    if f.exists():
+                        f.replace(f.with_name(f"days.bad.{stamp}.sqlite{suffix}"))
+                except OSError:
+                    pass
+            self.con = self._open()
+
+    def _open(self):
+        import sqlite3
+        con = None
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            con = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute("CREATE TABLE IF NOT EXISTS day(path TEXT PRIMARY KEY, sig TEXT NOT NULL, "
+                        "day TEXT, err TEXT)")
+            con.execute("SELECT count(*) FROM day WHERE 0").fetchone()
+            return con
+        except (OSError, sqlite3.Error) as e:
+            if con is not None:
+                con.close()
+            self._corrupt = getattr(e, "sqlite_errorname", "") in ("SQLITE_NOTADB", "SQLITE_CORRUPT")
+            _say_once(f"[eurlex] the unit-day cache {self.path} does not open ({type(e).__name__}: {e}): "
+                      f"every unit is read this walk" + ("; it is moved aside and made anew" if self._corrupt else ""))
+            return None
+
+    def sig(self, entries) -> str:
+        import hashlib
+        h = hashlib.sha256(self.code.encode())
+        for e in entries:
+            st = e.stat()
+            h.update(f"|{e.name}:{st.st_size}:{st.st_mtime_ns}:{st.st_ino}".encode())
+        return h.hexdigest()[:32]
+
+    def get(self, path: str, sig: str):
+        if self.con is None:
+            return None
+        try:
+            row = self.con.execute("SELECT sig, day, err FROM day WHERE path=?", (path,)).fetchone()
+        except Exception:   # noqa: BLE001 — a cache read that fails is a miss
+            return None
+        return (row[1], row[2]) if row is not None and row[0] == sig else None
+
+    def put(self, path: str, sig: str, day: str | None, err: str | None) -> None:
+        if self.con is None:
+            return
+        self.pending.append((path, sig, day, err))
+        if len(self.pending) >= self.BATCH:
+            self.flush()
+
+    def flush(self) -> None:
+        if self.con is None or not self.pending:
+            return
+        try:
+            with self.con:
+                self.con.executemany("INSERT OR REPLACE INTO day(path, sig, day, err) VALUES(?,?,?,?)",
+                                     self.pending)
+        except Exception as e:   # noqa: BLE001 — a cache that cannot be written is no cache, said once
+            _say_once(f"[eurlex] the unit-day cache {self.path} is not written ({type(e).__name__}: {e})")
+        self.pending.clear()
+
+    def close(self) -> None:
+        self.flush()
+        if self.con is not None:
+            self.con.close()
+            self.con = None
+
+
 def _unit_day(unit: Path, celex: str, entries: list[os.DirEntry], tree_facts: bool = False) -> str | None:
     """The day the unit's id sorts under: a consolidation's CELEX date, an
     original's OJ publication date from its wrapper's head. An act without
@@ -808,6 +992,19 @@ class EurlexSource:
             return
         guard = eli.CollisionGuard()
         held: dict[int, tuple[str, int, int]] = {}
+        say = state.say if callable(getattr(state, "say", None)) else None
+        days = _DayCache(root, self.TREE_FACTS)
+        try:
+            yield from self._walk(root, days, say, guard, held)
+        finally:
+            days.close()
+        for nid in sorted(held):
+            locator, mtime, size = held[nid]
+            yield DocRef(source_id=self.source_id, native_id=str(nid), locator=locator,
+                         mtime=mtime, size=size)
+
+    def _walk(self, root: Path, days: "_DayCache", say, guard, held):
+        walked = 0
         for ld in self._lang_dirs(root):
             m = _LANG_DIR.match(ld.name)
             if m is None or m["lang"] not in LANGUAGES:
@@ -819,7 +1016,12 @@ class EurlexSource:
                 with os.scandir(yd.path) as units:
                     unit_dirs = sorted((e for e in units if e.is_dir() and not e.name.startswith(".")),
                                        key=lambda e: e.name)
+                if say is not None:
+                    # WHERE THE WALK IS (lesson C3: the scan was silent 28-55 min,
+                    # its position read with py-spy); the platform keeps a line a minute
+                    say(f"walking {ld.name}/{yd.name}: {walked} units walked, {len(held)} held so far")
                 for ud in unit_dirs:
+                    walked += 1
                     unit, celex = Path(ud.path), ud.name
                     try:
                         entries = unit_files(unit)
@@ -832,12 +1034,23 @@ class EurlexSource:
                         # not landed yet, or landed before parser 3 kept its
                         # tree: the next fetch completes it (app/acquire/cellar.py)
                         continue
-                    try:
-                        day = _unit_day(unit, celex, entries, self.TREE_FACTS)
-                    except (OSError, ValueError) as e:
-                        day, err = None, str(e)
+                    sig = days.sig(entries)
+                    kept = days.get(str(unit), sig)
+                    if kept is not None:
+                        day, err = kept
                     else:
-                        err = "no consolidation date in its CELEX and no OJ date in its wrapper"
+                        transient = False
+                        try:
+                            day = _unit_day(unit, celex, entries, self.TREE_FACTS)
+                        except OSError as e:
+                            day, err, transient = None, str(e), True     # a read that may heal: never kept
+                        except ValueError as e:
+                            day, err = None, str(e)                      # the content's own fault
+                        else:
+                            err = None if day is not None else \
+                                "no consolidation date in its CELEX and no OJ date in its wrapper"
+                        if not transient:
+                            days.put(str(unit), sig, day, err)
                     if day is None:
                         yield DocRef(source_id=self.source_id, native_id=celex, locator=str(unit),
                                      scope="container", error=f"{unit_rel(lang, celex)}: {err}"[:200])
@@ -858,10 +1071,6 @@ class EurlexSource:
                     stats = [x.stat() for x in entries]
                     held[nid] = (str(unit), max(s.st_mtime_ns for s in stats) // 1_000_000_000,
                                  sum(s.st_size for s in stats))
-        for nid in sorted(held):
-            locator, mtime, size = held[nid]
-            yield DocRef(source_id=self.source_id, native_id=str(nid), locator=locator,
-                         mtime=mtime, size=size)
 
     def superseded_ids(self, ref: DocRef) -> list[str]:
         """The ids this unit could have had under another of its forms
@@ -1274,6 +1483,16 @@ class EurlexSource:
             keys.add(PROFILE.key(work_eli))
         if own_eli and own_eli != work_eli:
             keys.add(PROFILE.key(own_eli))
+        sections = formex.sections(act)
+        if act.rendered_sections is None and not any(text.strip() for _, text in sections) \
+                and _formex_title_only(view, act):
+            # A CHUNKLESS DOCUMENT STATES WHY (lesson E1, 2026-11-25: 41 Formex
+            # acts whose source holds only a title; app/build_check.py refuses
+            # a chunkless document that states none). Decided from the SOURCE,
+            # never from the parse's output (architecture's read of b4f6b52a:
+            # a parse that LOSES an act's text must stay caught by the check)
+            found.append(Issue("title-only", "the Formex body's PREAMBLE and ENACTING.TERMS and its "
+                                             "annexes hold no text: the record is the act's title"))
         return CanonicalDoc(
             uid=f"{self.source_id}:{raw.ref.native_id}",
             title=act.title or note.expression_title or celex,
@@ -1286,7 +1505,7 @@ class EurlexSource:
             # sorted by bytes (09 §9.5)
             keys=sorted(keys),
             extra={k: v for k, v in extra.items() if v not in (None, "", [], {})},
-            sections=formex.sections(act),
+            sections=sections,
             raw_hash=raw.raw_hash,
             issues=found,
         )
