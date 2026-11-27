@@ -1135,6 +1135,8 @@
       fillers = r.ok ? ((await r.json()).ready || []) : [];
     } catch (e) { fillers = []; }
   }
+  // UNVERIFIED ON iOS: the tone context a recording put to sleep is resumed
+  // here, outside a gesture. Chrome's sticky activation allows it; Safari may not.
   async function cueTone() {
     times.cues = (times.cues || []).concat([{ kind: 'tone', at: now() }]);
     try {
@@ -1151,8 +1153,12 @@
     } catch (e) { /* no sound: nothing to wait for */ }
   }
   // one cue of `kind`: its phrase where one is ready and the reader wants it, else the tone
+  // whether the answer's reading has begun: a phrase is never played once a
+  // sentence has started (architecture, 2026-11-27: a late phrase list took
+  // the shared player mid-sentence, and the reading never ended)
+  const readingBegun = () => !!reading && (reading.playing || reading.items.some(it => it.t.play != null));
   function playCue(kind) {
-    if (!cue || cue.kinds.has(kind) || cue.kinds.size >= 2) return;
+    if (!cue || cue.kinds.has(kind) || cue.kinds.size >= 2 || readingBegun()) return;
     cue.kinds.add(kind);
     const clip = phrasesOn() && (fillers || []).find(f => f.kind === kind && !playedPhrases.includes(f.id));
     if (!clip) { cue.playing = cueTone(); return; }
@@ -1160,18 +1166,32 @@
     const c = cue;
     times.cues = (times.cues || []).concat([{ kind, at: now() }]);
     c.playing = new Promise(done => {
-      const a = player, end = () => { if (a.onended === end) a.onended = a.onerror = null; c.audio = null; done(); };
-      a.onended = () => { playedPhrases.push(clip.id); end(); };
-      a.onerror = end;
+      const a = player;
+      // the handlers cleared BY REFERENCE: a stale one left on the shared
+      // player was fired by the next SILENT unlock, and reported the phrase twice
+      const end = () => {
+        if (a.onended === onEnded) a.onended = null;
+        if (a.onerror === end) a.onerror = null;
+        c.audio = null; done();
+      };
+      const onEnded = () => { if (!c.cut) playedPhrases.push(clip.id); end(); };
+      a.onended = onEnded; a.onerror = end;
       a.src = clip.url; c.audio = a;
       a.play().catch(end);
     });
   }
+  // how long the first sentence may wait for a phrase that never ends: its
+  // length and a second, 3 s where it is not known (architecture, 2026-11-27)
+  function cueBound() {
+    const d = cue && cue.audio && isFinite(cue.audio.duration) ? cue.audio.duration * 1000 : 2000;
+    return d + 1000;
+  }
   // a question whose answer will be read by itself (a spoken one) is taken
   function cueQuestion() {
     endCue();
-    cue = { kinds: new Set(), playing: null, audio: null, timer: null };
+    cue = { kinds: new Set(), playing: null, audio: null, timer: null, cut: false };
     const c = cue;
+    // playCue itself refuses once a sentence has begun: a late list plays nothing
     prefetchFillers().then(() => { if (cue === c) playCue('short'); });
     c.timer = setTimeout(() => {
       if (cue !== c) return;
@@ -1183,7 +1203,9 @@
   function endCue() {
     const c = cue; if (!c) return;
     cue = null; clearTimeout(c.timer);
-    if (c.audio) { c.audio.pause(); c.audio.removeAttribute('src'); if (c.audio.onerror) c.audio.onerror(); }
+    // a phrase cut short is no phrase played: not reported used
+    c.cut = true;
+    if (c.audio) { const a = c.audio; a.pause(); a.removeAttribute('src'); if (a.onerror) a.onerror(); }
   }
   // the phrases played, reported once (the node deletes and remakes them)
   function reportPhrases() {
@@ -1216,7 +1238,7 @@
         const url = await r.items[i].p;
         if (reading !== r) return;
         // the phrase that covers the wait plays to its end first, never cut
-        if (cue && cue.playing) await cue.playing;
+        if (cue && cue.playing) await Promise.race([cue.playing, new Promise(ok => setTimeout(ok, cueBound()))]);
         if (reading !== r) return;
         await whilePaused(r);
         if (reading !== r) return;
