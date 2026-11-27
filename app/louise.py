@@ -4069,7 +4069,8 @@ def cmd_node_speech(a) -> int:
             if a.use is not None:
                 _print(sv.use(a.lang, a.use))
             else:
-                _print(sv.make(a.lang, candidates=a.candidates, text=a.text, tag=a.tag,
+                _print(sv.make(a.lang, candidates=a.candidates,
+                               designs=a.designs.split(";") if a.designs else None, text=a.text, tag=a.tag,
                                log=lambda m: print(m, file=sys.stderr)))
             return 0
         except (sv.SyntheticError, *voice.LOAD_ERRORS) as e:
@@ -8050,8 +8051,12 @@ def build_parser() -> argparse.ArgumentParser:
                                              "(app/synthetic_voice.py)")
     q.add_argument("lang", help="the language, by its ISO code: es, pt, nl, …")
     q.add_argument("--candidates", type=int, default=1, metavar="N",
-                   help="make N voices (\"Synthetic es A\", \"B\", …) and set none, to choose one by ear "
-                        "with --use; unset, one voice, made and set")
+                   help="make N voices (\"Synthetic es A\", \"B\", …) from the first N of Louise's designs "
+                        "(\"male, middle-aged, low pitch\", …) and set none, to choose one by ear with --use; "
+                        "unset, one voice in the model's own default speaker, made and set")
+    q.add_argument("--designs", default=None, metavar="\"D; D; …\"",
+                   help="the voices to design, separated by \";\" (\"female, middle-aged, low pitch; male, "
+                        "elderly\"): one is made and set, several are candidates")
     q.add_argument("--use", default=None, metavar="NAME",
                    help="set the voice profile NAME (or its voice) as the language's synthetic voice; nothing "
                         "is made")
