@@ -206,24 +206,31 @@ def unpack(archive: Path, into: Path) -> None:
     as they are (a venv's absolute interpreter link is the backend's own),
     paths kept inside `into`, setuid bits dropped. A HARD-LINK entry (an
     archive written before 2026-11-27) is made a COPY of its target, never
-    a link."""
-    links: list[tarfile.TarInfo] = []
+    a link, IN ITS OWN PLACE in the member order — as tar would make it: its
+    target is an earlier member, and a later member of its name replaces it
+    as it replaces any file (the fourth read of cf91b9ac)."""
     into = Path(into)
+    root = into.resolve()
     with _zstd_reader(archive) as r, tarfile.open(fileobj=r, mode="r|") as tar:
         for m in tar:
-            if m.islnk():
-                tarfile.tar_filter(m, str(into))           # its own path checked as any member's
-                links.append(m)
+            if not m.islnk():
+                tar.extract(m, into, filter=refuse_hard_links("tar"))
                 continue
-            tar.extract(m, into, filter=refuse_hard_links("tar"))
-    root = into.resolve()
-    for m in links:
-        src, dst = (into / m.linkname).resolve(), (into / m.name).resolve()
-        if root not in src.parents or root not in dst.parents or not src.is_file():
-            raise tarfile.TarError(f"{m.name}: a hard-link entry to {m.linkname}, outside {into} or "
-                                   f"not a file it holds")
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+            tarfile.tar_filter(m, str(into))               # its own path checked as any member's
+            src = (into / m.linkname).resolve()
+            parent = (into / m.name).parent
+            parent.mkdir(parents=True, exist_ok=True)
+            parent = parent.resolve()
+            dst = parent / Path(m.name).name
+            if root not in src.parents or (parent != root and root not in parent.parents) \
+                    or not src.is_file():
+                raise tarfile.TarError(f"{m.name}: a hard-link entry to {m.linkname}, outside {into} or "
+                                       f"not a file it holds")
+            if dst.is_dir() and not dst.is_symlink():
+                raise tarfile.TarError(f"{m.name}: a hard-link entry over a directory")
+            if dst.is_symlink() or dst.exists():
+                dst.unlink()                                # replaced, as tar replaces a file
+            shutil.copy2(src, dst)
 
 
 def verify(archive: Path, want: str, scratch: Path) -> str:

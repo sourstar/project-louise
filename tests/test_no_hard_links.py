@@ -523,6 +523,26 @@ def test_archive_backend_writes_files_sharing_an_inode_whole_and_unpacks_old_lin
     mod.unpack(tmp_path / "old.tar.zst", tmp_path / "old")
     g = tmp_path / "old" / "g"
     assert g.read_bytes() == b"abc" and g.stat().st_nlink == 1 and (tmp_path / "old" / "f").stat().st_nlink == 1
+    # in its own place in the member order: a LATER member of its name
+    # replaces it, as it replaces any file — the copy never overwrites it
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tar:
+        for name, data in (("f", b"abc"), ("sub/f2", b"xyz")):
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        for name, target in (("g", "f"), ("sub/h", "sub/f2")):
+            link = tarfile.TarInfo(name)
+            link.type, link.linkname = tarfile.LNKTYPE, target
+            tar.addfile(link)
+        later = tarfile.TarInfo("g")
+        later.size = 5
+        tar.addfile(later, io.BytesIO(b"later"))
+    with mod._zstd_writer(tmp_path / "order.tar.zst") as w:
+        w.write(raw.getvalue())
+    mod.unpack(tmp_path / "order.tar.zst", tmp_path / "order")
+    assert (tmp_path / "order" / "g").read_bytes() == b"later", "the later member stands"
+    assert (tmp_path / "order" / "sub" / "h").read_bytes() == b"xyz"
 
 
 def test_a_copy_holds_the_bytes_of_a_symbolic_link_never_the_link(tmp_path):
