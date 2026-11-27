@@ -315,5 +315,12 @@ def test_juvenile_literature_and_periodicals_veto_lcc_pz_alone():
     assert w({"subjects": "Russia -- Social life and customs | PZ"}).startswith(
         " — a literary work (by its Library of Congress class)"), "no mark: PZ still says it"
     assert w({"subjects": "Animals -- Juvenile fiction | PZ"}).startswith(" — a literary work"), "fiction stays"
+    # architecture, 2026-11-27: a periodical states no one kind, whatever its shelf;
+    # non-fiction for children on the Essays shelf is an essay (21973, 45390)
+    for shelf in ("Category: Essays, Letters & Speeches", "Category: Novels", ""):
+        said = w({"subjects": "Girls -- Periodicals | PZ", "bookshelves": shelf})
+        assert "opinion" not in said and "a literary work" not in said, ("a periodical: none", said)
+    assert w({"subjects": "Animals -- Juvenile literature | PZ",
+              "bookshelves": "Category: Essays, Letters & Speeches"}).startswith(" — a work of opinion or belief")
     assert w({"subjects": "Animals -- Juvenile literature | QL", "bookshelves": "Category: Short Stories"}) \
         .startswith(" — a literary work (by its Gutenberg category)"), "only PZ is vetoed: a form shelf still says it"

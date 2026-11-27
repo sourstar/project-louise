@@ -58,9 +58,17 @@ def literary_ns(sources: list[dict[str, Any]]) -> set[int]:
             if isinstance(s.get("work"), dict) and s["work"].get("kind") == "a literary work"}
 
 
-def as_evidence(answer: str, sources: list[dict[str, Any]]) -> list[str]:
-    """The sentences that count a literary source among a fact's sources."""
-    lit = literary_ns(sources)
+def _title(s: dict[str, Any]) -> str:
+    return re.sub(r"[^\w ]", "", str(s.get("title") or "").split(":")[0]).strip().casefold()
+
+
+def as_evidence(answer: str, sources: list[dict[str, Any]], question: str = "") -> list[str]:
+    """The sentences that count a literary source among a fact's sources. A
+    literary work the QUESTION names is what is asked about, and citing it is
+    right (architecture, 2026-11-27: "Che cosa dice Il cinque maggio …")."""
+    asked = re.sub(r"[^\w ]", "", question).casefold()
+    lit = {n for n in literary_ns(sources)
+           if not (lambda t: len(t) >= 4 and t in asked)(next((_title(s) for s in sources if int(s["n"]) == n), ""))}
     out = []
     for sent in SENTENCE.findall(answer or ""):
         cited = {int(n) for n in CITES.findall(sent)}
@@ -113,7 +121,7 @@ def check(files: list[Path]) -> int:
             if "error" in row:
                 print(f"  {row['id']} run {row['run']}: ERROR {row['error']}")
                 continue
-            flagged = as_evidence(row["answer"], row["sources"])
+            flagged = as_evidence(row["answer"], row["sources"], row.get("question", ""))
             lit = sorted(literary_ns(row["sources"]))
             mark = "LITERARY AS EVIDENCE" if flagged else "ok"
             print(f"  {row['id']} run {row['run']} ({row['kind']}): {mark}; literary sources {lit}")

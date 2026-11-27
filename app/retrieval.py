@@ -2050,6 +2050,10 @@ def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -
     cats = {c.casefold() for c in categories}
     if any(scripture(x) for x in subjects):
         return None
+    # a periodical holds every kind, so its record states no one kind
+    # (architecture, 2026-11-27: The Girl's Own Paper, 49241, 61306, 63684)
+    if any(p.strip().rstrip(".").casefold() == "periodicals" for x in subjects for p in x.split("--")[1:]):
+        return None
     studied = any(p.strip().rstrip(".").casefold() in CRITICISM_SUBDIVISIONS
                   for x in subjects for p in x.split("--")[1:])
     # a FORM subdivision ("-- Fiction", "-- Poetry") is the record saying what
@@ -2061,16 +2065,18 @@ def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -
         return ("a literary work", "by its subject headings")
     vetoed = any(p.strip().rstrip(".").casefold() in NONFICTION_SUBDIVISIONS
                  for x in subjects for p in x.split("--")[1:])
+    marked = any(p.strip().rstrip(".").casefold() in PZ_VETOES for x in subjects for p in x.split("--")[1:])
     if not vetoed:
         if cats & LITERARY_SHELVES:
             return ("a literary work", "by its Gutenberg category")
-        if "PZ" in classes and not any(p.strip().rstrip(".").casefold() in PZ_VETOES
-                                       for x in subjects for p in x.split("--")[1:]):
+        if "PZ" in classes and not marked:
             return ("a literary work", "by its Library of Congress class")
         if any(_main_heading(x).casefold() in BARE_GENRES and len(x.split("--")) == 1 for x in subjects) \
                 and not (cats & OPINION_SHELVES) and not any(c.startswith("PN") for c in classes):
             return ("a literary work", "by its subject headings")
     # a satire is its author's invention; a study OF satire is not one
+    # non-fiction for children on PG's Essays shelf is an essay: attributed to
+    # its author (architecture, 2026-11-27: 21973, 45390 stay opinion)
     if cats & OPINION_SHELVES and not any(
             SATIRE.search(_main_heading(x)) and not x.rstrip(". ").casefold().endswith("history and criticism")
             for x in subjects):
