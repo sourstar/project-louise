@@ -368,6 +368,27 @@ docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv 
 # tokenizer (2026-11-20, the second OOM hold): required here, never skipped
 docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv -e LOUISE_REQUIRE_PINNED_TOKENIZER=1 \
   louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider tests/test_chunking_legal_spans.py
+# >>> TESTS_EXTRA — A RELEASE'S OWN TESTS (München, 2026-11-27: the tests-extra-<sha> list was
+# handed to this script from bcdf0dc to d62c8eb and never read — the block lived only in the
+# node's private copies since af66d00, so a release's NEW test files ran in the architecture's
+# container alone). TESTS_EXTRA is a file of test paths (one or more a line, `#` comments) or the
+# paths themselves; each must be in the staged tree, and they run in one more pass here
+if [ -n "${TESTS_EXTRA:-}" ]; then
+  if [ -f "$TESTS_EXTRA" ]; then
+    EXTRA=$(sed -e 's/#.*$//' "$TESTS_EXTRA" | tr -s ' \t\n' ' ')
+  else
+    EXTRA=$TESTS_EXTRA
+  fi
+  # an empty list would run pytest on the whole tree: a mistake, said and stopped
+  [ -n "${EXTRA// /}" ] || { echo "TESTS_EXTRA: no test path in $TESTS_EXTRA"; exit 1; }
+  say "3c. the release's own tests: $(printf '%s\n' $EXTRA | grep -c .) path(s) (TESTS_EXTRA)"
+  for t in $EXTRA; do
+    [ -e "$ROOT/src.new/$t" ] || { echo "TESTS_EXTRA: $t is not in the staged tree"; exit 1; }
+  done
+  docker run --rm --cpu-shares "$TEST_CPU_SHARES" -v "$ROOT/src.new:/srv" -w /srv -e PYTHONPATH=/srv \
+    louise-rag:staged timeout -s KILL "$TEST_BOUND" python -m pytest -q -p no:cacheprovider $EXTRA
+fi
+# <<< TESTS_EXTRA
 find "$ROOT/src.new" -name '__pycache__' -type d -prune -exec rm -rf {} +
 rm -rf "$ROOT/src.new/tests/fixtures/pubmed-mini/.pack"
 

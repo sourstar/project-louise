@@ -79,20 +79,31 @@
   // and ICU's abbreviation list (`ss=standard`) is not offered by
   // Intl.Segmenter. One letter, or a title before a name, is read with the
   // next piece; the node drops its stop (app/speech.py `_STOP_BEFORE_NAME`).
+  // and the abbreviations a citation or a legal text writes before what it
+  // names (architecture, 2026-11-26: "Abs." | "1 BGB", "Hrn." | "Meier",
+  // "Smith v." | "Jones"): never a sentence's end
   const TITLES = new Set(('dr mr mrs ms prof st jr sr sig sigg dott ing avv arch geom rag on '
-                          + 'mme mlle mgr pr hr fr frl sra srta').split(' '));
+                          + 'mme mlle mgr pr hr fr frl sra srta '
+                          + 'abs art artt nr hrn vgl cfr pag pp cap v vs cit ca '
+                          + 'sez sec cod civ reg dir vol capt col gen lt rev gov sen').split(' '));
   const endsInName = p => {
+    // an ordinal or a day ("am 1." | "Januar", "18." | "August"): the number
+    // and what it counts are said together (architecture, 2026-11-26). It also
+    // holds a real sentence's end after a small number ("He died at 64. His
+    // son…"), as TITLES do after art/cap/cod: harmless — the two sentences are
+    // read as one piece, with no pause between them, nothing lost or misread
+    if (/(?:^|\s)\d{1,2}\.$/.test(p)) return true;
     const m = /(?:^|[\s(«"'“‘])([\p{L}]{1,5})\.$/u.exec(p);
-    return !!m && ((m[1].length === 1 && m[1] === m[1].toUpperCase() && m[1] !== m[1].toLowerCase())
-                   || TITLES.has(m[1].toLowerCase()));
+    // one letter of either case ("G.", "z.", "B." — and so the last of a dotted
+    // acronym, "U.S.", "e.g.", "z.B."), or a title
+    return !!m && (m[1].length === 1 || TITLES.has(m[1].toLowerCase()));
   };
   // sentences being synthesized at once (pump)
   const IN_FLIGHT = 2;
-  // THE FIRST SOUND (München, 2026-11-08: OmniVoice takes 1.5-2x a clip's
-  // length to make it, 12-33 s for a first sentence of 9-17 s): a first
-  // sentence longer than FIRST_MAX is read in two, cut at its last clause
-  // mark (, ; :) between FIRST_MIN and FIRST_MAX characters
-  const FIRST_MAX = 90, FIRST_MIN = 30;
+  // HOW A READING IS CUT: in pieces sized from the node's measured speed
+  // (THE FIRST SOUND WITHIN A SECOND, below `cut`; operator, 2026-11-26),
+  // replacing the same day's first sentence read whole and 2026-11-08's cut
+  // of a first sentence past 90 characters at its last , ; :.
   // a WAV of no samples: played in the tap, it lets the page play the rest (iOS)
   const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=';
   const WORKLET = "class LouiseCapture extends AudioWorkletProcessor{constructor(){super();this.b=new Float32Array(2048);this.n=0}"
@@ -173,6 +184,17 @@
     // microphone's route is up, and the page says so (`wake`)
     if (r.first_ms === null) r.first_ms = Math.round(performance.now() - r.opened);
     if (!r.live) { if (top > 0) { r.live = true; wake(r, 'sound'); } else r.zero_ms += ms; }
+    // the ready tone as the microphone hears it, on the AUDIO's own clock
+    // (`r.ms`, where this window starts): neither speech nor the floor
+    // The FLOOR still follows its minimum there: speech that starts inside
+    // the window would otherwise set the first counted floor at speech level,
+    // and "loud" then needs 4x speech — its end was lost (architecture,
+    // 2026-11-26: 3 s of speech stopped at 2,322 ms). The tone only raises
+    // the level, so a minimum is safe.
+    if (r.deaf_end_ms != null && r.ms < r.deaf_end_ms) {
+      r.floor = r.floor === null ? rms : Math.min(r.floor, rms);
+      r.ms += ms; return false;
+    }
     const loud = rms > Math.max(FLOOR_MIN, FLOOR_X * (r.floor === null ? 0 : r.floor));
     r.floor = r.floor === null ? rms : Math.min(r.floor, rms);
     r.ms += ms;
@@ -218,6 +240,7 @@
     r.decoding = true;
     try {
       const pcm = await decoded(r);
+      r.decoded_ms = pcm.length * 1000 / RATE;
       while (rec === r && r.done + WINDOW <= pcm.length) {
         const w = pcm.subarray(r.done, r.done + WINDOW); r.done += WINDOW;
         if (hear(r, w, RATE)) break;
@@ -248,6 +271,7 @@
              first_ms: r.first_ms, wake_ms: r.wake_ms, zero_ms: Math.round(r.zero_ms), woke: r.woke,
              mode: r.mode || 'webaudio', ctx_was: r.ctxWas ?? null, parts: r.parts ? r.parts.length : null,
              decode_fails: r.decodeFails ?? null, mime: r.mr ? r.mr.mimeType : null,
+             tone: toneLast, deaf_end_ms: r.deaf_end_ms ?? null,
              inputs: r.inputs, ua: navigator.userAgent };
   }
   function report(outcome, info) {
@@ -267,12 +291,17 @@
   async function start() {
     stopReading(); auto = false;         // the microphone would hear the answer
     unlock();                            // inside the tap: the answer may be read later
+    toneUnlock();                        // inside the tap: the ready tone may sound
+    toneLast = null;                     // this recording's tone, not the last one's
+    toneUse++;                           // a re-tap: the last recording's release keeps its hands off the context
     busy = true; micState('busy', 'opening the microphone…'); active();
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
     } catch (e) {
       busy = false; rest();
+      // no recording, no release(): the tone's context sleeps here
+      if (toneCtx && toneCtx.state === 'running') toneCtx.suspend().catch(() => {});
       report('not opened: ' + ((e && (e.name || e.message)) || e), { ua: navigator.userAgent });
       say(e && e.name === 'NotAllowedError'
         ? 'the microphone is not allowed for this page — allow it in the browser to speak a question'
@@ -354,13 +383,77 @@
     r.shown = true; r.woke = how;
     r.wake_ms = Math.round(performance.now() - r.opened);
     clearTimeout(r.waking);
-    if (rec !== r && !busy) return;            // ended meanwhile
+    if (rec !== r) return;                     // ended meanwhile (a tap-stop too)
     const t0 = performance.now();
     const show = () => { if (rec === r) micState('rec', 'recording ' + clock(performance.now() - t0) + ' — tap the microphone to stop'); };
     show(); r.tick = setInterval(show, 250);
+    // the ready tone says it without the screen, once the microphone is red —
+    // and only for a microphone that gives sound: not after WAKE_MAX_MS of
+    // nothing. The microphone hears it: its windows are not counted (`hear`)
+    if (how === 'sound' && readyTone()) r.deaf_end_ms = deafEnd(r);
+  }
+
+  // THE READY TONE (operator, 2026-11-26: "Send a gentle ping when the
+  // microphone is ready (both car and no car) so the user knows when to talk
+  // without watching the screen"): one short soft tone when the microphone
+  // turns red (`wake`), on the phone and on a car's hands-free alike. Its own
+  // context, opened in the tap — the capture's is clocked by the output and
+  // may run no callback on a car (THE SECOND WAY TO RECORD). Web Audio's
+  // OscillatorNode, nothing fetched. False where the browser gives no sound
+  // (a context that is not running: suspended, interrupted, closed). Named a
+  // TONE: "ping" is the voice ping (app/voice_ping.py) and /ask/active's.
+  const TONE_MS = 160, TONE_HZ = 880, TONE_GAIN = 0.12;
+  // the microphone hears the tone after the output's latency and the route's
+  // (Bluetooth: 100-300 ms) and the capture's own buffering (a worklet window
+  // of 2048 samples, ~46 ms); its windows are not counted until the audio
+  // captured when it was played, plus that latency, the margin for the route
+  // and the buffering, and the tone with its tail, have passed (`deafEnd`:
+  // ~700 ms, before the reader has begun to speak). Measured in a loopback at
+  // coupling 0.5 (tests/browser/ask_voice.js 23): 150 ms of margin let a tone
+  // heard 300 ms late through as speech.
+  const TONE_MARGIN_MS = 400, TONE_TAIL_MS = 280;
+  let toneCtx = null, toneCount = 0, toneLast = null, toneUse = 0;
+  function toneUnlock() {
+    if (!AC) return;
+    try { if (!toneCtx || toneCtx.state === 'closed') toneCtx = new AC(); toneCtx.resume().catch(() => {}); }
+    catch (e) { toneCtx = null; }
+  }
+  function toneLatencyMs() {
+    if (!toneCtx) return 0;
+    const l = toneCtx.outputLatency || toneCtx.baseLatency || 0;
+    return Math.round(l * 1000);
+  }
+  function readyTone() {
+    toneLast = { state: toneCtx ? toneCtx.state : null, latency_ms: toneLatencyMs(), played: false };
+    if (!toneCtx || toneCtx.state !== 'running') return false;
+    try {
+      const t = toneCtx.currentTime, osc = toneCtx.createOscillator(), g = toneCtx.createGain();
+      osc.type = 'sine'; osc.frequency.value = TONE_HZ;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(TONE_GAIN, t + 0.02);            // no click at the start
+      g.gain.exponentialRampToValueAtTime(0.0001, t + TONE_MS / 1000);  // a soft end
+      osc.connect(g); g.connect(toneCtx.destination);
+      osc.start(t); osc.stop(t + TONE_MS / 1000 + 0.02);
+      toneCount++; toneLast.played = true;
+      try { window.dispatchEvent(new CustomEvent('louise-ready-tone')); } catch (e) { /* none */ }
+      return true;
+    } catch (e) { return false; }
+  }
+  // where, on the recording's own clock (ms of audio), the tone as heard ends:
+  // the audio captured so far — the worklet's windows as they come; the
+  // recorder's decoded length and the slice still being recorded — plus the
+  // output's latency, a margin, and the tone with its tail
+  function deafEnd(r) {
+    const captured = r.mode === 'recorder' ? Math.max(r.ms, r.decoded_ms || 0) + RECORDER_SLICE_MS : r.ms;
+    return captured + toneLatencyMs() + TONE_MARGIN_MS + TONE_TAIL_MS;
   }
 
   function release(r) {
+    // the tone's context sleeps between recordings (the next tap resumes it)
+    // — unless a new tap came meanwhile, whose microphone may still be opening
+    const use = toneUse;
+    setTimeout(() => { if (use === toneUse && !rec && toneCtx && toneCtx.state === 'running') toneCtx.suspend().catch(() => {}); },
+               TONE_MS + 500);
     clearInterval(r.tick); clearTimeout(r.watch); clearTimeout(r.max); clearTimeout(r.waking);
     if (r.mr && r.mr.state !== 'inactive') { try { r.mr.stop(); } catch (e) { /* already */ } }
     try { if (r.src) r.src.disconnect(); if (r.node) r.node.disconnect(); } catch (e) { /* already */ }
@@ -459,14 +552,6 @@
   const now = () => Math.round(performance.now());
   let times = { asked: null, first: null, last: null, started: [], taps: [], items: [] };
 
-  // the first sentence of a reading in two where it is long (FIRST_MAX)
-  function firstPieces(s) {
-    if (s.length <= FIRST_MAX) return [s];
-    const head = s.slice(0, FIRST_MAX);
-    let at = -1;
-    for (const m of head.matchAll(/[,;:](?=\s)/g)) if (m.index + 1 >= FIRST_MIN) at = m.index + 1;
-    return at < 0 ? [s] : [s.slice(0, at), s.slice(at).trim()];
-  }
   // the answer AS WRITTEN (ask.html `answerSource`): the page shows its
   // Markdown formatted, the node drops the marks before reading (app/speech.py)
   const answerText = () => {
@@ -521,6 +606,184 @@
       if (open) { if (fin.length) r.off += fin[fin.length - 1].end; return out; }
       r.at = nl + 1; r.off = 0;
     }
+  }
+
+  // THE FIRST SOUND WITHIN A SECOND (operator, 2026-11-26: "Knowing the
+  // processing time at 16 steps (first sentence only), process enough so
+  // that the speech starts within 1 second. The next speech chunk after the
+  // first must start with a proper gap from the previous one (you know
+  // already if the first cut is at a gap between 2 words, a comma, semi comma
+  // or full stop)"; replacing the same day's "first sentence whole"). The
+  // reading goes in PIECES: the first sized so the node makes it in
+  // FIRST_SOUND_MS at the first piece's steps (app/speech.py
+  // `reading_steps`: 16, then 20, 24, 28, 32), each next sized so it is made
+  // while the one before plays; a piece is cut at the best boundary that
+  // fits — a full stop, a ; or :, a comma, else a gap between two words —
+  // and the next starts after that boundary's own pause (GAP_MS), the
+  // silence the model put at the cut trimmed first (`trimWav`). Sentences
+  // that fit go whole, as before.
+  // THE RATES are measured: each clip's Server-Timing (`synth`, `audio`,
+  // `steps`) updates them, kept in this browser (RATES_KEY); until then the
+  // node's own of 2026-11-26 (114 chars at 32 steps: 4.6 s made, 8.1 s of
+  // sound; architecture: ~24 ms a char at 16 steps).
+  const FIRST_SOUND_MS = 1000, NET_MS = 120, MIN_PIECE = 12, RAMP = 4;
+  const GAP_MS = { word: 0, comma: 180, clause: 300 };
+  const RATES_KEY = 'louise-voice-rates';
+  const RATES0 = { per_step_char: 1.5, overhead: 150, audio_char: 71, full: 32 };
+  let rates = { ...RATES0 };
+  try { const k = JSON.parse(localStorage.getItem(RATES_KEY) || 'null'); if (k && typeof k === 'object') rates = { ...rates, ...k }; } catch (e) {}
+  // A SAMPLE FAR SLOWER THAN PREDICTED IS NOT SPEED: `synth` holds a cold
+  // load or a wait for the card (architecture, 2026-11-26: one 14 s clip took
+  // the rate from 1.5 to 11.9 and a dozen later pieces to the floor); one over
+  // OUTLIER_X times the prediction is not learned from
+  const OUTLIER_X = 3;
+  // — an ISOLATED one: a second in a row is the node's speed now, and is
+  // learned (architecture, 2026-11-26: a node steadily 3x slower was never
+  // learned). The sound's rate is learned from every clip.
+  let outlier = false;
+  function learn(t) {
+    if (rates.fixed || !t || !(t.chars > 0)) return;
+    if (t.audio > 0) rates.audio_char = 0.7 * rates.audio_char + 0.3 * (t.audio / t.chars);
+    if (t.steps > 0 && t.synth > 0 && !t.cache) {
+      const one = Math.max(0.05, (t.synth - rates.overhead) / (t.chars * t.steps));
+      const far = one > OUTLIER_X * rates.per_step_char;
+      if (!far || outlier) {
+        rates.per_step_char = 0.7 * rates.per_step_char + 0.3 * one;
+        rates.full = Math.max(rates.full === RATES0.full ? 0 : rates.full, t.steps, 2 * (t.steps - RAMP * (t.n || 0)));
+      }
+      outlier = far && !outlier;
+    }
+    try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {}
+  }
+  // THE RATES OF ONE ANSWER: taken once when it is asked (`asking`), so every
+  // reading of it — stopped and started again, read again — is cut in the
+  // same pieces and finds the node's kept clips (operator, 2026-11-09: "keep
+  // the buffering available even when I stop/start the speech"); what is
+  // learned meanwhile sizes the next answer
+  let answerRates = null;
+  // the steps the node makes piece n at (app/speech.py `reading_steps`)
+  const stepsOf = (n, k = rates) => Math.min(k.full, Math.floor(k.full / 2) + RAMP * n);
+  // THE LEAD: a reading's pieces are made one after the other and played one
+  // after the other; `plan` predicts, per reading, when the last piece will
+  // be made (`made`) and when its playing and pause will end (`free`). Piece
+  // n may take what is left of that lead: the first, FIRST_SOUND_MS; each
+  // next, the time from the last made to the last played — which grows as
+  // the pieces before play (architecture, 2026-11-26: a budget from the one
+  // piece before alone stuck at its floor after a short one, and cut a 175
+  // character sentence in 9).
+  function budget(n, p, k = rates) {
+    const per = k.per_step_char * stepsOf(n, k);
+    const time = n === 0 ? FIRST_SOUND_MS - NET_MS - k.overhead : (p.free - p.made) - k.overhead;
+    return Math.max(MIN_PIECE * 2, Math.floor(time / per));
+  }
+  // the lead after piece n of `chars`, cut at `gap`
+  function planned(p, n, chars, gap, k = rates) {
+    const make = k.overhead + k.per_step_char * stepsOf(n, k) * chars;
+    const made = p.made + make, play = Math.max(made, p.free);
+    return { made, free: play + chars * k.audio_char + (GAP_MS[gap] || 0) };
+  }
+  // the boundary after s[0..i): its kind, strongest first
+  const RANK = { sentence: 4, clause: 3, comma: 2, word: 1 };
+  // the punctuation of languages written without spaces between words: a
+  // cut there needs no space after it
+  const WIDE_CLAUSE = '；：', WIDE_COMMA = '，、';
+  function kindAt(s, i) {
+    const c = s[i - 1];
+    if (c === ';' || c === ':' || WIDE_CLAUSE.includes(c)) return 'clause';
+    if (c === ',' || WIDE_COMMA.includes(c)) return 'comma';
+    return 'word';
+  }
+  // NEVER AFTER A FULL STOP INSIDE A SENTENCE (architecture, 2026-11-26: "Ai
+  // sensi dell'art." | "5 del decreto", "Lo storico G." | "Cesare" — the
+  // operator's 2026-11-08 "G. Cesare" defect): a stop that ends a sentence
+  // is already the segmenter's boundary, so one inside is an abbreviation, an
+  // initial or a number's, and the gap after it is not a place to cut
+  const INNER_STOP = /[.!?…]["'»”)\]]*$/;
+  // s cut within `max` characters at its best boundary: [piece, rest, kind, at,
+  // restAt], or null where none is final yet. A strong boundary in the last
+  // two thirds of the budget is taken before a weaker later one; only a gap
+  // with a word after it counts (the stream may not have written it yet).
+  // where sentences start in s, as the segmenter tells them: a stop there,
+  // after no abbreviation, ENDS a sentence — the stream's open text holds a
+  // finished sentence and the first words of the next (architecture,
+  // 2026-11-26: "La legge lo vieta. Il" | "divieto vale…")
+  function starts(s) {
+    const out = new Set();
+    try {
+      if (window.Intl && Intl.Segmenter) {
+        for (const g of new Intl.Segmenter(undefined, { granularity: 'sentence' }).segment(s)) out.add(g.index);
+        return out;
+      }
+    } catch (e) { /* the regex below */ }
+    for (const m of s.matchAll(/[.!?…]["'»”)\]]*\s+(?=\S)/g)) out.add(m.index + m[0].length);
+    return out;
+  }
+  function split(s, max, open = false) {
+    let best = null, first = null;
+    const begin = starts(s);
+    for (let i = MIN_PIECE; i < s.length - 1; i++) {
+      if (best && i > max) break;
+      // a gap between two words, or the place after wide punctuation
+      const wide = (WIDE_CLAUSE + WIDE_COMMA).includes(s[i - 1]) && s[i] !== ' ';
+      if (s[i] !== ' ' && !wide) continue;
+      const restAt = wide ? i : i + 1;
+      // a rest too short to be a piece of its own ("[1].") is read with this
+      // one — of text that is final: the stream's open sentence has more coming
+      if (!open && s.slice(restAt).replace(/\[\d+\]/g, '').trim().length < MIN_PIECE) continue;
+      const head = s.slice(0, i);
+      let kind;
+      if (INNER_STOP.test(head)) {
+        // a stop: a sentence's end where the segmenter starts one after it,
+        // and no abbreviation or initial precedes it; else never a cut
+        if (endsInName(head) || !begin.has(restAt)) continue;
+        kind = 'sentence';
+      } else {
+        if (endsInName(head)) continue;
+        kind = kindAt(s, i);
+      }
+      if (i > max) { first = { i, kind, restAt }; break; }   // none fits: the first allowed past the budget
+      const key = [i >= max / 3 ? RANK[kind] : 0, i];
+      if (!best || key[0] > best.key[0] || (key[0] === best.key[0] && key[1] > best.key[1])) best = { i, kind, key, restAt };
+    }
+    const at = best || first;
+    if (!at) return null;
+    return [s.slice(0, at.i).trim(), s.slice(at.restAt).trim(), at.kind, at.i, at.restAt];
+  }
+  // a WAV of 16-bit PCM with the silence the model left at the cut trimmed
+  // (at its start, its end or both), TRIM_KEEP_MS of it kept; anything else,
+  // or a clip that would be left almost empty, as it came
+  // THE ENGINE'S OWN SILENCE THRESHOLD, -50 dBFS (OmniVoice's remove_silence,
+  // deploy/localai/patches/staged/0009): a fading last syllable is speech
+  // well below -34 dBFS, and a higher threshold cut it (operator, 2026-11-26:
+  // "the last word is cut ... the volume is fading out but while there is
+  // still speech"); 40 ms kept beyond the last sample above it
+  const TRIM_LEVEL = 32768 * Math.pow(10, -50 / 20), TRIM_KEEP_MS = 40;
+  function trimWav(buf, start, end) {
+    try {
+      const v = new DataView(buf);
+      if (v.getUint32(0, false) !== 0x52494646 || v.getUint32(8, false) !== 0x57415645) return buf;
+      let at = 12, fmt = null, data = null;
+      while (at + 8 <= buf.byteLength) {
+        const id = v.getUint32(at, false), size = v.getUint32(at + 4, true);
+        if (id === 0x666d7420) fmt = { ch: v.getUint16(at + 10, true), rate: v.getUint32(at + 12, true),
+                                       bits: v.getUint16(at + 22, true), pcm: v.getUint16(at + 8, true) };
+        if (id === 0x64617461) { data = { at: at + 8, size: Math.min(size, buf.byteLength - at - 8) }; break; }
+        at += 8 + size + (size & 1);
+      }
+      if (!fmt || !data || fmt.pcm !== 1 || fmt.bits !== 16) return buf;
+      const frame = 2 * fmt.ch, n = Math.floor(data.size / frame), keep = Math.round(fmt.rate * TRIM_KEEP_MS / 1000);
+      const loud = k => { for (let c = 0; c < fmt.ch; c++) if (Math.abs(v.getInt16(data.at + k * frame + 2 * c, true)) > TRIM_LEVEL) return true; return false; };
+      let a = 0, b = n;
+      if (start) { while (a < n && !loud(a)) a++; a = Math.max(0, a - keep); }
+      if (end) { while (b > a && !loud(b - 1)) b--; b = Math.min(n, b + keep); }
+      if (b - a < fmt.rate * 0.05 || (a === 0 && b === n)) return buf;
+      const out = new Uint8Array(data.at + (b - a) * frame);
+      out.set(new Uint8Array(buf, 0, data.at));
+      out.set(new Uint8Array(buf, data.at + a * frame, (b - a) * frame), data.at);
+      const w = new DataView(out.buffer);
+      w.setUint32(4, out.length - 8, true); w.setUint32(data.at - 4, (b - a) * frame, true);
+      return out.buffer;
+    } catch (e) { return buf; }
   }
 
   function speakState(on) {
@@ -661,9 +924,14 @@
       const d = await resp.json().catch(() => ({}));
       throw new Error((d.error && d.error.message) || d.detail || resp.statusText);
     }
-    const blob = await resp.blob();
+    let blob = await resp.blob();
     it.t.got = now();
     if (!live(r)) return null;
+    it.t.n = it.n; learn(it.t);
+    if (it.trimStart || it.trimEnd) {
+      blob = new Blob([trimWav(await blob.arrayBuffer(), it.trimStart, it.trimEnd)], { type: blob.type || 'audio/wav' });
+      if (!live(r)) return null;               // stopped during the trim: no URL to leak
+    }
     const u = URL.createObjectURL(blob); r.urls.push(u); return u;
   }
 
@@ -680,17 +948,41 @@
   }
 
   // the reading takes in what the answer box holds now
+  function push(r, text, gap) {
+    r.plan = planned(r.plan, r.items.length, text.length, gap, r.rates);
+    const prev = r.items[r.items.length - 1];
+    const it = { text, n: r.items.length, gap, trimEnd: gap !== 'sentence', trimStart: !!prev && prev.gap !== 'sentence',
+                 t: { chars: text.length, cut: now(), gap, budget: r.budget } };
+    times.items.push(it.t);
+    it.p = new Promise((ok, no) => { it.ok = ok; it.no = no; }); it.p.catch(() => {});
+    r.items.push(it);
+  }
   function feed(r) {
     const t = answerText();
     r.ended = !writing; r.text = t;
-    for (const whole of cut(r, t, r.ended)) {
-      for (const s of (r.items.length ? [whole] : firstPieces(whole))) {
-        const it = { text: s, n: r.items.length, t: { chars: s.length, cut: now() } };
-        times.items.push(it.t);
-        it.p = new Promise((ok, no) => { it.ok = ok; it.no = no; }); it.p.catch(() => {});
-        r.items.push(it);
+    for (const s of cut(r, t, r.ended)) r.queue.push(s);
+    // the pieces: whole sentences where they fit their budget, else cut at
+    // the best boundary within it; the open sentence of the stream too, once
+    // there is more of it than the budget holds
+    for (;;) {
+      const max = r.budget = budget(r.items.length, r.plan, r.rates);
+      if (r.queue.length) {
+        const s = r.queue[0];
+        const got = s.length > max ? split(s, max) : null;
+        if (got) { push(r, got[0], got[2]); r.queue[0] = got[1]; }
+        else { push(r, s, 'sentence'); r.queue.shift(); }
+        continue;
       }
+      // the stream's open sentence: its text after the reading's place
+      if (r.ended || t.indexOf('\n', r.at) >= 0) break;
+      const open = collapse(t.slice(r.at)).slice(r.off);
+      if (open.length <= max) break;            // it may still end within the budget
+      const got = split(open, max, true);
+      if (!got) break;
+      push(r, got[0], got[2]);
+      r.off += got[4];                           // the reading's place: past the piece (and its space)
     }
+    remember(r);
     pump(r);
     if (r.more) { const f = r.more; r.more = null; f(); }
   }
@@ -707,9 +999,34 @@
     stopReading(); startReading();
   }
 
+  // A READING OF THE SAME ANSWER REPLAYS THE PIECES ALREADY CUT (operator,
+  // 2026-11-09: "keep the buffering available even when I stop/start the
+  // speech"): the text cut while it streamed is not cut the same way once it
+  // has ended — a sentence closes, a short tail joins it — so a re-read cut
+  // afresh missed the node's kept clips (architecture, 2026-11-26: 2 of 10).
+  // `memo` is the last reading's cut — its pieces and its place in the text —
+  // and a new reading of that text in that language and voice starts from it.
+  let memo = null;
+  function remember(r) {
+    memo = { lang: r.lang, voice: r.voice, text: r.text, at: r.at, off: r.off, queue: [...r.queue],
+             plan: { ...r.plan }, rates: r.rates,
+             pieces: r.items.map(it => ({ text: it.text, gap: it.gap, budget: it.t.budget })) };
+  }
+  function replay(r) {
+    if (!memo || memo.lang !== r.lang || memo.voice !== r.voice || !answerText().startsWith(memo.text)) return r;
+    r.rates = memo.rates; r.text = memo.text; r.at = memo.at; r.off = memo.off; r.queue = [...memo.queue];
+    for (const p of memo.pieces) { r.budget = p.budget; push(r, p.text, p.gap); }
+    r.plan = { ...memo.plan };
+    return r;
+  }
   function newReading() {
+    if (!answerRates) answerRates = { ...rates };   // a page restored after a reload: its answer's rates, from now
+    return replay(newReadingFresh());
+  }
+  function newReadingFresh() {
     return { id: Math.random().toString(36).slice(2, 12) || 'r', ctl: new AbortController(), lang: answerLang, text: '', at: 0, off: 0, ended: false,
-             items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false, voice: chosenVoice() };
+             items: [], next: 0, inflight: 0, urls: [], wake: null, more: null, blocked: false, voice: chosenVoice(),
+             queue: [], budget: null, plan: { made: 0, free: 0 }, rates: { ...(answerRates || rates) } };
   }
   function dropAhead() {
     const r = ahead; if (!r) return;
@@ -747,6 +1064,10 @@
         if (reading !== r) return;
         if (url) { r.items[i].t.play = now(); await play(r, url); r.items[i].t.end = now(); }
         if (reading !== r) return;
+        // the pause the boundary it was cut at asks for, before the next piece
+        const gap = GAP_MS[r.items[i].gap];
+        if (gap && i + 1 < r.items.length) await new Promise(ok => setTimeout(ok, gap));
+        if (reading !== r) return;
         if (r.blocked) {
           if (speak) speak.hidden = false;
           say('the browser did not let the page play sound — tap the speaker to hear the answer');
@@ -773,6 +1094,9 @@
     asking() {
       const q = document.getElementById('q');
       stopReading(); dropAhead();
+      answerRates = { ...rates };            // this answer's rates, for every reading of it
+      outlier = false;                       // a slow clip of the last answer says nothing of this one's
+      memo = null;                           // and its cut is its own
       times = { asked: now(), first: null, last: null, started: [], taps: [], items: [] };
       auto = !!speak && dictated !== null && !!q && q.value.trim() === dictated;
       if (auto) unlock();
@@ -793,6 +1117,7 @@
     },
     answerCleared() {
       writing = false; stopReading(); dropAhead(); if (speak) speak.hidden = true;
+      answerRates = null; memo = null;
       const q = document.getElementById('q'); if (q) lastAsked = q.value.trim();
     },
     // a question of the page started (true) or ended (false): the
@@ -814,8 +1139,14 @@
                sentences: times.items.map(t => ({ chars: t.chars, cut: rel(t.cut), sent: rel(t.sent),
                  got: rel(t.got), synth: t.synth ?? null, audio: t.audio ?? null,
                  turn: t.turn ?? null, node: t.node ?? null, cache: t.cache ?? null,
-                 play: rel(t.play), end: rel(t.end) })) };
+                 play: rel(t.play), end: rel(t.end), steps: t.steps ?? null, gap: t.gap ?? null,
+                 budget: t.budget ?? null })) };
     },
-    sentences, cut, firstPieces, downsample, wavBytes,
+    // how many ready tones sounded on this page, and the last one's context
+    tones: () => toneCount, toneLast: () => toneLast, toneContext: () => toneCtx, deafEnd,
+    sentences, cut, downsample, wavBytes, split, budget, trimWav, rates: () => ({ ...rates }),
+    // a test's or an operator's rates, kept as measured ones are
+    setRates(k) { rates = { ...RATES0, ...k }; answerRates = null; outlier = false; try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {} },
+    learn, planned,
   };
 })();

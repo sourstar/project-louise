@@ -1139,6 +1139,63 @@ measured (published figures disagree).
     the operator's monitor is dropped only when the worker's rule has been seen live. Fixed the same day: the
     watcher says once whether it is armed, with its limit, its two lines and the reading
     (`memory_yield.watch`).
+- **An admin's questions are traced for timing and quality (operator, 2026-11-26: "Log admin only queries with
+  timestamps ... which models are loaded, system and gpu memory usage, cpu load, load/unload/parking of the
+  models, together with query and results"; `app/query_trace.py`).** One JSON line per Ask search or answer job
+  of an admin in `state/query-traces/<UTC day>.jsonl` (30 days kept), joined by `search_id`: the start and end,
+  marks (`search_done`, `first_word`, `last_word`, `cut`, `error`) in ms, the search's own timings, the node
+  sampled every second (CPU busy %, load average, RAM and swap, each card's VRAM and its processes; the models
+  loaded and parked per server at the start and the end), the node's `models` event lines meanwhile (web and
+  worker: cold starts, loads, evictions, parks, returns), the query, the top 50 hits with their scores and
+  `moved_by`, and the answer's text. Nobody else's question is read. EVERY WAY AN ADMIN ASKS: the relay, `/ask/query`,
+  `/v1/chat/completions`, `/api/ask/search|chat|pdf|lookup|traverse`, MCP over HTTP and `ask serve`'s stdio. After
+  architecture's read (2026-11-26): the end time is the question's (a 1.3 s job had been written as 2,301 ms);
+  the web's own model lines ("unloaded before the search", "loading ahead") now reach the event log
+  (`question_card.set_log` at the web's start); `/system` from model_load's cache, never a read a question's
+  fresh one waits behind; a card's process list only when it changed; the answer's `read` count. OWED: the
+  GPU probe's `/gpu` scan cost on the node, once (measuring.md), when the branch is in a release.
+- **A source is a work of its time; a quotation in another language is spoken in it (operator, 2026-11-26).**
+  (1) A quoted span («…», “…”, „…“, "…") of two words or more that reads clearly as another language than its
+  sentence is synthesized as its own segment in that language and joined to the rest (60 ms between), in the
+  piece's one turn and at its steps (`speech.quote_segments`); a one-word quotation, or one in the sentence's
+  language, stays in the sentence — the text alone says nothing of it. (2–3) Each source in the answer's
+  prompt says its first publication ("by PG's automatic summary" where that is where the year was read) and
+  what its own classification says it is — PG's LCSH form, its "Category: …" shelves, its LCC class, for PG's
+  records only (a Wikipedia article's categories say what it is about) — and its subjects, and that they call it a literary work (`retrieval._work_said`); the model is told that a literary
+  work's events are what it narrates, never historical fact, and that a source's "now" counts from its first
+  publication, never from today. (4) The answer's sources (`louise_sources`) and its PDF carry the first
+  publication. Coverage is the corpus's: Gutenberg states a first publication for ~12 % of its books (marc520);
+  the rest say none, and nothing is imported (CLAUDE.md).
+- **The voice: the first sound within a second, the steps rising 16→32 by 4 (operator, 2026-11-26, replacing the
+  same day's first sentence read whole).** The page cuts the reading into pieces: the first sized to be made within
+  1 s at 16 steps (~30 characters at ~1.5 ms a char a step + 150 ms), each next to be made while the one before
+  plays; a piece ends at a ; or :, a comma, or a word gap, and the next starts after that boundary's pause (0 /
+  180 / 300 ms), the model's silence at the cut trimmed. The node makes piece n at half the steps plus 4n, up to
+  full (`speech.reading_steps`) and says the steps in `Server-Timing`; the page learns its rates from each clip.
+  After architecture's read (2026-11-26): never cut after a full stop inside a sentence ("art." | "5", "G." |
+  "Cesare"); each budget from the predicted lead of the pieces queued, not the one piece before (a 175-char
+  sentence had gone in 9 pieces); a clip over 3x the prediction (a cold load) is not learned; one answer's rates
+  fixed when it is asked, so a re-read finds the kept clips; ，、；： cut a language without spaces.
+  Second read (2026-11-26): a full stop where the segmenter starts a sentence, after no abbreviation, is a
+  sentence's cut even inside the stream's open text ("La legge lo vieta." | "Il divieto…"); "Abs.", "Hrn.",
+  "z. B.", "e.g.", "U.S.", "v." and every single letter end no sentence; one slow clip is an outlier, a second in
+  a row is the node's speed; a page restored after a reload takes its answer's rates; a re-read REPLAYS the last
+  reading's pieces (the stream's cut and the ended text's differ); no gap within the budget: the first past it.
+  MEASURED: nothing on the node yet; the next reading's line says each piece's budget, steps and boundary.
+- **The voice: the first sentence whole and at half the steps; a ping when the microphone is ready (operator,
+  2026-11-26).** (1) A reading's sentence 0 is made at half `[speech] tts_steps` (the model's 32 when unset: 16),
+  every later one at full (`speech.first_steps`; the steps are in the kept clip's key). (2) The first sentence is
+  no longer cut at its last , ; : past 90 characters (`firstPieces` removed): its second half waited for its own
+  synthesis, a gap longer than a full stop's. (3) One soft 880 Hz tone of 160 ms when the microphone turns red,
+  phone and car alike, once it gives sound, from its own context opened in the tap (the "ready tone"); the
+  microphone's energy check skips the windows that may hold its echo, on the audio's own clock (~700 ms: the
+  output latency, 400 ms for a Bluetooth route and the buffering, the tone and its tail), proven by a loopback
+  at coupling 0.5 in both ways of recording (tests/browser/ask_voice.js 23). Speech that starts inside that
+  window keeps its end (the floor follows its minimum there). Unset `tts_steps`: half the model's own 32. A kept
+  clip takes its turn in order (unmarked, it left the next sentence waiting TURN_ARRIVE_S, 5 s; marked at once,
+  the next overtook the one before).
+  Measured before: 11-26's reading, sentence 1 (114 chars) made in 4.6 s at 32 steps; the first word 48.9 s after
+  Ask is the larger part, and is architecture's (mode-switch-room). After: owed, from the next voice-timeline line.
 - **The Ask button is Abort while a question is being answered (operator, 2026-11-25: "while a query is in
   processing I want the Ask button to switch to Abort"; `app/templates/ask.html`, 07 §7.4).** Pressed, the
   question's search and answer jobs are cancelled on the node (`DELETE /ask/relay/<id>`, the route the "stuck"

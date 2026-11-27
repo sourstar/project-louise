@@ -29,7 +29,10 @@ TOOLS: list[dict[str, Any]] = [
                     "record, chunk, trust level and producer (05 §5.3); facts from reference "
                     "sources beside the lists, never in them. Search the reader's own words first; when "
                     "what is asked for is not in the results, search again with the work's title and "
-                    "author, a name, or other key terms.",
+                    "author, a name, or other key terms. A result's `work_said` says what its own record "
+                    "states the work is: a literary work's events are what it narrates, never historical "
+                    "fact; a work of opinion or belief states its author's view, to be attributed; a "
+                    "source's 'now' counts from its first publication, never from today.",
      "inputSchema": {"type": "object", "required": ["query"], "properties": {
          "query": {"type": "string"},
          "collections": {"type": "array", "items": {"type": "string"},
@@ -138,6 +141,17 @@ def _call_tool(name: str, args: dict[str, Any]) -> Any:
     raise KeyError(name)
 
 
+def traced(who: str, admin: bool) -> Callable[[str, dict[str, Any]], Any]:
+    """`_call_tool`, an admin's calls traced for timing and quality
+    (app/query_trace.py): one line per tool call, its result kept."""
+    from app import query_trace
+
+    def call(name: str, args: dict[str, Any]) -> Any:
+        q = str(args.get("query") or args.get("id") or args.get("question") or json.dumps(args, default=str))
+        return query_trace.run(f"mcp:{name}", who, admin, q, _call_tool, name, args)
+    return call
+
+
 def handle(message: dict[str, Any], *, call: Callable[[str, dict[str, Any]], Any] = _call_tool
            ) -> dict[str, Any] | None:
     """One JSON-RPC request → its response, or None for a notification."""
@@ -194,9 +208,11 @@ def _error(rid, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
 
 
-def serve_stdio(inp=None, out=None, *, call: Callable[[str, dict[str, Any]], Any] = _call_tool) -> int:
+def serve_stdio(inp=None, out=None, *, call: Callable[[str, dict[str, Any]], Any] | None = None) -> int:
     """`ask serve`: one JSON object per line in, one per line out, until
-    the input ends. Needs nothing but what is held (07 §7.3)."""
+    the input ends. Needs nothing but what is held (07 §7.3). Only the node's
+    operator runs it, so its calls are an admin's, traced (`traced`)."""
+    call = call or traced("cli:ask serve", True)
     inp = inp or sys.stdin
     out = out or sys.stdout
     for line in inp:
@@ -212,4 +228,8 @@ def serve_stdio(inp=None, out=None, *, call: Callable[[str, dict[str, Any]], Any
         if response is not None:
             out.write(json.dumps(response, ensure_ascii=False) + "\n")
             out.flush()
+    # the last calls' traces written before the process ends (their samplers
+    # are daemon threads)
+    from app import query_trace
+    query_trace.flush()
     return 0

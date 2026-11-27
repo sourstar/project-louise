@@ -407,6 +407,24 @@ READING = {"first_word": 2400, "last_word": 9100, "started": [2450], "taps": [],
                           "play": 11400, "end": 16600}]}
 
 
+def test_a_readings_pieces_say_their_budget_steps_and_boundary(isolated_config, monkeypatch):
+    """Operator, 2026-11-26: the first piece within a second at 16 steps, the
+    steps rising by 4, each cut at a boundary: the line says each."""
+    from app import model_pins
+    lines = []
+    monkeypatch.setattr(model_pins, "node_event", lambda level, text: lines.append((level, text)))
+    body = json.loads(json.dumps(READING))
+    body["sentences"][0].update(budget=30, steps=16, gap="comma")
+    body["sentences"][1].update(budget=66, steps=20, gap="sentence")
+    body["sentences"].append({"chars": 3, "gap": "<script>", "steps": 24})
+    assert TestClient(api.app).post("/ask/voice/timeline", json=body).status_code == 204
+    (_level, text), = lines
+    assert "piece 1 (62 chars of a budget of 30, at 16 steps, cut at a comma): " in text
+    assert "steps 16, 20, 24" in text
+    numbers = json.loads(text.split(" — ")[2])
+    assert numbers["sentences"][2]["gap"] is None, "a boundary of a known few, never the client's text"
+
+
 def test_a_readings_times_are_one_line_saying_where_the_wait_went(isolated_config, monkeypatch):
     from app import model_pins
     lines = []
@@ -417,14 +435,14 @@ def test_a_readings_times_are_one_line_saying_where_the_wait_went(isolated_confi
     assert level == "info" and text.startswith("voice: reading (guest, it) — ")
     assert "the answer's first word 2.4 s after Ask" in text and "the reading started at 2.5 s (by itself)" in text
     assert "FIRST SOUND at 6.0 s, 3.6 s after the first word" in text
-    assert ("sentence 1 (62 chars): cut 0.7 s after the first word, asked for 0.0 s later, here 2.9 s after that "
+    assert ("piece 1 (62 chars): cut 0.7 s after the first word, asked for 0.0 s later, here 2.9 s after that "
             "(the node made it in 2.5 s, 4.1 s of sound), played 0.1 s after it arrived") in text
-    assert "the longest silence between two sentences 1.2 s" in text and "7 sentence(s)" in text
+    assert "the longest silence between two pieces 1.2 s" in text and "7 piece(s)" in text
     assert "Dante" not in text and "Firenze" not in text, "times only: never a word of the answer"
     numbers = json.loads(text.split(" — ")[2])
     assert numbers["first_word"] == 2400 and numbers["sentences"][0] == {
         "chars": 62, "cut": 3100, "sent": 3110, "got": 6000, "synth": 2510, "audio": 4100, "turn": 0, "node": 2700,
-        "cache": None, "play": 6050, "end": 10150}
+        "cache": None, "play": 6050, "end": 10150, "steps": None, "budget": None, "gap": None}
     assert text.endswith("Chrome/142 Mobile")
 
 

@@ -28,6 +28,7 @@ public API surface is unchanged.
 """
 import contextvars
 import json
+import re
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -1326,6 +1327,12 @@ def _legs_withheld(collection, partial: dict) -> list[dict]:
     return out
 
 
+#: the plugins whose records' `subjects` are a library's subject headings
+#: and class codes (LCSH, LCC) and whose `bookshelves` hold the library's
+#: own categories — what a work IS, not what it is about
+CLASSIFIED_PLUGINS = frozenset({"gutenberg"})
+
+
 def _attach_metadata_and_enqueue(con, collection, hits: list[dict]) -> None:
     """Attaches title/authors/lang to each hit and, in 'lazy' embed_mode,
     queues the hit documents not yet embedded. Shared by search() and
@@ -1335,10 +1342,28 @@ def _attach_metadata_and_enqueue(con, collection, hits: list[dict]) -> None:
     if ids:
         marks = ",".join("?" for _ in ids)
         for r in con.execute(
-                f"SELECT native_id,title,authors,lang FROM documents "
+                f"SELECT native_id,title,authors,lang,subjects,bookshelves FROM documents "
                 f"WHERE source=? AND native_id IN ({marks})",
                 [collection.plugin] + [str(i) for i in ids]):
+            # the record's own classification — its subject headings and
+            # class codes, its shelves (PG's "Category: …") — for what the
+            # answer's model is told the work IS (`_work_said`; operator,
+            # 2026-11-26: "Collections like gutenberg carry the category tag
+            # to determine what's fiction, what's a fact and what's an opinion")
             meta[int(r["native_id"])] = {"title": r["title"], "authors": r["authors"], "lang": r["lang"]}
+            # ONLY WHERE THE SUBJECTS ARE A LIBRARY'S HEADINGS: PG's LCSH and
+            # LCC, and its category shelves. A Wikipedia article's categories
+            # ("Italian poetry", "1890s novels") say what it is ABOUT, and
+            # read as a genre they would call an encyclopedia literature
+            # (architecture, 2026-11-26)
+            if collection.plugin in CLASSIFIED_PLUGINS:
+                one = meta[int(r["native_id"])]
+                one.update(subjects=r["subjects"] or "", bookshelves=r["bookshelves"] or "")
+                # what the record states its work is, for the page, the
+                # answer's sources and its PDF (`work_verdict`); absent: none
+                verdict = work_verdict(one)
+                if verdict:
+                    one["work"] = verdict
     for h in hits:
         h.update(meta.get(h["book_id"], {}))
         h.pop("rrf", None)
@@ -1853,6 +1878,240 @@ ANSWER_SYSTEM = (
     "facts, not ranked evidence — use them but do not cite them with [n]."
 )
 
+#: A SOURCE IS A WORK OF ITS TIME (operator, 2026-11-26: "the AI summary
+#: makes no distinction between facts and fiction; it happens that a
+#: historical character is mentioned in a book, and the content of the book
+#: is reported as an historical fact"; "sometimes a source reports a time
+#: span related to the time the source has been written (Napoleon is dead
+#: since 100 years and still...); the AI summary must take into account the
+#: publication date (the first publication date, not the publication in
+#: Gutenberg)"). Each source's header says what its own record says of the
+#: work — its first publication, its subjects, whether they call it a
+#: literary work (`_work_said`) — and the model is told how to read them.
+#: Only the collection's own corpus, or an annotation named as such
+#: (CLAUDE.md, "A collection holds only the information contained in its
+#: corpus"); where the record says nothing, the header says nothing.
+WORK_RULE = (
+    " Each source is a work of its own time. Where its header says it is a literary work (fiction, a "
+    "novel, a play, poetry), what it tells is what that work narrates: write \"in the novel …\" or "
+    "\"the author imagines …\", never present its events or its characters' deeds as historical fact. "
+    "A time span or a 'now' in a source (\"dead these hundred years\", \"today\") counts from that "
+    "work's first publication, when its header gives one: date it from that year, never from today; "
+    "where the header gives none, do not turn it into a date. Where its header says a work of opinion or "
+    "belief, what it states is its author's "
+    "view: attribute it (\"X argues …\", \"according to X …\"), never present it as established fact. "
+    "A date's source is named where the header names it (\"by …\")."
+)
+
+#: A LITERARY WORK, as the record's own subjects say it — the Library of
+#: Congress Subject Headings Project Gutenberg's records carry (its RDF
+#: `dcterms:subject`, app/plugins/gutenberg/rdf.py), where the genre is the
+#: heading's FORM: its last subdivision ("Napoleon I … -- Fiction", "-- Drama",
+#: "-- Poetry", "-- Juvenile fiction") or a genre heading of its own
+#: ("Historical fiction", "Short stories", "Love stories", "English poetry").
+#: Never a word anywhere in a heading: "Roman Empire", "Romance languages",
+#: "Drama -- History and criticism" are about history, languages or
+#: literature, and calling them fiction would tell the model a history book
+#: invents (architecture, 2026-11-26).
+LITERARY_FORMS = frozenset({"fiction", "juvenile fiction", "drama", "juvenile drama", "poetry",
+                            "juvenile poetry", "comic books, strips, etc"})
+LITERARY_HEADING = re.compile(
+    r"^(?:[\w' .-]+ )?(?:fiction|poetry|drama|stories|short stories|tales|fairy tales|fables|"
+    r"novels|romances|plays|verse|ballads|sonnets|epic poetry)$", re.IGNORECASE)
+
+
+def literary(subject: str) -> bool:
+    """Whether one subject heading calls its record a literary work: its
+    form subdivision (the last), or its main heading as a genre — with its
+    qualifiers stripped ("Fairy tales -- Germany", "Short stories, American",
+    "Greek drama (Tragedy)", "Epic poetry, Greek") — never a heading about
+    literature (its criticism, its history, its study) nor about the Bible."""
+    parts = [p.strip().rstrip(".") for p in str(subject).split("--")]
+    if not parts or not parts[0]:
+        return False
+    if len(parts) > 1 and parts[-1].lower() in LITERARY_FORMS:
+        return True                       # the heading's FORM: "France -- History -- … -- Drama"
+    if any(p.lower() in ("history and criticism", "criticism and interpretation", "bibliography",
+                         "study and teaching", "history", "technique", "authorship", "indexes") for p in parts[1:]):
+        return False
+    main = re.sub(r"\s*\([^)]*\)\s*$", "", parts[0])          # "(Tragedy)", "(Literary genre)"
+    main = re.sub(r",\s*[^,]+$", "", main)                        # ", American", ", Greek", ", English"
+    return parts[-1].lower() in LITERARY_FORMS or bool(LITERARY_HEADING.match(main))
+
+
+#: PG's own shelves of FORM, by their exact names (after "Category: "): what
+#: the work IS. Its other shelves are TOPICS — Adventure, Humour, Mythology,
+#: History - Religious, Politics — and a topic says nothing of fiction or
+#: opinion: they made Anabasis, Plutarch, The Golden Bough, the US
+#: Constitution and the Maastricht Treaty literature or opinion
+#: (architecture, 2026-11-26, on 37,334 texts of PG's catalogue)
+LITERARY_SHELVES = frozenset(s.casefold() for s in (
+    "Novels", "Historical Novels", "Short Stories", "Poetry", "Plays/Films/Dramas",
+    "Science-Fiction & Fantasy", "Romance", "Crime, Thrillers and Mystery", "Crime, Thrillers & Mystery"))
+#: "Religion/Spirituality" is a TOPIC shelf too, as Mythology and History -
+#: Religious are: it made The Golden Bough (anthropology) opinion, and reaches
+#: 4,159 records of the corpus (architecture, 2026-11-26)
+OPINION_SHELVES = frozenset(s.casefold() for s in (
+    "Essays, Letters & Speeches", "Philosophy & Ethics"))
+#: the record's own statements that it is NOT invention — a life, a history
+#: of a literature, a travel account, sources, scripture: they veto a shelf
+#: and a bare genre heading (a form subdivision "-- Fiction" still stands)
+NONFICTION_SUBDIVISIONS = frozenset(("biography", "history and criticism", "criticism and interpretation",
+                                     "criticism, interpretation, etc", "commentaries",
+                                     "technique", "description and travel", "sources"))
+#: a record that states it is a study of a work — its criticism, its
+#: commentary — is no work of that genre itself, whatever genre heading it
+#: also carries ("Gnomic poetry, Hebrew" on Cheyne's criticism, #65866;
+#: "Expositor's Bible: The Psalms" on a Poetry shelf, #44027, #30252)
+CRITICISM_SUBDIVISIONS = frozenset(("history and criticism", "criticism and interpretation",
+                                    "criticism, interpretation, etc", "commentaries"))
+#: SCRIPTURE, as its record writes it (architecture, 2026-11-26, over PG's
+#: 78,518 texts): a heading that IS a scripture — its title alone, or with
+#: "-- Selections" / "-- Paraphrases" ("Bible", "Qur'an", "Mishnah. Avot",
+#: "Tipitaka. … Jataka -- Paraphrases, English"), or one carrying "-- Sacred
+#: books" / "-- Sacred texts" ("Taoism -- Sacred books"), or its stories
+#: ("Bible stories", "Book of Mormon stories", "Jataka stories") — every
+#: religion alike. A heading ABOUT a scripture is no scripture: its
+#: criticism, its sermons, "Bible and science" follow the rule of any work,
+#: and its events retold with a literary form ("Bible. Genesis -- History of
+#: Biblical events -- Poetry", Ben-Hur's "-- Fiction", "Bible plays") are
+#: literature like any other — but a scripture's own stories stay scripture
+#: whatever form they take ("Bible stories -- Juvenile fiction", #11083,
+#: #49643), as the Jataka's do. Scripture gets no verdict at all: one work on
+#: two shelves must not be framed two ways (invariant 4).
+SCRIPTURE_TITLES = ("bible", "qur'an", "quran", "koran", "talmud", "mishnah", "midrash", "vedas", "upanishads",
+                    "tipitaka", "book of mormon", "bhagavadgita", "puranas")
+SCRIPTURE_STORIES = SCRIPTURE_TITLES + ("jataka",)
+SCRIPTURE_OWN = ("selections", "paraphrases")
+
+
+def scripture(heading: str) -> bool:
+    """Whether one subject heading says its record IS a scripture."""
+    parts = [p.strip().rstrip(".").casefold() for p in str(heading).split("--")]
+    if not parts or not parts[0]:
+        return False
+    if any(p.startswith(("sacred books", "sacred texts")) for p in parts[1:]):
+        return True
+    main = parts[0].replace("’", "'")
+    if any(re.match(rf"^{re.escape(t)} stories\b", main) for t in SCRIPTURE_STORIES):
+        return True
+    title = main.split(".")[0].strip()
+    if title.split(" (")[0] not in SCRIPTURE_TITLES:
+        return False
+    return all(p.startswith(SCRIPTURE_OWN) for p in parts[1:])
+
+
+#: satire is a literary work's own mode: its "argument" is the author's
+#: invention, never their view (A Modest Proposal, #1080)
+SATIRE = re.compile(r"\bsatire\b", re.IGNORECASE)
+#: a BARE genre heading is a topic: a work ABOUT poetry (Aristotle's Poetics,
+#: Shelley's Defence of Poetry) as often as a book of poems
+BARE_GENRES = frozenset(("poetry", "drama", "fiction"))
+CATEGORY = "Category:"
+#: Library of Congress Classification, as PG's records carry it ("PQ", "DC",
+#: "PZ", "E300", "F590.3"): PZ is fiction in English and juvenile fiction.
+#: The other literature classes (PA-PT) hold criticism and the classics'
+#: histories too: named, never read as fiction. PN is literature in general
+#: (its theory, its history).
+LCC = re.compile(r"^[A-Z]{1,3}(?:\d+(?:\.\d+)?)?$")
+
+
+def _main_heading(subject: str) -> str:
+    main = str(subject).split("--")[0].strip().rstrip(".")
+    main = re.sub(r"\s*\([^)]*\)\s*$", "", main)
+    return re.sub(r",\s*[^,]+$", "", main).strip()
+
+
+def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -> tuple[str, str] | None:
+    """What a record STATES its work is — ("a literary work" | "a work of
+    opinion or belief", the basis) — or None where it states neither.
+
+    Literary: a heading's form ("-- Fiction", "Historical fiction"); else,
+    where nothing in the record states it is a life, a history, a travel
+    account, sources or scripture, an exact PG form shelf, LCC PZ, or a
+    bare genre heading on a record with no essay or philosophy shelf and no
+    LCC PN. Opinion or belief: only the two exact PG shelves that say so (Essays, Letters & Speeches;
+    Philosophy & Ethics), never on a satire.
+    Scripture gets no verdict at all: the same work on two shelves must not
+    be framed two ways (invariant 4, no point of view by default)."""
+    cats = {c.casefold() for c in categories}
+    if any(scripture(x) for x in subjects):
+        return None
+    studied = any(p.strip().rstrip(".").casefold() in CRITICISM_SUBDIVISIONS
+                  for x in subjects for p in x.split("--")[1:])
+    # a FORM subdivision ("-- Fiction", "-- Poetry") is the record saying what
+    # it is; a genre heading ("Gnomic poetry, Hebrew") is, unless the record
+    # also says it is a study of such works
+    if any(len(x.split("--")) > 1 and x.split("--")[-1].strip().rstrip(".").casefold() in LITERARY_FORMS
+           for x in subjects) or (not studied and any(
+               literary(x) and _main_heading(x).casefold() not in BARE_GENRES for x in subjects)):
+        return ("a literary work", "by its subject headings")
+    vetoed = any(p.strip().rstrip(".").casefold() in NONFICTION_SUBDIVISIONS
+                 for x in subjects for p in x.split("--")[1:])
+    if not vetoed:
+        if cats & LITERARY_SHELVES:
+            return ("a literary work", "by its Gutenberg category")
+        if "PZ" in classes:
+            return ("a literary work", "by its Library of Congress class")
+        if any(_main_heading(x).casefold() in BARE_GENRES and len(x.split("--")) == 1 for x in subjects) \
+                and not (cats & OPINION_SHELVES) and not any(c.startswith("PN") for c in classes):
+            return ("a literary work", "by its subject headings")
+    # a satire is its author's invention; a study OF satire is not one
+    if cats & OPINION_SHELVES and not any(
+            SATIRE.search(_main_heading(x)) and not x.rstrip(". ").casefold().endswith("history and criticism")
+            for x in subjects):
+        return ("a work of opinion or belief", "by its Gutenberg category")
+    return None
+
+
+def work_verdict(h: dict) -> dict | None:
+    """What a hit's own record states its work is — {"kind", "basis"} — for
+    the page, the answer's sources and its PDF; None where it states neither
+    (the same verdict the answer's header gives, `_work_kind`)."""
+    every = _split(h.get("subjects"))
+    classes = [x for x in every if LCC.match(x)]
+    subjects = [x for x in every if not LCC.match(x)]
+    categories = [x[len(CATEGORY):].strip() for x in _split(h.get("bookshelves")) if x.startswith(CATEGORY)]
+    got = _work_kind(subjects, categories, classes)
+    return {"kind": got[0], "basis": got[1]} if got else None
+
+
+def _split(v) -> list[str]:
+    if isinstance(v, str):
+        return [x.strip() for x in v.split("|") if x.strip()]
+    return [str(x).strip() for x in (v or ()) if str(x).strip()]
+
+
+def _work_said(h: dict) -> str:
+    """What a hit's own record says of its WORK, for the answer's header:
+    its first publication (`first_published`; "by PG's automatic summary"
+    where that is where the year was read, app/ask/works.py), what it is
+    (`_work_kind`), PG's category shelves, its LCC class and its subject
+    headings — set on a hit only for a CLASSIFIED_PLUGINS record. Empty
+    where the record says nothing."""
+    parts = []
+    year = h.get("first_published")
+    if year:
+        by = h.get("first_published_by")
+        parts.append(f"first published {year}" + (f" (by {by})" if by else ""))
+    # `subjects` only: set on the live path for CLASSIFIED_PLUGINS records alone
+    # (`work_subjects`, of a path no longer run, is never read: architecture, 2026-11-26)
+    every = _split(h.get("subjects"))
+    classes = [x for x in every if LCC.match(x)]
+    subjects = [x for x in every if not LCC.match(x)]
+    categories = [x[len(CATEGORY):].strip() for x in _split(h.get("bookshelves")) if x.startswith(CATEGORY)]
+    kind = _work_kind(subjects, categories, classes)
+    if kind:
+        parts.append(f"{kind[0]} ({kind[1]})")
+    if categories:
+        parts.append("Gutenberg category: " + "; ".join(categories[:4])[:160])
+    if classes:
+        parts.append("LCC " + ", ".join(classes[:3]))
+    if subjects:
+        parts.append("subjects: " + "; ".join(subjects[:6])[:240])
+    return (" — " + " — ".join(parts)) if parts else ""
+
+
 #: QWEN3'S OWN SWITCH, in the prompt — as `llm._RESTRICT_SYSTEM` carries it.
 #: The node's chat model ignores `chat_template_kwargs.enable_thinking` and
 #: thinks before it answers. Measured on "Diritto all'oblio" over
@@ -1928,14 +2187,14 @@ def build_answer_messages(query: str, result: dict, answer_lang: str | None = No
         loc = f"{source_id}:{h['book_id']}"
         if h.get("chapter"):
             loc += f" {h['chapter']}"
-        head = f"[{i}] {loc} — {h.get('title','?')} — {h.get('authors','?')} ({h.get('lang','?')})"
+        head = f"[{i}] {loc} — {h.get('title','?')} — {h.get('authors','?')} ({h.get('lang','?')})" + _work_said(h)
         blocks.append(head + (h.get("reading") or "") + "\n" + h["text"][:1800])
     if result["catalog"]:
         cat = "\n".join(f"- {c['title']} — {c['authors']} (book #{c['book_id']})"
                         for c in result["catalog"][:8])
         blocks.append("[catalog matches]\n" + cat)
     context = "\n\n---\n\n".join(blocks) if blocks else "(no sources found)"
-    system = ANSWER_SYSTEM
+    system = ANSWER_SYSTEM + WORK_RULE
     if any(h.get("reading") for h in shown_hits):
         from . import historical
         system += historical.SYSTEM_RULE

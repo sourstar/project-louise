@@ -599,6 +599,117 @@ NO_SYNTHETIC = (b'{"error": {"message": "no synthetic voice is set on this node,
                 b'voice is read to an admin only"}}')
 
 
+#: the text-to-speech model's own steps where `[speech] tts_steps` is unset
+#: (OmniVoice's default, docs/07 §7.8)
+MODEL_STEPS = 32
+
+
+#: how much each later piece of a reading adds to the first's steps
+STEP_RAMP = 4
+
+
+def reading_steps(n: int, steps: int | None) -> int:
+    """The steps of piece `n` of a reading: the first at half (`first_steps`),
+    each next STEP_RAMP more, up to the node's (or, unset, the model's own) —
+    16, 20, 24, 28, 32 at 32."""
+    full = steps if steps is not None else MODEL_STEPS
+    return min(full, first_steps(steps) + STEP_RAMP * max(0, n))
+
+
+def first_steps(steps: int | None) -> int:
+    """The steps of a reading's first sentence: half the node's — or half the
+    model's own default where the node sets none — never under the lowest
+    `TTS_STEPS` accepts."""
+    return max(platform_config.TTS_STEPS[0], (steps if steps is not None else MODEL_STEPS) // 2)
+
+
+#: A QUOTED SPAN IN ANOTHER LANGUAGE IS SPOKEN IN IT (operator, 2026-11-26:
+#: "sometimes I see words in quote marks that are in a different language
+#: and the pronunciation is not in that language"). The engine takes one
+#: language a request; a sentence holding a quotation that clearly reads as
+#: another (`language`, as for any sentence) is made in segments — before,
+#: the quotation, after — each in its own language, and joined with
+#: QUOTE_GAP_MS between them. A quotation too short to tell (one word, a
+#: name) stays in the sentence's language: the text says nothing of it, and
+#: the answer's sources are not looked up for it.
+QUOTE = re.compile(r'(«\s*[^«»]+?\s*»|“[^“”]+?”|„[^„“”]+?[“”]|"[^"]+?"'
+                   # a quotation the reading's pieces cut across (architecture,
+                   # 2026-11-26): still open at a piece's end, or closed at its start
+                   r'|«[^«»]+$|“[^“”]+$|„[^„“”]+$|^[^«»“”„"]+[»”])')
+QUOTE_MARKS = "«»“”„\""
+QUOTE_MIN_WORDS = 2
+QUOTE_GAP_MS = 60
+
+
+def quote_segments(text: str, sentence_lang: str | None) -> list[tuple[str, str | None]]:
+    """`text` as [(segment, its language or None: the sentence's)] where a
+    quotation in it reads clearly as another language than `sentence_lang`;
+    [] where none does (the sentence goes whole)."""
+    out: list[tuple[str, str | None]] = []
+    if sentence_lang is None:
+        return []                 # nothing says the sentence's own language: nothing to tell a quotation from
+    at = 0
+    for m in QUOTE.finditer(text):
+        inner = m.group(0).strip().strip(QUOTE_MARKS).strip()
+        lang = language(inner) if len(re.findall(r"[^\W\d_]+", inner)) >= QUOTE_MIN_WORDS else None
+        if lang is None or lang == sentence_lang:
+            continue
+        before = text[at:m.start()].strip()
+        if before:
+            out.append((before, None))
+        out.append((m.group(0).strip(), lang))
+        at = m.end()
+    if not out:
+        return []
+    rest = text[at:].strip()
+    if rest:
+        out.append((rest, None))
+    # a segment with no letter nor digit — the full stop Italian writes after
+    # the guillemets (`«…».`), a comma — is no call of its own: it goes with
+    # the quotation beside it (architecture, 2026-11-26: a third call, ".",
+    # ≥150 ms and the engine's sound for a full stop joined in)
+    merged: list[tuple[str, str | None]] = []
+    for seg, lang in out:
+        lead = re.match(r"^[^\w\s«»“”„\"]+", seg)
+        if lead and merged and re.search(r"[^\W_]", seg):
+            # the stop or comma that closes the quotation goes with it
+            merged[-1] = (merged[-1][0] + lead.group(0), merged[-1][1])
+            seg = seg[lead.end():].strip()
+        if not re.search(r"[^\W_]", seg) and merged:
+            prev, plang = merged[-1]
+            merged[-1] = (prev + seg, plang)
+        elif merged and not re.search(r"[^\W_]", merged[-1][0]):
+            merged[-1] = (merged[-1][0] + " " + seg, lang)
+        else:
+            merged.append((seg, lang))
+    return merged if len(merged) > 1 else []
+
+
+def _join_wavs(clips: list[bytes], gap_ms: int) -> bytes | None:
+    """The clips as one WAV with `gap_ms` of silence between them; None where
+    they are not WAVs of the same format."""
+    params, frames = None, []
+    for c in clips:
+        try:
+            with wave.open(io.BytesIO(c)) as w:
+                p = (w.getnchannels(), w.getsampwidth(), w.getframerate())
+                if params is not None and p != params:
+                    return None
+                params = p
+                frames.append(w.readframes(w.getnframes()))
+        except (wave.Error, EOFError):
+            return None
+    if params is None:
+        return None
+    ch, width, rate = params
+    silence = b"\x00" * (int(rate * gap_ms / 1000) * ch * width)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(ch); w.setsampwidth(width); w.setframerate(rate)
+        w.writeframes(silence.join(frames))
+    return buf.getvalue()
+
+
 #: a reading whose last sentence (`/last`) has not come is in progress until
 #: this long without one of its sentences — a reader who stopped it, a page
 #: gone; while its answer is still written the answer's own call is live
@@ -661,7 +772,7 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
                      reading: str | None = None, n: int | None = None,
                      last: bool = False, account_voice: str | None = None,
                      admin: bool = True, keep: bool = True,
-                     background: bool = False) -> tuple[int, bytes, str, list]:
+                     background: bool = False, _steps_n: int | None = None) -> tuple[int, bytes, str, list]:
     """`synthesize` and its `Server-Timing` (W3C; 2026-11-08, to measure the
     reading's start and its pauses): `turn` the wait for the reading's
     sentence before (`Turns`), `synth` the model server's call in ms, `audio`
@@ -676,17 +787,17 @@ def synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     (`Readings`)."""
     if background:
         return _synthesize_timed(body, url, account_voice=account_voice, admin=admin, keep=keep,
-                                 background=True)
+                                 background=True, _steps_n=_steps_n)
     with _READINGS.sentence(reading, last):
         return _synthesize_timed(body, url, reading=reading, n=n, last=last, account_voice=account_voice,
-                                 admin=admin, keep=keep)
+                                 admin=admin, keep=keep, _steps_n=_steps_n)
 
 
 def _synthesize_timed(body: dict[str, Any], url: str | None = None, *,
                       reading: str | None = None, n: int | None = None,
                       last: bool = False, account_voice: str | None = None,
                       admin: bool = True, keep: bool = True,
-                      background: bool = False) -> tuple[int, bytes, str, list]:
+                      background: bool = False, _steps_n: int | None = None) -> tuple[int, bytes, str, list]:
     from app import voice as node_voice
     url = (url or config.CHAT_URL).rstrip("/")
     text = speakable(str(body.get("input") or ""))
@@ -699,6 +810,19 @@ def _synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     # never relayed. A sentence too short to tell its language is spoken in
     # the language of the answer it is part of
     context = str(body.get("context") or "")[:CONTEXT_CHARS]
+    # a quotation in another language, for a clip the node can join: a WAV
+    # (the engine's own, or asked for); any other format goes whole
+    wav = str(body.get("response_format") or "wav").lower() == "wav"
+    if _steps_n is None and wav:
+        around = QUOTE.sub(" ", text)
+        # the answer around it read without ITS quotations, which would make an
+        # Italian answer quoting English read as English
+        sentence_lang = spoken_language(around, QUOTE.sub(" ", context) if context else "", body.get("language"))
+        segs = quote_segments(text, sentence_lang)
+        if segs:
+            return _synthesize_segments(segs, body, url, reading=reading, n=n, last=last, keep=keep,
+                                        background=background,
+                                        account_voice=account_voice, admin=admin, sentence_lang=sentence_lang)
     out = {k: v for k, v in body.items() if k != "context"}
     out["input"] = text
     if model:
@@ -731,6 +855,27 @@ def _synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     # sent — a reader chooses no cost on the card. Unset, nothing is sent and
     # the model's own default stands. In the kept clip's key with the rest.
     steps = platform_config.tts_steps(node.tts_steps)
+    # THE FIRST SENTENCE AT HALF THE STEPS (operator, 2026-11-26: "process the
+    # first sentence at the half of the samples. The voice will be less
+    # fitting the real one, but the answer will be much faster. Then after
+    # the first sentence, we can switch to the full steps"): sentence 0 of a
+    # reading is what the reader waits for (4.6 s for 114 chars at 32 steps,
+    # the voice-timeline line of 11-26); every later one is made while the
+    # one before plays. The half is in the kept clip's key, so a half-step
+    # clip is never served for a full one.
+    # The operator's words: "the half of the samples" — of the node's steps,
+    # or, unset, of the model's own default (MODEL_STEPS).
+    # THEN UP BY STEP_RAMP A PIECE (operator, 2026-11-26: "to have a smooth
+    # transition (less perceivable) between 16 and 32 steps, increase the
+    # encoding at steps of 4 (16, 20, 24, 28, 32), it will give even more
+    # margin"): piece n of a reading at `reading_steps(n, steps)`.
+    # a segment of a quotation (`_synthesize_segments`) at its piece's steps;
+    # -1: a segment outside a reading, at the node's own
+    ramp_n = n if reading is not None else (_steps_n if _steps_n is not None and _steps_n >= 0 else None)
+    if ramp_n is not None:
+        ramped = reading_steps(ramp_n, steps)
+        # unset and at the model's own: nothing sent, as for any request
+        steps = ramped if (steps is not None or ramped < MODEL_STEPS) else None
     if steps is not None:
         out["params"] = {**(out.get("params") if isinstance(out.get("params"), dict) else {}),
                          "flow_steps": str(steps)}
@@ -749,15 +894,69 @@ def _synthesize_timed(body: dict[str, Any], url: str | None = None, *,
     engine = model_load.backend_of(url, model or None) if keep else None
     kept = _clip_get(_clip_key(url, out, engine)) if engine else None
     if kept is not None:
+        # a kept clip still TAKES ITS TURN: the next sentence of the reading
+        # waits for n to be DONE, and a hit that skipped `turn` left it
+        # waiting TURN_ARRIVE_S (5,000 ms measured) for an n never marked;
+        # marked done at once, n+1 overtook an n-1 still at the model
+        # (architecture, 2026-11-26) — so it waits for n-1 like any sentence
+        with _TURNS.turn(reading, n):
+            pass
         clip = audio_ms(kept[0])
-        return 200, kept[0], kept[1], [("cache", 1.0)] + ([("audio", clip)] if clip is not None else [])
+        return 200, kept[0], kept[1], ([("cache", 1.0)] + ([("audio", clip)] if clip is not None else [])
+                                       + _steps_timing(steps))
     with _TURNS.turn(reading, n) as waited:
         status, content, ctype, timing = _synthesize_call(url, model, out, last=last, background=background)
     if keep and status == 200 and str(ctype).startswith("audio/"):
         made_by = engine or model_load.backend_of(url, model or None)
         if made_by:
             _clip_put(_clip_key(url, out, made_by), content, ctype)
-    return status, content, ctype, ([("turn", waited)] if reading is not None else []) + timing
+    return status, content, ctype, (([("turn", waited)] if reading is not None else []) + timing
+                                    + _steps_timing(steps))
+
+
+def _synthesize_segments(segs: list[tuple[str, str | None]], body: dict[str, Any], url: str, *,
+                         reading: str | None, n: int | None, last: bool, account_voice: str | None,
+                         admin: bool, sentence_lang: str | None = None, keep: bool = True,
+                         background: bool = False) -> tuple[int, bytes, str, list]:
+    """A sentence holding a quotation in another language (`quote_segments`):
+    each segment made in its own language — at the steps of the reading's
+    piece — in the piece's one turn, and joined. A segment that fails, or
+    clips that cannot be joined, fail the sentence as one would."""
+    piece_n = n if (reading is not None and n is not None) else -1
+    clips, total, steps = [], 0.0, None
+    # each segment in ITS language: the quotation's, or the sentence's — never
+    # left to `context`, which holds the quotation and called "per tutti" English
+    # (architecture, 2026-11-26)
+    alone = {k: v for k, v in body.items() if k != "context"}
+    with _TURNS.turn(reading, n) as waited:
+        for seg, lang in segs:
+            one = {**alone, "input": seg}
+            if lang or sentence_lang:
+                one["language"] = lang or sentence_lang
+            status, content, ctype, timing = synthesize_timed(
+                one, url, last=last, account_voice=account_voice, admin=admin, keep=keep,
+                background=background, _steps_n=piece_n)
+            if status != 200:
+                return status, content, ctype, timing
+            clips.append(content)
+            total += sum(v for k, v in timing if k == "synth")
+            steps = next((v for k, v in timing if k == "steps"), steps)
+        joined = _join_wavs(clips, QUOTE_GAP_MS)
+        if joined is None:
+            # not WAVs that join: the sentence as one request, as before
+            return synthesize_timed(body, url, last=last, account_voice=account_voice, admin=admin,
+                                    keep=keep, background=background, _steps_n=piece_n)
+    clip = audio_ms(joined)
+    return 200, joined, "audio/wav", ([("turn", waited)] if reading is not None else []) + [
+        ("synth", round(total, 1)), ("segments", float(len(clips)))] + (
+        [("audio", clip)] if clip is not None else []) + ([("steps", steps)] if steps is not None else [])
+
+
+def _steps_timing(steps: int | None) -> list[tuple[str, float]]:
+    """The steps this clip was made at, in its `Server-Timing` (`steps;dur=N`,
+    a count, not ms): the page sizes the next piece from it (voice.js `rates`)
+    and the reading's line says it. Unset and not sent: the model's own."""
+    return [("steps", float(steps if steps is not None else MODEL_STEPS))]
 
 
 def _synthesize_call(url: str, model: str | None, out: dict, *, last: bool = False,
