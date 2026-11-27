@@ -64,29 +64,56 @@ def test_the_sparql_answer_thread_charges_under_the_pass_handle():
 
 
 def test_a_local_fault_ends_the_phase_promptly(tmp_path, monkeypatch):
+    """A local fault (ENOSPC) ends the listing phase: no window is dispatched
+    after it, and the phase raises without waiting for the windows in
+    flight, whose answers come 4 s after the fault.
+
+    ASSERTED ON WHAT WAS DISPATCHED, NOT ON A CLOCK (2026-11-27: under load
+    the pool's workers began their FIRST windows up to 0.13 s after the
+    fault, and the phase raised 1.8-2.7 s after it began against a 1.5 s
+    bound, the setup before the first window included, nothing wrong).
+    Every window but the fault's holds its worker until the phase's stop
+    ends it, so no worker is free before the fault: a worker that begins a
+    second window was handed it after the fault."""
     base, corpus, due = _setup(tmp_path, monkeypatch, range(1970, 1982))
-    started, lock, fault_at = [], threading.Lock(), []
+    begun, lock, at = [], threading.Lock(), {}
+    in_flight, faulted, answered, over = (threading.Event() for _ in range(4))
+
+    def slow_answer():
+        # the answer 4 s after the fault, unless the test is over first
+        if faulted.wait(30.0) and not over.wait(4.0):
+            answered.set()
 
     def window(client, url, year, langs, code_of, charge, place=None, learned=None):
         with lock:
-            started.append((year, time.monotonic()))
-        if year == 1970:
-            cellar._answer_of(lambda: time.sleep(4.0))
-        elif year == 1971:
-            fault_at.append(time.monotonic())
+            begun.append((threading.current_thread().name, year))
+        if year == 1971:
+            # the fault once a slow window is in flight, so the phase has one to end
+            assert in_flight.wait(30.0), "no other window began"
+            at["fault"] = time.monotonic()
+            faulted.set()
             raise OSError(errno.ENOSPC, "No space left on device")
-        else:
-            cellar._answer_of(lambda: time.sleep(0.3))
+        in_flight.set()
+        cellar._answer_of(slow_answer)
         return iter(())
     monkeypatch.setattr(cellar, "_window_files", window)
     stop = threading.Event()
-    with get_manager().bind(Priority.BACKFILL, Direction.DOWN, stop=stop):
-        t0 = time.monotonic()
-        with pytest.raises(OSError):
-            cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
-        took = time.monotonic() - t0
-    after = [y for y, t in started if t > fault_at[0] + 0.05]
-    assert not after and took < 1.5, f"windows begun after the fault: {after}; the phase raised {took:.1f} s in"
+    try:
+        with get_manager().bind(Priority.BACKFILL, Direction.DOWN, stop=stop):
+            with pytest.raises(OSError):
+                cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], due, "eu", "https://cellar.test")
+            waited = answered.is_set()
+            took = time.monotonic() - at["fault"]
+    finally:
+        over.set()
+        faulted.set()                              # the answer threads end now
+    workers, again = set(), []
+    for name, year in begun:
+        if name in workers:
+            again.append(year)
+        workers.add(name)
+    assert not again, f"window(s) {again} begun after the fault, by a worker the fault freed"
+    assert not waited, f"the phase raised {took:.1f} s after the fault, once a window in flight had answered"
 
 
 def test_a_stop_ends_every_listing_thread_within_a_second_and_resumes(tmp_path, monkeypatch):

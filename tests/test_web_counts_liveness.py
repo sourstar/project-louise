@@ -903,8 +903,14 @@ def test_a_rate_is_measured_at_the_counts_time_not_the_render(isolated_config, m
     """The counts are a scan served from cache between landings, so a delta
     counted over one span was divided by another — the render's. wikidata,
     2026-11-07: +184.021/h on the card against ~120k documents an hour in the
-    worker's log. A stage's sample carries the time its count was taken."""
+    worker's log. A stage's sample carries the time its count was taken.
+
+    THE CLOCK THE RATE READS IS FROZEN at the test's second (2026-11-27:
+    under load a second ticked between the test's read and the render's,
+    601 s for 600, 539/h; 2 runs in 150)."""
     import json as _json
+    import types
+    from app import status as status_mod
     c = collections_mod.default_collection()
     con = db.connect(c)
     _rdf_rows(con, 100, 300)
@@ -912,6 +918,7 @@ def test_a_rate_is_measured_at_the_counts_time_not_the_render(isolated_config, m
     _wait_counts(c)
     counts, _age = web._document_counts(c)
     now = int(time.time())
+    monkeypatch.setattr(status_mod, "time", types.SimpleNamespace(time=lambda: float(now)))
     # the last progress was seen at 10 parsed, 1,200 s ago; this count is 600 s old
     web._stage_rate_memo[str(c.manifest_path)] = {
         "rdf": 10, "fts": 0, "embed": 0, "fetch": 0, "ts": now - 1200,
@@ -948,17 +955,21 @@ def test_a_baseline_on_stored_counts_starts_when_they_were_counted(isolated_conf
 def test_a_cold_process_recounts_and_says_the_scans_interval(isolated_config):
     """The stored counts carry the scan's own time: a process that starts on
     them recounts on the scan's interval and says it, not the two-minute
-    floor (2026-11-07: "every 2 min" over recounts 5.5 min apart)."""
+    floor (2026-11-07: "every 2 min" over recounts 5.5 min apart).
+
+    COUNTED HERE, NOT BY A REFRESH (2026-11-27): a refresh writes its own
+    row after its counts land in the cache, and under load that write came
+    after this test's, its own scan time over the 45 s (120.0 == 450.0, 2
+    runs in 150). A cold process has no refresh behind it; nor has this."""
     c = collections_mod.default_collection()
     con = db.connect(c)
     _rdf_rows(con, 1, 3)
-    web.invalidate_counts()
-    _wait_counts(c)
-    counts, _age = web._document_counts(c)
+    counts = web._document_counts_query(c)
     key = web._counts_key(c)
     web._counts_scan_secs[key] = 45.0
     assert web._persist_counts(c, counts)
     web._counts_scan_secs.pop(key, None)
+    assert key not in web._counts_refreshing, "no refresh in flight to write the row after this test"
     assert web._counts_ttl_for(key) == web._COUNTS_TTL_S, "the floor, before the row is read"
     assert web._stored_counts(c) is not None
     assert web._counts_ttl_for(key) == 450.0
