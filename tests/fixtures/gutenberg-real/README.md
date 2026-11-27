@@ -40,3 +40,11 @@ the same way, byte for byte, from the node's mirror:
   Juvenile literature", LCC PZ; shelves Adventure, Travel Writing, History -
   Other. Literary by its LCC alone before "-- Juvenile literature" (non-fiction
   for children) vetoed PZ.
+
+## Added 2026-11-27 (pg-rdf-fixtures-4, 798ff00a)
+
+- 68190, 68937 Lord Lister: "Detective and mystery stories -- Periodicals",
+  "Dime novels -- Periodicals" — a genre's periodical: literary.
+- 14165 Punch ("English wit and humor -- Periodicals"), 43814 Blackwood's
+  ("Scotland -- Periodicals", "England -- Periodicals"), 56022 The Catholic World
+  ("Catholic Church -- Periodicals") — mixed magazines: no verdict.

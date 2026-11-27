@@ -31,7 +31,7 @@ def _sources(*hits) -> str:
 def test_each_source_says_its_first_publication_and_whether_it_is_a_literary_work():
     system, user = _sources(NAPOLEON, HISTORY, BARE)
     assert "[1] gutenberg:42 — Il cinque maggio — Manzoni (it) — first published 1821 — a literary work " \
-           "(by its subject headings): what it narrates is not evidence of what happened — " \
+           "(by its subject headings) — " \
            "subjects: Napoleon I, Emperor of the French, 1769-1821 -- Poetry" in user
     assert "[2] gutenberg:7 — History of Napoleon — Abbott (en) — first published 1855 (by PG\'s automatic summary) — " \
            "subjects: Napoleon I, Emperor of the French, 1769-1821" in user
@@ -85,8 +85,8 @@ def test_gutenbergs_category_shelves_and_class_say_fiction_fact_or_opinion():
     tag to determine what's fiction, what's a fact and what's an opinion"."""
     novel = retrieval._work_said({"subjects": "Napoleon I, Emperor of the French, 1769-1821 | PQ",
                                   "bookshelves": "Category: Novels | Category: Historical Fiction | Best Books Ever"})
-    assert novel.startswith(" — a literary work (by its Gutenberg category): what it narrates is not evidence of "
-                            "what happened — Gutenberg category: Novels; Historical Fiction — LCC PQ")
+    assert novel.startswith(" — a literary work (by its Gutenberg category) — Gutenberg category: Novels; "
+                            "Historical Fiction — LCC PQ")
     assert "Best Books" not in novel, "a shelf that is not a category is not said"
     essay = retrieval._work_said({"subjects": "Liberty | JC",
                                   "bookshelves": "Category: Essays, Letters & Speeches | Category: Politics"})
@@ -123,6 +123,9 @@ REAL = {
     # Famous Islands and Memorable Voyages: "Voyages and travels -- Juvenile literature", LCC PZ — non-fiction
     # for children; PZ alone had made it literary (München's judged run, 2026-11-27)
     25882: None,
+    # periodicals (architecture, 2026-11-27): a genre's periodical is fiction, a mixed magazine no one kind
+    68190: "a literary work", 68937: "a literary work",              # Lord Lister: "Detective and mystery stories -- Periodicals"
+    14165: None, 43814: None, 56022: None,                          # Punch, Blackwood's, The Catholic World
 }
 
 
@@ -148,8 +151,8 @@ def test_a_real_records_verdict(n):
     assert got == REAL[n], said[:240]
 
 
-def test_all_32_real_records_are_judged():
-    assert len(REAL) == 32
+def test_all_37_real_records_are_judged():
+    assert len(REAL) == 37
 
 
 def test_a_verdict_says_its_basis():
@@ -291,18 +294,25 @@ def test_the_other_answer_path_frames_a_source_alike(monkeypatch):
     assert "work_said" in mcp.TOOLS[0]["description"], "an MCP client is told how to read it"
 
 
-def test_a_literary_source_is_never_evidence_said_beside_it_and_in_the_rule():
-    """München's judged run, 2026-11-27: "When did Napoleon die?" counted a
-    historical novel, labelled a literary work, among the confirmations of
-    the date. The header says it where the model reads the source, and the
-    rule says it in so many words; a fact's source never carries the note."""
+def test_the_framing_not_shipped_is_not_in_the_prompt():
+    """Architecture, 2026-11-27: the note beside a literary source and the
+    WORK_RULE sentence did not stop the 35B; reverted to what is live, the
+    judged set kept (tools/measure/work_framing.py)."""
     system, user = _sources(NAPOLEON, HISTORY)
-    head1 = user.split("[1]")[1].split("\n")[0]
-    head2 = user.split("[2]")[1].split("\n")[0]
-    assert "a literary work (by its subject headings): what it narrates is not evidence of what happened" in head1
-    assert "not evidence" not in head2
-    assert "A literary work is never evidence for a historical fact" in system
-    assert "never count it among a fact's confirmations" in system
+    assert "not evidence of what happened" not in user
+    assert "never count it among a fact's confirmations" not in system
+
+
+def test_a_periodical_states_no_one_kind_unless_its_heading_is_a_genre():
+    w = retrieval._work_said
+    for subj, shelf in (("English wit and humor -- Periodicals | AP", "Category: Humour"),
+                        ("Catholic Church -- Periodicals | BX", "Category: Essays, Letters & Speeches"),
+                        ("English literature -- Periodicals | AP", "Category: Novels")):
+        said = w({"subjects": subj, "bookshelves": shelf})
+        assert "a literary work" not in said and "opinion" not in said, (subj, said)
+    for subj in ("Detective and mystery stories -- Periodicals | PT", "Dime novels -- Periodicals | PS",
+                 "Short stories -- Periodicals | PZ", "Poetry -- Periodicals | PN"):
+        assert w({"subjects": subj}).startswith(" — a literary work (by its subject headings)"), subj
 
 
 def test_juvenile_literature_and_periodicals_veto_lcc_pz_alone():

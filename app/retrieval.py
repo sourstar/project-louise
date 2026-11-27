@@ -1900,14 +1900,13 @@ WORK_RULE = (
     "where the header gives none, do not turn it into a date. Where its header says a work of opinion or "
     "belief, what it states is its author's "
     "view: attribute it (\"X argues …\", \"according to X …\"), never present it as established fact. "
-    "A date's source is named where the header names it (\"by …\"). A literary work is never evidence "
-    "for a historical fact: never count it among a fact's confirmations; cite it only for what the work "
-    "narrates."
+    "A date's source is named where the header names it (\"by …\")."
 )
-#: said where the model reads a literary source, not only in the system
-#: prompt far above it (München's judged run, 2026-11-27: the 9B counted a
-#: novel labelled "a literary work" among the confirmations of Napoleon's death)
-LITERARY_NOTE = ": what it narrates is not evidence of what happened"
+#: NOT SHIPPED (architecture, 2026-11-27): a note beside a literary source
+#: ("what it narrates is not evidence of what happened") and a WORK_RULE
+#: sentence did not stop the 35B counting a novel among a fact's sources — the
+#: defect moved between questions run to run (tools/measure/work_framing.py,
+#: München's staged run). The next attempt is the operator's design choice.
 
 #: A LITERARY WORK, as the record's own subjects say it — the Library of
 #: Congress Subject Headings Project Gutenberg's records carry (its RDF
@@ -2051,8 +2050,15 @@ def _work_kind(subjects: list[str], categories: list[str], classes: list[str]) -
     if any(scripture(x) for x in subjects):
         return None
     # a periodical holds every kind, so its record states no one kind
-    # (architecture, 2026-11-27: The Girl's Own Paper, 49241, 61306, 63684)
-    if any(p.strip().rstrip(".").casefold() == "periodicals" for x in subjects for p in x.split("--")[1:]):
+    # (architecture, 2026-11-27: Punch, Blackwood's, The Girl's Own Paper) —
+    # unless the heading's own main term is a literary genre: a genre's
+    # periodical is fiction, and its heading says so ("Detective and mystery
+    # stories -- Periodicals", Lord Lister 68190, 68937)
+    periodicals = [x for x in subjects if any(p.strip().rstrip(".").casefold() == "periodicals"
+                                              for p in x.split("--")[1:])]
+    if periodicals:
+        if any(literary(_main_heading(x)) for x in periodicals):
+            return ("a literary work", "by its subject headings")
         return None
     studied = any(p.strip().rstrip(".").casefold() in CRITICISM_SUBDIVISIONS
                   for x in subjects for p in x.split("--")[1:])
@@ -2122,7 +2128,7 @@ def _work_said(h: dict) -> str:
     categories = [x[len(CATEGORY):].strip() for x in _split(h.get("bookshelves")) if x.startswith(CATEGORY)]
     kind = _work_kind(subjects, categories, classes)
     if kind:
-        parts.append(f"{kind[0]} ({kind[1]})" + (LITERARY_NOTE if kind[0] == "a literary work" else ""))
+        parts.append(f"{kind[0]} ({kind[1]})")
     if categories:
         parts.append("Gutenberg category: " + "; ".join(categories[:4])[:160])
     if classes:
