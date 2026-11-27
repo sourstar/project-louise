@@ -136,6 +136,12 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   };
 
   await page.goto('http://localhost/ask');      // a secure context: the browser opens a microphone here
+  // THE PIECES' BUDGETS (operator, 2026-11-26: the first sound within a
+  // second): a node that makes speech at once, so every sentence fits and is
+  // read whole, as the tests below were written; test 24 sets the node's own rates
+  const FAST = JSON.stringify({ per_step_char: 0.001, overhead: 0, fixed: true });
+  await page.evaluate(k => localStorage.setItem('louise-voice-rates', k), FAST);
+  await page.goto('http://localhost/ask');
   await spy();
 
   // 1. the buttons of the voices the node offers
@@ -144,6 +150,8 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(await page.evaluate(() => document.getElementById('voice-choice').hidden), '1. one voice or none: nothing to choose');
 
   // 2. tap, speak, quiet: it stops by itself, posts the WAV, fills the box
+  await page.evaluate(() => { window.__toneRed = [];
+    addEventListener('louise-ready-tone', () => __toneRed.push(document.getElementById('mic').classList.contains('rec'))); });
   await page.click('#mic');
   check(await until(() => document.getElementById('mic').classList.contains('rec')
                        && /recording/.test(document.getElementById('mic-status').textContent), 4000),
@@ -158,6 +166,9 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(w1.pcm === 1 && w1.channels === 1 && w1.rate === 16000 && w1.bits === 16, '2. 16-bit PCM, 16 kHz, mono', w1);
   check(w1.samples > 16000 * 1.5 && w1.samples < 16000 * 12, '2. the recording, speech and the quiet after it', w1.samples);
   check(w1.peak > 3000, '2. the speech is in it', w1.peak);
+  // THE READY PING (operator, 2026-11-26): one soft tone when the microphone turns red
+  check(await page.evaluate(() => louiseVoice.tones()) === 1 && (await page.evaluate(() => __toneRed)).join() === 'true',
+        '2. one ready tone, once the microphone is red', await page.evaluate(() => ({ n: louiseVoice.tones(), red: __toneRed })));
   check(p1.type === 'audio/wav' && p1.fields.response_format === 'json' && !('model' in p1.fields)
         && !('language' in p1.fields), '2. no model named, and no language while results show in their own', p1.fields);
   // HANDS-FREE (operator, 2026-11-11): asked at once, as Ask asks, and the answer read by itself
@@ -171,6 +182,9 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
         '2. every sentence, in order', posted.speech.map(b => b.input));
   check(await page.evaluate(() => document.getElementById('mic-status').hidden && !document.getElementById('mic').classList.contains('rec')),
         '2. the microphone is idle again');
+  // after the reading's checks: waiting here earlier let the short fake reading end unseen (architecture, 2026-11-26)
+  check(await until(() => louiseVoice.toneContext() && louiseVoice.toneContext().state === 'suspended', 3000),
+        '2. and the tone\'s context sleeps once the recording is over', await page.evaluate(() => louiseVoice.toneContext().state));
 
   // 3. tap and tap again: stopped by hand, in the page's answer language; the
   //    question asked is replaced, one typed and not yet asked is added to
@@ -467,7 +481,9 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   //     ~90 deltas of a few words; tapped at the first word
   await reset(); answerJob = 'live';
   await asked(() => page.evaluate(() => { document.getElementById('q').value = 'Chi scrisse la Commedia?'; ask(); }));
-  const LONG = 'La Divina Commedia fu scritta da Dante Alighieri tra il 1304 e il 1321 [1]. '
+  // its FIRST sentence over 90 characters, with commas: read whole (operator, 2026-11-26)
+  const LONGFIRST = 'Il poema, composto in terzine incatenate di endecasillabi, si divide in tre cantiche e cento canti complessivi [1].';
+  const LONG = LONGFIRST + ' La Divina Commedia fu scritta da Dante Alighieri tra il 1304 e il 1321 [1]. '
     + 'È considerata il capolavoro della letteratura italiana [2][3].\n\n'
     + 'Il poema si divide in tre cantiche: Inferno, Purgatorio e Paradiso [1]. '
     + 'Ognuna conta trentatré canti, più il proemio [4]. Dante vi narra un viaggio nell\'aldilà [2].\n'
@@ -481,11 +497,10 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await emit('end', { state: 'done', reason: '' });
   await until(() => __speech.length >= 4, 8000);
   const t18 = await page.evaluate(() => louiseVoice.timeline());
-  // a long first sentence goes in two, cut at its last clause mark under 90
-  const LONGFIRST = 'Il poema, composto in terzine incatenate di endecasillabi, si divide in tre cantiche e cento canti complessivi [1].';
-  const pieces = await page.evaluate(t => { const r = []; return louiseVoice.firstPieces(t); }, LONGFIRST);
-  check(pieces.length === 2 && pieces[0] === 'Il poema, composto in terzine incatenate di endecasillabi,' && pieces[0].length <= 90
-        && pieces.join(' ') === LONGFIRST, '18. a long first sentence is read in two, at a clause mark', pieces);
+  // a long first sentence goes WHOLE, up to its full stop (operator, 2026-11-26)
+  const sent18 = await page.evaluate(() => __speech.map(b => b.input));
+  check(sent18[0] === LONGFIRST && t18.sentences[0].chars === LONGFIRST.length,
+        '18. the first sentence asked for is the whole first sentence, not cut at a comma', sent18.slice(0, 2));
   check(Array.isArray(t18.started) && t18.started.length === 1, '18. the reading\'s start is kept', t18.started);
   check(Array.isArray(t18.taps) && t18.taps.length === 1 && t18.taps[0] < lastWordAt && t18.started[0] >= t18.taps[0],
         '18. the tap is kept, beside the start it made', { taps: t18.taps, started: t18.started, lastWordAt });
@@ -494,6 +509,168 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
         { lastWordAt, t18, text: await page.evaluate(() => document.getElementById('answer').textContent),
           lives: await page.evaluate(() => __lives), on: await on() });
   answerJob = 'a1';
+
+  // 24. THE FIRST SOUND WITHIN A SECOND (operator, 2026-11-26), at the node's
+  //     own rates (24 ms a char at 16 steps, 71 ms of sound a char): a long
+  //     first sentence, streamed, goes in pieces — the first within its
+  //     one-second budget, cut at a boundary while the sentence is still being
+  //     written, each next sized to be made while the one before plays — and
+  //     the pause before a piece is its boundary's
+  // not fixed: what a clip teaches moves the rates (the fake node's clips say no times, so none do here)
+  await page.evaluate(() => louiseVoice.setRates({ per_step_char: 1.5, overhead: 150, audio_char: 71, full: 32 }));
+  await reset(); answerJob = 'live';
+  await asked(() => page.evaluate(() => { document.getElementById('q').value = 'Chi scrisse la Commedia?'; ask(); }));
+  const W24 = (LONGFIRST + ' Ognuna conta trentatré canti, più il proemio [4].').match(/\S+\s*/g);
+  await emit('delta', { text: W24[0] });
+  await until(() => !document.getElementById('speak').hidden, 2000);
+  await page.click('#speak');
+  let firstAskedAt = null;
+  for (let i = 1; i < W24.length; i++) {
+    await emit('delta', { text: W24[i] }); await sleep(25);
+    if (firstAskedAt === null && (await page.evaluate(() => __speech.length))) firstAskedAt = i;
+  }
+  await emit('end', { state: 'done', reason: '' });
+  await until(() => __speech.length >= 4, 8000);
+  await until(() => !document.getElementById('speak').classList.contains('on'), 20000);
+  const t24 = await page.evaluate(() => louiseVoice.timeline());
+  const in24 = await page.evaluate(() => __speech.map(b => b.input));
+  const b0 = t24.sentences[0].budget;
+  check(b0 >= 24 && b0 <= 40 && in24[0].length <= b0 && LONGFIRST.startsWith(in24[0]),
+        '24. the first piece fits the one-second budget at 16 steps', { b0, first: in24[0] });
+  check(firstAskedAt !== null && firstAskedAt < W24.length - 8,
+        '24. and is asked for while its sentence is still being written', { firstAskedAt, words: W24.length });
+  check(in24.join(' ').replace(/\s+/g, ' ') === W24.join('').trim().replace(/\s+/g, ' '),
+        '24. the pieces are the text, every word once, in order', in24);
+  const kinds = t24.sentences.map(t => t.gap);
+  check(kinds.includes('comma') && kinds[kinds.length - 1] === 'sentence',
+        '24. each piece says the boundary it was cut at', { kinds, in24, budgets: t24.sentences.map(t => t.budget) });
+  const ci = kinds.indexOf('comma'), pause = t24.sentences[ci + 1].play - t24.sentences[ci].end;
+  check(pause >= 170, '24. the piece after a comma starts after a comma\'s pause', { pause, row: t24.sentences[ci] });
+  check(t24.sentences.slice(1, -1).every((t, k) => t.budget >= t24.sentences[k].chars),
+        '24. each next piece holds at least what the one before did (it is made while that one plays)',
+        t24.sentences.map(t => [t.chars, t.budget]));
+  const trimmed = await page.evaluate(() => {
+    // 0.5 s of silence, 0.2 s of sound, 0.5 s of silence at 16 kHz
+    const n = 16000 * 1.2, x = new Float32Array(n); for (let i = 8000; i < 11200; i++) x[i] = 0.5 * Math.sin(i / 3);
+    const w = louiseVoice.wavBytes(x), cut = louiseVoice.trimWav(w, true, true), keep = louiseVoice.trimWav(w, false, true);
+    return [w.byteLength, cut.byteLength, keep.byteLength];
+  });
+  check(trimmed[1] < 44 + 2 * 16000 * 0.3 && trimmed[2] > 44 + 2 * 16000 * 0.69 && trimmed[2] < trimmed[0],
+        '24. the silence the model left at a cut is trimmed, at the side cut', trimmed);
+  // a fading tail, -40 dBFS, is speech: never trimmed (operator, 2026-11-26: the last word cut while fading)
+  const fade24 = await page.evaluate(() => {
+    const n = 16000, x = new Float32Array(n);
+    for (let i = 0; i < 4000; i++) x[i] = 0.5 * Math.sin(i / 3);        // a word, 250 ms
+    for (let i = 4000; i < 8000; i++) x[i] = 0.01 * Math.sin(i / 3);    // its fading end, -40 dBFS, 250 ms
+    const w = louiseVoice.wavBytes(x);
+    return [louiseVoice.trimWav(w, false, true).byteLength, 44 + 2 * 8000];
+  });
+  check(fade24[0] >= fade24[1], '24. a fading word\'s end, quiet but speech, is kept', fade24);
+  // THE SAME ANSWER READ AGAIN IS CUT IN THE SAME PIECES, whatever was
+  // learned meanwhile (its rates are taken once, when it was asked): the
+  // node's kept clips serve it (operator, 2026-11-09)
+  await page.evaluate(() => { for (let k = 0; k < 4; k++) louiseVoice.learn({ chars: 30, steps: 16, synth: 200, audio: 2100, n: 0 }); });
+  const moved = await page.evaluate(() => louiseVoice.rates().per_step_char);
+  await page.evaluate(() => { __speech.length = 0; });
+  await page.click('#speak');
+  await until(n => __speech.length >= n, 8000, in24.length);
+  await until(() => !document.getElementById('speak').classList.contains('on'), 20000);
+  const again24 = await page.evaluate(() => __speech.map(b => b.input));
+  check(moved < 1.5 && JSON.stringify(again24) === JSON.stringify(in24),
+        '24. read again after the rates moved: the same pieces', { moved, in24, again24 });
+  // never after a full stop inside a sentence: an abbreviation, an initial, a number's (architecture, 2026-11-26)
+  const cuts24 = await page.evaluate(() => {
+    const v = louiseVoice, cutsOf = (s, max) => { const out = []; let x = s; for (let n = 0; x && n < 20; n++) {
+      const g = x.length > max ? v.split(x, max) : null; if (!g) { out.push(x); break; } out.push(g[0]); x = g[1]; } return out; };
+    return [cutsOf("Ai sensi dell'art. 5 del decreto legislativo n. 196 del 2003 il titolare risponde [1].", 18),
+            cutsOf('Lo storico G. Cesare scrisse che il prof. Bianchi aveva torto sul punto [2].', 20),
+            cutsOf('东京是日本的首都和最大的城市，人口超过一千三百万；它也是世界上最大的都市圈之一。', 20)];
+  });
+  check(cuts24[0].concat(cuts24[1]).every(p => !/(art|n|G|prof)\.$/.test(p)),
+        '24. no piece ends at an abbreviation or an initial', cuts24.slice(0, 2));
+  check(cuts24[2].length >= 2 && /[，；]$/.test(cuts24[2][0])
+        && cuts24[2].join('') === '东京是日本的首都和最大的城市，人口超过一千三百万；它也是世界上最大的都市圈之一。',
+        '24. a language without spaces is cut at its own comma or semicolon', cuts24[2]);
+  // A SENTENCE'S END INSIDE THE STREAM'S OPEN TEXT is a cut, a sentence's
+  // own (architecture, 2026-11-26: three streamed answers cut "… di cinque"
+  // | "anni. Per …"); an abbreviation's stop never is
+  const ends24 = await page.evaluate(() => ['Il termine è di cinque anni. Per i danni il termine è diverso',
+    'La legge lo vieta. Il divieto vale per tutti', 'Sì, il contratto è nullo. La nullità può essere fatta valere']
+    .map(s => louiseVoice.split(s, 30, true)));
+  check(JSON.stringify(ends24.map(g => g && [g[0], g[2]])) === JSON.stringify([
+          ['Il termine è di cinque anni.', 'sentence'], ['La legge lo vieta.', 'sentence'],
+          ['Sì, il contratto è nullo.', 'sentence']]),
+        '24. a finished sentence in the stream\'s open text is cut at its full stop', ends24);
+  const abbr24 = await page.evaluate(() => [
+    louiseVoice.sentences('Nach § 3 Abs. 1 BGB gilt das z. B. auch für Hrn. Meier und andere. Das ist klar und gut so.'),
+    louiseVoice.sentences('As e.g. the U.S. Supreme Court held in Smith v. Jones, it is so. The next sentence is here.')]);
+  check(abbr24.every(x => x.length === 2), '24. "Abs.", "z. B.", "Hrn.", "e.g.", "U.S.", "v." end no sentence', abbr24);
+  // a day, an ordinal, a court's or a century's abbreviation: no sentence's end (architecture, 2026-11-26)
+  const days24 = await page.evaluate(() => [
+    louiseVoice.sentences('Das Gesetz tritt am 1. Januar 2025 in Kraft und gilt für alle. Das ist eine neue Regel für alle Bürger.'),
+    louiseVoice.sentences('Das BGB wurde am 18. August 1896 verkündet und gilt seitdem. Das ist ein altes Gesetz des Reiches.'),
+    louiseVoice.sentences('Secondo Cass. civ., sez. III, n. 1234 la regola vale per tutti. Così ha deciso la corte suprema.'),
+    louiseVoice.sentences('Il romanzo nel sec. XIX in Inghilterra fu il genere maggiore. Così fu per molti decenni ancora.'),
+    // "no" is a word: its stop ends a sentence
+    louiseVoice.sentences('Is it legal under the statute? No. The statute forbids it for everyone.')]);
+  check(days24.slice(0, 4).every(x => x.length === 2) && days24[4].length >= 2,
+        '24. "am 1." "18." "Cass. civ., sez." "sec." end no sentence; "No." does', days24);
+  // PINNED THROUGH split() (architecture, 2026-11-26: sentences under
+  // MIN_SENTENCE were joined by length anyway): a day or an ordinal's stop is
+  // never a piece's end; "no." ends a sentence
+  const pin24 = await page.evaluate(() => [
+    louiseVoice.split('Das Gesetz tritt am 1. Januar 2025 in Kraft und gilt', 22),
+    louiseVoice.split('Das BGB wurde am 18. August 1896 verkündet und gilt seitdem', 20),
+    louiseVoice.sentences("The court's answer to the question was a clear no. The statute forbids it for everyone.").length]);
+  check(pin24[0] && pin24[1] && !/\d\.$/.test(pin24[0][0]) && !/\d\.$/.test(pin24[1][0]) && pin24[2] === 2,
+        '24. no piece ends at "am 1." or "am 18."; "a clear no." ends a sentence', pin24);
+  // a slow clip of the last answer says nothing of the next one's
+  const out24 = await page.evaluate(() => {
+    const v = louiseVoice; v.setRates({ per_step_char: 1.5, overhead: 150, audio_char: 71, full: 32 });
+    v.learn({ chars: 30, steps: 16, synth: 14000, audio: 2000, n: 0 });
+    v.asking();
+    v.learn({ chars: 30, steps: 16, synth: 14000, audio: 2000, n: 0 });
+    return v.rates().per_step_char;
+  });
+  check(out24 === 1.5, '24. a new answer\'s first slow clip is an outlier, whatever the last answer\'s was', out24);
+  // a stop the segmenter starts no sentence after is never a cut
+  const lower24 = await page.evaluate(() => louiseVoice.split('Era la fine del 1914. e la guerra continuava ancora a lungo', 24, true));
+  check(!lower24 || !/1914\.$/.test(lower24[0]), '24. a stop with no sentence after it is never a cut', lower24);
+  const none24 = await page.evaluate(() => louiseVoice.split('Abcdefghijklmnopqrstuvwxyz abcdefghij klmno pqrst', 18));
+  check(none24 && none24[0] === 'Abcdefghijklmnopqrstuvwxyz', '24. no gap within the budget: the first one past it', none24);
+  // the lead: once a long piece is playing, the next sentence is not cut to
+  // the floor (architecture's case: pieces of 24, 51, 89 and 19, then a
+  // sentence of 175 that went in 9). At 32 steps a character is made in
+  // ~48 ms and plays ~71 ms, so the lead grows: the 175 go in two at most
+  const lead = await page.evaluate(() => {
+    const v = louiseVoice; let p = { made: 0, free: 0 };
+    p = v.planned(p, 0, 24, 'word'); p = v.planned(p, 1, 51, 'word'); p = v.planned(p, 2, 89, 'comma'); p = v.planned(p, 3, 19, 'sentence');
+    const b4 = v.budget(4, p), p5 = v.planned(p, 4, b4, 'comma');
+    return [b4, v.budget(5, p5)];
+  });
+  check(lead[0] >= 120 && lead[0] + lead[1] >= 175,
+        '24. the lead of the pieces queued sizes the next: a 175-character sentence after them goes in two at most', lead);
+  // what is learned: a clip far slower than predicted (a cold load) is not speed
+  const learned = await page.evaluate(() => {
+    const v = louiseVoice; v.setRates({ per_step_char: 1.5, overhead: 150, audio_char: 71, full: 32 });
+    v.learn({ chars: 30, steps: 16, synth: 14000, audio: 2000, n: 0 });
+    const afterLoad = v.rates().per_step_char;
+    v.learn({ chars: 30, steps: 16, synth: 1110, audio: 2100, n: 0 });
+    const ordinary = v.rates().per_step_char;
+    // a node now steadily slower: the second slow clip in a row is its speed
+    v.learn({ chars: 30, steps: 16, synth: 14000, audio: 2100, n: 0 });
+    const once = v.rates().per_step_char;
+    v.learn({ chars: 30, steps: 16, synth: 14000, audio: 2100, n: 0 });
+    return [afterLoad, ordinary, once, v.rates().per_step_char, v.rates().audio_char];
+  });
+  check(learned[0] === 1.5 && learned[1] > 1.5 && learned[1] < 1.7,
+        '24. a cold load is not learned as speed, an ordinary clip is', learned);
+  check(learned[2] === learned[1] && learned[3] > 3 * learned[1],
+        '24. one slow clip is an outlier; a second in a row is the node\'s speed now', learned);
+  check(learned[4] !== 71, '24. the sound\'s rate is learned from every clip, an outlier\'s too', learned);
+  await page.evaluate(k => louiseVoice.setRates(JSON.parse(k)), FAST);
+  answerJob = 'a1';
+
 
   // 14. a node that offers no voice: no button, no script
   const scripts = [];
@@ -585,8 +762,10 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(await until(() => __toasts.some(t => /sends only silence/.test(t)), 14000), '21. silence: it is said',
         await page.evaluate(() => __toasts));
   check(await page.evaluate(() => !document.getElementById('mic').classList.contains('rec')), '21. and the recording ended');
+  check(await page.evaluate(() => louiseVoice.tones()) === 0, '21. no ready tone for a microphone that gave only silence');
   const t21 = Date.now(); while (!(posted.reports || []).length && Date.now() - t21 < 4000) await sleep(40);
   const r21 = (posted.reports || [])[0] || {};
+  check(r21.tone === null, '21. and the report says no tone of its own (not the last recording\'s)', r21.tone);
   check(r21.outcome === 'silent' && r21.frames > 0 && r21.peak === 0 && r21.heard === false && r21.ms >= 8000,
         '21. reported: silent, with what came', r21);
   check(posted.stt === stt21, '21. silence is not sent to be written down', posted.stt - stt21);
@@ -620,6 +799,63 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(r22.mode === 'recorder' && r22.parts > 0 && /webm|ogg|mp4/.test(r22.mime || '') && r22.stop === 'speech',
         '22. reported: the second way, what it recorded, how it ended', r22);
   await until(() => !document.getElementById('speak').classList.contains('on'), 15000);
+
+  // 23. THE READY TONE HEARD BY THE MICROPHONE (architecture's read, 2026-11-26:
+  //     a loopback at coupling 0.5 stopped the recording as "speech" at 2.2 s).
+  //     A microphone that hears only a faint hum and, after `delay`, the tone
+  //     itself: not speech — the recording runs until its quiet bound. Both
+  //     ways of recording: the worklet's windows, and the recorder's
+  //     Then SPEECH right after the tone: its end is still found (the floor
+  //     follows its minimum inside the window), and the tone is not
+  //     "speech" either. And a tone context that is not running plays nothing.
+  const case23 = async (mode, delay, speechAfter, suspended) => {
+    posted.reports = [];
+    await page.goto('http://localhost/ask');
+    await page.evaluate(([mode, delay, speechAfter, suspended]) => {
+      const c = new AudioContext(), d = c.createMediaStreamDestination();
+      const hum = c.createConstantSource(); hum.offset.value = 0.002; hum.connect(d); hum.start();
+      const tone = () => {
+        const o = c.createOscillator(), g = c.createGain();
+        o.frequency.value = 880; g.gain.value = 0.06;                 // the tone's 0.12 at coupling 0.5
+        o.connect(g); g.connect(d); o.start(); o.stop(c.currentTime + 0.16);
+        if (speechAfter) {                                             // 3 s of "speech" 250 ms after the tone
+          const v = c.createOscillator(), vg = c.createGain();
+          v.frequency.value = 220; vg.gain.value = 0.25;
+          v.connect(vg); vg.connect(d); v.start(c.currentTime + 0.41); v.stop(c.currentTime + 3.41);
+        }
+      };
+      addEventListener('louise-ready-tone', () => setTimeout(tone, delay));
+      navigator.mediaDevices.getUserMedia = async () => {
+        if (suspended) {                                               // the tone's context taken away
+          const t = louiseVoice.toneContext(); await t.suspend(); t.resume = () => Promise.resolve();
+        }
+        return d.stream;
+      };
+      if (mode === 'recorder')
+        window.AudioWorkletNode = function (ctx) { const g = ctx.createGain(); g.port = { onmessage: null }; return g; };
+      document.getElementById('q').value = '';
+    }, [mode, delay, speechAfter, suspended]);
+    await page.click('#mic');
+    const t23 = Date.now();
+    while (!(posted.reports || []).length && Date.now() - t23 < 20000) await sleep(50);
+    const r = (posted.reports || [])[0] || {};
+    await until(() => !document.getElementById('speak').classList.contains('on'), 15000);
+    return r;
+  };
+  for (const [mode, delay] of [['webaudio', 300], ['recorder', 0], ['recorder', 300]]) {
+    const r23 = await case23(mode, delay, false, false);
+    check(r23.tone && r23.tone.played === true && r23.deaf_end_ms > 0 && r23.heard === false && r23.stop === 'quiet'
+          && r23.ms >= 7500 && r23.mode === mode,
+          `23. ${mode}: the tone the microphone heard ${delay} ms later is not taken for speech`, r23);
+  }
+  for (const mode of ['webaudio', 'recorder']) {
+    const r = await case23(mode, 0, true, false);
+    check(r.heard === true && r.stop === 'speech' && r.ms >= 4300,
+          `23. ${mode}: speech right after the tone is heard to its end, not cut`, r);
+  }
+  const rs = await case23('webaudio', 0, false, true);
+  check(rs.tone && rs.tone.played === false && rs.tone.state === 'suspended' && rs.deaf_end_ms == null,
+        '23. a tone context that is not running: no tone, and nothing ignored', rs);
 
   check(errors.length === 0, 'no page errors', errors);
   console.log(failures ? `${failures} FAILED` : 'ALL PASSED');

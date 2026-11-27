@@ -495,7 +495,10 @@ VOICE_REPORT_KEYS = ("label", "ready", "muted", "mutes", "rate", "channels", "ec
                      # how long the microphone took to give sound once opened (a car's Bluetooth
                      # switching profile): the first window, the first sample that is not zero,
                      # the zeros before it, and whether sound or WAKE_MAX_MS showed it recording
-                     "first_ms", "wake_ms", "zero_ms", "woke")
+                     "first_ms", "wake_ms", "zero_ms", "woke",
+                     # the ready tone (operator, 2026-11-26): its context's state and output
+                     # latency, whether it played, and where on the audio's clock its echo ends
+                     "tone", "deaf_end_ms")
 VOICE_REPORT_MAX = 4096
 
 
@@ -587,6 +590,10 @@ def _s(ms: int | None) -> str:
     return "?" if ms is None else f"{ms / 1000:.1f} s"
 
 
+#: the boundaries a reading's piece may be cut at (app/static/voice.js `split`)
+VOICE_GAPS = ("sentence", "clause", "comma", "word")
+
+
 def reading_said(body: dict) -> tuple[str, dict]:
     """ONE READING IN WORDS AND IN NUMBERS, from the times its page measured
     (`louiseVoice.timeline()`, ms since Ask): where the wait for the first
@@ -598,8 +605,11 @@ def reading_said(body: dict) -> tuple[str, dict]:
     rows = []
     for t in (body.get("sentences") or [])[:VOICE_TIMELINE_SENTENCES]:
         if isinstance(t, dict):
-            rows.append({k: _ms(t.get(k)) for k in ("chars", "cut", "sent", "got", "synth", "audio", "turn", "node",
-                                                    "cache", "play", "end")})
+            row = {k: _ms(t.get(k)) for k in ("chars", "cut", "sent", "got", "synth", "audio", "turn", "node",
+                                              "cache", "play", "end", "steps", "budget")}
+            # the boundary the piece was cut at (voice.js `split`): a word of a known few, never text
+            row["gap"] = t.get("gap") if t.get("gap") in VOICE_GAPS else None
+            rows.append(row)
     count = _ms(body.get("count"))
     numbers = {"first_word": first_word, "last_word": _ms(body.get("last_word")),
                "started": [v for v in started if v is not None], "sentences": rows,
@@ -640,15 +650,21 @@ def reading_said(body: dict) -> tuple[str, dict]:
                 if away >= 300:
                     made += f"; {_s(away)} between the page and the node"
             parts.append(
-                f"sentence 1 ({one.get('chars')} chars): "
+                f"piece 1 ({one.get('chars')} chars"
+                + (f" of a budget of {one['budget']}" if one.get("budget") is not None else "")
+                + (f", at {one['steps']} steps" if one.get("steps") is not None else "")
+                + (f", cut at a {one['gap']}" if one.get("gap") and one["gap"] != "sentence" else "") + "): "
                 + ("" if waited is None else f"cut {_s(waited)} after the first word, ")
                 + f"asked for {_s(sent - cut)} later, here {_s(got - sent)} after that "
                 + f"({made}, {_s(one.get('audio'))} of sound), "
                 + f"played {_s(play - got)} after it arrived")
     gaps = [b["play"] - a["end"] for a, b in zip(rows, rows[1:]) if a.get("end") is not None and b.get("play") is not None]
     if gaps:
-        parts.append(f"the longest silence between two sentences {_s(max(gaps))}")
-    parts.append(f"{numbers['count']} sentence(s)")
+        parts.append(f"the longest silence between two pieces {_s(max(gaps))}")
+    steps = [r["steps"] for r in rows if r.get("steps") is not None]
+    if steps:
+        parts.append("steps " + ", ".join(str(v) for v in steps))
+    parts.append(f"{numbers['count']} piece(s)")
     return "; ".join(parts), numbers
 
 
@@ -1199,12 +1215,31 @@ async def ask_query(request: Request, body: AskQueryBody):
     """The Ask page's search, stopped if the page's request goes — a reader
     who asks again, or closes the tab, leaves no search running for nobody
     (app/cancel.py)."""
+    from . import query_trace
+    who, admin = query_trace.viewer_of(request)
+    # off the event loop: a trace reads the node's collections at its start
+    from starlette.concurrency import run_in_threadpool
+    trace = await run_in_threadpool(query_trace.start, "search", "query-" + secrets.token_hex(6), who, body.query,
+                                    admin=admin)
     try:
         result = await cancel.while_connected(request, _ask_result, body)
     except cancel.Cancelled:
+        if trace is not None:
+            trace.end(error="cancelled: the page's request went")
         return Response(status_code=499)
+    except BaseException as e:
+        if trace is not None:
+            trace.end(error=f"{type(e).__name__}: {e}")
+        raise
+    sid = keep_search(body.query, result)
+    if trace is not None:
+        trace.mark("search_done")
+        trace.search_id = sid
+        trace.note(speed=body.speed, collections=body.collections, timings=result.get("timings"),
+                   results=query_trace.hits_of(result))
+        trace.end()
     resp = TEMPLATES.TemplateResponse(request, "_ask_results.html", {"result": result})
-    resp.headers["X-Louise-Search"] = keep_search(body.query, result)
+    resp.headers["X-Louise-Search"] = sid
     return resp
 
 
@@ -1320,10 +1355,27 @@ def _rerank_verdict(result: dict) -> str:
             + "; ".join(f"{n or 'the list'}: {why.get(n) or 'no reranker or no hits'}"[:200] for n in kept))
 
 
-def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
+def _relay_search(job: relay.Job, body: AskQueryBody, admin: bool | None = None) -> None:
     # THE CARD FOR THE QUESTION (docs/notes/ask-card-workflow.md spec 3–4;
     # app/question_card.py): room for the query encoders before, the answer's
     # models after — behind, so the results are not held
+    from . import question_card, query_trace
+    # an admin's question, traced for timing and quality (app/query_trace.py)
+    trace = query_trace.start("search", job.id, job.owner, body.query, admin=admin)
+    try:
+        result = _relay_search_traced(job, body, trace)
+    except BaseException as e:
+        if trace is not None:
+            trace.end(error=f"{type(e).__name__}: {e}")
+        raise
+    if trace is not None:
+        trace.note(speed=body.speed, collections=body.collections, timings=result.get("timings"),
+                   reranked=result.get("reranked"), rerank_withheld=result.get("rerank_withheld"),
+                   results=query_trace.hits_of(result))
+        trace.end()
+
+
+def _relay_search_traced(job: relay.Job, body: AskQueryBody, trace) -> dict:
     from . import question_card
     cols = _question_collections(body.collections)
     question_card.before_search(cols, speed=body.speed)
@@ -1336,18 +1388,40 @@ def _relay_search(job: relay.Job, body: AskQueryBody) -> None:
             result = _ask_result(body)
     finally:
         ahead.stop()
+    if trace is not None:
+        trace.mark("search_done")
     question_card.after_search(cols, speed=body.speed, ahead=ahead)
     _say_search_timings(body, result)
     html = TEMPLATES.env.get_template("_ask_results.html").render(result=result)
-    job.emit("result", html=html, search_id=keep_search(body.query, result),
-             hits=len(result.get("hits") or []))
+    sid = keep_search(body.query, result)
+    if trace is not None:
+        trace.search_id = sid
+    job.emit("result", html=html, search_id=sid, hits=len(result.get("hits") or []))
+    return result
 
 
-def _relay_answer(job: relay.Job, chat) -> None:
+def _relay_answer_job(job: relay.Job, chat, admin: bool | None = None) -> None:
+    """`_relay_answer`, an admin's traced (app/query_trace.py) and joined to
+    its search by `search_id`."""
+    from . import api, query_trace
+    user = [m for m in chat.messages if m.get("role") == "user"]
+    query = api._text_of(user[-1].get("content", "")) if user else ""
+    trace = query_trace.start("answer", job.id, job.owner, query, admin=admin, search_id=chat.search_id)
+    try:
+        _relay_answer(job, chat, trace)
+    except BaseException as e:
+        if trace is not None:
+            trace.end(error=f"{type(e).__name__}: {e}")
+        raise
+    if trace is not None:
+        trace.end()
+
+
+def _relay_answer(job: relay.Job, chat, trace=None) -> None:
     """The answer as /v1/chat/completions writes it (`api.answer_parts`), its
     words relayed as `delta` events. Each word is progress; a keepalive is
     not (a model that writes nothing for STUCK_S is stuck)."""
-    from . import api
+    from . import api, query_trace
     user = [m for m in chat.messages if m.get("role") == "user"]
     if not user:
         raise ValueError("no user message")
@@ -1362,12 +1436,19 @@ def _relay_answer(job: relay.Job, chat) -> None:
             verify=chat.verify, rerank_depth=chat.rerank_depth, all_languages=chat.all_languages,
             **({"show_in": chat.answer_lang} if chat.answer_lang else {}),
             **({"annotations": chat.annotations} if chat.annotations is not None else {}))
+    if trace is not None:
+        trace.mark("search_done")
+        trace.note(search_reused=kept is not None, model=chat.model, collections=chat.collections,
+                   answer_lang=chat.answer_lang, timings=result.get("timings"),
+                   results=query_trace.hits_of(result))
     job.touch("answer: waiting for the model")
     with contextlib.closing(api.answer_parts(chat, query, result, t0)) as parts:
         for kind, value in parts:
             job.token.check()               # cancelled: closing() stops the model writing
             if kind == "delta":
                 job.touch("answer")
+                if trace is not None:
+                    trace.word(value)
                 job.emit("delta", text=value)
             elif kind == "reading":
                 # the sources read as older language: their badges on the page
@@ -1376,7 +1457,16 @@ def _relay_answer(job: relay.Job, chat) -> None:
                 # how many of the sources the answer was given (api._fit_answer):
                 # the others are marked on the page and in its PDF
                 job.emit("read", count=value)
+                if trace is not None:
+                    trace.note(read=value)
+            elif kind == "timings":
+                # where the answer's time went, the server's own counts (llm.StreamEnd.timings)
+                if trace is not None:
+                    trace.note(answer_timings=value)
             elif kind == "cut":
+                if trace is not None:
+                    trace.mark("cut")
+                    trace.note(cut=str(value))
                 job.emit("delta", text=f"\n[answer cut: {value}]")
                 job.emit("cut", why=value)
 
@@ -1405,11 +1495,13 @@ def ask_active():
 def relay_start(request: Request, body: RelayBody):
     """Start the page's search or answer as a job; `{"id"}` to listen to."""
     owner = _relay_owner(request)
+    from . import auth
+    admin = auth.admin(getattr(request.state, "viewer", None))
     if body.kind == "search":
         if body.search is None:
             raise HTTPException(422, "a search job needs `search`")
         q = body.search
-        job = relay.start("search", owner, lambda j: _as_question(_relay_search, j, q), label=q.query,
+        job = relay.start("search", owner, lambda j: _as_question(lambda jj, qq: _relay_search(jj, qq, admin), j, q), label=q.query,
                           replaces=body.replaces)
     else:
         from .api import ChatBody
@@ -1417,7 +1509,7 @@ def relay_start(request: Request, body: RelayBody):
             chat = ChatBody(**{**(body.answer or {}), "stream": True})
         except Exception as e:   # noqa: BLE001 — pydantic's message, to the page
             raise HTTPException(422, f"an answer job needs /v1/chat/completions' body: {e}")
-        job = relay.start("answer", owner, lambda j: _as_question(_relay_answer, j, chat),
+        job = relay.start("answer", owner, lambda j: _as_question(lambda jj, cc: _relay_answer_job(jj, cc, admin), j, chat),
                           label=str((chat.messages or [{}])[-1].get("content", ""))[:80],
                           replaces=body.replaces)
     return {"id": job.id}

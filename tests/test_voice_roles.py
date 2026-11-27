@@ -117,6 +117,233 @@ def test_the_steps_of_a_synthesis_are_the_nodes_and_go_in_every_request(node, co
     assert voice.settings().tts_steps == "24" and platform_config.tts_steps("24") == 24
 
 
+def test_a_readings_first_sentence_is_made_at_half_the_steps(node, config_dir):
+    """Operator, 2026-11-26: the first sentence at half the steps, the rest
+    at full. Sentence 0 of a reading only — half the node's steps, or half the
+    model's own default where the node sets none (his words: "the half of the
+    samples"); a request outside a reading, and every later sentence, keep them."""
+    calls, _, _ = node
+    speech.synthesize_timed({"input": IT}, url="http://ai", reading="r0", n=0, admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "16"}, "unset: half the model's own 32"
+    speech.synthesize_timed({"input": IT + " Due."}, url="http://ai", reading="r0", n=1, admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "20"}, "unset: the ramp still climbs to the model's own"
+    speech.synthesize_timed({"input": IT + " Cinque."}, url="http://ai", reading="r0", n=4, admin=False)
+    assert "params" not in calls[-1], "unset and ramped up: the model's own default, nothing sent"
+    (config_dir / "platform.toml").write_text(TABLE + 'tts_steps = "24"\n', encoding="utf-8")
+    speech.synthesize_timed({"input": IT + " Tre."}, url="http://ai", reading="r2", n=0, admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "12"}
+    speech.synthesize_timed({"input": IT + " Tre."}, url="http://ai", reading="r2", n=1, admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "16"}, "the same words later in a reading: made again, ramped"
+    speech.synthesize_timed({"input": IT + " Tre."}, url="http://ai", reading="r2", n=9, admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "24"}, "and at full once ramped up"
+    speech.synthesize({"input": IT + " Quattro."}, url="http://ai", admin=False)
+    assert calls[-1]["params"] == {"flow_steps": "24"}, "outside a reading: full"
+    assert speech.first_steps(4) == 4 and speech.first_steps(5) == 4, "never under the lowest accepted"
+    assert speech.first_steps(None) == 16
+    # operator, 2026-11-26: "increase the encoding at steps of 4 (16, 20, 24, 28, 32)"
+    assert [speech.reading_steps(n, 32) for n in range(6)] == [16, 20, 24, 28, 32, 32]
+    assert [speech.reading_steps(n, None) for n in range(6)] == [16, 20, 24, 28, 32, 32]
+    assert [speech.reading_steps(n, 24) for n in range(4)] == [12, 16, 20, 24]
+    _, _, _, timing = speech.synthesize_timed({"input": IT + " Sei."}, url="http://ai", reading="r3", n=2,
+                                              admin=False)
+    assert ("steps", 20.0) in timing, "the steps a clip was made at, in its Server-Timing"
+
+
+def test_the_clip_key_tells_half_steps_from_full():
+    """The kept clip's key holds the steps: a half-step first sentence is
+    never served for the same words at full steps."""
+    out = {"model": "m", "voice": "v", "input": IT}
+    half = speech._clip_key("http://ai", {**out, "params": {"flow_steps": "16"}}, "engine-1")
+    full = speech._clip_key("http://ai", {**out, "params": {"flow_steps": "32"}}, "engine-1")
+    assert half != full and full == speech._clip_key("http://ai", {**out, "params": {"flow_steps": "32"}}, "engine-1")
+
+
+def _wav(ms: int, rate: int = 24000) -> bytes:
+    import io
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+        w.writeframes(b"\x01\x00" * (rate * ms // 1000))
+    return buf.getvalue()
+
+
+def test_a_quotation_in_another_language_is_spoken_in_it(node, monkeypatch):
+    """Operator, 2026-11-26: "words in quote marks that are in a different
+    language and the pronunciation is not in that language". The quotation,
+    where it reads clearly as another language, is its own segment in its
+    language; the rest in the sentence's; one clip, joined."""
+    calls, _, _ = node
+
+    class W:
+        status_code, headers = 200, {"content-type": "audio/wav"}
+        content = _wav(500)
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or W())
+    s = 'Il motto dei moschettieri era "Un pour tous, tous pour un", scritto da Dumas nel romanzo.'
+    status, content, ctype, timing = speech.synthesize_timed({"input": s}, url="http://ai", reading="q1", n=0)
+    sent = calls[-3:]
+    assert status == 200 and [c["language"] for c in sent] == ["it", "fr", "it"]
+    assert sent[1]["input"].startswith('"Un pour tous')
+    assert all(c["params"] == {"flow_steps": "16"} for c in sent), "each at the piece's steps (n=0: 16)"
+    assert ("segments", 3.0) in timing and ("steps", 16.0) in timing
+    assert 1500 <= speech.audio_ms(content) <= 1700, "three clips of 500 ms and two gaps"
+    # one word, or the sentence's own language: the sentence goes whole
+    before = len(calls)
+    speech.synthesize_timed({"input": 'Disse «addio» e partì da casa per sempre.'}, url="http://ai")
+    speech.synthesize_timed({"input": 'Disse «resta con me, amico mio» e partì da casa.'}, url="http://ai")
+    assert len(calls) == before + 2
+
+
+def test_a_quotations_neighbours_keep_the_sentences_language_and_punctuation_is_no_call(node, monkeypatch):
+    """Architecture's read, 2026-11-26: the lead-in and the tail were left to
+    `context`, which holds the quotation ("per tutti" spoken English in the
+    English voice); a "." after the guillemets was a third call; a format the
+    node cannot join turned the sentence into a 502."""
+    calls, _, _ = node
+
+    class W:
+        status_code, headers = 200, {"content-type": "audio/wav"}
+        content = _wav(300)
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or W())
+    s = 'Il giudice ha detto che «the law is the law and it must be obeyed» per tutti.'
+    speech.synthesize_timed({"input": s, "context": "«the law is the law and it must be obeyed»"}, url="http://ai",
+                            admin=False)
+    sent = calls[-3:]
+    assert [c["language"] for c in sent] == ["it", "en", "it"] and "context" not in sent[2]
+    assert sent[0]["voice"] == SYNTH_IT and sent[2]["voice"] == SYNTH_IT, "the sentence's voice, not the quotation's"
+    before = len(calls)
+    speech.synthesize_timed({"input": 'Il motto era «Un pour tous, tous pour un».', "language": "it"}, url="http://ai")
+    assert len(calls) == before + 2 and calls[-1]["input"].endswith("».") , "the stop goes with the quotation"
+    # nothing says the sentence's language: nothing to tell a quotation from, it goes whole
+    assert speech.quote_segments('Tom «Un pour tous, tous pour un»', None) == []
+
+
+def test_a_quotation_the_pieces_cut_across_is_still_spoken_in_its_language(node, monkeypatch):
+    """Architecture, 2026-11-26: at the first-sound budget the operator's own
+    example goes as "…che «the" | "law is … obeyed» per tutti."; the second
+    piece's closed half is the quotation, and the answer around is read
+    without its quotations."""
+    calls, _, _ = node
+
+    class W:
+        status_code, headers = 200, {"content-type": "audio/wav"}
+        content = _wav(300)
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or W())
+    ctx = 'Il giudice ha detto che «the law is the law and it must be obeyed» per tutti.'
+    speech.synthesize_timed({"input": 'law is the law and it must be obeyed» per tutti.', "context": ctx},
+                            url="http://ai", admin=False)
+    sent = calls[-2:]
+    assert [c["language"] for c in sent] == ["en", "it"] and sent[1]["voice"] == SYNTH_IT
+
+
+def test_a_quotation_still_open_at_a_pieces_end_is_spoken_in_its_language(node, monkeypatch):
+    """Architecture, 2026-11-26: the first half of a quotation the pieces cut
+    across ("… che «the law is the law and"): the Italian lead-in in Italian,
+    the open quotation in English."""
+    calls, _, _ = node
+
+    class W:
+        status_code, headers = 200, {"content-type": "audio/wav"}
+        content = _wav(300)
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or W())
+    ctx = 'Il giudice ha detto in aula che «the law is the law and it must be obeyed» per tutti.'
+    before = len(calls)
+    speech.synthesize_timed({"input": 'Il giudice ha detto in aula che «the law is the law and', "context": ctx},
+                            url="http://ai", admin=False)
+    assert [c["language"] for c in calls[before:]] == ["it", "en"]
+
+
+def test_a_segmented_sentence_keeps_keep_and_background(node, monkeypatch):
+    """Architecture, 2026-11-26 (main's #944): each quoted-language segment is
+    made as its sentence asks — keep=False writes no kept clip, background=True
+    takes no question's claim (the phrases that cover the wait)."""
+    seen, put = [], []
+    monkeypatch.setattr(speech, "_synthesize_call",
+                        lambda url, model, out, last=False, background=False:
+                        seen.append(background) or (200, _wav(200), "audio/wav", [("synth", 10.0)]))
+    monkeypatch.setattr(speech, "_clip_put", lambda key, data, ctype: put.append(key))
+    monkeypatch.setattr(speech.model_load, "backend_of", lambda url, model, *a, **k: "engine-1")
+    s = 'Il motto dei moschettieri era "Un pour tous, tous pour un", scritto da Dumas nel romanzo.'
+    status, *_ = speech.synthesize_timed({"input": s, "language": "it"}, url="http://ai", keep=False)
+    assert status == 200 and len(seen) == 3 and put == [], "keep=False: no segment is kept"
+    seen.clear()
+    speech.synthesize_timed({"input": s, "language": "it"}, url="http://ai", background=True)
+    assert seen == [True, True, True], "background=True: every segment as background work"
+    seen.clear(); put.clear()
+    speech.synthesize_timed({"input": s, "language": "it"}, url="http://ai")
+    assert seen == [False, False, False] and len(put) == 3, "a reader's sentence: kept, as a question"
+
+
+
+def test_the_one_request_fallback_keeps_keep_and_background(node, monkeypatch):
+    """Architecture's final read of 9460b920 (should-fix): segments that do
+    not join send the sentence again as ONE request — and that request is
+    made as its sentence asks too: keep=False reads and writes no kept clip,
+    background=True takes no question's claim and marks no reading."""
+    seen, put, got = [], [], []
+    monkeypatch.setattr(speech, "_synthesize_call",
+                        lambda url, model, out, last=False, background=False:
+                        seen.append(background) or (200, b"ID3 not a wav", "audio/wav", [("synth", 10.0)]))
+    monkeypatch.setattr(speech, "_clip_put", lambda key, data, ctype: put.append(key))
+    monkeypatch.setattr(speech, "_clip_get", lambda key: got.append(key))
+    monkeypatch.setattr(speech.model_load, "backend_of", lambda url, model, *a, **k: "engine-1")
+    monkeypatch.setattr(speech, "_READINGS", speech.Readings())   # no other test's reading
+    s = 'Il motto dei moschettieri era "Un pour tous, tous pour un", scritto da Dumas nel romanzo.'
+    status, *_ = speech.synthesize_timed({"input": s, "language": "it"}, url="http://ai",
+                                         keep=False, background=True)
+    assert status == 200
+    assert seen == [True] * 4, "three segments, then the fallback: every one as background work"
+    assert put == [] and got == [], "keep=False: the fallback reads and keeps no clip either"
+    assert speech.reading_quiet_s() == float("inf"), "background work marks no reading"
+
+def test_a_quotation_the_node_cannot_join_goes_as_one_sentence(node, monkeypatch):
+    calls, _, _ = node
+
+    class Mp3:
+        status_code, headers, content = 200, {"content-type": "audio/mpeg"}, b"ID3..."
+    monkeypatch.setattr(speech.httpc, "post", lambda url, json, **kw: calls.append(json) or Mp3())
+    s = 'Il motto dei moschettieri era "Un pour tous, tous pour un", scritto da Dumas nel romanzo.'
+    before = len(calls)
+    status, content, ctype, _ = speech.synthesize_timed({"input": s, "response_format": "mp3"}, url="http://ai")
+    assert status == 200 and len(calls) == before + 1, "another format: never segmented"
+    before = len(calls)
+    status, content, ctype, _ = speech.synthesize_timed({"input": s}, url="http://ai")
+    assert status == 200 and content == b"ID3..." and calls[-1]["input"].startswith("Il motto"), \
+        "clips that do not join: the sentence again, as one request, never a 502"
+
+
+def test_a_kept_clip_takes_its_turn_in_order(node, monkeypatch):
+    """A cache hit returns before the model's call; it still TAKES ITS TURN:
+    marked done (unmarked, sentence n+1 waited TURN_ARRIVE_S for it), and
+    only after n-1 is done (marked at once, n+1 overtook an n-1 still at the
+    model — architecture, 2026-11-26)."""
+    import threading
+    import time
+    turns = speech.Turns()
+    monkeypatch.setattr(speech, "_TURNS", turns)
+    monkeypatch.setattr(speech, "_clip_get", lambda key: (b"RIFF", "audio/wav"))
+    order: list[str] = []
+    entered = threading.Event()
+
+    def sentence0():
+        with turns.turn("rk", 0):
+            entered.set()
+            time.sleep(0.3)                     # n=0 still at the model
+            order.append("0")
+    t = threading.Thread(target=sentence0)
+    t.start()
+    entered.wait(2)
+    t0 = time.monotonic()
+    speech.synthesize_timed({"input": IT}, url="http://ai", reading="rk", n=1, admin=False)
+    order.append("1")
+    t.join()
+    assert order == ["0", "1"], "the kept clip waits for the sentence before it"
+    t1 = time.monotonic()
+    with turns.turn("rk", 2) as waited:
+        pass
+    assert time.monotonic() - t1 < 0.5, "and is marked done: the next one does not wait"
+
+
 def test_steps_that_are_not_a_number_in_range_are_refused_at_load(node, config_dir):
     for bad in ('"many"', '"3"', '"65"', '"2.5"', '"-8"'):
         (config_dir / "platform.toml").write_text(f"[speech]\ntts_steps = {bad}\n", encoding="utf-8")

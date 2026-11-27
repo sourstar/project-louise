@@ -77,6 +77,11 @@ async def lifespan(app: FastAPI):
     # operator, 2026-10-27): the first question after a restart waited ~65 s
     from . import warmup
     warmup.start()
+    # the question's own model lines (unloaded before / after the search,
+    # loading ahead) into the node's event log, as the worker's are — where
+    # an admin's query trace reads them (app/query_trace.py)
+    from . import model_pins, question_card
+    question_card.set_log(model_pins.node_event)
     yield
 
 app = FastAPI(title="louise-rag", lifespan=lifespan)
@@ -1155,11 +1160,17 @@ async def chat_completions(body: ChatBody, request: Request):
     query = _text_of(user_msgs[-1].get("content", ""))
     searched = collections_for_model(body.model, body.collections)
     t0 = time.time()
+    # an admin's question traced (app/query_trace.py)
+    from . import query_trace
+    who, admin = query_trace.viewer_of(request)
+    # off the event loop: a trace reads the node's collections at its start
+    trace = await run_in_threadpool(lambda: query_trace.start(
+        "chat", f"chat-{uuid.uuid4().hex[:12]}", who, query, admin=admin, search_id=body.search_id))
     kept = web.kept_search(body.search_id, query)
     if kept is not None:
         # the page's hits, untouched; this request's own timings start at 0
         result = {**kept, "timings": {"total": 0.0, "search": "reused"}}
-        return await run_in_threadpool(_chat_answer, body, query, result, t0)
+        return await run_in_threadpool(_chat_answer_traced, body, query, result, t0, trace, True)
     # The SEARCH stops if the caller goes (app/cancel.py). The answer after
     # it is one call to the model, which nothing can interrupt midway; it
     # runs in a worker thread so this endpoint never blocks the loop.
@@ -1178,8 +1189,37 @@ async def chat_completions(body: ChatBody, request: Request):
             **({"show_in": body.answer_lang} if body.answer_lang else {}),
             **({"annotations": body.annotations} if body.annotations is not None else {}))
     except cancel.Cancelled:
+        if trace is not None:
+            trace.end(error="cancelled: the caller went")
         return Response(status_code=CLIENT_GONE)
-    return await run_in_threadpool(_chat_answer, body, query, result, t0)
+    except BaseException as e:
+        if trace is not None:
+            trace.end(error=f"{type(e).__name__}: {e}")
+        raise
+    return await run_in_threadpool(_chat_answer_traced, body, query, result, t0, trace, False)
+
+
+def _chat_answer_traced(body: "ChatBody", query: str, result: dict, t0: float, trace, reused: bool):
+    """`_chat_answer`, an admin's traced: the search's results noted, then the
+    answer's words (the stream's, as they go; the whole answer's at once)."""
+    if trace is None:
+        return _chat_answer(body, query, result, t0)
+    from . import query_trace
+    trace.mark("search_done")
+    trace.note(search_reused=reused, model=body.model, collections=body.collections, stream=body.stream,
+               answer_lang=body.answer_lang, timings=result.get("timings"), results=query_trace.hits_of(result))
+    try:
+        out = _chat_answer(body, query, result, t0, trace=trace)
+    except BaseException as e:
+        trace.end(error=f"{type(e).__name__}: {e}")
+        raise
+    if not body.stream:
+        try:
+            trace.word(out["choices"][0]["message"]["content"])
+        except Exception:   # noqa: BLE001 — the trace says less, the answer goes
+            pass
+        trace.end()
+    return out
 
 
 @app.post("/v1/audio/speech")
@@ -1286,6 +1326,10 @@ def source_entries(hits: list[dict], reads: list | None = None,
             "collection": coll, "uid": h.get("uid"), "chunk_id": h.get("chunk_id"), "book_id": bid,
             "chapter": h.get("chapter"), "text": h.get("text"), "origin_url": h.get("origin_url"),
             "reader": reader,
+            # the work's first publication, as its record states it (05 §5.3), and by whom where not its own
+            "first_published": h.get("first_published"), "first_published_by": h.get("first_published_by"),
+            # what the record states the work is (retrieval.work_verdict), as the answer was told it
+            "work": h.get("work"),
             "editions": [{"uid": e.get("uid"), "title": e.get("title"), "lang": e.get("lang"),
                           "held": bool(e.get("held"))} for e in h.get("editions") or []],
             "annotations": [{"type": a.get("type"), "uid": (a.get("record") or {}).get("uid"),
@@ -1395,7 +1439,7 @@ def _answer_messages(body: ChatBody, query: str, result: dict,
     return p.messages
 
 
-def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
+def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None):
     con = _con()   # query_log lives in the default collection's manifest regardless
     prompt = _fit_answer(body, query, result)
     reads = prompt.reads
@@ -1413,6 +1457,8 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
                 _log_refit(con, e, smaller)
                 prompt = smaller
         reads = prompt.reads
+        if trace is not None:
+            trace.note(read=prompt.used)
         # "[3] [4]", not "[3][4]": a client's markdown cleaning reads a pair
         # as a reference link and speaks a number (app/speech.py)
         answer = speech.spaced_citations(text)
@@ -1439,11 +1485,15 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
             "choices": [{"index": 0, "delta": {"content": delta},
                          "finish_reason": None}]}) + "\n\n"
 
+    began = [False]                 # sse ran: its own `finally` ends the trace
+
     def sse():
         # the OpenAI framing of `answer_parts`, which the Ask page's relay
         # reads too (app/relay.py): one path from the model to every reader
+        began[0] = True
         parts = answer_parts(body, query, result, t0, prompt=prompt, con=con)
         tail = ""        # the text so far, for a citation pair split across two deltas
+        failed = None
         try:
             for kind, value in parts:
                 if kind == "sources":
@@ -1457,9 +1507,18 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
                 elif kind == "delta":
                     value = speech.spaced_citations(value, tail)
                     tail = (tail + value)[-speech.TAIL:]
+                    if trace is not None:
+                        trace.word(value)
                     yield chunk(value)
                 elif kind == "cut":
+                    if trace is not None:
+                        trace.mark("cut")
+                        trace.note(cut=str(value))
                     yield chunk(f"\n[answer cut: {value}]")
+                elif kind == "read" and trace is not None:
+                    trace.note(read=value)
+                elif kind == "timings" and trace is not None:
+                    trace.note(answer_timings=value)
                 elif kind == "pdf":
                     # after the last word, as the sources came before the first
                     yield "data: " + json.dumps({
@@ -1471,9 +1530,24 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float):
                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
             yield f"data: {json.dumps(done)}\n\n"
             yield "data: [DONE]\n\n"
+        except BaseException as e:
+            failed = f"{type(e).__name__}: {e}" if not isinstance(e, GeneratorExit) else "cancelled: the reader left"
+            raise
         finally:
             parts.close()           # the reader left: the model stops writing
+            if trace is not None:
+                trace.end(error=failed)
 
+    if trace is not None:
+        # a caller that leaves before the first chunk never runs `sse` at all,
+        # so its `finally` never ends the trace: the response's background
+        # task does (Trace.end is once only)
+        from starlette.background import BackgroundTask
+
+        def left_before() -> None:
+            if not began[0]:
+                trace.end(error="cancelled: the reader left before the answer")
+        return StreamingResponse(sse(), media_type="text/event-stream", background=BackgroundTask(left_before))
     return StreamingResponse(sse(), media_type="text/event-stream")
 
 
@@ -1618,6 +1692,10 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     # the request to its first token, and the server's own count of the prompt
     spent = llm.timings_said(getattr(ended, "timings", None))
     spent = f" [{spent}]" if spent else ""
+    if getattr(ended, "timings", None):
+        # the same counts, as numbers, for a caller that keeps them (an
+        # admin's query trace, app/query_trace.py): never counted twice
+        yield ("timings", dict(ended.timings))
     if why is not None:
         yield ("cut", why)
         db.log_event(con, "warn", "chat",

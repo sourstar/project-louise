@@ -243,7 +243,7 @@ def shown_search(query: str, result: dict[str, Any], sources: Sources, *,
             blocks.append(f"[{n}] {title} — shown above")
             continue
         by = f" — {h['authors']}" if h.get("authors") else ""
-        head = f"[{n}] {title}{by} ({h.get('lang') or '?'}) · {h.get('uid')}"
+        head = f"[{n}] {title}{by} ({h.get('lang') or '?'}) · {h.get('uid')}" + (h.get("work_said") or "")
         if h.get("trust_level") == "unverified":
             head += " · unverified"
         editions = [f"{e.get('title')} ({e.get('lang')})" for e in (h.get("editions") or [])[:3]]
@@ -530,7 +530,10 @@ def _ask(question: str, *, collections: list[str] | None = None, history: list[d
         raise ChatError("CHAT_URL unset: this node has no chat model, and `ask chat` needs one (07 §7.8)")
     model = model or llm.chat_tools
     call = call or mcp._call_tool
-    system = SYSTEM
+    from app import retrieval
+    # a source is a work of its time, read as the other answer path reads it
+    # (retrieval.WORK_RULE; architecture, 2026-11-26: one answer, one framing)
+    system = SYSTEM + retrieval.WORK_RULE
     if collections:
         system += (f" Search only these collections unless the question says otherwise: {', '.join(collections)}; "
                    f"pass them as `collections`.")
