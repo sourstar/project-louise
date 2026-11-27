@@ -1311,6 +1311,27 @@ reader needs at the command line:
   (§7.8), not the database: the page offers what the file says at its next
   load, with no restart. The browser opens a microphone only for a page
   reached over https or at localhost; `show` says so.
+- **`node speech synthetic <lang>`.** *Added 2026-11-27* (operator: "Add a
+  spanish voice"; the rule of the same day: "Anything requiring a manual
+  edit because not covered by the API goes back to architecture for
+  implementation or fix" — on 11-24 the it, en, fr and de voices were made
+  by hand calls to the model server). One command makes a language's
+  synthetic voice (app/synthetic_voice.py), also `POST
+  /api/node/speech/synthetic` with `{"lang": "es"}`:
+  1. the `--tts` model reads the language's fixed sentence with NO voice (the
+     request's `voice` absent: no person is in the clip);
+  2. the `--stt` model hears it back, and its words must be the sentence's;
+     a draw that fails is discarded and said, and another drawn;
+  3. the clip is recorded as the voice profile "Synthetic <lang>" on the
+     model server, its description saying how it was made;
+  4. `[speech] synthetic_voices` gets the language's voice, the others kept;
+  5. one short synthesis in the voice has the engine encode its clip.
+  `--candidates N` makes "Synthetic <lang> A", "B", … and sets none, to be
+  chosen by ear (Italian's is "Synthetic it C", the operator's choice of
+  11-25); `--use NAME` sets the one chosen and makes nothing. The sentence
+  is Louise's for it, en, fr, de and es; for another language `--text`
+  gives it (and `--tag` the profile's region, es-ES). A profile is never
+  replaced or deleted here: a name already held is refused, naming `--use`.
 - **`node resident show`, and the resident set.** *Added 2026-11-08, a
   TRIAL* (operator, option A: "keep every model Ask uses resident on the
   card"; "The load all is a test"; "It applies to any collection, on demand
