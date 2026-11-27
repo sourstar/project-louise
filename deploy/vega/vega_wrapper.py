@@ -1811,6 +1811,12 @@ class Gate:
         with self._load_lock:
             try:
                 canon = load_options(self.pb, raw)
+                # BEFORE THE BACKEND IS ASKED TO LOAD: what the model computes
+                # in needs no device, so a model whose file states none (or a
+                # precision its build does not compute) is refused here, never
+                # loaded — 22 GB onto the card — only to be refused after.
+                # `state_run` holds it again, as its contract.
+                stated_precision(self.backend.name, canon)
             except loadopts.Unstatable as e:
                 self.loaded = None
                 return self._refuse_load(e)

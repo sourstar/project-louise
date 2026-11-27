@@ -92,12 +92,15 @@ class Tensor:
 
 
 class Model:
-    """A module whose `.to(dtype=…)` moves its floating tensors — or, `stuck`,
-    leaves one behind (a buffer a model keeps in its own dtype)."""
+    """A module loaded as `dtype`, whose `.to(dtype=…)` moves its floating
+    tensors — or, `stuck`, leaves a buffer behind; `lora_only`: its own
+    `parameters()` yields only its LoRA weights, as XLMRobertaLoRA's does
+    while the main ones are frozen (torch.nn.Module's own iterator sees all)."""
 
-    def __init__(self, dtype="float32", stuck: str | None = None) -> None:
+    def __init__(self, dtype="float32", stuck: str | None = None, lora_only: bool = False) -> None:
         self.params = [Tensor(dtype), Tensor(dtype), Tensor("int64", floating=False)]
         self.bufs = [Tensor(dtype)] + ([Tensor(stuck)] if stuck else [])
+        self.lora_only = lora_only
         self.moves: list = []
 
     def to(self, dtype=None):
@@ -107,16 +110,15 @@ class Model:
                 t.dtype = dtype
         return self
 
-    def parameters(self):
-        return list(self.params)
-
-    def buffers(self):
-        return list(self.bufs)
+    def parameters(self):                       # an override may hide the main weights
+        return self.params[:1] if self.lora_only else list(self.params)
 
 
 def _torch(reads_back: str | None = None):
     said: dict = {}
+    module = SimpleNamespace(parameters=lambda m: list(m.params), buffers=lambda m: list(m.bufs))
     return SimpleNamespace(float32="float32", bfloat16="bfloat16", float16="float16",
+                           nn=SimpleNamespace(Module=module),
                            set_float32_matmul_precision=lambda p: said.__setitem__("p", p),
                            get_float32_matmul_precision=lambda: reads_back or said.get("p")), said
 
@@ -126,7 +128,7 @@ def _torch(reads_back: str | None = None):
                                               ("f16", "float16")])
 def test_torchs_dtype_is_applied_and_read_back(server, precision, dtype):
     torch, said = _torch()
-    model = Model()
+    model = Model(dtype)                        # the load was asked for the stated dtype
     assert SERVERS[server].apply_precision(torch, model, precision) is model
     assert model.moves == [dtype], "model.to(dtype), explicitly"
     assert all(t.dtype == dtype for t in (*model.params[:2], *model.bufs))
@@ -134,10 +136,33 @@ def test_torchs_dtype_is_applied_and_read_back(server, precision, dtype):
 
 
 @pytest.mark.parametrize("server", sorted(SERVERS))
+def test_a_load_in_another_dtype_is_refused_before_it_is_converted(server):
+    """Compared after `.to()`, the read-back would see only its own
+    conversion: the load itself must have given the stated dtype."""
+    torch, _said = _torch()
+    model = Model("float32")
+    with pytest.raises(RuntimeError, match="loaded as float32 though asked for bfloat16"):
+        SERVERS[server].apply_precision(torch, model, "bf16")
+    assert model.moves == [], "nothing converted"
+
+
+@pytest.mark.parametrize("server", sorted(SERVERS))
+def test_the_read_back_sees_the_weights_an_override_of_parameters_hides(server):
+    """XLMRobertaLoRA overrides `parameters()` to yield its LoRA weights alone:
+    read through it, a model whose main weights are another dtype would pass."""
+    torch, _said = _torch()
+    model = Model("bfloat16", lora_only=True)
+    model.params[1].dtype = "float32"           # a main weight the override hides
+    assert {t.dtype for t in model.parameters()} == {"bfloat16"}
+    with pytest.raises(RuntimeError, match="loaded as bfloat16, float32"):
+        SERVERS[server].apply_precision(torch, model, "bf16")
+
+
+@pytest.mark.parametrize("server", sorted(SERVERS))
 def test_a_tensor_left_in_another_dtype_refuses_the_load(server):
     torch, _said = _torch()
     with pytest.raises(RuntimeError, match="holds float32 tensors.*stated bf16"):
-        SERVERS[server].apply_precision(torch, Model(stuck="float32"), "bf16")
+        SERVERS[server].apply_precision(torch, Model("bfloat16", stuck="float32"), "bf16")
 
 
 @pytest.mark.parametrize("server", sorted(SERVERS))

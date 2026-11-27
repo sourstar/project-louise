@@ -213,20 +213,38 @@ def stated_precision(environ=None) -> str:
     return said
 
 
+def _floating(torch_mod, model, buffers: bool) -> set[str]:
+    """The dtypes of the model's floating parameters (and buffers), through
+    `torch.nn.Module`'s OWN iterators: a model may override `parameters()` —
+    jina-v3's `XLMRobertaLoRA` yields only its LoRA weights while the main ones
+    are frozen, so `model.parameters()` would read back a handful of tensors."""
+    module = torch_mod.nn.Module
+    tensors = [*module.parameters(model), *(module.buffers(model) if buffers else ())]
+    return {str(t.dtype) for t in tensors if t.is_floating_point()}
+
+
 def apply_precision(torch_mod, model, precision: str):
     """The model in the stated dtype, and torch's fp32 matmuls at their full
-    precision, both READ BACK (jina-v3's `apply_precision`, the same rule)."""
+    precision, READ BACK. The load was asked for the dtype (`torch_dtype`), so
+    every floating parameter must ALREADY be in it before `.to()` — compared
+    after, the check would only see the conversion it made, and a library
+    that loaded another dtype would pass. Then `.to(dtype)` (buffers too; a
+    model's code may keep one wider, as a rotary table), the matmul precision,
+    and every floating tensor again."""
     dtype = getattr(torch_mod, TORCH_DTYPES[precision])
+    loaded = _floating(torch_mod, model, buffers=False)
+    if loaded != {str(dtype)}:
+        raise RuntimeError(f"the model was loaded as {', '.join(sorted(loaded)) or 'nothing floating'} "
+                           f"though asked for {dtype}: it would not compute in the stated {precision}")
     model = model.to(dtype=dtype)
     torch_mod.set_float32_matmul_precision(FP32_MATMUL)
     if torch_mod.get_float32_matmul_precision() != FP32_MATMUL:
         raise RuntimeError(f"torch reports its fp32 matmul precision as "
                            f"{torch_mod.get_float32_matmul_precision()!r}, not {FP32_MATMUL!r}")
-    other = sorted({str(t.dtype) for t in (*model.parameters(), *model.buffers())
-                    if t.is_floating_point() and t.dtype != dtype})
-    if other:
-        raise RuntimeError(f"the model holds {', '.join(other)} tensors after .to({dtype}): it "
-                           f"would not compute in the stated {precision}")
+    held = _floating(torch_mod, model, buffers=True)
+    if held != {str(dtype)}:
+        raise RuntimeError(f"the model holds {', '.join(sorted(held - {str(dtype)}))} tensors after "
+                           f".to({dtype}): it would not compute in the stated {precision}")
     return model
 
 

@@ -358,6 +358,23 @@ def test_no_receipts_service_means_no_vector(make_node, tmp_path):
     assert time.monotonic() - t0 < 30
 
 
+@pytest.mark.parametrize("env, why", [
+    ({"VEGA_TEST_ENV": "on"}, "states no compute precision"),
+    ({"VEGA_TEST_ENV": "on", "LOUISE_COMPUTE_PRECISION": "half"}, "is not one of f32, bf16, f16"),
+])
+def test_a_load_whose_precision_is_unstated_is_refused_before_the_backend_loads(make_node, env, why):
+    """Compute precision, stated (operator, 2026-11-27): the check needs no
+    device, so it runs before the weights go anywhere — never a model loaded
+    onto the card only to be refused after."""
+    node = make_node(extra={"EnvVars": env})
+    pb = node.stubs.pb
+    answer = node.channel().unary_unary(vw.LOAD)(pb.ModelOptions(**node.options).SerializeToString(),
+                                                 timeout=10)
+    result = pb.Result.FromString(answer)
+    assert not result.success and why in result.message
+    assert node.calls("LoadModel") == [], "refused before the backend loads anything"
+
+
 def test_load_options_the_proto_cannot_name_are_refused(make_node):
     node = make_node()
     pb = node.stubs.pb

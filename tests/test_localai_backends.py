@@ -1135,10 +1135,7 @@ def test_jina_v3_loads_the_remote_code_from_the_folders_cache_whatever_the_env_s
         def modules(self):
             return [Attn()]
 
-        def parameters(self):
-            return []
-
-        def buffers(self):
+        def parameters(self):                   # XLMRobertaLoRA's own: its LoRA weights alone
             return []
 
         def encode(self, texts, **kw):
@@ -1153,6 +1150,9 @@ def test_jina_v3_loads_the_remote_code_from_the_folders_cache_whatever_the_env_s
     fake_torch.no_grad = lambda: __import__("contextlib").nullcontext()
     fake_torch.use_deterministic_algorithms = lambda flag: seen.setdefault("det", []).append(flag)
     fake_torch.float32 = "float32"
+    weight = SimpleNamespace(dtype="float32", is_floating_point=lambda: True)
+    fake_torch.nn = SimpleNamespace(Module=SimpleNamespace(parameters=lambda m: [weight],
+                                                           buffers=lambda m: [weight]))
     fake_torch.set_float32_matmul_precision = lambda p: seen.__setitem__("matmul", p)
     fake_torch.get_float32_matmul_precision = lambda: seen.get("matmul")
     fake_transformers = types.ModuleType("transformers")
@@ -1169,7 +1169,8 @@ def test_jina_v3_loads_the_remote_code_from_the_folders_cache_whatever_the_env_s
 
     encode, dim = jina.build_encoder(str(tmp_path), "cpu", "retrieval.passage", 512, 1024)
     assert seen["path"] == str(tmp_path)
-    assert seen["kw"] == {"trust_remote_code": True, "cache_dir": str(tmp_path / "hf-cache")}
+    assert seen["kw"] == {"trust_remote_code": True, "cache_dir": str(tmp_path / "hf-cache"),
+                          "torch_dtype": "float32"}, "the stated dtype asked of the load, never \"auto\""
     assert os.environ["TRANSFORMERS_CACHE"] == "/models", "LocalAI's env is left as it is"
     assert os.environ["HF_HUB_CACHE"] == str(tmp_path / "hf-cache") and os.environ["HF_HUB_OFFLINE"] == "1"
     assert dim == 512 and encode("a text")[:2] == [0.6, 0.8]
