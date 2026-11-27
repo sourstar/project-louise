@@ -28,7 +28,8 @@ const check = (ok, what, d) => { console.log((ok ? 'PASS ' : 'FAIL ') + what + (
       const next = script.shift() || { wait: 0, answer: { addressed: false, command: null, text: null, dropped: 'not addressed' } };
       await new Promise(ok => setTimeout(ok, next.wait));
       live--;
-      return r.fulfill({ contentType: 'application/json', body: JSON.stringify(next.answer) });
+      try { return await r.fulfill({ contentType: 'application/json', body: JSON.stringify(next.answer) }); }
+      catch (e) { return; }                     // the page gave up on it (its bound)
     }
     if (u.pathname === '/ask/voices') return r.fulfill({ contentType: 'application/json', body: '{"voices":[],"default":null,"account":null}' });
     return r.fulfill({ status: 204, body: '' });
@@ -53,6 +54,16 @@ const check = (ok, what, d) => { console.log((ok ? 'PASS ' : 'FAIL ') + what + (
   check(most === 1, '3. never more than one utterance in flight', { most, posts: posts.length - before });
   check(posts.length - before <= 3, '3. the ones cut meanwhile do not queue up', posts.length - before);
   check(JSON.stringify(await p.evaluate(() => asked)) === JSON.stringify(['chi era Garibaldi?']), '3. nothing unaddressed is asked');
+
+  // 3b. a node that hangs: the clip in flight is bounded, the next one goes
+  //     (architecture's read of 535b2f68, 3)
+  await p.waitForTimeout(6000);                      // the slow ones of 3 answered
+  await p.evaluate(() => louiseVoice.handsFree.setClipMax(2000));
+  const hung = posts.length;
+  script = Array.from({ length: 20 }, () => ({ wait: 60000, answer: { addressed: false, command: null, text: null } }));
+  await p.waitForTimeout(10000);
+  check(posts.length - hung >= 2, '3b. a hung node holds no clip past its bound: the next one goes', posts.length - hung);
+  script = [];
 
   // 4. a tap on the microphone turns hands-free off and closes it
   await p.evaluate(() => document.getElementById('mic').click());

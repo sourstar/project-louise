@@ -755,17 +755,21 @@ def test_the_spoken_question_s_language_picks_the_phrases_not_the_browser_s(node
     """Operator, 2026-11-27: the node saw only `lang=en` while the
     questions were spoken in Italian (the browser's language)."""
     c = TestClient(api.app)
-    got = c.get("/ask/voice/fillers", params={"lang": "en", "text": "Quando è finita la prima guerra mondiale?"},
-                headers=ADMIN).json()
+    got = c.post("/ask/voice/fillers", json={"lang": "en", "text": "Quando è finita la prima guerra mondiale?"},
+                 headers=ADMIN).json()
     assert got["lang"] == "it"
-    unsure = c.get("/ask/voice/fillers", params={"lang": "en", "text": "Napoleon"}, headers=ADMIN).json()
+    unsure = c.post("/ask/voice/fillers", json={"lang": "en", "text": "Napoleon"}, headers=ADMIN).json()
     assert unsure["lang"] == "en", "a text too short to tell: the page's language"
+    # never in the URL (architecture's read of 535b2f68, 5): the GET takes no text
+    assert c.get("/ask/voice/fillers", params={"lang": "en", "text": "Quando è finita la prima guerra mondiale?"},
+                 headers=ADMIN).json()["lang"] == "en"
 
 
 def test_the_page_sends_the_spoken_question_with_its_ask_for_phrases():
     page = (Path(__file__).parent.parent / "app" / "static" / "voice.js").read_text(encoding="utf-8")
     assert "prefetchFillers(dictated || '').then(() => { if (cue === c) playCue('short'); });" in page
-    assert "'&text=' + encodeURIComponent(text.slice(0, 500))" in page
+    assert "'&text='" not in page, "the question's text is never put in a URL"
+    assert "body: JSON.stringify({ lang, voice: voice || null, text: text.slice(0, 500) })" in page
 
 
 def test_the_waiting_tone_is_loud_enough_to_hear_and_the_ready_ping_keeps_its_level():
@@ -776,3 +780,31 @@ def test_the_waiting_tone_is_loud_enough_to_hear_and_the_ready_ping_keeps_its_le
     assert cue and float(cue.group(3)) >= 0.3 and int(cue.group(2)) >= 250
     assert "linearRampToValueAtTime(CUE_TONE_GAIN" in page, "the waiting tone plays at its own level"
     assert "TONE_MS = 160, TONE_HZ = 880, TONE_GAIN = 0.12;" in page, "the microphone's ping: unchanged"
+
+
+def test_ahead_never_loads_the_speech_model(node):
+    """Architecture's read of 535b2f68, 1: the keeper preloads it, and may
+    evict it; ahead makes nothing until a reader's question loaded it."""
+    node.engine[0] = None
+    assert fillers.ahead() == 0 and not node.calls
+
+
+def test_a_model_that_fails_is_not_asked_every_minute_by_ahead(node, monkeypatch):
+    """Probe: a 500 from the model gave 15 calls and 15 warns in three ticks."""
+    monkeypatch.setattr(fillers, "RETRY_AFTER_S", 0.0)
+    node.status = 500
+    fillers.ahead()
+    node.filled()
+    first = len(node.calls)
+    warns = lambda: [t for lv, t in node.lines if lv == "warn" and "not made" in t]  # noqa: E731
+    first_warns = len(warns())
+    assert first and first_warns
+    for _ in range(3):
+        fillers.ahead()
+        node.filled()
+    assert len(node.calls) == first, "skipped by ahead until a reader asks"
+    assert len(warns()) == first_warns, "one line an episode"
+    fillers.ready("it", admin=False)                  # a reader asks: tried again
+    node.filled()
+    assert len(node.calls) > first
+    assert len(warns()) == first_warns, "the same episode: no new line"

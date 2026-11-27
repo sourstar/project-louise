@@ -114,12 +114,16 @@ def _command(rest: str) -> str | None:
 def heard(text: str, *, name: str | None = None, follow: bool = False, said: str = "") -> Heard:
     """What the utterance `text` is: addressed by the name (or `follow`, in
     the continuation window), a command or a question; the node's own voice
-    (`said`, what was just read) or not addressed is dropped, with no text."""
+    (`said`, what was just read) or not addressed is dropped, with no text.
+
+    THE NAME AND A COMMAND COME FIRST, never taken for an echo (architecture's
+    read of 535b2f68, 2: "Philip, go on" over a reading of "Philip the
+    Second would go on…" was dropped — history answers are full of Philip,
+    Felipe, Philipp). The echo share counts only the words AFTER the lead and
+    the name."""
     words = fold(text).split()
     if not words:
         return Heard(False, dropped="nothing said")
-    if _echo(words, said):
-        return Heard(False, dropped="echo")
     forms = forms_of(name)
     at = 1 if words[0] in LEAD and len(words) > 1 else 0
     if words[at] in forms:
@@ -127,10 +131,12 @@ def heard(text: str, *, name: str | None = None, follow: bool = False, said: str
     elif follow:
         rest = text.strip()
     else:
-        return Heard(False, dropped="not addressed")
+        return Heard(False, dropped="echo" if _echo(words, said) else "not addressed")
     if not fold(rest):
         return Heard(True, command="listen")
     cmd = _command(rest)
     if cmd:
         return Heard(True, command=cmd)
+    if _echo(fold(rest).split(), said):
+        return Heard(False, dropped="echo")
     return Heard(True, text=rest)

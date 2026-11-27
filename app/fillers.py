@@ -435,7 +435,7 @@ _swept: list[tuple[str, str, str] | None] = [None]
 
 
 def ready(lang: Any, *, asked: Any = None, account_voice: str | None = None,
-          admin: bool = True) -> dict[str, Any]:
+          admin: bool = True, ahead: bool = False) -> dict[str, Any]:
     """`GET /ask/voice/fillers?lang=`: `{"lang", "voice", "ready": [{"id",
     "kind", "url"}]}` — the clips ready in the voice this reader's answer
     would be read in (`speech.reader_voice`) for `lang`, short first; `voice`
@@ -474,7 +474,15 @@ def ready(lang: Any, *, asked: Any = None, account_voice: str | None = None,
     out["ready"] = [{"id": have[k]["id"], "kind": k, "url": f"{ROUTE}/{have[k]['id']}"}
                     for k in KINDS if k in have]
     if len(have) < len(KINDS):
-        schedule(want)
+        if ahead:
+            with _lock:
+                skip = want in _ahead_failed
+            if not skip:
+                schedule(want)
+        else:
+            with _lock:
+                _ahead_failed.discard(want)          # a reader asks: ahead may try it again
+            schedule(want)
     return out
 
 
@@ -658,20 +666,35 @@ def _drain() -> None:
             _worker = None
 
 
+#: the pools whose making failed, skipped by `ahead` until a READER asks for
+#: one again (`ready(ahead=False)` takes it off): a model that fails is not
+#: asked every minute, forever, with nobody asking (architecture's read of
+#: 535b2f68, 1)
+_ahead_failed: set = set()
+
+
 def ahead() -> int:
     """The pools of every language in LANGUAGES, in the voice a reader is
     read to in, asked for as a page would (`ready`): what is short is made in
     the background, at idle, as any ask's. The number of languages asked;
     a language that cannot be asked (no model, no voice, no engine read) is
-    skipped, and the next tick asks again."""
-    from app import voice as node_voice
+    skipped, and the next tick asks again. NOTHING IS MADE WHILE THE SPEECH
+    MODEL IS NOT LOADED (the keeper preloads it for Ask, and evicts it when
+    space is claimed): ahead never loads it into a full card — it makes up
+    the pools once a reader's question has loaded it. A pool that failed is
+    skipped until a reader asks for it (`_ahead_failed`)."""
+    from app import model_load, voice as node_voice
     # nothing kept, or no speech model: nothing to make, nothing asked of the model server
-    if _root() is None or not node_voice.settings_or_none().tts_model:
+    node = node_voice.settings_or_none()
+    if _root() is None or not node.tts_model:
+        return 0
+    # not loaded: never loaded for this (the listing is cached, no load asked)
+    if model_load.backend_of(node_voice.server(), node.tts_model) is None:
         return 0
     asked = 0
     for code in LANGUAGES:
         try:
-            ready(code, admin=False)
+            ready(code, admin=False, ahead=True)
             asked += 1
         except Exception as e:   # noqa: BLE001 — ahead is a convenience, never in a question's way
             _say("warn", f"speech fillers: the pools ahead for {code} could not be asked ({type(e).__name__}: {e})")
@@ -716,8 +739,15 @@ def _sweep_for(job: Sweep) -> None:
 
 
 def _fail(want: Want, why: str) -> None:
+    """A synthesis that failed: kept for RETRY_AFTER_S, and SAID ONCE AN
+    EPISODE (architecture's read of 535b2f68, 1) — until the pool is made,
+    a failure again is not a line again."""
     with _lock:
+        again = want in _failed
         _failed[want] = time.monotonic()
+        _ahead_failed.add(want)
+    if again:
+        return
     _say("warn", f"speech fillers: {_voice_said(want)} ({want.lang}) not made — {why}; asked again at the "
                  f"next ask, {RETRY_AFTER_S:.0f} s from now at the earliest")
 
@@ -790,6 +820,7 @@ def _fill(want: Want) -> None:
             missing = [k for k in KINDS if k not in have]
             if not missing:
                 _failed.pop(want, None)
+                _ahead_failed.discard(want)
                 return
             kind = missing[0]
             text = _draw(want.lang, kind, _avoid(pool, kind, have))
@@ -830,6 +861,7 @@ def _fill(want: Want) -> None:
                 _write_atomic(pool / f"{clip_id}.json",
                               json.dumps(meta, ensure_ascii=False, sort_keys=True).encode("utf-8"))
                 _failed.pop(want, None)
+                _ahead_failed.discard(want)
             except OSError as e:
                 unwritten = e
         if unwritten is not None:
@@ -867,6 +899,7 @@ def reset() -> None:
                 break
         _pending.clear()
         _failed.clear()
+        _ahead_failed.clear()
         _worker = None
         _swept[0] = None
     _stop.clear()

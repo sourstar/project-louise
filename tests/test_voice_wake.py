@@ -50,7 +50,7 @@ def test_continuation_takes_an_utterance_without_the_name():
 def test_the_node_s_own_voice_is_dropped_whatever_it_starts_with():
     said = "Philippe Garibaldi was born in Nice in 1807. He led the expedition of the Thousand."
     assert heard("He led the expedition of the Thousand", said=said).dropped == "echo"
-    assert heard("Philippe Garibaldi was born in Nice", said=said).dropped == "echo"
+    assert heard("Philippe Garibaldi was born in Nice in 1807", said=said).dropped == "echo"
     assert heard("Philippe, stop", said=said).command == "stop", "a short command is never an echo"
     assert heard("Philippe, what about his brother?", said=said).text == "what about his brother?"
 
@@ -140,3 +140,35 @@ def test_the_name_is_the_node_s_and_the_command_line_sets_it(isolated_config):
     a = louise.build_parser().parse_args(["node", "speech", "set", "--name", "Louise"])
     assert a.wake_name == "Louise"
     assert voice_wake.forms_of(None) == voice_wake.FORMS["philippe"]
+
+
+@pytest.mark.parametrize("text,said,cmd", [
+    ("Philip, go on.", "Philip the Second would go on to rule Spain.", "resume"),
+    ("Philippe, stop it", "Louis Philippe tried to stop it.", "stop"),
+    ("Okay Philippe, wait a moment.", "Okay, so wait: a moment of history.", "wait"),
+])
+def test_the_name_and_a_command_are_never_taken_for_an_echo(text, said, cmd):
+    """Architecture's read of 535b2f68, 2: each of these was dropped as an echo."""
+    assert heard(text, said=said).command == cmd
+
+
+def test_an_utterance_is_no_question_for_the_idle_clock_unless_addressed(route):
+    """Architecture's read of 535b2f68, 4: a radio near the phone kept the web
+    from ever trimming."""
+    from app import idle_trim
+    assert not idle_trim.is_question("/ask/voice/heard") and idle_trim.is_question("/ask/query")
+    c, said = route
+    idle_trim._last = 0.0
+    said["text"] = "the radio talks about the weather"
+    _post(c)
+    assert idle_trim._last == 0.0, "dropped: the web stays idle"
+    said["text"] = "Philippe, chi era Garibaldi?"
+    _post(c)
+    assert idle_trim._last > 0.0, "addressed: a question"
+
+
+def test_an_upload_over_the_bound_is_refused_before_the_form_is_read(route):
+    c, _ = route
+    r = c.post("/ask/voice/heard", content=b"x" * 10, headers={
+        "content-type": "multipart/form-data; boundary=b", "content-length": str(64 * 1024 * 1024)})
+    assert r.status_code == 413

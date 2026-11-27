@@ -551,8 +551,22 @@ def _filler_reader(request: Request) -> tuple[bool, str | None]:
     return admin, (users.voice_of(auth.account(v)) if admin else None)
 
 
+class FillersAskBody(BaseModel):
+    lang: str = Field("", max_length=16)
+    voice: str | None = Field(None, max_length=512)
+    text: str = Field("", max_length=2000)
+
+
+@ask_router.post("/ask/voice/fillers")
+def ask_voice_fillers_for(request: Request, body: FillersAskBody):
+    """`GET /ask/voice/fillers` for a SPOKEN question, its text in the body —
+    never in the URL, which the access log writes (architecture's read of
+    535b2f68, 5)."""
+    return _fillers_ready(request, body.lang, body.voice, body.text)
+
+
 @ask_router.get("/ask/voice/fillers")
-def ask_voice_fillers(request: Request, lang: str = "", voice: str | None = None, text: str = ""):
+def ask_voice_fillers(request: Request, lang: str = "", voice: str | None = None):
     """THE PHRASES THAT COVER THE WAIT (docs/notes/hands-free-voice.md §7,
     Decision 5A): `{"lang", "voice", "ready": [{"id", "kind": "short" |
     "long", "url"}]}` — the clips ready in the voice this reader's answer
@@ -563,6 +577,10 @@ def ask_voice_fillers(request: Request, lang: str = "", voice: str | None = None
     spoken question, when there is one — its own language wins over the
     page's (operator, 2026-11-27: a question asked in Italian on a browser
     set to English was covered in English; `speech.language`, no model)."""
+    return _fillers_ready(request, lang, voice, "")
+
+
+def _fillers_ready(request: Request, lang: str, voice: str | None, text: str):
     from . import fillers, speech
     admin, mine = _filler_reader(request)
     said = speech.language(text[:500]) if text else None
@@ -1545,6 +1563,13 @@ async def ask_voice_heard(request: Request):
     from .rage import dispatch
     if not request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
         raise HTTPException(400, "the upload is multipart/form-data with a `file` field")
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared > HEARD_MAX_BYTES + HEARD_SAID_CHARS * 4 + 4096:
+        # refused before the form is spooled to disk
+        raise HTTPException(413, f"an utterance is at most {HEARD_MAX_BYTES >> 20} MB")
     form = await request.form()
     try:
         up = form.get("file")
@@ -1577,6 +1602,8 @@ async def ask_voice_heard(request: Request):
     print(f"{time.strftime('%H:%M:%S')} [voice] heard {seconds:.1f} s, vad {vad}, stt {stt_s} s: {outcome}",
           flush=True)
     if out.addressed:
+        from . import idle_trim
+        idle_trim.note()                             # a question, for the web's idle clock too
         with dispatch.question():
             pass
     return out.as_dict()

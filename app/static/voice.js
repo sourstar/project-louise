@@ -1143,8 +1143,12 @@
     if (!lang || (fillers && fillers.length && fillersFor === key)) return;   // an empty list is asked again
     fillersFor = key;
     try {
-      const r = await fetch('/ask/voice/fillers?lang=' + encodeURIComponent(lang) + (voice ? '&voice=' + encodeURIComponent(voice) : '')
-                            + (text ? '&text=' + encodeURIComponent(text.slice(0, 500)) : ''));
+      // a spoken question's text goes in the body, never in the URL the
+      // access log writes (architecture's read of 535b2f68, 5)
+      const r = text
+        ? await fetch('/ask/voice/fillers', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                             body: JSON.stringify({ lang, voice: voice || null, text: text.slice(0, 500) }) })
+        : await fetch('/ask/voice/fillers?lang=' + encodeURIComponent(lang) + (voice ? '&voice=' + encodeURIComponent(voice) : ''));
       fillers = r.ok ? ((await r.json()).ready || []) : [];
     } catch (e) { fillers = []; }
   }
@@ -1255,6 +1259,8 @@
   const HF_KEY = 'louise-hands-free';
   const HF_PRE_MS = 300, HF_QUIET_MS = 1500, HF_MAX_MS = 20000, HF_MIN_MS = 300;
   const HF_FOLLOW_MS = 5000, HF_SAID_MS = 30000;
+  // the longest a clip may be in flight: a hung node lets the next one go
+  let HF_CLIP_MAX_MS = 15000;
   const hfBox = document.getElementById('hands-free'), hfChoice = document.getElementById('hands-free-choice');
   let hf = null;
   function hfSaid() {
@@ -1291,10 +1297,16 @@
     const lang = pageLang(); if (lang) fd.append('language', lang);
     if (performance.now() < h.followUntil) fd.append('follow', '1');
     const said = hfSaid(); if (said) fd.append('said', said);
-    fetch('/ask/voice/heard', { method: 'POST', body: fd })
+    // BOUNDED (architecture's read of 535b2f68, 3): a hung node or network
+    // would hold the one clip in flight, and hands-free would hear nothing
+    // new — a passenger's clip then replacing a waiting "Philippe, stop"
+    const ctl = window.AbortController ? new AbortController() : null;
+    const bound = setTimeout(() => { if (ctl) ctl.abort(); }, HF_CLIP_MAX_MS);
+    fetch('/ask/voice/heard', { method: 'POST', body: fd, ...(ctl ? { signal: ctl.signal } : {}) })
       .then(r => r.ok ? r.json() : null).then(d => { if (d && hf === h) hfAct(h, d); })
       .catch(() => {})
       .finally(() => {
+        clearTimeout(bound);
         h.inflight = false;
         if (hf === h && h.waiting) { const next = h.waiting; h.waiting = null; hfSend(h, next); }
       });
@@ -1504,7 +1516,8 @@
     // the cue plan, for a test: a question taken as a spoken one is, the long cue's delay, what was cued
     cueQuestion: () => cueQuestion(), setLongCue(ms) { LONG_CUE_MS = ms; },
     // hands-free, for a test: on, off, and what it counted (never what was said)
-    handsFree: { start: () => hfStart(), stop: () => hfStop(), on: () => !!hf, counts: () => (hf ? { ...hf.counts } : null) },
+    handsFree: { start: () => hfStart(), stop: () => hfStop(), on: () => !!hf, counts: () => (hf ? { ...hf.counts } : null),
+                 setClipMax(ms) { HF_CLIP_MAX_MS = ms; } },
     cues: () => (times.cues || []).map(c => c.kind), split, budget, trimWav, rates: () => ({ ...rates }),
     // a test's or an operator's rates, kept as measured ones are
     setRates(k) { rates = { ...RATES0, ...k }; answerRates = null; outlier = false; try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {} },
