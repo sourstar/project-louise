@@ -176,7 +176,8 @@ def test_an_oserror_while_listing_holds_the_pass_back(tmp_path, monkeypatch):
     units.prepare([f], [f], SimpleNamespace(corpus_dir=corpus, name="eu"), SimpleNamespace(url=URL))
     thread, _events, _phase = next(iter(units._runs.values()))
     thread.join(10)
-    assert units.held_back() and "local fault" in units.held_back()
+    coll = SimpleNamespace(corpus_dir=corpus, name="eu")
+    assert units.pass_held(coll) and "local fault" in units.pass_held(coll)
     units.ready(f, None)                                          # returns at once: the pass is held
     units.close()
 

@@ -126,7 +126,7 @@ def test_the_engine_waits_for_ready_before_it_takes_a_slot(monkeypatch):
     order = []
 
     class Fetcher:
-        def ready(self, f, stop):
+        def ready(self, f, stop, collection=None):
             order.append("ready")
 
         def fetch(self, endpoint, f, dest):
@@ -149,7 +149,7 @@ def test_the_engine_ends_a_pass_its_fetcher_held_back(tmp_path, monkeypatch):
     asked = []
 
     class Fetcher:
-        def held_back(self):
+        def pass_held(self, collection):
             return "eu: the listing met a local fault"
     spec = SimpleNamespace(unit_fetcher=Fetcher())
     monkeypatch.setattr(engine.transfer_pool, "acquire_endpoint_slot", lambda *a, **k: asked.append(1))
@@ -167,6 +167,7 @@ def _runs(units):
 
 
 def test_cellar_connections_stay_within_max_conns_while_the_listing_runs(tmp_path, monkeypatch):
+    """(Its gate shortened: each blocked acquire timed it, 10-60 s.)"""
     from app.acquire import specs
     from app.transfer import pool as transfer_pool
     spec = specs.EURLEX_SPEC
@@ -176,7 +177,7 @@ def test_cellar_connections_stay_within_max_conns_while_the_listing_runs(tmp_pat
     def window(client, url, year, langs, code_of, charge, place=None, learned=None):
         with lock:
             live[0] += 1
-        gate.wait(10)
+        gate.wait(3)
         with lock:
             live[0] -= 1
         return iter(())
@@ -273,3 +274,90 @@ def test_a_stop_with_units_in_ready_ends_all_in_2_s_and_resumes(tmp_path, monkey
     monkeypatch.setattr(cellar, "_window_files", lambda c, u, y, ls, *a, **k: (asked.append(y), iter(()))[1])
     cellar.TreeUnits()._prepare_bulk(base, corpus, ["it"], due, "eu", URL, background=False)
     assert asked == [1971], asked
+
+
+
+# ---- architecture's probes for 0225f33f ----------------------------------------------------
+
+def test_the_listing_gets_its_slots_beside_busy_fetchers(tmp_path, monkeypatch):
+    from app.acquire import specs
+    from app.transfer import pool as transfer_pool
+    spec = specs.EURLEX_SPEC
+    base, corpus, due = _setup(tmp_path, monkeypatch, range(1970, 1976))
+    got_at = []
+
+    def window(client, url, year, langs, code_of, charge, place=None, learned=None):
+        got_at.append(time.monotonic())
+        time.sleep(0.5)
+        return iter(())
+    monkeypatch.setattr(cellar, "_window_files", window)
+    mgr = get_manager()
+    ranked = mgr.rank_endpoints([(e.url, e) for e in spec.endpoints])
+    done, fetched = threading.Event(), [0]
+
+    def fetcher():
+        while not done.is_set():
+            s = transfer_pool.acquire_endpoint_slot(mgr, ranked, spec, stop=done)
+            if s is None:
+                return
+            try:
+                time.sleep(0.05)
+                fetched[0] += 1
+            finally:
+                s[2].release()
+    fs = [threading.Thread(target=fetcher) for _ in range(8)]
+    for f in fs:
+        f.start()
+    time.sleep(0.3)
+    units = cellar.TreeUnits()
+    stop = threading.Event()
+    t0 = time.monotonic()
+    with get_manager().bind(Priority.BACKFILL, Direction.DOWN, stop=stop):
+        units._prepare_bulk(base, corpus, ["it"], due, "eu", URL, background=True)
+    thread, _e, _p = next(iter(units._runs.values()))
+    thread.join(30)
+    took = time.monotonic() - t0
+    done.set()
+    for f in fs:
+        f.join(5)
+    units.close()
+    assert took < 2.0, (f"the listing's 6 x 0.5 s windows took {took:.1f} s beside 8 fetchers "
+                        f"({fetched[0]} units meanwhile); first window began {got_at[0] - t0:.2f} s in")
+    assert fetched[0] > 0, "the fetch kept a slot"
+
+
+def test_a_fault_in_one_corpus_listing_holds_back_only_that_corpus(tmp_path, monkeypatch):
+    import errno
+    from types import SimpleNamespace
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    base_a, corpus_a, due_a = _setup(a, monkeypatch, (1970,))
+    units = cellar.TreeUnits()
+
+    def full(*args, **kw):
+        raise OSError(errno.ENOSPC, "No space left on device")
+    monkeypatch.setattr(cellar, "_window_files", full)
+    stop = threading.Event()
+    with get_manager().bind(Priority.BACKFILL, Direction.DOWN, stop=stop):
+        units._prepare_bulk(base_a, corpus_a, ["it"], due_a, "A", URL, background=True)
+    next(iter(units._runs.values()))[0].join(5)
+    units.close()
+    coll_a, coll_b = SimpleNamespace(corpus_dir=corpus_a), SimpleNamespace(corpus_dir=b / "corpus")
+    assert units.pass_held(coll_a), "corpus A is held back"
+    base_b, corpus_b, due_b = _setup(b, monkeypatch, (1971,))
+    monkeypatch.setattr(cellar, "_window_files", lambda *a, **k: iter(()))
+    with get_manager().bind(Priority.BACKFILL, Direction.DOWN, stop=stop):
+        units._prepare_bulk(base_b, corpus_b, ["it"], due_b, "B", URL, background=True)
+    next(iter(units._runs.values()))[0].join(5)
+    why = units.pass_held(coll_b)
+    units.close()
+    assert why is None, f"corpus B's pass is held back by A's fault: {why!r}"
+    assert units.pass_held(coll_a), "A's own hold stands until its next prepare"
+
+
+def test_a_held_back_pass_carries_what_it_fetched():
+    from app.acquire import engine
+    from app.acquire.spec import HeldBack
+    e = HeldBack("x")
+    e.fetched = 7
+    assert int(getattr(e, "fetched", 0)) == 7 and "fetched" in engine._no_counts()

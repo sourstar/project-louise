@@ -982,7 +982,10 @@ LISTING_COOL_WAIT_S = 120.0
 #: the listing phase's own endpoint key: its episodes cool the listing
 #: threads (review of a69741dd, S2), never the fetch threads (Z2)
 LISTING_KEY = "cellar-listing"
-#: languages a listing-phase window starts with (see `_prepare_bulk`)
+#: languages a listing-phase window starts with (see `_prepare_bulk`). At 1
+#: a window is never split. ABOVE 1, a window `_window_files` splits keeps its
+#: halves' files, so the pipeline's `publish` (the window's own file) finds
+#: nothing and its units wait for the next pass: publish the halves first
 LISTING_START_GROUP = 1
 
 
@@ -1432,7 +1435,7 @@ class TreeUnits(CellarUnits):
                     return (1, i, f.rel_path)
         return (0, -1, f.rel_path)
 
-    def ready(self, f: RemoteFile, stop=None) -> None:
+    def ready(self, f: RemoteFile, stop=None, collection=None) -> None:
         """Called by the engine BEFORE it takes an endpoint slot for `f`
         (spec.UnitFetcher, optional): a unit whose window the pipeline's
         listing has still to list waits for it here, holding no slot, the
@@ -1442,24 +1445,38 @@ class TreeUnits(CellarUnits):
             return
         u = unit_of(f)
         year = window_year(u["celex"])
+        key = self._key_of(collection)
         with self._lock:
-            runs = list(self._runs.values())
-        for thread, events, _phase in runs:
-            ev = events.get((year, u["lang"]))
-            if ev is None:
-                continue
-            t0 = time.monotonic()
-            while not ev.is_set() and thread.is_alive() and time.monotonic() - t0 < READY_WAIT_S:
-                if (stop is not None and stop.is_set()) or self.held_back():
-                    return
-                ev.wait(1.0)
+            run = self._runs.get(key) if key is not None else \
+                (next(iter(self._runs.values())) if len(self._runs) == 1 else None)
+        if run is None:
             return
+        thread, events, _phase = run
+        ev = events.get((year, u["lang"]))
+        if ev is None:
+            return
+        t0 = time.monotonic()
+        while not ev.is_set() and thread.is_alive() and time.monotonic() - t0 < READY_WAIT_S:
+            if (stop is not None and stop.is_set()) or self.pass_held(collection):
+                return
+            ev.wait(1.0)
 
-    def held_back(self) -> str | None:
-        """Why the pass is held back mid-pass, or None (spec.UnitFetcher,
-        optional: the engine asks nothing more and ends the pass HeldBack)."""
+    @staticmethod
+    def _key_of(collection) -> str | None:
+        corpus = getattr(collection, "corpus_dir", None) if collection is not None else None
+        return str(Path(corpus).resolve()) if corpus is not None else None
+
+    def pass_held(self, collection=None) -> str | None:
+        """Why THIS collection's pass is held back mid-pass, or None
+        (spec.UnitFetcher, optional: the engine asks nothing more and ends the
+        pass HeldBack). Keyed on the corpus root: TREE_UNITS serves every
+        parser-4 EUR-Lex collection (review of 0225f33f: B's pass was held
+        back by A's fault)."""
+        key = self._key_of(collection)
         with self._lock:
-            return next(iter(self._held.values()), None)
+            if key is not None:
+                return self._held.get(key)
+            return next(iter(self._held.values()), None) if len(self._held) == 1 else None
 
     def close(self) -> None:
         """The pass ended: a pipelined listing still running ends at its next
@@ -1824,11 +1841,18 @@ class TreeUnits(CellarUnits):
                             # ITS SLOT FROM THE ENDPOINT'S OWN POOL, the fetch's
                             # (review of b797db0e, B1: 3 listing queries + 4 fetch
                             # slots = 7 at once on Cellar, which allows 4)
+                            # AHEAD OF THE FETCH (review of 0225f33f, L1: beside busy
+                            # fetchers it got no slot in 30 s): the next free slot is
+                            # the listing's, as an INTERACTIVE caller's is
+                            # (`manager.urgent`); at most N-1 listing threads, so the
+                            # fetch keeps one; the wait for a busy slot bounded,
+                            # stop-aware, then retried
                             slot = None
                             while slot is None:
                                 _stop_check()
-                                slot = transfer_pool.acquire_endpoint_slot(mgr, ranked, EURLEX_SPEC, stop=phase,
-                                                                           bound_s=5.0)
+                                slot = transfer_pool.acquire_endpoint_slot(
+                                    mgr, ranked, EURLEX_SPEC, stop=phase, bound_s=5.0,
+                                    priority=Priority.INTERACTIVE, busy_bound_s=5.0)
                             if phase.is_set():                 # a fault or a stop while it waited
                                 slot[2].release()
                                 raise TransferAborted("cellar: stopped between requests")

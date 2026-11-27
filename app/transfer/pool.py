@@ -118,7 +118,7 @@ def _paced(manager, key: str, spec, stop, sem, bound_s: float, sleep=time.sleep)
 
 
 def acquire_endpoint_slot(manager, ranked, spec, stop: threading.Event | None = None, *,
-                          bound_s: float | None = None, priority=None):
+                          bound_s: float | None = None, priority=None, busy_bound_s: float | None = None):
     """`_acquire_slot`, in the priority order of the endpoint's connections:
     an INTERACTIVE caller (a fetch a query triggers) is registered as waiting
     (`manager.urgent`) and every other caller leaves the next free slot to it
@@ -134,8 +134,9 @@ def acquire_endpoint_slot(manager, ranked, spec, stop: threading.Event | None = 
     urgent = getattr(manager, "urgent", None)
     if priority is not None and Priority(priority) is Priority.INTERACTIVE and urgent is not None:
         with urgent([k for k, _e in ranked]):
-            return _acquire_slot(manager, ranked, spec, stop, bound_s=bound_s, yields=False)
-    return _acquire_slot(manager, ranked, spec, stop, bound_s=bound_s, yields=True)
+            return _acquire_slot(manager, ranked, spec, stop, bound_s=bound_s, yields=False,
+                                 busy_bound_s=busy_bound_s)
+    return _acquire_slot(manager, ranked, spec, stop, bound_s=bound_s, yields=True, busy_bound_s=busy_bound_s)
 
 
 def _yields(manager, key: str, yields: bool) -> bool:
@@ -144,7 +145,7 @@ def _yields(manager, key: str, yields: bool) -> bool:
 
 
 def _acquire_slot(manager, ranked, spec, stop: threading.Event | None = None, *,
-                  bound_s: float | None = None, yields: bool = True):
+                  bound_s: float | None = None, yields: bool = True, busy_bound_s: float | None = None):
     """Take a per-endpoint concurrency slot, preferring the fastest mirror that
     has one free right now and is not cooling down.
 
@@ -178,8 +179,14 @@ def _acquire_slot(manager, ranked, spec, stop: threading.Event | None = None, *,
     if manager.cooled_for(key) > bound:
         return None
     sem = manager.endpoint_semaphore(key, manager.endpoint_slots(endpoint, spec))
+    # `busy_bound_s` (optional): how long to wait for a BUSY slot before
+    # returning None for the caller to retry (the eurlex listing, which takes
+    # its slots ahead of the fetch; review of 0225f33f, L1)
+    busy_until = None if busy_bound_s is None else time.monotonic() + busy_bound_s
     while True:
         if stop is not None and stop.is_set():
+            return None
+        if busy_until is not None and time.monotonic() > busy_until:
             return None
         if _yields(manager, key, yields):
             time.sleep(0.1)                 # an INTERACTIVE caller waits: the next slot is its
