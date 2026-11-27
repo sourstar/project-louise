@@ -254,6 +254,27 @@ def test_grow_run_declares_the_profile_and_preserves_the_whole_toml(client):
                        json={"profile": "gigantic"}).status_code == 400
 
 
+def test_grow_is_refused_for_a_sister_whose_sister_acquires_their_corpus(client, monkeypatch):
+    """gutenberg-nemo (2026-11-27): a case-J sister's origin is her sister's;
+    growing her would turn on a second fetch into that one folder under
+    another manifest's claim. Refused in words, the file untouched."""
+    import dataclasses
+    from app import web as web_mod
+    collection = collections_mod.by_name("gutenberg")
+    sister = dataclasses.replace(collection, codex=dataclasses.replace(collection.codex,
+                                                                       derived_from="sha256:" + "ab" * 32))
+    monkeypatch.setattr(web_mod, "_collection_or_404", lambda name: sister)
+    toml_path = collections_mod.config_toml_path("gutenberg")
+    before = toml_path.read_text(encoding="utf-8")
+    from app.acquire import spec as acquire_spec
+    from app.acquire.specs import ACQUIRE_REGISTRY
+    everything = acquire_spec.everything_profile(ACQUIRE_REGISTRY["gutenberg"])
+    for route in ("run", "plan"):
+        r = client.post(f"/admin/library/gutenberg/grow/{route}", json={"profile": everything})
+        assert r.status_code == 409 and "sister" in r.json()["detail"], r.text
+    assert toml_path.read_text(encoding="utf-8") == before
+
+
 def test_embed_mode_is_a_per_collection_control(client):
     r = client.post("/admin/library/gutenberg/embed-mode", json={"mode": "all"})
     assert r.status_code == 200

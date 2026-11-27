@@ -3550,6 +3550,9 @@ class GrowBody(BaseModel):
 @admin_router.post("/library/{name}/grow/plan")
 def grow_plan(name: str, body: GrowBody):
     collection = _collection_or_404(name)
+    why = collections_mod.sister_refusal(collection)
+    if why:
+        raise HTTPException(409, why)
     spec = _spec_or_400(collection)
     con = db.connect(collection)
     plan = acquire_engine.plan_acquisition(con, collection, spec, body.profile)
@@ -3567,6 +3570,9 @@ def grow_run(name: str, body: GrowBody):
     a multi-GB download (observed live: the grow modal never closed) and
     moved corpus bytes in the wrong process."""
     collection = _collection_or_404(name)
+    why = collections_mod.sister_refusal(collection)
+    if why:
+        raise HTTPException(409, why)
     spec = _spec_or_400(collection)
     try:
         # accepts a COMBINED profile ("tr,it,en") on an additive source,

@@ -7722,6 +7722,10 @@ def cmd_records_fetch(a) -> int:
     from app.acquire.specs import ACQUIRE_REGISTRY
     from app.hold import records_fetch
     collection = _node_collections(a.collection)[0]
+    from app import collections as collections_mod
+    why = collections_mod.sister_refusal(collection)
+    if why:
+        raise CodexError(why)
     if getattr(collection, "source", "origin") == "shard":
         # the loader's own rule (acquire_enabled with source = "shard"):
         # the origin's files would land in the SHARD this copy reads

@@ -456,6 +456,8 @@ def test_an_encoder_sister_has_her_sister_s_index_identity_and_slices(pair, card
     a, b = (collections_mod._load_one(f) for f in files)
     assert text_index.identity(a) is not None and text_index.identity(a) == text_index.identity(b)
     assert b.acquire_enabled is False and a.slices == b.slices
+    assert collections_mod.sister_refusal(a) is None
+    assert "sister" in collections_mod.sister_refusal(b), "growing her is refused: her sister acquires"
 
 
 def test_a_sister_of_a_file_spelling_profile_holds_that_profile_and_acquires_nothing(pair, card, monkeypatch):

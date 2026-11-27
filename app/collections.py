@@ -1006,6 +1006,21 @@ def _credited_archives(codex) -> list[str]:
     return [c.archive for c in codex.credits if c.kind == "archive" and c.archive]
 
 
+def sister_refusal(collection) -> str | None:
+    """Why `collection` takes no records from the origin, or None. A case-J
+    SISTER (`derived_from`, 02 §2.7) holds her sister's records part for
+    part, her origin linked to her sister's: her sister acquires their one
+    corpus. A fetch of hers would be a second writer into that folder under
+    another manifest's claim (gutenberg-nemo, 2026-11-27; the independent
+    read of b28b0feb), so growing her is refused and her file says
+    `acquire_enabled = false`."""
+    sister = getattr(getattr(collection, "codex", None), "derived_from", None)
+    if not sister:
+        return None
+    return (f"{collection.name} is a sister (02 §2.7): she holds the records of {str(sister)[:23]}…, whose "
+            f"origin she shares, and that collection takes them from the origin; grow it, not her")
+
+
 def codex_defaults(codex, name: str, slices, kinds, source: str = "origin") -> dict[str, Any]:
     """What a Codex file's older keys come to when the file does not state
     them — each an answer the Codex or the tree already gives.
