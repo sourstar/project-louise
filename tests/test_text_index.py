@@ -452,31 +452,40 @@ def test_unshare_gives_her_an_empty_index_of_her_own_her_marks_reset(tmp_path):
     assert (a.fts_dir / "en" / "seg.store").read_bytes() == b"alpha", "her sister's untouched"
 
 
-def test_unshare_needs_the_node_stopped_and_is_not_routed(tmp_path, monkeypatch):
+def test_unshare_takes_her_lock_only_and_is_routed(tmp_path, monkeypatch):
+    """No node stop: with the worker running (its node-wide lock held) it
+    unshares; with HER lock held (the worker runs her) it waits, exit 3.
+    Routed (07 §7.3)."""
     import time
     from app import api_commands, louise
     from app.hold import lock as lock_mod
     root, [(a, _), (b, _)] = _discovered(tmp_path)
     _share(root, ["alpha", "beta"], "alpha")
     monkeypatch.setattr(louise.col, "name_of", lambda r, n: n)
-    r, w = os.pipe()
-    pid = os.fork()
-    if pid == 0:                                            # the worker runs beta
-        lk = lock_mod.take(lock_mod.state_dir(root, "beta"), "beta", "the node (worker)")
-        os.write(w, b"1")
-        time.sleep(30)
-        lk.release()
-        os._exit(0)
-    try:
-        os.read(r, 1)
-        assert louise.main(["hold", "collection", "unshare", "beta", "--root", str(root)]) == 3
-        assert text_index.placement(root, "beta") is not None, "nothing done"
-    finally:
-        os.kill(pid, 9)
-        os.waitpid(pid, 0)
-        os.close(r), os.close(w)
-    with pytest.raises(api_commands.Refused, match="needs the node stopped"):
-        api_commands.resolve(["hold", "collection", "unshare"])
+    api_commands.resolve(["hold", "collection", "unshare"])      # routed: no Refused
+
+    def held_by_another(lock_of, then):
+        r, w = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            lk = lock_of()
+            os.write(w, b"1")
+            time.sleep(30)
+            lk.release()
+            os._exit(0)
+        try:
+            os.read(r, 1)
+            return then()
+        finally:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+            os.close(r), os.close(w)
+    got = held_by_another(lambda: lock_mod.take(lock_mod.state_dir(root, "beta"), "beta", "the node (worker)"),
+                          lambda: louise.main(["hold", "collection", "unshare", "beta", "--root", str(root)]))
+    assert got == 3 and text_index.placement(root, "beta") is not None, "her lock held: nothing done"
+    got = held_by_another(lambda: lock_mod.take_worker(root, "the node (worker)"),
+                          lambda: louise.main(["hold", "collection", "unshare", "beta", "--root", str(root)]))
+    assert got == 0 and text_index.placement(root, "beta") is None, "the worker running: done"
 
 
 def test_a_forget_hands_her_sister_s_index_to_its_one_reader_by_rename(tmp_path):

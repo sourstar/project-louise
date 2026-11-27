@@ -533,42 +533,50 @@ def test_a_boot_between_her_make_and_her_carry_leaves_both_and_her_carry_shares(
     assert (g / "seg.store").read_bytes() == b"the index"
 
 
-def test_her_creation_defers_while_another_process_holds_her_sister_s_writer(pair, card, monkeypatch):
-    """RULE 1: forming the group renames her sister's index; with its writer
-    held (the running worker), `new` asks for `louise node stop`, exit 3
-    (the route's 503), before anything is copied."""
+def test_her_creation_works_while_a_worker_runs_and_holds_her_sister_s_writer(pair, card, monkeypatch):
+    """The coordinator's call (2026-11-27): the share MOVES NOTHING and never
+    takes her sister's index writer, so `hold collection new --sister-of` —
+    the command POST /api/hold/collection/new runs — works while a worker
+    runs (its node-wide lock held) and holds her sister's tantivy writer;
+    she never takes or writes it."""
     import fcntl
     import os
-    from app import text_index
+    import time
+    from app import api_commands, text_index
+    from app.hold import lock as lock_mod
     root, old, _ = pair
     _ready_nemo(root, old, card)
     g = root / "old" / "index" / "en"
     g.mkdir(parents=True, exist_ok=True)
     (g / "meta.json").write_text("{}", encoding="utf-8")
+    (g / "seg.store").write_bytes(b"the index")
     lock = g / ".tantivy-writer.lock"
     lock.write_bytes(b"")
+    before = {f.name: (f.stat().st_ino, f.stat().st_mtime_ns) for f in g.iterdir()}
     monkeypatch.setattr(louise, "_index_identities", lambda root, a, b: ("id1", "id1"))
-    fd = os.open(lock, os.O_RDWR)
+    api_commands.resolve(["hold", "collection", "new"])          # routed: no Refused
+    r, w = os.pipe()
     pid = os.fork()
-    if pid == 0:                                            # another process holds it
+    if pid == 0:                                            # the worker: its lock and the writer
+        wl = lock_mod.take_worker(root, "the node (worker)")
+        fd = os.open(lock, os.O_RDWR)
         fcntl.flock(fd, fcntl.LOCK_EX)
-        import time
+        os.write(w, b"1")
         time.sleep(30)
+        wl.release()
         os._exit(0)
     try:
-        import time
-        for _ in range(100):
-            if text_index.writer_held(root / "old" / "index"):
-                break
-            time.sleep(0.05)
-        assert _new_enc(root) == 3
-        assert text_index.placement(root, "old") is None and (g / "meta.json").is_file(), "nothing renamed"
-        assert not (root / "sis" / "shard" / "snapshots").exists() or \
-            not list((root / "sis" / "shard" / "snapshots").glob("*.json")), "nothing seeded"
+        os.read(r, 1)
+        assert text_index.writer_held(root / "old" / "index") == "en"
+        assert _new_enc(root) == 0
+        assert text_index.placement(root, "sis")["dir"] == "old/index"
+        assert text_index.writer_held(root / "old" / "index") == "en", "the worker's still: never taken"
+        assert {f.name: (f.stat().st_ino, f.stat().st_mtime_ns) for f in g.iterdir()} == before, \
+            "nothing of her sister's index written"
     finally:
         os.kill(pid, 9)
         os.waitpid(pid, 0)
-        os.close(fd)
+        os.close(r), os.close(w)
 
 
 def test_her_text_index_is_copied_where_the_identities_differ(pair, card, monkeypatch):

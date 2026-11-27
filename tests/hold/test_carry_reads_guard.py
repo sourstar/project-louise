@@ -165,33 +165,3 @@ def test_a_carry_that_would_move_an_index_a_sister_reads_is_refused(pair):  # no
     assert text_index.placement(root, "rd")["dir"] == "old/index"
     assert (root / "old" / "state" / "manifest.sqlite").is_file(), "nothing moved"
     assert carry.carry(root, "old", "new", copy=True, apply=True, log=quiet)["apply"], "a copy moves nothing"
-
-
-def test_her_creation_s_share_waits_for_the_worker_s_node_wide_lock(tmp_path):
-    """Main's refit added `state/worker.lock`: the share's "node stopped"
-    test probes it too (the worker may hold no index writer at all)."""
-    import os
-    import time
-    from app import louise
-    from app.hold import lock as lock_mod
-    from app.hold.codex import CodexError
-    root = tmp_path / "collections"
-    (root / "old" / "index").mkdir(parents=True)
-    r, w = os.pipe()
-    pid = os.fork()
-    if pid == 0:                                            # the worker runs
-        lk = lock_mod.take_worker(root, "the node (worker)")
-        os.write(w, b"1")
-        time.sleep(30)
-        lk.release()
-        os._exit(0)
-    try:
-        os.read(r, 1)
-        with pytest.raises(CodexError, match="louise node stop") as got:
-            louise._form_text_index(root, "old", "sis", probe=True)
-        assert got.value.exit_code == 3
-    finally:
-        os.kill(pid, 9)
-        os.waitpid(pid, 0)
-        os.close(r), os.close(w)
-    assert louise._form_text_index(root, "old", "sis", probe=True) is None, "free: the probe passes"

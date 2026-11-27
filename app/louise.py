@@ -1152,22 +1152,13 @@ def _form_text_index(root: Path, her_sister_name: str, name: str, *, probe: bool
     """A sister carried beside her sister, their index identities equal,
     READS her sister's own index from now on (app/text_index.py `share`, the
     operator's default B): a placement naming `<sister>/index`, her marks
-    reconciled once against her sister's. Made with the node stopped: a
-    writer of her sister's index another process holds (the running worker)
-    defers, exit 3 (route 503), asking for `louise node stop` (CLAUDE.md
-    RULE 1). None: their identities differ (she holds a copy). `probe`: only
-    that check, nothing written."""
+    reconciled once from her sister's COMMITTED marks (invariant 2). It moves
+    nothing and never takes her sister's index writer, so it needs no node
+    stop (the coordinator's call, 2026-11-27: the operator makes
+    gutenberg-nemo through the API, whose route runs inside the worker); her
+    own lock is held while she is written. None: their identities differ
+    (she holds a copy). `probe`: nothing to check, nothing written."""
     from app import text_index
-    from app.hold import lock as lock_mod
-    if lock_mod.holder(lock_mod.worker_state(Path(root)), file=lock_mod.WORKER_LOCK) is not None:
-        raise _defer(f"the worker runs (it holds the node-wide lock): {name} is made to read "
-                     f"{her_sister_name}'s text index with the node stopped. `louise node stop`, then run "
-                     f"this again: it resumes where it stopped (CLAUDE.md RULE 1)")
-    held = text_index.writer_held(text_index.base(Path(root) / her_sister_name / "index"))
-    if held is not None:
-        raise _defer(f"{her_sister_name}'s text index ({held}) has its writer held by another process (the "
-                     f"running worker): {name} is made to read it with the node stopped. `louise node "
-                     f"stop`, then run this again: it resumes where it stopped (CLAUDE.md RULE 1)")
     if probe:
         return None
     ia, ib = _index_identities(root, her_sister_name, name)
@@ -3113,17 +3104,13 @@ def cmd_collection_forget(a) -> int:
 def cmd_collection_unshare(a) -> int:
     """`hold collection unshare <collection>`: she reads no sister's text
     index from now on — an EMPTY index of her own, her fts marks reset and
-    said; the worker indexes her again (app/text_index.py `unshare`). With
-    the node stopped: the running worker holds her lock, exit 3 asking for
-    `louise node stop`."""
+    said; the worker indexes her again (app/text_index.py `unshare`). It
+    takes HER lock only (exit 3 while the worker runs her: `node pause
+    <collection>` first) and needs no node stop; routed (07 §7.3)."""
     from app import text_index
-    from app.hold import lock as lock_mod
     name = col.name_of(a.root, a.collection)
     root = Path(a.root) if a.root else _default_root()
-    try:
-        _take_write_lock(a.root, name, "hold collection unshare")
-    except lock_mod.Held as e:
-        raise _defer(f"{e}. `louise node stop`, then run this again") from None
+    _take_write_lock(a.root, name, "hold collection unshare")
     _print(text_index.unshare(root, name, log=lambda m: None))
     return 0
 
@@ -8533,7 +8520,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = verbs.add_parser("unshare",
                          help="read no sister's text index any more: an empty index of its own, its "
-                              "marks reset, indexed again by the worker (node stopped)")
+                              "marks reset, indexed again by the worker (its lock: `node pause` it first)")
     root_arg(p); p.add_argument("collection")
     p.set_defaults(fn=cmd_collection_unshare)
 

@@ -7,7 +7,7 @@ never moved by the system after.
 
 A sister whose INDEX IDENTITY (`identity`: the same records, layers,
 update, held slices and index schema) equals her sister's, made by `hold
-collection new --sister-of` with the node stopped, READS HER SISTER'S OWN
+collection new --sister-of` (no node stop: it moves nothing), READS HER SISTER'S OWN
 INDEX: her PLACEMENT, `<name>/state/text-index.json`, names `<sister>/index`
 by path (`share`). Her sister indexes as every collection does and is its
 only writer; she never writes it: her index stage copies her sister's marks
@@ -37,7 +37,7 @@ NOTHING AUTOMATIC AT BOOT (`settle`): each placement is only CHECKED. Her
 identity still equal to her sister's, her sister held: her text leg is
 served from it. Otherwise it is WITHHELD, in words (`hold collection show`,
 the search's withheld note): nothing is moved, copied or reset; `louise hold
-collection unshare <name>` (node stopped) gives her an empty index of her
+collection unshare <name>` (her lock only) gives her an empty index of her
 own, her marks reset, and the worker indexes her again. A forget of a
 sister another reads hands its index to her when she is its only reader (a
 RENAME: she writes it from then on), else is refused. A group folder an
@@ -793,18 +793,14 @@ def writer_held(index_dir: Path) -> str | None:
     return None
 
 
-class WriterHeld(RuntimeError):
-    """An index writer another process holds (the running worker keeps its
-    writers for its life): the share is made with the node stopped."""
-
-
 def share(root: Path, sister: str, name: str, ident: str, log: Callable[[str], None] = print) -> str:
     """`name`, carried from `sister` with the same index identity, READS her
     sister's own index from now on: her marks reconciled once against her
     sister's (`reset_differing`), any language group of her own removed (an
     earlier carry's copy, never read again), then her placement written,
     naming `<sister>/index`. Her sister reading another's, she reads that
-    one's: a reader is never a writer. The caller holds the node stopped."""
+    one's: a reader is never a writer. Nothing is moved and her sister's
+    writer is never taken: no node stop; the caller holds HER lock."""
     root = Path(root)
     pl = placement(root, sister)
     w = (pl.get("writer") or writer(root, pl["dir"])) if pl is not None else sister
@@ -819,8 +815,8 @@ def share(root: Path, sister: str, name: str, ident: str, log: Callable[[str], N
 def unshare(root: Path, name: str, log: Callable[[str], None] = print) -> dict[str, Any]:
     """`name` reads no other's index from now on: her placement dropped, an
     EMPTY `<name>/index` of her own (her catalogue kept), every fts mark of
-    hers reset, said — the worker indexes her again. The caller holds the
-    node stopped."""
+    hers reset, said — the worker indexes her again. The caller holds HER
+    lock; no node stop."""
     root = Path(root)
     pl = placement(root, name)
     if pl is None:

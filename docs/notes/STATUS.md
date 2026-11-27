@@ -31,7 +31,7 @@ measured (published figures disagree).
   scripts by command). What two collections use is read where it lies, by its path:
   - a case-J sister's text index: her sister's own, `<sister>/index`, named by her placement — THE
     STATIC SHARE (operator's default B, after six reads found the automatic groups of 74c95825–19a5cf5d
-    losing data): set once at her creation with the node stopped, her marks reconciled once; nothing
+    losing data): set once at her creation (moving nothing: no node stop), her marks reconciled once; nothing
     automatic at boot (a placement that no longer holds is withheld in words; `hold collection
     unshare` gives her an empty index of her own); a forget hands it to its one reader by rename,
     else refuses; an earlier version's `.text-index/` group is refused at boot, never migrated;

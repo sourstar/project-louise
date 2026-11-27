@@ -107,7 +107,7 @@ louise hold
                 (a sister who changes only her ENCODER SIDE: S's layers, cleaning and records in a new space with
                  C's encoder side whole — encoder and engine, dim, dtype, ctx, cut, pooling, instructions, query
                  side, calibration set, reference and tolerance, carried, nothing embedded; her endpoint and model
-                 C's file's; her manifest and text index S's, her manifest copied and her text index S's OWN, read where it lies (`state/text-index.json` names `S/index`; never copied nor hard-linked; with the worker running, `louise node stop` first, exit 3; the static share, 2026-11-27), one index identity, so she reads S's
+                 C's file's; her manifest and text index S's, her manifest copied and her text index S's OWN, read where it lies (`state/text-index.json` names `S/index`; never copied nor hard-linked; it moves nothing, so no node stop: routed; the static share, 2026-11-27), one index identity, so she reads S's
                  (docs/notes/sister-shared-index.md); her slices S's. gutenberg-nemo, 2026-11-27)
                                                                        case J, a SISTER INTO A HELD SPACE (added 2026-11-08, normattiva-nemo): `derive` of her sister S
                                                                        into C's space and layers; carry — her parts seeded from S's snapshot, S's manifest and text index
@@ -223,7 +223,7 @@ louise hold
               ack --web-sources [--yes]                                print the web-sources disclaimer; record this node's acceptance, once (04 §4.4)
               certify <collection> <snapshot>                          sign a snapshot as this collection's certifier
               forget <collection> [--kinds …] [--yes] [--dry-run] [--here]  stop holding: remove this peer's copy and its state; --here when no worker runs
-              unshare <collection>                                read no sister's text index any more: an empty index of its own, its fts marks reset, indexed again (node stopped; not routed; 2026-11-27)
+              unshare <collection>                                read no sister's text index any more: an empty index of its own, its fts marks reset, indexed again (its lock: `node pause` it first; 2026-11-27)
               rename <collection> <new-name> [--dry-run]               the same collection under another local name; nothing recomputed
               migrate <collection> [--apply]                           the 09 §9.3 fields a Codex predates added, each as null — collection_id moves; printed unless --apply
               update <collection> [--dry-run] [--retry]                (*amended 2026-11-17*, docs/notes/collection-updates.md) the update by cadence of a collection
@@ -2804,7 +2804,7 @@ hard links, always consciously load from a path. It already happened that
 you deleted important files because you forgot the hard links"). Nothing
 makes a second name for a file. What two collections both use is read
 WHERE IT LIES, by its path: a sister's text index (her sister's own, set once at
-her creation with the node stopped; checked at boot, withheld in words when
+her creation, moving nothing; checked at boot, withheld in words when
 her identity no longer matches, `hold collection unshare` to index her own), a re-check's claims, a re-created collection's origin directory (a symbolic
 link, handed over at its holder's forget), a discarded snapshot's part the
 build since shares (kept in place). What becomes another owner's own is
