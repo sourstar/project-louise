@@ -4642,7 +4642,7 @@ def cmd_ask_search(a) -> int:
     out = results.search(" ".join(a.query), collections=a.collections or None, space=a.space, filters=filters,
                          limit=a.limit, rerank_depth=a.rerank_depth, as_of=a.as_of, freshness=a.freshness,
                          translate=a.translate, all_languages=a.all_languages, root=getattr(a, "root", None),
-                         history=bool(getattr(a, "history", False)))
+                         history=bool(getattr(a, "history", False)), kind=getattr(a, "kind", "auto"))
     _print(out)
     return 0
 
@@ -9143,6 +9143,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--history", action="store_true", help="fetch the past versions of a cited EU act's article not held, bounded (05 §5.3 `history`)")
     p.add_argument("--translate", action="store_true")
     p.add_argument("--all-languages", action="store_true")
+    p.add_argument("--kind", choices=("auto", "facts", "literature", "all"), default="auto",
+                   help="facts: no literary work; literature: literary works only; all: every result; "
+                        "auto: decided from the query (docs/05 §5.4, amended 2026-11-27)")
     p.add_argument("--filter", action="append", metavar="FACET=VALUE",
                    help="restrict the legs to a facet value (05 §5.2); a range facet takes FROM..TO, "
                         "either end omitted for open; FACET=!VALUE excludes")

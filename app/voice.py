@@ -150,10 +150,12 @@ def voices(account: str | None = None, admin: bool = True) -> dict[str, Any]:
     from app import speech, users
     if not admin:
         return {"voices": [], "default": None,
-                "account": {"name": account, "voice": None} if account else None,
+                "account": {"name": account, "voice": None, "phrases": users.phrases_of(account)}
+                if account else None,
                 "by_language": list(synthetic()) if (offered(admin=False).get("output") or {})
                 .get("available") else []}
-    mine = {"name": account, "voice": users.voice_of(account)} if account else None
+    mine = ({"name": account, "voice": users.voice_of(account), "phrases": users.phrases_of(account)}
+            if account else None)
     offer = offered().get("output") or {}
     if not offer.get("available"):
         return {"voices": [], "default": None, "account": mine}

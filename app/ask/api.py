@@ -6,7 +6,7 @@ the MCP server of 05 §5.4 over HTTP (one JSON-RPC request per POST).
 Migration step 11."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -43,6 +43,10 @@ class SearchBody(BaseModel):
     #: the annotations collections consulted, by local name; None = every
     #: one held, [] = none (05 §5.3) — as the MCP tool takes it
     annotations: list[str] | None = None
+    # the search's kind (docs/notes/fact-fiction-search.md): facts leave out
+    # literary works, literature keeps them alone, all is every result; auto
+    # (the default) decides from the question, and the result says which
+    kind: Literal["auto", "facts", "literature", "all"] = "auto"
 
 
 @router.post("/search")
@@ -56,7 +60,7 @@ async def search(body: SearchBody, request: Request) -> JSONResponse:
             query_trace.run, "ask:search", who, admin, body.query, results.search, body.query, collections=body.collections, space=body.space, filters=body.filters,
             limit=body.limit, rerank_depth=body.rerank_depth, as_of=body.as_of, freshness=body.freshness,
             translate=body.translate, all_languages=body.all_languages, annotations=body.annotations,
-            history=body.history)
+            history=body.history, kind=body.kind)
     except CodexError as e:
         code = int(getattr(e, "exit_code", 2))
         return JSONResponse({"exit": code, "error": str(e)}, status_code=STATUS.get(code, 500))

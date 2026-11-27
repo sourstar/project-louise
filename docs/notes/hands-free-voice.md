@@ -337,6 +337,20 @@ How it runs:
   - a regular user hears the phrases in the synthetic voice of the
     language, as their answers;
   - nothing asks.
+- *As built, the page side (2026-11-27, app/static/voice.js "THE PHRASES THAT COVER THE WAIT"):*
+  - a spoken question (its answer read by itself) gets the SHORT phrase when it is asked, and the LONG one
+    at 7 s if no sentence is made yet; at most two, never two of a kind; the first sentence waits for the
+    phrase playing;
+  - a missing kind, or the setting off: a 140 ms WebAudio tone;
+  - played phrases are reported (`POST /ask/voice/fillers/used`) once, at the reading's end or the
+    answer's;
+  - the list is prefetched at the microphone's and the speaker's first use and after each answer;
+  - a tap pauses a phrase as it pauses a sentence, and a new answer ends it;
+  - the setting is "phrases while waiting" in Settings, kept with the account (`POST /ask/voice/phrases`,
+    users.toml `phrases`) for every reader with one, else in localStorage;
+  - tests: tests/browser/ask_voice.js 20 and 25, tests/test_voice.py.
+  - NOT CUED: a typed question. The page reads a typed answer only when the speaker is tapped, so "a
+    typed question with the speaker on" has no state to read yet.
 
 ## 8. What is measured before each step is called done
 

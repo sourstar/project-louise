@@ -106,7 +106,7 @@ def test_the_search_answers_from_the_snapshot_asked_for_and_names_the_rest(node,
     monkeypatch.setattr(results, "_layer", lambda c, h: "abstract")
     seen = {}
 
-    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None):
+    def run(names, query, k, mode, translate, rerank_depth=50, all_languages=False, filters=None, kind="all"):
         seen["names"] = names
         return {"hits": [
             {"chunk_id": "pubmed:1:0:1", "book_id": 1, "source_collection": name, "leg_ranks": {"text": 1}},

@@ -224,11 +224,14 @@ def _rdf_one(con, row, collection, plugin, now: int, meta: dict | None = None,
         for g in gone:
             left.setdefault(g, []).append(int(row["native_id"]))
         moved = bool(gone)
+    from app import work_kind
     con.execute(
         "UPDATE documents SET title=?,authors=?,lang=?,subjects=?,bookshelves=?,"
-        "work=?,rdf_done=1,updated_at=?" + (",fts_done=0" if moved else "") + " WHERE uid=?",
+        "work=?,work_kind=?,work_kind_basis=?,work_kind_v=?,rdf_done=1,updated_at=?"
+        + (",fts_done=0" if moved else "") + " WHERE uid=?",
         (meta["title"], meta["authors"], meta["lang"], meta["subjects"],
-         meta["bookshelves"], plugin_io.work_identity(meta), now, row["uid"]))
+         meta["bookshelves"], plugin_io.work_identity(meta),
+         *work_kind.row_values(collection, meta["subjects"], meta["bookshelves"]), now, row["uid"]))
     if meta.get("validity"):
         # one record per Expression (app/validity.py): this version joins its
         # Work's chain; a neighbour whose end or `shown` moved has its stage
@@ -3227,6 +3230,30 @@ def _maintain_catalog(con, collection) -> bool:
     return True
 
 
+def _maintain_work_kind(con, collection) -> bool:
+    """What each document's work IS, for the rows the rdf stage wrote before
+    this rules version (app/work_kind.py `maintain`): on the maintainer's
+    turn and at its priority, rowid windows from a cursor per version, until
+    its budget. Nothing to do once done for this version, or for a
+    collection whose records carry no kind. Returns True when it covered any."""
+    if not _maintenance_allowed():
+        return False
+    from app import work_kind
+    try:
+        out = work_kind.maintain(con, collection, may_continue=_maintenance_allowed)
+    except Exception as e:   # noqa: BLE001 — a derived column, never a crash
+        db.log_event(con, "warn", "index", f"work kinds deferred: {type(e).__name__}: {e}"[:300])
+        return False
+    if not out or not out["windows"]:
+        return False
+    db.log_event(con, "info", "index",
+                 (f"work kinds complete for rules v{work_kind.RULES_VERSION} ({out['top']:,} rowids)"
+                  if out["complete"] else
+                  f"work kinds: {out['written']:,} documents in {out['windows']} window(s) ({out['secs']}s), "
+                  f"rowid {out['cursor']:,} of {out['top']:,}"))
+    return True
+
+
 def _vector_writes_allowed(collection, con=None) -> bool:
     """Whether this collection's vector writers may run.
 
@@ -3967,6 +3994,7 @@ def _index_maintainer() -> None:
                 t0 = time.monotonic()
                 did = _maintain_vector_index(cons[key], c)
                 did = _maintain_catalog(cons[key], c) or did
+                did = _maintain_work_kind(cons[key], c) or did
                 try:
                     did = _rederive_amendments(cons[key], c) or did
                 except Exception as e:   # noqa: BLE001 — one re-derivation, not the maintainer

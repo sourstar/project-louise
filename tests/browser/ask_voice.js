@@ -56,7 +56,7 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   const errors = [], posted = { relay: [], stt: 0, speech: [] };
   // speechDelay: every sentence's wait; slow: a sentence's own; answerJob:
   // 'live' is the answer the test writes into the page's stream itself
-  let speechDelay = 0, slow = {}, answerJob = 'a1', offerVoices = false, account = null;
+  let speechDelay = 0, slow = {}, answerJob = 'a1', offerVoices = false, account = null, fillersReady = [];
   const VOICES = { voices: [{ name: 'Voice A', voice: 'localai://voice-profiles/p1', language: 'en' },
                             { name: 'Voice B', voice: 'localai://voice-profiles/v2', language: 'it' }],
                    default: 'localai://voice-profiles/p1' };
@@ -73,6 +73,21 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
     if (u.pathname === '/ask/voices')
       return req.respond({ status: 200, contentType: 'application/json',
                            body: JSON.stringify(offerVoices ? { ...VOICES, account } : { voices: [], default: null, account: null }) });
+    // THE PHRASES THAT COVER THE WAIT, the node's routes (#944) as the page sees them
+    if (u.pathname === '/ask/voice/fillers')
+      return req.respond({ status: 200, contentType: 'application/json',
+                           body: JSON.stringify({ lang: u.searchParams.get('lang'), voice: 'v', ready: fillersReady }) });
+    if (u.pathname === '/ask/voice/fillers/used' && req.method === 'POST') {
+      posted.used = (posted.used || []).concat([JSON.parse(req.postData).ids]);
+      return req.respond({ status: 200, contentType: 'application/json', body: '{"removed":0}' });
+    }
+    if (u.pathname.startsWith('/fill/'))
+      return req.respond({ status: 200, contentType: 'audio/wav', body: wavOf(16000 * 0.4) });
+    if (u.pathname === '/ask/voice/phrases' && req.method === 'POST') {
+      const b = JSON.parse(req.postData); posted.phrases = (posted.phrases || []).concat([b]);
+      account = { ...account, phrases: b.on };
+      return req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ phrases: b.on }) });
+    }
     if (u.pathname === '/ask/voice/report' && req.method === 'POST') {
       posted.reports = (posted.reports || []).concat([JSON.parse(req.postData)]);
       return req.respond({ status: 204, contentType: 'text/plain', body: '' });
@@ -224,15 +239,26 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(posted.speech.every(b => b.language === 'it' && !('model' in b) && !('voice' in b)),
         '4. the node\'s model and voice: the page names neither', posted.speech);
 
-  // 5. tapped again while reading: it stops, and asks nothing more
+  // 5. A TAP PAUSES, THE NEXT RESUMES (operator, 2026-11-27: "I do", to a true
+  //    pause): the player paused at its place, nothing aborted, nothing made
+  //    twice; resumed, the same sentence goes on and the next ones follow
   posted.speech.length = 0; speechDelay = 400;
   await page.click('#speak');
   check(await until(() => document.getElementById('speak').classList.contains('on'), 2000), '5. reading again');
-  await sleep(150);
+  for (const t5 = Date.now(); posted.speech.length < 1 && Date.now() - t5 < 3000;) await sleep(40);
+  await sleep(300);
   await page.click('#speak');
+  check(await until(() => document.getElementById('speak').classList.contains('paused'), 1000), '5. a tap pauses it, and says so',
+        await page.evaluate(() => document.getElementById('speak').className));
+  const at5 = posted.speech.length;
   await sleep(1500);
-  check(posted.speech.length <= 2, '5. a tap stops it: no request after', posted.speech.length);
-  check(await page.evaluate(() => !document.getElementById('speak').classList.contains('on')), '5. and says so');
+  check(await page.evaluate(() => document.getElementById('speak').classList.contains('on')), '5. paused is not stopped');
+  check(posted.speech.length >= at5, '5. nothing in flight was aborted', posted.speech.length);
+  await page.click('#speak');
+  check(await until(() => !document.getElementById('speak').classList.contains('paused'), 1000), '5. the next tap resumes');
+  check(await until(() => !document.getElementById('speak').classList.contains('on'), 15000), '5. and the reading goes to its end');
+  check(JSON.stringify(posted.speech.map(b => b.input)) === JSON.stringify(SENTENCES),
+        '5. every sentence asked for once, in order: nothing made twice', posted.speech.map(b => b.input));
   speechDelay = 0;
 
   // 6. a new question takes the speaker away
@@ -344,7 +370,7 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
     const b = document.getElementById('speak').getBoundingClientRect();
     return { right: b.right, scroll: document.documentElement.scrollWidth, label: document.getElementById('speak').textContent.trim() };
   });
-  check(ph.right <= 360 && ph.scroll <= 360 && ph.label === 'stop', '8. reading, on a phone: the speaker inside the screen', ph);
+  check(ph.right <= 360 && ph.scroll <= 360 && ph.label === 'pause', '8. reading, on a phone: the speaker inside the screen', ph);
   await emit('delta', { text: 'lowed him.' });
   await sleep(500);
   check(posted.speech.length === 2, '8. the last sentence waits for the stream\'s end: it could still grow', posted.speech.map(b => b.input));
@@ -360,23 +386,25 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
         '8. each sentence names its reading and its place (the node keeps the order: speech.Turns)', order);
   slow = {};
 
-  // 9. tapped while the answer is still written: the fetches in flight are
-  //    cancelled, and nothing more is asked for or played
+  // 9. paused while the answer is still written: the fetches in flight go on,
+  //    nothing is played while paused; resumed, the whole answer is read once
   await reset(); speechDelay = 1500;
   await asked(() => page.evaluate(() => { ask(); }));
   await emit('delta', { text: SENTENCES.slice(0, 2).join(' ') + ' Petrarch and Boccaccio fol' });
   await page.click('#speak');
   check(await until(() => __speech.length === 2, 3000), '9. two sentences being made', await inputs());
   await page.click('#speak');
-  check(await until(() => __speech.every(s => s.state === 'aborted'), 3000), '9. a tap cancels them', await page.evaluate(() => __speech));
+  await sleep(300);
+  check(await page.evaluate(() => __speech.every(s => s.state !== 'aborted')), '9. a pause cancels nothing',
+        await page.evaluate(() => __speech));
   await emit('delta', { text: 'lowed him.' });
   await emit('end', { state: 'done', reason: '' });
   await sleep(2000);
-  // operator, 2026-11-09: "keep the buffering available even when I stop/start
-  // the speech" — the answer still arriving is made into speech, never played
-  check(posted.speech.length > 2 && (await played()).length === 0 && !(await on()),
-        '9. nothing is played, and the rest of the answer is still made into speech (buffered)',
-        { posted: posted.speech.length, played: await played() });
+  check((await played()).length === 0 && await on(), '9. paused: nothing is played meanwhile', await played());
+  await page.click('#speak');
+  check(await until(() => !document.getElementById('speak').classList.contains('on'), 15000), '9. resumed, it reads to its end');
+  check((await played()).length === SENTENCES.length && posted.speech.length === SENTENCES.length,
+        '9. every sentence played once, none made twice', { played: await played(), posted: posted.speech.length });
 
   // 10. a new question stops the reading too
   await reset();
@@ -671,6 +699,48 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await page.evaluate(k => louiseVoice.setRates(JSON.parse(k)), FAST);
   answerJob = 'a1';
 
+  // 25. THE PHRASES THAT COVER THE WAIT (operator, 2026-11-26/27; hands-free-voice.md §7):
+  //     the short one when the question is taken, the long one past the delay
+  //     with no sentence ready, never two of a kind; the first sentence after
+  //     the phrase; `used` once per phrase played; the tone where a kind is
+  //     missing or the reader turned them off
+  const question25 = async (longMs, firstDeltaAfter) => {
+    await reset(); answerJob = 'live';
+    await page.evaluate(ms => louiseVoice.setLongCue(ms), longMs);
+    await asked(() => page.evaluate(() => { document.getElementById('q').value = 'Who wrote it?'; ask(); }));
+    await page.evaluate(() => louiseVoice.cueQuestion());       // as a spoken question is taken
+    await sleep(firstDeltaAfter);
+    await emit('delta', { text: SENTENCES.join(' ') });
+    await page.click('#speak');
+    await emit('end', { state: 'done', reason: '' });
+    await until(() => !document.getElementById('speak').classList.contains('on'), 15000);
+    return page.evaluate(() => louiseVoice.cues());
+  };
+  fillersReady = [{ id: 's1', kind: 'short', url: '/fill/s1.wav' }, { id: 'l1', kind: 'long', url: '/fill/l1.wav' },
+                  { id: 's2', kind: 'short', url: '/fill/s2.wav' }];
+  posted.used = [];
+  const c25a = await question25(600, 1500);
+  check(JSON.stringify(c25a) === JSON.stringify(['short', 'long']),
+        '25. the short phrase at once, the long one past its delay with no sentence ready, never two of a kind', c25a);
+  check(JSON.stringify(posted.used) === JSON.stringify([['s1', 'l1']]), '25. the phrases played reported used, once', posted.used);
+  check((await played()).length === SENTENCES.length, '25. and every sentence is read after them', await played());
+  posted.used = [];
+  const c25b = await question25(5000, 300);
+  check(JSON.stringify(c25b) === JSON.stringify(['short']), '25. a sentence ready before the delay: no long phrase', c25b);
+  fillersReady = [];
+  const c25c = await question25(600, 1500);
+  check(JSON.stringify(c25c) === JSON.stringify(['tone', 'tone']), '25. no phrase ready: the tone instead', c25c);
+  fillersReady = [{ id: 's9', kind: 'short', url: '/fill/s9.wav' }, { id: 'l9', kind: 'long', url: '/fill/l9.wav' }];
+  posted.used = [];
+  await page.evaluate(() => { const b = document.getElementById('voice-phrases'); b.checked = false; b.dispatchEvent(new Event('change')); });
+  check(await page.evaluate(() => { try { return localStorage.getItem('louise-phrases'); } catch (e) { return null; } }) === 'off',
+        '25. turned off, kept in this browser (no account)');
+  const c25d = await question25(600, 1500);
+  check(JSON.stringify(c25d) === JSON.stringify(['tone', 'tone']) && !posted.used.length,
+        '25. off: the tone, and no phrase used', { c25d, used: posted.used });
+  await page.evaluate(() => { const b = document.getElementById('voice-phrases'); b.checked = true; b.dispatchEvent(new Event('change')); });
+  answerJob = 'a1';
+
 
   // 14. a node that offers no voice: no button, no script
   const scripts = [];
@@ -743,6 +813,15 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await page.goto('http://localhost/ask');
   check(await until(v => document.getElementById('voice-pick').value === v, 4000, VOICES.voices[1].voice),
         '20. and the account\'s on the next visit');
+  // the phrases that cover the wait: kept with the account too, for every reader with one
+  await page.evaluate(() => { document.querySelector('details.settings').open = true;
+    const b = document.getElementById('voice-phrases'); b.checked = false; b.dispatchEvent(new Event('change')); });
+  const t20p = Date.now(); while (!posted.phrases && Date.now() - t20p < 4000) await sleep(40);
+  check(JSON.stringify(posted.phrases) === JSON.stringify([{ on: false }]), '20. the phrases turned off, kept with the account',
+        posted.phrases);
+  await page.goto('http://localhost/ask');
+  check(await until(() => document.getElementById('voice-phrases').checked === false, 4000),
+        '20. and off on the next visit, whatever this browser kept');
 
   // 21. a microphone that sends only silence (operator, 2026-11-11: "when the
   //     phone is connected to the car the mic of louise does not work"): the

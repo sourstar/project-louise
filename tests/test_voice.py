@@ -325,9 +325,9 @@ def test_an_account_keeps_its_voice_and_every_client_of_it_hears_it(two_voices, 
     monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
     _, token = users.add("ada", role="admin")
     c, h = TestClient(api.app), {"Authorization": f"Bearer {token}"}
-    assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None}
+    assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None, "phrases": None}
     r = c.post("/ask/voice", headers=h, json={"voice": VOICE_B})
-    assert r.status_code == 200 and r.json()["account"] == {"name": "ada", "voice": VOICE_B}
+    assert r.status_code == 200 and r.json()["account"] == {"name": "ada", "voice": VOICE_B, "phrases": None}
     assert f'voice = "{VOICE_B}"' in users.path().read_text(), "kept with the account, in users.toml"
     assert c.post("/v1/audio/speech", headers=h, json={"input": "Dante."}).status_code == 200
     assert calls[-1]["voice"] == VOICE_B, "a client naming no voice hears the account's"
@@ -352,7 +352,7 @@ def test_no_account_no_voice_kept_by_the_node_and_one_since_removed_is_the_nodes
     _, token = users.add("ada", role="admin")
     users.set_voice("ada", "localai://voice-profiles/gone")
     h = {"Authorization": f"Bearer {token}"}
-    assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None}
+    assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None, "phrases": None}
     c.post("/v1/audio/speech", headers=h, json={"input": "Dante."})
     assert calls[-1]["voice"] == VOICE_A, "a voice the server no longer holds: the node's, never an error"
 
@@ -543,3 +543,24 @@ def test_the_recordings_report_carries_how_long_the_microphone_took_to_give_soun
     assert said == {"label": "Car hands-free", "chars": 9, "first_ms": 180, "wake_ms": 2350, "zero_ms": 2170,
                     "woke": "sound"}, "the car's number: 2.2 s of zeros before the first sound"
     assert {"first_ms", "wake_ms", "zero_ms", "woke"} <= set(web.VOICE_REPORT_KEYS)
+
+
+def test_every_reader_with_an_account_keeps_the_phrases_choice(isolated_config, monkeypatch):
+    """The phrases that cover the wait (docs/notes/hands-free-voice.md §7;
+    operator: "it goes also in the regular user's settings"): on by default
+    (None), off kept with the account for an admin and a user alike; no
+    account, the browser keeps it (409)."""
+    from app import config, users
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
+    c = TestClient(api.app)
+    for role in ("user", "admin"):
+        _, token = users.add(f"r-{role}", role=role)
+        h = {"Authorization": f"Bearer {token}"}
+        assert users.phrases_of(f"r-{role}") is None, "not chosen: on by default"
+        r = c.post("/ask/voice/phrases", headers=h, json={"on": False})
+        assert r.status_code == 200 and r.json() == {"phrases": False}
+        assert users.phrases_of(f"r-{role}") is False and "phrases = false" in users.path().read_text()
+        assert c.get("/ask/voices", headers=h).json()["account"]["phrases"] is False
+        assert c.post("/ask/voice/phrases", headers=h, json={"on": True}).json() == {"phrases": True}
+    assert c.post("/ask/voice/phrases", headers={"Authorization": "Bearer sekrit"}, json={"on": False}).status_code == 409, \
+        "the admin token has no account: its browser keeps the choice"

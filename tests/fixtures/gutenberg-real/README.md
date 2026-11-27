@@ -33,3 +33,26 @@ the same way, byte for byte, from the node's mirror:
   Old Testament -- Criticism, interpretation, etc.", "Wisdom literature --
   Criticism, interpretation, etc.", "Gnomic poetry, Hebrew"; shelves
   Philosophy & Ethics, Religion/Spirituality.
+
+## Added 2026-11-27 (pg-rdf-fixtures-3, 3bcc1161)
+
+- 25882 Famous Islands and Memorable Voyages: LCSH "Voyages and travels --
+  Juvenile literature", LCC PZ; shelves Adventure, Travel Writing, History -
+  Other. Literary by its LCC alone before "-- Juvenile literature" (non-fiction
+  for children) vetoed PZ.
+
+## Added 2026-11-27 (pg-rdf-fixtures-4, 798ff00a)
+
+- 68190, 68937 Lord Lister: "Detective and mystery stories -- Periodicals",
+  "Dime novels -- Periodicals" — a genre's periodical: literary.
+- 14165 Punch ("English wit and humor -- Periodicals"), 43814 Blackwood's
+  ("Scotland -- Periodicals", "England -- Periodicals"), 56022 The Catholic World
+  ("Catholic Church -- Periodicals") — mixed magazines: no verdict.
+
+## Added 2026-11-27 (pg-rdf-fixtures-5, 5c30b8ac)
+
+- 63399, 62744 The Glebe: "American poetry -- 20th century" / "American drama --
+  20th century" beside "Literature, Modern -- 20th century -- Periodicals" — every
+  other heading literary: literary.
+- 71448 Fire!!: literary headings and "African American art -- 20th century", a
+  topic: the periodicals veto holds, none.

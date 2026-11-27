@@ -20,6 +20,7 @@ read/query endpoints (status/stats/events/books/search/chat) stay open —
 "Ask is LAN-open read-only" (architecture-v2.md §15).
 """
 import contextvars
+from typing import Literal
 import dataclasses
 import json
 import queue
@@ -1027,6 +1028,10 @@ class SearchBody(BaseModel):
     # 05 §5.6: how many of each list the reranker orders — 50 by default
     rerank_depth: int = Field(retrieval.RERANK_TOP_N, ge=1, le=retrieval.MAX_RERANK_DEPTH)
     all_languages: bool = False            # every language held, not only the main ones
+    # the search's kind (docs/notes/fact-fiction-search.md): facts leave out
+    # literary works, literature keeps them alone, all is every result; auto
+    # (the default) decides from the question, and the result says which
+    kind: Literal["auto", "facts", "literature", "all"] = "auto"
     # the annotations collections consulted (05 §5.3, amended 2026-10-19):
     # None = every one held, [] = none, names = those
     annotations: list[str] | None = None
@@ -1040,7 +1045,7 @@ def _search_and_log(body: SearchBody) -> dict:
     result = _run_search(body.collections, body.query, body.k, body.mode, body.translate,
                          **({"annotations": body.annotations} if body.annotations is not None else {}),
                           verify=body.verify, rerank_depth=body.rerank_depth,
-                          all_languages=body.all_languages)
+                          all_languages=body.all_languages, kind=body.kind)
     con = _con()   # query_log lives in the default collection's manifest regardless
     db.log_query(con, "search", body.query, body.mode, body.k, result["timings"],
                  len(result["hits"]), _source_qualified_ids(result["hits"]))
@@ -1126,6 +1131,10 @@ class ChatBody(BaseModel):
     limit: int = Field(retrieval.DEFAULT_RESULTS, ge=1, le=retrieval.MAX_RESULTS)
     rerank_depth: int = Field(retrieval.RERANK_TOP_N, ge=1, le=retrieval.MAX_RERANK_DEPTH)
     all_languages: bool = False            # the page's own choice, so both searches match
+    # the search's kind (docs/notes/fact-fiction-search.md): facts leave out
+    # literary works, literature keeps them alone, all is every result; auto
+    # (the default) decides from the question, and the result says which
+    kind: Literal["auto", "facts", "literature", "all"] = "auto"
     # the page's choice of annotations collections, so the answer's [n] are
     # the page's hits (05 §5.3, amended 2026-10-19); None = every one held
     annotations: list[str] | None = None
@@ -1183,7 +1192,7 @@ async def chat_completions(body: ChatBody, request: Request):
             request, functools.partial(reading.under, not body.speed, _run_search),
             searched, query, body.limit, "hybrid", True,
             verify=body.verify, rerank_depth=body.rerank_depth,
-            all_languages=body.all_languages,
+            all_languages=body.all_languages, kind=body.kind,
             # the page's own "show results in", so a work's one hit is the
             # same edition in the answer's [n] as on the page
             **({"show_in": body.answer_lang} if body.answer_lang else {}),
@@ -1207,7 +1216,8 @@ def _chat_answer_traced(body: "ChatBody", query: str, result: dict, t0: float, t
     from . import query_trace
     trace.mark("search_done")
     trace.note(search_reused=reused, model=body.model, collections=body.collections, stream=body.stream,
-               answer_lang=body.answer_lang, timings=result.get("timings"), results=query_trace.hits_of(result))
+               answer_lang=body.answer_lang, timings=result.get("timings"), results=query_trace.hits_of(result),
+                   **query_trace.kind_of(result))
     try:
         out = _chat_answer(body, query, result, t0, trace=trace)
     except BaseException as e:
@@ -1439,6 +1449,60 @@ def _answer_messages(body: ChatBody, query: str, result: dict,
     return p.messages
 
 
+def louise_kind(result: dict) -> dict:
+    """The search's kind as every /v1 answer carries it (architecture's read
+    of 2643e7d8, 3: a filter nobody can see is what invariant 4 forbids):
+    {applied, by, left_out: {count, by_basis}}."""
+    return {"applied": result.get("kind_applied", "all"), "by": result.get("kind_by", "the reader"),
+            "left_out": result.get("left_out") or {"count": 0, "by_basis": {}}}
+
+
+#: the note of an answer whose search's kind left out everything it found,
+#: in the answer's language (architecture's read of a5971abf, D): {lang:
+#: ((facts one, many), (literature one, many))}, each with {n}
+KIND_NOTES = {
+    "en": (("[facts only: this search left out {n} literary work and found nothing else — ask again for literature, or for all]",
+            "[facts only: this search left out {n} literary works and found nothing else — ask again for literature, or for all]"),
+           ("[literature only: this search left out {n} other work and found no literary work — ask again for facts, or for all]",
+            "[literature only: this search left out {n} other works and found no literary work — ask again for facts, or for all]")),
+    "it": (("[solo fatti: questa ricerca ha escluso {n} opera letteraria e non ha trovato altro — chiedi di nuovo la letteratura, o tutto]",
+            "[solo fatti: questa ricerca ha escluso {n} opere letterarie e non ha trovato altro — chiedi di nuovo la letteratura, o tutto]"),
+           ("[solo letteratura: questa ricerca ha escluso {n} altra opera e non ha trovato opere letterarie — chiedi di nuovo i fatti, o tutto]",
+            "[solo letteratura: questa ricerca ha escluso {n} altre opere e non ha trovato opere letterarie — chiedi di nuovo i fatti, o tutto]")),
+    "fr": (("[faits seulement : cette recherche a écarté {n} œuvre littéraire et n'a rien trouvé d'autre — redemandez la littérature, ou tout]",
+            "[faits seulement : cette recherche a écarté {n} œuvres littéraires et n'a rien trouvé d'autre — redemandez la littérature, ou tout]"),
+           ("[littérature seulement : cette recherche a écarté {n} autre œuvre et n'a trouvé aucune œuvre littéraire — redemandez les faits, ou tout]",
+            "[littérature seulement : cette recherche a écarté {n} autres œuvres et n'a trouvé aucune œuvre littéraire — redemandez les faits, ou tout]")),
+    "de": (("[nur Fakten: diese Suche hat {n} literarisches Werk ausgelassen und nichts anderes gefunden — fragen Sie erneut nach Literatur oder nach allem]",
+            "[nur Fakten: diese Suche hat {n} literarische Werke ausgelassen und nichts anderes gefunden — fragen Sie erneut nach Literatur oder nach allem]"),
+           ("[nur Literatur: diese Suche hat {n} anderes Werk ausgelassen und kein literarisches Werk gefunden — fragen Sie erneut nach Fakten oder nach allem]",
+            "[nur Literatur: diese Suche hat {n} andere Werke ausgelassen und kein literarisches Werk gefunden — fragen Sie erneut nach Fakten oder nach allem]")),
+    "es": (("[solo hechos: esta búsqueda dejó fuera {n} obra literaria y no encontró nada más — pregunte de nuevo por la literatura, o por todo]",
+            "[solo hechos: esta búsqueda dejó fuera {n} obras literarias y no encontró nada más — pregunte de nuevo por la literatura, o por todo]"),
+           ("[solo literatura: esta búsqueda dejó fuera {n} otra obra y no encontró ninguna obra literaria — pregunte de nuevo por los hechos, o por todo]",
+            "[solo literatura: esta búsqueda dejó fuera {n} otras obras y no encontró ninguna obra literaria — pregunte de nuevo por los hechos, o por todo]")),
+}
+#: the 639-2/3 codes the answer path may carry for those five
+_NOTE_LANG = {"eng": "en", "ita": "it", "fra": "fr", "fre": "fr", "deu": "de", "ger": "de", "spa": "es"}
+
+
+def kind_note(result: dict, lang: str | None = None) -> str:
+    """What the answer says when its search's kind left out everything it
+    found, as the page's chip would, in the answer's language (en, it, fr,
+    de, es; English otherwise); "" otherwise."""
+    k = louise_kind(result)
+    n = k["left_out"]["count"]
+    if result.get("hits") or not n or k["applied"] not in ("facts", "literature"):
+        return ""
+    # as the answer path takes it (architecture's read of f21e98e3): an ISO
+    # code whole, never its first two letters ("spa" is not "sp")
+    lang = ((lang or "").strip().lower() or (result.get("query_lang") or "").strip().lower() or "en")
+    lang = _NOTE_LANG.get(lang, lang)
+    facts, literature = KIND_NOTES.get(lang, KIND_NOTES["en"])
+    one, many = facts if k["applied"] == "facts" else literature
+    return (one if n == 1 else many).format(n=n)
+
+
 def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None):
     con = _con()   # query_log lives in the default collection's manifest regardless
     prompt = _fit_answer(body, query, result)
@@ -1462,6 +1526,9 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
         # "[3] [4]", not "[3][4]": a client's markdown cleaning reads a pair
         # as a reference link and speaks a number (app/speech.py)
         answer = speech.spaced_citations(text)
+        note = kind_note(result, body.answer_lang)
+        if note:
+            answer = f"{note}\n\n{answer}"
         _log_reads(con, reads)
         result["timings"]["llm"] = round((time.time() - t0) * 1000 - result["timings"]["total"], 1)
         result["timings"]["total"] = round((time.time() - t0) * 1000, 1)
@@ -1472,6 +1539,7 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
             "model": body.model,
             "choices": [{"index": 0, "finish_reason": "stop",
                          "message": {"role": "assistant", "content": answer}}],
+            "louise_kind": louise_kind(result),
         }
         if body.sources:
             out["louise_sources"] = source_entries(result["hits"], reads, prompt.used)
@@ -1495,6 +1563,9 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
         tail = ""        # the text so far, for a citation pair split across two deltas
         failed = None
         try:
+            note = kind_note(result, body.answer_lang)
+            if note:
+                yield chunk(note + "\n\n")
             for kind, value in parts:
                 if kind == "sources":
                     # before the first word: an OpenAI client ignores the extra key
@@ -1527,7 +1598,9 @@ def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None
                         "louise_pdf": value}) + "\n\n"
             done = {"id": rid, "object": "chat.completion.chunk",
                     "created": int(time.time()), "model": body.model,
-                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    # the search's kind, on the final chunk whatever `sources` says
+                    "louise_kind": louise_kind(result)}
             yield f"data: {json.dumps(done)}\n\n"
             yield "data: [DONE]\n\n"
         except BaseException as e:

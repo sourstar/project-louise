@@ -232,6 +232,16 @@ def hits_of(result: Any) -> list[dict] | dict:
     return got
 
 
+def kind_of(result: Any) -> dict:
+    """The search's kind, how it was decided and what it left out
+    (docs/notes/fact-fiction-search.md: "the trace records the kind and the
+    left-out count"); {} for a result that carries none."""
+    if not isinstance(result, dict) or "kind_applied" not in result:
+        return {}
+    return {"search_kind": result.get("kind_applied"), "kind_by": result.get("kind_by"),
+            **({"left_out": result["left_out"]} if "left_out" in result else {})}
+
+
 #: a result that is not a hit list, kept to this many characters of JSON
 RESULT_CHARS = 20_000
 
@@ -430,7 +440,7 @@ def run(kind: str, who: str, admin: bool, query: str, fn, /, *args: Any, **kw: A
     except BaseException as e:
         trace.end(error=f"{type(e).__name__}: {e}")
         raise
-    trace.note(results=hits_of(out))
+    trace.note(results=hits_of(out), **kind_of(out))
     trace.end()
     return out
 
