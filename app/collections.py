@@ -1025,11 +1025,19 @@ def sister_refusal(collection, held=None) -> str | None:
     if not getattr(getattr(collection, "codex", None), "derived_from", None):
         return None
     try:
-        held = list(held) if held is not None else load_all()
+        # as the worker reads them: another file's fault is not hers
+        held = list(held) if held is not None else load_all(skip_unreadable=True)[0]
     except Exception as e:  # noqa: BLE001 — unsure who acquires: no second writer
         return (f"{collection.name}: whether the collection she derives from acquires their corpus "
                 f"could not be read ({type(e).__name__}: {e}); nothing changed")
-    mine = [c for c in held if c.name != collection.name] + [collection]
+    # judged AS GROWN: a grow states `acquire_enabled = true` (web grow_run,
+    # `hold records fetch`), so she is judged on with nothing stated — a
+    # sister whose default is off (`slices = []`) is refused too while an
+    # ancestor acquires her folder (re-read of d927e4ad)
+    import dataclasses
+    grown = dataclasses.replace(collection, acquire_enabled=True, acquire_stated=False, acquire_by=None) \
+        if dataclasses.is_dataclass(collection) else collection
+    mine = [c for c in held if c.name != collection.name] + [grown]
     me = next(c for c in _one_acquirer(mine) if c.name == collection.name)
     if not getattr(me, "acquire_by", None):
         return None

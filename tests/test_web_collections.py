@@ -269,7 +269,8 @@ def test_grow_is_refused_for_a_sister_whose_sister_acquires_their_corpus(client,
     sister = dataclasses.replace(collection, acquire_enabled=True, acquire_stated=False,
                                  codex=dataclasses.replace(collection.codex,
                                                            derived_from=owner.codex.collection_id))
-    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: [owner, sister])
+    monkeypatch.setattr(collections_mod, "load_all",
+                        lambda *a, **k: ([owner, sister], []) if k.get("skip_unreadable") else [owner, sister])
     monkeypatch.setattr(web_mod, "_collection_or_404", lambda name: sister)
     toml_path = collections_mod.config_toml_path("gutenberg")
     before = toml_path.read_text(encoding="utf-8")
@@ -281,8 +282,13 @@ def test_grow_is_refused_for_a_sister_whose_sister_acquires_their_corpus(client,
         assert r.status_code == 409 and "sister" in r.json()["detail"], r.text
     assert toml_path.read_text(encoding="utf-8") == before
     # a sister who acquires (Normattiva, once normattiva-nemo) is not refused
+    # one who took over (Normattiva, once normattiva-nemo): her ancestor no longer acquires
     took_over = dataclasses.replace(sister, acquire_enabled=True, acquire_stated=True)
-    assert collections_mod.sister_refusal(took_over, held=[owner, took_over]) is None
+    retired = SimpleNamespace(**{**vars(owner), "acquire_enabled": False})
+    assert collections_mod.sister_refusal(took_over, held=[retired, took_over]) is None
+    # a sister whose default is off (slices = []) is refused too: a grow would state true
+    off_by_default = dataclasses.replace(sister, acquire_enabled=False)
+    assert "grow owner" in collections_mod.sister_refusal(off_by_default, held=[owner, off_by_default])
     idle = SimpleNamespace(**{**vars(owner), "acquire_enabled": False})
     assert collections_mod.sister_refusal(sister, held=[idle, sister]) is None, \
         "her sister acquires nothing: she is not refused"

@@ -748,7 +748,7 @@ def _effective_acquire(back) -> bool:
     resolution): the file's, through the one-acquirer rule over what is held
     (collections._one_acquirer)."""
     try:
-        held = [x for x in collections_mod.load_all() if x.name != back.name] + [back]
+        held = [x for x in collections_mod.load_all(skip_unreadable=True)[0] if x.name != back.name] + [back]
         return next(x for x in collections_mod._one_acquirer(held) if x.name == back.name).acquire_enabled
     except Exception:   # noqa: BLE001 — another file's fault: this one's own value
         return back.acquire_enabled

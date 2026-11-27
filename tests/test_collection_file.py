@@ -224,9 +224,9 @@ def test_the_value_reported_after_a_write_is_the_worker_s(monkeypatch, tmp_path)
         name="sis", plugin="gutenberg", profile=None, embed_mode_default=None, corpus_dir=tmp_path,
         manifest_path=tmp_path / "m", fts_dir=tmp_path / "i", lance_dir=tmp_path / "l",
         acquire_enabled=True, codex=SimpleNamespace(collection_id="S", derived_from="R"))
-    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: [owner])
+    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: ([owner], []))
     assert collection_file._effective_acquire(back) is False
-    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: [])
+    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: ([], []))
     assert collection_file._effective_acquire(back) is True, "her sister not held: her own"
 
 
