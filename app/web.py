@@ -699,6 +699,26 @@ class AskVoiceBody(BaseModel):
     voice: str | None = None
 
 
+class AskPhrasesBody(BaseModel):
+    on: bool
+
+
+@ask_router.post("/ask/voice/phrases")
+def ask_voice_phrases(request: Request, body: AskPhrasesBody):
+    """THE PHRASES THAT COVER THE WAIT, a reader's choice (operator,
+    2026-11-26/27, docs/notes/hands-free-voice.md §7: "it goes also in the
+    regular user's settings"): kept with the account, for EVERY reader with
+    one, admin or not; 409 without an account — the browser keeps it."""
+    from . import auth, users
+    name = auth.account(getattr(request.state, "viewer", None))
+    if not name:
+        raise HTTPException(409, "no account: this browser keeps the choice")
+    try:
+        return {"phrases": users.set_phrases(name, body.on).phrases}
+    except users.UserError as e:
+        raise HTTPException(400, str(e)) from None
+
+
 @ask_router.post("/ask/voice")
 def ask_voice_choose(request: Request, body: AskVoiceBody):
     """The reader's account keeps the voice it chose (operator, 2026-11-11:

@@ -56,7 +56,7 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   const errors = [], posted = { relay: [], stt: 0, speech: [] };
   // speechDelay: every sentence's wait; slow: a sentence's own; answerJob:
   // 'live' is the answer the test writes into the page's stream itself
-  let speechDelay = 0, slow = {}, answerJob = 'a1', offerVoices = false, account = null;
+  let speechDelay = 0, slow = {}, answerJob = 'a1', offerVoices = false, account = null, fillersReady = [];
   const VOICES = { voices: [{ name: 'Voice A', voice: 'localai://voice-profiles/p1', language: 'en' },
                             { name: 'Voice B', voice: 'localai://voice-profiles/v2', language: 'it' }],
                    default: 'localai://voice-profiles/p1' };
@@ -73,6 +73,21 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
     if (u.pathname === '/ask/voices')
       return req.respond({ status: 200, contentType: 'application/json',
                            body: JSON.stringify(offerVoices ? { ...VOICES, account } : { voices: [], default: null, account: null }) });
+    // THE PHRASES THAT COVER THE WAIT, the node's routes (#944) as the page sees them
+    if (u.pathname === '/ask/voice/fillers')
+      return req.respond({ status: 200, contentType: 'application/json',
+                           body: JSON.stringify({ lang: u.searchParams.get('lang'), voice: 'v', ready: fillersReady }) });
+    if (u.pathname === '/ask/voice/fillers/used' && req.method === 'POST') {
+      posted.used = (posted.used || []).concat([JSON.parse(req.postData).ids]);
+      return req.respond({ status: 200, contentType: 'application/json', body: '{"removed":0}' });
+    }
+    if (u.pathname.startsWith('/fill/'))
+      return req.respond({ status: 200, contentType: 'audio/wav', body: wavOf(16000 * 0.4) });
+    if (u.pathname === '/ask/voice/phrases' && req.method === 'POST') {
+      const b = JSON.parse(req.postData); posted.phrases = (posted.phrases || []).concat([b]);
+      account = { ...account, phrases: b.on };
+      return req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ phrases: b.on }) });
+    }
     if (u.pathname === '/ask/voice/report' && req.method === 'POST') {
       posted.reports = (posted.reports || []).concat([JSON.parse(req.postData)]);
       return req.respond({ status: 204, contentType: 'text/plain', body: '' });
@@ -684,6 +699,48 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await page.evaluate(k => louiseVoice.setRates(JSON.parse(k)), FAST);
   answerJob = 'a1';
 
+  // 25. THE PHRASES THAT COVER THE WAIT (operator, 2026-11-26/27; hands-free-voice.md §7):
+  //     the short one when the question is taken, the long one past the delay
+  //     with no sentence ready, never two of a kind; the first sentence after
+  //     the phrase; `used` once per phrase played; the tone where a kind is
+  //     missing or the reader turned them off
+  const question25 = async (longMs, firstDeltaAfter) => {
+    await reset(); answerJob = 'live';
+    await page.evaluate(ms => louiseVoice.setLongCue(ms), longMs);
+    await asked(() => page.evaluate(() => { document.getElementById('q').value = 'Who wrote it?'; ask(); }));
+    await page.evaluate(() => louiseVoice.cueQuestion());       // as a spoken question is taken
+    await sleep(firstDeltaAfter);
+    await emit('delta', { text: SENTENCES.join(' ') });
+    await page.click('#speak');
+    await emit('end', { state: 'done', reason: '' });
+    await until(() => !document.getElementById('speak').classList.contains('on'), 15000);
+    return page.evaluate(() => louiseVoice.cues());
+  };
+  fillersReady = [{ id: 's1', kind: 'short', url: '/fill/s1.wav' }, { id: 'l1', kind: 'long', url: '/fill/l1.wav' },
+                  { id: 's2', kind: 'short', url: '/fill/s2.wav' }];
+  posted.used = [];
+  const c25a = await question25(600, 1500);
+  check(JSON.stringify(c25a) === JSON.stringify(['short', 'long']),
+        '25. the short phrase at once, the long one past its delay with no sentence ready, never two of a kind', c25a);
+  check(JSON.stringify(posted.used) === JSON.stringify([['s1', 'l1']]), '25. the phrases played reported used, once', posted.used);
+  check((await played()).length === SENTENCES.length, '25. and every sentence is read after them', await played());
+  posted.used = [];
+  const c25b = await question25(5000, 300);
+  check(JSON.stringify(c25b) === JSON.stringify(['short']), '25. a sentence ready before the delay: no long phrase', c25b);
+  fillersReady = [];
+  const c25c = await question25(600, 1500);
+  check(JSON.stringify(c25c) === JSON.stringify(['tone', 'tone']), '25. no phrase ready: the tone instead', c25c);
+  fillersReady = [{ id: 's9', kind: 'short', url: '/fill/s9.wav' }, { id: 'l9', kind: 'long', url: '/fill/l9.wav' }];
+  posted.used = [];
+  await page.evaluate(() => { const b = document.getElementById('voice-phrases'); b.checked = false; b.dispatchEvent(new Event('change')); });
+  check(await page.evaluate(() => { try { return localStorage.getItem('louise-phrases'); } catch (e) { return null; } }) === 'off',
+        '25. turned off, kept in this browser (no account)');
+  const c25d = await question25(600, 1500);
+  check(JSON.stringify(c25d) === JSON.stringify(['tone', 'tone']) && !posted.used.length,
+        '25. off: the tone, and no phrase used', { c25d, used: posted.used });
+  await page.evaluate(() => { const b = document.getElementById('voice-phrases'); b.checked = true; b.dispatchEvent(new Event('change')); });
+  answerJob = 'a1';
+
 
   // 14. a node that offers no voice: no button, no script
   const scripts = [];
@@ -756,6 +813,15 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await page.goto('http://localhost/ask');
   check(await until(v => document.getElementById('voice-pick').value === v, 4000, VOICES.voices[1].voice),
         '20. and the account\'s on the next visit');
+  // the phrases that cover the wait: kept with the account too, for every reader with one
+  await page.evaluate(() => { document.querySelector('details.settings').open = true;
+    const b = document.getElementById('voice-phrases'); b.checked = false; b.dispatchEvent(new Event('change')); });
+  const t20p = Date.now(); while (!posted.phrases && Date.now() - t20p < 4000) await sleep(40);
+  check(JSON.stringify(posted.phrases) === JSON.stringify([{ on: false }]), '20. the phrases turned off, kept with the account',
+        posted.phrases);
+  await page.goto('http://localhost/ask');
+  check(await until(() => document.getElementById('voice-phrases').checked === false, 4000),
+        '20. and off on the next visit, whatever this browser kept');
 
   // 21. a microphone that sends only silence (operator, 2026-11-11: "when the
   //     phone is connected to the car the mic of louise does not work"): the

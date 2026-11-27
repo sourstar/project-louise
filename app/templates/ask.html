@@ -137,6 +137,11 @@
     {% if voice.output.available %}
     <label class="inline" id="voice-choice" hidden title="the voice that reads the answer aloud">voice
       <select id="voice-pick" style="width:auto"></select></label>
+    {# the phrases that cover the wait ("Let me check"), every reader's choice,
+       on by default; off, a short tone instead (docs/notes/hands-free-voice.md §7) #}
+    <label class="inline check" id="phrases-choice" hidden
+           title="a short phrase while the answer is being searched; off, a tone instead">
+      <input type="checkbox" id="voice-phrases" style="width:auto" checked> phrases while waiting</label>
     {% endif %}
   </div>
   </details>

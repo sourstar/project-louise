@@ -292,6 +292,7 @@
     stopReading(); auto = false;         // the microphone would hear the answer
     unlock();                            // inside the tap: the answer may be read later
     toneUnlock();                        // inside the tap: the ready tone may sound
+    prefetchFillers();                   // the phrases that will cover this question's wait
     toneLast = null;                     // this recording's tone, not the last one's
     toneUse++;                           // a re-tap: the last recording's release keeps its hands off the context
     busy = true; micState('busy', 'opening the microphone…'); active();
@@ -806,7 +807,7 @@
   function pauseReading() {
     const r = reading; if (!r || r.paused) return;
     r.paused = true; times.pauses = (times.pauses || []).concat([now()]);
-    if (player && !player.paused) player.pause();
+    if (player && !player.paused) player.pause();       // a sentence, or the phrase covering the wait
     speakState(true, true);
     clearTimeout(r.pauseTimer);
     r.pauseTimer = setTimeout(() => { if (reading === r && r.paused) stopReading(); }, PAUSE_MAX_MS);
@@ -816,7 +817,7 @@
     r.paused = false; clearTimeout(r.pauseTimer);
     speakState(true, false);
     // inside the tap: the browser lets the paused element play on
-    if (player && r.playing) player.play().catch(e => { if (e && e.name === 'NotAllowedError') r.blocked = true; });
+    if (player && (r.playing || (cue && cue.audio))) player.play().catch(e => { if (e && e.name === 'NotAllowedError') r.blocked = true; });
     if (r.resumed) { const f = r.resumed; r.resumed = null; f(); }
   }
   // the reading's loop waits here while paused
@@ -855,7 +856,9 @@
   }
 
   function stopReading() {
-    const r = reading; if (!r) return;
+    const r = reading;
+    endCue(); reportPhrases();
+    if (!r) return;
     reportReading(r);
     reading = null; r.ctl.abort();             // the fetches in flight with it
     clearTimeout(r.pauseTimer);
@@ -922,6 +925,13 @@
     voiceIds = new Set(list.map(v => v.voice));
     account = got && got.account ? got.account.name : null;
     accountVoice = got && got.account ? got.account.voice : null;
+    accountPhrases = got && got.account ? got.account.phrases : null;
+    const ph = document.getElementById('voice-phrases');
+    if (ph) {
+      ph.checked = phrasesOn();
+      ph.onchange = () => keepPhrases(ph.checked);
+      const box = document.getElementById('phrases-choice'); if (box) box.hidden = false;
+    }
     if (list.length < 2) { box.hidden = true; return; }
     pick.textContent = '';
     for (const v of list) {
@@ -1081,6 +1091,111 @@
     feed(ahead);
   }
 
+  // THE PHRASES THAT COVER THE WAIT (operator, 2026-11-26/27;
+  // docs/notes/hands-free-voice.md §7, Decision 5A; the node side, #944):
+  // between a question and its answer's first sentence, a short phrase in
+  // the voice the answer is read in ("Let me check") when the question is
+  // taken, and a long one at LONG_CUE_MS if no sentence is ready yet — at
+  // most two a question, never two of a kind. The answer's first sentence
+  // waits for the phrase playing, never cutting it. A kind missing (the
+  // pool short, another language, the reader's setting off): a short TONE
+  // instead, WebAudio, no asset. A phrase is reported used once it has
+  // played, at the end of the reading (or of the answer, not read), and the
+  // node remakes it. Prefetched when the microphone or the speaker is first
+  // used, and after each answer.
+  let LONG_CUE_MS = 7000;
+  const CUE_TONE_HZ = 660, CUE_TONE_MS = 140;
+  const PHRASES_KEY = 'louise-phrases';
+  let fillers = null, fillersFor = null, cue = null, accountPhrases = null, playedPhrases = [];
+  // the reader's choice: with the account (POST /ask/voice/phrases), else this browser; on by default
+  function phrasesOn() {
+    if (account) return accountPhrases !== false;
+    try { return localStorage.getItem(PHRASES_KEY) !== 'off'; } catch (e) { return true; }
+  }
+  async function keepPhrases(on) {
+    if (!account) { try { localStorage.setItem(PHRASES_KEY, on ? 'on' : 'off'); } catch (e) {} return; }
+    accountPhrases = on;
+    try {
+      const r = await fetch('/ask/voice/phrases', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                     body: JSON.stringify({ on }) });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    } catch (e) { say('the choice could not be kept with your account: ' + (e.message || e)); }
+  }
+  // the answer's language, as the page knows it before the answer
+  function cueLang() {
+    const l = answerLang || (document.getElementById('lang') || {}).value || navigator.language || '';
+    return String(l === 'original' ? navigator.language || '' : l).split(/[-_]/)[0].toLowerCase();
+  }
+  async function prefetchFillers() {
+    const lang = cueLang(), voice = chosenVoice(), key = lang + '|' + (voice || '');
+    if (!lang || (fillers && fillers.length && fillersFor === key)) return;   // an empty list is asked again
+    fillersFor = key;
+    try {
+      const r = await fetch('/ask/voice/fillers?lang=' + encodeURIComponent(lang) + (voice ? '&voice=' + encodeURIComponent(voice) : ''));
+      fillers = r.ok ? ((await r.json()).ready || []) : [];
+    } catch (e) { fillers = []; }
+  }
+  async function cueTone() {
+    times.cues = (times.cues || []).concat([{ kind: 'tone', at: now() }]);
+    try {
+      if (!toneCtx || toneCtx.state === 'closed') toneUnlock();
+      // a context the last recording put to sleep is woken first (never cut short)
+      if (toneCtx && toneCtx.state !== 'running') await Promise.race([toneCtx.resume(), new Promise(ok => setTimeout(ok, 300))]);
+      if (!toneCtx || toneCtx.state !== 'running') return;
+      const t = toneCtx.currentTime, osc = toneCtx.createOscillator(), g = toneCtx.createGain();
+      osc.type = 'sine'; osc.frequency.value = CUE_TONE_HZ;
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(TONE_GAIN, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + CUE_TONE_MS / 1000);
+      osc.connect(g); g.connect(toneCtx.destination); osc.start(t); osc.stop(t + CUE_TONE_MS / 1000 + 0.02);
+      await new Promise(ok => setTimeout(ok, CUE_TONE_MS + 40));
+    } catch (e) { /* no sound: nothing to wait for */ }
+  }
+  // one cue of `kind`: its phrase where one is ready and the reader wants it, else the tone
+  function playCue(kind) {
+    if (!cue || cue.kinds.has(kind) || cue.kinds.size >= 2) return;
+    cue.kinds.add(kind);
+    const clip = phrasesOn() && (fillers || []).find(f => f.kind === kind && !playedPhrases.includes(f.id));
+    if (!clip) { cue.playing = cueTone(); return; }
+    if (!player) player = new Audio();
+    const c = cue;
+    times.cues = (times.cues || []).concat([{ kind, at: now() }]);
+    c.playing = new Promise(done => {
+      const a = player, end = () => { if (a.onended === end) a.onended = a.onerror = null; c.audio = null; done(); };
+      a.onended = () => { playedPhrases.push(clip.id); end(); };
+      a.onerror = end;
+      a.src = clip.url; c.audio = a;
+      a.play().catch(end);
+    });
+  }
+  // a question whose answer will be read by itself (a spoken one) is taken
+  function cueQuestion() {
+    endCue();
+    cue = { kinds: new Set(), playing: null, audio: null, timer: null };
+    const c = cue;
+    prefetchFillers().then(() => { if (cue === c) playCue('short'); });
+    c.timer = setTimeout(() => {
+      if (cue !== c) return;
+      const ready = reading && reading.items.length && reading.items[0].t.got;
+      if (!ready) playCue('long');
+    }, LONG_CUE_MS);
+  }
+  // a new answer, or the reading's end: the phrase stopped, its timer gone
+  function endCue() {
+    const c = cue; if (!c) return;
+    cue = null; clearTimeout(c.timer);
+    if (c.audio) { c.audio.pause(); c.audio.removeAttribute('src'); if (c.audio.onerror) c.audio.onerror(); }
+  }
+  // the phrases played, reported once (the node deletes and remakes them)
+  function reportPhrases() {
+    if (!playedPhrases.length) return;
+    const ids = playedPhrases.splice(0);
+    fillers = (fillers || []).filter(f => !ids.includes(f.id)); fillersFor = null;
+    try {
+      fetch('/ask/voice/fillers/used', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
+                                         body: JSON.stringify({ ids }) }).catch(() => {});
+    } catch (e) { /* never in the way */ }
+  }
+
   function startReading() {
     if (!player) player = new Audio();
     let r;
@@ -1099,6 +1214,9 @@
         while (reading === r && i >= r.items.length && !r.ended) await new Promise(ok => { r.more = ok; });
         if (reading !== r || i >= r.items.length) return;
         const url = await r.items[i].p;
+        if (reading !== r) return;
+        // the phrase that covers the wait plays to its end first, never cut
+        if (cue && cue.playing) await cue.playing;
         if (reading !== r) return;
         await whilePaused(r);
         if (reading !== r) return;
@@ -1128,7 +1246,7 @@
   if (speak) speak.addEventListener('click', () => {
     times.taps.push(now());                    // when the tap came, beside when a reading started
     if (reading) { if (reading.paused) resumeReading(); else pauseReading(); return; }
-    unlock(); startReading();
+    unlock(); prefetchFillers(); startReading();
   });
 
   // the page's hooks (ask.html); `lang` is the language of the text shown
@@ -1145,7 +1263,8 @@
       memo = null;                           // and its cut is its own
       times = { asked: now(), first: null, last: null, started: [], taps: [], items: [] };
       auto = !!speak && dictated !== null && !!q && q.value.trim() === dictated;
-      if (auto) unlock();
+      endCue();                              // a new answer ends any phrase
+      if (auto) { unlock(); cueQuestion(); }
     },
     // the answer being written grew
     answerGrew(lang) {
@@ -1160,6 +1279,10 @@
       writing = false; answerLang = lang || null;
       if (speak) speak.hidden = !answerText().trim();
       if (reading) follow(); else if (ahead) prefetch();
+      // the answer is all there: a phrase played and not read after is reported now,
+      // and the next question's phrases are fetched
+      if (!reading) { endCue(); reportPhrases(); }
+      fillersFor = null; prefetchFillers();
     },
     answerCleared() {
       writing = false; stopReading(); dropAhead(); if (speak) speak.hidden = true;
@@ -1190,7 +1313,10 @@
     },
     // how many ready tones sounded on this page, and the last one's context
     tones: () => toneCount, toneLast: () => toneLast, toneContext: () => toneCtx, deafEnd,
-    sentences, cut, downsample, wavBytes, split, budget, trimWav, rates: () => ({ ...rates }),
+    sentences, cut, downsample, wavBytes, phrasesOn,
+    // the cue plan, for a test: a question taken as a spoken one is, the long cue's delay, what was cued
+    cueQuestion: () => cueQuestion(), setLongCue(ms) { LONG_CUE_MS = ms; },
+    cues: () => (times.cues || []).map(c => c.kind), split, budget, trimWav, rates: () => ({ ...rates }),
     // a test's or an operator's rates, kept as measured ones are
     setRates(k) { rates = { ...RATES0, ...k }; answerRates = null; outlier = false; try { localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch (e) {} },
     learn, planned,
