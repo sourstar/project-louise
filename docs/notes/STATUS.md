@@ -1326,6 +1326,16 @@ measured (published figures disagree).
   median, exact over 3 fresh loads and 300 fresh contexts. No park by the keeper yet. A ROLLBACK HAS ONE STEP MORE: `619655e5833b`
   does not park, and with the three lines left in a model's file the gate refuses its run ("the runner will not park it") — take
   them out first.
+- **OUR LLAMA.CPP ON UPSTREAM'S LATEST — A STANDING RULE, THE FIRST CANDIDATE STAGED (2026-11-27; the operator: "1.B always";
+  llama-cpp-upstream.md):** every new engine starts from upstream master of the day, our patches carried onto it; LocalAI's base
+  stays. `engine-upstream.series` = engine-guard + 0037 (`1f6cedc4307a`): llama.cpp `78e0529` → `8e23278c` (299 commits), nine
+  inner patches carried (OmniVoice without the scale arguments upstream removed, #28898; 0026 without its pooler hunk, upstream's
+  #33122), LocalAI's own grpc-server fix for #32578. On the CPU the old and new builds give THE SAME BYTES for MedCPT (both models)
+  and OmniVoice; MedCPT's article GGUF converts to the same bytes, the cross-encoder's gains one key (`classifier.activation`,
+  scores unchanged). SYCL compiles with icpx; not on a card. Every gate again (#32726 moves the bytes of Q6_K/Q4_K_M models).
+- **MEDCPT'S RERANKER PASSES ON LLAMA.CPP, THE SPEED IS THE OPERATOR'S CHOICE (München, 2026-11-27; medcpt-on-llama-cpp.md §6):**
+  48 × 50, the same order; nearer the model than OpenVINO (largest score difference 0.0039 FA off, 0.0070 FA ON, OpenVINO
+  0.0088); 312 / 224 / 111 ms per 50 documents. Recommended FA ON; OpenVINO stays until the operator says.
 - **TWO DEFECTS FROM THE NODE, STAGED WITH MEDCPT (2026-11-27; `engine-guard.series` = engine-pair + 0035 + 0036, `4b0da8dfcd96`; München
   holds `b77c50dd0fbb` and gates once):** (P34) a speech request on a card at 30.7 of 32 GB ended the backend - "level_zero backend
   failed with error: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)" caught by a matrix product's handler, exit 1: within a graph a

@@ -1,0 +1,49 @@
+# A CANDIDATE: OUR LLAMA.CPP ON UPSTREAM'S LATEST (the operator, 2026-11-27: "1.B always" -
+# every new engine starts from upstream llama.cpp's master of the day, all our patches on it).
+# engine-guard.series line for line, then:
+#   0037  llama.cpp at master 8e23278c (2026-11-27; 299 commits after our 78e0529): nine
+#         inner patches rebased (0008 0012 0013 0015 0016 0017 0022 0023 0026, the rest
+#         apply as they are, none with fuzz), the OmniVoice backbone without the
+#         per-tensor scale arguments upstream folded into the tensors (#28898), 0026
+#         without its own pooler hunk (upstream's #33122 keeps it; the GELU key also for
+#         upstream's BertForSequenceClassification), and LocalAI's own grpc-server
+#         fix for the decision API's audio flag (#32578, LocalAI a1937e98).
+#         Upstream comes with it, among others: q6_K dequantized in f32 on SYCL
+#         (#32726: the bytes of every Q6_K/Q4_K_M model move), BMG decode at D=256 on
+#         the FA vector kernel (#30606), the MoE cache's experts selected on another
+#         backend (#33133).
+#   SERIES_FILE=deploy/localai/patches/staged/engine-upstream.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
+# ANOTHER ENGINE ON ANOTHER LLAMA.CPP: a build and EVERY gate again - each encoder's run
+# validated anew (#32726 moves quantized bytes), the chat, MADLAD, speech, MedCPT,
+# parking, the op refusal (docs/notes/llama-cpp-upstream.md).
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0009-llama-cpp-omnivoice.patch
+staged/0010-llama-cpp-tts-voice-modes.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch
+staged/0016-llama-cpp-sycl-pool-refuse-switch.patch
+staged/0017-llama-cpp-moe-record.patch
+staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch
+staged/0020-llama-cpp-omnivoice-nothing-kept-between-requests.patch
+staged/0021-llama-cpp-sycl-paging-is-the-default.patch
+staged/0022-llama-cpp-omnivoice-language-tag.patch
+staged/0025-llama-cpp-stream-fails-after-its-first-chunk.patch
+staged/0026-llama-cpp-sycl-graph-refuse-switch.patch
+staged/0023-llama-cpp-park-when-told.patch
+staged/0030-llama-cpp-omnivoice-fade-out-ends-with-the-kept-silence.patch
+staged/0033-llama-cpp-sycl-park-paced-by-the-host-reserve.patch
+staged/0034-llama-cpp-bert-text-pairs.patch
+staged/0035-llama-cpp-speech-refusal-says-why.patch
+staged/0036-llama-cpp-sycl-op-refusal-fails-the-request.patch
+staged/0037-llama-cpp-upstream-8e23278c.patch

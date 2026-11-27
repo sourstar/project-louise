@@ -1,0 +1,2119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 27 Nov 2026 21:00:26 +0000
+Subject: [PATCH] chore(llama-cpp): llama.cpp at upstream master 8e23278c,
+ every patch carried onto it
+
+LLAMA_VERSION moves from 78e0529 (2026-11-18) to master's 8e23278c
+(2026-11-27), 299 commits later. Of the 24 patches in patches/, nine are
+carried onto it (0008, 0012, 0013, 0015, 0016, 0017, 0022, 0023, 0026) and
+the other fifteen apply as they are; the whole set applies with patch -p1
+and no fuzz.
+
+- 0012 (OmniVoice): the backbone's attention, feed-forward and output
+  without the per-tensor scale arguments, which upstream folded into the
+  tensors (#28898); its projector, gen-audio type and capability beside the
+  speech models upstream added meanwhile (Moshi, VoxCPM2).
+- 0026 (a BERT text pair): its own pooler hunk is gone, upstream keeps the
+  pooler since #33122 (15fcfc7, BertForSequenceClassification); the GELU key
+  is written for that class too, or MedCPT's cross-encoder would fall back
+  to the tanh GELU.
+- the others: context only (upstream's new lines next to ours).
+
+grpc-server.cpp and prepare.sh take LocalAI's own fix for the decision
+API's audio flag (#32578, LocalAI a1937e98): parse_questions(body, audio),
+probed by prepare.sh so an older tree keeps the one-argument call.
+
+Checked, on a CPU: every standalone test of the patches; the gRPC server
+built and driven over gRPC - MedCPT's article encoder (67 pairs) and
+cross-encoder (40 reranks) the same bytes as with 78e0529, two OmniVoice
+clips (seed 1234) the same bytes, an invalid voice design refused with the
+same reason; the server's parking and context-on-demand tests, 25 of 25.
+The SYCL backend and libllama compile with icpx. Not run on a card.
+
+Assisted-by: Claude Code
+---
+ backend/cpp/llama-cpp/Makefile                |   2 +-
+ backend/cpp/llama-cpp/grpc-server.cpp         |   5 +
+ .../0008-chat-cohere-command3-parser.patch    |  14 +-
+ .../patches/0012-mtmd-omnivoice.patch         | 188 +++++++++---------
+ .../0013-sycl-reorder-experts-switch.patch    |  14 +-
+ .../llama-cpp/patches/0015-park-weights.patch |  94 ++++-----
+ .../0016-sycl-pool-refuse-switch.patch        |  16 +-
+ .../llama-cpp/patches/0017-moe-record.patch   |  31 +--
+ .../0022-sycl-graph-refuse-switch.patch       |  16 +-
+ .../patches/0023-server-park-when-told.patch  | 122 ++++++------
+ .../patches/0026-bert-text-pairs.patch        | 106 ++++------
+ backend/cpp/llama-cpp/prepare.sh              |   8 +
+ 12 files changed, 299 insertions(+), 317 deletions(-)
+
+diff --git a/backend/cpp/llama-cpp/Makefile b/backend/cpp/llama-cpp/Makefile
+index d91a88d..929e68c 100644
+--- a/backend/cpp/llama-cpp/Makefile
++++ b/backend/cpp/llama-cpp/Makefile
+@@ -1,5 +1,5 @@
+ 
+-LLAMA_VERSION?=78e05298f0d68abff41d08d79fa7469264b2aff0
++LLAMA_VERSION?=8e23278c7c36f4429fb237467d50e2935a91e655
+ LLAMA_REPO?=https://github.com/ggerganov/llama.cpp
+ 
+ CMAKE_ARGS?=
+diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
+index 7550bde..bc5ed45 100644
+--- a/backend/cpp/llama-cpp/grpc-server.cpp
++++ b/backend/cpp/llama-cpp/grpc-server.cpp
+@@ -4962,7 +4962,12 @@ public:
+                 return grpc::Status(grpc::StatusCode::UNIMPLEMENTED,
+                     "This decision model requires an image-capable projector for image input");
+             }
++#if LOCALAI_HAS_DECISION_AUDIO_INPUT
++            // A spoken question needs a model with an audio encoder, as in upstream's /decision route.
++            const auto questions = decision.parse_questions(body, ctx_server.impl->chat_params.allow_audio);
++#else
+             const auto questions = decision.parse_questions(body);
++#endif
+             std::vector<raw_buffer> files;
+             const json state = decision.parse_state(body, files);
+             if (context->IsCancelled()) {
+diff --git a/backend/cpp/llama-cpp/patches/0008-chat-cohere-command3-parser.patch b/backend/cpp/llama-cpp/patches/0008-chat-cohere-command3-parser.patch
+index f3b4753..83cd468 100644
+--- a/backend/cpp/llama-cpp/patches/0008-chat-cohere-command3-parser.patch
++++ b/backend/cpp/llama-cpp/patches/0008-chat-cohere-command3-parser.patch
+@@ -26,10 +26,10 @@ and the preserved tokens and generation prompt, which a text-fed parser test
+ cannot see. Upstream's R7B and Cohere2 MoE cases pass unchanged.
+ 
+ diff --git a/common/chat.cpp b/common/chat.cpp
+-index de5f1c4..a102f1b 100644
++index 9e810d6..29a135d 100644
+ --- a/common/chat.cpp
+ +++ b/common/chat.cpp
+-@@ -1392,6 +1392,18 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const
++@@ -1451,6 +1451,18 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const
+          return common_chat_params_init_cohere2moe;
+      }
+  
+@@ -475,10 +475,10 @@ index 0000000..d4b994c
+ +{%- endfor %}<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>
+ \ No newline at end of file
+ diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
+-index efffae5..f1ed95c 100644
++index 83c11cc..2565eac 100644
+ --- a/tests/test-chat.cpp
+ +++ b/tests/test-chat.cpp
+-@@ -3003,6 +3003,92 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
++@@ -3119,6 +3119,92 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+              .run();
+      }
+  
+@@ -571,7 +571,7 @@ index efffae5..f1ed95c 100644
+      {
+          // Cohere2 MoE (North Code) - dedicated parser.
+          // Marker-wrapped format: <|START_THINKING|>...<|END_THINKING|> then either
+-@@ -7876,6 +7962,41 @@ static void test_inkling2_media_blocks() {
++@@ -8331,6 +8417,41 @@ static void test_inkling2_media_blocks() {
+      assert_equals(U + T + "a" + E,                             render({ "a" }));
+  }
+  
+@@ -613,9 +613,9 @@ index efffae5..f1ed95c 100644
+  static void test_template_generation_prompt() {
+      common_chat_msg system_msg;
+      system_msg.role = "system";
+-@@ -8885,6 +9006,7 @@ int main(int argc, char ** argv) {
+-         test_deepseek_v4_1_message_fields();
++@@ -9523,6 +9644,7 @@ int main(int argc, char ** argv) {
+          test_inkling2_media_blocks();
++         test_raon_prompt();
+          test_template_generation_prompt();
+ +        test_command_r7b_params();
+          test_reasoning_effort_caps();
+diff --git a/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch b/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
+index 76e044b..60a2b44 100644
+--- a/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
++++ b/backend/cpp/llama-cpp/patches/0012-mtmd-omnivoice.patch
+@@ -85,10 +85,10 @@ Not yet: a chunk of a long text delivered as soon as it is decoded (the
+ audio comes in one piece, as Kokoro's does).
+ ---
+ diff --git a/common/arg.cpp b/common/arg.cpp
+-index 110a30a..af999a7 100644
++index 7749b69..e09d759 100644
+ --- a/common/arg.cpp
+ +++ b/common/arg.cpp
+-@@ -4564,6 +4564,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
++@@ -4580,6 +4580,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+              params.tts_speaker_text = value;
+          }
+      ).set_examples({LLAMA_EXAMPLE_TTS}));
+@@ -104,10 +104,10 @@ index 110a30a..af999a7 100644
+      //
+      // diffusion params
+ diff --git a/common/common.h b/common/common.h
+-index 53ddc39..f3da483 100644
++index c09caf7..86b7130 100644
+ --- a/common/common.h
+ +++ b/common/common.h
+-@@ -803,6 +803,7 @@ struct common_params {
++@@ -805,6 +805,7 @@ struct common_params {
+      std::string tts_voice = "";
+      std::string tts_speaker_file = "";
+      std::string tts_speaker_text = "";
+@@ -116,10 +116,10 @@ index 53ddc39..f3da483 100644
+      bool is_gen_docs = false; // whether we are running inside llama-gen-docs
+  };
+ diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
+-index c2ecc31..5e28f3d 100644
++index 33d5378..3c93699 100644
+ --- a/gguf-py/gguf/constants.py
+ +++ b/gguf-py/gguf/constants.py
+-@@ -774,6 +774,7 @@ class MODEL_ARCH(IntEnum):
++@@ -787,6 +787,7 @@ class MODEL_ARCH(IntEnum):
+      ZONOS3           = auto()
+      KOKORO           = auto()
+      TINY_VOCA        = auto()
+@@ -127,7 +127,7 @@ index c2ecc31..5e28f3d 100644
+      K2HORIZON        = auto()
+      KOLIBRI1         = auto()
+      LIMITE           = auto()
+-@@ -1774,6 +1775,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
++@@ -1818,6 +1819,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+      MODEL_ARCH.ZONOS3:           "zonos3",
+      MODEL_ARCH.KOKORO:           "kokoro",
+      MODEL_ARCH.TINY_VOCA:        "tiny-voca",
+@@ -135,7 +135,7 @@ index c2ecc31..5e28f3d 100644
+      MODEL_ARCH.K2HORIZON:        "k2-horizon",
+      MODEL_ARCH.KOLIBRI1:         "kolibri1",
+      MODEL_ARCH.LIMITE:           "limite",
+-@@ -6921,6 +6923,21 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
++@@ -7126,6 +7128,21 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+          MODEL_TENSOR.FFN_DOWN,
+          MODEL_TENSOR.FFN_UP,
+      ],
+@@ -157,19 +157,19 @@ index c2ecc31..5e28f3d 100644
+      MODEL_ARCH.TINY_VOCA: [
+          MODEL_TENSOR.TOKEN_EMBD,
+          MODEL_TENSOR.OUTPUT_NORM,
+-@@ -7425,6 +7442,7 @@ class VisionProjectorType:
++@@ -7703,6 +7720,7 @@ class VisionProjectorType:
+      FISH_S2_SPKENC = "fish_s2_spkenc" # audio: Fish DAC encoder + RVQ, reference clip -> prompt rows
+      KOKORO = "kokoro" # audio generation: StyleTTS2 prosody predictor + iSTFTNet decoder
+      TINY_VOCA = "tiny_voca" # audio generation: duration predictor, frame transformers, source-filter vocoder
+ +    OMNIVOICE = "omnivoice" # audio generation: audio heads of the backbone, RVQ + DAC decoder
+      HUNYUANVL      = "hunyuanvl"
++     HY_V4_FLASH    = "hy_v4_flash"
+      PARAKEET       = "parakeet"  # audio
+-     MINIMAXM3      = "minimax_m3"
+ diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
+-index c50e9f9..5fdfd70 100644
++index fe0b808..800449a 100644
+ --- a/src/llama-arch.cpp
+ +++ b/src/llama-arch.cpp
+-@@ -179,6 +179,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
++@@ -182,6 +182,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
+      { LLM_ARCH_ZONOS3,           "zonos3"           },
+      { LLM_ARCH_KOKORO,           "kokoro"           },
+      { LLM_ARCH_TINY_VOCA,        "tiny-voca"        },
+@@ -178,10 +178,10 @@ index c50e9f9..5fdfd70 100644
+      { LLM_ARCH_BEAM,             "beam"             },
+      { LLM_ARCH_KOLIBRI1,         "kolibri1"         },
+ diff --git a/src/llama-arch.h b/src/llama-arch.h
+-index 9c517a9..207d866 100644
++index 305aae2..1c0af0d 100644
+ --- a/src/llama-arch.h
+ +++ b/src/llama-arch.h
+-@@ -180,6 +180,7 @@ enum llm_arch {
++@@ -183,6 +183,7 @@ enum llm_arch {
+      LLM_ARCH_ZONOS3,
+      LLM_ARCH_KOKORO,
+      LLM_ARCH_TINY_VOCA,
+@@ -190,10 +190,10 @@ index 9c517a9..207d866 100644
+      LLM_ARCH_HRM_TEXT,
+      LLM_ARCH_K2_HORIZON,
+ diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+-index ac5266a..5bf73f2 100644
++index f06ea2e..165329f 100644
+ --- a/src/llama-model.cpp
+ +++ b/src/llama-model.cpp
+-@@ -132,6 +132,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
++@@ -135,6 +135,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+              return new llama_model_kokoro(params);
+          case LLM_ARCH_TINY_VOCA:
+              return new llama_model_tiny_voca(params);
+@@ -202,7 +202,7 @@ index ac5266a..5bf73f2 100644
+          case LLM_ARCH_PHI2:
+              return new llama_model_phi2(params);
+          case LLM_ARCH_PHI3:
+-@@ -2995,6 +2997,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
++@@ -3011,6 +3013,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+          case LLM_ARCH_CLEF:
+          case LLM_ARCH_KOKORO:
+          case LLM_ARCH_TINY_VOCA:
+@@ -210,7 +210,7 @@ index ac5266a..5bf73f2 100644
+              {
+                  res = nullptr;
+              } break;
+-@@ -3806,6 +3809,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
++@@ -3854,6 +3857,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+          case LLM_ARCH_DREAM:
+          case LLM_ARCH_QWEN2MOE:
+          case LLM_ARCH_QWEN3:
+@@ -219,10 +219,10 @@ index ac5266a..5bf73f2 100644
+          case LLM_ARCH_FLINT:
+          case LLM_ARCH_QWEN3MOE:
+ diff --git a/src/models/models.h b/src/models/models.h
+-index ca8c230..721b80b 100644
++index ffe0a0c..c310846 100644
+ --- a/src/models/models.h
+ +++ b/src/models/models.h
+-@@ -787,6 +787,18 @@ struct llama_model_kokoro : public llama_model_base {
++@@ -839,6 +839,18 @@ struct llama_model_kokoro : public llama_model_base {
+      std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+  };
+  
+@@ -243,7 +243,7 @@ index ca8c230..721b80b 100644
+      void load_arch_hparams(llama_model_loader & ml) override;
+ diff --git a/src/models/omnivoice.cpp b/src/models/omnivoice.cpp
+ new file mode 100644
+-index 0000000..6ecb841
++index 0000000..53bde72
+ --- /dev/null
+ +++ b/src/models/omnivoice.cpp
+ @@ -0,0 +1,100 @@
+@@ -306,7 +306,7 @@ index 0000000..6ecb841
+ +            cb(Vcur, "Vcur", il);
+ +
+ +            cur = build_attn(inp_attn,
+-+                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+++                    model.layers[il].wo, model.layers[il].wo_b,
+ +                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+ +        }
+ +        if (il == n_layer - 1 && inp_out_ids) {
+@@ -320,9 +320,9 @@ index 0000000..6ecb841
+ +        cb(cur, "ffn_norm", il);
+ +
+ +        cur = build_ffn(cur,
+-+                model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_s,
+-+                model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
+-+                model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
+++                model.layers[il].ffn_up,   NULL,
+++                model.layers[il].ffn_gate, NULL,
+++                model.layers[il].ffn_down, NULL,
+ +                NULL,
+ +                LLM_FFN_SILU, LLM_FFN_PAR, il);
+ +        cb(cur, "ffn_out", il);
+@@ -341,25 +341,25 @@ index 0000000..6ecb841
+ +
+ +    // the vocabulary is 150k entries wide: its head would cost a third of a decoding step, for logits nobody reads
+ +    if (ubatch.token != nullptr) {
+-+        cur = build_lora_mm(model.output, cur, model.output_s);
+++        cur = build_lora_mm(model.output, cur);
+ +
+ +        cb(cur, "result_output", -1);
+ +        res->t_logits = cur;
+ +    }
+ +}
+ diff --git a/tools/mtmd/CMakeLists.txt b/tools/mtmd/CMakeLists.txt
+-index 25a5549..8a5aee8 100644
++index 273c514..6be95f8 100644
+ --- a/tools/mtmd/CMakeLists.txt
+ +++ b/tools/mtmd/CMakeLists.txt
+-@@ -96,6 +96,7 @@ add_library(mtmd
+-             models/pockettts-gen.cpp
++@@ -100,6 +100,7 @@ add_library(mtmd
++             models/moshi.cpp
+              models/soprano.cpp
+              models/kokoro.cpp
+ +            models/omnivoice.cpp
+              models/tiny-voca.cpp
+              models/step3vl.cpp
+              models/siglip.cpp
+-@@ -122,7 +123,7 @@ set_source_files_properties(${MTMD_CORE_SOURCES}
++@@ -126,7 +127,7 @@ set_source_files_properties(${MTMD_CORE_SOURCES}
+      PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+  
+  target_link_libraries     (mtmd PUBLIC ggml llama)
+@@ -369,7 +369,7 @@ index 25a5549..8a5aee8 100644
+  target_compile_features   (mtmd PRIVATE cxx_std_17)
+  
+ diff --git a/tools/mtmd/models/models.h b/tools/mtmd/models/models.h
+-index e5e568b..c2a9df9 100644
++index b475741..4d7bce8 100644
+ --- a/tools/mtmd/models/models.h
+ +++ b/tools/mtmd/models/models.h
+ @@ -258,6 +258,51 @@ struct mtmd_graph_chatterbox : mtmd_graph_chatterbox_base {
+@@ -774,7 +774,7 @@ index 0000000..ef3baa8
+ +    return gf;
+ +}
+ diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
+-index 638648a..f12a137 100644
++index bfea3a3..e8c9ed7 100644
+ --- a/tools/mtmd/mtmd-audio.cpp
+ +++ b/tools/mtmd/mtmd-audio.cpp
+ @@ -4,6 +4,8 @@
+@@ -786,7 +786,7 @@ index 638648a..f12a137 100644
+  #include <cstring>
+  #include <vector>
+  #include <fstream>
+-@@ -2260,6 +2262,44 @@ bool mtmd_audio_preprocessor_fish_s2::process(const float * samples, size_t n_sa
++@@ -2246,6 +2248,44 @@ bool mtmd_audio_preprocessor_spk_ref::process(const float * samples, size_t n_sa
+      return mtmd_audio_preprocessor_muse_spark_audio::process(samples, n_samples, output, shape_only);
+  }
+  
+@@ -832,11 +832,11 @@ index 638648a..f12a137 100644
+  // mtmd_audio_preprocessor_vibevoice_asr
+  //
+ diff --git a/tools/mtmd/mtmd-audio.h b/tools/mtmd/mtmd-audio.h
+-index 117d2bb..df19e40 100644
++index 269e78c..3ec174f 100644
+ --- a/tools/mtmd/mtmd-audio.h
+ +++ b/tools/mtmd/mtmd-audio.h
+-@@ -140,6 +140,14 @@ struct mtmd_audio_preprocessor_fish_s2 : mtmd_audio_preprocessor_muse_spark_audi
+-     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
++@@ -143,6 +143,14 @@ struct mtmd_audio_preprocessor_spk_ref : mtmd_audio_preprocessor_muse_spark_audi
++     const int32_t max_seconds;
+  };
+  
+ +// omnivoice reference clip: the 24 kHz waveform cut to whole codec frames, then the same clip at 16 kHz for the
+@@ -851,12 +851,12 @@ index 117d2bb..df19e40 100644
+  // the RMS is floored at -50 dBFS, so that silence or noise alone is not boosted to full scale
+  double mtmd_audio_vibevoice_gain(double sum_sq, int64_t n_samples, double peak);
+ diff --git a/tools/mtmd/mtmd-graph.cpp b/tools/mtmd/mtmd-graph.cpp
+-index 24469c1..e9e6da5 100644
++index 576f27b..64a3cf2 100644
+ --- a/tools/mtmd/mtmd-graph.cpp
+ +++ b/tools/mtmd/mtmd-graph.cpp
+-@@ -977,6 +977,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const
++@@ -985,6 +985,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const
+              {
+-                 builder = std::make_unique<mtmd_graph_fish_s2_spkenc>(ctx, img);
++                 builder = std::make_unique<mtmd_graph_voxcpm2_spkenc>(ctx, img);
+              } break;
+ +        case PROJECTOR_TYPE_OMNIVOICE_SPKENC:
+ +            {
+@@ -865,7 +865,7 @@ index 24469c1..e9e6da5 100644
+          case PROJECTOR_TYPE_POCKETTTS_GEN:
+              {
+                  const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+-@@ -1097,6 +1101,13 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const
++@@ -1141,6 +1145,13 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const
+                  const int n_frames = params && params->feats ? (int) (params->feats->size() / ctx->model.hparams.projection_dim) : 2;
+                  builder = std::make_unique<mtmd_graph_soprano>(ctx, img, n_frames);
+              } break;
+@@ -880,7 +880,7 @@ index 24469c1..e9e6da5 100644
+              {
+                  // without a stage (warmup), a short decoder graph: 2 frames, 600 samples each, one STFT row per 5 samples
+ diff --git a/tools/mtmd/mtmd-helper-gen.cpp b/tools/mtmd/mtmd-helper-gen.cpp
+-index ef9cfee..31160b0 100644
++index 03ab766..21c318d 100644
+ --- a/tools/mtmd/mtmd-helper-gen.cpp
+ +++ b/tools/mtmd/mtmd-helper-gen.cpp
+ @@ -3,18 +3,51 @@
+@@ -1892,7 +1892,7 @@ index ef9cfee..31160b0 100644
+  // tiny-voca is not autoregressive: the backbone encodes the phonemes of one sentence, the mmproj turns its states into audio
+  // the prompt is a phoneme string, symbols separated by spaces, a stress mark (ˈ or ˌ) before a stressed vowel
+  // each sentence is one utterance, like the reference pipeline: the "tts" template ends each one with <eos>
+-@@ -4926,6 +5909,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
++@@ -5606,6 +6589,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
+              return std::unique_ptr<mtmd_gen_audio_pipeline>(new kokoro_gen_audio_pipeline(lctx, mctx));
+          case MTMD_GEN_AUDIO_TYPE_TINY_VOCA:
+              return std::unique_ptr<mtmd_gen_audio_pipeline>(new tiny_voca_gen_audio_pipeline(lctx, mctx));
+@@ -1902,7 +1902,7 @@ index ef9cfee..31160b0 100644
+              return std::unique_ptr<mtmd_gen_audio_pipeline>(new lfm3a_gen_audio_pipeline(lctx, mctx));
+          case MTMD_GEN_AUDIO_TYPE_CHATTERBOX:
+ diff --git a/tools/mtmd/mtmd-helper.cpp b/tools/mtmd/mtmd-helper.cpp
+-index bce73a7..b1955ed 100644
++index 165936d..35d917d 100644
+ --- a/tools/mtmd/mtmd-helper.cpp
+ +++ b/tools/mtmd/mtmd-helper.cpp
+ @@ -1047,7 +1047,8 @@ mtmd_helper_cap mtmd_helper_get_capabilities(const llama_model * model, const mt
+@@ -1912,14 +1912,14 @@ index bce73a7..b1955ed 100644
+ -                         || gen_audio_type == MTMD_GEN_AUDIO_TYPE_POCKETTTS;
+ +                         || gen_audio_type == MTMD_GEN_AUDIO_TYPE_POCKETTTS
+ +                         || gen_audio_type == MTMD_GEN_AUDIO_TYPE_OMNIVOICE;
++     cap.audio_duplex = cap.audio_stream && gen_audio_type == MTMD_GEN_AUDIO_TYPE_MOSHI;
+  
+      // a tts model without a chat template only outputs audio, it cannot be used for chat
+-     // neither can a realtime transcription model (e.g. Voxtral Realtime): its text follows the audio by a token delay
+ diff --git a/tools/mtmd/mtmd-helper.h b/tools/mtmd/mtmd-helper.h
+-index 3fb75e5..5bc5b01 100644
++index c20cb0a..b3546db 100644
+ --- a/tools/mtmd/mtmd-helper.h
+ +++ b/tools/mtmd/mtmd-helper.h
+-@@ -311,6 +311,11 @@ struct mtmd_helper_gen_audio_inp {
++@@ -312,6 +312,11 @@ struct mtmd_helper_gen_audio_inp {
+  
+      mtmd_bitmap * speaker_ref; // optional, can be NULL: audio to clone, or a voice bitmap
+      const char * speaker_ref_text; // optional, can be NULL: transcript of speaker_ref, for models that use it to clone the voice (e.g. Fish S2, Qwen3-TTS)
+@@ -1931,7 +1931,7 @@ index 3fb75e5..5bc5b01 100644
+      const char * lang; // optional, can be NULL
+  
+      int32_t  top_k;
+-@@ -437,6 +442,7 @@ struct gen_audio {
++@@ -438,6 +443,7 @@ struct gen_audio {
+          std::string prompt_str;
+          std::string lang_str;
+          std::string speaker_ref_text_str;
+@@ -1939,7 +1939,7 @@ index 3fb75e5..5bc5b01 100644
+          mtmd::bitmap_ptr speaker_ref_ptr;
+  
+          inp()                             = default;
+-@@ -449,6 +455,7 @@ struct gen_audio {
++@@ -450,6 +456,7 @@ struct gen_audio {
+          void set_lang       (std::string l)        { lang_str   = std::move(l); }
+          void set_speaker_ref(mtmd::bitmap_ptr bmp) { speaker_ref_ptr = std::move(bmp); }
+          void set_speaker_ref_text(std::string t)   { speaker_ref_text_str = std::move(t); }
+@@ -1947,7 +1947,7 @@ index 3fb75e5..5bc5b01 100644
+  
+          // pointers are only valid as long as *this is alive
+          const mtmd_helper_gen_audio_inp * get() {
+-@@ -457,6 +464,7 @@ struct gen_audio {
++@@ -458,6 +465,7 @@ struct gen_audio {
+              data.lang        = lang_str.empty() ? nullptr : lang_str.c_str();
+              data.speaker_ref = speaker_ref_ptr.get();
+              data.speaker_ref_text = speaker_ref_text_str.empty() ? nullptr : speaker_ref_text_str.c_str();
+@@ -1956,10 +1956,10 @@ index 3fb75e5..5bc5b01 100644
+          }
+      };
+ diff --git a/tools/mtmd/mtmd-impl.h b/tools/mtmd/mtmd-impl.h
+-index c28a13d..bd23ebf 100644
++index d6b32fa..f2112bc 100644
+ --- a/tools/mtmd/mtmd-impl.h
+ +++ b/tools/mtmd/mtmd-impl.h
+-@@ -617,6 +617,8 @@ enum projector_type {
++@@ -620,6 +620,8 @@ enum projector_type {
+      PROJECTOR_TYPE_SOPRANO,
+      PROJECTOR_TYPE_KOKORO,
+      PROJECTOR_TYPE_TINY_VOCA,
+@@ -1968,7 +1968,7 @@ index c28a13d..bd23ebf 100644
+      PROJECTOR_TYPE_LFM3A_GEN,
+      PROJECTOR_TYPE_DRAMA3_GEN,
+      PROJECTOR_TYPE_ZONOS3_GEN,
+-@@ -715,6 +717,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
++@@ -723,6 +725,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
+      { PROJECTOR_TYPE_SOPRANO,           "soprano"},
+      { PROJECTOR_TYPE_KOKORO,            "kokoro"},
+      { PROJECTOR_TYPE_TINY_VOCA,         "tiny_voca"},
+@@ -1978,12 +1978,12 @@ index c28a13d..bd23ebf 100644
+      { PROJECTOR_TYPE_DRAMA3_GEN,        "drama3_gen"},
+      { PROJECTOR_TYPE_ZONOS3_GEN,        "zonos3_gen"},
+ diff --git a/tools/mtmd/mtmd-model.cpp b/tools/mtmd/mtmd-model.cpp
+-index 35f9d1c..f5af0d0 100644
++index 508dfbe..414359b 100644
+ --- a/tools/mtmd/mtmd-model.cpp
+ +++ b/tools/mtmd/mtmd-model.cpp
+-@@ -1145,6 +1145,14 @@ struct mtmd_model_loader {
+-                         hparams.flow_n_step       = 1;
+-                         hparams.gen_eos_threshold = -4.0f;
++@@ -1173,6 +1173,14 @@ struct mtmd_model_loader {
++                         // whole patches, about 10 s like a typical reference clip
++                         hparams.warmup_audio_size = hparams.audio_samples_per_token() * 63;
+                      } break;
+ +                case PROJECTOR_TYPE_OMNIVOICE_SPKENC:
+ +                    {
+@@ -1996,7 +1996,7 @@ index 35f9d1c..f5af0d0 100644
+                  case PROJECTOR_TYPE_FISH_S2_SPKENC:
+                      {
+                          // Fish DAC encoder, codec.pth has no config
+-@@ -1174,6 +1182,7 @@ struct mtmd_model_loader {
++@@ -1206,6 +1214,7 @@ struct mtmd_model_loader {
+                      } break;
+                  case PROJECTOR_TYPE_KOKORO:
+                  case PROJECTOR_TYPE_TINY_VOCA:
+@@ -2004,15 +2004,15 @@ index 35f9d1c..f5af0d0 100644
+                      {
+                          hparams.audio_sample_rate = 24000;
+                      } break;
+-@@ -1411,6 +1420,7 @@ struct mtmd_model_loader {
+-                                        model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
++@@ -1461,6 +1470,7 @@ struct mtmd_model_loader {
+                                         model.proj_type != PROJECTOR_TYPE_VIBEVOICE_ASR &&
+                                         model.proj_type != PROJECTOR_TYPE_POCKETTTS_SPKENC &&
++                                        model.proj_type != PROJECTOR_TYPE_MOSHI &&
+ +                                       model.proj_type != PROJECTOR_TYPE_OMNIVOICE_SPKENC &&
+-                                        model.proj_type != PROJECTOR_TYPE_FISH_S2_SPKENC;
++                                        model.proj_type != PROJECTOR_TYPE_FISH_S2_SPKENC &&
++                                        model.proj_type != PROJECTOR_TYPE_VOXCPM2_SPKENC;
+  
+-                 // Validate audio hparams loaded from GGUF metadata
+-@@ -1585,6 +1595,8 @@ struct mtmd_model_loader {
++@@ -1659,6 +1669,8 @@ struct mtmd_model_loader {
+              model.proj_type != PROJECTOR_TYPE_SOPRANO &&
+              model.proj_type != PROJECTOR_TYPE_KOKORO &&
+              model.proj_type != PROJECTOR_TYPE_TINY_VOCA &&
+@@ -2021,7 +2021,7 @@ index 35f9d1c..f5af0d0 100644
+              model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
+              model.proj_type != PROJECTOR_TYPE_VIBEVOICE_ASR &&
+              model.proj_type != PROJECTOR_TYPE_CHATTERBOX &&
+-@@ -3466,6 +3478,27 @@ struct mtmd_model_loader {
++@@ -3686,6 +3698,27 @@ struct mtmd_model_loader {
+                          }
+                      }
+                  } break;
+@@ -2049,7 +2049,7 @@ index 35f9d1c..f5af0d0 100644
+              case PROJECTOR_TYPE_KOKORO:
+                  {
+                      // the graphs and the host code look the tensors up by name, see models/kokoro.cpp
+-@@ -4859,6 +4892,11 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
++@@ -5111,6 +5144,11 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
+                  // one hidden-state vector fed back to the talker per call
+                  n_patches = 1;
+              } break;
+@@ -2059,9 +2059,9 @@ index 35f9d1c..f5af0d0 100644
+ +                n_patches = (int) ((img->nx() - 320) / 1600);
+ +            } break;
+          case PROJECTOR_TYPE_FISH_S2_SPKENC:
++         case PROJECTOR_TYPE_VOXCPM2_SPKENC:
+              {
+-                 // one backbone row per codec frame, the preprocessor pads to whole frames
+-@@ -4923,6 +4961,11 @@ size_t mtmd_model::cbx_read_tensor(const char * name, float * out, size_t n_max)
++@@ -5186,6 +5224,11 @@ size_t mtmd_model::cbx_read_tensor(const char * name, float * out, size_t n_max)
+          std::vector<ggml_fp16_t> tmp(n);
+          ggml_backend_tensor_get(t, tmp.data(), 0, n * sizeof(ggml_fp16_t));
+          for (size_t i = 0; i < n; i++) out[i] = ggml_fp16_to_fp32(tmp[i]);
+@@ -2073,7 +2073,7 @@ index 35f9d1c..f5af0d0 100644
+      } else {
+          return 0;
+      }
+-@@ -5070,6 +5113,8 @@ int mtmd_model::n_mmproj_embd() const {
++@@ -5344,6 +5387,8 @@ int mtmd_model::n_mmproj_embd() const {
+          case PROJECTOR_TYPE_SOPRANO:
+          case PROJECTOR_TYPE_KOKORO:
+          case PROJECTOR_TYPE_TINY_VOCA:
+@@ -2083,7 +2083,7 @@ index 35f9d1c..f5af0d0 100644
+          case PROJECTOR_TYPE_PARAKEET:
+              return mm_1_w->ne[1];
+ diff --git a/tools/mtmd/mtmd-model.h b/tools/mtmd/mtmd-model.h
+-index 2dcf190..bea59a9 100644
++index 10c3154..1140982 100644
+ --- a/tools/mtmd/mtmd-model.h
+ +++ b/tools/mtmd/mtmd-model.h
+ @@ -165,6 +165,12 @@ struct mtmd_hparams {
+@@ -2100,12 +2100,12 @@ index 2dcf190..bea59a9 100644
+          int64_t n = 1;
+          for (int32_t p : audio_patch_sizes) {
+ diff --git a/tools/mtmd/mtmd-subcontext.cpp b/tools/mtmd/mtmd-subcontext.cpp
+-index 4f3a240..8a7a118 100644
++index 640950c..bf4b40e 100644
+ --- a/tools/mtmd/mtmd-subcontext.cpp
+ +++ b/tools/mtmd/mtmd-subcontext.cpp
+-@@ -1600,6 +1600,17 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
+-             {
+-                 set_input_f32("inp_feats", *params->feats);
++@@ -1642,6 +1642,17 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
++                     set_gen_state_in();
++                 }
+              } break;
+ +        case PROJECTOR_TYPE_OMNIVOICE:
+ +            {
+@@ -2121,15 +2121,15 @@ index 4f3a240..8a7a118 100644
+          case PROJECTOR_TYPE_KOKORO:
+              {
+                  const auto * io = params->kokoro;
+-@@ -1830,6 +1841,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
+-         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
++@@ -1873,6 +1884,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
+          case PROJECTOR_TYPE_ZONOS3_SPKENC:
+          case PROJECTOR_TYPE_FISH_S2_SPKENC:
++         case PROJECTOR_TYPE_VOXCPM2_SPKENC:
+ +        case PROJECTOR_TYPE_OMNIVOICE_SPKENC:
+              {
+                  // do nothing
+              } break;
+-@@ -2510,6 +2522,15 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
++@@ -2619,6 +2631,15 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
+          return false;
+      }
+  
+@@ -2146,10 +2146,10 @@ index 4f3a240..8a7a118 100644
+          const auto * io = params->kokoro;
+          auto read = [&](const char * name, std::vector<float> * out) {
+ diff --git a/tools/mtmd/mtmd-subcontext.h b/tools/mtmd/mtmd-subcontext.h
+-index 0dfcedd..ab4c828 100644
++index 853268b..074bcdf 100644
+ --- a/tools/mtmd/mtmd-subcontext.h
+ +++ b/tools/mtmd/mtmd-subcontext.h
+-@@ -130,6 +130,15 @@ struct mtmd_subctx_kokoro_io {
++@@ -131,6 +131,15 @@ struct mtmd_subctx_kokoro_io {
+      std::vector<float> * out1 = nullptr; // STAGE_F0N: energy
+  };
+  
+@@ -2165,7 +2165,7 @@ index 0dfcedd..ab4c828 100644
+  struct mtmd_subctx_encode_params {
+      int n_threads = 1;
+      const mtmd_image_f32_batch * imgs = nullptr;
+-@@ -168,6 +177,9 @@ struct mtmd_subctx_encode_params {
++@@ -170,6 +179,9 @@ struct mtmd_subctx_encode_params {
+      const mtmd_subctx_kokoro_io * kokoro = nullptr;
+      float speed = 1.0f; // kokoro: the predicted durations are divided by it
+  
+@@ -2176,12 +2176,12 @@ index 0dfcedd..ab4c828 100644
+      struct mtmd_subctx_gen_state * gen_state = nullptr;
+  
+ diff --git a/tools/mtmd/mtmd.cpp b/tools/mtmd/mtmd.cpp
+-index a4fee15..028b5bb 100644
++index e99d257..3fbb722 100644
+ --- a/tools/mtmd/mtmd.cpp
+ +++ b/tools/mtmd/mtmd.cpp
+-@@ -1483,6 +1483,10 @@ struct mtmd_context {
++@@ -1563,6 +1563,10 @@ struct mtmd_context {
+                  {
+-                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_fish_s2>(models.a.get());
++                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_spk_ref>(models.a.get(), mtmd_hparams::voxcpm2_max_spk_seconds);
+                  } break;
+ +            case PROJECTOR_TYPE_OMNIVOICE_SPKENC:
+ +                {
+@@ -2190,7 +2190,7 @@ index a4fee15..028b5bb 100644
+              case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
+                  {
+                      audio_preproc = std::make_unique<mtmd_audio_preprocessor_chatterbox_ref>(models.a.get(), cbx_is_mtl(*models.a));
+-@@ -2762,6 +2766,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
++@@ -2889,6 +2893,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
+              info.type = MTMD_GEN_AUDIO_TYPE_TINY_VOCA;
+              info.sample_rate = 24000;
+              break;
+@@ -2201,16 +2201,16 @@ index a4fee15..028b5bb 100644
+          default:
+              info.type = MTMD_GEN_AUDIO_TYPE_NONE;
+              break;
+-@@ -3196,6 +3204,7 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
++@@ -3356,6 +3364,7 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
+          case PROJECTOR_TYPE_SOPRANO:
+          case PROJECTOR_TYPE_KOKORO:
+          case PROJECTOR_TYPE_TINY_VOCA:
+ +        case PROJECTOR_TYPE_OMNIVOICE:
+              inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+              break;
+-         case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+-@@ -3948,6 +3957,74 @@ int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
+-     return 0;
++         case PROJECTOR_TYPE_MOSHI_GEN:
++@@ -4276,6 +4285,74 @@ const int32_t * mtmd_gen_state_get_ref_codes(const mtmd_gen_state * state, size_
++     return state && !state->ref.tokens.empty() ? state->ref.tokens.data() : nullptr;
+  }
+  
+ +// omnivoice GEN_CODE: backbone states -> logits of the 8 codebooks; GEN_WAV: codes -> audio
+@@ -2284,7 +2284,7 @@ index a4fee15..028b5bb 100644
+  static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+      mtmd_subcontext * sctx = ctx->ctx_gen_a.get();
+      if (!sctx) {
+-@@ -3974,6 +4051,10 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state *
++@@ -4313,6 +4390,10 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state *
+          return mtmd_gen_wav_tiny_voca(ctx, state, inp, out);
+      }
+  
+@@ -2296,19 +2296,19 @@ index a4fee15..028b5bb 100644
+          const size_t n_embd = (size_t) sctx->model.n_mmproj_embd();
+          if (inp->type != MTMD_GEN_PROCESS_TYPE_GEN_WAV || !inp->feats || inp->n_feats < 2 * n_embd || inp->n_feats % n_embd != 0 || inp->codes) {
+ diff --git a/tools/mtmd/mtmd.h b/tools/mtmd/mtmd.h
+-index 7a15f47..b9a630c 100644
++index 09cae0a..26805f9 100644
+ --- a/tools/mtmd/mtmd.h
+ +++ b/tools/mtmd/mtmd.h
+-@@ -480,6 +480,7 @@ enum mtmd_gen_audio_type {
+-     MTMD_GEN_AUDIO_TYPE_FISH_S2,
++@@ -482,6 +482,7 @@ enum mtmd_gen_audio_type {
+      MTMD_GEN_AUDIO_TYPE_KOKORO,
+      MTMD_GEN_AUDIO_TYPE_TINY_VOCA,
++     MTMD_GEN_AUDIO_TYPE_VOXCPM2,
+ +    MTMD_GEN_AUDIO_TYPE_OMNIVOICE,
+  };
+  
+  struct mtmd_gen_audio_info {
+-@@ -535,6 +536,8 @@ struct mtmd_gen_inp {
+-     // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
++@@ -538,6 +539,8 @@ struct mtmd_gen_inp {
++     // moshi GEN_CODE: code0 is the sampled text token; with codes (all of the frame), only their backbone embedding is built
+      // zonos3 GEN_WAV: -1 for a residual code not known yet, the frame is decoded without it
+      // kokoro GEN_WAV takes both: codes are the phoneme tokens, feats is the voice row (256 values) then the backbone state of each token
+ +    // omnivoice GEN_CODE: feats holds backbone states, mtmd_gen_out::feats their logits, 8 codebooks of 1025 entries per state
+@@ -2317,10 +2317,10 @@ index 7a15f47..b9a630c 100644
+      size_t    n_codes;
+      const float * feats;
+ diff --git a/tools/tts/tts.cpp b/tools/tts/tts.cpp
+-index dbf618a..4e8b797 100644
++index 238cc82..f19ec6c 100644
+ --- a/tools/tts/tts.cpp
+ +++ b/tools/tts/tts.cpp
+-@@ -161,6 +161,7 @@ int main(int argc, char ** argv) {
++@@ -162,6 +162,7 @@ int main(int argc, char ** argv) {
+      inp.prompt_len  = prompt.size();
+      inp.speaker_ref = speaker_bitmap.get();
+      inp.speaker_ref_text = params.tts_speaker_text.empty() ? nullptr : params.tts_speaker_text.c_str();
+diff --git a/backend/cpp/llama-cpp/patches/0013-sycl-reorder-experts-switch.patch b/backend/cpp/llama-cpp/patches/0013-sycl-reorder-experts-switch.patch
+index c52c3df..743a537 100644
+--- a/backend/cpp/llama-cpp/patches/0013-sycl-reorder-experts-switch.patch
++++ b/backend/cpp/llama-cpp/patches/0013-sycl-reorder-experts-switch.patch
+@@ -18,22 +18,22 @@ runs. The default, 1, is today's behaviour.
+ Not compiled where it was written (no SYCL compiler there).
+ ---
+ diff --git a/docs/backend/SYCL.md b/docs/backend/SYCL.md
+-index 8649fca..1045db7 100644
++index 2cd5b1e..44e0d70 100644
+ --- a/docs/backend/SYCL.md
+ +++ b/docs/backend/SYCL.md
+ @@ -840,6 +840,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
+  | GGML_SYCL_SPARSE_FA_MARGIN | [0,..] default:256 | Set the margin value for Sparse Flash-attention.|
+  | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
+- | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
++ | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_USE_LEVEL_ZERO_API=1. |
+ +| GGML_SYCL_REORDER_EXPERTS | 1 (default) or 0 | With 0, the expert tensors of a mixture-of-experts model (`mul_mat_id`) are not rewritten into the reorder layout at first use; the dense weights still are. To measure: on one Arc Pro B70 run of a 35B MoE at Q4_K_M the plain layout started a 2,048-token prompt sooner at the same decode speed. |
+  | GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
+  | GGML_SYCL_BMG_VRAM_CHECK | 1 (default) or 0 | Workaround for BMG (Arc B-series) GPUs, where the Level Zero driver accepts device allocations beyond VRAM and moves the overflow to system RAM, which can exhaust host memory when a model does not fit (e.g. `-ngl 999`, see https://github.com/intel/compute-runtime/issues/1047). When enabled, a model or split buffer that does not fit in the device's free memory is refused and the model load fails with an error. Set to 0 to disable. |
+  
+ diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
+-index d3797f8..4f961b7 100644
++index 493de64..ec19437 100644
+ --- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+ +++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
+-@@ -147,6 +147,7 @@ int g_ggml_sycl_use_level_zero_api = 0;
++@@ -150,6 +150,7 @@ int g_ggml_sycl_use_level_zero_api = 0;
+  int g_ggml_sycl_enable_flash_attention = 1;
+  int g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
+  int g_ggml_sycl_usm_system = 0;
+@@ -41,7 +41,7 @@ index d3797f8..4f961b7 100644
+  int g_ggml_sycl_bmg_vram_check = 1;
+  int g_ggml_sycl_enable_host_pinned_mem = 1;
+  int g_ggml_sycl_host_pinned_mem_2g = 0;
+-@@ -478,6 +479,7 @@ static void ggml_check_sycl() try {
++@@ -484,6 +485,7 @@ static void ggml_check_sycl() try {
+  #endif
+  
+          g_ggml_sycl_usm_system = ggml_sycl_get_env("GGML_SYCL_USM_SYSTEM", 0);
+@@ -49,7 +49,7 @@ index d3797f8..4f961b7 100644
+          g_ggml_sycl_bmg_vram_check = ggml_sycl_get_env("GGML_SYCL_BMG_VRAM_CHECK", 1);
+          g_ggml_sycl_enable_host_pinned_mem =
+              ggml_sycl_get_env("GGML_SYCL_ENABLE_HOST_PINNED_MEM", 1);
+-@@ -617,6 +619,7 @@ static void ggml_check_sycl() try {
++@@ -626,6 +628,7 @@ static void ggml_check_sycl() try {
+  #endif
+  
+          GGML_LOG_INFO("  GGML_SYCL_USM_SYSTEM: %d\n", g_ggml_sycl_usm_system);
+@@ -57,7 +57,7 @@ index d3797f8..4f961b7 100644
+          GGML_LOG_INFO("  GGML_SYCL_BMG_VRAM_CHECK: %d\n", g_ggml_sycl_bmg_vram_check);
+          GGML_LOG_INFO("  GGML_SYCL_ENABLE_HOST_PINNED_MEM: %d\n", g_ggml_sycl_enable_host_pinned_mem);
+          GGML_LOG_INFO("  GGML_SYCL_HOST_PINNED_MEM_2G: %d\n", g_ggml_sycl_host_pinned_mem_2g);
+-@@ -5090,6 +5093,11 @@ static void opt_for_reorder_id(ggml_backend_sycl_context * ctx, const ggml_tenso
++@@ -5121,6 +5124,11 @@ static void opt_for_reorder_id(ggml_backend_sycl_context * ctx, const ggml_tenso
+      if (!g_ggml_sycl_enable_optimize || !ctx->opt_feature.reorder) {
+          return;
+      }
+diff --git a/backend/cpp/llama-cpp/patches/0015-park-weights.patch b/backend/cpp/llama-cpp/patches/0015-park-weights.patch
+index 73f1934..b35ce90 100644
+--- a/backend/cpp/llama-cpp/patches/0015-park-weights.patch
++++ b/backend/cpp/llama-cpp/patches/0015-park-weights.patch
+@@ -52,7 +52,7 @@ canary. ggml-sycl.cpp compiles with icpx 2025.3.3; the SYCL path itself has
+ not run: it needs the device.
+ ---
+ diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+-index afb8633..3293616 100644
++index a077e22..6d34f06 100644
+ --- a/ggml/include/ggml-backend.h
+ +++ b/ggml/include/ggml-backend.h
+ @@ -69,6 +69,20 @@ extern "C" {
+@@ -77,10 +77,10 @@ index afb8633..3293616 100644
+      GGML_API void ggml_backend_tensor_copy  (const struct ggml_tensor * src, struct ggml_tensor * dst);
+      GGML_API void ggml_backend_tensor_copy_n(const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors);
+ diff --git a/ggml/src/ggml-backend-impl.h b/ggml/src/ggml-backend-impl.h
+-index 545880b..4709a63 100644
++index 482d6b3..4cbd16e 100644
+ --- a/ggml/src/ggml-backend-impl.h
+ +++ b/ggml/src/ggml-backend-impl.h
+-@@ -76,6 +76,14 @@ extern "C" {
++@@ -77,6 +77,14 @@ extern "C" {
+          void         (*get_tensor_n) (ggml_backend_buffer_t buffer, const struct ggml_tensor * const * tensors,       void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors);
+          // (optional) batched tensor copies: returns true if all copies were performed, false if unsupported and no copies were performed
+          bool         (*cpy_tensor_n) (ggml_backend_buffer_t buffer, const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors);
+@@ -96,10 +96,10 @@ index 545880b..4709a63 100644
+  
+      struct ggml_backend_buffer {
+ diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+-index 2e2f9c0..b49b957 100644
++index 9a12391..1271a65 100644
+ --- a/ggml/src/ggml-backend.cpp
+ +++ b/ggml/src/ggml-backend.cpp
+-@@ -1113,6 +1113,8 @@ static const struct ggml_backend_buffer_i ggml_backend_multi_buffer_i = {
++@@ -1124,6 +1124,8 @@ static const struct ggml_backend_buffer_i ggml_backend_multi_buffer_i = {
+      /* .set_tensor_n    = */ NULL,
+      /* .get_tensor_n    = */ NULL,
+      /* .cpy_tensor_n    = */ NULL,
+@@ -108,7 +108,7 @@ index 2e2f9c0..b49b957 100644
+  };
+  
+  ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers) {
+-@@ -1136,6 +1138,70 @@ bool ggml_backend_buffer_is_multi_buffer(ggml_backend_buffer_t buffer) {
++@@ -1147,6 +1149,70 @@ bool ggml_backend_buffer_is_multi_buffer(ggml_backend_buffer_t buffer) {
+      return buffer->iface.free_buffer == ggml_backend_multi_buffer_free_buffer;
+  }
+  
+@@ -179,7 +179,7 @@ index 2e2f9c0..b49b957 100644
+  void ggml_backend_multi_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage) {
+      GGML_ASSERT(buffer);
+      GGML_ASSERT(ggml_backend_buffer_is_multi_buffer(buffer));
+-@@ -2892,6 +2958,8 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
++@@ -2972,6 +3038,8 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
+      /* .set_tensor_n    = */ NULL,
+      /* .get_tensor_n    = */ NULL,
+      /* .cpy_tensor_n    = */ NULL,
+@@ -188,7 +188,7 @@ index 2e2f9c0..b49b957 100644
+  };
+  
+  static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
+-@@ -2909,6 +2977,8 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
++@@ -2989,6 +3057,8 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
+      /* .set_tensor_n    = */ NULL,
+      /* .get_tensor_n    = */ NULL,
+      /* .cpy_tensor_n    = */ NULL,
+@@ -198,10 +198,10 @@ index 2e2f9c0..b49b957 100644
+  
+  // CPU backend buffer type
+ diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
+-index dd33bf3..720db24 100644
++index 6d307e9..b32edec 100644
+ --- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+ +++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
+-@@ -110,6 +110,10 @@ int g_ggml_sycl_fa_dpas = 1;
++@@ -111,6 +111,10 @@ int g_ggml_sycl_fa_dpas = 1;
+  int g_ggml_sycl_memtrace = 0;
+  int g_ggml_sycl_memtrace_step = 64;
+  int g_ggml_sycl_enable_vmm = 1;
+@@ -210,18 +210,18 @@ index dd33bf3..720db24 100644
+ +int g_ggml_sycl_parkable = 0;
+ +int g_ggml_sycl_park_verify = 0;
+  int g_ggml_sycl_enable_fusion = 1;
++ int g_ggml_sycl_fuse_conv_window = 1;
+  int g_ggml_sycl_enable_esimd = 1;
+- int g_ggml_sycl_mmvq_wide = 1;
+-@@ -444,6 +448,8 @@ static void ggml_check_sycl() try {
++@@ -448,6 +452,8 @@ static void ggml_check_sycl() try {
+          g_ggml_sycl_memtrace = ggml_sycl_get_env("GGML_SYCL_MEMTRACE", 0);
+          g_ggml_sycl_memtrace_step = ggml_sycl_get_env("GGML_SYCL_MEMTRACE_STEP", 64);
+          g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
+ +        g_ggml_sycl_parkable = ggml_sycl_get_env("GGML_SYCL_PARKABLE", 0);
+ +        g_ggml_sycl_park_verify = ggml_sycl_get_env("GGML_SYCL_PARK_VERIFY", 0);
+          g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
++         g_ggml_sycl_fuse_conv_window = ggml_sycl_get_env("GGML_SYCL_FUSE_CONV_WINDOW", 1);
+          g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
+-         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
+-@@ -592,6 +598,8 @@ static void ggml_check_sycl() try {
++@@ -600,6 +606,8 @@ static void ggml_check_sycl() try {
+  #else
+          GGML_LOG_INFO("  GGML_SYCL_ENABLE_VMM: virtual memory extension is not available\n");
+  #endif
+@@ -229,8 +229,8 @@ index dd33bf3..720db24 100644
+ +        GGML_LOG_INFO("  GGML_SYCL_PARK_VERIFY: %d\n", g_ggml_sycl_park_verify);
+  
+          GGML_LOG_INFO("  GGML_SYCL_ENABLE_FUSION: %d\n", g_ggml_sycl_enable_fusion);
+-         GGML_LOG_INFO("  GGML_SYCL_UPLOAD_STAGING_SLOTS: %d\n", g_ggml_sycl_upload_staging_slots);
+-@@ -722,6 +730,82 @@ inline void free_aligned_mem_host(void * memblock) {
++         GGML_LOG_INFO("  GGML_SYCL_FUSE_CONV_WINDOW: %d\n", g_ggml_sycl_fuse_conv_window);
++@@ -731,6 +739,82 @@ inline void free_aligned_mem_host(void * memblock) {
+  #endif
+  }
+  
+@@ -313,7 +313,7 @@ index dd33bf3..720db24 100644
+  // sycl buffer
+  
+  struct ggml_backend_sycl_buffer_context {
+-@@ -743,6 +827,10 @@ struct ggml_backend_sycl_buffer_context {
++@@ -752,6 +836,10 @@ struct ggml_backend_sycl_buffer_context {
+      std::vector<ggml_tensor_extra_gpu *> tensor_extras;
+      host_staging staging;
+      bool is_usm_system;
+@@ -324,7 +324,7 @@ index dd33bf3..720db24 100644
+  
+      ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream, bool is_usm_system) :
+          device(device), dev_ptr(dev_ptr), stream(stream), is_usm_system(is_usm_system) {
+-@@ -767,6 +855,17 @@ struct ggml_backend_sycl_buffer_context {
++@@ -776,6 +864,17 @@ struct ggml_backend_sycl_buffer_context {
+  
+      ~ggml_backend_sycl_buffer_context() {
+          drop_host_staging();
+@@ -342,7 +342,7 @@ index dd33bf3..720db24 100644
+          if (dev_ptr != nullptr) {
+              ggml_sycl_set_device(device);
+              if (is_usm_system)
+-@@ -783,6 +882,18 @@ struct ggml_backend_sycl_buffer_context {
++@@ -792,6 +891,18 @@ struct ggml_backend_sycl_buffer_context {
+      }
+  };
+  
+@@ -361,7 +361,7 @@ index dd33bf3..720db24 100644
+  static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_type_t buft);
+  
+  static bool ggml_backend_buffer_is_sycl(ggml_backend_buffer_t buffer) {
+-@@ -884,6 +995,7 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
++@@ -895,6 +1006,7 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
+      GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
+      GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
+      ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
+@@ -369,7 +369,7 @@ index dd33bf3..720db24 100644
+      ggml_sycl_set_device(ctx->device);
+  
+      // copy through pinned memory so the device never reads mmap()ed pages directly
+-@@ -936,6 +1048,7 @@ static void ggml_backend_sycl_buffer_set_tensor_2d(ggml_backend_buffer_t buffer,
++@@ -947,6 +1059,7 @@ static void ggml_backend_sycl_buffer_set_tensor_2d(ggml_backend_buffer_t buffer,
+                                                     size_t n_copies, size_t stride_tensor,
+                                                     size_t stride_data) try {
+      ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
+@@ -377,7 +377,7 @@ index dd33bf3..720db24 100644
+      const char * src = (const char *) data;
+      ggml_sycl_set_device(ctx->device);
+  
+-@@ -981,6 +1094,7 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
++@@ -992,6 +1105,7 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
+      GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
+      GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
+      ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
+@@ -385,7 +385,7 @@ index dd33bf3..720db24 100644
+  
+      ggml_sycl_set_device(ctx->device);
+      auto stream = dpct::dev_mgr::instance().get_device(ctx->device).default_queue();
+-@@ -1127,6 +1241,7 @@ static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer,
++@@ -1138,6 +1252,7 @@ static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer,
+                                             uint8_t value) try {
+      GGML_SYCL_DEBUG("[SYCL] call %s: size=%zu\n", __func__, buffer->size);
+      ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
+@@ -393,7 +393,7 @@ index dd33bf3..720db24 100644
+  
+      ggml_sycl_set_device(ctx->device);
+      queue_ptr stream = ctx->stream;
+-@@ -1155,6 +1270,7 @@ static void ggml_backend_sycl_buffer_memset_tensor(ggml_backend_buffer_t buffer,
++@@ -1166,6 +1281,7 @@ static void ggml_backend_sycl_buffer_memset_tensor(ggml_backend_buffer_t buffer,
+      GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
+      GGML_SYCL_DEBUG(" size=%zu offset=%zu value=%u\n", size, offset, value);
+      ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
+@@ -401,7 +401,7 @@ index dd33bf3..720db24 100644
+      SYCL_CHECK(ggml_sycl_set_device(ctx->device));
+      auto stream = &(dpct::dev_mgr::instance().get_device(ctx->device).default_queue());
+      if (size == 0) {
+-@@ -1199,7 +1315,167 @@ static const ggml_backend_buffer_i ggml_backend_sycl_buffer_interface = {
++@@ -1210,7 +1326,167 @@ static const ggml_backend_buffer_i ggml_backend_sycl_buffer_interface = {
+      /* .set_tensor_n    = */ NULL,
+      /* .get_tensor_n    = */ NULL,
+      /* .cpy_tensor_n    = */ NULL,
+@@ -569,7 +569,7 @@ index dd33bf3..720db24 100644
+  
+  // sycl buffer type
+  struct ggml_backend_sycl_buffer_type_context {
+-@@ -1255,6 +1531,35 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
++@@ -1266,6 +1542,35 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
+      size_t aligned_size = ((size + alignment - 1) / alignment) * alignment;
+      bool use_usm_system = check_usm_system(buft_ctx->device, aligned_size);
+  
+@@ -605,7 +605,7 @@ index dd33bf3..720db24 100644
+      void * dev_ptr;
+      if (use_usm_system) {
+          GGML_SYCL_DEBUG("[SYCL] allocating %zu Bytes with USM system\n", size);
+-@@ -1710,6 +2015,8 @@ static struct ggml_backend_buffer_i ggml_backend_sycl_split_buffer_interface = {
++@@ -1721,6 +2026,8 @@ static struct ggml_backend_buffer_i ggml_backend_sycl_split_buffer_interface = {
+      /* .set_tensor_n    = */ NULL,
+      /* .get_tensor_n    = */ NULL,
+      /* .cpy_tensor_n    = */ NULL,
+@@ -615,10 +615,10 @@ index dd33bf3..720db24 100644
+  
+  // sycl split buffer type
+ diff --git a/include/llama.h b/include/llama.h
+-index 7122143..e4ccb13 100644
++index 9cc17a8..057d198 100644
+ --- a/include/llama.h
+ +++ b/include/llama.h
+-@@ -652,6 +652,18 @@ extern "C" {
++@@ -661,6 +661,18 @@ extern "C" {
+      // Returns the total size of all the tensors in the model in bytes
+      LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
+  
+@@ -638,10 +638,10 @@ index 7122143..e4ccb13 100644
+      // If name is NULL, returns the default chat template
+      LLAMA_API const char * llama_model_chat_template(const struct llama_model * model, const char * name);
+ diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+-index 6cd39ac..8626e12 100644
++index 35308bf..f6878a3 100644
+ --- a/src/llama-context.cpp
+ +++ b/src/llama-context.cpp
+-@@ -4480,6 +4480,12 @@ llama_context * llama_init_from_model(
++@@ -4459,6 +4459,12 @@ llama_context * llama_init_from_model(
+          return nullptr;
+      }
+  
+@@ -655,10 +655,10 @@ index 6cd39ac..8626e12 100644
+          LLAMA_LOG_ERROR("%s: n_batch and n_ubatch cannot both be zero\n", __func__);
+          return nullptr;
+ diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+-index ac5266a..9749a8d 100644
++index 165329f..07b1b28 100644
+ --- a/src/llama-model.cpp
+ +++ b/src/llama-model.cpp
+-@@ -1382,6 +1382,9 @@ struct llama_model::impl {
++@@ -1462,6 +1462,9 @@ struct llama_model::impl {
+      // contexts where the model tensors metadata is stored as well as the corresponding buffers:
+      std::vector<std::pair<ggml_context_ptr, std::vector<ggml_backend_buffer_ptr>>> ctxs_bufs;
+  
+@@ -668,7 +668,7 @@ index ac5266a..9749a8d 100644
+      buft_list_t cpu_buft_list;
+      std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
+  
+-@@ -2103,7 +2106,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
++@@ -2067,7 +2070,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+                      t->buffer = buf; // set dummy buffer for weights so that the backend scheduler won't try to allocate them
+                  }
+              } else {
+@@ -679,7 +679,7 @@ index ac5266a..9749a8d 100644
+              }
+              if (buf == nullptr) {
+                  throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+-@@ -4001,6 +4007,89 @@ uint64_t llama_model_size(const llama_model * model) {
++@@ -4054,6 +4060,89 @@ uint64_t llama_model_size(const llama_model * model) {
+      return model->size();
+  }
+  
+@@ -770,10 +770,10 @@ index ac5266a..9749a8d 100644
+      const auto key = name ? LLM_KV(model->arch, name)(LLM_KV_TOKENIZER_CHAT_TEMPLATE)
+          : LLM_KV(model->arch)(LLM_KV_TOKENIZER_CHAT_TEMPLATE);
+ diff --git a/src/llama-model.h b/src/llama-model.h
+-index 8d2f562..9033973 100644
++index c333446..4ca1abe 100644
+ --- a/src/llama-model.h
+ +++ b/src/llama-model.h
+-@@ -1028,6 +1028,12 @@ struct llama_model {
++@@ -1030,6 +1030,12 @@ struct llama_model {
+      // total number of parameters in the model
+      uint64_t n_elements() const;
+  
+@@ -786,7 +786,7 @@ index 8d2f562..9033973 100644
+      void print_info() const;
+  
+      ggml_backend_dev_t dev_layer(int il) const;
+-@@ -1069,6 +1075,10 @@ protected:
++@@ -1080,6 +1086,10 @@ protected:
+  
+      struct impl;
+      std::unique_ptr<impl> pimpl;
+@@ -798,10 +798,10 @@ index 8d2f562..9033973 100644
+  
+  llama_model * llama_model_create(llm_arch arch, const llama_model_params & params);
+ diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+-index b3f98b1..ce8e3fc 100644
++index 32127c4..af48bc4 100644
+ --- a/tools/server/server-context.cpp
+ +++ b/tools/server/server-context.cpp
+-@@ -1186,6 +1186,12 @@ private:
++@@ -1190,6 +1190,12 @@ private:
+      int ctx_canary_fail = 0; // env: LLAMA_SERVER_CTX_CANARY_FAIL, for the tests: the next N contexts created fail their canary
+      bool ctx_canary_stale = false; // the adapters changed since the canary was recorded: the next context created records it again
+  
+@@ -814,7 +814,7 @@ index b3f98b1..ce8e3fc 100644
+      int n_empty_consecutive = 0;
+  
+      std::unique_ptr<server_prompt_cache> prompt_cache;
+-@@ -1262,6 +1268,23 @@ private:
++@@ -1266,6 +1272,23 @@ private:
+  
+          SRV_INF("context freed in %.2f ms, it lived %.3f s\n",
+                  (ggml_time_us() - t_start) / 1000.0, (ggml_time_ms() - t_ctx_created) / 1000.0);
+@@ -838,7 +838,7 @@ index b3f98b1..ce8e3fc 100644
+      }
+  
+      enum context_acquire_result {
+-@@ -1283,8 +1306,23 @@ private:
++@@ -1287,8 +1310,23 @@ private:
+              return CONTEXT_NOT_CREATED;
+          }
+  
+@@ -862,7 +862,7 @@ index b3f98b1..ce8e3fc 100644
+              return CONTEXT_NOT_CREATED;
+          }
+  
+-@@ -1308,6 +1346,9 @@ private:
++@@ -1312,6 +1350,9 @@ private:
+                  metrics.n_ctx_canary_fail += 1;
+                  SRV_ERR("the context created does not reproduce the canary of the load, it is discarded (%" PRIu64 " so far)\n",
+                          metrics.n_ctx_canary_fail);
+@@ -872,7 +872,7 @@ index b3f98b1..ce8e3fc 100644
+                  return CONTEXT_NOT_SAME;
+              }
+          }
+-@@ -1903,6 +1944,23 @@ private:
++@@ -1907,6 +1948,23 @@ private:
+              }
+          }
+  
+@@ -958,10 +958,10 @@ index 0000000..eff14f0
+ +    server.start()
+ +    assert embedding(server) == plain
+ diff --git a/tools/server/tests/utils.py b/tools/server/tests/utils.py
+-index 74c61f0..0f3c801 100644
++index 815117d..e846a98 100644
+ --- a/tools/server/tests/utils.py
+ +++ b/tools/server/tests/utils.py
+-@@ -126,6 +126,7 @@ class ServerProcess:
++@@ -130,6 +130,7 @@ class ServerProcess:
+      context_create_fail: int | None = None  # LLAMA_SERVER_CTX_CREATE_FAIL
+      context_canary: bool | None = None  # None = the server's default
+      context_canary_fail: int | None = None  # LLAMA_SERVER_CTX_CANARY_FAIL
+@@ -969,7 +969,7 @@ index 74c61f0..0f3c801 100644
+      cache_ram: int | None = None
+      override_kv: str | None = None
+      no_cache_idle_slots: bool = False
+-@@ -316,6 +317,8 @@ class ServerProcess:
++@@ -319,6 +320,8 @@ class ServerProcess:
+              server_args.extend(["--keep-context-ms", self.keep_context_ms])
+          if self.context_create_fail is not None:
+              env["LLAMA_SERVER_CTX_CREATE_FAIL"] = str(self.context_create_fail)
+diff --git a/backend/cpp/llama-cpp/patches/0016-sycl-pool-refuse-switch.patch b/backend/cpp/llama-cpp/patches/0016-sycl-pool-refuse-switch.patch
+index 421d690..566023f 100644
+--- a/backend/cpp/llama-cpp/patches/0016-sycl-pool-refuse-switch.patch
++++ b/backend/cpp/llama-cpp/patches/0016-sycl-pool-refuse-switch.patch
+@@ -18,10 +18,10 @@ log says so as a warning.
+ Compiles with icpx 2025.3.3; not run where it was written (no device).
+ ---
+ diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
+-index 720db24..a9599ca 100644
++index b32edec..f003eae 100644
+ --- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+ +++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
+-@@ -114,6 +114,9 @@ int g_ggml_sycl_enable_vmm = 1;
++@@ -115,6 +115,9 @@ int g_ggml_sycl_enable_vmm = 1;
+  // mapped into a reserved virtual range, GGML_SYCL_PARK_VERIFY=1 reads each unparked buffer back and compares it
+  int g_ggml_sycl_parkable = 0;
+  int g_ggml_sycl_park_verify = 0;
+@@ -29,17 +29,17 @@ index 720db24..a9599ca 100644
+ +// neighbour out first): GGML_SYCL_POOL_REFUSE=N refuses the next N commits that GROW a pool, as a full device does
+ +std::atomic<int> g_ggml_sycl_pool_refuse{0};
+  int g_ggml_sycl_enable_fusion = 1;
++ int g_ggml_sycl_fuse_conv_window = 1;
+  int g_ggml_sycl_enable_esimd = 1;
+- int g_ggml_sycl_mmvq_wide = 1;
+-@@ -450,6 +453,7 @@ static void ggml_check_sycl() try {
++@@ -454,6 +457,7 @@ static void ggml_check_sycl() try {
+          g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
+          g_ggml_sycl_parkable = ggml_sycl_get_env("GGML_SYCL_PARKABLE", 0);
+          g_ggml_sycl_park_verify = ggml_sycl_get_env("GGML_SYCL_PARK_VERIFY", 0);
+ +        g_ggml_sycl_pool_refuse = ggml_sycl_get_env("GGML_SYCL_POOL_REFUSE", 0);
+          g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
++         g_ggml_sycl_fuse_conv_window = ggml_sycl_get_env("GGML_SYCL_FUSE_CONV_WINDOW", 1);
+          g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
+-         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
+-@@ -600,6 +604,10 @@ static void ggml_check_sycl() try {
++@@ -608,6 +612,10 @@ static void ggml_check_sycl() try {
+  #endif
+          GGML_LOG_INFO("  GGML_SYCL_PARKABLE: %d\n", g_ggml_sycl_parkable);
+          GGML_LOG_INFO("  GGML_SYCL_PARK_VERIFY: %d\n", g_ggml_sycl_park_verify);
+@@ -49,8 +49,8 @@ index 720db24..a9599ca 100644
+ +        }
+  
+          GGML_LOG_INFO("  GGML_SYCL_ENABLE_FUSION: %d\n", g_ggml_sycl_enable_fusion);
+-         GGML_LOG_INFO("  GGML_SYCL_UPLOAD_STAGING_SLOTS: %d\n", g_ggml_sycl_upload_staging_slots);
+-@@ -2465,6 +2473,12 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
++         GGML_LOG_INFO("  GGML_SYCL_FUSE_CONV_WINDOW: %d\n", g_ggml_sycl_fuse_conv_window);
++@@ -2476,6 +2484,12 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
+              // allocate more physical memory
+              std::optional<sycl::ext::oneapi::experimental::physical_mem> phys;
+              try {
+diff --git a/backend/cpp/llama-cpp/patches/0017-moe-record.patch b/backend/cpp/llama-cpp/patches/0017-moe-record.patch
+index f30a51c..d644051 100644
+--- a/backend/cpp/llama-cpp/patches/0017-moe-record.patch
++++ b/backend/cpp/llama-cpp/patches/0017-moe-record.patch
+@@ -57,7 +57,7 @@ The fill itself needs a second device: it compiles (g++, icpx 2025.3.3) and
+ has not run where it was written.
+ ---
+ diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+-index 1f9c98a..f79efcc 100644
++index 07b1b28..825357c 100644
+ --- a/src/llama-model.cpp
+ +++ b/src/llama-model.cpp
+ @@ -1,4 +1,5 @@
+@@ -66,7 +66,7 @@ index 1f9c98a..f79efcc 100644
+  
+  #include "llama-arch.h"
+  #include "llama-ext.h"
+-@@ -1387,6 +1388,9 @@ struct llama_model::impl {
++@@ -1465,6 +1466,9 @@ struct llama_model::impl {
+      // the weights are parked (llama_model_park): no buffer in ctxs_bufs that can park may be read or written
+      bool parked = false;
+  
+@@ -76,7 +76,7 @@ index 1f9c98a..f79efcc 100644
+      buft_list_t cpu_buft_list;
+      std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
+  
+-@@ -4007,6 +4011,10 @@ llama_ftype llama_model_ftype(const llama_model * model) {
++@@ -4056,6 +4060,10 @@ llama_ftype llama_model_ftype(const llama_model * model) {
+      return model->ftype();
+  }
+  
+@@ -88,10 +88,10 @@ index 1f9c98a..f79efcc 100644
+      return model->size();
+  }
+ diff --git a/src/llama-model.h b/src/llama-model.h
+-index 9033973..af6baa9 100644
++index 4ca1abe..2fce2c4 100644
+ --- a/src/llama-model.h
+ +++ b/src/llama-model.h
+-@@ -1034,6 +1034,9 @@ struct llama_model {
++@@ -1036,6 +1036,9 @@ struct llama_model {
+      bool park();
+      bool unpark();
+  
+@@ -102,10 +102,10 @@ index 9033973..af6baa9 100644
+  
+      ggml_backend_dev_t dev_layer(int il) const;
+ diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+-index ba35af0..a90d6f6 100644
++index db30860..3d3f417 100644
+ --- a/src/llama-moe-cache.cpp
+ +++ b/src/llama-moe-cache.cpp
+-@@ -4,15 +4,19 @@
++@@ -4,16 +4,20 @@
+  #include "llama-impl.h"
+  #include "llama-memory.h"
+  #include "llama-model.h"
+@@ -114,6 +114,7 @@ index ba35af0..a90d6f6 100644
+  #include "ggml-cpp.h"
+  
+  #include <algorithm>
++ #include <array>
+ +#include <cinttypes>
+  #include <cmath>
+  #include <cstdio>
+@@ -125,7 +126,7 @@ index ba35af0..a90d6f6 100644
+  #include <unordered_map>
+  #include <vector>
+  
+-@@ -46,6 +50,7 @@ struct moe_cache_lru {
++@@ -47,6 +51,7 @@ struct moe_cache_lru {
+  
+      std::vector<float>   crf;      // [n_layer*n_expert]
+      std::vector<int64_t> last_use; // [n_layer*n_expert] layer clock at the last use, -1 if not used
+@@ -133,7 +134,7 @@ index ba35af0..a90d6f6 100644
+      std::vector<int64_t> clock;    // [n_layer] tokens seen by the layer (as added by plan() for each ubatch)
+  
+      std::vector<uint32_t> seen; // [n_expert] seen[e] == seen_gen if expert e is selected by the current plan()
+-@@ -76,6 +81,7 @@ struct moe_cache_lru {
++@@ -77,6 +82,7 @@ struct moe_cache_lru {
+          list_of.assign(n_slots, 0);
+          crf.assign((size_t) n_layer*n_expert, 0.0f);
+          last_use.assign((size_t) n_layer*n_expert, -1);
+@@ -141,7 +142,7 @@ index ba35af0..a90d6f6 100644
+          clock.assign(n_layer, 0);
+          seen.assign(n_expert, 0);
+      }
+-@@ -127,6 +133,20 @@ struct moe_cache_lru {
++@@ -128,6 +134,20 @@ struct moe_cache_lru {
+      void use(int32_t il, int32_t key) {
+          crf[key]      = decayed_crf(il, key) + 1.0f;
+          last_use[key] = clock[il];
+@@ -162,7 +163,7 @@ index ba35af0..a90d6f6 100644
+      }
+  
+      // the experts selected by this plan() must not be evicted, nor the slots this plan() filled already
+-@@ -391,6 +411,15 @@ struct llama_moe_cache::impl {
++@@ -403,6 +423,15 @@ struct llama_moe_cache::impl {
+      // LLAMA_MOE_CACHE_TRACE: the selected experts of each slot lookup, for a simulator of the cache
+      FILE * trace = nullptr;
+  
+@@ -178,7 +179,7 @@ index ba35af0..a90d6f6 100644
+      // slot maps in host memory
+      ggml_context_ptr ctx_host;
+      ggml_backend_buffer_ptr buf_host;
+-@@ -400,7 +429,15 @@ struct llama_moe_cache::impl {
++@@ -412,7 +441,15 @@ struct llama_moe_cache::impl {
+      ggml_context_ptr ctx_views;
+  
+      impl(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share) :
+@@ -195,7 +196,7 @@ index ba35af0..a90d6f6 100644
+          for (size_t i = 0; i < backends.size(); ++i) {
+              const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
+              if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+-@@ -634,6 +671,147 @@ struct llama_moe_cache::impl {
++@@ -727,6 +764,147 @@ struct llama_moe_cache::impl {
+                  }
+              }
+          }
+@@ -343,7 +344,7 @@ index ba35af0..a90d6f6 100644
+      }
+  
+      // the device that caches layer il
+-@@ -684,6 +862,9 @@ struct llama_moe_cache::impl {
++@@ -777,6 +955,9 @@ struct llama_moe_cache::impl {
+          if (trace != nullptr) {
+              fclose(trace);
+          }
+@@ -651,7 +652,7 @@ index 0000000..956edce
+ +    bool             file_tried = false; // the file was looked for once, by the first cache of this process
+ +};
+ diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+-index 0b7e8e4..c0a27ad 100644
++index 46fd38d..ff76109 100644
+ --- a/tests/CMakeLists.txt
+ +++ b/tests/CMakeLists.txt
+ @@ -192,6 +192,9 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+diff --git a/backend/cpp/llama-cpp/patches/0022-sycl-graph-refuse-switch.patch b/backend/cpp/llama-cpp/patches/0022-sycl-graph-refuse-switch.patch
+index f3fc236..91ec371 100644
+--- a/backend/cpp/llama-cpp/patches/0022-sycl-graph-refuse-switch.patch
++++ b/backend/cpp/llama-cpp/patches/0022-sycl-graph-refuse-switch.patch
+@@ -21,10 +21,10 @@ Checked: ggml-sycl.cpp compiles with icpx. Its twin on the CPU backend, a
+ dev patch in no engine, is what the callers above it were tested with.
+ ---
+ diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
+-index 67cafad..e8c1110 100644
++index 5986b8f..6d6e62c 100644
+ --- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+ +++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
+-@@ -118,6 +118,12 @@ int g_ggml_sycl_park_verify = 0;
++@@ -119,6 +119,12 @@ int g_ggml_sycl_park_verify = 0;
+  // for the TEST of a refused pool commit, which a card cannot be made to give on demand (its driver pages an idle
+  // neighbour out first): GGML_SYCL_POOL_REFUSE=N refuses the next N commits that GROW a pool, as a full device does
+  std::atomic<int> g_ggml_sycl_pool_refuse{0};
+@@ -35,9 +35,9 @@ index 67cafad..e8c1110 100644
+ +std::atomic<int> g_ggml_sycl_graph_refuse{0};
+ +std::string g_ggml_sycl_graph_refuse_arm;
+  int g_ggml_sycl_enable_fusion = 1;
++ int g_ggml_sycl_fuse_conv_window = 1;
+  int g_ggml_sycl_enable_esimd = 1;
+- int g_ggml_sycl_mmvq_wide = 1;
+-@@ -455,6 +461,10 @@ static void ggml_check_sycl() try {
++@@ -459,6 +465,10 @@ static void ggml_check_sycl() try {
+          g_ggml_sycl_parkable = ggml_sycl_get_env("GGML_SYCL_PARKABLE", 0);
+          g_ggml_sycl_park_verify = ggml_sycl_get_env("GGML_SYCL_PARK_VERIFY", 0);
+          g_ggml_sycl_pool_refuse = ggml_sycl_get_env("GGML_SYCL_POOL_REFUSE", 0);
+@@ -46,9 +46,9 @@ index 67cafad..e8c1110 100644
+ +            g_ggml_sycl_graph_refuse_arm = arm;
+ +        }
+          g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
++         g_ggml_sycl_fuse_conv_window = ggml_sycl_get_env("GGML_SYCL_FUSE_CONV_WINDOW", 1);
+          g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
+-         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
+-@@ -619,6 +629,14 @@ static void ggml_check_sycl() try {
++@@ -627,6 +637,14 @@ static void ggml_check_sycl() try {
+              GGML_LOG_WARN("  GGML_SYCL_POOL_REFUSE: %d - the next commits that grow a pool are REFUSED, for a test\n",
+                            g_ggml_sycl_pool_refuse.load());
+          }
+@@ -62,8 +62,8 @@ index 67cafad..e8c1110 100644
+ +        }
+  
+          GGML_LOG_INFO("  GGML_SYCL_ENABLE_FUSION: %d\n", g_ggml_sycl_enable_fusion);
+-         GGML_LOG_INFO("  GGML_SYCL_UPLOAD_STAGING_SLOTS: %d\n", g_ggml_sycl_upload_staging_slots);
+-@@ -7411,6 +7429,17 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
++         GGML_LOG_INFO("  GGML_SYCL_FUSE_CONV_WINDOW: %d\n", g_ggml_sycl_fuse_conv_window);
++@@ -7462,6 +7480,17 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
+  // the graph computed, or failed for want of device memory (the pool's refusal): the caller's decode returns an
+  // error for this batch and the process goes on
+  static ggml_status ggml_sycl_graph_compute_or_fail(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
+diff --git a/backend/cpp/llama-cpp/patches/0023-server-park-when-told.patch b/backend/cpp/llama-cpp/patches/0023-server-park-when-told.patch
+index 00348bd..2ae96eb 100644
+--- a/backend/cpp/llama-cpp/patches/0023-server-park-when-told.patch
++++ b/backend/cpp/llama-cpp/patches/0023-server-park-when-told.patch
+@@ -161,10 +161,10 @@ index e6c5181..fa081a2 100644
+          return COMMON_CANARY_MISMATCH;
+      }
+ diff --git a/common/common.h b/common/common.h
+-index f3da483..0f97b98 100644
++index 86b7130..ff64e52 100644
+ --- a/common/common.h
+ +++ b/common/common.h
+-@@ -1028,6 +1028,9 @@ enum common_canary_status {
++@@ -1030,6 +1030,9 @@ enum common_canary_status {
+      COMMON_CANARY_OK,       // recorded, or reproduced
+      COMMON_CANARY_NONE,     // the output cannot be computed for this model: nothing is recorded, nothing is checked
+      COMMON_CANARY_MISMATCH, // the same input did not give the same values
+@@ -175,7 +175,7 @@ index f3da483..0f97b98 100644
+  
+  // note: defines the model, context, samplers, ets. lifetimes
+ diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+-index 3293616..36ea7d1 100644
++index 6d34f06..f19fba1 100644
+ --- a/ggml/include/ggml-backend.h
+ +++ b/ggml/include/ggml-backend.h
+ @@ -71,11 +71,20 @@ extern "C" {
+@@ -204,10 +204,10 @@ index 3293616..36ea7d1 100644
+      // What the buffers this thread is about to allocate are for: a backend reads it in alloc_buffer, where the usage
+      // set by ggml_backend_buffer_set_usage is not known yet (weights that can park are allocated differently).
+ diff --git a/ggml/src/ggml-backend-impl.h b/ggml/src/ggml-backend-impl.h
+-index 4709a63..032d7b4 100644
++index 4cbd16e..d7942c6 100644
+ --- a/ggml/src/ggml-backend-impl.h
+ +++ b/ggml/src/ggml-backend-impl.h
+-@@ -79,11 +79,11 @@ extern "C" {
++@@ -80,11 +80,11 @@ extern "C" {
+          // (optional) parking: release the device memory of the buffer and keep its contents and its ADDRESSES.
+          // park() saves the contents and frees the memory behind the buffer's address range; unpark() commits memory at
+          // the same addresses and restores the contents, so every tensor, view and extra that refers to the buffer stays
+@@ -225,10 +225,10 @@ index 4709a63..032d7b4 100644
+  
+      struct ggml_backend_buffer {
+ diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
+-index b49b957..ad62e61 100644
++index 1271a65..61cf50c 100644
+ --- a/ggml/src/ggml-backend.cpp
+ +++ b/ggml/src/ggml-backend.cpp
+-@@ -1170,35 +1170,36 @@ bool ggml_backend_buffer_can_park(ggml_backend_buffer_t buffer) {
++@@ -1181,35 +1181,36 @@ bool ggml_backend_buffer_can_park(ggml_backend_buffer_t buffer) {
+      return !parts.empty();
+  }
+  
+@@ -277,10 +277,10 @@ index b49b957..ad62e61 100644
+  }
+  
+ diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
+-index e8c1110..a7f6827 100644
++index 6d6e62c..0f47316 100644
+ --- a/ggml/src/ggml-sycl/ggml-sycl.cpp
+ +++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
+-@@ -124,6 +124,9 @@ std::atomic<int> g_ggml_sycl_pool_refuse{0};
++@@ -125,6 +125,9 @@ std::atomic<int> g_ggml_sycl_pool_refuse{0};
+  // Once that file exists, the next N graphs are abandoned as after a refused pool commit; the device is not asked
+  std::atomic<int> g_ggml_sycl_graph_refuse{0};
+  std::string g_ggml_sycl_graph_refuse_arm;
+@@ -288,17 +288,17 @@ index e8c1110..a7f6827 100644
+ +// buffer back, as a device with no room does
+ +std::atomic<int> g_ggml_sycl_park_refuse{0};
+  int g_ggml_sycl_enable_fusion = 1;
++ int g_ggml_sycl_fuse_conv_window = 1;
+  int g_ggml_sycl_enable_esimd = 1;
+- int g_ggml_sycl_mmvq_wide = 1;
+-@@ -465,6 +468,7 @@ static void ggml_check_sycl() try {
++@@ -469,6 +472,7 @@ static void ggml_check_sycl() try {
+          if (const char * arm = getenv("GGML_SYCL_GRAPH_REFUSE_ARM")) {
+              g_ggml_sycl_graph_refuse_arm = arm;
+          }
+ +        g_ggml_sycl_park_refuse = ggml_sycl_get_env("GGML_SYCL_PARK_REFUSE", 0);
+          g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
++         g_ggml_sycl_fuse_conv_window = ggml_sycl_get_env("GGML_SYCL_FUSE_CONV_WINDOW", 1);
+          g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
+-         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
+-@@ -625,6 +629,10 @@ static void ggml_check_sycl() try {
++@@ -633,6 +637,10 @@ static void ggml_check_sycl() try {
+  #endif
+          GGML_LOG_INFO("  GGML_SYCL_PARKABLE: %d\n", g_ggml_sycl_parkable);
+          GGML_LOG_INFO("  GGML_SYCL_PARK_VERIFY: %d\n", g_ggml_sycl_park_verify);
+@@ -309,7 +309,7 @@ index e8c1110..a7f6827 100644
+          if (g_ggml_sycl_pool_refuse > 0) {
+              GGML_LOG_WARN("  GGML_SYCL_POOL_REFUSE: %d - the next commits that grow a pool are REFUSED, for a test\n",
+                            g_ggml_sycl_pool_refuse.load());
+-@@ -813,24 +821,37 @@ struct ggml_sycl_parkable_mem {
++@@ -822,24 +830,37 @@ struct ggml_sycl_parkable_mem {
+  
+      bool committed() const { return !mappings.empty(); }
+  
+@@ -353,7 +353,7 @@ index e8c1110..a7f6827 100644
+      }
+  
+      // unmap exactly what was mapped, before the physical memory goes: its destructor does not unmap
+-@@ -1384,12 +1405,12 @@ static void ggml_sycl_park_copy(sycl::queue & q, void * dst, const void * src, s
++@@ -1395,12 +1416,12 @@ static void ggml_sycl_park_copy(sycl::queue & q, void * dst, const void * src, s
+  }
+  
+  // the contents to host memory, then the device memory released; the buffer's addresses stay reserved
+@@ -368,7 +368,7 @@ index e8c1110..a7f6827 100644
+      }
+      ggml_sycl_set_device(ctx->device);
+  
+-@@ -1404,7 +1425,7 @@ static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
++@@ -1415,7 +1436,7 @@ static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
+      if (mem->host == nullptr) {
+          GGML_LOG_ERROR("%s: no host memory for the %.2f MiB of %s, it stays on the device\n", __func__,
+                         buffer->size / 1024.0 / 1024.0, ctx->name.c_str());
+@@ -377,7 +377,7 @@ index e8c1110..a7f6827 100644
+      }
+      ggml_sycl_park_copy(*ctx->stream, mem->host, ctx->dev_ptr, buffer->size);
+      const int64_t t_copied = ggml_time_us();
+-@@ -1429,29 +1450,33 @@ static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
++@@ -1440,29 +1461,33 @@ static bool ggml_backend_sycl_buffer_park(ggml_backend_buffer_t buffer) try {
+                    __func__, ctx->name.c_str(), buffer->size / 1024.0 / 1024.0,
+                    (t_end - t_start - (t_summed - t_copied)) / 1000.0, (t_copied - t_start) / 1000.0,
+                    (t_end - t_summed) / 1000.0, said, mem->n_park);
+@@ -418,7 +418,7 @@ index e8c1110..a7f6827 100644
+      }
+      ggml_sycl_memtrace_add(GGML_SYCL_MEM_BUFFER, ctx->dev_ptr, mem->size);
+      const int64_t t_committed = ggml_time_us();
+-@@ -1475,7 +1500,7 @@ static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
++@@ -1486,7 +1511,7 @@ static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
+                                 ctx->name.c_str());
+                  mem->release();
+                  ggml_sycl_memtrace_del(ctx->dev_ptr);
+@@ -427,7 +427,7 @@ index e8c1110..a7f6827 100644
+              }
+              snprintf(said, sizeof(said), ", read back: the same bytes");
+          }
+-@@ -1487,7 +1512,7 @@ static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
++@@ -1498,7 +1523,7 @@ static bool ggml_backend_sycl_buffer_unpark(ggml_backend_buffer_t buffer) try {
+      GGML_LOG_INFO("%s: %s unparked, %.2f MiB to the device in %.1f ms (the commit %.1f, the copy %.1f)%s\n", __func__,
+                    ctx->name.c_str(), buffer->size / 1024.0 / 1024.0, (t_copied - t_start) / 1000.0,
+                    (t_committed - t_start) / 1000.0, (t_copied - t_committed) / 1000.0, said);
+@@ -436,7 +436,7 @@ index e8c1110..a7f6827 100644
+  }
+  catch (sycl::exception const & exc) {
+      std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+-@@ -1583,7 +1608,7 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
++@@ -1594,7 +1619,7 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
+                  GGML_LOG_ERROR("%s: can't reserve %zu Bytes of virtual memory: %s\n", __func__, size, e.what());
+                  return nullptr;
+              }
+@@ -445,7 +445,7 @@ index e8c1110..a7f6827 100644
+                  GGML_LOG_ERROR("%s: can't allocate %zu Bytes of memory on device\n", __func__, size);
+                  return nullptr;
+              }
+-@@ -2520,6 +2545,14 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
++@@ -2531,6 +2556,14 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
+                  }
+                  phys.emplace(dev, ctx, reserve_size);
+              } catch (const sycl::exception & e) {
+@@ -461,10 +461,10 @@ index e8c1110..a7f6827 100644
+                  GGML_LOG_ERROR("%s: the device refused %zu MiB for the pool (%zu MiB committed): %s\n", __func__,
+                                 reserve_size / (1024 * 1024), pool_size / (1024 * 1024), e.what());
+ diff --git a/include/llama.h b/include/llama.h
+-index e4ccb13..da49dfb 100644
++index 057d198..5cd9f5b 100644
+ --- a/include/llama.h
+ +++ b/include/llama.h
+-@@ -652,17 +652,29 @@ extern "C" {
++@@ -661,17 +661,29 @@ extern "C" {
+      // Returns the total size of all the tensors in the model in bytes
+      LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
+  
+@@ -499,7 +499,7 @@ index e4ccb13..da49dfb 100644
+  
+      // Get the default chat template. Returns nullptr if not available
+      // If name is NULL, returns the default chat template
+-@@ -1014,6 +1026,8 @@ extern "C" {
++@@ -1023,6 +1035,8 @@ extern "C" {
+      //    2 - aborted     (processed ubatches will remain in the context's memory)
+      //   -1 - invalid input batch
+      // < -1 - fatal error (processed ubatches will remain in the context's memory)
+@@ -509,10 +509,10 @@ index e4ccb13..da49dfb 100644
+              struct llama_context * ctx,
+                struct llama_batch   batch),
+ diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+-index 8626e12..ff59ae6 100644
++index f6878a3..a085823 100644
+ --- a/src/llama-context.cpp
+ +++ b/src/llama-context.cpp
+-@@ -1985,7 +1985,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
++@@ -1979,7 +1979,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
+      if (!res) {
+          switch (status) {
+              case GGML_STATUS_ABORTED:      return  2;
+@@ -521,7 +521,7 @@ index 8626e12..ff59ae6 100644
+              case GGML_STATUS_FAILED:       return -3;
+              case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
+          }
+-@@ -2404,7 +2404,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
++@@ -2398,7 +2398,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
+  
+              switch (status) {
+                  case GGML_STATUS_ABORTED:      return  2;
+@@ -531,10 +531,10 @@ index 8626e12..ff59ae6 100644
+                  case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
+              }
+ diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+-index f79efcc..8331269 100644
++index 825357c..681b257 100644
+ --- a/src/llama-model.cpp
+ +++ b/src/llama-model.cpp
+-@@ -4046,43 +4046,56 @@ bool llama_model::is_parked() const {
++@@ -4095,43 +4095,56 @@ bool llama_model::is_parked() const {
+      return pimpl->parked;
+  }
+  
+@@ -605,7 +605,7 @@ index f79efcc..8331269 100644
+      return park_all(false);
+  }
+  
+-@@ -4094,14 +4107,18 @@ bool llama_model_is_parked(const llama_model * model) {
++@@ -4143,14 +4156,18 @@ bool llama_model_is_parked(const llama_model * model) {
+      return model->is_parked();
+  }
+  
+@@ -627,10 +627,10 @@ index f79efcc..8331269 100644
+      const auto key = name ? LLM_KV(model->arch, name)(LLM_KV_TOKENIZER_CHAT_TEMPLATE)
+          : LLM_KV(model->arch)(LLM_KV_TOKENIZER_CHAT_TEMPLATE);
+ diff --git a/src/llama-model.h b/src/llama-model.h
+-index af6baa9..874a748 100644
++index 2fce2c4..19d4cba 100644
+ --- a/src/llama-model.h
+ +++ b/src/llama-model.h
+-@@ -1031,8 +1031,9 @@ struct llama_model {
++@@ -1033,8 +1033,9 @@ struct llama_model {
+      // parking, see llama_model_park() in llama.h
+      bool can_park() const;
+      bool is_parked() const;
+@@ -642,7 +642,7 @@ index af6baa9..874a748 100644
+  
+      // the record of the experts used, kept beyond a context (llama-moe-record.h): its own mutex guards it
+      struct llama_moe_record_store & moe_record() const;
+-@@ -1081,7 +1082,7 @@ protected:
++@@ -1092,7 +1093,7 @@ protected:
+  
+      // the weight buffers that park, and both directions of it
+      bool park_buffers(std::vector<ggml_backend_buffer_t> & out) const;
+@@ -652,10 +652,10 @@ index af6baa9..874a748 100644
+  
+  llama_model * llama_model_create(llm_arch arch, const llama_model_params & params);
+ diff --git a/tools/server/README.md b/tools/server/README.md
+-index b054b6f..a9cc250 100644
++index 5e0fafe..fb65852 100644
+ --- a/tools/server/README.md
+ +++ b/tools/server/README.md
+-@@ -2626,7 +2626,7 @@ This is the `keep_alive` of other runners applied to the context instead of the
++@@ -2638,7 +2638,7 @@ This is the `keep_alive` of other runners applied to the context instead of the
+  
+  Notes:
+  
+@@ -664,7 +664,7 @@ index b054b6f..a9cc250 100644
+  - The cached prompt of a slot lives in the KV cache and is freed with it: a conversation whose context was freed evaluates its prompt again. Give its requests a `keep_context_ms` as long as the pause expected before the next one, or none at all.
+  - `/health`, `/props`, `/models`, `/metrics`, `/slots`, tokenization and detokenization do not need the context and do not create it.
+  - The context is created with the parameters of the first load: the same size, batch sizes and device placement, without fitting them again to the memory that is free at that moment.
+-@@ -2638,6 +2638,25 @@ Notes:
++@@ -2650,6 +2650,25 @@ Notes:
+  
+  A result of `/embedding` (the non-OpenAI route, which returns its results as they are) carries `context_create_ms` when the context was created for it: the time its creation took.
+  
+@@ -691,10 +691,10 @@ index b054b6f..a9cc250 100644
+  
+  ### Interactive mode
+ diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
+-index 0c907a4..c60c09f 100644
++index 29b41ee..e236519 100644
+ --- a/tools/server/server-common.cpp
+ +++ b/tools/server/server-common.cpp
+-@@ -131,6 +131,10 @@ json format_error_response(const std::string & message, const enum error_type ty
++@@ -132,6 +132,10 @@ json format_error_response(const std::string & message, const enum error_type ty
+              type_str = "exceed_context_size_error";
+              code = 400;
+              break;
+@@ -706,7 +706,7 @@ index 0c907a4..c60c09f 100644
+      return json {
+          {"code", code},
+ diff --git a/tools/server/server-common.h b/tools/server/server-common.h
+-index 3ec548f..417943f 100644
++index d99bc6a..22fd62c 100644
+ --- a/tools/server/server-common.h
+ +++ b/tools/server/server-common.h
+ @@ -67,6 +67,10 @@ enum error_type {
+@@ -736,10 +736,10 @@ index 3ec548f..417943f 100644
+      void init() {
+          t_start = ggml_time_us();
+ diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+-index ce8e3fc..7971e68 100644
++index af48bc4..70dc3d1 100644
+ --- a/tools/server/server-context.cpp
+ +++ b/tools/server/server-context.cpp
+-@@ -1186,11 +1186,12 @@ private:
++@@ -1190,11 +1190,12 @@ private:
+      int ctx_canary_fail = 0; // env: LLAMA_SERVER_CTX_CANARY_FAIL, for the tests: the next N contexts created fail their canary
+      bool ctx_canary_stale = false; // the adapters changed since the canary was recorded: the next context created records it again
+  
+@@ -756,7 +756,7 @@ index ce8e3fc..7971e68 100644
+  
+      int n_empty_consecutive = 0;
+  
+-@@ -1237,12 +1238,21 @@ private:
++@@ -1241,12 +1242,21 @@ private:
+              case SERVER_TASK_TYPE_SLOT_GET:
+              case SERVER_TASK_TYPE_GET_LORA:
+              case SERVER_TASK_TYPE_SET_LORA:
+@@ -778,7 +778,7 @@ index ce8e3fc..7971e68 100644
+      // free the context and what is bound to it, keep the model
+      void context_release() {
+          GGML_ASSERT(ctx_tgt != nullptr);
+-@@ -1270,26 +1280,126 @@ private:
++@@ -1274,26 +1284,126 @@ private:
+                  (ggml_time_us() - t_start) / 1000.0, (ggml_time_ms() - t_ctx_created) / 1000.0);
+  
+          if (park_weights) {
+@@ -913,7 +913,7 @@ index ce8e3fc..7971e68 100644
+          CONTEXT_NOT_SAME,    // it was created and did not reproduce the canary of the load: discarded
+      };
+  
+-@@ -1300,41 +1410,55 @@ private:
++@@ -1304,41 +1414,55 @@ private:
+  
+          const int64_t t_start = ggml_time_us();
+  
+@@ -987,7 +987,7 @@ index ce8e3fc..7971e68 100644
+              }
+              if (ctx_canary_fail > 0) {
+                  ctx_canary_fail--;
+-@@ -1346,9 +1470,7 @@ private:
++@@ -1350,9 +1474,7 @@ private:
+                  metrics.n_ctx_canary_fail += 1;
+                  SRV_ERR("the context created does not reproduce the canary of the load, it is discarded (%" PRIu64 " so far)\n",
+                          metrics.n_ctx_canary_fail);
+@@ -998,7 +998,7 @@ index ce8e3fc..7971e68 100644
+                  return CONTEXT_NOT_SAME;
+              }
+          }
+-@@ -1659,6 +1781,11 @@ private:
++@@ -1663,6 +1785,11 @@ private:
+                      SRV_ERR("%s", "the model does not give the same output twice for the same input: the context canary cannot "
+                                    "be recorded. start with --no-context-canary to serve it without the check\n");
+                      return false;
+@@ -1010,7 +1010,7 @@ index ce8e3fc..7971e68 100644
+              }
+          }
+  
+-@@ -1956,6 +2083,13 @@ private:
++@@ -1960,6 +2087,13 @@ private:
+                  SRV_WRN("%s", "LLAMA_SERVER_PARK_WEIGHTS: the weights of this model cannot be parked on this backend, ignored\n");
+                  park_weights = false;
+              }
+@@ -1024,7 +1024,7 @@ index ce8e3fc..7971e68 100644
+              if (park_weights) {
+                  SRV_INF("%s", "parking: when the context is freed the weights leave the device, the next request brings them back\n");
+              }
+-@@ -2379,7 +2513,7 @@ private:
++@@ -2411,7 +2545,7 @@ private:
+          const int32_t ret = llama_process(ctx_tgt, LLAMA_PROCESS_TYPE_ENCODE, batch_enc.get());
+          if (ret != 0) {
+              for (auto * slot : wave) {
+@@ -1033,7 +1033,7 @@ index ce8e3fc..7971e68 100644
+                  slot->release();
+              }
+              return;
+-@@ -2812,6 +2946,11 @@ private:
++@@ -2844,6 +2978,11 @@ private:
+          if (type == ERROR_TYPE_EXCEED_CONTEXT_SIZE) {
+              GGML_ASSERT(n_ctx > 0 && n_prompt_tokens > 0);
+          }
+@@ -1045,7 +1045,7 @@ index ce8e3fc..7971e68 100644
+  
+          auto res = std::make_unique<server_task_result_error>();
+          res->id              = id_task;
+-@@ -3710,8 +3849,15 @@ private:
++@@ -3742,8 +3881,15 @@ private:
+              switch (context_acquire()) {
+                  case CONTEXT_ACQUIRED:
+                      break;
+@@ -1062,7 +1062,7 @@ index ce8e3fc..7971e68 100644
+                      return true;
+                  case CONTEXT_NOT_SAME:
+                      send_error(task, "context canary failed: the context created for this request did not reproduce the output of the load's "
+-@@ -3896,6 +4042,10 @@ private:
++@@ -3912,6 +4058,10 @@ private:
+                  {
+                      // do nothing
+                  } break;
+@@ -1073,7 +1073,7 @@ index ce8e3fc..7971e68 100644
+              case SERVER_TASK_TYPE_METRICS:
+                  {
+                      int n_processing_slots = 0;
+-@@ -5528,7 +5678,9 @@ private:
++@@ -5546,7 +5696,9 @@ private:
+  
+                  if (ret < -1) {
+                      // TODO: update slot state based on llama_memory_seq_pos_min() and llama_memory_seq_pos_max()
+@@ -1084,7 +1084,7 @@ index ce8e3fc..7971e68 100644
+                  }
+  
+                  // TODO: handle ret == 2 (abort) when we start aborting
+-@@ -5538,7 +5690,7 @@ private:
++@@ -5556,7 +5708,7 @@ private:
+  
+                      for (auto & slot : slots) {
+                          if (slot.is_processing()) {
+@@ -1093,7 +1093,7 @@ index ce8e3fc..7971e68 100644
+                              slot.release();
+  
+                              // note: it's complicated to keep track of how much of the current batch has been
+-@@ -6095,6 +6247,7 @@ server_context_meta server_context::get_meta() const {
++@@ -6113,6 +6265,7 @@ server_context_meta server_context::get_meta() const {
+          /* json_ui_settings        */ impl->json_ui_settings,
+          /* slot_n_ctx              */ impl->n_ctx_slot(),
+          /* pooling_type            */ impl->pooling_type,
+@@ -1101,7 +1101,7 @@ index ce8e3fc..7971e68 100644
+  
+          /* chat_params             */ impl->chat_params,
+          /* chat_template_caps      */ common_chat_templates_get_caps(impl->chat_params.tmpls.get()),
+-@@ -7497,6 +7650,38 @@ void server_routes::init_routes() {
++@@ -7518,6 +7671,38 @@ void server_routes::init_routes() {
+          return res;
+      };
+  
+@@ -1162,10 +1162,10 @@ index 87cd7c1..5ccbf6b 100644
+      // to be used in router mode
+      json get_model_info() const;
+ diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
+-index 74e2d99..4346646 100644
++index e074305..15f6704 100644
+ --- a/tools/server/server-task.cpp
+ +++ b/tools/server/server-task.cpp
+-@@ -1624,6 +1624,18 @@ std::string server_task_result_metrics::to_metrics() {
++@@ -1630,6 +1630,18 @@ std::string server_task_result_metrics::to_metrics() {
+              "context_canary_failures_total",
+              "Context on demand: contexts discarded because they did not reproduce the canary of the load",
+              (double) metrics.n_ctx_canary_fail
+@@ -1184,7 +1184,7 @@ index 74e2d99..4346646 100644
+          },
+      };
+  
+-@@ -1656,6 +1668,14 @@ std::string server_task_result_metrics::to_metrics() {
++@@ -1662,6 +1674,14 @@ std::string server_task_result_metrics::to_metrics() {
+              "context_canary",
+              "Context on demand: 1 while each context created is held to the canary of the load",
+              metrics.ctx_canary ? 1.0 : 0.0
+@@ -1244,10 +1244,10 @@ index 6596e64..53fbf26 100644
+      struct lora {
+          common_adapter_lora_info info;
+ diff --git a/tools/server/server.cpp b/tools/server/server.cpp
+-index d149782..7104206 100644
++index 8b9b73d..7d3ec8b 100644
+ --- a/tools/server/server.cpp
+ +++ b/tools/server/server.cpp
+-@@ -214,6 +214,9 @@ static void server_register_routes(server_http_context & ctx_http, server_routes
++@@ -215,6 +215,9 @@ static void server_register_routes(server_http_context & ctx_http, server_routes
+      // LoRA adapters hotswap
+      ctx_http.get ("/lora-adapters",            ex_wrapper(routes.get_lora_adapters));
+      ctx_http.post("/lora-adapters",            ex_wrapper(routes.post_lora_adapters));
+@@ -1257,7 +1257,7 @@ index d149782..7104206 100644
+      // Save & load slots
+      ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
+      ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
+-@@ -545,6 +548,8 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
++@@ -542,6 +545,8 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
+      routes.post_responses_tok_oai      = models_routes->proxy_post;
+      routes.get_lora_adapters           = models_routes->proxy_get;
+      routes.post_lora_adapters          = models_routes->proxy_post;
+diff --git a/backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch b/backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch
+index 56dce4b..64f6669 100644
+--- a/backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch
++++ b/backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch
+@@ -1,4 +1,4 @@
+-llama: a BERT reads a text pair's second segment on token-type row 1 (pair_segments), its declared GELU, and a sequence classifier keeps its pooler
++llama: a BERT reads a text pair's second segment on token-type row 1 (pair_segments), and its declared GELU
+ 
+ A BERT trained on text pairs reads `[CLS] a [SEP] b [SEP]` with the first
+ segment's tokens on token-type row 0 and the second's on row 1 - Hugging
+@@ -17,14 +17,11 @@ holds a [SEP] of its own. A context asking it of a model that is not BERT, has
+ no second token-type row or no separator is refused at creation, never run
+ with the pair dropped. Without pair_segments the graph is the one it was.
+ 
+-The converter dropped BERT's pooling layer ("we are only using BERT for
+-embeddings"), for BertForSequenceClassification too, whose score is
+-classifier(tanh(pooler.dense([CLS]))): the classifier read the raw [CLS]
+-row, and ncbi/MedCPT-Cross-Encoder's logits were off by up to 16. The pooler
+-is now the head's dense layer (cls, tanh by default) for a sequence classifier
+-of BertModel itself; every class built on it still drops it. With both,
+-MedCPT's cross-encoder scores 80 (query, article) pairs within 0.079 of
+-torch's logits.
++The converter keeps a sequence classifier's pooler as the head's dense layer
++upstream's way (ggml-org/llama.cpp#33122, BertForSequenceClassification):
++this patch carried its own until the pin passed 15fcfc7. Dropped, the
++classifier read the raw [CLS] row and ncbi/MedCPT-Cross-Encoder's logits were
++off by up to 16.
+ 
+ MedCPT's tokenizer is registered for its pre-tokenizer hash
+ (convert_hf_to_gguf_update.py, `medcpt`, WPM; llama-vocab reads no
+@@ -34,8 +31,9 @@ was not recognized".
+ The GELU a BERT was trained with: transformers' BERT "gelu" is the exact erf
+ GELU, and the graph computed the tanh one for every BERT. The converter now
+ writes the model's hidden_act as `bert.hidden_activation` (the key ModernBert
+-reads), and the BERT graph computes the GELU the file declares: "gelu" the
+-erf GELU (ggml_gelu_erf), the tanh names the tanh GELU, anything else
++reads) for BertModel and upstream's BertForSequenceClassification alone,
++and the BERT graph computes the GELU the file declares: "gelu" the erf GELU
++(ggml_gelu_erf), the tanh names the tanh GELU, anything else
+ refused. A GGUF without the key - every file converted before - keeps the
+ tanh GELU and its bytes (measured: 67 of 67 vectors and 80 of 80 logits the
+ same floats). With it, against torch: the article encoder from 1 - 1.16e-5
+@@ -60,7 +58,7 @@ index fa081a2..541769a 100644
+      cparams.type_k = params.cache_type_k;
+      cparams.type_v = params.cache_type_v;
+ diff --git a/common/common.h b/common/common.h
+-index 0f97b98..3fc1001 100644
++index ff64e52..5e7256d 100644
+ --- a/common/common.h
+ +++ b/common/common.h
+ @@ -602,6 +602,7 @@ struct common_params {
+@@ -72,13 +70,13 @@ index 0f97b98..3fc1001 100644
+      bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
+      bool verbose_prompt    = false; // print prompt tokens before generation
+ diff --git a/conversion/base.py b/conversion/base.py
+-index 7cfbff3..d9f5f08 100644
++index bf78432..c9cf91b 100644
+ --- a/conversion/base.py
+ +++ b/conversion/base.py
+-@@ -2470,6 +2470,9 @@ class TextModel(ModelBase):
+-         if chkhsh == "5635e1c8d621dff7b4825f41f2f97b6ceb39bcf2d5c541db28577080d6efd5e5":
+-             # ref: https://huggingface.co/thinkingmachines/Inkling-2-Small
+-             res = "inkling2"
++@@ -2551,6 +2551,9 @@ class TextModel(ModelBase):
++         if chkhsh == "ffdae2f611dc6903980be2fbb108467cb97376d7d03cd332bb7e2602f87fa1f1":
++             # ref: https://huggingface.co/KRAFTON/Raon-1-mini-preview
++             res = "raon"
+ +        if chkhsh == "0f99a1f1fe4b3bd304b99003d4c1cb7c98fad2e3b2cc0d7cdb1a87fc46659b11":
+ +            # ref: https://huggingface.co/ncbi/MedCPT-Query-Encoder
+ +            res = "medcpt"
+@@ -86,66 +84,36 @@ index 7cfbff3..d9f5f08 100644
+          if res is None:
+              logger.warning("\n")
+ diff --git a/conversion/bert.py b/conversion/bert.py
+-index 150b266..43eb494 100644
++index ea43606..fe37c00 100644
+ --- a/conversion/bert.py
+ +++ b/conversion/bert.py
+-@@ -34,6 +34,11 @@ class BertModel(TextModel):
++@@ -34,6 +34,12 @@ class BertModel(TextModel):
+          self.gguf_writer.add_causal_attention(False)
+          self._try_set_pooling_type()
+  
+ +        # the FFN's activation as transformers names it ("gelu": the exact erf GELU), read by the BERT graph as
+-+        # ModernBert's reads `hidden_activation`; a GGUF without it is computed with the tanh GELU
+-+        if type(self) is BertModel and (hidden_act := self.hparams.get("hidden_act")):
+++        # ModernBert's reads `hidden_activation`; a GGUF without it is computed with the tanh GELU. Written for
+++        # BertModel and its sequence classifier alone: the classes built on them keep the GGUF they had
+++        if type(self) in (BertModel, BertForSequenceClassification) and (hidden_act := self.hparams.get("hidden_act")):
+ +            self.gguf_writer.add_hidden_act(hidden_act)
+ +
+          if self.cls_out_labels:
+              self.gguf_writer.add_classifier_output_labels([v for k, v in sorted(self.cls_out_labels.items())])
+  
+-@@ -79,8 +84,12 @@ class BertModel(TextModel):
+-         if name.endswith(".beta"):
+-             name = name[:-5] + ".bias"
+- 
+--        # we are only using BERT for embeddings so we don't need the pooling layer
+--        if name in ("embeddings.position_ids", "pooler.dense.weight", "pooler.dense.bias"):
+-+        if name == "embeddings.position_ids":
+-+            return None
+-+
+-+        # the pooling layer: BertForSequenceClassification's head, which BertModel.modify_tensors keeps as the
+-+        # classifier's dense layer; unused by an embedding model, and by every class built on this one
+-+        if name in ("pooler.dense.weight", "pooler.dense.bias") and cls is not BertModel:
+-             return None
+- 
+-         if name.startswith("cls.predictions"):
+-@@ -92,6 +101,15 @@ class BertModel(TextModel):
+-         return super().filter_tensors((name, gen))
+- 
+-     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+-+        if name in ("pooler.dense.weight", "pooler.dense.bias"):
+-+            if not self.cls_out_labels:
+-+                # an embedding model does not use the pooling layer
+-+                return
+-+            # BertForSequenceClassification scores classifier(tanh(pooler.dense([CLS]))): the pooler is the head's
+-+            # dense layer (cls, its activation tanh by default), as RobertaClassificationHead's classifier.dense.
+-+            # Dropped, the classifier read the raw [CLS] row: ncbi/MedCPT-Cross-Encoder's logits off by up to 16.
+-+            name = name.replace("pooler.dense", "classifier.dense")
+-+
+-         if self.cls_out_labels:
+-             # For BertForSequenceClassification (direct projection layer)
+-             if name == "classifier.weight":
+ diff --git a/convert_hf_to_gguf_update.py b/convert_hf_to_gguf_update.py
+-index ff5fca4..b13135a 100755
++index 0b623a7..1110edd 100755
+ --- a/convert_hf_to_gguf_update.py
+ +++ b/convert_hf_to_gguf_update.py
+-@@ -168,6 +168,7 @@ models = [
+-     {"name": "mmbert",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jhu-clsp/mmBERT-base", },
+-     {"name": "k2-horizon",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/IFM/K2-Horizon-36B", },
++@@ -170,6 +170,7 @@ models = [
+      {"name": "inkling2",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/thinkingmachines/Inkling-2-Small", },
++     {"name": "domyn-edge",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/domyn/Domyn-Edge-Teacher-IF", },
++     {"name": "raon",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/KRAFTON/Raon-1-mini-preview", },
+ +    {"name": "medcpt",           "tokt": TOKENIZER_TYPE.WPM, "repo": "https://huggingface.co/ncbi/MedCPT-Query-Encoder", }, # WPM: the article and cross encoders share it
+  ]
+  
+  # some models are known to be broken upstream, so we will skip them as exceptions
+ diff --git a/include/llama.h b/include/llama.h
+-index da49dfb..d217ee6 100644
++index 5cd9f5b..90352f8 100644
+ --- a/include/llama.h
+ +++ b/include/llama.h
+ @@ -426,6 +426,9 @@ extern "C" {
+@@ -159,13 +127,13 @@ index da49dfb..d217ee6 100644
+          // [EXPERIMENTAL]
+          // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
+ diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+-index ff59ae6..e679f52 100644
++index a085823..6223e8d 100644
+ --- a/src/llama-context.cpp
+ +++ b/src/llama-context.cpp
+-@@ -376,6 +376,22 @@ llama_context::llama_context(
++@@ -382,6 +382,22 @@ llama_context::llama_context(
++         cparams.kv_unified = true;
++     }
+  
+-     cparams.op_offload     = params.op_offload;
+-     cparams.kv_unified     = params.kv_unified;
+ +    cparams.pair_segments  = params.pair_segments;
+ +
+ +    // a text pair's segments are read by the BERT graph alone, from a second
+@@ -185,7 +153,7 @@ index ff59ae6..e679f52 100644
+      cparams.moe_cache_size      = params.moe_cache_size;
+      cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
+  
+-@@ -441,6 +457,9 @@ llama_context::llama_context(
++@@ -447,6 +463,9 @@ llama_context::llama_context(
+      LLAMA_LOG_INFO("%s: causal_attn           = %d\n",   __func__, cparams.causal_attn);
+      LLAMA_LOG_INFO("%s: flash_attn            = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
+      LLAMA_LOG_INFO("%s: kv_unified            = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
+@@ -195,7 +163,7 @@ index ff59ae6..e679f52 100644
+      LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
+      LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
+      LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
+-@@ -4464,6 +4483,7 @@ llama_context_params llama_context_default_params() {
++@@ -4443,6 +4462,7 @@ llama_context_params llama_context_default_params() {
+          /*.op_offload                  =*/ true,
+          /*.swa_full                    =*/ true,
+          /*.kv_unified                  =*/ false,
+@@ -204,10 +172,10 @@ index ff59ae6..e679f52 100644
+          /*.n_sampler                   =*/ 0,
+          /*.ctx_other                   =*/ nullptr,
+ diff --git a/src/llama-cparams.h b/src/llama-cparams.h
+-index 1f890d6..4cb45e6 100644
++index c71582a..b0dd9dc 100644
+ --- a/src/llama-cparams.h
+ +++ b/src/llama-cparams.h
+-@@ -52,6 +52,7 @@ struct llama_cparams {
++@@ -51,6 +51,7 @@ struct llama_cparams {
+      bool no_perf;
+      bool op_offload;
+      bool kv_unified;
+@@ -269,7 +237,7 @@ index 0000000..66b6243
+ +    return segment;
+ +}
+ diff --git a/src/models/bert.cpp b/src/models/bert.cpp
+-index b98faff..cc43601 100644
++index b497863..5a0bfeb 100644
+ --- a/src/models/bert.cpp
+ +++ b/src/models/bert.cpp
+ @@ -1,8 +1,54 @@
+@@ -352,9 +320,9 @@ index b98faff..cc43601 100644
+ +            // the declared activation (load_arch_hparams), the tanh GELU where none is
+ +            const llm_ffn_op_type ffn_op = model.arch == LLM_ARCH_BERT ? hparams.llm_ffn_op : LLM_FFN_GELU;
+              cur = build_ffn(cur,
+-                     model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL,
+-                     NULL, NULL, NULL,
+-                     model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, NULL,
++                     model.layers[il].ffn_up, model.layers[il].ffn_up_b,
++                     NULL, NULL,
++                     model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+ -                    LLM_FFN_GELU, LLM_FFN_SEQ, il);
+ +                    ffn_op, LLM_FFN_SEQ, il);
+              cb(cur, "ffn_out", il);
+diff --git a/backend/cpp/llama-cpp/prepare.sh b/backend/cpp/llama-cpp/prepare.sh
+index 932eb69..9543184 100644
+--- a/backend/cpp/llama-cpp/prepare.sh
++++ b/backend/cpp/llama-cpp/prepare.sh
+@@ -257,6 +257,13 @@ if grep -q "pair_segments" llama.cpp/common/common.h; then
+ else
+     HAS_PAIR_SEGMENTS=0
+ fi
++# Decision questions take an audio-input flag (ggml-org/llama.cpp#32578).
++# Older pins and forks take the body only, or have no decision server at all.
++if grep -q "bool support_audio_input" llama.cpp/tools/server/server-decision.h 2>/dev/null; then
++    HAS_DECISION_AUDIO_INPUT=1
++else
++    HAS_DECISION_AUDIO_INPUT=0
++fi
+ cat > llama.cpp/tools/grpc-server/llama_compat.h <<EOF
+ // Generated by backend/cpp/llama-cpp/prepare.sh. Do not edit.
+ #pragma once
+@@ -278,6 +285,7 @@ cat > llama.cpp/tools/grpc-server/llama_compat.h <<EOF
+ #define LOCALAI_HAS_TTS_VOICE ${HAS_TTS_VOICE}
+ #define LOCALAI_HAS_TTS_TEMPLATE ${HAS_TTS_TEMPLATE}
+ #define LOCALAI_HAS_ASR_PRESET ${HAS_ASR_PRESET}
++#define LOCALAI_HAS_DECISION_AUDIO_INPUT ${HAS_DECISION_AUDIO_INPUT}
+ #define LOCALAI_HAS_PARK ${HAS_PARK}
+ #define LOCALAI_HAS_PAIR_SEGMENTS ${HAS_PAIR_SEGMENTS}
+ EOF
+-- 
+2.43.0
+

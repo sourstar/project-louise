@@ -312,6 +312,27 @@ float32, CPU, the card's pair tokenization) and the line becomes: the candidate 
 from the model than OpenVINO is, or within 0.01. Said here as a revision made AFTER the
 first result, and why.
 
+**The second run, against the model (München, 2026-11-27, `rerank_parity` at `15c38af6`,
+`--torch-cross` on snapshot `71caf65d`; 48 questions × 50 documents, `--loads 3 --cut 7`;
+`/root/measure/medcpt-rerank/parity-qual-rerank-medcpt-lc{,-fa}.json`).**
+
+| | llama.cpp, FA off | llama.cpp, FA ON (`GGML_SYCL_FA_ONEDNN=0`) | OpenVINO (`louise-rerank-medcpt`) |
+|---|---|---|---|
+| same first / median top-10 share | 48 of 48 / 1.0 | 48 of 48 / 1.0 | — |
+| median tau / tau of the top 10 | 0.9967 / 1.0 | 0.9967 / 1.0 | — |
+| largest score difference to OpenVINO | 0.010197 | 0.010671 | — |
+| **largest score difference to the model** (torch, fp32, CPU) | **0.003895** | **0.007040** | **0.008815** |
+| the same bits reversed, seven at a time, three fresh loads | yes | yes | — |
+| 50 documents, p50 / p95 | 311.8 / 350.7 ms | 224.2 / 268.6 ms | 110.8 / 119.7 ms |
+| pass (the revised line) | **yes** | **yes** | |
+
+Both llama.cpp twins are nearer the model than OpenVINO is (FA off 2.3× nearer); FA ON
+keeps every reproducibility check and is 1.39× faster than FA off, and still 2.0×
+slower than OpenVINO. Nothing changed live. THE OPERATOR'S CHOICE, put 2026-11-27:
+OpenVINO kept (the status quo, if nothing is said), llama.cpp FA ON (recommended:
+nearer the model, one engine for both MedCPT models; ~113 ms more per query), or FA
+off (nearest; ~200 ms more).
+
 **The calibration's name.** A calibration names the model it was fitted for, and under
 another name it is not used: the merge falls back to rank (`merge_withheld`). Either the
 model keeps its name (`louise-rerank-medcpt`, its backend moved) and its calibration
