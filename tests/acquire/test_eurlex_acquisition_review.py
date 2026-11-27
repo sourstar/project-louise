@@ -152,14 +152,18 @@ def test_a_mark_appends_a_line_and_never_rewrites_the_record(tmp_path):
     before = eurlex_dump._sig(path)
     assert before[2] > 15 << 20
     keys = [(l, c) for l in sorted(rec) for c in list(rec[l])[:20]]
-    t0 = time.monotonic()
+    # the cost is measured in this process's CPU time, not the wall clock: the defect was
+    # CPU (a 15.6 MiB JSON re-serialised per mark, ~400 ms), and wall time is the node's
+    # load (76.5 ms a mark in the deploy's run beside the live worker and a Go build, load
+    # average 27; 2.4-2.7 s for the whole test alone — München, 2026-11-27)
+    t0 = time.process_time()
     for l, c in keys:
         eurlex_dump.mark_fetched(corpus, l, c)
     eurlex_dump.mark_tried(corpus, *keys[-1], "cellar: 404 to the tree")
-    per = (time.monotonic() - t0) / len(keys)
+    per = (time.process_time() - t0) / len(keys)
     assert eurlex_dump._sig(path) == before, "the record is not rewritten by a mark"
     assert (corpus / eurlex_dump.MARKS).stat().st_size < 120 * (len(keys) + 2), "a line a mark"
-    assert per < 0.02, f"{per * 1000:.1f} ms a mark"
+    assert per < 0.02, f"{per * 1000:.1f} ms of CPU a mark"
     got = eurlex_dump.incomplete(corpus)
     assert all(got[l][c]["fetched"] for l, c in keys) and got[keys[-1][0]][keys[-1][1]]["tried"]
     assert sum(1 for u in got.values() for e in u.values() if e.get("fetched")) == len(keys)
