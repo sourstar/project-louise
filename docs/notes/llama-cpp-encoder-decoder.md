@@ -324,3 +324,20 @@ tools/measure/t5waves.py.*
 - Every rebuild of the shared llama.cpp backend is a new engine for every SYCL embedder. It is measured bit-identical (invariant 12) and gated before it serves. Nothing is re-embedded when it passes.
 - MADLAD replaces the torch path only after translator-choice.md's comparison on the 451 + 39 queries.
 - The client change (one `/v1/completions` per segment, the `<2xx>` prompt, transformers' `clean_up_tokenization_spaces`) belongs to the architecture session.
+
+## 10. Does a question's translation wait? (2026-11-27)
+
+The staged stage 1 (P9, `0006`) turned out incomplete: two of its files were never
+committed (localai-bugs.md P9). Before anyone re-implements it, the default put to the
+operator is to MEASURE whether a translation waits for another question's wave at all.
+`tools/measure/translation_waits.py` reads the admin's query traces
+(`state/query-traces/<day>.jsonl`, app/query_trace.py): each question's language stage
+(`timings.languages`, the translator's calls included), whether it overlapped another
+question's, and the stage's p50/p95/max alone and overlapped:
+
+    python -m tools.measure.translation_waits state/query-traces/*.jsonl
+
+If the overlapped questions' stage is not longer than the alone ones', or if there are
+no overlapped questions, the wait is not real for these questions, and stage 1 waits. A trace
+does not show the worker's own translations meeting a question in a wave; that half
+needs the translator's own timings.
