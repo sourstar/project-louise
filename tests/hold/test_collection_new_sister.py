@@ -501,6 +501,40 @@ def test_her_text_index_and_her_sister_s_are_one_group_formed_by_rename(pair, ca
         "no hard link anywhere"
 
 
+def test_a_boot_between_her_make_and_her_carry_leaves_both_and_her_carry_forms_the_group(pair, card,
+                                                                                         monkeypatch):
+    """The fourth read of cf91b9ac, finding 3: a worker boot (`settle`)
+    between her make and her carry makes no manifest for her and moves
+    nothing of her sister's; her carry then forms the group by rename."""
+    from app import text_index
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    g = root / "old" / "index" / "en"
+    g.mkdir(parents=True, exist_ok=True)
+    (g / "meta.json").write_text("{}", encoding="utf-8")
+    (g / "seg.store").write_bytes(b"the index")
+    monkeypatch.setattr(louise, "_index_identities", lambda root, a, b: ("id1", "id1"))
+    real = louise._whole_quota
+
+    def cut():
+        raise CodexError("the process is stopped here, after the make")
+    monkeypatch.setattr(louise, "_whole_quota", cut)
+    assert _new_enc(root) != 0
+    assert (root / "sis").is_dir() and not (root / "sis" / "state" / "manifest.sqlite").exists()
+    monkeypatch.setattr(text_index, "identity", lambda c: "id1")
+    monkeypatch.setattr(text_index, "content_key", lambda c: None)
+    said = []
+    out = text_index.settle(root, [_local(root, "old"), _local(root, "sis")], log=said.append)
+    assert ("sis", "no manifest yet (made, its carry not done)") in out["skipped"]
+    assert not (root / "sis" / "state" / "manifest.sqlite").exists(), "no empty manifest made for her"
+    assert text_index.placement(root, "old") is None and (g / "seg.store").read_bytes() == b"the index"
+    monkeypatch.setattr(louise, "_whole_quota", real)
+    assert _new_enc(root) == 0
+    rel = text_index.placement(root, "old")["dir"]
+    assert text_index.placement(root, "sis")["dir"] == rel
+    assert (root / rel / "en" / "seg.store").read_bytes() == b"the index"
+
+
 def test_her_creation_defers_while_another_process_holds_her_sister_s_writer(pair, card, monkeypatch):
     """RULE 1: forming the group renames her sister's index; with its writer
     held (the running worker), `new` asks for `louise node stop`, exit 3

@@ -286,20 +286,94 @@ def test_the_join_compares_in_the_pools_processes_with_the_same_result(tmp_path,
     con.close()
 
 
-def test_members_left_alone_stay_placed_and_nothing_is_copied_back(tmp_path, monkeypatch):
-    """Finding F of the second read: a member alone in its group STAYS
-    placed — no copy back to `<name>/index` (54 GB for gutenberg); the
-    group's directory goes with the last member's forget."""
+def test_a_member_whose_identity_differs_from_its_writer_s_leaves_with_a_copy(tmp_path, monkeypatch):
+    """The fourth read of cf91b9ac, finding 1 (replacing the second read's
+    "left alone stay placed", which kept split sisters on one writer): a
+    member whose identity now differs from its folder's WRITER's LEAVES, to
+    a new folder holding a copy of the groups it still shares; the writer
+    stays. Nothing is copied back to `<name>/index`."""
     root, [(a, _), (b, _)] = _discovered(tmp_path)
     rel = _share(root, ["alpha", "beta"], "alpha")
     _fake_group(root / rel, "en", b"shared")
     ino = os.stat(root / rel / "en" / "seg.store").st_ino
     _with_identity(monkeypatch, {"alpha": "id1", "beta": "id2"})       # their slices differ now
-    text_index.settle(root, [a, b], log=lambda m: None)
-    for c in (a, b):
-        assert text_index.placement(root, c.name)["dir"] == rel, "placed still"
-        assert not text_index.group_dirs(c.fts_dir), "nothing copied back"
+    out = text_index.settle(root, [a, b], log=lambda m: None)
+    assert not out["skipped"], out["skipped"]
+    assert text_index.placement(root, "alpha")["dir"] == rel, "the writer stays"
+    mine = text_index.placement(root, "beta")["dir"]
+    assert mine != rel and text_index.is_shared(mine), "she leaves, to a folder of her own"
+    assert (root / mine / "en" / "seg.store").read_bytes() == b"shared"
+    assert os.stat(root / mine / "en" / "seg.store").st_ino != ino, "a copy"
     assert os.stat(root / rel / "en" / "seg.store").st_ino == ino
+    assert not text_index.role(b).reader and not text_index.role(a).reader, "each writes its own"
+    for c in (a, b):
+        assert not text_index.group_dirs(c.fts_dir), "nothing copied back"
+    again = text_index.settle(root, [a, b], log=lambda m: None)
+    assert text_index.placement(root, "beta")["dir"] == mine and not again["skipped"], "idempotent"
+
+
+def _row(con, native):
+    return con.execute("SELECT * FROM documents WHERE native_id=?", (native,)).fetchone()
+
+
+@pytest.mark.parametrize("room", [True, False])
+def test_a_leaving_member_never_searches_a_slice_it_does_not_hold_and_indexes_its_own(tmp_path, monkeypatch,
+                                                                                        room):
+    """Finding 1: beta read alpha's index; now beta holds 10001 and 10003,
+    alpha 10001 and 10002. Beta leaves — with a copy where it fits, the
+    documents she does not hold deleted from it; else an empty folder, her
+    marks reset — and her searches never show 10002; her own slice, 10003,
+    is indexed by her, and never in alpha's."""
+    from app import file_copy
+    root, [(a, acon), (b, bcon)] = _discovered(tmp_path)
+    rel = _share(root, ["alpha", "beta"], "alpha")
+    acon.execute("UPDATE documents SET in_scope=0 WHERE native_id='10003'")       # not alpha's slice
+    bcon.execute("UPDATE documents SET in_scope=0 WHERE native_id='10002'")       # not beta's
+    acon.commit(), bcon.commit()
+    while (row := acon.execute("SELECT * FROM documents WHERE fts_done=0 AND in_scope=1 "
+                               "ORDER BY native_id LIMIT 1").fetchone()) is not None:
+        assert worker._execute_step(acon, a, "fts", row) is True
+    worker._fts_copy_round(bcon, b)
+    assert _row(bcon, "10001")["fts_done"] == 1 and _row(bcon, "10003")["fts_done"] == 0
+    g2, g3 = fts.group_for(_row(acon, "10002")["lang"]), fts.group_for(_row(bcon, "10003")["lang"])
+    words = fts.book_chunks(g2, 10002, a)[0]["text"].split()[:3]
+    assert fts.books_held(g2, [10002], b) > 0, "before: she reads alpha's"
+    fts.close_all()
+    if not room:
+        monkeypatch.setattr(file_copy, "free_bytes", lambda where: 0)
+    _with_identity(monkeypatch, {"alpha": "id1", "beta": "id2"})
+    said = []
+    out = text_index.settle(root, [a, b], log=said.append)
+    assert not out["skipped"], out["skipped"]
+    mine = text_index.placement(root, "beta")["dir"]
+    assert mine != rel and text_index.placement(root, "alpha")["dir"] == rel
+    assert fts.books_held(g2, [10002], b) == 0 and fts.books_held(g2, [10002], a) > 0
+    assert not [h for h in fts.search(g2, " ".join(words), collection=b) if h["book_id"] == 10002], \
+        "her searches never show a slice she does not hold"
+    if room:
+        assert fts.books_held(fts.group_for(_row(bcon, "10001")["lang"]), [10001], b) > 0, "the copy kept it"
+        assert _row(bcon, "10001")["fts_done"] == 1
+    else:
+        assert any("an empty folder instead" in m for m in said)
+        assert bcon.execute("SELECT COUNT(*) FROM documents WHERE fts_done=1").fetchone()[0] == 0, "reset"
+    # her own slice: she writes now, and indexes it into her folder alone
+    assert text_index.writes(b)
+    assert worker._execute_step(bcon, b, "fts", _row(bcon, "10003")) is True
+    assert fts.books_held(g3, [10003], b) > 0 and fts.books_held(g3, [10003], a) == 0
+
+
+def test_a_placed_member_s_own_copy_is_removed(tmp_path, monkeypatch):
+    """Finding 2: a member placed already whose `<name>/index` still holds
+    language groups (never read: its index is the folder's) loses them."""
+    root, [(a, _), (b, _)] = _discovered(tmp_path)
+    rel = _share(root, ["alpha", "beta"], "alpha")
+    _fake_group(root / rel, "en", b"shared")
+    _fake_group(b.fts_dir, "en", b"leaked")
+    (b.fts_dir / "_catalog").mkdir()
+    _with_identity(monkeypatch, {"alpha": "id1", "beta": "id1"})
+    text_index.settle(root, [a, b], log=lambda m: None)
+    assert text_index.placement(root, "beta")["dir"] == rel
+    assert not text_index.group_dirs(b.fts_dir) and (b.fts_dir / "_catalog").is_dir()
 
 
 def test_a_placement_whose_directory_is_gone_is_dropped_and_its_marks_reset(tmp_path, monkeypatch):
@@ -319,32 +393,41 @@ def test_a_placement_whose_directory_is_gone_is_dropped_and_its_marks_reset(tmp_
     assert any("which is gone: dropped" in m for m in said)
 
 
-def test_a_settle_whose_copies_do_not_fit_skips_them_and_goes_on(tmp_path, monkeypatch):
-    """Finding D: the copies counted once, before the first; short, the
-    identity is skipped and said, the rest settled."""
+def test_a_settle_whose_copies_do_not_fit_leaves_to_an_empty_folder_and_goes_on(tmp_path, monkeypatch):
+    """Finding D, under the fourth read's rule: the copies counted once,
+    before the first. alpha, the writer, keeps its folder with gamma, who
+    joins; beta, whose identity differs, leaves — its copy does not fit, so
+    to an empty folder, its marks reset, said."""
     from app import file_copy
-    root, [(a, acon), (b, _), (c, _)] = _discovered(tmp_path, names=("alpha", "beta", "gamma"))
+    root, [(a, acon), (b, bcon), (c, _)] = _discovered(tmp_path, names=("alpha", "beta", "gamma"))
     acon.execute("UPDATE documents SET fts_done=1")
     acon.commit()
+    bcon.execute("UPDATE documents SET fts_done=1")
+    bcon.commit()
     rel = _share(root, ["alpha", "beta"], "alpha")
     _fake_group(root / rel, "en", b"x" * 5000)
-    # alpha now shares gamma's identity: gamma's group would copy alpha's
     _with_identity(monkeypatch, {"alpha": "id2", "beta": "abc", "gamma": "id2"})
     monkeypatch.setattr(file_copy, "free_bytes", lambda where: 10)
     said = []
     out = text_index.settle(root, [a, b, c], log=said.append)
-    assert ("alpha,gamma", "no room for the copy of its index") in out["skipped"]
-    assert not (root / text_index.SHARED / "id2").exists() and text_index.placement(root, "gamma") is None
-    assert any("not formed this boot" in m for m in said)
+    assert not out["skipped"], out["skipped"]
+    assert text_index.placement(root, "alpha")["dir"] == rel == text_index.placement(root, "gamma")["dir"]
+    mine = root / text_index.placement(root, "beta")["dir"]
+    assert mine != root / rel and not text_index.group_dirs(mine), "empty: nothing copied"
+    assert bcon.execute("SELECT COUNT(*) FROM documents WHERE fts_done=1").fetchone()[0] == 0, "reset"
+    assert any("an empty folder instead" in m for m in said)
+    assert (root / rel / "en" / "seg.store").read_bytes() == b"x" * 5000
 
 
 def test_the_one_copy_is_refused_for_a_member_whose_content_changed(tmp_path, monkeypatch):
     """`_move_into`'s copy happens only where the old group's index still
     describes the member (its slices changed, not its layers): otherwise
     the new group starts empty and the member's marks are reset."""
-    root, [(a, acon), (b, _), (c, _)] = _discovered(tmp_path, names=("alpha", "beta", "gamma"))
+    root, [(a, acon), (b, bcon), (c, _)] = _discovered(tmp_path, names=("alpha", "beta", "gamma"))
     acon.execute("UPDATE documents SET fts_done=1")
     acon.commit()
+    bcon.execute("UPDATE documents SET fts_done=1")                 # its reader: alpha's marks
+    bcon.commit()
     rel = _share(root, ["alpha", "beta"], "alpha")
     text_index.write_placement(root, "alpha", rel, "abc", content="old-content")
     _fake_group(root / rel, "en", b"x" * 50)
@@ -355,6 +438,8 @@ def test_the_one_copy_is_refused_for_a_member_whose_content_changed(tmp_path, mo
     assert new != root / rel and new.is_dir() and not text_index.group_dirs(new), "started empty: nothing copied"
     assert acon.execute("SELECT COUNT(*) FROM documents WHERE fts_done=1").fetchone()[0] == 0, "reset"
     assert text_index.group_dirs(root / rel), "the old group keeps its index for beta"
+    assert text_index.placement(root, "beta")["dir"] == rel and not text_index.role(b).reader, \
+        "beta, whose index it still describes, writes it now"
 
 
 def test_a_folder_named_by_an_identity_is_never_adopted_nor_reused(tmp_path, monkeypatch):
@@ -582,6 +667,8 @@ def test_a_group_whose_every_member_moves_keeps_its_folder_and_copies_nothing(tm
     for n in ("alpha", "beta", "gamma"):
         assert text_index.placement(root, n)["dir"] == rel
     assert text_index.folder_identity(root, rel) == "id9" and os.stat(root / rel / "en" / "seg.store").st_ino == ino
+    assert all(text_index.placement(root, n)["identity"] == "id9" for n in ("alpha", "beta", "gamma")), \
+        "the placements' identity refreshed"
 
 
 def test_an_index_the_manifest_marks_populated_is_never_made_empty(tmp_path):
@@ -622,3 +709,124 @@ def test_a_marked_multilingual_document_marks_every_group_its_sections_can_be_in
         with pytest.raises(fts.IndexMissing, match="none is made"):
             fts.get_index(group, a)
         assert not (fts.base_of(a) / group / "meta.json").exists(), group
+
+
+# ---- the fourth read of cf91b9ac: settle and the journal ---------------------------
+
+def test_a_collection_another_process_holds_is_not_settled(tmp_path, monkeypatch):
+    """Finding 3: a collection whose write lock another process holds (a
+    `hold` command, a sister being carried) is not settled this boot, said;
+    nothing of its sister moves either."""
+    import time
+    from app.hold import lock as lock_mod
+    root, [(a, _), (b, _)] = _discovered(tmp_path)
+    _fake_group(a.fts_dir, "en", b"alpha")
+    _with_identity(monkeypatch, {"alpha": "id1", "beta": "id1"})
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:                                            # another process holds beta
+        lk = lock_mod.take(lock_mod.state_dir(root, "beta"), "beta", "a hold command")
+        os.write(w, b"1")
+        time.sleep(30)
+        lk.release()
+        os._exit(0)
+    try:
+        os.read(r, 1)
+        said = []
+        out = text_index.settle(root, [a, b], log=said.append)
+        assert ("beta", "another process holds it (a hold command)") in out["skipped"]
+        assert any("beta not settled this boot" in m for m in said)
+        assert text_index.placement(root, "alpha") is None and text_index.placement(root, "beta") is None
+        assert (a.fts_dir / "en" / "seg.store").read_bytes() == b"alpha", "nothing renamed"
+    finally:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        os.close(r), os.close(w)
+
+
+def test_one_identity_s_failure_is_said_and_the_others_settle(tmp_path, monkeypatch):
+    """Finding 3: each identity is caught on its own (OperationalError
+    included), said, and the rest settled; the next boot finishes the
+    failed one's forming forward."""
+    root, cols = _discovered(tmp_path, names=("alpha", "beta", "gamma", "delta"))
+    (a, _), (b, _), (c, _), (d, _) = cols
+    _fake_group(a.fts_dir, "en", b"alpha")
+    _fake_group(c.fts_dir, "en", b"gamma")
+    _with_identity(monkeypatch, {"alpha": "id1", "beta": "id1", "gamma": "id2", "delta": "id2"})
+    real = text_index.reset_differing
+
+    def locked(reader, wman, **kw):
+        if Path(reader) == b.manifest_path:
+            raise sqlite3.OperationalError("database is locked")
+        return real(reader, wman, **kw)
+    monkeypatch.setattr(text_index, "reset_differing", locked)
+    said = []
+    out = text_index.settle(root, [x for x, _ in cols], log=said.append)
+    assert [s for s in out["skipped"] if s[0] == "alpha,beta"][0][1].startswith("OperationalError")
+    assert text_index.placement(root, "gamma")["dir"] == text_index.placement(root, "delta")["dir"]
+    assert any("alpha, beta not settled this boot" in m for m in said)
+    monkeypatch.setattr(text_index, "reset_differing", real)
+    again = text_index.settle(root, [x for x, _ in cols], log=lambda m: None)
+    assert not again["skipped"], again["skipped"]
+    rel = text_index.placement(root, "alpha")["dir"]
+    assert text_index.placement(root, "beta")["dir"] == rel and (root / rel / "en" / "seg.store").read_bytes() == b"alpha"
+
+
+def test_only_its_own_journals_are_resumed_and_a_stale_foreign_one_blocks_nothing(tmp_path):
+    """Finding 3: a forming journal naming collections the caller does not
+    settle is left alone, and an unreadable one is said: neither blocks a
+    sister's carry nor the boot."""
+    root, [(a, _), (b, _)] = _discovered(tmp_path)
+    _fake_group(a.fts_dir, "en", b"alpha")
+    jd = text_index._journal_dir(root)
+    jd.mkdir(parents=True)
+    foreign = jd / "f0reign.json"
+    foreign.write_text(json.dumps({"rel": f"{text_index.SHARED}/f0reign", "source": str(tmp_path / "gone"),
+                                   "groups": ["en"], "copy": False, "identity": "x", "content": None,
+                                   "writer": "x", "place": ["x", "y"]}), encoding="utf-8")
+    (jd / "broken.json").write_text("{not json", encoding="utf-8")
+    rel = text_index.form_at_carry(root, "alpha", "beta", "id1", "id1")
+    assert text_index.placement(root, "beta")["dir"] == rel
+    out = text_index.settle(root, [a, b], log=lambda m: None)
+    assert foreign.is_file() and not (root / text_index.SHARED / "f0reign").exists(), "left alone"
+    assert any(s[0] == "broken.json" for s in out["skipped"]), "said"
+    assert not (root / "x").exists(), "nothing made for a collection it does not settle"
+
+
+def test_a_manifest_is_opened_to_write_and_never_created(tmp_path):
+    """Finding 3: `mode=rw` — a collection made and not carried has no
+    manifest, and none is made for it."""
+    root, [(a, _), (_b, _)] = _discovered(tmp_path)
+    missing = root / "sis" / "state" / "manifest.sqlite"
+    missing.parent.mkdir(parents=True)
+    with pytest.raises(sqlite3.OperationalError):
+        text_index.reset_differing(missing, a.manifest_path, log=lambda m: None)
+    with pytest.raises(sqlite3.OperationalError):
+        text_index._reset_all(missing)
+    assert not missing.exists()
+
+
+def test_a_boot_skips_a_collection_with_no_manifest_and_makes_none(tmp_path, monkeypatch):
+    root, [(a, _), (_b, _)] = _discovered(tmp_path)
+    _fake_group(a.fts_dir, "en", b"alpha")
+    sis = _collection(root, "sis", a.corpus_dir)                         # made, not carried
+    _with_identity(monkeypatch, {"alpha": "id1", "beta": "id9", "sis": "id1"})
+    out = text_index.settle(root, [a, _b, sis], log=lambda m: None)
+    assert ("sis", "no manifest yet (made, its carry not done)") in out["skipped"]
+    assert not sis.manifest_path.exists() and text_index.placement(root, "alpha") is None
+    assert (a.fts_dir / "en" / "seg.store").read_bytes() == b"alpha"
+
+
+def test_a_group_s_record_and_a_journal_are_synced_file_then_directory(tmp_path, monkeypatch):
+    """Finding 4: `group.json` and a forming's journal survive a power cut."""
+    root, [(a, _), (b, _)] = _discovered(tmp_path)
+    _fake_group(a.fts_dir, "en", b"alpha")
+    synced = []
+    real = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: synced.append(os.readlink(f"/proc/self/fd/{fd}")) or real(fd))
+    rel = text_index.form_at_carry(root, "alpha", "beta", "id1", "id1")
+    jd = str(text_index._journal_dir(root))
+    journal = [i for i, p in enumerate(synced) if p.startswith(jd + "/.") and p.endswith(".json.tmp")]
+    assert journal and synced[journal[0] + 1] == jd, synced
+    group = [i for i, p in enumerate(synced) if p == str(root / rel / f".{text_index.GROUP}.tmp")]
+    assert group and synced[group[0] + 1] == str(root / rel), synced
