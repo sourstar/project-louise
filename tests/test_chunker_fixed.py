@@ -296,3 +296,99 @@ def test_an_overlap_still_carries_its_tail_byte_for_byte():
     firsts = [c for c in cs if c["chapter"] == "Chapter 1"]
     for a, b in zip(firsts, firsts[1:]):
         assert b["text"].startswith(a["text"][-120:])
+
+
+# ---- the encoder's window, optional (operator, 2026-11-27, option B) ----------
+# "Keep the max 4000 chars window as long as it fits the embedder ... If it
+# does not fit, trim the size of the text to the previous paragraph or period"
+
+import pytest as _pytest
+from tokenizers import Tokenizer as _Tokenizer, models as _models, pre_tokenizers as _pre
+
+from app import chunking as _chunking, layers as _layers
+from app.plugins.wikidata import chunker as _wd
+
+_SHA = "sha256:" + "ef" * 32
+
+
+@_pytest.fixture
+def words():
+    """One token per whitespace-separated word."""
+    tok = _Tokenizer(_models.WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
+    tok.pre_tokenizer = _pre.WhitespaceSplit()
+    _wd.register(_SHA, tok)
+    yield tok
+    _wd._tokenizers.pop(_SHA, None)
+
+
+def _fixed(chapters, **extra):
+    params = {"tokens": 100, "overlap": 10, **extra}
+    return list(_chunking.chunk_fixed("gutenberg:1", 1, chapters, version=1, params=params))
+
+
+def test_a_window_that_fits_is_byte_for_byte_and_id_for_id_what_it_was(words):
+    body = "\n\n".join(f"Paragraph {i} says a thing. It ends here." for i in range(60))
+    before = _fixed([("C", body)])
+    after = _fixed([("C", body)], tokenizer=_SHA, max_tokens=8175)
+    assert after == before, "nothing over the window: every chunk, id and text, as before"
+
+
+def test_a_window_over_the_limit_is_cut_back_to_its_last_sentence_and_nothing_is_lost(words):
+    # one paragraph of 300 four-byte "words": 1,500 bytes, over a 70-token window
+    sentence = "word " * 9 + "word."
+    para = " ".join([sentence] * 30)
+    before = _fixed([("C", para)], )
+    after = _fixed([("C", para)], tokenizer=_SHA, max_tokens=70)
+    assert all(len(c["text"].split()) <= 70 for c in after), "every piece within the window"
+    assert "".join(c["text"].replace(" ", "") for c in after) == \
+        "".join(c["text"].replace(" ", "") for c in before), "the pieces together are the windows' text"
+    assert [c["seq"] for c in after] == list(range(len(after)))
+    assert [c["id"] for c in after] == [f"gutenberg:1:{i}:1" for i in range(len(after))]
+
+
+def test_only_the_window_over_the_limit_changes_and_the_rest_keep_their_text(words):
+    fits = "\n\n".join(f"Short {i}." for i in range(5))
+    long = " ".join(["word " * 9 + "word."] * 12)            # 120 words in one window
+    before = _fixed([("A", fits), ("B", long), ("C", fits)])
+    after = _fixed([("A", fits), ("B", long), ("C", fits)], tokenizer=_SHA, max_tokens=64)
+    assert [c["text"] for c in after if c["chapter"] == "A"] == [c["text"] for c in before if c["chapter"] == "A"]
+    assert [c["text"] for c in after if c["chapter"] == "C"] == [c["text"] for c in before if c["chapter"] == "C"]
+    assert len([c for c in after if c["chapter"] == "B"]) > len([c for c in before if c["chapter"] == "B"])
+
+
+def test_with_no_sentence_end_the_cut_falls_back_to_a_space_then_a_token_boundary(words):
+    no_stop = " ".join(["word"] * 200)
+    after = _fixed([("C", no_stop)], tokenizer=_SHA, max_tokens=64)
+    assert all(len(c["text"].split()) <= 64 for c in after) and sum(len(c["text"].split()) for c in after) >= 200
+
+
+def test_a_window_of_no_more_bytes_than_the_limit_is_never_counted(words, monkeypatch):
+    calls = []
+    real = _chunking._count
+    monkeypatch.setattr(_chunking, "_count", lambda tok, t: calls.append(len(t)) or real(tok, t))
+    _fixed([("C", "A short line. Another one.")], tokenizer=_SHA, max_tokens=8175)
+    assert calls == [], "4,000 ASCII characters cannot exceed 8,175 tokens: nothing to count"
+
+
+@_pytest.mark.parametrize("extra", [{"tokenizer": _SHA}, {"max_tokens": 8175}, {"tokenizer": "nope", "max_tokens": 8175},
+                                    {"tokenizer": _SHA, "max_tokens": 10}])
+def test_the_window_is_stated_whole_or_refused(words, extra):
+    with _pytest.raises(_chunking.ChunkerError):
+        _fixed([("C", "text.")], **extra)
+    with _pytest.raises(_layers.LayerError):
+        _layers.check_params({"tokens": 1000, "overlap": 120, **extra}, chunker=_chunking.FIXED, where="layer")
+
+
+def test_the_cut_lands_on_the_last_sentence_end_that_fits(words):
+    text = " ".join(["word " * 9 + "word."] * 30)          # 300 words, a stop every 10
+    pieces = _chunking._fit(text, words, 64)
+    assert all(len(p.split()) <= 64 for p in pieces)
+    assert all(p.endswith(".") for p in pieces), "every cut at a sentence's end"
+    assert [len(p.split()) for p in pieces[:-1]] == [60] * (len(pieces) - 1), "the LAST end that fits"
+    assert " ".join(pieces).split() == text.split(), "nothing lost, nothing added"
+
+
+def test_tibetan_stops_end_a_sentence(words):
+    text = " ".join(["ཀ " * 9 + "ཀ །"] * 20)
+    pieces = _chunking._fit(text, words, 64)
+    assert all(p.endswith("།") for p in pieces[:-1]) and " ".join(pieces).split() == text.split()

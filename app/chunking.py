@@ -60,6 +60,19 @@ def chunk_fixed(uid: str, native_id, chapters: list[tuple[str, str]],
     document prescribes, and both are honest.
 
     So there is no default. A layer that does not say is refused.
+
+    THE ENCODER'S WINDOW, OPTIONAL (operator, 2026-11-27, option B for
+    gutenberg and gutenberg-nemo: "Keep the max 4000 chars window as long as
+    it fits the embedder ... If it does not fit, trim the size of the text to
+    the previous paragraph or period"): a layer that also states
+    `max_tokens` and the `tokenizer` it counts in (the sha256 of its
+    tokenizer.json, as `legal_article` and `wikidata-text` pin theirs) keeps
+    every window that fits as it is, byte for byte and under its own id, and
+    cuts a window over `max_tokens` back to its last sentence end (else its
+    last paragraph, else its last space, else a token boundary), the rest
+    becoming the next chunk (`_fit`). Absent, nothing changes for any layer
+    (invariant 3: the params are inside `space_id`; a layer without them
+    cuts as before, tests/test_chunker_fixed.py).
     """
     if not params or "tokens" not in params or "overlap" not in params:
         raise ChunkerError(
@@ -75,8 +88,86 @@ def chunk_fixed(uid: str, native_id, chapters: list[tuple[str, str]],
             f"fixed: overlap is at least 0 and less than tokens, got "
             f"{overlap} against {tokens}; at or above it the hard-split loop "
             f"stops shrinking and yields for ever")
-    yield from _fixed_windows(uid, native_id, chapters, version,
-                              tokens * 4, overlap * 4)
+    windows = _fixed_windows(uid, native_id, chapters, version, tokens * 4, overlap * 4)
+    fit = _fit_params(params)
+    if fit is None:
+        yield from windows
+        return
+    tok, max_tokens = fit
+    seq = 0
+    for c in windows:
+        for piece in _fit(c["text"], tok, max_tokens):
+            yield _mk(uid, native_id, seq, c["chapter"], piece, version)
+            seq += 1
+
+
+def _fit_params(params: dict):
+    """`(tokenizer, max_tokens)` where the layer states the encoder's window,
+    else None. Both or neither: a window counted in no named tokenizer
+    would let two peers count it differently."""
+    has_t, has_m = "tokenizer" in params, "max_tokens" in params
+    if not has_t and not has_m:
+        return None
+    if not (has_t and has_m):
+        raise ChunkerError("fixed: `max_tokens` and `tokenizer` come together: the window is counted in "
+                           "the tokens of the tokenizer the layer pins (its tokenizer.json's sha256)")
+    mt, sha = params["max_tokens"], params["tokenizer"]
+    if not isinstance(mt, int) or isinstance(mt, bool) or mt < 64:
+        raise ChunkerError(f"fixed: max_tokens is an integer of at least 64, got {mt!r}")
+    if not isinstance(sha, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", sha):
+        raise ChunkerError(f"fixed: the tokenizer is the sha256 of its tokenizer.json, not {sha!r}")
+    from app.plugins.wikidata import chunker as wd     # the one loader of a pinned tokenizer
+    return wd.tokenizer_for(params["tokenizer"]), mt
+
+
+#: where a window may end, best first: a sentence's end (Latin, CJK and
+#: Tibetan stops, with what closes after them), a paragraph, a space
+_SENTENCE_END = re.compile(r"[.!?\u2026\u3002\uff01\uff1f\u0f0d\u0f0e\u0f11\u0f14]+[\"'\u00bb\u201d\u2019)\]]*(?=\s|$)")
+_PARAGRAPH = re.compile(r"\n\s*\n")
+_SPACE = re.compile(r"\s+")
+
+
+def _count(tok, text: str) -> int:
+    return len(tok.encode(text, add_special_tokens=False).ids)
+
+
+def _fit(text: str, tok, max_tokens: int) -> list[str]:
+    """`text` as pieces of at most `max_tokens` tokens: the whole text when
+    it fits (nearly always: a piece of no more UTF-8 bytes than `max_tokens`
+    fits whatever the tokenizer, since a token spans a byte at least), else
+    cut back to the last sentence end that fits, the rest the next piece."""
+    pieces: list[str] = []
+    rest = text
+    while rest:
+        if len(rest.encode("utf-8")) <= max_tokens or _count(tok, rest) <= max_tokens:
+            pieces.append(rest)
+            break
+        cut = _fit_cut(rest, tok, max_tokens)
+        head, rest = rest[:cut].rstrip(), rest[cut:].lstrip()
+        if head:
+            pieces.append(head)
+    return pieces
+
+
+def _fit_cut(text: str, tok, max_tokens: int) -> int:
+    """The end of the longest prefix of `text` within `max_tokens` that ends
+    at a sentence's end; else at a paragraph; else at a space; else the
+    longest prefix at all. Always at least 1, so the pieces always shrink."""
+    def best(ends: list[int]) -> int | None:
+        ends = sorted({e for e in ends if 0 < e < len(text)})
+        lo, hi, found = 0, len(ends) - 1, None
+        while lo <= hi:                                 # the token count grows with the prefix
+            mid = (lo + hi) // 2
+            if _count(tok, text[:ends[mid]]) <= max_tokens:
+                found, lo = ends[mid], mid + 1
+            else:
+                hi = mid - 1
+        return found
+    for pattern, at_end in ((_SENTENCE_END, True), (_PARAGRAPH, False), (_SPACE, False)):
+        got = best([m.end() if at_end else m.start() for m in pattern.finditer(text)])
+        if got is not None:
+            return got
+    return best(list(range(1, len(text)))) or 1
 
 
 class ChunkerError(ValueError):
