@@ -218,6 +218,15 @@ False: that part is not preloaded. Nothing is unloaded for being idle
 whatever they say (the operator's rule is not the trial's). Shown by
 `louise node resident show`; no dialog (RULE 2).
 
+THE CARD CAP, `[models] card_cap_mib` (operator, 2026-11-27: "For test
+purpose we can limit the b70 to 16 GB to pre optimize the scenario";
+app/card_cap.py): the card's total, everywhere above, is the lesser of its
+own and the cap — applied where the probe's answer is read (`gpu.from_json`)
+— and its used the driver's count, so past the cap no load has room. What
+only the card itself says (the driver paging, a reading with room) is still
+judged against its own total, and a count past the cap is warned once per
+crossing (`_say_over_cap`).
+
 THE NODE'S MODE WINS. Paused or seed-only — the node's own, or a profile's
 `mode` (the stricter wins, node_state.runs) — is "the node suspended because
 the operator needs the GPU" (operator, 2026-10-23): nothing is preloaded,
@@ -451,9 +460,10 @@ def reset() -> None:
     """Forget the last beat, every model's history and the budget's memory
     as this process holds it — the file stays, as a restart finds it (tests)."""
     global _last, _last_why, _last_switches, _memory, _out_said, _write_failed, _orphans_at, _pids_seen
-    global _over_said
+    global _over_said, _card_seen, _over_cap_said, _cap_said
     with _lock:
         _over_said = None
+        _card_seen, _over_cap_said, _cap_said = None, False, None
         _reclaimer_seen.clear()
         _reclaimer_failed.clear()
         _park_floor_seen.clear()
@@ -636,7 +646,13 @@ def _card() -> tuple[int, int] | None:
     """(total, used) bytes of the card the models are on, as its driver
     counts them — asked of the GPU probe (GET /gpu), which reads them with
     app/gpu_memory.py's query; None when no probe is set or it cannot say.
-    Of several cards, the one whose processes hold the most."""
+    Of several cards, the one whose processes hold the most.
+    THE CARD CAP is in the total (`gpu.from_json`, the one place it is
+    applied; app/card_cap.py): the lesser of the card's own and `[models]
+    card_cap_mib`, used as the driver counts it — so past the cap every room
+    decision reads none. The card's own total is kept beside it
+    (`_card_seen`), for what only the card itself says: whether the driver
+    pages (`_overcommitted`) and whether a reading is taken with room."""
     from app import config, gpu
     if not config.GPU_PROBE_URL:
         return None
@@ -651,10 +667,46 @@ def _card() -> tuple[int, int] | None:
     here = frozenset(p.ns_pid for p in d.processes if p.ns_pid is not None)
     there = frozenset(p.ns_pid for o in devices if o is not d for p in o.processes
                       if p.ns_pid is not None) - here
-    global _pids_seen
+    global _pids_seen, _card_seen
     with _lock:
         _pids_seen = (here, there)
+        _card_seen = CardSeen(int(d.vram_total), int(d.used), d.vram_total_real, str(d.name or d.card))
     return int(d.vram_total), int(d.used)
+
+
+@dataclass(frozen=True)
+class CardSeen:
+    """The card as the last `_card` read it: the total room decisions read
+    (capped), the driver's used, the card's own total where the cap lowered
+    it (None: not capped), its name."""
+    total: int
+    used: int
+    real: int | None = None
+    name: str = ""
+
+    @property
+    def physical(self) -> int:
+        """The card's own total: what the driver pages against."""
+        return self.real if self.real is not None else self.total
+
+    @property
+    def over(self) -> int:
+        """Bytes used past the cap; 0 uncapped or under it."""
+        return 0 if self.real is None else max(0, self.used - self.total)
+
+
+#: the card as the last `_card` read it; None before a read (or `_card` stubbed)
+_card_seen: CardSeen | None = None
+
+
+def _physical(card: tuple[int, int]) -> tuple[int, int]:
+    """`card` with the card's OWN total where the cap lowered it — for what
+    the driver does, which no cap changes (the readings, the paging)."""
+    with _lock:
+        seen = _card_seen
+    if seen is not None and seen.real is not None and (seen.total, seen.used) == tuple(card):
+        return seen.real, card[1]
+    return card
 
 
 #: (backend pids on this card, backend pids on another card and not this
@@ -1491,6 +1543,63 @@ def _say_overcommitted(over: tuple[int, int, tuple[str, ...]] | None) -> None:
                      f"at rest against the card's {before[1] // MIB:,} MiB)")
 
 
+#: whether the last beat found the driver's count past the card cap, and the
+#: cap it read (to say a change of the cap once)
+_over_cap_said: bool = False
+_cap_said: int | None = None
+
+
+def _loaded_says(servers: Iterable[str]) -> str:
+    """"louise-chat 5,791 MiB, vega-4b 2,737 MiB" — what the runners list
+    loaded, the largest first; the ids alone where a runner gives no sizes."""
+    from app import model_load
+    parts: list[tuple[int, str]] = []
+    for s in sorted(set(servers)):
+        try:
+            got = model_load.held_sizes(s)
+            if got is None:
+                parts += [(0, m) for m in sorted(model_load.loaded_models(s) or ())]
+                continue
+            parts += [(int(size or 0), f"{m} {int(size or 0) // MIB:,} MiB") for m, (_pid, size) in got.items()]
+        except Exception:   # noqa: BLE001 — a runner unread: the event says what the others hold
+            continue
+    return ", ".join(t for _, t in sorted(parts, key=lambda p: (-p[0], p[1]))) or "none listed"
+
+
+def _say_over_cap(servers: Iterable[str]) -> None:
+    """THE CARD CAP's finding (app/card_cap.py; operator, 2026-11-27): the
+    driver counts more used than the cap — a load Louise's room decisions did
+    not plan, or the working memory grown past it. Warned ONCE PER CROSSING,
+    naming the MiB over and the models loaded; said again once it is back
+    under. Every room decision reads no room meanwhile (`_card`). A change of
+    the cap itself is said once."""
+    global _over_cap_said, _cap_said
+    with _lock:
+        seen = _card_seen
+    if seen is None:
+        return
+    cap = seen.total if seen.real is not None else None
+    with _lock:
+        cap_before, _cap_said = _cap_said, cap
+    if cap != cap_before:
+        _say("info", f"card: {seen.name} capped at {cap // MIB:,} MiB of {seen.real // MIB:,} "
+                     f"(platform.toml [models] card_cap_mib): every room decision reads the card at the cap"
+             if cap is not None and seen.real is not None else
+             f"card: {seen.name} no longer capped: every room decision reads its own "
+             f"{seen.total // MIB:,} MiB")
+    over = seen.over
+    with _lock:
+        before, _over_cap_said = _over_cap_said, over > 0
+    if over and not before:
+        _say("warn", f"card: OVER ITS CAP — the driver counts {seen.used // MIB:,} MiB used, "
+                     f"{over // MIB:,} MiB over the cap of {seen.total // MIB:,} MiB "
+                     f"({seen.name}, {seen.physical // MIB:,} MiB of its own): a load Louise did not plan; "
+                     f"loaded: {_loaded_says(servers)}. Every room decision reads no room until it is back under")
+    elif before and not over and cap is not None:      # a cap removed has said so above
+        _say("info", f"card: back under its cap of {seen.total // MIB:,} MiB "
+                     f"({seen.used // MIB:,} MiB used)")
+
+
 def _settling(now: float | None = None) -> bool:
     """Whether the node RESUMED less than SETTLE_S ago: its last mode write
     turned a mode that preloads nothing into one that does (node_state's
@@ -1561,12 +1670,17 @@ def _remember(want: list[Resident]) -> Memory:
             sample = max(0, card[1] - at_rest - min(beyond, live))
         # OVER-COMMITTED: the driver holds part of the models in host memory,
         # and neither the card's count nor a model's says what rests where
-        over = None if card is None else _overcommitted(servers, frozen, card, there)
+        # (against the card's OWN total: a cap is Louise's view, and the
+        # driver pages only past the card itself; app/card_cap.py)
+        phys = None if card is None else _physical(card)
+        over = None if phys is None else _overcommitted(servers, frozen, phys, there)
         _say_overcommitted(over)
+        if card is not None:
+            _say_over_cap(servers)
         if over is not None:
             sample = None
-        fits_whole = (card is not None and over is None and not loading and not settling
-                      and bool(card[0]) and card[1] <= LEARN_ROOM * card[0])
+        fits_whole = (phys is not None and over is None and not loading and not settling
+                      and bool(phys[0]) and phys[1] <= LEARN_ROOM * phys[0])
         if card is not None:
             moved = _where(servers, here, there)
     now = _wall()
@@ -2222,7 +2336,9 @@ def show() -> dict[str, Any]:
     collections, whether the runner lists it loaded, its at-rest and largest sizes and
     what the budget counts, whether it is in the budget and why, when it was
     last used, and whether LocalAI has it pinned and by whom (never this
-    keeper: an embed batch's pin, or the operator's). The worker's file
+    keeper: an embed batch's pin, or the operator's); and the card as the
+    worker's next beat reads it, "capped at 16,384 MiB of 32,656" where
+    `[models] card_cap_mib` caps it. The worker's file
     (`state/resident-budget.json`) read, nothing written: the same `plan`
     the worker fills."""
     from app import effective_config, model_load, node_state, platform_config
@@ -2236,9 +2352,14 @@ def show() -> dict[str, Any]:
     for r in want:
         model_load.loaded_models(r.server)       # this process's own reading: the sizes of what is loaded
     mem = read_memory()
-    if not mem.total and want:
-        card = _card()
-        mem.total = card[0] if card else None
+    # THE CARD AS THE WORKER'S NEXT BEAT READS IT (the cap applied, app/
+    # card_cap.py): the file's total is the last beat's, so a cap just set or
+    # removed shows here at once
+    card = _card()
+    with _lock:
+        seen = _card_seen if card is not None else None
+    if card is not None:
+        mem.total = card[0]
     p = _plan_now(want, mem)
     now = _wall()
     rows = []
@@ -2295,11 +2416,36 @@ def show() -> dict[str, Any]:
                    "taken_mib": sum(pl.counted for pl in p.placed if pl.fits) // MIB,
                    "median_mib": None if p.median is None else p.median // MIB,
                    "memory": str(memory_path())},
+        "card": _card_shown(seen),
         "models": rows,
         "embed_off": sorted(n for n, m in modes.items() if m not in _embedding_modes()),
         "not_served": not_served}
     if sw.error:
         out["switches_note"] = sw.error
+    return out
+
+
+def _card_shown(seen: CardSeen | None) -> dict[str, Any]:
+    """`show`'s card line: its total as every room decision reads it, the
+    driver's used, and THE CAP where one is set ("capped at 16,384 MiB of
+    32,656", `[models] card_cap_mib`, app/card_cap.py)."""
+    from app import card_cap
+    cap = card_cap.cap_mib()
+    if seen is None:
+        return {"read": False, "card_cap_mib": cap,
+                "says": "the card is not read here (GPU_PROBE_URL unset or the probe silent)"
+                        + (f"; [models] card_cap_mib = {cap:,}" if cap else "")}
+    out: dict[str, Any] = {"read": True, "name": seen.name, "total_mib": seen.total // MIB,
+                           "used_mib": seen.used // MIB, "free_mib": max(0, seen.total - seen.used) // MIB,
+                           "card_cap_mib": cap}
+    if seen.real is not None:
+        out |= {"real_total_mib": seen.real // MIB, "over_cap_mib": seen.over // MIB,
+                "says": f"capped at {seen.total // MIB:,} MiB of {seen.real // MIB:,} (platform.toml "
+                        f"[models] card_cap_mib, a test: `node resident set --card-cap \"\"` removes it)"
+                        + (f"; OVER THE CAP by {seen.over // MIB:,} MiB: no room for any load" if seen.over else "")}
+    else:
+        out["says"] = (f"{seen.total // MIB:,} MiB, its own"
+                       + (f" (the cap of {cap:,} MiB is not under it: nothing capped)" if cap else ""))
     return out
 
 

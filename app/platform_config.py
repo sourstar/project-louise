@@ -224,7 +224,20 @@ class ModelsConfig:
     #: succeed, and a refused one kills its backend. Raised only by a
     #: measurement
     page_over_gib: int = 3
+    #: THE CARD CAP (added 2026-11-27, operator: "For test purpose we can limit
+    #: the b70 to 16 GB to pre optimize the scenario"): the card seen as at most
+    #: this many MiB by every room decision — the keeper's room and budget, a
+    #: load's eviction, a question's room, a gate's twin — while the driver's
+    #: own count of what is used stays as it is (app/card_cap.py, applied where
+    #: the probe's answer is read, `gpu.from_json`). Unset, the card's own
+    #: total. Written by `louise node resident set --card-cap MIB` (07 §7.3),
+    #: never by hand; at least CARD_CAP_MIN_MIB
+    card_cap_mib: int | None = None
 
+
+#: `[models] card_cap_mib`'s floor: under it no model set this node serves
+#: would load at all, which tests nothing
+CARD_CAP_MIN_MIB = 4096
 
 #: `[models] make_room`
 MAKE_ROOM = ("unload", "page")
@@ -520,8 +533,10 @@ def platform_path() -> Path:
 
 def toml_literal(value: Any) -> str:
     """A TOML value as written in the file: a string (JSON's escapes are
-    TOML's basic string's), or a {str: str} inline table."""
+    TOML's basic string's), an integer, or a {str: str} inline table."""
     import json
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
     if isinstance(value, dict):
         if not value:
             return "{}"
@@ -834,6 +849,12 @@ def _load_one(path: Path) -> PlatformConfig:
     if make_room not in MAKE_ROOM:
         raise schedule_mod.ScheduleError(
             f"models.make_room is \"unload\" or \"page\", got {make_room!r} (07 §7.8)")
+    card_cap = models_raw.get("card_cap_mib")
+    if card_cap is not None and (isinstance(card_cap, bool) or not isinstance(card_cap, int)
+                                 or card_cap < CARD_CAP_MIN_MIB):
+        raise schedule_mod.ScheduleError(
+            f"models.card_cap_mib is a whole number of MiB, at least {CARD_CAP_MIN_MIB:,}, got "
+            f"{card_cap!r} (07 §7.8)")
     models = ModelsConfig(load_timeout_s=_positive_int(
         models_raw, "load_timeout_s", ModelsConfig().load_timeout_s),
         keep_ask_resident=models_raw.get("keep_ask_resident", True),
@@ -844,7 +865,8 @@ def _load_one(path: Path) -> PlatformConfig:
         page_floor_gib=_positive_int(models_raw, "page_floor_gib", ModelsConfig().page_floor_gib),
         page_over_gib=_positive_int(models_raw, "page_over_gib", ModelsConfig().page_over_gib),
         chat_large=(models_raw.get("chat_large") or "").strip() or None,
-        chat_small=(models_raw.get("chat_small") or "").strip() or None)
+        chat_small=(models_raw.get("chat_small") or "").strip() or None,
+        card_cap_mib=card_cap)
     modes = _modes(raw.get("modes", {}) or {})
 
     speech = _speech(raw.get("speech", {}) or {})
@@ -1098,7 +1120,7 @@ def load() -> PlatformConfig:
     return _load_one(path)
 
 
-_SEEN: tuple = (None, None)     # ((path, mtime_ns, size), PlatformConfig)
+_SEEN: tuple = (None, None)     # ((path, inode, mtime_ns, size), PlatformConfig)
 
 
 def seen() -> PlatformConfig:
@@ -1111,7 +1133,11 @@ def seen() -> PlatformConfig:
     path = platform_path()
     try:
         st = path.stat()
-        key = (str(path), st.st_mtime_ns, st.st_size)
+        # the inode too, as git's index keeps stat data: `set_keys` replaces
+        # the file (a new inode each write), and two writes of one size within
+        # one timestamp tick share the rest (`node resident set --card-cap
+        # 16384`, then 20000)
+        key = (str(path), st.st_ino, st.st_mtime_ns, st.st_size)
     except OSError:
         return PlatformConfig()
     if _SEEN[0] != key:

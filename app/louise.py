@@ -4135,13 +4135,27 @@ def cmd_node_resident(a) -> int:
     `preload_speech`, the node's mode, the budget the set is preloaded
     within (the line, the working margin measured over 6 h or its default),
     and each model's rank, loaded state, at-rest and largest sizes, place in the
-    budget and why, and pin holders. Read-only."""
-    from app import platform_config, resident
+    budget and why, and pin holders; the card, and its cap where one is set.
+    Read-only.
+
+    `node resident set --card-cap MIB` (added 2026-11-27, operator: "For test
+    purpose we can limit the b70 to 16 GB to pre optimize the scenario"):
+    `[models] card_cap_mib` written into platform.toml — every room decision
+    sees the card as at most MIB (app/card_cap.py); an empty value removes
+    it. Refused (exit 2) under 4,096 MiB or above the card's own total."""
+    from app import card_cap, platform_config, resident
     try:
+        if a.resident_verb == "set":
+            if a.card_cap is None:
+                print("louise node resident set: nothing to set — give --card-cap MIB "
+                      "(an empty value removes the cap)", file=sys.stderr)
+                return 2
+            _print(card_cap.write(platform_config.platform_path(), a.card_cap))
+            return 0
         _print(resident.show())
         return 0
-    except (platform_config.schedule_mod.ScheduleError, OSError) as e:
-        print(f"louise node resident show: {e}", file=sys.stderr)
+    except (platform_config.schedule_mod.ScheduleError, OSError, ValueError) as e:
+        print(f"louise node resident {a.resident_verb}: {e}", file=sys.stderr)
         return 2
 
 
@@ -8081,11 +8095,19 @@ def build_parser() -> argparse.ArgumentParser:
                                        "failures (state/model-pins.json); read-only")
     p.set_defaults(fn=cmd_node_pins)
     p = nverbs.add_parser("resident", help="the models preloaded on the card for Ask (a trial): platform.toml "
-                                           "[models] keep_ask_resident, preload_speech")
+                                           "[models] keep_ask_resident, preload_speech; the card cap, "
+                                           "[models] card_cap_mib")
     rverbs = p.add_subparsers(dest="resident_verb", required=True)
     q = rverbs.add_parser("show", help="the switches, the node's mode, the budget (line, measured margin), and "
                                        "each model of the set in priority order with its roles, collections, "
                                        "loaded state, size, in the budget or not and why, and pin holders")
+    q.set_defaults(fn=cmd_node_resident)
+    q = rverbs.add_parser("set", help="write the card cap into platform.toml [models] card_cap_mib: every room "
+                                      "decision sees the card as at most MIB, the driver's used unchanged "
+                                      "(a test of a smaller card); an empty value removes it")
+    q.add_argument("--card-cap", dest="card_cap", default=None, metavar="MIB",
+                   help="the card's size as Louise sees it, in MiB (16384 for a 16 GB card): at least 4096, "
+                        "at most the card's own total")
     q.set_defaults(fn=cmd_node_resident)
 
     hold = surfaces.add_parser("hold", help="your own copy: complete, current, checked")

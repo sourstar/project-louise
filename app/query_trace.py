@@ -137,7 +137,10 @@ def _gpus() -> list[dict] | dict:
     got = gpu.panel(config.GPU_PROBE_URL)
     if got.get("state") != "ok":
         return {"state": got.get("state"), "error": got.get("error")}
+    # the total as every room decision read it (the card cap applied, app/
+    # card_cap.py) and, where a cap lowered it, the card's own beside it
     return [{"card": d.card, "name": d.name, "vram_total": d.vram_total, "vram_used": d.vram_used,
+             **({"vram_total_real": d.vram_total_real} if d.capped else {}),
              "processes": [{"label": p.label, "container": p.container, "vram": p.vram, "host": p.host,
                             "ram": p.ram} for p in d.processes]}
             for d in got.get("devices") or ()]

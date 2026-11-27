@@ -95,6 +95,31 @@ class GpuDevice:
     #: 2026-11-11: the Radeon 610M's only model was shown "pushed off the
     #: card"). None = the driver was not asked or could not say.
     integrated: bool | None = None
+    #: THE CARD'S OWN TOTAL where `[models] card_cap_mib` caps it (app/
+    #: card_cap.py): `vram_total` is then the cap, which every room decision
+    #: reads, and this is kept for display; None where nothing caps the card.
+    #: Never set by the probe: `from_json` sets it, where Louise reads the card
+    vram_total_real: int | None = None
+
+    @property
+    def capped(self) -> bool:
+        return self.vram_total_real is not None
+
+    @property
+    def cap_says(self) -> str:
+        """"capped at 16,384 MiB of 32,656" — or "" where nothing caps the card."""
+        if self.vram_total_real is None or self.vram_total is None:
+            return ""
+        return f"capped at {self.vram_total >> 20:,} MiB of {self.vram_total_real >> 20:,}"
+
+    @property
+    def over_cap(self) -> int:
+        """Bytes the driver counts used past the cap (0 uncapped or under it):
+        a load Louise's room decisions did not plan (app/resident.py says it)."""
+        used = self.used
+        if self.vram_total_real is None or self.vram_total is None or used is None:
+            return 0
+        return max(0, used - self.vram_total)
 
     def pushed_off(self, p: GpuProcess) -> bool:
         """`p.pushed_out`, on a card with memory of its own to be pushed off."""
@@ -158,7 +183,36 @@ def to_json(snapshot: GpuSnapshot) -> dict:
 _PROCESS_FIELDS = frozenset(f.name for f in fields(GpuProcess))
 _DEVICE_FIELDS = frozenset(f.name for f in fields(GpuDevice))
 
-def from_json(data: dict) -> GpuSnapshot:
+#: `from_json`'s cap: read from platform.toml unless the caller gives one
+_FROM_FILE = object()
+
+
+def capped(d: dict, cap: int | None) -> dict:
+    """One device of the probe's answer with THE CARD CAP applied (app/
+    card_cap.py): its total the lesser of its own and `cap` (bytes), its own
+    kept as `vram_total_real` where the cap lowered it; `vram_used` as the
+    driver counts it. A card that is part of the processor is never capped:
+    its memory is the system's. Idempotent — a device already capped is
+    capped again from its own total, and uncapped where `cap` is None."""
+    real = d.get("vram_total_real") or d.get("vram_total")
+    out = {**d, "vram_total": real, "vram_total_real": None}
+    if cap and real and int(real) > int(cap) and d.get("integrated") is not True:
+        out |= {"vram_total": int(cap), "vram_total_real": int(real)}
+    return out
+
+
+def from_json(data: dict, *, cap: int | None | object = _FROM_FILE) -> GpuSnapshot:
+    """The probe's answer as Louise reads it — THE ONE PLACE the card cap is
+    applied (`capped`; `[models] card_cap_mib`, app/card_cap.py): every
+    consumer of the card's memory reads it here (app/resident.py `_card`, the
+    keeper's room and budget, app/model_evict.py, app/question_card.py,
+    app/gate_twin.py; `panel`, the System page and app/gpu_models.py).
+    `cap`: bytes, or None for the card as its driver counts it (the cap's
+    own check against the card's real total); omitted, the file's."""
+    if cap is _FROM_FILE:
+        from . import card_cap
+        cap = card_cap.cap_bytes()
+
     def sensors(s):
         if not s:
             return None
@@ -168,7 +222,7 @@ def from_json(data: dict) -> GpuSnapshot:
                           clock_mhz=s.get("clock_mhz"), clock_max_mhz=s.get("clock_max_mhz"))
     return GpuSnapshot(
         devices=tuple(
-            GpuDevice(**{**{k: v for k, v in d.items() if k in _DEVICE_FIELDS},
+            GpuDevice(**{**{k: v for k, v in capped(d, cap).items() if k in _DEVICE_FIELDS},
                          "processes": tuple(GpuProcess(**{k: (tuple(v) if k == "ns_ancestors" else v)
                                                           for k, v in p.items() if k in _PROCESS_FIELDS})
                                                  for p in d.get("processes", ())),

@@ -11,6 +11,29 @@ SYCL (München, 2026-11-27, `node resident show` in chat mode). None was
 measured on the RX 9060 XT. On ROCm or Vulkan the same models load at other
 sizes, and Perugia's keeper learns them there (§2a).
 
+## 0. The cap on the B70 (until Perugia resumes)
+
+The operator, 2026-11-27: "For test purpose we can limit the b70 to 16 GB to
+pre optimize the scenario". München behaves as a 16 GB node would, for
+Louise's own decisions:
+
+    louise node resident set --card-cap 16384     # [models] card_cap_mib = 16384 in platform.toml
+    louise node resident set --card-cap ""        # removed: the card's own 32,656 MiB again
+
+What it does:
+- Every room decision sees the card's total as 16,384 MiB: the keeper's room check and budget, a load's eviction or paging, a question's room, a gate's twin.
+- `used` stays as the driver counts it, so past 16,384 MiB none has room. The keeper then unloads the model with the oldest real use, or the rule in force pages.
+- It is applied in one place, where the probe's answer is read (app/gpu.py `from_json`, app/card_cap.py).
+- `node resident show` and the System page say "capped at 16,384 MiB of 32,656".
+- Whether the driver pages, and whether a reading was taken with room, are still judged against the card's own total: the B70 pages nothing until 32.7 GB.
+- When the driver's count passes the cap, the keeper's node event warns once per crossing, naming the MiB over and the models loaded. That event is the test's finding: a load Louise did not plan.
+
+What it does NOT do:
+- **It is Louise's view, not the card's.** LocalAI's memory reclaimer and the engine's allocator still see 32.7 GB. A load that bypasses the keeper (the operator's own, for instance) is not stopped at 16 GB; the event only reports it. On a real 16 GB card that load would page or fail. Here it succeeds.
+- **Do not lower `memory_reclaimer_threshold` to imitate a smaller card.** The keeper reads that same number as its line and applies it to the capped total, so the cap would be counted twice. The reclaimer keeps its 0.98 of 32.7 GB, where it is on (it is off in query mode).
+- **The sizes are SYCL's.** The keeper learns every model's size as the B70's runners load it under SYCL. ROCm or Vulkan on the RX 9060 XT load the same models at other sizes (§2a), so a set that fits 16 GB here is a forecast for Perugia, not a measurement of it.
+- It caps a card with memory of its own. The processor's Radeon (speech to text) is never capped: its memory is the system's.
+
 ## 1. What a 16 GB card has to hold (B70 figures, MiB loaded)
 
 | Role | Today | With one universal embedder |

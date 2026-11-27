@@ -47,12 +47,12 @@
   {% if d.vram_total and mb %}
   <div class="gpu-bar whose" title="{{ '%.0f'|format(d.used_pct) }}% used"><span class="louise" style="width:{{ '%.1f'|format(mb.louise) }}%" title="Louise's models: {{ cm.louise|size }}"></span><span class="others" style="width:{{ '%.1f'|format(mb.other) }}%" title="other models: {{ cm.other|size }}"></span><span class="unattributed" style="width:{{ '%.1f'|format(mb.outside) }}%" title="outside LocalAI's models: {{ mb.outside_bytes|size }}"></span></div>
   <div class="legend note"><div><span class="swatch louise"></span>Louise {{ cm.louise|size }}</div><div><span class="swatch others"></span>other models {{ cm.other|size }}</div><div><span class="swatch unattributed"></span>outside LocalAI {{ mb.outside_bytes|size }}</div><div><span class="swatch free"></span>free {{ d.free|size }}</div></div>
-  <div>VRAM {{ d.vram_total|size }} · used {{ d.used|size }} · free {{ d.free|size }}</div>
+  <div>VRAM {{ d.vram_total|size }} · used {{ d.used|size }} · free {{ d.free|size }}{% if d.capped %} <span class="note">({{ d.cap_says }}: platform.toml [models] card_cap_mib{% if d.over_cap %}; over the cap by {{ d.over_cap|size }}{% endif %})</span>{% endif %}</div>
   {% elif d.vram_total %}
   {% set sh = d.shares() %}
   <div class="gpu-bar whose" title="{{ '%.0f'|format(d.used_pct) }}% used"><span class="others" style="width:{{ '%.1f'|format(sh.processes) }}%" title="models: {{ d.attributed|size }}"></span><span class="unattributed" style="width:{{ '%.1f'|format(sh.unattributed) }}%" title="held by no model shown: {{ d.unattributed|size }}"></span></div>
   <div class="legend note"><div><span class="swatch others"></span>models {{ d.attributed|size }}</div>{% if d.unattributed %}<div><span class="swatch unattributed"></span>no model shown {{ d.unattributed|size }}</div>{% endif %}<div><span class="swatch free"></span>free {{ d.free|size }}</div></div>
-  <div>VRAM {{ d.vram_total|size }} · used {{ d.used|size }}{% if d.vram_used is none %} <span class="note">(sum of the models)</span>{% endif %} · free {{ d.free|size }}</div>
+  <div>VRAM {{ d.vram_total|size }} · used {{ d.used|size }}{% if d.vram_used is none %} <span class="note">(sum of the models)</span>{% endif %} · free {{ d.free|size }}{% if d.capped %} <span class="note">({{ d.cap_says }}: platform.toml [models] card_cap_mib{% if d.over_cap %}; over the cap by {{ d.over_cap|size }}{% endif %})</span>{% endif %}</div>
   {% else %}
   <div class="note">VRAM not read for the {{ d.driver }} driver</div>
   {% endif %}

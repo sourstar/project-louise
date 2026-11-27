@@ -446,8 +446,16 @@ louise node
                                                                        state, at-rest and largest size, in the budget or not and why, last use, and pin holders
                                                                        (an embed batch's, the operator's; never the preload's); and how a load that does not fit
                                                                        gets its room (`[models] make_room`, §7.8: in "page" the host's available memory against
-                                                                       its floor, and LocalAI's reclaimer if it is still on); read-only (added 2026-11-08,
+                                                                       its floor, and LocalAI's reclaimer if it is still on); and the card, "capped at 16,384 MiB
+                                                                       of 32,656" where `[models] card_cap_mib` caps it; read-only (added 2026-11-08,
                                                                        operator; the budget the same day)
+  resident set --card-cap MIB                                          THE CARD CAP, a test of a smaller card (added 2026-11-27, operator: "For test purpose we can
+                                                                       limit the b70 to 16 GB to pre optimize the scenario"): `[models] card_cap_mib` written into
+                                                                       platform.toml (§7.8), every other line kept — every room decision sees the card as at most
+                                                                       MIB, the driver's used unchanged; an empty value removes it. Refused (exit 2) under 4,096
+                                                                       MiB or above the card's own total as the GPU probe reads it; written, and said unchecked,
+                                                                       where the probe cannot say. In force at the worker's next beat; `POST
+                                                                       /api/node/resident/set {"card_cap": 16384}` (§7.4) does the same
 
 louise dev                                                             operator instruments; read-only unless the line says otherwise
   schedule-report      what the worker spent its rounds on; --gpu [--minutes N]: the card's busy, gaps and who held it, per minute;
@@ -1376,6 +1384,16 @@ reader needs at the command line:
   alternative is LocalAI's own `LOAD_TO_MEMORY`: a list kept by hand,
   loaded once at its start, and skipped under `max_active_backends = 1`
   (app/resident.py).
+  THE CARD CAP (`node resident set --card-cap MIB`, *added 2026-11-27*,
+  operator: "For test purpose we can limit the b70 to 16 GB to pre optimize
+  the scenario"; app/card_cap.py, docs/notes/perugia-16gb-test.md §0): with
+  `[models] card_cap_mib` set, "total" above and below is the lesser of the
+  card's own and the cap, applied where the probe's answer is read, and
+  "used" is the driver's count — so past the cap no load has room, the
+  keeper makes it by the oldest real use or waits, and its node event warns
+  once per crossing with the MiB over and the models loaded. What only the
+  card itself says — whether the driver pages, whether a reading is taken
+  with room — is still judged against its own total.
   THE BUDGET (*amended 2026-11-08*, the node's measurement at 03:25: with
   every collection on on-demand the set was 11 models, 28.3–28.5 GB on the
   32.7 GB card; every load passed the room check, but the compute buffers
@@ -2484,6 +2502,17 @@ variable, a file, a log line or a message.
              # one setting there was, is CUSTOM mode's model ("freely select the chat model") and what each of the
              # two reads when unset — so a file that names only `chat` answers with it in every mode — before the
              # environment's
+             card_cap_mib = 16384                       # THE CARD CAP, A TEST (added 2026-11-27, operator: "For test
+             # purpose we can limit the b70 to 16 GB to pre optimize the scenario"): every room decision sees the
+             # card as at most this many MiB — the keeper's room check and budget, a load's eviction or paging, a
+             # question's room, a gate's twin — and the driver's count of what is used as it is, so past the cap
+             # none has room; the card's own total is shown beside it ("capped at 16,384 MiB of 32,656"). Applied
+             # in one place, where the GPU probe's answer is read (app/gpu.py `from_json`, app/card_cap.py); a card
+             # that is part of the processor is never capped. Past it, the keeper's node event warns once per
+             # crossing with the MiB over and the models loaded. It is LOUISE'S VIEW ONLY: the model server's
+             # reclaimer and the engine still see the whole card, so a load that bypasses the keeper is reported,
+             # not stopped. Unset: the card's own total. Written by `node resident set --card-cap MIB` (§7.3), at
+             # least 4,096 and at most the card's own total; an empty value removes it
 [speech]     stt_model = "whisper-large-v3"   vad_model = "silero-vad"   tts_model = "omnivoice-cpp"
              tts_voice = "localai://voice-profiles/<id>"   synthetic_voices = "it=<voice>, en=<voice>"
              tts_steps = "24"
