@@ -333,6 +333,12 @@ OpenVINO kept (the status quo, if nothing is said), llama.cpp FA ON (recommended
 nearer the model, one engine for both MedCPT models; ~113 ms more per query), or FA
 off (nearest; ~200 ms more).
 
+**THE SWITCH ON HOLD INDEFINITELY (the operator, 2026-11-27: "MedCpt backend switch stays on
+hold indefinitely, keep the current one").** The reranker and the article encoder stay on
+OpenVINO, the query encoder where it is; the choice above is answered with the status quo,
+and no new pubmed space is made. The work of this note (0034, the converter, the gate tools
+and their results) stays on record for the day the hold is lifted.
+
 **HELD (the operator, 2026-11-27, through München: "Don't touch medcpt until Gutenberg nemo
 is done").** Nothing of MedCPT moves until then: the reranker, the article and query
 encoders, the new pubmed space, the precision runs (encoder-precision.md).

@@ -1336,6 +1336,10 @@ measured (published figures disagree).
 - **MEDCPT'S RERANKER PASSES ON LLAMA.CPP, THE SPEED IS THE OPERATOR'S CHOICE (München, 2026-11-27; medcpt-on-llama-cpp.md §6):**
   48 × 50, the same order; nearer the model than OpenVINO (largest score difference 0.0039 FA off, 0.0070 FA ON, OpenVINO
   0.0088); 312 / 224 / 111 ms per 50 documents. Recommended FA ON; OpenVINO stays until the operator says.
+  **THE MEDCPT BACKEND SWITCH IS ON HOLD INDEFINITELY; THE CURRENT BACKENDS STAY** (the operator, 2026-11-27: "MedCpt
+  backend switch stays on hold indefinitely, keep the current one"): the reranker and the article encoder stay on OpenVINO,
+  the query encoder where it is; no new pubmed space. **Legal benchmarking is postponed to next weekend** (the operator, the
+  same day).
   **ALL MEDCPT WORK HELD until Gutenberg's Nemotron run is done** (the operator, 2026-11-27, through München: "Don't touch
   medcpt until Gutenberg nemo is done"): the reranker swap, the OpenVINO precision arms, the `GGML_SYCL_DYNAMIC_PRECISION=F32`
   twin, the article and query encoders' port and new space. `engine-upstream.series` may be BUILT; its gates (which include
