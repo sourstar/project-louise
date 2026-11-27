@@ -76,7 +76,10 @@ def route(isolated_config, monkeypatch):
     from app.rage import dispatch
     said = {"text": "", "status": 200, "claims": 0}
 
-    def fake(audio, filename, ctype, fields, url=None):
+    def fake(audio, filename, ctype, fields, url=None, timeout_s=None):
+        said["timeout_s"] = timeout_s
+        if said.get("gate") is not None:
+            said["gate"].wait(10)
         return transcribe.Answer(said["status"], json.dumps({"text": said["text"]}).encode(), "application/json",
                                  "trimmed: 0.9 s of speech kept of 1.0 s", (("vad", 30.0), ("stt", 410.0)))
     monkeypatch.setattr(transcribe, "transcribe", fake)
@@ -183,3 +186,36 @@ def test_a_true_echo_name_included_is_dropped_and_the_same_words_out_of_order_ar
     assert heard("Philippe stop", said="Philippe went home. Stop the army.").command == "stop", "not unbroken"
     assert heard("Philippe, please stop", said=said).command is None and \
         heard("Philippe, please stop", said=said).addressed, "a word not read: taken"
+
+
+
+def test_one_clip_a_reader_is_written_down_at_a_time_and_the_others_answer_429(route):
+    """Architecture's read of 394fbc0e, A: a hung STT, a clip a second."""
+    import threading
+    c, said = route
+    said["text"], said["gate"] = "Philippe, chi era Garibaldi?", threading.Event()
+    first = {}
+    t = threading.Thread(target=lambda: first.update(r=_post(c)))
+    t.start()
+    import time
+    for _ in range(100):
+        from app import web
+        if web._heard_busy:
+            break
+        time.sleep(0.02)
+    others = [_post(c).status_code for _ in range(3)]
+    said["gate"].set()
+    t.join(10)
+    assert others == [429, 429, 429] and first["r"].status_code == 200
+    assert said["timeout_s"] == 15.0, "the server gives up when the page does"
+    said["gate"] = None
+    assert _post(c).status_code == 200, "free again once it ended"
+
+
+def test_a_clip_without_content_length_is_refused_before_it_is_parsed(route):
+    c, _ = route
+
+    def chunks():
+        yield b"x" * 1024
+    r = c.post("/ask/voice/heard", content=chunks(), headers={"content-type": "multipart/form-data; boundary=b"})
+    assert r.status_code == 411

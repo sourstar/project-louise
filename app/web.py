@@ -1541,6 +1541,15 @@ def _as_question(fn, job, arg):
 HEARD_SAID_CHARS = 4000
 #: a clip this long at most (hands-free cuts at 20 s): 16 kHz mono 16-bit
 HEARD_MAX_BYTES = 2 * 1024 * 1024
+#: the VAD's and the STT's bound for a hands-free clip: the page gives up at
+#: 15 s (voice.js HF_CLIP_MAX_MS), and so does the server (architecture's
+#: read of 394fbc0e, A)
+HEARD_TIMEOUT_S = 15.0
+#: the viewers whose clip is being written down now: ONE at a time each — a
+#: clip arriving meanwhile answers 429, and the page keeps listening (a slow
+#: STT would otherwise get ~12 calls a page on the shared thread pool)
+_heard_busy: set[str] = set()
+_heard_lock = threading.Lock()
 
 
 @ask_router.post("/ask/voice/heard")
@@ -1564,9 +1573,12 @@ async def ask_voice_heard(request: Request):
     if not request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
         raise HTTPException(400, "the upload is multipart/form-data with a `file` field")
     try:
-        declared = int(request.headers.get("content-length") or 0)
+        declared = int(request.headers.get("content-length") or -1)
     except ValueError:
-        declared = 0
+        declared = -1
+    if declared < 0:
+        # a chunked upload would be spooled whatever its size: a browser always says it
+        raise HTTPException(411, "a hands-free clip says its Content-Length")
     if declared > HEARD_MAX_BYTES + HEARD_SAID_CHARS * 4 + 4096:
         # refused before the form is spooled to disk
         raise HTTPException(413, f"an utterance is at most {HEARD_MAX_BYTES >> 20} MB")
@@ -1585,7 +1597,19 @@ async def ask_voice_heard(request: Request):
         await form.close()
     seconds = max(0.0, (len(audio) - 44) / 32000.0)
     fields = [("response_format", "json")] + ([("language", lang)] if lang else [])
-    got = await run_in_threadpool(transcribe.transcribe, audio, "utterance.wav", "audio/wav", fields)
+    who = _relay_owner(request)
+    with _heard_lock:
+        if who in _heard_busy:
+            print(f"{time.strftime('%H:%M:%S')} [voice] heard {seconds:.1f} s: dropped (one being written down)",
+                  flush=True)
+            raise HTTPException(429, "this reader's last clip is still being written down")
+        _heard_busy.add(who)
+    try:
+        got = await run_in_threadpool(transcribe.transcribe, audio, "utterance.wav", "audio/wav", fields,
+                                      None, HEARD_TIMEOUT_S)
+    finally:
+        with _heard_lock:
+            _heard_busy.discard(who)
     stt_s = round(sum(d for n, d in got.timing if n == "stt") / 1000.0, 2)
     vad = got.vad.split(":")[0]
     if got.status != 200:
