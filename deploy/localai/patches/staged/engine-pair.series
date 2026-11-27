@@ -1,0 +1,44 @@
+# A CANDIDATE: MEDCPT ON OUR LLAMA.CPP (the operator, 2026-11-26, through München: "Move
+# both" - MedCPT's article encoder and its cross-encoder from OpenVINO to llama.cpp -
+# "Validate all the models and port MedCPT").
+# engine-pace.series line for line, then:
+#   0034  a BERT text pair: with the model option pairs:true, VeGa's pair marker (an
+#         embedding) and (query, document) (a rerank) become [CLS] a [SEP] b [SEP], cut
+#         longest first to the load's context as Hugging Face's tokenizer cuts, the
+#         second segment on token-type row 1 (the inner patch's pair_segments); a
+#         [SEP] inside a first segment, or inside one text, is refused.
+#         rerank_score:sigmoid answers the logit's sigmoid, as the OpenVINO backend did.
+#         The converter keeps a BERT sequence classifier's pooler (MedCPT's
+#         cross-encoder needs it) and knows MedCPT's tokenizer: its GGUFs are converted
+#         with this tree. Without pairs:true no model's answer can move.
+#   SERIES_FILE=deploy/localai/patches/staged/engine-pair.series \
+#     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
+# ANOTHER ENGINE: a build and every gate again, and MedCPT's two models gated against
+# their OpenVINO runs (docs/notes/medcpt-on-llama-cpp.md).
+base dd5780aa904d132c784867d37fc713df8d984c8a
+0001-system-list-load-options.patch
+0002-llama-cpp-embed-token-ids.patch
+0003-llama-cpp-encoder-decoder.patch
+0004-llama-cpp-encoder-decoder-waves.patch
+0005-llama-cpp-sycl-batched-mul-mat-src1.patch
+0006-llama-cpp-chat-cohere-command3.patch
+0007-llama-cpp-nemotron-rerank.patch
+0008-llama-cpp-context-on-demand.patch
+staged/0009-llama-cpp-omnivoice.patch
+staged/0010-llama-cpp-tts-voice-modes.patch
+staged/0012-llama-cpp-sycl-reorder-experts-switch.patch
+staged/0013-llama-cpp-sycl-pool-refusal.patch
+staged/0014-llama-cpp-second-signal-exit.patch
+staged/0015-llama-cpp-park-weights.patch
+staged/0016-llama-cpp-sycl-pool-refuse-switch.patch
+staged/0017-llama-cpp-moe-record.patch
+staged/0018-llama-cpp-sycl-pool-refusal-reaches-the-graph.patch
+staged/0020-llama-cpp-omnivoice-nothing-kept-between-requests.patch
+staged/0021-llama-cpp-sycl-paging-is-the-default.patch
+staged/0022-llama-cpp-omnivoice-language-tag.patch
+staged/0025-llama-cpp-stream-fails-after-its-first-chunk.patch
+staged/0026-llama-cpp-sycl-graph-refuse-switch.patch
+staged/0023-llama-cpp-park-when-told.patch
+staged/0030-llama-cpp-omnivoice-fade-out-ends-with-the-kept-silence.patch
+staged/0033-llama-cpp-sycl-park-paced-by-the-host-reserve.patch
+staged/0034-llama-cpp-bert-text-pairs.patch

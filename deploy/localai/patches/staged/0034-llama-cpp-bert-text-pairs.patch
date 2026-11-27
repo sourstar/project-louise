@@ -1,0 +1,1167 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 27 Nov 2026 07:54:44 +0000
+Subject: [PATCH] feat(llama-cpp): a BERT text pair for embedding and rerank
+ (pairs:true), and rerank_score:sigmoid
+
+Carried as a llama.cpp patch beside the others
+(patches/0026-bert-text-pairs.patch), after 0025.
+
+MedCPT's article encoder reads a (title, abstract) pair and its
+cross-encoder a (query, article) pair, each as Hugging Face's pair
+tokenizer builds it: `[CLS] a [SEP] b [SEP]`, the second segment on
+token-type row 1, the two cut longest first to max_length. llama.cpp gave
+every token row 0, its rerank prompt for a WordPiece vocabulary had no
+closing [SEP], and its converter dropped a BERT classifier's pooler.
+
+With the model option `pairs:true` (VeGa's wrapper already sends pairs only
+to a model declaring it):
+- Embedding: VeGa's pair marker followed by the JSON [first, second] is
+  built into `[CLS] a [SEP] b [SEP]` (text_pair.h), cut longest first to the
+  bound (the load's context, the physical batch, the trained positions:
+  512 for MedCPT), as Hugging Face's TruncationStrategy::LongestFirst - 216
+  of 216 rows of its own table agree; the context reads the segments
+  (pair_segments, the inner patch). A first segment holding [SEP] is
+  refused, so is one text with a [SEP] inside it: the graph would start a
+  second segment there.
+- Rerank: (query, document) is built the same way.
+- `rerank_score:sigmoid` answers the logit's sigmoid, as TEI's /rerank and
+  the OpenVINO backend gave MedCPT's; `raw`, the default, the logit.
+A llama.cpp without pair_segments (a fork) refuses a load asking pairs:true:
+a pair read as one segment is a wrong vector. Without the option nothing
+changes.
+
+Measured on CPU (this tree, both models converted with it, f32) through the
+gRPC server, against NCBI's usage (transformers, fp32, CPU): the article
+encoder, 67 PubMed pairs (three past 512 tokens, one per truncation case):
+cosine 0.9999882 at worst, the token counts Hugging Face's; without the
+segments 0.9736. The cross-encoder, 80 (title, abstract) pairs: sigmoid
+scores within 0.0075, logits within 0.079, the order of every pair the same
+but for one tie (two records with the same abstract); without pairs, logits
+off by up to 18.9. Not run on a card.
+
+Assisted-by: Claude Code
+---
+ backend/cpp/llama-cpp/CMakeLists.txt          |   6 +
+ backend/cpp/llama-cpp/grpc-server.cpp         | 155 ++++++-
+ .../patches/0026-bert-text-pairs.patch        | 389 ++++++++++++++++++
+ backend/cpp/llama-cpp/prepare.sh              |  13 +
+ backend/cpp/llama-cpp/text_pair.h             | 123 ++++++
+ backend/cpp/llama-cpp/text_pair_test.cpp      | 303 ++++++++++++++
+ 6 files changed, 987 insertions(+), 2 deletions(-)
+ create mode 100644 backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch
+ create mode 100644 backend/cpp/llama-cpp/text_pair.h
+ create mode 100644 backend/cpp/llama-cpp/text_pair_test.cpp
+
+diff --git a/backend/cpp/llama-cpp/CMakeLists.txt b/backend/cpp/llama-cpp/CMakeLists.txt
+index 111eef0..96be116 100644
+--- a/backend/cpp/llama-cpp/CMakeLists.txt
++++ b/backend/cpp/llama-cpp/CMakeLists.txt
+@@ -124,6 +124,12 @@ if(LLAMA_GRPC_BUILD_TESTS)
+     target_compile_features(second_signal_test PRIVATE cxx_std_17)
+     add_test(NAME second_signal_test COMMAND second_signal_test)
+ 
++    # A text pair as a BERT reads it (text_pair.h) — standard library only.
++    add_executable(text_pair_test text_pair_test.cpp text_pair.h)
++    target_include_directories(text_pair_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
++    target_compile_features(text_pair_test PRIVATE cxx_std_17)
++    add_test(NAME text_pair_test COMMAND text_pair_test)
++
+     # Parking's messages and codes (park_reply.h) — standard library only.
+     add_executable(park_reply_test park_reply_test.cpp park_reply.h)
+     target_include_directories(park_reply_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+diff --git a/backend/cpp/llama-cpp/grpc-server.cpp b/backend/cpp/llama-cpp/grpc-server.cpp
+index c878fa6..7550bde 100644
+--- a/backend/cpp/llama-cpp/grpc-server.cpp
++++ b/backend/cpp/llama-cpp/grpc-server.cpp
+@@ -120,6 +120,30 @@
+ #include "parent_watch.h" // best-effort parent-death backstop (see header)
+ #include "second_signal.h" // a second signal leaves at once, without exit() (see header)
+ #include "park_reply.h" // parking: the messages and the codes a caller reads (see header)
++#include "text_pair.h" // a text pair as a BERT reads it, with pairs:true (see header)
++
++// rerank_score:sigmoid - a reranker's relevance is the sigmoid of its logit, as
++// TEI's /rerank and the OpenVINO backend gave MedCPT's; the order is the logit's.
++// raw (the default): the logit itself. Set by each load's options (params_parse).
++static std::atomic<bool> rerank_score_sigmoid{false};
++
++// pairs:true asked by the load's options; a llama.cpp that cannot read the
++// segments (a fork without common_params::pair_segments) refuses the load
++static std::atomic<bool> pairs_asked{false};
++
++#if LOCALAI_HAS_PAIR_SEGMENTS
++static bool pair_segments_of(const common_params & params) { return params.pair_segments; }
++#else
++static bool pair_segments_of(const common_params &) { return false; }
++#endif
++
++static bool option_says_on(const std::string & v) {
++    return v == "true" || v == "1" || v == "yes" || v == "on" || v == "enabled";
++}
++
++static bool option_says_off(const std::string & v) {
++    return v == "false" || v == "0" || v == "no" || v == "off" || v == "disabled";
++}
+ 
+ // park_reply.h names its codes apart from gRPC's
+ static grpc::StatusCode grpc_code_of(llama_grpc::ParkCode code) {
+@@ -642,6 +666,8 @@ static void add_rpc_devices(std::string servers) {
+ 
+ static void params_parse(server_context& /*ctx_server*/, const backend::ModelOptions* request,
+                                 common_params & params) {
++    rerank_score_sigmoid = false;
++    pairs_asked = false;
+ 
+     // this is comparable to: https://github.com/ggerganov/llama.cpp/blob/d9b33fe95bd257b36c84ee5769cc048230067d6f/examples/server/server.cpp#L1809
+ 
+@@ -1098,6 +1124,34 @@ static void params_parse(server_context& /*ctx_server*/, const backend::ModelOpt
+                 try { params.embd_normalize = std::stoi(optval_str); } catch (...) {}
+             }
+ 
++        // --- a text pair, as a BERT reads it (text_pair.h): [CLS] a [SEP] b [SEP]
++        //     with the second segment on token-type row 1, for an embedding (VeGa's
++        //     pair marker) and for a rerank (query, document) ---
++        } else if (!strcmp(optname, "pairs")) {
++            if (option_says_on(optval_str)) {
++                pairs_asked = true;
++#if LOCALAI_HAS_PAIR_SEGMENTS
++                params.pair_segments = true;
++#endif
++            } else if (option_says_off(optval_str)) {
++                pairs_asked = false;
++#if LOCALAI_HAS_PAIR_SEGMENTS
++                params.pair_segments = false;
++#endif
++            } else {
++                fprintf(stderr, "[llama-cpp] pairs:%s is not true or false: the option is not read\n", optval_str.c_str());
++            }
++
++        // --- the score a rerank answers: raw (the logit) or sigmoid ---
++        } else if (!strcmp(optname, "rerank_score")) {
++            if (optval_str == "sigmoid") {
++                rerank_score_sigmoid = true;
++            } else if (optval_str == "raw") {
++                rerank_score_sigmoid = false;
++            } else {
++                fprintf(stderr, "[llama-cpp] rerank_score:%s is not raw or sigmoid: the scores stay raw\n", optval_str.c_str());
++            }
++
+         // --- reasoning parser (upstream --reasoning-format) ---
+         // Picks the parser for <think> blocks emitted by reasoning models.
+         // none / auto / deepseek / deepseek-legacy
+@@ -2870,6 +2924,15 @@ public:
+         common_params params;
+         params_parse(ctx_server, request, params);
+ 
++        if (pairs_asked && !LOCALAI_HAS_PAIR_SEGMENTS) {
++            const std::string error_msg =
++                "pairs:true: this build's llama.cpp cannot read a text pair's segments (no pair_segments), and a pair "
++                "read as one segment is a wrong vector";
++            result->set_message(error_msg);
++            result->set_success(false);
++            return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, error_msg);
++        }
++
+ #ifndef LOCALAI_LLAMA_CPP_NO_SCORE_TASK
+         if (params.score_enabled && !params.kv_unified) {
+             const std::string error_msg =
+@@ -4248,6 +4311,41 @@ public:
+         return grpc::Status::OK;
+     }
+ 
++    // The bound of a text pair, in tokens: what one sequence can hold (its
++    // context, the physical batch a non-causal model needs it in at once, the
++    // model's trained positions) - the load call's context_size, as the model
++    // card's max_length.
++    size_t pair_bound() const {
++        size_t bound = (size_t) llama_model_n_ctx_train(ctx_server.impl->model_tgt);
++        if (params_base.n_ctx > 0) {
++            const int n_seq = params_base.kv_unified ? 1 : std::max(1, params_base.n_parallel);
++            bound = std::min(bound, (size_t) (params_base.n_ctx / n_seq));
++        }
++        if (params_base.n_ubatch > 0) {
++            bound = std::min(bound, (size_t) params_base.n_ubatch);
++        }
++        return bound;
++    }
++
++    // [CLS] a [SEP] b [SEP] from two texts (text_pair.h), each tokenized as the
++    // model's own tokenizer does (special tokens in the text read as such)
++    grpc::Status pair_tokens_of(const std::string & a, const std::string & b, std::vector<int32_t> & out) const {
++        const llama_vocab * vocab = ctx_server.impl->vocab;
++        const llama_token cls = llama_vocab_bos(vocab), sep = llama_vocab_sep(vocab);
++        if (cls == LLAMA_TOKEN_NULL || sep == LLAMA_TOKEN_NULL) {
++            return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
++                                "pairs: the model's vocabulary has no [CLS] or no [SEP] to build a text pair with");
++        }
++        try {
++            out = llama_grpc::pair_tokens(cls, sep, common_tokenize(vocab, a, /*add_special=*/false, /*parse_special=*/true),
++                                          common_tokenize(vocab, b, /*add_special=*/false, /*parse_special=*/true), pair_bound())
++                      .tokens;
++        } catch (const std::invalid_argument & e) {
++            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, e.what());
++        }
++        return grpc::Status::OK;
++    }
++
+     grpc::Status Embedding(ServerContext* context, const backend::PredictOptions* request, backend::EmbeddingResult* embeddingResult) override {
+         auto auth = checkAuth(context);
+         if (!auth.ok()) return auth;
+@@ -4285,12 +4383,46 @@ public:
+             prompt = *ids;
+         }
+ 
++        // a text pair (pairs:true, text_pair.h): VeGa's marker and [first, second]
++        // become [CLS] a [SEP] b [SEP], cut longest first to the bound; taken as
++        // the tokens themselves
++        bool is_pair = false;
++        if (pair_segments_of(params_base) && request->embeddingtokens_size() == 0 && prompt.is_string()) {
++            std::optional<std::string> body;
++            try {
++                body = llama_grpc::pair_body(prompt.get<std::string>());
++            } catch (const std::invalid_argument & e) {
++                return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, e.what());
++            }
++            if (body) {
++                const json pair = json::parse_no_throw(*body);
++                if (pair.is_discarded() || !pair.is_array() || pair.size() != 2 || !pair[0].is_string() || !pair[1].is_string()) {
++                    return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
++                                        "a text pair is the pair marker followed by a JSON array of two strings");
++                }
++                std::vector<int32_t> ids;
++                const auto built = pair_tokens_of(pair[0].get<std::string>(), pair[1].get<std::string>(), ids);
++                if (!built.ok()) {
++                    return built;
++                }
++                prompt = ids;
++                is_pair = true;
++            }
++        }
++
+         auto tokenized_prompts = tokenize_input_prompts(ctx_server.impl->vocab, ctx_server.impl->mctx, prompt, true, true LOCALAI_MTMD_INIT_OPT_ARG(ctx_server.impl->init_opt));
+         for (const auto & tokens : tokenized_prompts) {
+             // this check is necessary for models that do not add BOS token to the input
+             if (tokens.empty()) {
+                 return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "Input content cannot be empty");
+             }
++            // one text in a pair model: a [SEP] inside it would start a second segment
++            if (pair_segments_of(params_base) && !is_pair &&
++                llama_grpc::has_inner_separator(tokens.get_text_tokens(), llama_vocab_sep(ctx_server.impl->vocab))) {
++                return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
++                                    "a text holds the separator token inside it, which a pair model reads as the start of a second "
++                                    "segment: it is not embedded");
++            }
+         }
+ 
+         // Honor the load-time embd_normalize set via options:embd_normalize.
+@@ -4405,7 +4537,18 @@ public:
+ 
+             tasks.reserve(documents.size());
+             for (size_t i = 0; i < documents.size(); i++) {
+-                auto tmp = format_prompt_rerank(ctx_server.impl->model_tgt, ctx_server.impl->vocab, ctx_server.impl->mctx, request->query(), documents[i] LOCALAI_RERANK_FILES_ARGS LOCALAI_MTMD_INIT_OPT_ARG(ctx_server.impl->init_opt));
++                server_tokens tmp;
++                if (pair_segments_of(params_base)) {
++                    // (query, document) as the model reads a pair (text_pair.h)
++                    std::vector<int32_t> ids;
++                    const auto built = pair_tokens_of(request->query(), documents[i], ids);
++                    if (!built.ok()) {
++                        return built;
++                    }
++                    tmp = server_tokens(ids, false);
++                } else {
++                    tmp = format_prompt_rerank(ctx_server.impl->model_tgt, ctx_server.impl->vocab, ctx_server.impl->mctx, request->query(), documents[i] LOCALAI_RERANK_FILES_ARGS LOCALAI_MTMD_INIT_OPT_ARG(ctx_server.impl->init_opt));
++                }
+                 server_task task = server_task(SERVER_TASK_TYPE_RERANK);
+                 task.id = rd.queue_tasks.get_new_id();
+                 task.index = i;
+@@ -4452,7 +4595,15 @@ public:
+             backend::DocumentResult* doc_result = rerankResult->add_results();
+             doc_result->set_index(response.value("index", 0));
+             doc_result->set_text(request->documents(response.value("index", 0)));
+-            doc_result->set_relevance_score(response.value("score", 0.0f));
++            const float score = response.value("score", 0.0f);
++            if (rerank_score_sigmoid) {
++                // the stable form: no exp() of a large positive number
++                const double x = score;
++                const double s = x >= 0 ? 1.0 / (1.0 + std::exp(-x)) : std::exp(x) / (1.0 + std::exp(x));
++                doc_result->set_relevance_score((float) s);
++            } else {
++                doc_result->set_relevance_score(score);
++            }
+ 
+             // Add tokens evaluated for this document
+             int tokens_evaluated = response.value("tokens_evaluated", 0);
+diff --git a/backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch b/backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch
+new file mode 100644
+index 0000000..3cc242d
+--- /dev/null
++++ b/backend/cpp/llama-cpp/patches/0026-bert-text-pairs.patch
+@@ -0,0 +1,389 @@
++llama: a BERT reads a text pair's second segment on token-type row 1 (pair_segments), and a BERT sequence classifier keeps its pooler
++
++A BERT trained on text pairs reads `[CLS] a [SEP] b [SEP]` with the first
++segment's tokens on token-type row 0 and the second's on row 1 - Hugging
++Face's token_type_ids. The graph gave row 0 to every token ("token types are
++hardcoded to zero"), so such a model read its second segment as more of the
++first. Measured on ncbi/MedCPT-Article-Encoder (title, abstract) against
++NCBI's own usage (transformers, fp32, CPU), 67 PubMed pairs: cosine as low as
++0.9736 with every token on row 0; 0.9999882 at worst with the segments.
++
++llama_context_params::pair_segments (default false; common_params too): the
++BERT graph then gives a token after its sequence's first [SEP], by position,
++row 1 (src/llama-pair-segments.h: read off the ubatch's tokens, each
++sequence its own first separator). A single text, `[CLS] a [SEP]`, is all
++row 0, as before. The caller builds the pair and refuses a first segment that
++holds a [SEP] of its own. A context asking it of a model that is not BERT, has
++no second token-type row or no separator is refused at creation, never run
++with the pair dropped. Without pair_segments the graph is the one it was.
++
++The converter dropped BERT's pooling layer ("we are only using BERT for
++embeddings"), for BertForSequenceClassification too, whose score is
++classifier(tanh(pooler.dense([CLS]))): the classifier read the raw [CLS]
++row, and ncbi/MedCPT-Cross-Encoder's logits were off by up to 16. The pooler
++is now the head's dense layer (cls, tanh by default) for a sequence classifier
++of BertModel itself; every class built on it still drops it. With both,
++MedCPT's cross-encoder scores 80 (query, article) pairs within 0.079 of
++torch's logits.
++
++MedCPT's tokenizer is registered for its pre-tokenizer hash
++(convert_hf_to_gguf_update.py, `medcpt`, WPM; llama-vocab reads no
++pre-tokenizer for WPM): without it the converter stops on "BPE pre-tokenizer
++was not recognized".
++
++Not changed: the residual against torch (cosine 1 - 1.2e-5, logits 0.08) is
++ggml's tanh GELU against BERT's erf GELU, on every BERT here alike; moving
++BERT to ggml_gelu_erf would move every BERT space's vectors and belongs to a
++new space, not to this patch.
++
++Checked: tests/test-bert-pair-segments.cpp, standard library only, 8 cases;
++both MedCPT models converted with this tree, embedded and scored through the
++gRPC server on CPU against torch (the outer patch's numbers).
++---
++diff --git a/common/common.cpp b/common/common.cpp
++index fa081a2..541769a 100644
++--- a/common/common.cpp
+++++ b/common/common.cpp
++@@ -1982,6 +1982,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
++     cparams.op_offload        = !params.no_op_offload;
++     cparams.swa_full          = params.swa_full;
++     cparams.kv_unified        = params.kv_unified;
+++    cparams.pair_segments     = params.pair_segments;
++ 
++     cparams.type_k = params.cache_type_k;
++     cparams.type_v = params.cache_type_v;
++diff --git a/common/common.h b/common/common.h
++index 0f97b98..3fc1001 100644
++--- a/common/common.h
+++++ b/common/common.h
++@@ -602,6 +602,7 @@ struct common_params {
++     bool ctx_shift         = false; // context shift on infinite text generation
++     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
++     bool kv_unified        = false; // enable unified KV cache
+++    bool pair_segments     = false; // BERT: token-type row 1 after a sequence's first SEP (a text pair)
++ 
++     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
++     bool verbose_prompt    = false; // print prompt tokens before generation
++diff --git a/conversion/base.py b/conversion/base.py
++index 7cfbff3..d9f5f08 100644
++--- a/conversion/base.py
+++++ b/conversion/base.py
++@@ -2470,6 +2470,9 @@ class TextModel(ModelBase):
++         if chkhsh == "5635e1c8d621dff7b4825f41f2f97b6ceb39bcf2d5c541db28577080d6efd5e5":
++             # ref: https://huggingface.co/thinkingmachines/Inkling-2-Small
++             res = "inkling2"
+++        if chkhsh == "0f99a1f1fe4b3bd304b99003d4c1cb7c98fad2e3b2cc0d7cdb1a87fc46659b11":
+++            # ref: https://huggingface.co/ncbi/MedCPT-Query-Encoder
+++            res = "medcpt"
++ 
++         if res is None:
++             logger.warning("\n")
++diff --git a/conversion/bert.py b/conversion/bert.py
++index 150b266..df1028b 100644
++--- a/conversion/bert.py
+++++ b/conversion/bert.py
++@@ -79,8 +79,12 @@ class BertModel(TextModel):
++         if name.endswith(".beta"):
++             name = name[:-5] + ".bias"
++ 
++-        # we are only using BERT for embeddings so we don't need the pooling layer
++-        if name in ("embeddings.position_ids", "pooler.dense.weight", "pooler.dense.bias"):
+++        if name == "embeddings.position_ids":
+++            return None
+++
+++        # the pooling layer: BertForSequenceClassification's head, which BertModel.modify_tensors keeps as the
+++        # classifier's dense layer; unused by an embedding model, and by every class built on this one
+++        if name in ("pooler.dense.weight", "pooler.dense.bias") and cls is not BertModel:
++             return None
++ 
++         if name.startswith("cls.predictions"):
++@@ -92,6 +96,15 @@ class BertModel(TextModel):
++         return super().filter_tensors((name, gen))
++ 
++     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+++        if name in ("pooler.dense.weight", "pooler.dense.bias"):
+++            if not self.cls_out_labels:
+++                # an embedding model does not use the pooling layer
+++                return
+++            # BertForSequenceClassification scores classifier(tanh(pooler.dense([CLS]))): the pooler is the head's
+++            # dense layer (cls, its activation tanh by default), as RobertaClassificationHead's classifier.dense.
+++            # Dropped, the classifier read the raw [CLS] row: ncbi/MedCPT-Cross-Encoder's logits off by up to 16.
+++            name = name.replace("pooler.dense", "classifier.dense")
+++
++         if self.cls_out_labels:
++             # For BertForSequenceClassification (direct projection layer)
++             if name == "classifier.weight":
++diff --git a/convert_hf_to_gguf_update.py b/convert_hf_to_gguf_update.py
++index ff5fca4..b13135a 100755
++--- a/convert_hf_to_gguf_update.py
+++++ b/convert_hf_to_gguf_update.py
++@@ -168,6 +168,7 @@ models = [
++     {"name": "mmbert",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jhu-clsp/mmBERT-base", },
++     {"name": "k2-horizon",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/IFM/K2-Horizon-36B", },
++     {"name": "inkling2",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/thinkingmachines/Inkling-2-Small", },
+++    {"name": "medcpt",           "tokt": TOKENIZER_TYPE.WPM, "repo": "https://huggingface.co/ncbi/MedCPT-Query-Encoder", }, # WPM: the article and cross encoders share it
++ ]
++ 
++ # some models are known to be broken upstream, so we will skip them as exceptions
++diff --git a/include/llama.h b/include/llama.h
++index da49dfb..d217ee6 100644
++--- a/include/llama.h
+++++ b/include/llama.h
++@@ -426,6 +426,9 @@ extern "C" {
++         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
++                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
++                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+++        bool pair_segments; // BERT: a token after its sequence's first SEP takes token-type row 1, a text pair's second
+++                            // segment, instead of row 0 for every token (src/llama-pair-segments.h); a single text is
+++                            // unchanged. The caller builds [CLS] a [SEP] b [SEP] with no SEP inside a.
++ 
++         // [EXPERIMENTAL]
++         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
++diff --git a/src/llama-context.cpp b/src/llama-context.cpp
++index ff59ae6..e679f52 100644
++--- a/src/llama-context.cpp
+++++ b/src/llama-context.cpp
++@@ -376,6 +376,22 @@ llama_context::llama_context(
++ 
++     cparams.op_offload     = params.op_offload;
++     cparams.kv_unified     = params.kv_unified;
+++    cparams.pair_segments  = params.pair_segments;
+++
+++    // a text pair's segments are read by the BERT graph alone, from a second
+++    // token-type row and the separator: anywhere else they would be dropped
+++    // without a word, and the pair read as one text
+++    if (cparams.pair_segments) {
+++        if (model.arch != LLM_ARCH_BERT) {
+++            throw std::runtime_error("pair_segments: only the BERT architecture reads a text pair's segments, not " + model.arch_name());
+++        }
+++        if (model.type_embd == nullptr || model.type_embd->ne[1] < 2) {
+++            throw std::runtime_error("pair_segments: the model has no second token-type row");
+++        }
+++        if (model.vocab.token_sep() == LLAMA_TOKEN_NULL) {
+++            throw std::runtime_error("pair_segments: the model's vocabulary has no separator token");
+++        }
+++    }
++     cparams.moe_cache_size      = params.moe_cache_size;
++     cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
++ 
++@@ -441,6 +457,9 @@ llama_context::llama_context(
++     LLAMA_LOG_INFO("%s: causal_attn           = %d\n",   __func__, cparams.causal_attn);
++     LLAMA_LOG_INFO("%s: flash_attn            = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
++     LLAMA_LOG_INFO("%s: kv_unified            = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
+++    if (cparams.pair_segments) {
+++        LLAMA_LOG_INFO("%s: pair_segments         = true\n", __func__);
+++    }
++     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
++     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
++     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
++@@ -4464,6 +4483,7 @@ llama_context_params llama_context_default_params() {
++         /*.op_offload                  =*/ true,
++         /*.swa_full                    =*/ true,
++         /*.kv_unified                  =*/ false,
+++        /*.pair_segments               =*/ false,
++         /*.sampler                     =*/ nullptr,
++         /*.n_sampler                   =*/ 0,
++         /*.ctx_other                   =*/ nullptr,
++diff --git a/src/llama-cparams.h b/src/llama-cparams.h
++index 1f890d6..4cb45e6 100644
++--- a/src/llama-cparams.h
+++++ b/src/llama-cparams.h
++@@ -52,6 +52,7 @@ struct llama_cparams {
++     bool no_perf;
++     bool op_offload;
++     bool kv_unified;
+++    bool pair_segments;      // BERT: token-type row 1 after a sequence's first SEP (llama-pair-segments.h)
++     bool pipeline_parallel;
++     bool training;           // set by llama_opt_init()
++     bool moe_random_routing; // benchmark only: random expert ids in the MoE GEMMs
++diff --git a/src/llama-pair-segments.h b/src/llama-pair-segments.h
++new file mode 100644
++index 0000000..66b6243
++--- /dev/null
+++++ b/src/llama-pair-segments.h
++@@ -0,0 +1,47 @@
+++#pragma once
+++
+++// A TEXT PAIR'S SEGMENTS for a BERT graph (a context made with pair_segments).
+++//
+++// A BERT reads a text pair as `[CLS] a [SEP] b [SEP]`, the first segment's
+++// tokens with token-type row 0 and the second's with row 1: Hugging Face's
+++// pair template gives token_type_ids 0 to `[CLS] a [SEP]` and 1 to `b [SEP]`.
+++// llama.cpp's graph gave row 0 to every token, so a model trained on pairs
+++// (MedCPT's article encoder: title and abstract; its cross-encoder: query and
+++// article) read its second segment as a continuation of the first.
+++//
+++// The segment is read off the tokens themselves: a token after the first
+++// separator of its sequence, by position, is in segment 1; everything up to
+++// and including that separator is in segment 0. A single text, `[CLS] a
+++// [SEP]`, is all 0 - what the graph gave before. The rule holds only while the
+++// first segment carries no separator of its own: the caller that builds the
+++// pair refuses one that does (a literal "[SEP]" in a title, tokenized as the
+++// special token, as Hugging Face's tokenizer does).
+++//
+++// Standard library only (tests/test-bert-pair-segments.cpp).
+++
+++#include <cstdint>
+++#include <unordered_map>
+++#include <vector>
+++
+++// The segment of each of `n_tokens` tokens: `token[i]` at position `pos[i]`
+++// in sequence `seq[i]`; `sep` the separator. Positions decide "after", not
+++// the tokens' order in the batch.
+++static inline std::vector<int32_t> llama_pair_segments(
+++        int32_t n_tokens, const int32_t * token, const int32_t * pos, const int32_t * seq, int32_t sep) {
+++    std::unordered_map<int32_t, int32_t> first_sep; // sequence -> position of its first separator
+++    for (int32_t i = 0; i < n_tokens; ++i) {
+++        if (token[i] != sep) {
+++            continue;
+++        }
+++        auto it = first_sep.find(seq[i]);
+++        if (it == first_sep.end() || pos[i] < it->second) {
+++            first_sep[seq[i]] = pos[i];
+++        }
+++    }
+++    std::vector<int32_t> segment(n_tokens, 0);
+++    for (int32_t i = 0; i < n_tokens; ++i) {
+++        const auto it = first_sep.find(seq[i]);
+++        segment[i] = it != first_sep.end() && pos[i] > it->second ? 1 : 0;
+++    }
+++    return segment;
+++}
++diff --git a/src/models/bert.cpp b/src/models/bert.cpp
++index b98faff..2396cdd 100644
++--- a/src/models/bert.cpp
+++++ b/src/models/bert.cpp
++@@ -1,5 +1,35 @@
++ #include "models.h"
++ 
+++#include "../llama-pair-segments.h"
+++
+++// A text pair's segments, read off the ubatch's tokens (llama-pair-segments.h)
+++class llm_graph_input_pair_segments : public llm_graph_input_i {
+++public:
+++    explicit llm_graph_input_pair_segments(llama_token sep) : sep(sep) {}
+++    virtual ~llm_graph_input_pair_segments() = default;
+++
+++    void set_input(const llama_ubatch * ubatch) override {
+++        const int32_t n = (int32_t) ubatch->n_tokens;
+++        std::vector<int32_t> seq(n, 0);
+++        for (int32_t i = 0; i < n; ++i) {
+++            seq[i] = ubatch->seq_id[i][0];
+++        }
+++        const std::vector<int32_t> seg = ubatch->token && ubatch->pos
+++            ? llama_pair_segments(n, ubatch->token, ubatch->pos, seq.data(), sep)
+++            : std::vector<int32_t>(n, 0);
+++        ggml_backend_tensor_set(segments, seg.data(), 0, n*ggml_element_size(segments));
+++    }
+++
+++    bool can_reuse(const llm_graph_params & params) override {
+++        // the values are computed again in set_input(), only the shape must match
+++        return segments->ne[0] == params.ubatch.n_tokens;
+++    }
+++
+++    ggml_tensor * segments = nullptr; // I32 [n_tokens]
+++
+++    const llama_token sep;
+++};
+++
++ void llama_model_bert::load_arch_hparams(llama_model_loader & ml) {
++     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
++ 
++@@ -87,8 +117,15 @@ llama_model_bert::graph::graph(const llm_graph_params & params) : llm_graph_cont
++     // construct input embeddings (token, type, position)
++     inpL = build_inp_embd(model.tok_embd);
++ 
++-    // token types are hardcoded to zero ("Sentence A")
++-    if (model.type_embd) {
+++    // token types are hardcoded to zero ("Sentence A"), unless the context
+++    // reads a text pair's segments (pair_segments, checked at its creation)
+++    if (model.type_embd && cparams.pair_segments && ubatch.token) {
+++        auto inp = std::make_unique<llm_graph_input_pair_segments>(model.vocab.token_sep());
+++        inp->segments = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+++        ggml_set_input(inp->segments);
+++        inpL = ggml_add(ctx0, inpL, ggml_get_rows(ctx0, model.type_embd, inp->segments));
+++        res->add_input(std::move(inp));
+++    } else if (model.type_embd) {
++         ggml_tensor * type_row0 = ggml_view_1d(ctx0, model.type_embd, n_embd, 0);
++         inpL                    = ggml_add(ctx0, inpL, type_row0);
++     }
++diff --git a/tests/test-bert-pair-segments.cpp b/tests/test-bert-pair-segments.cpp
++new file mode 100644
++index 0000000..49ae11a
++--- /dev/null
+++++ b/tests/test-bert-pair-segments.cpp
++@@ -0,0 +1,74 @@
+++// A text pair's segments (src/llama-pair-segments.h). Standard library only:
+++//   c++ -std=c++17 -I src tests/test-bert-pair-segments.cpp && ./a.out
+++
+++#include "llama-pair-segments.h"
+++
+++#include <cstdio>
+++#include <string>
+++#include <vector>
+++
+++static int failures = 0;
+++
+++static void check(bool ok, const std::string & what) {
+++    std::printf("%s %s\n", ok ? "ok:  " : "FAIL:", what.c_str());
+++    failures += ok ? 0 : 1;
+++}
+++
+++static std::vector<int32_t> segments(const std::vector<int32_t> & token, const std::vector<int32_t> & pos,
+++                                     const std::vector<int32_t> & seq, int32_t sep = 102) {
+++    return llama_pair_segments((int32_t) token.size(), token.data(), pos.data(), seq.data(), sep);
+++}
+++
+++static std::vector<int32_t> iota(size_t n) {
+++    std::vector<int32_t> v(n);
+++    for (size_t i = 0; i < n; ++i) v[i] = (int32_t) i;
+++    return v;
+++}
+++
+++int main() {
+++    const int32_t CLS = 101, SEP = 102;
+++
+++    // [CLS] a a [SEP] b b b [SEP]: Hugging Face's token_type_ids for a pair
+++    const std::vector<int32_t> pair = { CLS, 7, 8, SEP, 9, 10, 11, SEP };
+++    check(segments(pair, iota(8), std::vector<int32_t>(8, 0)) == std::vector<int32_t>({ 0, 0, 0, 0, 1, 1, 1, 1 }),
+++          "a pair: [CLS] a [SEP] in segment 0, b [SEP] in segment 1");
+++
+++    // [CLS] a [SEP]: one text is all 0, as the graph gave before
+++    check(segments({ CLS, 7, 8, SEP }, iota(4), { 0, 0, 0, 0 }) == std::vector<int32_t>({ 0, 0, 0, 0 }),
+++          "a single text is all segment 0");
+++
+++    // an empty second segment: [CLS] a [SEP] [SEP]
+++    check(segments({ CLS, 7, SEP, SEP }, iota(4), { 0, 0, 0, 0 }) == std::vector<int32_t>({ 0, 0, 0, 1 }),
+++          "an empty second segment: its separator alone in segment 1");
+++
+++    // no separator at all (tokens given by the caller): nothing moves
+++    check(segments({ CLS, 7, 8 }, iota(3), { 0, 0, 0 }) == std::vector<int32_t>({ 0, 0, 0 }),
+++          "no separator: all segment 0");
+++
+++    // two sequences in one batch, each its own first separator
+++    {
+++        const std::vector<int32_t> tok = { CLS, 7, SEP, 9, SEP,    CLS, 5, 6, SEP, 4, SEP };
+++        const std::vector<int32_t> pos = { 0,   1, 2,   3, 4,      0,   1, 2, 3,   4, 5 };
+++        const std::vector<int32_t> seq = { 0,   0, 0,   0, 0,      1,   1, 1, 1,   1, 1 };
+++        check(segments(tok, pos, seq) == std::vector<int32_t>({ 0, 0, 0, 1, 1,   0, 0, 0, 0, 1, 1 }),
+++              "two sequences in one batch: each switches after its own first separator");
+++    }
+++
+++    // positions decide, not the order in the batch
+++    {
+++        const std::vector<int32_t> tok = { 9, SEP, CLS, 7, SEP };
+++        const std::vector<int32_t> pos = { 3, 4,   0,   1, 2 };
+++        check(segments(tok, pos, { 0, 0, 0, 0, 0 }) == std::vector<int32_t>({ 1, 1, 0, 0, 0 }),
+++              "positions decide 'after', not the order in the batch");
+++    }
+++
+++    // the separator id is the model's, not a constant
+++    check(segments({ 1, 7, 2, 9, 2 }, iota(5), { 0, 0, 0, 0, 0 }, 2) == std::vector<int32_t>({ 0, 0, 0, 1, 1 }),
+++          "the separator is the one given");
+++
+++    // an empty batch
+++    check(segments({}, {}, {}).empty(), "an empty batch gives no segments");
+++
+++    std::printf("%s\n", failures == 0 ? "all passed" : "FAILED");
+++    return failures == 0 ? 0 : 1;
+++}
+diff --git a/backend/cpp/llama-cpp/prepare.sh b/backend/cpp/llama-cpp/prepare.sh
+index 10a8746..932eb69 100644
+--- a/backend/cpp/llama-cpp/prepare.sh
++++ b/backend/cpp/llama-cpp/prepare.sh
+@@ -99,6 +99,10 @@ cp -r second_signal_test.cpp llama.cpp/tools/grpc-server/
+ # and its standalone unit test.
+ cp -r park_reply.h llama.cpp/tools/grpc-server/
+ cp -r park_reply_test.cpp llama.cpp/tools/grpc-server/
++# A text pair as a BERT reads it, with pairs:true (included by grpc-server.cpp)
++# and its standalone unit test.
++cp -r text_pair.h llama.cpp/tools/grpc-server/
++cp -r text_pair_test.cpp llama.cpp/tools/grpc-server/
+ # Dead-stream tracker (included by grpc-server.cpp) and its standalone unit
+ # test (run via backend/cpp/run-unit-tests.sh; also buildable under ctest).
+ cp -r stream_peer.h llama.cpp/tools/grpc-server/
+@@ -245,6 +249,14 @@ if grep -q "SERVER_TASK_TYPE_PARK" llama.cpp/tools/server/server-task.h; then
+ else
+     HAS_PARK=0
+ fi
++# A text pair's segments (common_params::pair_segments, the BERT graph's token
++# types after the first [SEP]). Without it a load asking pairs:true is refused:
++# a pair read with every token on segment 0 is a wrong vector, not a slow one.
++if grep -q "pair_segments" llama.cpp/common/common.h; then
++    HAS_PAIR_SEGMENTS=1
++else
++    HAS_PAIR_SEGMENTS=0
++fi
+ cat > llama.cpp/tools/grpc-server/llama_compat.h <<EOF
+ // Generated by backend/cpp/llama-cpp/prepare.sh. Do not edit.
+ #pragma once
+@@ -267,6 +279,7 @@ cat > llama.cpp/tools/grpc-server/llama_compat.h <<EOF
+ #define LOCALAI_HAS_TTS_TEMPLATE ${HAS_TTS_TEMPLATE}
+ #define LOCALAI_HAS_ASR_PRESET ${HAS_ASR_PRESET}
+ #define LOCALAI_HAS_PARK ${HAS_PARK}
++#define LOCALAI_HAS_PAIR_SEGMENTS ${HAS_PAIR_SEGMENTS}
+ EOF
+ 
+ set +e
+diff --git a/backend/cpp/llama-cpp/text_pair.h b/backend/cpp/llama-cpp/text_pair.h
+new file mode 100644
+index 0000000..a68a629
+--- /dev/null
++++ b/backend/cpp/llama-cpp/text_pair.h
+@@ -0,0 +1,123 @@
++#pragma once
++
++// A TEXT PAIR for a BERT that reads two segments (the model option
++// `pairs:true`; MedCPT's article encoder reads a title and an abstract, its
++// cross-encoder a query and an article).
++//
++// VeGa's wrapper sends a pair as PAIR_MARK followed by the JSON array
++// [first, second] (deploy/vega/vega_wrapper.py, app/vega/tag.py
++// `backend_pair`), and only to a model loaded with `pairs:true`. The backend
++// builds what Hugging Face's pair tokenizer builds, the model card's
++// `tokenizer([[a, b]], truncation=True, max_length=M)`:
++//
++//     [CLS] a [SEP] b [SEP]      segment 0: [CLS] a [SEP]   segment 1: b [SEP]
++//
++// the two segments cut LONGEST FIRST so that the whole is at most M tokens
++// (`longest_first`, Hugging Face tokenizers' TruncationStrategy::LongestFirst,
++// tokenizers/src/utils/truncation.rs), and libllama's BERT graph gives a
++// token after its sequence's first [SEP] token-type row 1
++// (src/llama-pair-segments.h, the context's pair_segments). That rule holds
++// only while the first segment carries no [SEP] of its own, so a first
++// segment that does is REFUSED, never read wrongly (a literal "[SEP]" in a
++// title is the special token, as in Hugging Face's tokenizer); so is a single
++// text, in a pair model, with a [SEP] inside it.
++//
++// Standard library only (text_pair_test.cpp); the JSON behind the marker is
++// read by grpc-server.cpp.
++
++#include <cstddef>
++#include <cstdint>
++#include <optional>
++#include <stdexcept>
++#include <string>
++#include <utility>
++#include <vector>
++
++namespace llama_grpc {
++
++// app/vega/tag.py PAIR_MARK: record separators around a name no text carries
++inline const std::string PAIR_MARK = "\x1e" "LOUISE-PAIR" "\x1e";
++
++// The JSON text after the marker when `content` is a pair; nullopt for one
++// text. A marker anywhere but at the start is refused: only VeGa writes it.
++inline std::optional<std::string> pair_body(const std::string & content) {
++    if (content.compare(0, PAIR_MARK.size(), PAIR_MARK) == 0) {
++        return content.substr(PAIR_MARK.size());
++    }
++    if (content.find(PAIR_MARK) != std::string::npos) {
++        throw std::invalid_argument("a text carries the pair marker inside it: a pair starts with it, and only VeGa writes it");
++    }
++    return std::nullopt;
++}
++
++// How many tokens of each segment Hugging Face keeps when the two, `n1` and
++// `n2` tokens, must fit in `max_len` (the bound less the special tokens):
++// tokenizers/src/utils/truncation.rs, TruncationStrategy::LongestFirst. The
++// shorter segment is kept whole while it fits in half; otherwise each gets
++// half, the second segment the odd token.
++inline std::pair<size_t, size_t> longest_first(size_t n1, size_t n2, size_t max_len) {
++    if (n1 + n2 <= max_len) {
++        return { n1, n2 };
++    }
++    size_t a = n1, b = n2;
++    const bool swap = a > b;
++    if (swap) {
++        std::swap(a, b);
++    }
++    b = a > max_len ? a : std::max(a, max_len - a);
++    if (a + b > max_len) {
++        a = max_len / 2;
++        b = a + max_len % 2;
++    }
++    if (swap) {
++        std::swap(a, b);
++    }
++    return { std::min(a, n1), std::min(b, n2) };
++}
++
++struct PairTokens {
++    std::vector<int32_t> tokens; // [CLS] a [SEP] b [SEP]
++    size_t first  = 0;           // tokens of a kept
++    size_t second = 0;           // tokens of b kept
++};
++
++// `[CLS] a [SEP] b [SEP]`, at most `max_tokens` in all, from the segments'
++// own tokens (no special tokens added). Throws std::invalid_argument for a
++// [SEP] inside `a`, or a bound that cannot hold the three special tokens.
++inline PairTokens pair_tokens(int32_t cls, int32_t sep, const std::vector<int32_t> & a,
++                              const std::vector<int32_t> & b, size_t max_tokens) {
++    for (const int32_t t : a) {
++        if (t == sep) {
++            throw std::invalid_argument("a text pair's first segment holds the separator token itself: the second "
++                                        "segment would start there, so the pair is not embedded");
++        }
++    }
++    if (max_tokens < 3) {
++        throw std::invalid_argument("a text pair needs a bound of at least its three special tokens");
++    }
++    const auto [k1, k2] = longest_first(a.size(), b.size(), max_tokens - 3);
++    PairTokens out;
++    out.first  = k1;
++    out.second = k2;
++    out.tokens.reserve(k1 + k2 + 3);
++    out.tokens.push_back(cls);
++    out.tokens.insert(out.tokens.end(), a.begin(), a.begin() + (std::ptrdiff_t) k1);
++    out.tokens.push_back(sep);
++    out.tokens.insert(out.tokens.end(), b.begin(), b.begin() + (std::ptrdiff_t) k2);
++    out.tokens.push_back(sep);
++    return out;
++}
++
++// A single text in a pair model, tokenized with its special tokens: true when
++// a [SEP] stands anywhere but at its end (the graph would read what follows as
++// a second segment).
++inline bool has_inner_separator(const std::vector<int32_t> & tokens, int32_t sep) {
++    for (size_t i = 0; i + 1 < tokens.size(); ++i) {
++        if (tokens[i] == sep) {
++            return true;
++        }
++    }
++    return false;
++}
++
++} // namespace llama_grpc
+diff --git a/backend/cpp/llama-cpp/text_pair_test.cpp b/backend/cpp/llama-cpp/text_pair_test.cpp
+new file mode 100644
+index 0000000..1d858ff
+--- /dev/null
++++ b/backend/cpp/llama-cpp/text_pair_test.cpp
+@@ -0,0 +1,303 @@
++// A text pair as a BERT reads it (text_pair.h). Standard library only:
++//   c++ -std=c++17 text_pair_test.cpp && ./a.out
++
++#include "text_pair.h"
++
++#include <cstdio>
++#include <string>
++#include <vector>
++
++static int failures = 0;
++
++static void check(bool ok, const std::string & what) {
++    std::printf("%s %s\n", ok ? "ok:  " : "FAIL:", what.c_str());
++    failures += ok ? 0 : 1;
++}
++
++template <typename F> static bool throws(F f) {
++    try { f(); } catch (const std::invalid_argument &) { return true; }
++    return false;
++}
++
++static std::vector<int32_t> run(int32_t from, size_t n) {
++    std::vector<int32_t> v(n);
++    for (size_t i = 0; i < n; ++i) v[i] = from + (int32_t) i;
++    return v;
++}
++
++// What Hugging Face's pair tokenizer kept (tokenizers 0.22, MedCPT's
++// tokenizer.json, enable_truncation(M), encode(a, b) with a and b of n1 and n2
++// one-token words): { M, n1, n2, kept of a, kept of b }.
++static const int HF[][5] = {
++        {   5,   0,   0,   0,   0 },
++        {   5,   0,   6,   0,   2 },
++        {   5,   0,  13,   0,   2 },
++        {   5,   0, 256,   0,   2 },
++        {   5,   0, 300,   0,   2 },
++        {   5,   0, 600,   0,   2 },
++        {   5,   3,   0,   2,   0 },
++        {   5,   3,   6,   1,   1 },
++        {   5,   3,  13,   1,   1 },
++        {   5,   3, 256,   1,   1 },
++        {   5,   3, 300,   1,   1 },
++        {   5,   3, 600,   1,   1 },
++        {   5,   7,   0,   2,   0 },
++        {   5,   7,   6,   1,   1 },
++        {   5,   7,  13,   1,   1 },
++        {   5,   7, 256,   1,   1 },
++        {   5,   7, 300,   1,   1 },
++        {   5,   7, 600,   1,   1 },
++        {   5, 255,   0,   2,   0 },
++        {   5, 255,   6,   1,   1 },
++        {   5, 255,  13,   1,   1 },
++        {   5, 255, 256,   1,   1 },
++        {   5, 255, 300,   1,   1 },
++        {   5, 255, 600,   1,   1 },
++        {   5, 256,   0,   2,   0 },
++        {   5, 256,   6,   1,   1 },
++        {   5, 256,  13,   1,   1 },
++        {   5, 256, 256,   1,   1 },
++        {   5, 256, 300,   1,   1 },
++        {   5, 256, 600,   1,   1 },
++        {   5, 600,   0,   2,   0 },
++        {   5, 600,   6,   1,   1 },
++        {   5, 600,  13,   1,   1 },
++        {   5, 600, 256,   1,   1 },
++        {   5, 600, 300,   1,   1 },
++        {   5, 600, 600,   1,   1 },
++        {   8,   0,   0,   0,   0 },
++        {   8,   0,   6,   0,   5 },
++        {   8,   0,  13,   0,   5 },
++        {   8,   0, 256,   0,   5 },
++        {   8,   0, 300,   0,   5 },
++        {   8,   0, 600,   0,   5 },
++        {   8,   3,   0,   3,   0 },
++        {   8,   3,   6,   2,   3 },
++        {   8,   3,  13,   2,   3 },
++        {   8,   3, 256,   2,   3 },
++        {   8,   3, 300,   2,   3 },
++        {   8,   3, 600,   2,   3 },
++        {   8,   7,   0,   5,   0 },
++        {   8,   7,   6,   3,   2 },
++        {   8,   7,  13,   2,   3 },
++        {   8,   7, 256,   2,   3 },
++        {   8,   7, 300,   2,   3 },
++        {   8,   7, 600,   2,   3 },
++        {   8, 255,   0,   5,   0 },
++        {   8, 255,   6,   3,   2 },
++        {   8, 255,  13,   3,   2 },
++        {   8, 255, 256,   2,   3 },
++        {   8, 255, 300,   2,   3 },
++        {   8, 255, 600,   2,   3 },
++        {   8, 256,   0,   5,   0 },
++        {   8, 256,   6,   3,   2 },
++        {   8, 256,  13,   3,   2 },
++        {   8, 256, 256,   2,   3 },
++        {   8, 256, 300,   2,   3 },
++        {   8, 256, 600,   2,   3 },
++        {   8, 600,   0,   5,   0 },
++        {   8, 600,   6,   3,   2 },
++        {   8, 600,  13,   3,   2 },
++        {   8, 600, 256,   3,   2 },
++        {   8, 600, 300,   3,   2 },
++        {   8, 600, 600,   2,   3 },
++        {   9,   0,   0,   0,   0 },
++        {   9,   0,   6,   0,   6 },
++        {   9,   0,  13,   0,   6 },
++        {   9,   0, 256,   0,   6 },
++        {   9,   0, 300,   0,   6 },
++        {   9,   0, 600,   0,   6 },
++        {   9,   3,   0,   3,   0 },
++        {   9,   3,   6,   3,   3 },
++        {   9,   3,  13,   3,   3 },
++        {   9,   3, 256,   3,   3 },
++        {   9,   3, 300,   3,   3 },
++        {   9,   3, 600,   3,   3 },
++        {   9,   7,   0,   6,   0 },
++        {   9,   7,   6,   3,   3 },
++        {   9,   7,  13,   3,   3 },
++        {   9,   7, 256,   3,   3 },
++        {   9,   7, 300,   3,   3 },
++        {   9,   7, 600,   3,   3 },
++        {   9, 255,   0,   6,   0 },
++        {   9, 255,   6,   3,   3 },
++        {   9, 255,  13,   3,   3 },
++        {   9, 255, 256,   3,   3 },
++        {   9, 255, 300,   3,   3 },
++        {   9, 255, 600,   3,   3 },
++        {   9, 256,   0,   6,   0 },
++        {   9, 256,   6,   3,   3 },
++        {   9, 256,  13,   3,   3 },
++        {   9, 256, 256,   3,   3 },
++        {   9, 256, 300,   3,   3 },
++        {   9, 256, 600,   3,   3 },
++        {   9, 600,   0,   6,   0 },
++        {   9, 600,   6,   3,   3 },
++        {   9, 600,  13,   3,   3 },
++        {   9, 600, 256,   3,   3 },
++        {   9, 600, 300,   3,   3 },
++        {   9, 600, 600,   3,   3 },
++        {  16,   0,   0,   0,   0 },
++        {  16,   0,   6,   0,   6 },
++        {  16,   0,  13,   0,  13 },
++        {  16,   0, 256,   0,  13 },
++        {  16,   0, 300,   0,  13 },
++        {  16,   0, 600,   0,  13 },
++        {  16,   3,   0,   3,   0 },
++        {  16,   3,   6,   3,   6 },
++        {  16,   3,  13,   3,  10 },
++        {  16,   3, 256,   3,  10 },
++        {  16,   3, 300,   3,  10 },
++        {  16,   3, 600,   3,  10 },
++        {  16,   7,   0,   7,   0 },
++        {  16,   7,   6,   7,   6 },
++        {  16,   7,  13,   6,   7 },
++        {  16,   7, 256,   6,   7 },
++        {  16,   7, 300,   6,   7 },
++        {  16,   7, 600,   6,   7 },
++        {  16, 255,   0,  13,   0 },
++        {  16, 255,   6,   7,   6 },
++        {  16, 255,  13,   7,   6 },
++        {  16, 255, 256,   6,   7 },
++        {  16, 255, 300,   6,   7 },
++        {  16, 255, 600,   6,   7 },
++        {  16, 256,   0,  13,   0 },
++        {  16, 256,   6,   7,   6 },
++        {  16, 256,  13,   7,   6 },
++        {  16, 256, 256,   6,   7 },
++        {  16, 256, 300,   6,   7 },
++        {  16, 256, 600,   6,   7 },
++        {  16, 600,   0,  13,   0 },
++        {  16, 600,   6,   7,   6 },
++        {  16, 600,  13,   7,   6 },
++        {  16, 600, 256,   7,   6 },
++        {  16, 600, 300,   7,   6 },
++        {  16, 600, 600,   6,   7 },
++        {  17,   0,   0,   0,   0 },
++        {  17,   0,   6,   0,   6 },
++        {  17,   0,  13,   0,  13 },
++        {  17,   0, 256,   0,  14 },
++        {  17,   0, 300,   0,  14 },
++        {  17,   0, 600,   0,  14 },
++        {  17,   3,   0,   3,   0 },
++        {  17,   3,   6,   3,   6 },
++        {  17,   3,  13,   3,  11 },
++        {  17,   3, 256,   3,  11 },
++        {  17,   3, 300,   3,  11 },
++        {  17,   3, 600,   3,  11 },
++        {  17,   7,   0,   7,   0 },
++        {  17,   7,   6,   7,   6 },
++        {  17,   7,  13,   7,   7 },
++        {  17,   7, 256,   7,   7 },
++        {  17,   7, 300,   7,   7 },
++        {  17,   7, 600,   7,   7 },
++        {  17, 255,   0,  14,   0 },
++        {  17, 255,   6,   8,   6 },
++        {  17, 255,  13,   7,   7 },
++        {  17, 255, 256,   7,   7 },
++        {  17, 255, 300,   7,   7 },
++        {  17, 255, 600,   7,   7 },
++        {  17, 256,   0,  14,   0 },
++        {  17, 256,   6,   8,   6 },
++        {  17, 256,  13,   7,   7 },
++        {  17, 256, 256,   7,   7 },
++        {  17, 256, 300,   7,   7 },
++        {  17, 256, 600,   7,   7 },
++        {  17, 600,   0,  14,   0 },
++        {  17, 600,   6,   8,   6 },
++        {  17, 600,  13,   7,   7 },
++        {  17, 600, 256,   7,   7 },
++        {  17, 600, 300,   7,   7 },
++        {  17, 600, 600,   7,   7 },
++        { 512,   0,   0,   0,   0 },
++        { 512,   0,   6,   0,   6 },
++        { 512,   0,  13,   0,  13 },
++        { 512,   0, 256,   0, 256 },
++        { 512,   0, 300,   0, 300 },
++        { 512,   0, 600,   0, 509 },
++        { 512,   3,   0,   3,   0 },
++        { 512,   3,   6,   3,   6 },
++        { 512,   3,  13,   3,  13 },
++        { 512,   3, 256,   3, 256 },
++        { 512,   3, 300,   3, 300 },
++        { 512,   3, 600,   3, 506 },
++        { 512,   7,   0,   7,   0 },
++        { 512,   7,   6,   7,   6 },
++        { 512,   7,  13,   7,  13 },
++        { 512,   7, 256,   7, 256 },
++        { 512,   7, 300,   7, 300 },
++        { 512,   7, 600,   7, 502 },
++        { 512, 255,   0, 255,   0 },
++        { 512, 255,   6, 255,   6 },
++        { 512, 255,  13, 255,  13 },
++        { 512, 255, 256, 254, 255 },
++        { 512, 255, 300, 254, 255 },
++        { 512, 255, 600, 254, 255 },
++        { 512, 256,   0, 256,   0 },
++        { 512, 256,   6, 256,   6 },
++        { 512, 256,  13, 256,  13 },
++        { 512, 256, 256, 254, 255 },
++        { 512, 256, 300, 254, 255 },
++        { 512, 256, 600, 254, 255 },
++        { 512, 600,   0, 509,   0 },
++        { 512, 600,   6, 503,   6 },
++        { 512, 600,  13, 496,  13 },
++        { 512, 600, 256, 255, 254 },
++        { 512, 600, 300, 255, 254 },
++        { 512, 600, 600, 254, 255 }
++};
++
++int main() {
++    using namespace llama_grpc;
++    const int32_t CLS = 101, SEP = 102;
++
++    // the marker: at the start a pair, absent one text, elsewhere refused
++    check(pair_body(PAIR_MARK + "[\"t\", \"a\"]") == std::optional<std::string>("[\"t\", \"a\"]"),
++          "a pair: the JSON after the marker");
++    check(!pair_body("an abstract").has_value(), "one text: no pair");
++    check(throws([&] { pair_body("x" + PAIR_MARK + "[]"); }), "the marker inside a text is refused");
++    check(PAIR_MARK == std::string("\x1eLOUISE-PAIR\x1e"), "the marker is VeGa's (app/vega/tag.py PAIR_MARK)");
++
++    // longest first, as Hugging Face cuts: every row of its table
++    size_t agree = 0, rows = sizeof(HF) / sizeof(HF[0]);
++    for (const auto & r : HF) {
++        const auto kept = longest_first((size_t) r[1], (size_t) r[2], (size_t) r[0] - 3);
++        agree += kept.first == (size_t) r[3] && kept.second == (size_t) r[4];
++    }
++    check(rows > 200 && agree == rows, "longest first keeps what Hugging Face keeps: " + std::to_string(agree) + " of " +
++          std::to_string(rows) + " rows");
++
++    // [CLS] a [SEP] b [SEP], whole when it fits
++    {
++        const auto p = pair_tokens(CLS, SEP, { 7, 8 }, { 9, 10, 11 }, 512);
++        check(p.tokens == std::vector<int32_t>({ CLS, 7, 8, SEP, 9, 10, 11, SEP }) && p.first == 2 && p.second == 3,
++              "a pair that fits: [CLS] a [SEP] b [SEP]");
++    }
++    // a short title, a long abstract: the abstract is cut, the title kept
++    {
++        const auto p = pair_tokens(CLS, SEP, run(1000, 20), run(2000, 600), 512);
++        check(p.tokens.size() == 512 && p.first == 20 && p.second == 489 && p.tokens[21] == SEP && p.tokens.back() == SEP &&
++              p.tokens[22] == 2000 && p.tokens[510] == 2000 + 488,
++              "a short title and a long abstract: the abstract cut to 489, the whole 512");
++    }
++    // both long: half each, the second the odd token
++    {
++        const auto p = pair_tokens(CLS, SEP, run(1000, 400), run(2000, 400), 512);
++        check(p.first == 254 && p.second == 255 && p.tokens.size() == 512, "both long: 254 and 255");
++    }
++    // an empty second segment: [CLS] a [SEP] [SEP]
++    check(pair_tokens(CLS, SEP, { 7 }, {}, 512).tokens == std::vector<int32_t>({ CLS, 7, SEP, SEP }),
++          "an empty second segment: [CLS] a [SEP] [SEP]");
++    // a separator inside the first segment is refused; inside the second it is the text's own
++    check(throws([&] { pair_tokens(CLS, SEP, { 7, SEP, 8 }, { 9 }, 512); }), "a [SEP] inside the first segment is refused");
++    check(!throws([&] { pair_tokens(CLS, SEP, { 7 }, { 9, SEP, 10 }, 512); }), "a [SEP] inside the second segment is kept");
++    check(throws([&] { pair_tokens(CLS, SEP, {}, {}, 2); }), "a bound under the three special tokens is refused");
++
++    // one text in a pair model: a [SEP] anywhere but its end
++    check(!has_inner_separator({ CLS, 7, 8, SEP }, SEP), "one text: its closing [SEP] is not inside it");
++    check(has_inner_separator({ CLS, 7, SEP, 8, SEP }, SEP), "one text with a [SEP] inside it");
++    check(!has_inner_separator({}, SEP), "no tokens: nothing inside");
++
++    std::printf("%s\n", failures == 0 ? "all passed" : "FAILED");
++    return failures == 0 ? 0 : 1;
++}
+-- 
+2.43.0
+
