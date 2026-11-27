@@ -675,23 +675,34 @@ above.
   floating-point type the forward pass rounds its products' inputs to. A
   quantized weight's integer products (Q4_K × Q8_K) are the weights' format,
   fixed by the weights digest, not a compute precision.
-- **Applied**: torch (jina-v3, MADLAD) puts the model in the stated dtype
-  (`model.to(dtype)`) and sets the fp32 matmul precision `"highest"` (no TF32
-  on CUDA, no bf16 or TF32 inside oneDNN's fp32 matmuls on the CPU and XPU).
-  MADLAD's `dtype:` option must say the same. OpenVINO passes it as
-  `INFERENCE_PRECISION_HINT` (`louise_backend.openvino_config`). llama.cpp
-  has no switch: the build decides.
-- **Verified**: torch reads every floating parameter and buffer back, and the
-  matmul precision; OpenVINO reads `compiled.get_property(
-  "INFERENCE_PRECISION_HINT")` back (`openvino_precision_holds`); each refuses
+- **Applied**: torch (jina-v3, MADLAD) asks the load for the stated dtype
+  (`torch_dtype`, never jina's remote-code `"auto"`), then `model.to(dtype)`,
+  and sets the fp32 matmul precision `"highest"` (no TF32 on CUDA, no bf16 or
+  TF32 inside oneDNN's fp32 matmuls on the CPU and XPU). MADLAD's `dtype:`
+  option must say the same. OpenVINO's half is BUILT, NOT WIRED (MedCPT, its
+  only model, is held): the hint as `INFERENCE_PRECISION_HINT`
+  (`louise_backend.openvino_config`). llama.cpp has no switch: the build
+  decides.
+- **Verified**: torch reads every floating parameter back through
+  `torch.nn.Module`'s OWN iterators — `XLMRobertaLoRA` overrides
+  `parameters()` to yield its LoRA weights alone — BEFORE `.to()`, so the
+  load itself must have given the stated dtype (after it, the check would see
+  only its own conversion); then every tensor again, and the matmul
+  precision. OpenVINO would read `compiled.get_property(
+  "INFERENCE_PRECISION_HINT")` back (`openvino_precision_holds`). Each refuses
   to load, in words, on a mismatch. VeGa's wrapper states no run whose file
   states none, a word outside the three, a `dtype:` that says another, or a
   claim its build does not compute — a SYCL-F16 llama.cpp engine
   (`…-sycl-f16-…`) states f16, and f32 or bf16 on it is refused
-  (`vega_wrapper.stated_precision`, `BUILD_PRECISION`). For every model, not
-  only an embedder. tests/vega/test_compute_precision.py holds every staged
-  file to its value below; tests/test_compute_precision_backends.py the
-  read-backs.
+  (`vega_wrapper.stated_precision`, `BUILD_PRECISION`) — and refuses it
+  BEFORE the backend is asked to load (it needs no device: a 22 GB model is
+  never loaded only to be refused). For every model, not only an embedder.
+  NOT CHECKED BY THE WRAPPER, which is not in front of them: the models
+  loaded on a `louise-sycl-f16-llama-cpp-…` engine directly —
+  `louise-rerank-nemotron-1b`, `louise-translate-madlad` (the GGUF) and
+  `louise-tts-omnivoice` — state f16 and are held to it by the guard test
+  alone. tests/vega/test_compute_precision.py holds every staged file to its
+  value below; tests/test_compute_precision_backends.py the read-backs.
 - **Recorded**: in the run's engine `env`, so in the receipts, the gate's
   statement and the Codex engine. Two precisions are two runs.
 
@@ -707,11 +718,12 @@ means read from the build or the code, never from the card.
 
 | model file | engine | stated | before: the default it replaces | how it is known |
 |---|---|---|---|---|
-| the 21 `louise-chat-*`; the gallery's 17 chat and 3 `louise-sum-*` entries | llama.cpp SYCL-F16 (`vega-louise-llama-cpp`) | f16 | f16, by the build (`GGML_SYCL_F16`: half activations, oneMKL half in; upstream-bugs.md S1) | the build |
-| `louise-rerank-bge`, `louise-rerank-lamar`, `louise-rerank-nemotron-1b` | llama.cpp SYCL-F16 | f16 | f16, by the build | the build |
-| `louise-translate-madlad` | llama.cpp SYCL-F16, f32 KV cache | f16 | f16, by the build: the F16 weights' products are half; the f32 cache does not make them f32 | the build |
-| `louise-tts-omnivoice` | llama.cpp SYCL-F16, direct | f16 | f16, by the build | the build |
-| `vega-bge-m3`, `vega-granite`, `vega-harrier-oss-v1-0.6b`, `vega-nemotron-3-embed-1b`, `vega-qwen3-embedding-4b` | llama.cpp SYCL-F16 | f16 | f16, by the build | the build |
+| the 21 `louise-chat-*`; the gallery's 17 chat and 3 `louise-sum-*` entries | llama.cpp SYCL-F16 (`vega-louise-llama-cpp`) | f16 | f16, by the build (`GGML_SYCL_F16`: half activations, oneMKL half in; upstream-bugs.md S1) | by the build, read from code, not measured |
+| `louise-rerank-bge`, `louise-rerank-lamar` | llama.cpp SYCL-F16 | f16 | f16, by the build | by the build, read from code, not measured |
+| `louise-rerank-nemotron-1b` | llama.cpp SYCL-F16, loaded directly (no wrapper) | f16 | f16, by the build | by the build, read from code, not measured; not checked by the wrapper |
+| `louise-translate-madlad` | llama.cpp SYCL-F16, loaded directly; its default F16 KV cache (no `cache_type_*` since d372ba5: P5 fixed the F16 cache, b68820c had f32) | f16 | f16, by the build | by the build, read from code, not measured; not checked by the wrapper |
+| `louise-tts-omnivoice` | llama.cpp SYCL-F16, loaded directly | f16 | f16, by the build | by the build, read from code, not measured; not checked by the wrapper |
+| `vega-bge-m3`, `vega-granite`, `vega-harrier-oss-v1-0.6b`, `vega-nemotron-3-embed-1b`, `vega-qwen3-embedding-4b` | llama.cpp SYCL-F16 | f16 | f16, by the build | by the build, read from code, not measured |
 | `vega-qwen3-embedding-4b-cpu` (the CPU reference) | llama.cpp CPU (`louise-cpu-llama-cpp-…`) | f16 | f16: ggml-cpu converts the activations to the weights' dot type on x86 — f16 for the F16 KV cache, Q8_K for the Q4_K weights. **The CPU reference is not an f32 reference** | the code, not measured |
 | `louise-translate-madlad-torch` | torch XPU | bf16 | bf16, its `dtype:bfloat16` (explicit already) | the file |
 | `vega-jina-v3`, `vega-jina-v3-query` | torch XPU | f32 | f32: the remote code loads `torch_dtype="auto"`, and its config keeps float32 wherever CUDA is not available (configuration_xlm_roberta.py) | the code; the vectors unchanged (`.to(float32)` of f32 tensors) |
@@ -719,25 +731,76 @@ means read from the build or the code, never from the card.
 | `vega-medcpt-article-ov`, `vega-medcpt-article-ov-cpu`, `louise-rerank-medcpt`, `vega-medcpt-article`, `vega-medcpt-query`, `vega-medcpt-query-cpu` | OpenVINO GPU and CPU; llama.cpp SYCL-F16 and CPU | held: OpenVINO GPU default f16, CPU default bf16; to be stated when released | the OpenVINO plugins' defaults (convert_article.py: bf16 on the Ryzen 7600's avx512_bf16, 0.99995–0.99999 against fp32); the GGUFs f16 by the build | the plugins' documentation and convert_article.py |
 | NVIDIA (deploy/localai-nvidia): `louise-chat-qwen3-8b`, `louise-rerank-bge`, `vega-bge-m3`, `vega-granite`, `vega-qwen3-embedding-4b` | llama.cpp CUDA | f16 | f16: cuBLAS takes the F16 tensors' activations in f16 (quantized ones in MMQ's 8 bits) | the code, not measured (no peer has a card) |
 | NVIDIA: `vega-bge-m3-cpu`, `vega-qwen3-embedding-4b-cpu` | the CUDA build on the CPU | f16 | f16, ggml-cpu as above | the code, not measured |
-| NVIDIA: `vega-jina-v3` | torch CUDA | **bf16** | **bf16**: the same remote code keeps its config's bfloat16 where CUDA is available — where the node's computes in f32 | the code, not measured. f32 here is a new run, gated: the node's people decide |
+| NVIDIA: `vega-jina-v3` | torch CUDA | **bf16** | **bf16**: the same remote code keeps its config's bfloat16 where CUDA is available — where the node's computes in f32. `.to(bfloat16)` also narrows any buffer its code keeps in f32 (a rotary table), which the unstated load did not | the code, not measured. f32 here is a new run, gated: the node's people decide |
 | AMD desktop (deploy/localai-desktop): `louise-chat-qwen3-8b`, `louise-rerank-bge`, `vega-bge-m3`, `vega-granite`, `vega-qwen3-embedding-4b` | llama.cpp ROCm | f16 | f16: hipBLAS takes f16 inputs, as cuBLAS | the code, not measured |
 | AMD desktop: `vega-bge-m3-cpu`, `vega-qwen3-embedding-4b-cpu` | the ROCm build on the CPU | f16 | f16, ggml-cpu as above | the code, not measured |
+
+The three `louise-sum-*` are GALLERY-ONLY: LocalAI writes their node file from
+its gallery's base config and the entry's overrides, so no stage file can hold
+it byte for byte, and the wrapper cannot exempt them by name (the load names
+their weights, which the repo does not know). Their entries state f16 in the
+overrides, and install_model_files.py (the deploy plan, step 1) writes that
+line into their node files with the package — so they are stated, not exempt.
 
 Not in the repo, so not stated here: the node's speech-to-text model (parakeet,
 LocalAI's gallery file on `…-parakeet-cpp`). An F32 GGUF with an f32 KV cache
 would compute f32 matmuls even on the SYCL-F16 build; none is staged, and one
 is measured before the wrapper's rule is widened for it.
 
-**What deploying it costs.** The wrapper is part of every run's engine image,
-so a rebuilt package states a new run for every model it serves, gated again —
-the env key adds nothing to that. The exempt models share packages:
-`vega-louise-llama-cpp` and `-cpu` serve MedCPT's query and article GGUFs,
-`vega-louise-openvino` MedCPT alone, `vega-louise-pytorch` DAR-legal-it beside
-jina-v3 and MADLAD. Rebuilding one restates its exempt models' runs too, though
-their files are untouched: under the holds, those packages wait, or the
-exempt runs are gated again. jina-v3 and MADLAD need a new louise-python tree
-(their model code changed). An OpenVINO model compiled with the hint keys
-OpenVINO's cache anew and compiles once (when MedCPT is released).
+### Deploy plan
+
+The branch stays unmerged until gutenberg-nemo is done and the operator has
+given his word on re-gating, because the deploy restates runs. The wrapper is
+part of every run's engine image, so a REBUILT PACKAGE STATES A NEW RUN FOR
+EVERY MODEL IT SERVES — exempt ones included, though their files are untouched
+— and every embedder among them is gated again before a vector of it is
+written (the last whole-package restatement: 53 minutes of gates,
+2026-11-25, seed_pinned.py). The env key adds no run of its own. A chat
+model, a reranker, a translator or a speech model is restated, not gated.
+
+**A package and its model files go together, never the wrapper first.** The
+new wrapper states no run for a file without the key, so a package built
+before its files would be an outage of those models.
+`build_vega_package.sh` therefore requires `MODELS` (LocalAI's models
+directory, mounted read-write) and runs `install_model_files.py` FIRST: every
+node file behind the package gets its staged statement (the staged file of its
+`name`, or the gallery entry for a gallery-only model); one that cannot state
+it refuses the build before anything of the package is touched. A file that
+gains the key under the OLD wrapper loads as before. The node's files behind
+each package, staged or not, are listed first with `--check`.
+
+**Impact, per package** (from the staged files' `backend`; the node's own
+unstaged files behind a package are what `--check` adds):
+
+| package | re-gated (embedders) | restated, not gated | holds it touches | when |
+|---|---|---|---|---|
+| `vega-louise-llama-cpp` (SYCL-F16) | `vega-bge-m3`, `vega-qwen3-embedding-4b`, `vega-nemotron-3-embed-1b` (gutenberg-nemo's), `vega-granite`, `vega-harrier-oss-v1-0.6b`; and MedCPT's `vega-medcpt-query`, `vega-medcpt-article` | the 21 chat models and the 3 `louise-sum-*`; `louise-rerank-bge`, `louise-rerank-lamar` | **MedCPT** (its two GGUFs); gutenberg-nemo's encoder | step 3: after gutenberg-nemo is done, with MedCPT released or its two runs gated on the operator's word |
+| `vega-louise-llama-cpp-cpu` | the CPU twins `vega-qwen3-embedding-4b-cpu`, `vega-medcpt-query-cpu` (the stored CPU references) | — | **MedCPT** (`vega-medcpt-query-cpu`) | with step 3 |
+| `vega-louise-openvino` | — (MedCPT alone: `vega-medcpt-article-ov`, `-ov-cpu`) | `louise-rerank-medcpt` | **MedCPT**, all of it | **NEVER rebuilt while MedCPT is held**; nothing of this change needs it |
+| `vega-louise-pytorch` | — | — | **DAR-legal-it** (`vega-dar-legal-it`, `-cpu`) | **not rebuilt**: its rebuild would restate DAR. jina-v3 and MADLAD leave it first (step 2) |
+| a NEW torch package over a NEW louise-python tree (step 2) | `vega-jina-v3`, `vega-jina-v3-query` (wikidata) | `louise-translate-madlad-torch` | none | step 2 |
+| no package: `louise-rerank-nemotron-1b`, `louise-translate-madlad`, `louise-tts-omnivoice` on `louise-sycl-f16-llama-cpp-…` directly | — | their next load reads the key and ignores it; no run is stated | none | step 1, any time |
+| the peers' packages (deploy/localai-nvidia, deploy/localai-desktop: `STAGED` their own directory) | their embedders | the rest | none | any time (RULE 1: the peers test the architecture) |
+
+**The order.**
+1. Any time: the three direct models' files (one key, inert to llama.cpp);
+   the peers' packages.
+2. jina-v3 and MADLAD to their own tree, BEFORE anything rebuilds
+   `vega-louise-pytorch`: a louise-python tree built from this commit
+   (build_louise_backend.sh, a new dated name) and a new package in front of
+   it (build_vega_package.sh, `CUTS=context_size`); their staged files name
+   that package (a commit of their `backend` lines) and the package's build
+   installs their key. wikidata's two runs are gated; DAR stays on
+   `vega-louise-pytorch`, its tree and its wrapper as they are.
+3. After gutenberg-nemo is done: `vega-louise-llama-cpp` and `-cpu` rebuilt,
+   with MedCPT released (its files stated) or MedCPT's runs gated on the
+   operator's word; every embedder of the table's first two rows gated.
+4. MedCPT released: its files stated (GPU f16, CPU bf16, as the plugins'
+   defaults), the read-back wired into deploy/medcpt-rerank/server.py, a new
+   louise-python tree — measured bit-exact again (`LOUISE_BITEXACT_MEASURED`
+   names the tree) — and only then `vega-louise-openvino`. OpenVINO keys its
+   cache on the config, so the hint compiles each model once.
+5. DAR released by the operator: the same, on its own package.
 
 ## Known limits of the Arc Pro B70 (2026-10-28)
 

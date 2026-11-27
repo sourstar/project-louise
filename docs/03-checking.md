@@ -357,11 +357,14 @@ floating-point type its products' inputs are rounded to — as
 gate's statement and the Codex's `space.encoder.engine` carry it with no
 new field (09 §9.3 unchanged). VeGa's wrapper states no run whose file
 leaves it unstated, or claims what the engine's build does not compute (a
-SYCL-F16 llama.cpp states f16), and a backend that can read its precision
-back (torch's dtype, OpenVINO's `INFERENCE_PRECISION_HINT`) refuses to load
-on a mismatch. Exempt by name, their files untouched: DAR-legal-it and
-MedCPT (operator, 2026-11-27). docs/notes/approved-encoders.md, "Compute
-precision, stated", lists every model's value and the default it replaces.
+SYCL-F16 llama.cpp states f16), and refuses it before the backend loads
+anything. torch reads its dtype back and refuses to load on a mismatch;
+OpenVINO's read-back of `INFERENCE_PRECISION_HINT` is built, not wired
+(MedCPT held). The models loaded on an engine without the wrapper state it
+and are not checked at load. Exempt by name, their files untouched:
+DAR-legal-it and MedCPT (operator, 2026-11-27). docs/notes/approved-encoders.md,
+"Compute precision, stated", lists every model's value, the default it
+replaces, and the deploy plan.
 
 **The gate also measures what the answers depend on besides the run.**
 It embeds the sixteen fingerprint texts (09 §9.12) one at a time, then
