@@ -146,9 +146,16 @@ def test_too_many_failed_draws_stop_with_nothing_set(server):
     assert server.posted == [] and server.line() == {"it": IT} and server.pings == []
 
 
-def test_candidates_are_made_named_and_none_set_until_one_is_used(server):
+def test_candidates_are_designed_as_on_11_24_and_none_set_until_one_is_used(server):
     out = sv.make("es", candidates=3, log=lambda m: None)
     assert [m["name"] for m in out["made"]] == ["Synthetic es A", "Synthetic es B", "Synthetic es C"]
+    # each candidate a DESIGN, in `instructions`, with no voice (München, 11-27:
+    # three undesigned draws were one speaker)
+    assert [c.get("instructions") for c in server.speech] == [
+        "male, elderly, low pitch", "male, elderly, very low pitch", "male, middle-aged, low pitch"]
+    assert all("voice" not in c for c in server.speech)
+    assert [m["design"] for m in out["made"]] == [c["instructions"] for c in server.speech]
+    assert 'designed as "male, middle-aged, low pitch"' in server.posted[2][0]["description"]
     assert server.line() == {"it": IT} and server.pings == []
     assert "--use" in out["says"]
     got = sv.use("es", "Synthetic es B")
@@ -157,9 +164,46 @@ def test_candidates_are_made_named_and_none_set_until_one_is_used(server):
 
 
 def test_a_name_already_held_is_refused_and_nothing_is_drawn(server):
-    with pytest.raises(sv.SyntheticError, match="--use \"Synthetic it C\""):
-        sv.make("it", candidates=3, log=lambda m: None)
+    server.profiles.append({"id": "s", "name": "Synthetic es", "voice": speech.PROFILE_PREFIX + "s"})
+    with pytest.raises(sv.SyntheticError, match="--use \"Synthetic es\""):
+        sv.make("es", log=lambda m: None)
     assert server.speech == [] and server.posted == []
+
+
+def test_candidates_take_the_letters_no_profile_holds(server):
+    # the node's three undesigned Spanish draws of 11-27 keep A to C
+    for c in "ABC":
+        server.profiles.append({"id": c, "name": f"Synthetic es {c}", "voice": speech.PROFILE_PREFIX + c})
+    out = sv.make("es", candidates=2, log=lambda m: None)
+    assert [m["name"] for m in out["made"]] == ["Synthetic es D", "Synthetic es E"]
+    assert [m["design"] for m in out["made"]] == ["male, elderly, low pitch", "male, elderly, very low pitch"]
+    assert server.line() == {"it": IT}
+
+
+def test_designs_given_are_drawn_and_one_design_is_made_and_set(server):
+    out = sv.make("es", designs=["female, middle-aged, low pitch", " male, elderly "], log=lambda m: None)
+    assert [c["instructions"] for c in server.speech] == ["female, middle-aged, low pitch", "male, elderly"]
+    assert server.line() == {"it": IT}
+    out = sv.make("es", designs=["male, middle-aged, low pitch"], log=lambda m: None)
+    assert out["made"][0]["name"] == "Synthetic es" and server.speech[-1]["instructions"] == (
+        "male, middle-aged, low pitch")
+    assert server.line()["es"] == out["made"][0]["voice"]
+    with pytest.raises(sv.SyntheticError, match="one or the other"):
+        sv.make("fr", candidates=3, designs=["male, elderly"], log=lambda m: None)
+
+
+def test_a_discarded_design_is_drawn_again(server):
+    server.heard = ["no"]
+    out = sv.make("es", candidates=2, log=lambda m: None)
+    assert [c["instructions"] for c in server.speech] == [
+        "male, elderly, low pitch", "male, elderly, low pitch", "male, elderly, very low pitch"]
+    assert out["discarded"][0]["design"] == "male, elderly, low pitch"
+
+
+def test_the_11_24_designs_are_kept_verbatim():
+    assert sv.DESIGNS == {"A": "male, elderly, low pitch", "B": "male, elderly, very low pitch",
+                          "C": "male, middle-aged, low pitch", "D": "female, elderly, low pitch",
+                          "E": "female, middle-aged, low pitch", "F": "male, elderly"}
 
 
 def test_use_replaces_a_language_s_voice_in_its_place(server):
@@ -204,3 +248,8 @@ def test_the_command_and_its_route(server, capsys):
     a = louise.build_parser().parse_args(["node", "speech", "synthetic", "es"])
     assert a.fn(a) == 2                                  # held now: refused, naming --use
     assert "--use" in capsys.readouterr().err
+    a = louise.build_parser().parse_args(["node", "speech", "synthetic", "fr", "--designs",
+                                          "female, elderly, low pitch; male, elderly"])
+    assert a.fn(a) == 0
+    assert [m["design"] for m in json.loads(capsys.readouterr().out)["made"]] == [
+        "female, elderly, low pitch", "male, elderly"]
