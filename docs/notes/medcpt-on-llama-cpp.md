@@ -164,6 +164,26 @@ against every engine whose vectors are carried (OpenVINO's 4.58 M, NCBI's
 35.4 M: torch as its stand-in) and the B70's run, or it comes out too tight
 for the carry.
 
+**The operator's decision on the golden vectors (2026-11-27): "A, as
+recommended".** So, for the new space:
+
+1. The golden vectors and the CPU reference are ONE computation, stored once:
+   the SYCL image's own CPU twin (`gpu_layers 0`, the device hidden), baseline
+   x86-64, flash attention OFF.
+2. Before the calibration is written, the twin's fingerprint is compared on the
+   node (Zen 4) and on a peer with another CPU. If they differ, the work stops
+   there: the engine's device must then name the CPU, a format question for
+   architecture.
+3. The tolerance `calibrate` writes is measured against the B70's run,
+   OpenVINO's (`vega-medcpt-article-ov`, the engine of the 4.58 M) and torch on
+   the CPU as NCBI's stand-in for the 35.4 M (`deploy/vega/stage/article_reference.py`
+   already computes NCBI's usage).
+4. The query encoder is converted again from `ncbi/MedCPT-Query-Encoder` with
+   this tree (`bert.hidden_activation = "gelu"`), with its own CPU reference and
+   calibration role from the same twin.
+5. The carry as decided: within the peers' tolerance carried, re-embedded only
+   where not, the count said before any re-embedding.
+
 **Why the GELU is decided now.** The new space's CPU twin computes what its
 card does, so with the tanh GELU the gate would never see the gap — but the
 carry is measured against the erf vectors, and the gap would take ~1.2e-5 of
