@@ -120,6 +120,9 @@ REAL = {
     # Cheyne's Job and Solomon: a study (its criticism headings), on a Philosophy & Ethics shelf — opinion by
     # that shelf, exactly as the probe's Bible criticism on a Philosophy shelf (#45475; architecture, 2026-11-26)
     65866: "a work of opinion or belief",
+    # Famous Islands and Memorable Voyages: "Voyages and travels -- Juvenile literature", LCC PZ — non-fiction
+    # for children; PZ alone had made it literary (München's judged run, 2026-11-27)
+    25882: None,
 }
 
 
@@ -145,8 +148,8 @@ def test_a_real_records_verdict(n):
     assert got == REAL[n], said[:240]
 
 
-def test_all_31_real_records_are_judged():
-    assert len(REAL) == 31
+def test_all_32_real_records_are_judged():
+    assert len(REAL) == 32
 
 
 def test_a_verdict_says_its_basis():

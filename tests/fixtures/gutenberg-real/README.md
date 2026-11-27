@@ -33,3 +33,10 @@ the same way, byte for byte, from the node's mirror:
   Old Testament -- Criticism, interpretation, etc.", "Wisdom literature --
   Criticism, interpretation, etc.", "Gnomic poetry, Hebrew"; shelves
   Philosophy & Ethics, Religion/Spirituality.
+
+## Added 2026-11-27 (pg-rdf-fixtures-3, 3bcc1161)
+
+- 25882 Famous Islands and Memorable Voyages: LCSH "Voyages and travels --
+  Juvenile literature", LCC PZ; shelves Adventure, Travel Writing, History -
+  Other. Literary by its LCC alone before "-- Juvenile literature" (non-fiction
+  for children) vetoed PZ.
