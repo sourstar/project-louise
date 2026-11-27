@@ -257,6 +257,40 @@ cross-encoder's `cls.weight` and `cls.bias` (the pooler) as well as
 | the article encoder (a new pubmed space, §4) | `pairs:true`, `pooling:cls`, `parallel:1`, `ubatch:512`, context 512; `embd_normalize` as the space declares (the OpenVINO task returned the raw `[CLS]` row) |
 | the cross-encoder | `reranking: true`, `pairs:true`, `rerank_score:sigmoid` (the OpenVINO scores were sigmoids), `parallel:1`, `ubatch:512`, context 512 |
 
+**The cross-encoder's gate, exactly (2026-11-27), on `4b0da8dfcd96`.** A qual twin:
+
+    {"name": "qual-rerank-medcpt-lc", "backend": "louise-sycl-f16-llama-cpp-4b0da8dfcd96-stack-7c301a7ba437",
+     "reranking": true, "embeddings": true, "context_size": 512, "gpu_layers": 999, "mmap": true, "threads": 6,
+     "flash_attention": "off",
+     "parameters": {"model": "<MedCPT-Cross-Encoder-f16.gguf, sha256 078f8cde…>", "batch": 512, "seed": 0},
+     "options": ["fit:off", "parallel:1", "cache_ram:0", "ubatch:512", "pairs:true", "rerank_score:sigmoid"],
+     "env": {"GGML_SYCL_ENABLE_DNN": "0", "GGML_SYCL_FA_ONEDNN": "0", "NEO_CACHE_DIR": "/data/louise-cache/neo-cache"}}
+
+Flash attention OFF: MedCPT's query encoder on this card was bit-exact across fresh
+loads with it off and not with it on (approved-encoders.md); ON is measured after, as an
+optimisation, never in the gate. The lists: the judged set pubmed's calibration was
+fitted on, as the live search sends them (`python -m tools.measure.rerank_bench capture
+umbrela <that judged.jsonl> --collection pubmed --out pubmed-medcpt.jsonl`). The parity,
+the candidate against itself and the latency, both models on the same lists:
+
+    python -m tools.measure.rerank_parity --capture pubmed-medcpt.jsonl --queries 40 --per-query 50 \
+        --url http://localai:8080/v1/rerank --model qual-rerank-medcpt-lc --reference-model louise-rerank-medcpt \
+        --loads 3 --cut 7 --calibration <pubmed's a>,<b> --out medcpt-rerank-parity.json
+
+PASS (proposed): the first document the same for every query (a reference tie at 1.0
+counts as the same); the median share of the reference's top 10 kept ≥ 0.9; the largest
+score difference ≤ 0.01; the candidate's scores the same bits again, reversed, sent seven
+at a time, and after each of three fresh loads. REPORTED: both models' 50-document
+latency (p50, p95, warm) and the largest difference of calibrated relevance. And the
+judged quality, both arms on the same lists: `rerank_bench rerank` per arm, then
+`rerank_bench score --arms OV,LC --base OV`.
+
+**The calibration's name.** A calibration names the model it was fitted for, and under
+another name it is not used: the merge falls back to rank (`merge_withheld`). Either the
+model keeps its name (`louise-rerank-medcpt`, its backend moved) and its calibration
+applies, its measured difference shown by the parity; or a new name, and the calibration
+fitted again (`tools/measure/fusion_calibration.py`). The operator's.
+
 The cross-encoder is gated against `louise-rerank-medcpt`'s scores and order on
 the same (query, document) sets, its scores across fresh loads and
 batch-mates (OpenVINO's #112 measurement), its latency against OpenVINO's,
