@@ -118,6 +118,18 @@ louise hold
                                                                        Every case keeps the new collection PAUSED from before her file exists until her gate has run
                                                                        (added 2026-11-08: legi's gate lost her writer to the worker), then resumes her, unless the operator
                                                                        had paused her; a worker already holding her writer is waited for, at most 600 s
+              refit <collection> --layer-param KEY=VALUE [--layer-param …] [--processes N] [--sample N] [--cpu-model T] [--dry-run | --rollback]
+                (amendment A1l IN PLACE, 2026-11-27, gutenberg: "In place"; "rule 1"): the collection's `fixed`
+                 layer's ENCODER WINDOW (max_tokens=N with tokenizer=sha256:…, both) set or changed where the
+                 collection lies — its name, directories and every file kept at their paths, nothing copied or
+                 linked. Every document is cut at both layers in the parse pool, paused; the ones cut otherwise
+                 (gutenberg: PG 69207) have their rows and marks reset for the worker; the parts holding them
+                 are written again from their own lines and the new Codex's snapshot made, every other part's
+                 entry and file kept; a seeded sample proven, a failure ROLLED BACK. What the old Codex owned is
+                 set aside under <SHARD>/.replaced/<old id>/ and state/.replaced/<old id>/, never deleted. Then
+                 the CPU reference and the gate, still paused; then resumed. Resumable (state/refit.json);
+                 `--rollback` puts back whatever it changed; `--dry-run` writes nothing and takes no lock.
+                 Anything but the encoder window is refused. POST /api/hold/collection/refit
               create <plugin> --recipe FILE --encoder URL [--query-encoder URL] [--api A] [--embed-model M] [--query-model M]
               [--space-from CODEX] [--calibration-set FILE]
                                                                        the model flags: required where a URL names no model (§7.8, amended 2026-10-09)
@@ -2695,7 +2707,11 @@ file; `hold collection forget` removes it. The name is `--name` when
 given, otherwise the plugin's name, or the plugin's name and the first
 12 hex characters of the id when that is taken. A file's `codex` is
 never edited: a name holds one collection for its life, and another
-collection is another name.
+collection is another name — but for ONE case (*amended 2026-11-27,
+A1l in place, RULE 1*): `hold collection refit` gives the name a new
+Codex whose layers differ from the old one's by the encoder window
+alone, and rewrites only the file's `codex` line
+(`collection_file.recodex`); the old Codex is set aside, not deleted.
 
 **The state directory.** Everything under one root:
 

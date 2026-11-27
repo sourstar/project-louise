@@ -25,6 +25,7 @@ annotate their files by hand, since a rewrite drops comments today.
 from __future__ import annotations
 
 import dataclasses
+import re
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,37 @@ def _replace(path: Path, text: str) -> None:
     tmp = path.with_suffix(".toml.tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
+
+
+_CODEX_LINE_RE = re.compile(r'^codex\s*=.*$', re.MULTILINE)
+
+
+def recodex(path: Path, collection_id: str) -> str:
+    """THE ONE EDIT OF A FILE'S `codex` (amendment A1l in place, 2026-11-27;
+    app/hold/refit.py): the collection keeps its name and its file while its
+    Codex changes where it lies (RULE 1; 07 §7.8 otherwise: "A file's `codex`
+    is never edited"). Only the `codex` line before the first table is
+    rewritten, every other byte kept, so nothing the operator set moves (the
+    writer's full rendering would drop comments, as the module says); the
+    result is read back and must differ in `codex` alone, or nothing is
+    written. Atomic. What was done, in words."""
+    text = path.read_text(encoding="utf-8")
+    head_end = re.search(r'^\[', text, re.MULTILINE)
+    head, tail = (text[:head_end.start()], text[head_end.start():]) if head_end else (text, "")
+    if len(_CODEX_LINE_RE.findall(head)) != 1:
+        raise SetRefused(f"{path}: its codex is not named once on a line of its own before its first "
+                         f"table; nothing was written")
+    before = tomllib.loads(text)
+    if before.get("codex") == collection_id:
+        return f"codex {collection_id[:23]}… already"
+    out = _CODEX_LINE_RE.sub(f'codex = "{collection_id}"', head, count=1) + tail
+    after = tomllib.loads(out)
+    if after.get("codex") != collection_id or \
+            {k: v for k, v in after.items() if k != "codex"} != {k: v for k, v in before.items() if k != "codex"}:
+        raise SetRefused(f"{path}: rewriting its codex line would change more than its codex; nothing "
+                         f"was written")
+    _replace(path, out)
+    return f"codex {str(before.get('codex'))[:23]}… → {collection_id[:23]}…"
 
 
 def _codex_toml_text(path: Path, *, codex: str, profile: str | None,

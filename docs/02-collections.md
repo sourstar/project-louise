@@ -774,6 +774,31 @@ its new id (`louise dev carry --rechunked`); a document whose every chunk was
 kept is marked embedded, and every other chunk is the embed stage's. The gate
 runs once for the new space and `vectors-sample` passes before use, as for any
 carry. The shared legal space's `legal_article` 3 → 4 is the case.
+*Amendment A1l IN PLACE (RULE 1, 2026-11-27; the operator, for gutenberg:
+"In place", and on the con that the case is new to the spec: "rule 1"):* a
+collection's Codex may be replaced WHERE IT LIES, under its own name, by one
+whose layers differ from it by the `fixed` chunker's encoder window alone
+(`max_tokens` with its pinned `tokenizer`, app/chunking.py) — the same
+records, the same function (`space_differences` empty), every other layer
+field equal (`hold/refit.py layers_refit_only`). The window keeps every
+window that fits as it was, byte for byte and under its own id, so a
+document whose windows all fit has the same chunks, index entries and
+vectors under both: they stay where they are. Only a document with a window
+over the limit is cut otherwise; its rows and marks are reset and the worker
+cuts, indexes and embeds it again. A record line holds no layer (09 §9.5), so
+the parts keep their lines; the parts holding a changed document are written
+again for their chunk count and roots, and the new Codex's first snapshot
+keeps every other part's entry and file. The new Codex is a new
+`collection_id` and `space_id`, written at the version a new Codex in a new
+space is written at (never below the old one's), with the old one's lineage
+and credits; the old `collection_id` is recorded as its predecessor in the
+pass's state and names the folder the old Codex, its snapshots and every
+replaced part version are set aside in, never deleted, so a failed proof
+rolls everything back (`louise hold collection refit`). Nothing is copied
+and nothing is linked. It is a re-creation (case F) by RULE 1 that keeps the
+name in place, for a collection nothing official was published from; the
+gate runs once for the new space. Gutenberg's PG 69207, one chunk of 8,621
+Nemotron tokens in a window of 8,175, is the case.
 
 The **calibration** block is the contract for anyone who wants to
 contribute vectors. The calibration set is corpus-independent: a fixed

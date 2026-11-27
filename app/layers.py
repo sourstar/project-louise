@@ -138,6 +138,14 @@ def check_input(value: Any, *, chunker: str, where: str) -> None:
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 
+#: the params a chunker TAKES without requiring them, as one group stated
+#: whole or not at all (`check_params`): `fixed`'s encoder window
+#: (chunking.chunk_fixed, operator 2026-11-27). `--layer-param` may add them
+#: to a layer that does not state them yet (app/louise.py `_layers_with`):
+#: `hold collection refit` in place (app/hold/refit.py, A1l), or a case-J
+#: sister
+OPTIONAL_PARAMS: dict[str, tuple[str, ...]] = {chunking.FIXED: ("max_tokens", "tokenizer")}
+
 
 def check_params(params: Any, *, chunker: str, where: str) -> None:
     """Refuse a layer whose chunker cannot run on its params — they are inside

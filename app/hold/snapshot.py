@@ -510,7 +510,8 @@ def reissued(previous: Snapshot | None, current: Snapshot) -> list[Shard]:
 # --------------------------------------------------------------------------
 # creating one from a build (07 §7.4: `hold.snapshot.create`)
 
-def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snapshot:
+def create(root, ref: str, *, snapshot_id: str | None = None, log=print,
+           writers_from: "Snapshot | None" = None) -> Snapshot:
     """`louise hold snapshot create <collection>` — freeze the records the
     SHARD now holds as this period's snapshot.
 
@@ -524,6 +525,13 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
     exits 0; different bytes is refused (07 §7.3), because a snapshot is
     content-addressed and two different ones under one id is the dispute
     04 §4.3 exists to resolve, not something to create locally.
+
+    `writers_from`: a snapshot of ANOTHER Codex over the same parts (a
+    refit in place, app/hold/refit.py), whose part entries' `writer` is
+    kept for every part whose bytes it lists — the writer is the one who
+    compressed those bytes, and a refit compresses only the parts it writes
+    again. Without it a first snapshot names this platform's writer for
+    every part.
     """
     import json
     import sqlite3
@@ -584,6 +592,8 @@ def create(root, ref: str, *, snapshot_id: str | None = None, log=print) -> Snap
     from app.pack import records as pack_records
     from .codex import container_of
     before = {(s.slice, s.n, s.root): s.writer for s in previous.shards} if previous else {}
+    if previous is None and writers_from is not None:
+        before = {(s.slice, s.n, s.root): s.writer for s in writers_from.shards}
     shards = tuple(
         Shard(slice=r["slice"], n=r["n"], root=r["root"], container=container_of(codex),
               records_root=r["records_root"],

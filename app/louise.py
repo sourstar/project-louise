@@ -1130,6 +1130,138 @@ def _join_text_index(root: Path, her_sister_name: str, name: str) -> str | None:
     return joined
 
 
+class _SaidSteps:
+    """What `_new_reference_and_gate` reports into, for a command with no
+    workflow run of its own (`refit`): each step said, nothing recorded."""
+
+    def __init__(self, say):
+        self.say = say
+
+    def at(self, step: str, text: str) -> None:
+        self.say(f"[refit] {step}: {text}")
+
+    def record(self, step: str, data=None) -> None:
+        return None
+
+
+def cmd_collection_refit(a) -> int:
+    """`hold collection refit <collection> --layer-param KEY=VALUE [...]
+    [--dry-run | --rollback]` — the collection's encoder window changed IN
+    PLACE (amendment A1l, operator 2026-11-27: "In place"; on the con that
+    it is new to the spec: "rule 1"). Its name, its directories and every
+    file stay; only what the new Codex owns otherwise moves, and what the
+    old one owned is set aside, never deleted (app/hold/refit.py):
+      changes   every document cut at both layers in the parse pool, paused
+      switch    the old Codex set aside, the new one written, the file's
+                codex line, the manifest re-pinned, the change set reset
+      parts     the parts holding the change set written again, a snapshot
+      proof     a seeded sample against the vector table and the parts; a
+                failure rolls everything back
+    then the CPU reference and the gate, still paused, and the worker cuts,
+    indexes and embeds the change set. Resumable (`state/refit.json`): the
+    same command again continues. `--rollback` puts back whatever a refit
+    changed. `--dry-run` runs the change-set pass, writes nothing, takes no
+    lock. Exit 3 while the worker holds the collection: `node pause` it."""
+    from app.hold import lock as lock_mod, refit as refit_mod
+    root = Path(a.root)
+    name = a.collection
+    say = lambda m: print(m, flush=True)      # noqa: E731
+    if a.rollback:
+        if a.layer_param or a.dry_run:
+            raise CodexError("refit --rollback takes no --layer-param and no --dry-run: it puts back what "
+                             f"{refit_mod.marker_path(root, name)} records")
+        by = f"louise hold collection refit {name} --rollback"
+        paused_here = _hold_off_worker(root, name, by)
+        try:
+            lk = lock_mod.take(lock_mod.state_dir(root, name), name, by)
+        except lock_mod.Held as e:
+            _let_worker_back(name, by, paused_here)
+            raise _defer(f"{e}. `louise node pause {name}` first; then run this again") from None
+        try:
+            refit_mod.rollback(root, name, log=say)
+        finally:
+            lk.release()
+        marked = paused_here or bool((refit_mod.read_marker(root, name) or {}).get("paused_here"))
+        _let_worker_back(name, by, marked)
+        return 0
+    params = _layer_params(a.layer_param)
+    if not params:
+        raise CodexError("refit: at least one --layer-param KEY=VALUE — the encoder window, "
+                         "max_tokens=N and tokenizer=sha256:… together")
+    old = refit_mod.predecessor(root, name)
+    layers = _layers_with(old, params)
+    refit_mod.new_codex(old, layers)             # refused in words before any pause, lock or write
+    if a.dry_run:
+        pl = refit_mod.plan(root, name, layers, processes=a.processes, log=say)
+        print(f"refit {name} (a dry run: nothing written, no lock taken)")
+        print(f"  from        {pl['from']}  space {pl['space_from'][:23]}…")
+        print(f"  to          {pl['to']}  space {pl['space_to'][:23]}…  (Codex version {pl['version'][0]} → "
+              f"{pl['version'][1]})")
+        print("  layers      " + "; ".join(json.dumps(l.chunker.params, sort_keys=True) for l in pl["codex"].layers))
+        print(f"  change set  {pl['changed']} of {pl['documents']} document(s) cut otherwise"
+              + (f": {', '.join(pl['changed_uids'])}{' …' if pl['changed'] > len(pl['changed_uids']) else ''}"
+                 if pl["changed"] else "")
+              + (f"; {pl['errors']} could not be cut ({pl['first_error']}), reset too" if pl["errors"] else ""))
+        print(f"  their rows  deleted from the vector table and their marks reset; the worker cuts, indexes "
+              f"and embeds them at the new layer. Every other document's vectors, index entries and marks "
+              f"stay where they are")
+        if pl["snapshot"]:
+            print(f"  parts       {len(pl['parts'])} written again from their own lines"
+                  + (f" ({', '.join(p['path'] for p in pl['parts'][:5])}{' …' if len(pl['parts']) > 5 else ''})"
+                     if pl["parts"] else "")
+                  + f"; snapshot {pl['snapshot']} for the new Codex, every other part's entry and file kept")
+        else:
+            print("  parts       none: the collection froze no snapshot")
+        print(f"  set aside   {pl['shard_aside']} (the old codex.json, snapshots, old part versions) and "
+              f"{pl['state_aside']} (its staging build, its file's text, the saved rows); nothing deleted")
+        print(f"  locks       {name} paused and its write lock taken: `louise node pause {name}` first if the "
+              f"worker holds it")
+        print("  steps       changes, switch, parts, proof (a failure rolls back); then the CPU reference and "
+              "the gate, still paused; then resumed")
+        return 0
+    by = f"louise hold collection refit {name} (paused until its gate)"
+    paused_here = _hold_off_worker(root, name, by)
+    marker = refit_mod.read_marker(root, name) or {}
+    paused_here = paused_here or bool(marker.get("paused_here") and not marker.get("done"))
+    try:
+        lk = lock_mod.take(lock_mod.state_dir(root, name), name, by)
+    except lock_mod.Held as e:
+        if not marker or marker.get("done") or marker.get("rolled_back"):
+            _let_worker_back(name, by, paused_here)
+        raise _defer(f"{e}. `louise node pause {name}` first; then run this again: it resumes") from None
+    try:
+        with _graceful_stop() as stop:
+            m = refit_mod.run(root, name, layers, processes=a.processes, sample=a.sample, stop=stop,
+                              now=_utc_now(), paused_here=paused_here, log=say)
+    except refit_mod.RefitFailed:
+        lk.release()
+        _let_worker_back(name, by, paused_here)
+        raise
+    except BaseException:
+        lk.release()
+        now_m = refit_mod.read_marker(root, name)
+        if now_m is None or now_m.get("done"):
+            _let_worker_back(name, by, paused_here)            # nothing of the refit begun
+        else:
+            say(f"[refit] {name}: stays paused until the refit is finished: run the same command again "
+                f"(it resumes), or `--rollback`")
+        raise
+    lk.release()
+    if m.get("stopped"):
+        say(f"[refit] {name}: stopped; it stays paused — run the same command again to resume")
+        return 130
+    rc, stopped = _new_reference_and_gate(a, _SaidSteps(say), name, say)
+    if stopped:
+        say(f"[refit] {name}: stays paused: its CPU reference exited {rc}; run the same command again once "
+            f"it can")
+        return rc
+    _let_worker_back(name, by, paused_here)
+    say(f"[refit] {name}: resumed — the worker cuts, indexes and embeds the change set "
+        f"({m['steps']['changes']['changed']} document(s)) at the new layer"
+        + ("" if rc == 0 else f"; the gate exited {rc}: nothing may be embedded until it passes"))
+    return rc
+
+
 def _layer_params(given: list[str] | None) -> dict[str, Any]:
     """`["header=false", "max_tokens=512"]` → `{"header": False, "max_tokens": 512}`:
     each value read as JSON, a bare word as a string."""
@@ -1151,28 +1283,47 @@ def _said(params: dict[str, Any]) -> str:
 
 
 def _layers_with(codex, params: dict[str, Any]) -> tuple:
-    """Her sister's layers with `params` changed in every layer whose chunker
-    has them. Only a param the chunker already states, and only to another
-    value: adding one is a chunker's own change (chunking_context, the
-    architecture session's B), and the same value is the same space."""
+    """The collection's layers with `params` changed in every layer whose
+    chunker has them. A param the chunker already states, to another value;
+    or one it TAKES without requiring it (`layers.OPTIONAL_PARAMS`: `fixed`'s
+    encoder window, `max_tokens` with its `tokenizer`, both or neither —
+    operator, 2026-11-27, gutenberg), checked as a Codex would check it
+    (`layers.check_params`). Any other new param is a chunker's own change
+    (chunking_context, the architecture session's B), and the same values
+    are the same space."""
     import dataclasses
+
+    from app import layers as layers_mod
     changed: set[str] = set()
     out = []
-    for layer in codex.layers:
+    for i, layer in enumerate(codex.layers):
         cur = dict(layer.chunker.params or {})
-        mine = {k: v for k, v in params.items() if k in cur}
+        optional = layers_mod.OPTIONAL_PARAMS.get(layer.chunker.id, ())
+        mine = {k: v for k, v in params.items() if k in cur or k in optional}
         for k, v in mine.items():
-            if cur[k] == v:
+            if k not in optional and cur[k] == v:
                 raise CodexError(f"--layer-param {k}={json.dumps(v)}: {layer.chunker.id} has it already; "
                                  f"the same value is the same space")
+        group = {k: v for k, v in mine.items() if k in optional}
+        if group and all(k in cur and cur[k] == v for k, v in group.items()):
+            raise CodexError(f"--layer-param {_said(group)}: {layer.chunker.id} has it already; the same "
+                             f"values are the same space")
         changed |= set(mine)
         cur.update(mine)
+        if group:
+            try:
+                layers_mod.check_params(cur, chunker=layer.chunker.id,
+                                        where=f"--layer-param (layer {i}, {layer.chunker.id})")
+            except layers_mod.LayerError as e:
+                raise CodexError(str(e)) from None
         out.append(dataclasses.replace(layer, chunker=dataclasses.replace(layer.chunker, params=cur)))
     unknown = sorted(set(params) - changed)
     if unknown:
         have = sorted({k for l in codex.layers for k in (l.chunker.params or {})})
+        takes = sorted({k for l in codex.layers for k in layers_mod.OPTIONAL_PARAMS.get(l.chunker.id, ())})
         raise CodexError(f"--layer-param {', '.join(unknown)}: no layer's chunker states it (they state "
-                         f"{', '.join(have) or 'none'}); a new param is the chunker's own change")
+                         f"{', '.join(have) or 'none'}" + (f"; they take {', '.join(takes)}" if takes else "")
+                         + "); a new param is the chunker's own change")
     return tuple(out)
 
 
@@ -8257,6 +8408,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="the outcome as one JSON object")
     p.set_defaults(fn=cmd_collection_update)
 
+    p = verbs.add_parser("refit", help="the collection's encoder window changed IN PLACE (RULE 1, A1l): its "
+                                       "name, files and vectors kept, only the documents a window over the "
+                                       "limit cuts otherwise redone; resumable; --rollback puts it back")
+    root_arg(p)
+    p.add_argument("collection")
+    p.add_argument("--layer-param", dest="layer_param", action="append", default=None, metavar="KEY=VALUE",
+                   help="the `fixed` layer's encoder window: max_tokens=N and tokenizer=sha256:… (the value "
+                        "read as JSON). Repeatable")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="the change set, the parts and the steps; writes nothing, takes no lock")
+    p.add_argument("--rollback", action="store_true",
+                   help="put back everything a refit changed, from whatever step it reached")
+    p.add_argument("--processes", type=int, default=None, metavar="N",
+                   help="at most N processes for the change-set pass (default: the node profile's cores)")
+    from app.hold.refit import SAMPLE as REFIT_SAMPLE
+    p.add_argument("--sample", type=int, default=REFIT_SAMPLE, metavar="N",
+                   help=f"the proof's sample of unchanged embedded documents (default {REFIT_SAMPLE})")
+    p.add_argument("--cpu-model", default=None, metavar="NAME",
+                   help="its CPU twin, for the CPU reference after the refit (default: resolved as `new` does)")
+    p.set_defaults(fn=cmd_collection_refit)
     p = verbs.add_parser(
         "migrate", help="add the §9.3 fields a Codex predates, each as null")
     root_arg(p); p.add_argument("name")
