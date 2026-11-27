@@ -447,12 +447,32 @@ def test_an_encoder_sister_has_her_sister_s_index_identity_and_slices(pair, card
     path.write_text(text.replace("slices = []", 'slices = ["lang=en", "lang=it"]'), encoding="utf-8")
     assert _new_enc(root) == 0
     with open(deposit.held_file(root, "sis"), "rb") as f:
-        assert tomllib.load(f)["slices"] == ["lang=en", "lang=it"], "her sister's slices, not []"
+        held = tomllib.load(f)
+    assert held["slices"] == ["lang=en", "lang=it"], "her sister's slices, not []"
+    assert held["acquire_enabled"] is False, "her sister acquires their one corpus; she never does"
     files = deposit.held_file(root, "old"), deposit.held_file(root, "sis")
     assert root.name == "collections"
     monkeypatch.setenv("LOUISE_ROOT", str(root.parent))      # the node's layout: <LOUISE_ROOT>/collections
     a, b = (collections_mod._load_one(f) for f in files)
     assert text_index.identity(a) is not None and text_index.identity(a) == text_index.identity(b)
+    assert b.acquire_enabled is False and a.slices == b.slices
+
+
+def test_a_sister_of_a_file_spelling_profile_holds_that_profile_and_acquires_nothing(pair, card, monkeypatch):
+    """The older spelling (`profile`, as the node's gutenberg file had it):
+    hers says the same, never `slices = []` beside it."""
+    import tomllib
+    from app.hold import deposit
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    path = deposit.held_file(root, "old")
+    if not path.is_file():
+        louise._write_held_file(root, old, "http://localai:8080", api="vega", embed_model="vega-old")
+    path.write_text(path.read_text(encoding="utf-8").replace("slices = []", 'profile = "full"'), encoding="utf-8")
+    assert _new_enc(root) == 0
+    with open(deposit.held_file(root, "sis"), "rb") as f:
+        held = tomllib.load(f)
+    assert held.get("profile") == "full" and "slices" not in held and held["acquire_enabled"] is False
 
 
 def test_the_dry_run_names_the_encoder_side_and_makes_nothing(pair, card, capsys):
@@ -466,8 +486,8 @@ def test_the_dry_run_names_the_encoder_side_and_makes_nothing(pair, card, capsys
 
 
 @pytest.mark.parametrize("why", ["with-space-from", "with-layer-param", "her-sister-s-own", "unknown",
-                                 "no-sister"])
-def test_what_an_encoder_sister_cannot_be_is_refused_before_anything(pair, card, why):
+                                 "no-sister", "a-held-space", "another-form"])
+def test_what_an_encoder_sister_cannot_be_is_refused_before_anything(pair, card, why, monkeypatch):
     root, old, _ = pair
     _ready_nemo(root, old, card)
     args = ["hold", "collection", "new", "gutenberg", "--root", str(root), "--name", "sis",
@@ -481,6 +501,15 @@ def test_what_an_encoder_sister_cannot_be_is_refused_before_anything(pair, card,
         args[args.index("nemo")] = "old"            # her own encoder side: her sister's space
     elif why == "unknown":
         args[args.index("nemo")] = "nobody"
+    elif why == "a-held-space":
+        # bge cuts as her sister does: her space would BE bge's, which is --space-from
+        card["weights"] = col.resolve(root, "bge")[1].space.encoder.weights
+        args[args.index("nemo")] = "bge"
+    elif why == "another-form":
+        from app.hold import calibration as cal
+        real = cal.form
+        monkeypatch.setattr(cal, "form", lambda c: "pair" if c.collection_id == col.resolve(root, "nemo")[1]
+                            .collection_id else real(c))
     else:
         i = args.index("--sister-of")
         del args[i:i + 2]

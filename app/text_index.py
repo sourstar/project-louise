@@ -115,12 +115,10 @@ def _layer_key(layer: Any) -> Any:
 
 def _slicing_key(slicing: Any) -> Any:
     """The slicing as its index reads it: `container = "jsonl"` stated (Codex
-    version 9 and later) or absent (below 9, which means JSONL — 09 §9.5,
-    hold/collection.py `_slicing_at`) is the same parts. Absent is kept."""
-    plain = _plain(slicing)
-    if isinstance(plain, dict) and plain.get("container") == "jsonl":
-        plain = {k: v for k, v in plain.items() if k != "container"} or None
-    return plain
+    version 9 and later) or absent (below 9, which means JSONL) is the same
+    parts — `codex.parts_slicing`, the one answer the carry uses too."""
+    from .hold import codex as cx
+    return cx.parts_slicing(_plain(slicing))
 
 
 def identity(collection) -> str | None:
