@@ -23,7 +23,7 @@ SERIES = STAGED / "engine-pace.series"
 LIVE = STAGED / "engine-fade.series"
 BUILD = ROOT / "deploy" / "localai" / "llama-cpp" / "build.sh"
 NOTE = (ROOT / "docs" / "notes" / "parking-step-2.md").read_text(encoding="utf-8")
-NAME = "3216ace3205f"
+NAME = "a4f65005d8c3"
 INNER = "backend/cpp/llama-cpp/patches/0025-sycl-park-paced-by-the-host-reserve.patch"
 
 
@@ -73,16 +73,20 @@ def test_the_server_counts_the_evictable_part_with_its_margin_and_its_caps():
     assert 'Expect(err).NotTo(HaveOccurred(), "the ARC gives back what the copy needs")' in added
 
 
-def test_the_engine_waits_on_the_reserve_and_unset_runs_as_before():
+def test_the_engine_paces_every_park_and_unset_is_the_default_reserve():
     inner = _inner(ENGINE)
     added = "\n".join(line[1:] for line in inner.splitlines() if line.startswith("+") and not line.startswith("+++"))
     assert "static constexpr size_t PIECE = 256ull << 20;" in added
     assert 'from(std::getenv("GGML_SYCL_PARK_HOST_RESERVE"), std::getenv("GGML_SYCL_PARK_HOST_WAIT_MS"))' in added
     assert "int64_t wait_ms = 30000;" in added and "int64_t step_ms = 50;" in added
-    # unset: the copy as it was, one call to the old copy, no reading
+    # every park paced (architecture, 2026-11-27: 0032 counts the ARC for every park): unset, 0 or unreadable is 2 GiB,
+    # and the copy has no unpaced branch
+    assert "static constexpr size_t DEFAULT_RESERVE = 2ull << 30;" in added
+    assert "size_t  reserve = DEFAULT_RESERVE;" in added
+    assert "if (end && *end == '\\0' && v > 0) {" in added
     to_host = added[added.index("static bool ggml_sycl_park_copy_to_host("):]
     to_host = to_host[:to_host.index("\n}\n")]
-    assert "if (pace.reserve == 0) {\n        ggml_sycl_park_copy(q, dst, src, size);\n        return true;\n    }" in to_host
+    assert "ggml_sycl_park_copy(" not in to_host and "ggml_sycl_park_wait_for_host(pace, n," in to_host
     # at the bound: the host copy freed, the device never released, NO_MEMORY
     refusal = added[added.index("if (!ggml_sycl_park_copy_to_host("):]
     refusal = refusal[:refusal.index("return GGML_BACKEND_PARK_NO_MEMORY;")]
@@ -121,8 +125,9 @@ def test_the_candidate_is_the_live_engine_plus_0033_and_its_name_is_held():
 
 def test_the_notes_say_the_constraint_and_what_was_not_measured():
     section = NOTE[NOTE.index("## 15. The ZFS ARC counted, the copy paced"):]
-    for said in ("**THE ONE CONSTRAINT: the reserve must not be above `zfs_arc_sys_free`.**", NAME, "1222e3616d6b569cc577cc9a0c27f014476d11ae",
-                 "15,032,385,536", "| a park paced on the card, the ARC giving back under it | NOT measured"):
+    for said in ("**THE ONE CONSTRAINT: the reserve must not be above `zfs_arc_sys_free`.**", NAME,
+                 "there is no unpaced park", "AND THE ORDER: the engine live first, then 0032", "1222e3616d6b569cc577cc9a0c27f014476d11ae",
+                 "15,032,385,536", "| a park paced on the card, the ARC giving back under it, with the env and without it | NOT measured"):
         assert said in section, said
     readme = (STAGED / "README.md").read_text(encoding="utf-8")
     assert f"**A candidate after the live engine, a park paced by the host: `engine-pace.series`** (`{NAME}`;" in readme

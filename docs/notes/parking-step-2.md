@@ -1553,13 +1553,30 @@ refusal's reading says the evictable part and what of it was counted.
 
 **B, the engine (staged 0033, inner `0025-sycl-park-paced-by-the-host-reserve.patch`;
 candidate `engine-pace.series` = the live `engine-fade.series` + 0033:
-`3216ace3205f`).** With `GGML_SYCL_PARK_HOST_RESERVE=<bytes>` in a model's env, a
-park copies its weights to host memory in pieces of 256 MiB and, before
-each, waits — in steps of 50 ms, at most `GGML_SYCL_PARK_HOST_WAIT_MS`
+`a4f65005d8c3`).** EVERY park copies its weights to host memory in pieces
+of 256 MiB and, before each, waits — in steps of 50 ms, at most `GGML_SYCL_PARK_HOST_WAIT_MS`
 (30,000) for the whole park — while MemAvailable is under the reserve plus
 the piece. At the bound the park does not happen: the host copy is freed,
 the device memory was never released, NO_MEMORY (the server stops the model
-instead, as for a host with no room). Unset, the copy runs as before.
+instead, as for a host with no room). The reserve is
+`GGML_SYCL_PARK_HOST_RESERVE=<bytes>` in a model's env, and 2 GiB where it is
+unset, 0 or not a number: there is no unpaced park.
+
+**Why every park (architecture, 2026-11-27, through München).** 0032 counts the
+ARC as room for EVERY park; a park that copies faster than the ARC gives back
+(2.3 GiB in ~24 s under 10 GiB) is an OOM of the process holding the weights.
+The first cut paced only a model whose env set the reserve — tonight's gate,
+bge-m3 alone — and the live engine `aea955022a8f` paces nothing. Three ways
+were weighed: (a) the env on every `park: true` model (no rebuild; a model or
+twin made on the node without it parks unpaced on ARC room); (b) 0032 counts
+the ARC only for a paced model (the server never sees the engine's env, which
+VeGa's wrapper passes: plumbing in both); (c) the engine paces every park on a
+default reserve — taken: no setting to drift, at the cost of the first
+candidate's name (`3216ace3205f`, void) and a park refused after 30 s on a
+host held under 2.25 GiB. AND THE ORDER: the engine live first, then 0032 —
+0032 on the live engine is every ARC-counted park unpaced. The gate adds a run
+of a `park: true` model WITHOUT the env under the 10 GiB allocation: a paced
+copy or a refusal, never an OOM.
 
 **THE ONE CONSTRAINT: the reserve must not be above `zfs_arc_sys_free`.**
 ZFS gives memory back when the host's free memory falls under
@@ -1572,7 +1589,7 @@ engine's reserve (counted on MemAvailable alone).
 | | |
 |---|---|
 | the server: the evictable part read, counted with its margin and its cap, nothing added under a cgroup limit, a park admitted on the ARC | MEASURED, `pkg/xsysinfo` and `pkg/model` (279 of 279); the new spec fails when the park ignores the ARC |
-| the engine: the wait (no reserve: no reading; room: at once; under it: steps until back; never back: refused after exactly the bound, the park's bound; unreadable: goes) | MEASURED, `tests/test-sycl-park-pace.cpp`, 12 of 12 |
+| the engine: the wait (unset and 0: the default reserve of 2 GiB; room: at once; under it: steps until back; never back: refused after exactly the bound, the park's bound; unreadable: goes) | MEASURED, `tests/test-sycl-park-pace.cpp`, 12 of 12 |
 | the engine compiles | MEASURED: `ggml-sycl.cpp` with icpx (oneAPI 2025.3); the inner patch applies on the very file the live series produces |
-| a park paced on the card, the ARC giving back under it | NOT measured: a build, a gate, and a copy of a model with the reserve set — München's |
+| a park paced on the card, the ARC giving back under it, with the env and without it | NOT measured: a build, a gate, and a copy of a model with the reserve set and of one without — München's |
 

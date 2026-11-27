@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Fri, 27 Nov 2026 07:13:08 +0000
-Subject: [PATCH] fix(llama-cpp): a park waits for the host's reserve before
- each piece it copies to host memory
+Subject: [PATCH] fix(llama-cpp): every park waits for the host's reserve
+ before each piece it copies to host memory
 
 Carried as a llama.cpp patch beside the others
 (patches/0025-sycl-park-paced-by-the-host-reserve.patch), after
@@ -13,29 +13,31 @@ whose page cache gives memory back slowly (the ZFS ARC: 24 s unmoved under a
 10 GiB allocation, then 2.3 GiB back, measured on a node) that can take the
 host under what it must keep free before the cache has given back.
 
-With GGML_SYCL_PARK_HOST_RESERVE=<bytes> in the model's env the copy goes in
-pieces of 256 MiB, and before each piece waits - in steps, at most
-GGML_SYCL_PARK_HOST_WAIT_MS in all - while MemAvailable is under the reserve
-plus the piece; at the bound the weights stay on the device (NO_MEMORY).
-Unset, nothing changes. The reserve must not be above zfs_arc_sys_free, or
-the wait waits for nothing.
+Every park now copies in pieces of 256 MiB, and before each piece waits - in
+steps, at most GGML_SYCL_PARK_HOST_WAIT_MS in all - while MemAvailable is
+under the reserve plus the piece; at the bound the weights stay on the device
+(NO_MEMORY). The reserve is GGML_SYCL_PARK_HOST_RESERVE=<bytes> in the
+model's env, 2 GiB where it is unset, 0 or not a number: a server that counts
+a slow cache as room for a park must not meet a park that outruns the cache.
+The reserve must not be above zfs_arc_sys_free, or the wait waits for
+nothing.
 
 Checked: a standalone test of 12 cases; the backend compiles with icpx. Not
 run on a card.
 
 Assisted-by: Claude Code
 ---
- ...-sycl-park-paced-by-the-host-reserve.patch | 295 ++++++++++++++++++
- 1 file changed, 295 insertions(+)
+ ...-sycl-park-paced-by-the-host-reserve.patch | 300 ++++++++++++++++++
+ 1 file changed, 300 insertions(+)
  create mode 100644 backend/cpp/llama-cpp/patches/0025-sycl-park-paced-by-the-host-reserve.patch
 
 diff --git a/backend/cpp/llama-cpp/patches/0025-sycl-park-paced-by-the-host-reserve.patch b/backend/cpp/llama-cpp/patches/0025-sycl-park-paced-by-the-host-reserve.patch
 new file mode 100644
-index 0000000..b1dd9ff
+index 0000000..5f97b10
 --- /dev/null
 +++ b/backend/cpp/llama-cpp/patches/0025-sycl-park-paced-by-the-host-reserve.patch
-@@ -0,0 +1,295 @@
-+ggml-sycl: a park's copy to host memory waits for the host's reserve (GGML_SYCL_PARK_HOST_RESERVE)
+@@ -0,0 +1,300 @@
++ggml-sycl: a park's copy to host memory waits for the host's reserve, every park (GGML_SYCL_PARK_HOST_RESERVE)
 +
 +Parking copies a model's weights into ordinary host memory, which the kernel
 +commits page by page as the copy writes it. On a host whose page cache gives
@@ -43,28 +45,31 @@ index 0000000..b1dd9ff
 +24 s, then 2.3 GiB back (measured on a node) - a copy at full speed can take
 +the host under what it must keep free before the cache has given back.
 +
-+With GGML_SYCL_PARK_HOST_RESERVE=<bytes> in a model's env, a park copies in
-+pieces of 256 MiB and, before each piece, reads the host's MemAvailable;
-+while it is under the reserve plus the piece the park waits, in steps of
-+50 ms and at most GGML_SYCL_PARK_HOST_WAIT_MS (30000) in all. At that bound
-+the park does not happen: the host copy is freed, the device memory was
-+never released, NO_MEMORY - as a host with no room. A park that waited says
-+how long. Unset (the default), the copy runs as before, one piece of 1 GiB
-+after another, with no reading and no wait.
++Every park copies in pieces of 256 MiB and, before each piece, reads the
++host's MemAvailable; while it is under the reserve plus the piece the park
++waits, in steps of 50 ms and at most GGML_SYCL_PARK_HOST_WAIT_MS (30000) in
++all. At that bound the park does not happen: the host copy is freed, the
++device memory was never released, NO_MEMORY - as a host with no room. A park
++that waited says how long. The reserve is GGML_SYCL_PARK_HOST_RESERVE=<bytes>
++in a model's env, and 2 GiB where it is unset, 0 or not a number: there is no
++unpaced park. A server that counts a slow cache as room for a park
++(LocalAI's, counting the ARC's evictable part) is safe only if no park copies
++faster than the cache gives back, whatever one model's settings say.
 +
 +The reserve must not be above what ZFS keeps free (zfs_arc_sys_free): ZFS
 +gives memory back when the host's free memory falls under that, so a wait
 +under a higher reserve waits for nothing and every park ends at its bound.
 +MemAvailable that cannot be read is no reason to refuse.
 +
-+Checked: tests/test-sycl-park-pace.cpp, standard library only, 12 cases (no
-+reserve: no reading; room: at once; under it: steps until the host is back;
-+never back: refused after exactly the bound, the bound the park's and not
-+the piece's; unreadable: goes; the switches as written in an env). The
-+backend's object compiles with icpx (oneAPI 2025.3). Not run on a card.
++Checked: tests/test-sycl-park-pace.cpp, standard library only, 12 cases (a
++pace with no reserve, a test's alone: no reading; room: at once; under it:
++steps until the host is back; never back: refused after exactly the bound,
++the bound the park's and not the piece's; unreadable: goes; the switches as
++written in an env, unset and 0 the default reserve). The backend's object
++compiles with icpx (oneAPI 2025.3). Not run on a card.
 +---
 +diff --git a/ggml/src/ggml-sycl/ggml-sycl.cpp b/ggml/src/ggml-sycl/ggml-sycl.cpp
-+index a7f6827..8cdcf36 100644
++index a7f6827..016603a 100644
 +--- a/ggml/src/ggml-sycl/ggml-sycl.cpp
 ++++ b/ggml/src/ggml-sycl/ggml-sycl.cpp
 +@@ -71,6 +71,7 @@
@@ -75,21 +80,17 @@ index 0000000..b1dd9ff
 + #include "ggml-sycl/mem.hpp"
 + #include "ggml-sycl/norm.hpp"
 + #include "ggml-sycl/presets.hpp"
-+@@ -1397,6 +1398,27 @@ static uint64_t ggml_sycl_park_checksum(const void * data, size_t size) {
++@@ -1397,6 +1398,23 @@ static uint64_t ggml_sycl_park_checksum(const void * data, size_t size) {
 + }
 + 
 + // host <-> device over the whole buffer, in pieces, each waited for
 ++static void ggml_sycl_park_copy(sycl::queue & q, void * dst, const void * src, size_t size);
 ++
-++// device -> host for a park: paced on the host's free memory where a reserve is set (park-pace.hpp), as one copy
-++// otherwise. false when the host stayed under its reserve for the whole bound; nothing is released then
+++// device -> host for a park, in pieces paced on the host's free memory (park-pace.hpp: every park, on a reserve of 2 GiB
+++// unless the env names another). false when the host stayed under its reserve for the whole bound; nothing is released then
 ++static bool ggml_sycl_park_copy_to_host(sycl::queue & q, void * dst, const void * src, size_t size, int64_t & waited_ms) {
 ++    const ggml_sycl_park_pace & pace = ggml_sycl_park_pace::env();
 ++    waited_ms = 0;
-++    if (pace.reserve == 0) {
-++        ggml_sycl_park_copy(q, dst, src, size);
-++        return true;
-++    }
 ++    for (size_t off = 0; off < size; off += ggml_sycl_park_pace::PIECE) {
 ++        const size_t n = std::min(ggml_sycl_park_pace::PIECE, size - off);
 ++        if (!ggml_sycl_park_wait_for_host(pace, n, ggml_sycl_host_mem_available, ggml_sycl_park_sleep_ms, waited_ms)) {
@@ -103,7 +104,7 @@ index 0000000..b1dd9ff
 + static void ggml_sycl_park_copy(sycl::queue & q, void * dst, const void * src, size_t size) {
 +     for (size_t off = 0; off < size; off += ggml_sycl_parkable_mem::PIECE) {
 +         const size_t n = std::min(ggml_sycl_parkable_mem::PIECE, size - off);
-+@@ -1427,7 +1449,16 @@ static ggml_backend_park_status ggml_backend_sycl_buffer_park(ggml_backend_buffe
++@@ -1427,7 +1445,16 @@ static ggml_backend_park_status ggml_backend_sycl_buffer_park(ggml_backend_buffe
 +                        buffer->size / 1024.0 / 1024.0, ctx->name.c_str());
 +         return GGML_BACKEND_PARK_NO_MEMORY;
 +     }
@@ -121,7 +122,7 @@ index 0000000..b1dd9ff
 +     const int64_t t_copied = ggml_time_us();
 + 
 +     char said[64] = "";
-+@@ -1446,9 +1477,13 @@ static ggml_backend_park_status ggml_backend_sycl_buffer_park(ggml_backend_buffe
++@@ -1446,9 +1473,13 @@ static ggml_backend_park_status ggml_backend_sycl_buffer_park(ggml_backend_buffe
 +     mem->n_park++;
 + 
 +     const int64_t t_end = ggml_time_us();
@@ -139,20 +140,24 @@ index 0000000..b1dd9ff
 + }
 +diff --git a/ggml/src/ggml-sycl/park-pace.hpp b/ggml/src/ggml-sycl/park-pace.hpp
 +new file mode 100644
-+index 0000000..ec8835e
++index 0000000..f077a9b
 +--- /dev/null
 ++++ b/ggml/src/ggml-sycl/park-pace.hpp
-+@@ -0,0 +1,101 @@
++@@ -0,0 +1,107 @@
 ++#pragma once
 ++// A park's copy to host memory, paced on the host's free memory (GGML_SYCL_PARK_HOST_RESERVE).
 ++//
 ++// Parking copies a model's weights into ordinary host memory, which the kernel commits page by page as the copy
 ++// writes it. On a host whose page cache gives memory back slowly - the ZFS ARC: measured on a node, 2026-11-26, a
 ++// 10 GiB allocation, the ARC unmoved for 24 s, then 2.3 GiB back - a copy that runs at full speed can take the host
-++// under what it must keep free before the cache has given anything back. With a reserve set, the copy goes in pieces
-++// and, before each piece, waits (in steps, at most GGML_SYCL_PARK_HOST_WAIT_MS) while the host's MemAvailable is under
-++// the reserve plus the piece; at that bound the park does not happen: the weights stay on the device, NO_MEMORY, as a
-++// host with no room. Without a reserve (the default) the copy runs as before, without a wait.
+++// under what it must keep free before the cache has given anything back. So the copy goes in pieces and, before each
+++// piece, waits (in steps, at most GGML_SYCL_PARK_HOST_WAIT_MS) while the host's MemAvailable is under the reserve
+++// (GGML_SYCL_PARK_HOST_RESERVE) plus the piece; at that bound the park does not happen: the weights stay on the
+++// device, NO_MEMORY, as a host with no room.
+++//
+++// EVERY PARK IS PACED: unset, 0 or unreadable, the reserve is DEFAULT_RESERVE (2 GiB); the env only changes the
+++// number. A server that counts a slow cache as room for a park (LocalAI's, counting the ARC's evictable part) is safe
+++// only if no park copies faster than that cache gives back, whatever a model's settings say (2026-11-27).
 ++//
 ++// THE RESERVE MUST NOT BE ABOVE WHAT ZFS KEEPS FREE (zfs_arc_sys_free): ZFS gives memory back when the host's free
 ++// memory falls under that, so a wait under a higher reserve waits for nothing and every park ends at the bound.
@@ -166,7 +171,9 @@ index 0000000..b1dd9ff
 ++#include <thread>
 ++
 ++struct ggml_sycl_park_pace {
-++    size_t  reserve = 0;      // bytes the host keeps free while weights are copied into it; 0: no pacing
+++    static constexpr size_t DEFAULT_RESERVE = 2ull << 30;
+++
+++    size_t  reserve = DEFAULT_RESERVE; // bytes the host keeps free while weights are copied into it; 0 (a test's): no wait
 ++    int64_t wait_ms = 30000;  // the longest a park waits for the host, in all
 ++    int64_t step_ms = 50;     // between two readings
 ++
@@ -177,7 +184,7 @@ index 0000000..b1dd9ff
 ++        if (reserve && reserve[0]) {
 ++            char * end = nullptr;
 ++            const unsigned long long v = strtoull(reserve, &end, 10);
-++            if (end && *end == '\0') {
+++            if (end && *end == '\0' && v > 0) {
 ++                p.reserve = (size_t) v;
 ++            }
 ++        }
@@ -218,8 +225,8 @@ index 0000000..b1dd9ff
 ++    return kb == std::numeric_limits<size_t>::max() ? kb : kb * 1024;
 ++}
 ++
-++// Before a piece of `need` bytes: true at once where the host has the reserve and the piece available, or where no
-++// reserve is set; else reads again every step_ms until it has, and false once the park has waited wait_ms in all.
+++// Before a piece of `need` bytes: true at once where the host has the reserve and the piece available (or a test's pace
+++// has no reserve); else reads again every step_ms until it has, and false once the park has waited wait_ms in all.
 ++// `waited_ms` is the park's running total. `available` and `sleep_ms` are the host's, or a test's.
 ++template <typename Available, typename Sleep>
 ++static bool ggml_sycl_park_wait_for_host(const ggml_sycl_park_pace & pace, size_t need, Available && available,
@@ -246,10 +253,10 @@ index 0000000..b1dd9ff
 ++}
 +diff --git a/tests/test-sycl-park-pace.cpp b/tests/test-sycl-park-pace.cpp
 +new file mode 100644
-+index 0000000..7234e91
++index 0000000..4c54f18
 +--- /dev/null
 ++++ b/tests/test-sycl-park-pace.cpp
-+@@ -0,0 +1,78 @@
++@@ -0,0 +1,80 @@
 ++// A park's copy paced on the host's free memory (ggml/src/ggml-sycl/park-pace.hpp). Standard library only:
 ++//   c++ -std=c++17 -I ggml/src/ggml-sycl tests/test-sycl-park-pace.cpp -o test-sycl-park-pace && ./test-sycl-park-pace
 ++
@@ -273,11 +280,12 @@ index 0000000..b1dd9ff
 ++    std::vector<int64_t> slept;
 ++    auto sleep = [&](int64_t ms) { slept.push_back(ms); };
 ++
-++    {   // no reserve: no reading, no wait - the copy as before
+++    {   // a pace with no reserve (a test's alone: the env never gives one): no reading, no wait
 ++        ggml_sycl_park_pace pace;
+++        pace.reserve = 0;
 ++        int64_t waited = 0, reads = 0;
 ++        const bool go = ggml_sycl_park_wait_for_host(pace, 256 * mib, [&] { reads++; return (size_t) 0; }, sleep, waited);
-++        expect(go && waited == 0 && reads == 0 && slept.empty(), "no reserve set: the copy goes, the host not even read");
+++        expect(go && waited == 0 && reads == 0 && slept.empty(), "a pace with no reserve (a test's): the copy goes, the host not even read");
 ++    }
 ++    {   // room for the reserve and the piece: at once
 ++        ggml_sycl_park_pace pace = ggml_sycl_park_pace::from("2147483648", nullptr);
@@ -315,12 +323,13 @@ index 0000000..b1dd9ff
 ++        expect(go && waited == 0, "MemAvailable not readable: the copy goes");
 ++    }
 ++    {   // the switches as written in a model's env
-++        expect(ggml_sycl_park_pace::from(nullptr, nullptr).reserve == 0, "unset: no reserve");
-++        expect(ggml_sycl_park_pace::from("0", nullptr).reserve == 0, "0: no reserve");
+++        expect(ggml_sycl_park_pace::from(nullptr, nullptr).reserve == 2 * gib && ggml_sycl_park_pace().reserve == 2 * gib,
+++               "unset: every park paced, on a reserve of 2 GiB");
+++        expect(ggml_sycl_park_pace::from("0", nullptr).reserve == 2 * gib, "0: not a way out of the pace, the default reserve");
 ++        expect(ggml_sycl_park_pace::from("4294967296", "5000").reserve == 4 * gib &&
 ++               ggml_sycl_park_pace::from("4294967296", "5000").wait_ms == 5000, "a reserve and a bound in bytes and ms");
-++        expect(ggml_sycl_park_pace::from("4 GiB", "-1").reserve == 0 && ggml_sycl_park_pace::from("4 GiB", "-1").wait_ms == 30000,
-++               "what is not a number is not read: no reserve, the default bound");
+++        expect(ggml_sycl_park_pace::from("4 GiB", "-1").reserve == 2 * gib && ggml_sycl_park_pace::from("4 GiB", "-1").wait_ms == 30000,
+++               "what is not a number is not read: the default reserve and bound");
 ++        expect(ggml_sycl_park_pace::PIECE == 256 * mib, "pieces of 256 MiB");
 ++        const size_t have = ggml_sycl_host_mem_available();
 ++        expect(have > 0, "this host's MemAvailable is read");
@@ -328,8 +337,6 @@ index 0000000..b1dd9ff
 ++    printf("%s\n", failed ? "FAILED" : "all passed");
 ++    return failed ? 1 : 0;
 ++}
-+-- 
-+2.43.0
 -- 
 2.43.0
 

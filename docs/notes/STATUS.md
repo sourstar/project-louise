@@ -1329,8 +1329,9 @@ measured (published figures disagree).
 - **THE ZFS ARC COUNTED, THE COPY PACED — STAGED, NOT BUILT (2026-11-26; the operator's "C" and "Both go tonight"; parking-step-2.md
   §15):** A is München's (`zfs_arc_sys_free` 15,032,385,536 B, live). B: staged 0032, the SERVER after 0031 (tree `1222e361…`) —
   a park counts MemAvailable plus the ARC's evictable part less 1 GiB; and staged 0033, the ENGINE (`engine-pace.series` =
-  the live series + 0033, `3216ace3205f`) — with `GGML_SYCL_PARK_HOST_RESERVE` set, the copy to host memory goes in 256 MiB pieces and
-  waits, bounded, while MemAvailable is under the reserve. THE RESERVE MUST NOT BE ABOVE `zfs_arc_sys_free`, or the wait waits for
+  the live series + 0033, `a4f65005d8c3`) — EVERY park's copy to host memory goes in 256 MiB pieces and waits, bounded, while
+  MemAvailable is under the reserve (`GGML_SYCL_PARK_HOST_RESERVE`, 2 GiB unset; architecture's catch: 0032 counts the ARC for every
+  park). THE ENGINE GOES LIVE BEFORE 0032. THE RESERVE MUST NOT BE ABOVE `zfs_arc_sys_free`, or the wait waits for
   nothing. Measured here: `pkg/model` 279 of 279, the engine's wait 12 of 12, the SYCL object compiles; not on a card.
 - **A PARK REFUSED FOR THE HOST'S FLOOR SAYS WHAT IT READ — STAGED, NOT BUILT (2026-11-26; parking-step-2.md §14):** a 412 in the
   fade engine's gate reached no log, and could not say whether MemAvailable or the cgroup's room refused it. Staged 0031, the SERVER
