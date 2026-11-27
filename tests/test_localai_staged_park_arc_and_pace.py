@@ -23,7 +23,7 @@ SERIES = STAGED / "engine-pace.series"
 LIVE = STAGED / "engine-fade.series"
 BUILD = ROOT / "deploy" / "localai" / "llama-cpp" / "build.sh"
 NOTE = (ROOT / "docs" / "notes" / "parking-step-2.md").read_text(encoding="utf-8")
-NAME = "a4f65005d8c3"
+NAME = "95d9f59679df"
 INNER = "backend/cpp/llama-cpp/patches/0025-sycl-park-paced-by-the-host-reserve.patch"
 
 

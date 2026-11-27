@@ -1553,7 +1553,7 @@ refusal's reading says the evictable part and what of it was counted.
 
 **B, the engine (staged 0033, inner `0025-sycl-park-paced-by-the-host-reserve.patch`;
 candidate `engine-pace.series` = the live `engine-fade.series` + 0033:
-`a4f65005d8c3`).** EVERY park copies its weights to host memory in pieces
+`95d9f59679df`).** EVERY park copies its weights to host memory in pieces
 of 256 MiB and, before each, waits — in steps of 50 ms, at most `GGML_SYCL_PARK_HOST_WAIT_MS`
 (30,000) for the whole park — while MemAvailable is under the reserve plus
 the piece. At the bound the park does not happen: the host copy is freed,
@@ -1572,7 +1572,7 @@ twin made on the node without it parks unpaced on ARC room); (b) 0032 counts
 the ARC only for a paced model (the server never sees the engine's env, which
 VeGa's wrapper passes: plumbing in both); (c) the engine paces every park on a
 default reserve — taken: no setting to drift, at the cost of the first
-candidate's name (`3216ace3205f`, void) and a park refused after 30 s on a
+candidate's name (`3216ace3205f`, void; then `a4f65005d8c3`, void for a stale line in its series header) and a park refused after 30 s on a
 host held under 2.25 GiB. AND THE ORDER: the engine live first, then 0032 —
 0032 on the live engine is every ARC-counted park unpaced. The gate adds a run
 of a `park: true` model WITHOUT the env under the 10 GiB allocation: a paced

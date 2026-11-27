@@ -1,15 +1,17 @@
 # A CANDIDATE: A PARK PACED BY THE HOST (the operator's "C", 2026-11-26: the ZFS ARC
 # counted by the server, staged 0032, and the copy paced by the engine).
 # engine-fade.series, the LIVE engine aea955022a8f, line for line, then:
-#   0033  with GGML_SYCL_PARK_HOST_RESERVE=<bytes> in a model's env, a park copies its
-#         weights to host memory in 256 MiB pieces and waits before each, at most
-#         GGML_SYCL_PARK_HOST_WAIT_MS, while MemAvailable is under the reserve plus the
-#         piece; at that bound the weights stay on the device. Unset: nothing changes.
-#         The reserve must not be above zfs_arc_sys_free.
+#   0033  EVERY park copies its weights to host memory in 256 MiB pieces and waits
+#         before each, at most GGML_SYCL_PARK_HOST_WAIT_MS, while MemAvailable is under
+#         the reserve plus the piece; at that bound the weights stay on the device. The
+#         reserve: GGML_SYCL_PARK_HOST_RESERVE=<bytes> in a model's env, 2 GiB unset or 0
+#         - no unpaced park, since 0032 counts the ARC for every park (architecture,
+#         2026-11-27). The reserve must not be above zfs_arc_sys_free; this engine goes
+#         live BEFORE the server's 0032.
 #   SERIES_FILE=deploy/localai/patches/staged/engine-pace.series \
 #     sh deploy/localai/llama-cpp/build.sh sycl_f16 <out dir>      # the live INTEL_STACK
-# ANOTHER ENGINE: a build and every gate again. Only a park with the reserve set
-# changes; no model's answer can move.
+# ANOTHER ENGINE: a build and every gate again. Every park is paced; no model's
+# answer can move.
 base dd5780aa904d132c784867d37fc713df8d984c8a
 0001-system-list-load-options.patch
 0002-llama-cpp-embed-token-ids.patch

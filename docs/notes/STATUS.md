@@ -1329,7 +1329,7 @@ measured (published figures disagree).
 - **THE ZFS ARC COUNTED, THE COPY PACED — STAGED, NOT BUILT (2026-11-26; the operator's "C" and "Both go tonight"; parking-step-2.md
   §15):** A is München's (`zfs_arc_sys_free` 15,032,385,536 B, live). B: staged 0032, the SERVER after 0031 (tree `1222e361…`) —
   a park counts MemAvailable plus the ARC's evictable part less 1 GiB; and staged 0033, the ENGINE (`engine-pace.series` =
-  the live series + 0033, `a4f65005d8c3`) — EVERY park's copy to host memory goes in 256 MiB pieces and waits, bounded, while
+  the live series + 0033, `95d9f59679df`) — EVERY park's copy to host memory goes in 256 MiB pieces and waits, bounded, while
   MemAvailable is under the reserve (`GGML_SYCL_PARK_HOST_RESERVE`, 2 GiB unset; architecture's catch: 0032 counts the ARC for every
   park). THE ENGINE GOES LIVE BEFORE 0032. THE RESERVE MUST NOT BE ABOVE `zfs_arc_sys_free`, or the wait waits for
   nothing. Measured here: `pkg/model` 279 of 279, the engine's wait 12 of 12, the SYCL object compiles; not on a card.
