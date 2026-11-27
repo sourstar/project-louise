@@ -68,7 +68,8 @@ async def lifespan(app: FastAPI):
         # PER-COLLECTION (invariant 1): one collection whose space does not
         # match is not served, and the node keeps the rest. The web process
         # exiting over it took every other collection offline too.
-        for collection, reason in spaces.refuse_boot(collections_mod.load_all()):
+        from . import query_service
+        for collection, reason in query_service.refuse_at_start(collections_mod.load_all()):
             print(f"NOT SERVED: {collection.name}: {reason}", file=sys.stderr)
     except spaces.BootValidationError as e:
         # chunking config — node-wide, no per-collection answer exists

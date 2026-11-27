@@ -406,7 +406,15 @@
   // OscillatorNode, nothing fetched. False where the browser gives no sound
   // (a context that is not running: suspended, interrupted, closed). Named a
   // TONE: "ping" is the voice ping (app/voice_ping.py) and /ask/active's.
-  const TONE_MS = 160, TONE_HZ = 880, TONE_GAIN = 0.12;
+  // PLAYED, NEVER HEARD (operator, 2026-11-27: "the ping when the microphone
+  // is ready is never playing"): every report since the tone was added says
+  // its context was running and it played (Android 10, Chrome) — at −18 dBFS
+  // for 160 ms, the instant the microphone gave sound, which is when Android
+  // moves the audio to its call mode and the media output is ducked or sent
+  // to the earpiece. Now −8 dBFS for 220 ms, TONE_DELAY_MS after the
+  // microphone is live, the route settled; the microphone stays deaf to it
+  // for that much longer (`deafEnd`).
+  const TONE_MS = 220, TONE_HZ = 880, TONE_GAIN = 0.4, TONE_DELAY_MS = 350;
   // the microphone hears the tone after the output's latency and the route's
   // (Bluetooth: 100-300 ms) and the capture's own buffering (a worklet window
   // of 2048 samples, ~46 ms); its windows are not counted until the audio
@@ -431,7 +439,7 @@
     toneLast = { state: toneCtx ? toneCtx.state : null, latency_ms: toneLatencyMs(), played: false };
     if (!toneCtx || toneCtx.state !== 'running') return false;
     try {
-      const t = toneCtx.currentTime, osc = toneCtx.createOscillator(), g = toneCtx.createGain();
+      const t = toneCtx.currentTime + TONE_DELAY_MS / 1000, osc = toneCtx.createOscillator(), g = toneCtx.createGain();
       osc.type = 'sine'; osc.frequency.value = TONE_HZ;
       g.gain.setValueAtTime(0, t);
       g.gain.linearRampToValueAtTime(TONE_GAIN, t + 0.02);            // no click at the start
@@ -449,7 +457,7 @@
   // output's latency, a margin, and the tone with its tail
   function deafEnd(r) {
     const captured = r.mode === 'recorder' ? Math.max(r.ms, r.decoded_ms || 0) + RECORDER_SLICE_MS : r.ms;
-    return captured + toneLatencyMs() + TONE_MARGIN_MS + TONE_TAIL_MS;
+    return captured + TONE_DELAY_MS + toneLatencyMs() + TONE_MARGIN_MS + TONE_TAIL_MS;
   }
 
   function release(r) {
@@ -1275,7 +1283,55 @@
                   .map(it => it.text).join(' ').slice(-4000);
   }
   function hfSay(text) { if (status) { status.textContent = text || ''; status.hidden = !text; } }
+  // THE NAME, THE READER'S OWN (operator, 2026-11-27: "the activation name
+  // can be customized, and every time in the speech there is that name the
+  // mic is muted"): Settings › name, kept with the account (POST
+  // /ask/voice/name) or in this browser; empty, the node's. Its written
+  // forms come from the node (GET /ask/voice/name), which matches them.
+  const WAKE_KEY = 'louise-wake-name', WAKE_TAIL_MS = 600;
+  const wakeName = { name: window.louiseWakeName || 'Philippe', forms: [], browser: null, muteUntil: 0 };
+  try { wakeName.browser = localStorage.getItem(WAKE_KEY) || null; } catch (e) { /* none */ }
+  const foldText = t => String(t || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  function mentionsName(text) {
+    const w = ' ' + foldText(text) + ' ';
+    return wakeName.forms.some(f => f && w.includes(' ' + f + ' '));
+  }
+  async function loadWake() {
+    try {
+      const r = await fetch('/ask/voice/name' + (wakeName.browser ? '?asked=' + encodeURIComponent(wakeName.browser) : ''));
+      if (!r.ok) return;
+      const d = await r.json();
+      wakeName.name = d.wake_name; wakeName.forms = (d.forms || []).map(foldText);
+      const box = document.getElementById('wake-name');
+      if (box && document.activeElement !== box) box.value = d.mine || wakeName.browser ? d.wake_name : '';
+      if (hfChoice) hfChoice.title = 'the microphone stays on: say "' + wakeName.name + '" and the question, or "'
+        + wakeName.name + ', wait / go on / stop"';
+    } catch (e) { /* the node's name, as the page was given it */ }
+  }
+  async function keepWake(name) {
+    const v = String(name || '').replace(/\s+/g, ' ').trim();
+    if (account) {
+      try {
+        const r = await fetch('/ask/voice/name', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ name: v || null }) });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+      } catch (e) { say('the name could not be kept: ' + (e.message || e)); }
+    } else {
+      wakeName.browser = v || null;
+      try { v ? localStorage.setItem(WAKE_KEY, v) : localStorage.removeItem(WAKE_KEY); } catch (e) {}
+    }
+    loadWake();
+  }
+  // muted while a sentence that names it is read aloud, and WAKE_TAIL_MS after
+  // — by the reading's own state: a reading stopped mid-sentence mutes nothing more
+  function hfMuted() {
+    const r = reading;
+    if (r && r.playing && !r.paused && r.now && r.now.names) return true;
+    return performance.now() < wakeName.muteUntil;
+  }
   function hfWindow(h, buf, rate) {
+    if (hfMuted()) { h.utt = null; h.pre = []; h.preMs = 0; return; }   // nothing heard, nothing cut
     let e = 0; for (let i = 0; i < buf.length; i++) e += buf[i] * buf[i];
     const rms = Math.sqrt(e / (buf.length || 1)), ms = buf.length * 1000 / rate;
     const loud = rms > Math.max(FLOOR_MIN, FLOOR_X * (h.floor === null ? 0 : h.floor));
@@ -1303,6 +1359,7 @@
     if (performance.now() < h.followUntil) fd.append('follow', '1');
     const said = hfSaid(); if (said) fd.append('said', said);
     fd.append('page', HF_PAGE);                       // this page's own slot on the node, without an account
+    if (wakeName.browser) fd.append('name', wakeName.browser); // the name this browser keeps, without an account
     // BOUNDED (architecture's read of 535b2f68, 3): a hung node or network
     // would hold the one clip in flight, and hands-free would hear nothing
     // new — a passenger's clip then replacing a waiting "Philippe, stop"
@@ -1371,7 +1428,7 @@
     }
     hfLock(h);
     if (mic) mic.classList.add('hands-free');
-    hfSay('hands-free: say "' + (window.louiseWakeName || 'Philippe') + '" and the question');
+    hfSay('hands-free: say "' + wakeName.name + '" and the question');
   }
   function hfStop() {
     const h = hf; if (!h) return;
@@ -1418,6 +1475,12 @@
     // said on the button from the start, not only once its state first changes
     mic.title = (mic.title || 'speak the question').replace(/ \(hold: hands-free\)$/, '') + ' (hold: hands-free)';
   }
+  const wakeBox = document.getElementById('wake-name'), wakeChoice = document.getElementById('wake-choice');
+  if (mic && !mic.hidden) loadWake();
+  if (wakeBox && mic && !mic.hidden) {
+    if (wakeChoice) wakeChoice.hidden = false;
+    wakeBox.addEventListener('change', () => keepWake(wakeBox.value));
+  }
   if (hfBox && mic && !mic.hidden) {
     if (hfChoice) hfChoice.hidden = false;
     hfHold();
@@ -1462,7 +1525,11 @@
         if (reading !== r) return;
         if (url) {
           r.items[i].t.play = now(); r.playing = true;
+          // hands-free deaf while the node says its name (`hfMuted`), and a moment after
+          r.now = r.items[i]; r.now.names = mentionsName(r.now.text);
           await play(r, url);
+          if (r.now && r.now.names) wakeName.muteUntil = performance.now() + WAKE_TAIL_MS;
+          r.now = null;
           r.playing = false; r.items[i].t.end = now();
         }
         if (reading !== r) return;
@@ -1558,6 +1625,7 @@
     cueQuestion: () => cueQuestion(), setLongCue(ms) { LONG_CUE_MS = ms; },
     // hands-free, for a test: on, off, and what it counted (never what was said)
     handsFree: { start: () => hfStart(), stop: () => hfStop(), on: () => !!hf, counts: () => (hf ? { ...hf.counts } : null),
+                 wake: () => ({ name: wakeName.name, forms: wakeName.forms.slice(), muted: hfMuted() }), mentionsName,
                  setClipMax(ms) { HF_CLIP_MAX_MS = ms; } },
     cues: () => (times.cues || []).map(c => c.kind), split, budget, trimWav, rates: () => ({ ...rates }),
     // a test's or an operator's rates, kept as measured ones are

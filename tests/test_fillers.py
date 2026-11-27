@@ -779,7 +779,10 @@ def test_the_waiting_tone_is_loud_enough_to_hear_and_the_ready_ping_keeps_its_le
     cue = re.search(r"CUE_TONE_HZ = (\d+), CUE_TONE_MS = (\d+), CUE_TONE_GAIN = ([\d.]+);", page)
     assert cue and float(cue.group(3)) >= 0.3 and int(cue.group(2)) >= 250
     assert "linearRampToValueAtTime(CUE_TONE_GAIN" in page, "the waiting tone plays at its own level"
-    assert "TONE_MS = 160, TONE_HZ = 880, TONE_GAIN = 0.12;" in page, "the microphone's ping: unchanged"
+    ping = re.search(r"const TONE_MS = (\d+), TONE_HZ = (\d+), TONE_GAIN = ([\d.]+), TONE_DELAY_MS = (\d+);", page)
+    # the microphone's ready ping: heard too (operator, 2026-11-27: "never playing"), after the route settled
+    assert ping and float(ping.group(3)) >= 0.3 and int(ping.group(1)) >= 200 and int(ping.group(4)) >= 300
+    assert "captured + TONE_DELAY_MS + toneLatencyMs()" in page, "deaf to the tone for its delay too"
 
 
 def test_ahead_never_loads_the_speech_model(node):

@@ -52,7 +52,10 @@ READ_VERBS = ("show", "list")
 NOT_ROUTED = {("node", "start"): "the daemon itself is started on the node",
               ("ask",): "`ask` has its own routes (05 §5.4)",
               ("user",): "users are managed at /admin/api/users (07 §7.4)",
-              ("dev",): "operator instruments stay on the command line (RULE 2)"}
+              ("dev",): "operator instruments stay on the command line (RULE 2)",
+              ("hold", "collection", "refit"): "an OFFLINE pass: it runs with the worker stopped (it takes "
+                                               "the worker's node-wide lock), so the worker cannot run it — "
+                                               "on the node, as an operator pass (deploy/supervise-pass.sh)"}
 #: A read answered at once still has a bound (CLAUDE.md: no unbounded wait).
 READ_TIMEOUT_S = 120.0
 #: A command sent SIGTERM finishes its unit (07 §7.7) — bounded in time

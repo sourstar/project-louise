@@ -861,23 +861,69 @@ def is_annotations(collection) -> bool:
 
 
 def load_annotations() -> list:
+    out: list[Collection] = []
+    _list_annotations(out, [], [])
+    return out
+
+
+def annotations_and_refusals() -> tuple[list, list]:
+    """(the annotations collections served, those left out with why — a
+    `Refusal` each), from the one listing (`load_annotations`, which records
+    what it left out): a reader says what it did not serve."""
+    served = load_annotations()
+    return served, annotation_refusals()
+
+
+def refused_annotations() -> list:
+    """The annotations collections held here and left out mid-refit — held
+    all the same (`share.offer.held_ids`)."""
+    out: list = []
+    left: list = []
+    held: list = []
+    _list_annotations(out, left, held)
+    return held
+
+
+def _list_annotations(out: list, left: list, held: list) -> None:
     """The annotations collections this node holds: the files in
     `collections/` whose Codex annotates another collection. One that
     cannot load is left out here and named by `load_all`'s caller the way
     any unreadable file is — this listing never raises, because it runs
     beside every search and every seeding beat."""
     cfg_dir = collections_dir()
-    out: list[Collection] = []
     if not cfg_dir.is_dir():
-        return out
+        _annotation_refusals[:] = []
+        return
+    from .hold import refit
     for p in sorted(cfg_dir.glob("*.toml")):
         try:
             c = _load_one(p)
         except Exception:                               # noqa: BLE001
             continue
-        if is_annotations(c):
-            out.append(c)
-    return out
+        if not is_annotations(c):
+            continue
+        # NOT SERVED MID-REFIT (invariant 1; the fourth read of caa9fd8f, 4):
+        # its target's identity is being replaced — the seeder, the cascade
+        # and a question leave it out, through the one function the boot
+        # check reads (app/hold/refit.py `boot_refusal`, app/spaces.py)
+        try:
+            why = refit.boot_refusal(Path(c.manifest_path).parent)
+        except Exception as e:                          # noqa: BLE001 — fail closed
+            why = f"whether it is served cannot be judged ({type(e).__name__}: {e})"
+        if why:
+            left.append(Refusal(c.name, p, why))
+            held.append(c)
+            continue
+        out.append(c)
+    _annotation_refusals[:] = left
+
+
+#: the annotations collections the last `load_annotations` left out, and why
+_annotation_refusals: list = []
+
+
+def annotation_refusals() -> list:
+    return list(_annotation_refusals)
 
 
 #: 07 §7.8 spells the middle mode `on-demand`; the code has always called
