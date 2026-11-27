@@ -4057,12 +4057,24 @@ def cmd_node_show(a) -> int:
 
 
 def cmd_node_speech(a) -> int:
-    """`node speech show` and `node speech set` (07 §7.3): the Ask page's
+    """`node speech show`, `set` and `synthetic` (07 §7.3): the Ask page's
     voice — its models the node's, in platform.toml's `[speech]` (07 §7.8;
     app/voice.py, the one resolution). `set` is desired state written into
     the file; the page offers what it says at its next load."""
     from app import platform_config, voice
     from app.platform_config import SPEECH_KEYS
+    if a.speech_verb == "synthetic":
+        from app import synthetic_voice as sv
+        try:
+            if a.use is not None:
+                _print(sv.use(a.lang, a.use))
+            else:
+                _print(sv.make(a.lang, candidates=a.candidates, text=a.text, tag=a.tag,
+                               log=lambda m: print(m, file=sys.stderr)))
+            return 0
+        except (sv.SyntheticError, *voice.LOAD_ERRORS) as e:
+            print(f"louise node speech synthetic: {e}", file=sys.stderr)
+            return 2
     try:
         if a.speech_verb == "set":
             changes = {k: getattr(a, k) for k in SPEECH_KEYS if getattr(a, k) is not None}
@@ -8030,6 +8042,23 @@ def build_parser() -> argparse.ArgumentParser:
                         "model's own default (32)")
     q.add_argument("--name", dest="wake_name", default=None, metavar="NAME",
                    help="the name a hands-free reader calls the page by (\"Philippe, …\"); unset, Philippe")
+    q.set_defaults(fn=cmd_node_speech)
+    q = spverbs.add_parser("synthetic", help="make a language's synthetic voice on this node: the text-to-speech "
+                                             "model reads a fixed sentence with no voice, the clip is heard back "
+                                             "by the speech-to-text model, recorded as a voice profile on the "
+                                             "model server and set in [speech] synthetic_voices "
+                                             "(app/synthetic_voice.py)")
+    q.add_argument("lang", help="the language, by its ISO code: es, pt, nl, …")
+    q.add_argument("--candidates", type=int, default=1, metavar="N",
+                   help="make N voices (\"Synthetic es A\", \"B\", …) and set none, to choose one by ear "
+                        "with --use; unset, one voice, made and set")
+    q.add_argument("--use", default=None, metavar="NAME",
+                   help="set the voice profile NAME (or its voice) as the language's synthetic voice; nothing "
+                        "is made")
+    q.add_argument("--text", default=None, metavar="TEXT",
+                   help="the sentence the reference clip reads, for a language Louise has none for")
+    q.add_argument("--tag", default=None, metavar="TAG",
+                   help="the profile's language tag (es-ES); unset, Louise's for the language")
     q.set_defaults(fn=cmd_node_speech)
 
     p = nverbs.add_parser("title", help="the node's title: the label at the top left of every page and a "
