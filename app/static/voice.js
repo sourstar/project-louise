@@ -1104,7 +1104,13 @@
   // node remakes it. Prefetched when the microphone or the speaker is first
   // used, and after each answer.
   let LONG_CUE_MS = 7000;
-  const CUE_TONE_HZ = 660, CUE_TONE_MS = 140;
+  // THE WAITING TONE, HEARD (operator, 2026-11-27: "either the tone was very
+  // low or it did not play"): at the ready ping's 0.12 (−18 dBFS) for 140 ms
+  // it sat some 15 dB under the speech it stands in for, and a phone's or a
+  // car's speaker barely renders 660 Hz that short. −8 dBFS and 260 ms; the
+  // microphone's ready ping keeps its own gentle level (its deaf window is
+  // measured at it), and the microphone is closed while this one sounds.
+  const CUE_TONE_HZ = 660, CUE_TONE_MS = 260, CUE_TONE_GAIN = 0.4;
   const PHRASES_KEY = 'louise-phrases';
   let fillers = null, fillersFor = null, cue = null, accountPhrases = null, playedPhrases = [];
   // the reader's choice: with the account (POST /ask/voice/phrases), else this browser; on by default
@@ -1126,12 +1132,15 @@
     const l = answerLang || (document.getElementById('lang') || {}).value || navigator.language || '';
     return String(l === 'original' ? navigator.language || '' : l).split(/[-_]/)[0].toLowerCase();
   }
-  async function prefetchFillers() {
-    const lang = cueLang(), voice = chosenVoice(), key = lang + '|' + (voice || '');
+  // the spoken question, once taken: its own language picks the phrases
+  // (the node reads it, app/web.py `ask_voice_fillers`), not the browser's
+  async function prefetchFillers(text) {
+    const lang = cueLang(), voice = chosenVoice(), key = lang + '|' + (voice || '') + '|' + (text || '');
     if (!lang || (fillers && fillers.length && fillersFor === key)) return;   // an empty list is asked again
     fillersFor = key;
     try {
-      const r = await fetch('/ask/voice/fillers?lang=' + encodeURIComponent(lang) + (voice ? '&voice=' + encodeURIComponent(voice) : ''));
+      const r = await fetch('/ask/voice/fillers?lang=' + encodeURIComponent(lang) + (voice ? '&voice=' + encodeURIComponent(voice) : '')
+                            + (text ? '&text=' + encodeURIComponent(text.slice(0, 500)) : ''));
       fillers = r.ok ? ((await r.json()).ready || []) : [];
     } catch (e) { fillers = []; }
   }
@@ -1146,7 +1155,7 @@
       if (!toneCtx || toneCtx.state !== 'running') return;
       const t = toneCtx.currentTime, osc = toneCtx.createOscillator(), g = toneCtx.createGain();
       osc.type = 'sine'; osc.frequency.value = CUE_TONE_HZ;
-      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(TONE_GAIN, t + 0.02);
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(CUE_TONE_GAIN, t + 0.02);
       g.gain.exponentialRampToValueAtTime(0.0001, t + CUE_TONE_MS / 1000);
       osc.connect(g); g.connect(toneCtx.destination); osc.start(t); osc.stop(t + CUE_TONE_MS / 1000 + 0.02);
       await new Promise(ok => setTimeout(ok, CUE_TONE_MS + 40));
@@ -1192,7 +1201,7 @@
     cue = { kinds: new Set(), playing: null, audio: null, timer: null, cut: false };
     const c = cue;
     // playCue itself refuses once a sentence has begun: a late list plays nothing
-    prefetchFillers().then(() => { if (cue === c) playCue('short'); });
+    prefetchFillers(dictated || '').then(() => { if (cue === c) playCue('short'); });
     c.timer = setTimeout(() => {
       if (cue !== c) return;
       const ready = reading && reading.items.length && reading.items[0].t.got;

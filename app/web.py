@@ -545,17 +545,21 @@ def _filler_reader(request: Request) -> tuple[bool, str | None]:
 
 
 @ask_router.get("/ask/voice/fillers")
-def ask_voice_fillers(request: Request, lang: str = "", voice: str | None = None):
+def ask_voice_fillers(request: Request, lang: str = "", voice: str | None = None, text: str = ""):
     """THE PHRASES THAT COVER THE WAIT (docs/notes/hands-free-voice.md §7,
     Decision 5A): `{"lang", "voice", "ready": [{"id", "kind": "short" |
     "long", "url"}]}` — the clips ready in the voice this reader's answer
     would be read in (`voice`, the page's choice, counts for an admin only)
     for `lang`, one of the five main languages; another gets none. A pool
     short of a kind is made in the background, and this answers at once
-    with what is ready, possibly nothing (app/fillers.py)."""
-    from . import fillers
+    with what is ready, possibly nothing (app/fillers.py). `text`: the
+    spoken question, when there is one — its own language wins over the
+    page's (operator, 2026-11-27: a question asked in Italian on a browser
+    set to English was covered in English; `speech.language`, no model)."""
+    from . import fillers, speech
     admin, mine = _filler_reader(request)
-    return fillers.ready(lang, asked=voice, account_voice=mine, admin=admin)
+    said = speech.language(text[:500]) if text else None
+    return fillers.ready(said or lang, asked=voice, account_voice=mine, admin=admin)
 
 
 @ask_router.get("/ask/voice/fillers/{clip_id}")
