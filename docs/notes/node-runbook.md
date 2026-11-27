@@ -17,6 +17,25 @@ Read first: `CLAUDE.md` (the rules), `docs/notes/STATUS.md` (where things stand)
   read 2026-11-19) although the BIOS menu shows the EXPO profile selected — the
   profile is not in effect (AM5 falls back to JEDEC after a failed training); open
   until a bandwidth measurement or a BIOS session settles it. ZFS ARC capped at 16 GB.
+- **ZFS KEEPS 14 GiB OF RAM FREE** (`zfs_arc_sys_free` = 15032385536; the
+  operator, 2026-11-26/27, option C: "Make it persistent with the init
+  script … keep in the install notes so it doesn't get lost"). The ARC
+  shrinks AHEAD of demand to keep that much free, so a model's park (the
+  keeper's floor is 12,288 MiB) finds real room, not ARC that gives back
+  2.3 GiB in ~24 s under a 10-GiB demand (measured 2026-11-27, OpenZFS
+  2.4.4). Linux's MemAvailable does not count the ARC.
+  - **Persistent ONLY through TrueNAS's post-init command** (a write to
+    `/sys/module/zfs/parameters` is lost at a reboot). It is set and checked
+    through TrueNAS's own API:
+    - set: `midclt call initshutdownscript.create '{"type": "COMMAND", "command": "echo 15032385536 > /sys/module/zfs/parameters/zfs_arc_sys_free", "when": "POSTINIT", "enabled": true, "timeout": 10, "comment": "Louise: ZFS keeps 14 GiB of RAM free"}'`;
+    - check that it exists: `midclt call initshutdownscript.query`;
+    - check the value in force: `cat /sys/module/zfs/parameters/zfs_arc_sys_free`.
+  - **After any reboot or reinstall, read the value back**: on a fresh
+    TrueNAS install, or a restore of its config without the init scripts,
+    it is gone. The same is in UI as System → Advanced → Init/Shutdown
+    Scripts.
+  - The cost: 14 GiB less file cache for the NAS. The cap of 16 GB above
+    (`zfs_arc_max`) still applies.
 - **GPU**: Intel Arc Pro B70 (`8086:e223`; `lspci` labels it "Battlemage G21" from its
   id table, the AOT target is `bmg-g31` — build.sh), 32 GB VRAM, 608 GB/s, xe
   driver, at PCI `0000:03:00.0`, on a **PCIe 5.0 x16 link** — read 2026-11-19 from
