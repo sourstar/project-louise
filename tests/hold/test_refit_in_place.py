@@ -889,3 +889,386 @@ def test_crash_after_parts_done_and_after_proof_done(held_gb, card, monkeypatch,
     _ends_as_by_the_book(root, old, held)
     assert card["order"] == [("cpu-reference", NAME), ("gate", NAME)]
     assert NAME not in node_state.paused_collections()
+
+
+# ---- the second read of 10cc6f34 -----------------------------------------------
+
+@pytest.fixture
+def signer(monkeypatch):
+    """This node's key and image, as the node has them."""
+    from app.bundles import keys as node_keys
+    from app.hold import equivalence
+    monkeypatch.setattr(node_keys, "load_signing_key", lambda *a, **k: KEY)
+    monkeypatch.setenv("LOUISE_PLATFORM_IMAGE", PLATFORM)
+    assert equivalence.running_image() == PLATFORM
+    return KEY
+
+
+def test_r2_1_quarantine_enforced_the_new_id_is_in_use_by_its_own_attested_checks(held_gb, card, signer,
+                                                                                  monkeypatch):
+    """Attestations are keyed on the id: without the `attest` step an
+    enforced quarantine withholds gutenberg from every search. The node lists
+    the OLD id in `quarantine_in_use_before`; the new one is cleared by its
+    own roots and chunks, run on the part written again, while paused."""
+    from app import copy_state, platform_config
+    from app.hold import envelope as env
+    root, old, _held_ = held_gb
+    platform_config.platform_path().parent.mkdir(parents=True, exist_ok=True)
+    platform_config.platform_path().write_text(
+        f'[node]\nquarantine = "enforce"\nquarantine_in_use_before = ["{old.collection_id}"]\n', encoding="utf-8")
+    copy_state._switch.clear()
+    copy_state.reset_cache()
+    me = env.key_text(KEY.verify_key)
+    monkeypatch.setattr(copy_state, "_gate", lambda *a, **k: (copy_state.Test("gate", copy_state.PASSED,
+                                                                              "the gate ran"), True, ""))
+    assert copy_state.enforced()
+
+    def state(codex):
+        copy_state.reset_cache()
+        return copy_state.evaluate(root, NAME, codex, licence="not-required", key=me,
+                                   before=copy_state.in_use_before(codex))
+    assert state(old).in_use, "in use before, by the operator's decision"
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    assert not copy_state.in_use_before(new), "the new id is in no list"
+    got = state(new)
+    assert got.in_use, got.reasons
+    assert {t.name: t.status for t in got.tests}["roots-and-chunks"] == copy_state.PASSED
+    m = refit_mod.read_marker(root, NAME)
+    assert set(m["steps"]["attest"]["attestations"]) >= {"roots", "chunks"}
+    assert m["steps"]["attest"]["parts"] == [p["path"].removeprefix("records/").rsplit(".", 2)[0]
+                                            for p in m["steps"]["changes"]["parts"]]
+    # without them: quarantine
+    att = root / NAME / "state" / "attestations" / new.collection_id.split(":", 1)[1]
+    att.rename(att.with_name("away"))
+    assert not state(new).in_use, "an enforced quarantine withholds a copy with no attested checks"
+
+
+def _published_fixture(root, old):
+    """What the node shared of gutenberg for testing: the seeder's serving,
+    the publisher's pass, a published marker, its attestations, a peer's
+    chain, a carry's record naming it."""
+    from app import node_state
+    from app.hold import cascade
+    _set(root, "SELECT 1")                                     # the manifest is there
+    m = sqlite3.connect(root / NAME / "state" / "manifest.sqlite")
+    m.execute("INSERT OR REPLACE INTO control(key, value) VALUES('share_served', ?)",
+              (json.dumps({"collection_id": old.collection_id}),))
+    m.commit()
+    m.close()
+    node_state.set_paused("someone-else", False, by="test")       # node.sqlite exists
+    n = sqlite3.connect(node_state.path())
+    n.execute("CREATE TABLE IF NOT EXISTS control (key TEXT PRIMARY KEY, value TEXT)")
+    n.execute("INSERT OR REPLACE INTO control(key, value) VALUES(?, ?)", (f"publish:{NAME}", "2026-11-01 pass"))
+    n.commit()
+    n.close()
+    hexid = old.collection_id.split(":", 1)[1]
+    files = {cascade.published_path(root, NAME, "2026-08"): {"collection_id": old.collection_id},
+             root / NAME / "state" / "attestations" / hexid / "a1.json": {"collection_id": old.collection_id},
+             root / NAME / "state" / "chain" / f"{hexid}.json": {"collection_id": old.collection_id},
+             root / NAME / "state" / "carry.json": {"done": True, "from": "sha256:" + "5e" * 32,
+                                                    "to": old.collection_id, "rebuilt": True}}
+    for p, body in files.items():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(body), encoding="utf-8")
+    return {str(p.relative_to(root / NAME)): p.read_bytes() for p in files}
+
+
+def test_r2_2_what_was_shared_under_the_old_id_is_said_set_aside_and_put_back(held_gb, card, capsys):
+    """The operator, 2026-11-27: shared for testing only — superseded, never
+    refused; every item said; set aside, never deleted; a rollback puts each
+    back."""
+    from app import node_state
+    root, old, _held_ = held_gb
+    before = _published_fixture(root, old)
+    assert _refit(root, *FIT, extra=("--dry-run",)) == 0
+    out = capsys.readouterr().out
+    assert "shared      under the old id: the seeder served it" in out
+    assert "the publisher made a pass for it" in out and "fetched from a peer" in out
+    assert "names it    state/attestations/" in out and "state/carry.json: repoint" in out
+    assert "host step   a ZFS snapshot" in out and "attest      roots, records and chunks" in out
+    assert _refit(root, *FIT) == 0
+    out = capsys.readouterr().out
+    assert "superseded (shared for testing only, RULE 1)" in out and "see a new collection" in out
+    _, new = col.resolve(root, NAME)
+    ta = refit_mod.asides(root, NAME, refit_mod.read_marker(root, NAME))[1]
+    for rel in before:
+        if rel == "state/carry.json":
+            assert json.loads((root / NAME / rel).read_text())["to"] == new.collection_id, "re-pointed"
+            assert (ta / refit_mod.FILES / rel).read_bytes() == before[rel], "its old bytes kept"
+        else:
+            assert (ta / refit_mod.FILES / rel).read_bytes() == before[rel], f"{rel} set aside, not deleted"
+    n = sqlite3.connect(node_state.path())
+    assert n.execute("SELECT COUNT(*) FROM control WHERE key=?", (f"publish:{NAME}",)).fetchone()[0] == 0
+    n.close()
+    assert _refit(root, extra=("--rollback",)) == 0
+    for rel, data in before.items():
+        assert (root / NAME / rel).read_bytes() == data, f"{rel} put back"
+    n = sqlite3.connect(node_state.path())
+    assert n.execute("SELECT value FROM control WHERE key=?", (f"publish:{NAME}",)).fetchone()[0] == \
+        "2026-11-01 pass"
+    n.close()
+    assert _control(root, "share_served") is not None
+
+
+def test_r2_2_an_official_publication_refuses_in_the_one_condition(held_gb, monkeypatch, capsys):
+    root, old, _held_ = held_gb
+    monkeypatch.setattr(refit_mod, "official_publication", lambda r, n, c: f"{n} is certified")
+    tree = _tree(root)
+    assert _refit(root, *FIT) != 0
+    assert "is certified" in capsys.readouterr().err
+    assert _tree(root) == tree
+
+
+def test_r2_3_a_rollback_after_a_crash_between_the_index_delete_and_reset_at_reindexes(held_gb, card,
+                                                                                     monkeypatch):
+    """The reviewer's probe: entries gone, `reset_at` not saved. The rollback
+    empties the index marks whatever `reset_at` says: indexed again, never
+    marked indexed with nothing in the index."""
+    root, old, held = held_gb
+    dense = _dense_uid(root)
+    native = int(_marks(root)[dense][0])
+    real = refit_mod._drop_index_entries
+
+    def drop_then_crash(coll, win):
+        n = real(coll, win)
+        raise _Boom("after the index delete, before reset_at")
+    monkeypatch.setattr(refit_mod, "_drop_index_entries", drop_then_crash)
+    _first(root, old)
+    monkeypatch.setattr(refit_mod, "_drop_index_entries", real)
+    assert not refit_mod.read_marker(root, NAME)["steps"]["switch"].get("reset_at")
+    assert _index_count(root, native) == 0
+    assert _refit(root, extra=("--rollback",)) == 0
+    assert _row(root, dense, "fts_done", "fts_version")[0] == 0, "the worker indexes it again"
+    assert col.read(root, NAME).collection_id == old.collection_id and _held(root, sorted(held)) == held
+
+
+@pytest.mark.parametrize("where", ["named", "repin", "staging"])
+def test_r2_a_rollback_after_a_crash_inside_the_switch(held_gb, card, monkeypatch, where):
+    root, old, held = held_gb
+    before, text, snap0 = _marks(root), (root / f"{NAME}.toml").read_text(), _snapshot(root)
+    real = refit_mod._save
+
+    def save(r, n, m):
+        real(r, n, m)
+        if (m["steps"].get("switch") or {}).get(where):
+            raise _Boom(f"after switch {where}")
+    monkeypatch.setattr(refit_mod, "_save", save)
+    _first(root, old)
+    monkeypatch.setattr(refit_mod, "_save", real)
+    assert _refit(root, extra=("--rollback",)) == 0
+    assert col.read(root, NAME).collection_id == old.collection_id and _pin(root) == old.space_id
+    assert _marks(root) == _reindexed(before, _dense_uid(root)) and _held(root, sorted(held)) == held
+    assert (root / f"{NAME}.toml").read_text() == text and _snapshot(root).hash == snap0.hash
+
+
+def test_r2_a_real_tantivy_lock_held_by_another_process_asks_for_a_stop_and_the_writer_is_free_after(
+        held_gb, card, capsys):
+    import subprocess
+    import sys
+    import tantivy
+    root, old, _held_ = held_gb
+    dense = _dense_uid(root)
+    groups = [g for g in (root / NAME / "index").iterdir() if (g / "meta.json").is_file()]
+    from app import fts
+    coll = _local(root, NAME)
+    native = int(_marks(root)[dense][0])
+    group = next(g for g in groups if fts.books_held(g.name, [native], coll))
+    holder = subprocess.Popen([sys.executable, "-I", "-c",
+                               "import sys, time, tantivy\n"
+                               "w = tantivy.Index.open(sys.argv[1]).writer()\n"
+                               "print('held', flush=True)\n"
+                               "time.sleep(120)\n", str(group)],
+                              stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        assert _refit(root, *FIT) == 3
+        assert "louise node stop" in capsys.readouterr().err
+        assert not refit_mod.read_marker(root, NAME)["steps"].get("switch"), "nothing of the switch written"
+    finally:
+        holder.kill()
+        holder.wait()
+    assert _refit(root, *FIT) == 0
+    w = tantivy.Index.open(str(group)).writer()            # this process let it go
+    w.wait_merging_threads()
+
+
+def test_r2_7_a_document_added_before_the_switch_makes_the_change_set_stale(held_gb, monkeypatch):
+    root, old, held = held_gb
+    real = refit_mod._save
+
+    def stop_after_changes(r, n, m):
+        real(r, n, m)
+        if (m["steps"].get("changes") or {}).get("done") and not m["steps"].get("switch"):
+            raise _Boom("after changes")
+    monkeypatch.setattr(refit_mod, "_save", stop_after_changes)
+    _first(root, old)
+    monkeypatch.setattr(refit_mod, "_save", real)
+    _set(root, "INSERT INTO documents(uid, source, native_id, path, lang, in_scope) "
+               "VALUES('gutenberg:99999', 'gutenberg', '99999', 'nowhere', 'en', 1)")
+    logs: list[str] = []
+    lk = lock_mod.take(lock_mod.state_dir(root, NAME), NAME, "resume")
+    try:
+        m = refit_mod.run(root, NAME, louise._layers_with(old, louise._layer_params(list(FIT))), log=logs.append)
+    finally:
+        lk.release()
+    assert any("stale" in line and "last rowid moved" in line for line in logs)
+    assert m["done"] and m["steps"]["changes"]["top"] == int(_row(root, "gutenberg:99999", "rowid")[0])
+
+
+def test_r2_the_parts_and_snapshot_are_a_fresh_build_of_the_new_codex(held_gb, card, tmp_path, corpus_dir):
+    """As pin-run's tests do: the refit's parts and snapshot entries are what
+    a build of the new Codex from scratch writes, byte for byte."""
+    from app.hold import records as rec, snapshot as sn
+    root, old, _held_ = held_gb
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    fresh_root = tmp_path / "fresh"
+    layers = [{"rule": "default", "chunker": {"id": "fixed", "version": 1, "params": {
+        "tokens": 100, "overlap": 0, "max_tokens": 120, "tokenizer": _SHA}}, "input": {"form": "text"}}]
+    fresh = col.create_from_recipe(fresh_root, "gutenberg", recipe(layers=layers), platform_image=PLATFORM,
+                                   embed=fake_embed, embed_query=fake_query_embed, name=NAME, key=KEY, now=NOW)
+    assert fresh.space_id == new.space_id and fresh.collection_id == new.collection_id, \
+        "the same Codex as a create of the new recipe"
+    rec.build(fresh_root, NAME, corpus_dir=corpus_dir, records_per_shard=2, log=quiet)
+    rec.write_validation(fresh_root, NAME)
+    fs = sn.create(fresh_root, NAME, snapshot_id="2026-08", log=quiet)
+    mine = _snapshot(root)
+    a = {(s.slice, int(s.n)): s.to_dict() for s in mine.shards}
+    b = {(s.slice, int(s.n)): s.to_dict() for s in fs.shards}
+    assert a == b, "every entry, root and writer included"
+    for s in fs.shards:
+        assert (root / NAME / "shard" / s.path).read_bytes() == (fresh_root / NAME / "shard" / s.path).read_bytes()
+
+
+def test_r2_4_a_refit_predecessor_ranks_as_the_target_itself_against_a_sisters_twin(held_gb, card, monkeypatch):
+    """The tie: gutenberg after its refit, and a sister whose carry names the
+    old id, both twins at the same snapshot. The refit is the target itself."""
+    from types import SimpleNamespace
+    from app.hold import annotations as ann
+    from app.share import seeder
+    root, old, _held_ = held_gb
+    assert _refit(root, *FIT) == 0
+    sis = root / "aa-sister" / "state"
+    sis.mkdir(parents=True)
+    (sis / "carry.json").write_text(json.dumps({"done": True, "from": old.collection_id, "to": "x"}))
+    real_held = col._held
+    a_sister = SimpleNamespace(collection_id="sha256:" + "ab" * 32, annotates=None, plugin="gutenberg")
+    monkeypatch.setattr(col, "_held", lambda r: [("aa-sister", a_sister), *real_held(r)])
+    monkeypatch.setattr(seeder, "current_snapshot", lambda d: SimpleNamespace(snapshot_id="2026-08"))
+    assert ann._target_holder(root, old.collection_id)[0] == NAME
+    fake_ann = SimpleNamespace(annotates=(SimpleNamespace(collection_id=old.collection_id),))
+    assert col._target_names(root, fake_ann) == [NAME]
+
+
+def test_r2_4_rename_carries_the_refit(held_gb, card):
+    from app.hold import rename as rename_mod
+    root, old, held = held_gb
+    assert _refit(root, *FIT) == 0
+    rename_mod.rename(root, NAME, "gb2")
+    m = refit_mod.read_marker(root, "gb2")
+    sa, ta = refit_mod.asides(root, "gb2", m)
+    assert sa.is_dir() and ta.is_dir() and str(root / "gb2") in str(sa)
+    assert refit_mod.predecessors(root / "gb2" / "state") == (old.collection_id,)
+    lk = lock_mod.take(lock_mod.state_dir(root, "gb2"), "gb2", "test")
+    try:
+        refit_mod.rollback(root, "gb2", log=quiet)
+    finally:
+        lk.release()
+    assert col.read(root, "gb2").collection_id == old.collection_id
+    assert (root / "gb2.toml").read_text().count(old.collection_id) == 1, "its own file, under its new name"
+
+
+def test_r2_5_a_stop_in_the_reset_loop_is_honoured_after_a_window_and_resumes(held_gb, monkeypatch):
+    """SIGTERM inside the switch's reset: honoured after the window in hand
+    is saved, resumed from `reset_at`."""
+    import threading
+    root, old, held = held_gb
+    real = refit_mod._save
+
+    def stop_after_changes(r, n, m):
+        real(r, n, m)
+        if (m["steps"].get("changes") or {}).get("done") and not m["steps"].get("switch"):
+            raise _Boom("after changes")
+    monkeypatch.setattr(refit_mod, "_save", stop_after_changes)
+    _first(root, old)
+    monkeypatch.setattr(refit_mod, "_save", real)
+    # a second document in the change set: reset and redone by the book
+    m = refit_mod.read_marker(root, NAME)
+    ta = refit_mod.asides(root, NAME, m)[1]
+    con = sqlite3.connect(root / NAME / "state" / "manifest.sqlite")
+    row = con.execute("SELECT rowid, uid, native_id FROM documents WHERE uid != ? ORDER BY rowid LIMIT 1",
+                      (_dense_uid(root),)).fetchone()
+    con.close()
+    changed = sorted(refit_mod.read_changed(ta / "changed.jsonl") + [[int(row[0]), row[1], int(row[2])]])
+    refit_mod._write_changed(ta / "changed.jsonl", changed)
+    stop = threading.Event()
+    real_unversion = refit_mod._unversion
+
+    def unversion(con, win):
+        stop.set()                                   # SIGTERM arrives during the first window
+        return real_unversion(con, win)
+    monkeypatch.setattr(refit_mod, "_unversion", unversion)
+    layers = louise._layers_with(old, louise._layer_params(list(FIT)))
+    lk = lock_mod.take(lock_mod.state_dir(root, NAME), NAME, "test")
+    try:
+        m = refit_mod.run(root, NAME, layers, window=1, stop=stop, log=quiet)
+        assert m.get("stopped") and refit_mod.read_marker(root, NAME)["steps"]["switch"]["reset_at"] == 1
+        monkeypatch.setattr(refit_mod, "_unversion", real_unversion)
+        m = refit_mod.run(root, NAME, layers, window=1, log=quiet)
+    finally:
+        lk.release()
+    assert m["done"] and m["steps"]["switch"]["reset_at"] == 2
+    assert all(_held(root, [c[2]])[c[2]] == {} for c in changed), "both reset"
+
+
+def test_r2_6_a_missing_staging_build_is_refused_in_the_plan_and_before_the_pass(held_gb, capsys):
+    from app.hold import records as rec
+    root, old, _held_ = held_gb
+    build = root / NAME / rec.STATE / rec.BUILD
+    build.rename(build.with_name("build-away"))
+    tree = _tree(root)
+    assert _refit(root, *FIT, extra=("--dry-run",)) != 0
+    assert "no staging build database" in capsys.readouterr().err
+    assert _refit(root, *FIT) != 0
+    assert "no staging build database" in capsys.readouterr().err
+    assert refit_mod.read_marker(root, NAME) is None or not refit_mod.read_marker(root, NAME)["steps"].get(
+        "switch")
+    assert {k: v for k, v in _tree(root).items() if "refit" not in k and ".replaced" not in k} == tree
+
+
+def test_r2_8_retarget_recreates_the_annotations_against_the_refit_collection(held_gb, card, capsys):
+    from app.hold import annotations as ann, retarget as rt
+    from tests.hold.test_annotations import a_claim, claims_file
+    root, old, _held_ = held_gb
+    uids = sorted(_marks(root))
+    codex, _snap = ann.create(root, "gb-editions", target_ref=NAME, from_snapshot="2026-08",
+                              claims=claims_file(a_claim(uids[0], uids[1], subject_lang="en")),
+                              platform_image=PLATFORM, snapshot_id="2026-09", key=KEY, now=NOW,
+                              nonce="0f" * 16, log=lambda m: None)
+    assert _refit(root, *FIT) == 0
+    assert "`louise hold annotations retarget gb-editions`" in capsys.readouterr().out, "the refit's last line"
+    _, new = col.resolve(root, NAME)
+    assert rt.plan(root, "gb-editions")["due"]
+    assert louise.main(["hold", "annotations", "retarget", "gb-editions", "--root", str(root),
+                        "--platform-image", PLATFORM]) == 0
+    _, now_ann = col.resolve(root, "gb-editions")
+    assert [t.collection_id for t in cx.targets_of(now_ann)] == [new.collection_id]
+    kept = [d.name for d in root.iterdir() if d.name.startswith("gb-editions.retargeted-")]
+    assert len(kept) == 1 and col.read(root, kept[0]).collection_id == codex.collection_id, "the old one kept"
+    assert not (root / f"{kept[0]}.toml").exists(), "its file set aside: the node no longer loads it"
+    assert (root / "gb-editions.toml").is_file()
+    from app.pack import records as pack_records
+    from app.hold import seed
+    n_old = sum(s.records for s in seed.latest_snapshot(root, kept[0]).shards)
+    n_new = sum(s.records for s in seed.latest_snapshot(root, "gb-editions").shards)
+    assert n_old == n_new == 1
+    del pack_records
+    assert not rt.plan(root, "gb-editions")["due"], "nothing more to do"
+
+
+def test_r2_8_retarget_is_a_route_of_the_tree():
+    from app import api_commands as ac
+    path, p = ac.resolve(["hold", "annotations", "retarget"])
+    assert ac.argv_for(path, p, {"collection": "gutenberg-book-editions", "dry_run": True}) == \
+        ["hold", "annotations", "retarget", "--dry-run", "gutenberg-book-editions"]

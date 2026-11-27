@@ -321,6 +321,49 @@ def cmd_create_annotations(a) -> int:
     return 0
 
 
+def cmd_annotations_retarget(a) -> int:
+    """`hold annotations retarget <collection> [--repin] [--dry-run]`
+    (app/hold/retarget.py): an annotations collection whose target was
+    replaced — a refit in place, a re-creation — re-created against the
+    collection the target became, in ONE command: its claims exported, the
+    new collection created from them against each target's holder (every end
+    read, every pin checked), then given the name; the old one kept under
+    another name, its file set aside. Resumable. Paused while it runs."""
+    from app.hold import collection as col, lock as lock_mod, retarget as rt
+    root = Path(a.root)
+    name = a.collection
+    if a.dry_run:
+        p = rt.plan(root, name)
+        print(f"retarget {name} (a dry run: nothing written)")
+        for t in p["targets"]:
+            print(f"  target      {t['from'][:23]}… → {t['holder']} {t['to'][:23]}… at {t['snapshot']}"
+                  + ("" if t["moves"] else " (already its own id: nothing to do)"))
+        print(f"  steps       claims exported, {name}{rt.INTERIM} created against the holders, {name} kept as "
+              f"{name}{rt.ASIDE}<time> with its file set aside, {name}{rt.INTERIM} renamed {name}")
+        return 0
+    col.check_name(name)
+    by = f"louise hold annotations retarget {name}"
+    paused_here = _hold_off_worker(root, name, by)
+    try:
+        lk = lock_mod.take(lock_mod.state_dir(root, name), name, by)
+    except lock_mod.Held as e:
+        _let_worker_back(name, by, paused_here)
+        raise _defer(f"{e}. `louise node pause {name}` first; then run this again: it resumes") from None
+    key = None
+    try:
+        from app.bundles import keys as node_keys
+        key = node_keys.load_signing_key()
+    except Exception:   # noqa: BLE001 — no key: its snapshot is held unsigned (09 §9.4)
+        print("no node key: the new snapshot is written unsigned", file=sys.stderr)
+    try:
+        rt.retarget(root, name, platform_image=preflight_create({}, a.platform_image), key=key, now=_utc_now(),
+                    repin=bool(a.repin), log=lambda m: print(m, flush=True))
+    finally:
+        lk.release()
+        _let_worker_back(name, by, paused_here)
+    return 0
+
+
 def cmd_annotations_derive(a) -> int:
     """`hold annotations derive <collection> [--dry-run]` (2026-11-12,
     app/hold/annotation_methods.py): the method its collection file records
@@ -1230,10 +1273,22 @@ def cmd_collection_refit(a) -> int:
             print("  parts       none: the collection froze no snapshot")
         print(f"  set aside   {pl['shard_aside']} (the old codex.json, snapshots, old part versions) and "
               f"{pl['state_aside']} (its staging build, its file's text, the saved rows); nothing deleted")
+        for item in pl["published"]:
+            print(f"  shared      under the old id: {item} — superseded and set aside (shared for testing only, "
+                  f"RULE 1); the peers holding the old id keep it and see a new collection")
+        for it in pl["names"]:
+            print(f"  names it    {it['rel']}: {it['action']} ({it['why']})")
+        print(f"  attest      roots, records and chunks of the {len(pl['parts']) or 1} part(s) written again, "
+              f"signed for the new id while paused (quarantine's test 1; attestations are keyed on the id); "
+              f"signing possible here: {pl['attest']}")
         print(f"  locks       {name} paused and its write lock taken: `louise node pause {name}` first if the "
-              f"worker holds it")
-        print("  steps       changes, switch, parts, proof (a failure rolls back); then the CPU reference and "
-              "the gate, still paused; then resumed")
+              f"worker holds it; the worker keeps its text-index writer: `louise node stop` before the run")
+        print("  steps       changes, switch, parts, proof, attest (a failure rolls back); then the CPU reference "
+              "and the gate, still paused; then resumed")
+        print("  host step   a ZFS snapshot of /data before the run is the node's practice (hourly snapshots "
+              "run anyway): the operator's, on the host")
+        for ann_name in pl["annotations"]:
+            print(f"  after       `louise hold annotations retarget {ann_name}`: its claims name the old id")
         return 0
     by = f"louise hold collection refit {name} (paused until its gate)"
     paused_here = _hold_off_worker(root, name, by)
@@ -1285,6 +1340,9 @@ def _refit_gate(a, root: Path, name: str, m: dict, by: str, paused_here: bool, s
         f"({m['steps']['changes']['changed']} document(s)) at the new layer"
         + ("" if rc == 0 else f"; the gate exited {rc}: nothing may be embedded until it passes, and the "
                               f"same command runs the CPU reference and the gate again"))
+    for ann_name in refit_mod.annotations_naming(root, name, m["predecessor"]["collection_id"]):
+        say(f"[refit] {name}: next, `louise hold annotations retarget {ann_name}` — its claims name the old id "
+            f"(they apply meanwhile, as a twin's)")
     return rc
 
 
@@ -8540,6 +8598,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     anns = nouns.add_parser("annotations", help="an annotations collection's claims (02 §2.10)")
     averbs = anns.add_subparsers(dest="verb", required=True)
+    p = averbs.add_parser("retarget", help="re-create the annotations collection against the collection its "
+                                           "target became (a refit in place, a re-creation): its claims exported, "
+                                           "created against each target's holder, then given the name; the old "
+                                           "one kept, its file set aside (07 §7.3, amended 2026-11-17)")
+    root_arg(p); p.add_argument("collection")
+    p.add_argument("--repin", action="store_true", help="pin every claim anew where the target's text moved")
+    p.add_argument("--platform-image", default=None)
+    p.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="the targets and the holder each answers by; writes nothing")
+    p.set_defaults(fn=cmd_annotations_retarget)
     p = averbs.add_parser("update", help="the next snapshot of the SAME collection: the claims re-checked "
                                          "against the target's newer snapshot, or replaced by a new file")
     root_arg(p); p.add_argument("collection")

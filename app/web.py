@@ -802,10 +802,18 @@ def _ask_annotations() -> list[dict]:
     from .hold.codex import targets_of
     from .ask.annotations import answers_for
     root = collections_mod.louise_root() / "collections"
+    from .hold import refit as refit_mod
     served: dict[str, str] = {}
-    for c in collections_mod.load_all():
-        # a collection answers for its own id and its records twins' (a
-        # carry's, a refit's in place: A1f, A1l), its own id first
+    held = collections_mod.load_all()
+    # a collection answers for its own id and its records twins' (a carry's,
+    # a refit's in place: A1f, A1l): its own id and a refit's predecessors
+    # first, ranked as the collection itself, a carry's twin after — never
+    # the load order (the second read of 10cc6f34, 4)
+    for c in held:
+        for i in (getattr(c.codex, "collection_id", None), *refit_mod.predecessors(root / c.name / "state")):
+            if i:
+                served.setdefault(i, c.name)
+    for c in held:
         for i in answers_for(root, c.name, getattr(c.codex, "collection_id", None)):
             served.setdefault(i, c.name)
     out = []

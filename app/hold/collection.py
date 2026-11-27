@@ -1448,11 +1448,17 @@ def _target_names(root: Path, codex: Codex) -> list[str | None]:
     wanted = [t.collection_id for t in targets_of(codex)]
     if not wanted:
         return []
-    from . import carry
+    from . import carry, refit
     names: dict[str, str] = {}
     for name, held in _held(root):
         if held.collection_id in wanted:
             names[held.collection_id] = name
+    for name, held in _held(root):
+        # a refit in place ranks as the target itself (A1l), before any carry's twin
+        if getattr(held, "annotates", None) is None:
+            for prev in refit.predecessors(root / name / "state"):
+                if prev in wanted:
+                    names.setdefault(prev, name)
     for name, held in _held(root):
         # a records twin answers for a target it is not itself (a carry's,
         # a refit's in place: A1f, A1l); the target itself first

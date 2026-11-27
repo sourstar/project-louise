@@ -132,7 +132,12 @@ louise hold
                  Anything but the encoder window is refused, a window that cuts nothing otherwise too, and a
                  collection whose text index is shared. The worker keeps its index writer: exit 3 asks for
                  `louise node stop` before the switch writes. A refit done and not gated goes straight to its
-                 CPU reference and gate. POST /api/hold/collection/refit
+                 CPU reference and gate. What was shared under the old id (pin-run's checks) is said and set
+                 aside, every file naming the old id re-keyed or set aside (shared for testing only, RULE 1;
+                 an official publication refuses). Its `attest` step runs roots, records and chunks on the
+                 parts written again and signs them for the new id, so an enforced quarantine keeps it in
+                 use. Its last line names `hold annotations retarget` for each annotations collection
+                 naming the old id. POST /api/hold/collection/refit
               create <plugin> --recipe FILE --encoder URL [--query-encoder URL] [--api A] [--embed-model M] [--query-model M]
               [--space-from CODEX] [--calibration-set FILE]
                                                                        the model flags: required where a URL names no model (§7.8, amended 2026-10-09)
@@ -211,6 +216,11 @@ louise hold
                                                                        file `create annotations` reads: a re-created target's annotations collection is created from it
                                                                        against the new target, every end read there and every pin checked (amended 2026-11-17); where
                                                                        the target's text moved (a new parser), with `--repin` (2026-11-18)
+  annotations retarget <collection> [--repin] [--dry-run]          (2026-11-27, A1l) the annotations collection re-created against the collection
+                                                                       its target became — a refit in place, a re-creation — in ONE command: its claims
+                                                                       exported, created against each target's holder at its latest snapshot (every end read,
+                                                                       every pin checked), then given the name; the old one kept as <name>.retargeted-<time>,
+                                                                       its file set aside in its state (its forget is the operator's). Resumable
   annotations update <collection> [--claims FILE] [--against TARGET=SNAPSHOT …] [--snapshot ID] [--dry-run] [--whole]
                                                                        (amended 2026-10-23, operator: updated, not replaced; 02 §2.10) the next snapshot of the SAME
                                                                        annotations collection: the claims checked against each target's newest snapshot (or

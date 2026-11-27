@@ -344,26 +344,22 @@ def under_way(root, ref: str) -> dict[str, Any] | None:
     return body if isinstance(body, dict) and body.get("step") != "done" else None
 
 
-def plan(root, ref: str, *, run: str | None = None) -> dict[str, Any]:
-    """Everything checked, nothing written: what `apply` would do."""
-    from app.acquire.specs import ACQUIRE_REGISTRY
-
-    from . import collection as col
-    from . import origin_run
+def published_under(root: Path, name: str, codex: Codex, file: Path) -> list[str]:
+    """EVERYTHING THIS NODE SHARED OR PUBLISHED UNDER THE COLLECTION'S ID, each
+    item in words: its file's `share`, the seeder's serving, coverage rows,
+    the publisher's pass, published attestations, a certifier's pointer or
+    anchor, a chain fetched from a peer, another held Codex naming the id.
+    ONE function, read-only, for every pass that changes a collection's id in
+    place: `pin-run` refuses on any item; `hold collection refit` sets each
+    aside and supersedes it while nothing was published officially
+    (app/hold/refit.py `official_publication`). A fact that cannot be read
+    refuses ("could not tell" is never "nothing was published")."""
     from . import shard as shard_mod
-    from .seed import latest_snapshot
     root = Path(root)
-    name, codex = col.resolve(root, ref)
-    if origin_run.named_run(codex) is not None:
-        raise PinRefused(f"pin-run: {name}'s Codex names run {origin_run.named_run(codex)} already")
-    if not origin_run.spec_dated(ACQUIRE_REGISTRY.get(codex.plugin)):
-        raise PinRefused(f"pin-run: {codex.plugin}'s origin publishes no dated dumps; there is no run to name")
-    # ANYTHING PUBLISHED OR SHARED IS SUPERSEDED, NEVER REWRITTEN (01 promise 8)
-    from app import collections as collections_mod
     why: list[str] = []
     try:
         import tomllib
-        raw = tomllib.loads((collections_mod.collections_dir() / f"{name}.toml").read_text(encoding="utf-8"))
+        raw = tomllib.loads(Path(file).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise PinRefused(f"pin-run: {name}'s collection file cannot be read ({e}): whether it is shared "
                          f"is not known") from None
@@ -395,6 +391,28 @@ def plan(root, ref: str, *, run: str | None = None) -> dict[str, Any]:
     named = _naming(root, name, codex.collection_id)
     if named:
         why.append(f"{', '.join(named)} name(s) its id")
+    return why
+
+
+def plan(root, ref: str, *, run: str | None = None) -> dict[str, Any]:
+    """Everything checked, nothing written: what `apply` would do."""
+    from app.acquire.specs import ACQUIRE_REGISTRY
+
+    from . import collection as col
+    from . import origin_run
+    from . import shard as shard_mod
+    from .seed import latest_snapshot
+    root = Path(root)
+    name, codex = col.resolve(root, ref)
+    if origin_run.named_run(codex) is not None:
+        raise PinRefused(f"pin-run: {name}'s Codex names run {origin_run.named_run(codex)} already")
+    if not origin_run.spec_dated(ACQUIRE_REGISTRY.get(codex.plugin)):
+        raise PinRefused(f"pin-run: {codex.plugin}'s origin publishes no dated dumps; there is no run to name")
+    # ANYTHING PUBLISHED OR SHARED IS SUPERSEDED, NEVER REWRITTEN (01 promise 8)
+    from app import collections as collections_mod
+    why = published_under(root, name, codex, collections_mod.collections_dir() / f"{name}.toml")
+    state = root / name / "state"
+    facts = _manifest_facts(state / "manifest.sqlite", codex)
     if why:
         raise PinRefused(f"pin-run: {name} may be held elsewhere — {'; '.join(why)}. A collection a peer "
                          f"may hold is superseded (a new collection, carried), never rewritten in place")

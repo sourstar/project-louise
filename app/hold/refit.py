@@ -64,10 +64,31 @@ uid) and embeds the change set at the new layer.
 THE STANDARD. 06 §6.3's carry within a space by what a chunk is (its id and
 text), here across two spaces whose function from cleaned text to vectors
 is one (`carry.space_differences` empty); 09 §9.4's part entry recomputed
-the way the build computes it. Written down, not taken: a copy-on-write
-filesystem snapshot (btrfs/ZFS) of the collection's directory would give
-the rollback for free; it pays once the node's /data is one, and costs a
-filesystem the node does not run.
+the way the build computes it. THE NODE'S /data IS ZFS, snapshotted every
+hour (München, 2026-11-27): a ZFS snapshot taken before the run is the
+node's practice and the operator's host step (`--dry-run` says so) — a
+whole-filesystem rollback beside this command's own, which rolls back one
+collection while the node runs its others. A rollback BY the filesystem was
+not taken as this command's: it reaches every collection on the dataset,
+and a container cannot take one.
+
+WHAT WAS SHARED UNDER THE OLD ID (the operator, 2026-11-27: "Look the other
+peer was a test peer and Gutenberg has been shared only for test purpose").
+Every collection on this node has been shared for testing only (RULE 1: no
+official publication so far), so a refit SUPERSEDES what was shared and
+never refuses for it: pin-run's checks list each item
+(`pin_run.published_under`), the dry run and the output say each one, and
+the rows and files are set aside under state/.replaced/<old id>/ and put
+back by a rollback; every file naming the old id (pin-run's `_sweep`) is
+re-keyed or set aside. The peers holding the old id keep it, and see a new
+collection. Once something is published OFFICIALLY the refit refuses, as
+pin-run does — the one condition, `official_publication`.
+
+QUARANTINE. Attestations are keyed on the collection's id (copy_state), so
+the new id has none: the `attest` step runs `roots`, `records` and `chunks`
+on the parts written again (`hold check`'s `attest_landed`, scoped to
+parts), still paused, and signs them with this node's key — the unchanged
+parts are the old snapshot's byte for byte, proven entry by entry.
 """
 from __future__ import annotations
 
@@ -97,7 +118,13 @@ SHOWN = 20
 #: the `fixed` chunker's OPTIONAL params, one group (app/layers.py
 #: OPTIONAL_PARAMS): the encoder's window
 FIT_PARAMS = ("max_tokens", "tokenizer")
-STEPS = ("changes", "switch", "parts", "proof")
+STEPS = ("changes", "switch", "parts", "proof", "attest")
+#: the collection file's old text, kept (by its role, not its name: a rename
+#: moves the collection and this folder with it)
+KEPT_FILE = "collection.toml"
+#: the files naming the old id set aside or kept, at their paths from the
+#: collection's directory
+FILES = "files"
 
 
 class RefitFailed(CodexError):
@@ -398,6 +425,16 @@ def state_aside(root, name: str, old_id: str) -> Path:
     return Path(root) / name / "state" / ASIDE / _hex(old_id)
 
 
+def asides(root, name: str, m: dict) -> tuple[Path, Path]:
+    """The marker's two folders set aside, from the collection's directory:
+    stored relative to it (`hold collection rename` moves the directory and
+    refit.json with it), an absolute path read as it is (a marker written
+    before)."""
+    base = Path(root) / name
+    return tuple(Path(m[k]) if Path(m[k]).is_absolute() else base / m[k]   # type: ignore[return-value]
+                 for k in ("shard_aside", "state_aside"))
+
+
 def read_marker(root, name: str) -> dict | None:
     p = marker_path(root, name)
     return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
@@ -623,13 +660,16 @@ def _unversion(con, changed: list[list]) -> int:
 
 def _tables(coll) -> list:
     """`[(its directory, the table)]` for every vector table of the collection
-    (one, or a split collection's parts), the ones holding a table."""
+    (one, or a split collection's parts), the ones holding a table; the
+    directory from the collection's own folder, so a rename keeps the
+    recorded versions' keys (`hold collection rename`)."""
     from app import embeddings, vector_parts
+    base = Path(coll.manifest_path).parent.parent
     out = []
     for view in vector_parts.views(coll):
         db = embeddings._conn(view)
         if embeddings.TABLE in db.table_names():
-            out.append((str(view.lance_dir), db.open_table(embeddings.TABLE)))
+            out.append((os.path.relpath(str(view.lance_dir), str(base)), db.open_table(embeddings.TABLE)))
     return out
 
 
@@ -777,6 +817,13 @@ def predecessors(state_dir) -> tuple[str, ...]:
     return tuple(dict.fromkeys(out))
 
 
+def is_predecessor(state_dir, collection_id: str) -> bool:
+    """Whether a refit in place here replaced `collection_id`: the collection
+    held here IS that one, under a new Codex (ranked as itself, not as a
+    twin)."""
+    return collection_id in predecessors(state_dir)
+
+
 def gated(m: dict | None) -> bool:
     """Whether a finished refit's new space passed its gate."""
     return bool(m) and (m.get("gate") or {}).get("rc") == 0
@@ -791,6 +838,260 @@ def note_gate(root, name: str, rc: int) -> None:
         return
     m["gate"] = {"rc": int(rc), "at": int(time.time())}
     _save(root, name, m)
+
+
+# ---- what was shared under the old id, and every file naming it ----------------
+
+def official_publication(root, name: str, codex: Codex) -> str | None:
+    """THE ONE CONDITION between superseding what was shared and refusing
+    (the operator, 2026-11-27: "Look the other peer was a test peer and
+    Gutenberg has been shared only for test purpose"; RULE 1: no official
+    publication so far). Every collection on this node has been shared for
+    testing only, so a refit supersedes what was shared and never refuses for
+    it. Published OFFICIALLY — a certified collection, or one a certifier's
+    pointer or anchor names (03 §3.7) — it refuses, as pin-run does. The
+    reason in words, or None."""
+    from .anchor import state_path as anchor_path
+    from .certify import pointer_path
+    if getattr(codex, "publication", "open") == "certified":
+        return f"{name} is certified (publication = \"certified\"): an official publication is superseded, " \
+               f"never refit in place"
+    if pointer_path(Path(root), name, codex).is_file():
+        return f"a certifier's pointer names {name}: it is published officially"
+    if anchor_path(Path(root), name, codex).is_file():
+        return f"a certifier's anchor names {name}: it is published officially"
+    return None
+
+
+def published(root, name: str, codex: Codex) -> list[str]:
+    """What this node shared or published under the collection's id, each
+    item in words: pin-run's checks, one function (`pin_run.published_under`)."""
+    from . import deposit, pin_run
+    file = deposit.held_file(Path(root), name)
+    if not file.is_file():
+        return []
+    return pin_run.published_under(Path(root), name, codex, file)
+
+
+def _refuse_official(root, name: str, codex: Codex) -> None:
+    why = official_publication(root, name, codex)
+    if why:
+        raise CodexError(f"refit: {why}; nothing was written")
+
+
+#: the node database's rows about the old id that the switch sets aside
+def _node_selections(name: str, old_id: str) -> list[tuple[str, str, list]]:
+    return [("control", "key = ?", [f"publish:{name}"]),
+            ("attestations_published", "collection_id = ?", [old_id])]
+
+
+def _node_rows_aside(name: str, old_id: str, path: Path) -> dict[str, int]:
+    """node.sqlite's rows about the old id — the publisher's pass of the
+    name, the attestations it published of the id — saved into `path`, then
+    deleted, one BEGIN IMMEDIATE. Repeatable (saved once)."""
+    from app import node_state
+    db_path = node_state.path()
+    if not db_path.exists():
+        return {}
+    con = sqlite3.connect(db_path, timeout=60, isolation_level=None)
+    con.row_factory = sqlite3.Row
+    counts: dict[str, int] = {}
+    try:
+        tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        rows = []
+        for t, where, params in _node_selections(name, old_id):
+            if t in tables:
+                rows += [(t, json.dumps({k: _enc(r[k]) for k in r.keys()}, sort_keys=True))
+                         for r in con.execute(f"SELECT * FROM {t} WHERE {where}", params)]
+        if not path.is_file():
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.unlink(missing_ok=True)
+            out = sqlite3.connect(tmp)
+            out.execute("CREATE TABLE saved(tbl TEXT NOT NULL, row TEXT NOT NULL)")
+            out.executemany("INSERT INTO saved VALUES(?, ?)", rows)
+            out.commit()
+            out.close()
+            os.replace(tmp, path)
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            for t, where, params in _node_selections(name, old_id):
+                if t in tables:
+                    counts[t] = con.execute(f"DELETE FROM {t} WHERE {where}", params).rowcount
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
+    finally:
+        con.close()
+    return {k: v for k, v in counts.items() if v}
+
+
+def _node_rows_back(path: Path) -> int:
+    """The saved node.sqlite rows back (insert or replace). Repeatable."""
+    from app import node_state
+    if not path.is_file() or not node_state.path().exists():
+        return 0
+    saved = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        rows = [(t, json.loads(r)) for t, r in saved.execute("SELECT tbl, row FROM saved")]
+    finally:
+        saved.close()
+    con = sqlite3.connect(node_state.path(), timeout=60, isolation_level=None)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            for t, row in rows:
+                vals = {k: _dec(v) for k, v in row.items()}
+                con.execute(f"INSERT OR REPLACE INTO {t}({', '.join(vals)}) VALUES({', '.join('?' for _ in vals)})",
+                            list(vals.values()))
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
+    finally:
+        con.close()
+    return len(rows)
+
+
+def _ours(rel: str) -> bool:
+    """A file this pass handles itself, or keeps: not the sweep's."""
+    return (rel in ("shard/codex.json", f"state/{MARKER}", f"state/{MARKER}.tmp")
+            or rel.startswith(("shard/snapshots/", f"shard/{ASIDE}/", f"state/{ASIDE}/", "state/build/")))
+
+
+def names_plan(root, name: str, old_id: str) -> list[dict[str, str]]:
+    """Every file of the collection naming the old id (pin-run's `_sweep`),
+    each with what the switch does with it — set aside, re-pointed to the
+    new id, or signed again for it — and refused in words where none applies
+    (or a RAGE settings file another peer signed, or an update under way).
+    `[{rel, action, why}]`, read-only."""
+    from . import carry as carry_mod, line_carry, pin_run, update_state
+    from .cascade import PUBLISHED_DIR
+    from app.share.fetch import CHAIN
+    root = Path(root)
+    hexid = old_id.split(":", 1)[-1]
+    out: list[dict[str, str]] = []
+    unknown: list[str] = []
+    dirs: set[str] = set()
+    aside_files = {f"state/{pin_run._ORIGIN_TRIED}", f"state/{pin_run._ORIGIN_ACK}", "state/calibration.json",
+                   *(f"state/{f}" for f in pin_run._SCHEDULED)}
+    for rel in pin_run._sweep(root, name, old_id):
+        if _ours(rel):
+            continue
+        if rel.startswith(f"state/attestations/{hexid}/"):
+            d = f"state/attestations/{hexid}"
+            if d not in dirs:
+                dirs.add(d)
+                out.append({"rel": d, "action": "aside", "why": "the attestations of the old id"})
+        elif rel.startswith("shard/rage-settings/") and rel.endswith(".json"):
+            try:
+                from app.bundles import keys as node_keys
+                key = node_keys.load_signing_key()
+            except Exception:   # noqa: BLE001 — refused below in words
+                key = None
+            pin_run._resignable(root / name / rel, key)
+            out.append({"rel": rel, "action": "resign", "why": "this node's RAGE settings, signed again for the "
+                                                               "new id (refused for it otherwise)"})
+        elif rel in (f"state/{carry_mod.MARKER}", f"state/{line_carry.MARKER}"):
+            out.append({"rel": rel, "action": "repoint", "why": "a carry's record: `to` names the new id"})
+        elif rel == f"state/{update_state.FILE}":
+            mk = update_state.read(root, name) or {}
+            if not (mk.get("step") == "due" and not mk.get("moved")):
+                raise CodexError(f"refit: {name}'s update of the old Codex is under way (step {mk.get('step')!r}, "
+                                 f"state/{update_state.FILE}): finish or abandon it first; nothing was written")
+            out.append({"rel": rel, "action": "aside", "why": "an update due that had done nothing"})
+        elif (rel in aside_files or rel.startswith((f"state/{PUBLISHED_DIR}/", "state/calibration/",
+                                                    f"state/{CHAIN}/"))):
+            out.append({"rel": rel, "action": "aside", "why": "what the old id's checks, gate, publication or "
+                                                              "fetch wrote"})
+        else:
+            unknown.append(rel)
+    if unknown:
+        raise CodexError(f"refit: {', '.join(unknown[:5])} name(s) {old_id} and the refit does not know what "
+                         f"to do with it; nothing was written")
+    return out
+
+
+def _apply_names(root: Path, name: str, items: list[dict[str, str]], done: list[str], old_id: str,
+                 new_id: str, ta: Path, save) -> None:
+    """Each file naming the old id handled as `names_plan` said, its old bytes
+    kept under `ta/files/<rel>` (set aside by rename, or copied before a
+    re-point or a signature), each recorded in `done`."""
+    from . import pin_run
+    base = Path(root) / name
+    for it in items:
+        rel = it["rel"]
+        if rel in done:
+            continue
+        here, kept = base / rel, ta / FILES / rel
+        if it["action"] == "aside":
+            if here.exists():
+                _rename(here, kept)
+        else:
+            if not kept.exists() and here.is_file():
+                kept.parent.mkdir(parents=True, exist_ok=True)
+                tmp = kept.with_name(kept.name + ".tmp")
+                tmp.write_bytes(here.read_bytes())
+                os.replace(tmp, kept)
+            if it["action"] == "repoint":
+                pin_run._repoint_json(here, old_id, new_id)
+            else:
+                from app.bundles import keys as node_keys
+                pin_run._resign_rage(here, old_id, new_id, node_keys.load_signing_key())
+        done.append(rel)
+        save()
+
+
+def _names_back(root: Path, name: str, items: list[dict[str, str]], ta: Path, rejected_t: Path) -> int:
+    """Each file the switch set aside or rewrote put back: what the new Codex
+    wrote at its path set aside under `rejected/`, never deleted. Each move
+    decided by what lies where (a re-run finishes a stopped one)."""
+    base = Path(root) / name
+    n = 0
+    for it in reversed(items):
+        rel = it["rel"]
+        here, kept = base / rel, ta / FILES / rel
+        if not kept.exists():
+            continue
+        if it["action"] == "aside":
+            if here.exists():
+                _rename(here, rejected_t / FILES / rel)
+            _rename(kept, here)
+        else:
+            tmp = here.with_name(here.name + ".refit")
+            tmp.write_bytes(kept.read_bytes())
+            os.replace(tmp, here)
+            kept.unlink()                                  # its bytes are back at their path
+        n += 1
+    return n
+
+
+def _attest(root: Path, name: str, new: Codex, t_coll, steps: dict, log) -> dict[str, Any]:
+    """03 §3.6's test 1 for the NEW id, still paused: `roots`, `records` and
+    `chunks` over the parts written again (a seeded unchanged one where none
+    was), signed with this node's key (`check.attest_landed`, scoped to
+    parts). Attestations are keyed on the id, so the new one has none until
+    this runs, and an enforced quarantine would withhold it from search."""
+    from . import check as chk, equivalence, seed
+    snap = seed.latest_snapshot(root, name)
+    parts = [p["path"] for p in (steps.get("changes") or {}).get("parts") or []]
+    if not parts and snap.shards:
+        parts = [random.Random(new.collection_id).choice(list(snap.shards)).path]
+    try:
+        from app.bundles import keys as node_keys
+        key = node_keys.load_signing_key()
+    except Exception:   # noqa: BLE001 — checked, not attested; said
+        key = None
+    got = chk.attest_landed(root, name, new, snap, parts, key=key, platform_image=equivalence.running_image())
+    failed = sorted(c for c, r in got["results"].items() if r == "fail")
+    out = {"parts": got["parts"], "results": got["results"], "attestations": got["attestations"],
+           "why": got["why"], "failed": failed}
+    log(f"[refit] {name}: roots, records and chunks of {len(got['parts'])} part(s) for the new id: "
+        + ", ".join(f"{k} {v.upper()}" for k, v in got["results"].items())
+        + (f"; attested ({len(got['attestations'])})" if got["attestations"] else
+           f"; NOT attested — {got['why']}: an enforced quarantine withholds {name} until `louise hold check "
+           f"{name} --checks roots,chunks` runs with the node's key"))
+    return out
 
 
 # ---- the parts ----------------------------------------------------------------
@@ -859,6 +1160,53 @@ def part_chunks(t_coll, path: str) -> tuple[int, str]:
 
 # ---- the dry run ----------------------------------------------------------------
 
+def staging_refusal(root: Path, name: str, snap) -> str | None:
+    """Why the parts cannot be written again, or None: the staging build
+    database must describe the old snapshot — its rows are the new snapshot's
+    entries for every part kept (`seed._write_build_db`). Asked before the
+    pass, not after the switch (the second read of 10cc6f34, 6)."""
+    from app.pack import build as pack_build
+    from . import records as rec, seed
+    if snap is None:
+        return None
+    db_path = Path(root) / name / rec.STATE / rec.BUILD / pack_build.BUILD_DIR / pack_build.BUILD_DB
+    if not db_path.is_file():
+        return (f"{name} holds no staging build database ({db_path}): its parts were not built here, so "
+                f"nothing says how they were cut; a refit writes parts again from a build's rows")
+    con = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+    try:
+        bad = seed._mismatch(seed._rows(con), snap)
+    finally:
+        con.close()
+    if bad:
+        return (f"{db_path} does not describe {name}'s snapshot {snap.snapshot_id} ({'; '.join(bad[:3])}): "
+                f"the parts' entries cannot be taken from it")
+    return None
+
+
+def _attest_readiness() -> str:
+    """Whether this process can sign the new id's attestations, in words."""
+    from . import equivalence
+    try:
+        from app.bundles import keys as node_keys
+        node_keys.load_signing_key()
+    except Exception as e:   # noqa: BLE001
+        return f"NOT here: no node key ({type(e).__name__})"
+    if equivalence.running_image() is None:
+        return "NOT here: this process does not know its image (LOUISE_PLATFORM_IMAGE)"
+    return "yes: the node's key and image"
+
+
+def annotations_naming(root, name: str, old_id: str) -> list[str]:
+    """The held annotations collections whose targets name `old_id`: each is
+    retargeted (`louise hold annotations retarget <name>`) once the refit is
+    done; until then its claims apply to the records as a twin's."""
+    from . import collection as col
+    from .codex import targets_of
+    return sorted(n for n, c in col._held(Path(root)) if n != name and getattr(c, "annotates", None) is not None
+                  and any(t.collection_id == old_id for t in targets_of(c)))
+
+
 def _old_snapshot(root: Path, name: str, old: Codex):
     """The old Codex's latest snapshot while it is in place, else None."""
     from . import seed
@@ -880,6 +1228,12 @@ def plan(root, name: str, layers, *, window: int = WINDOW, processes: int | None
         raise CodexError(f"refit: {why}")
     old = predecessor(root, name)
     new = new_codex(old, layers)
+    _refuse_official(root, name, old)
+    shared = published(root, name, old)
+    why = staging_refusal(root, name, _old_snapshot(root, name, old))
+    if why:
+        raise CodexError(f"refit: {why}; nothing was written")
+    files = names_plan(root, name, old.collection_id)
     s_coll = rec.local_collection(root, name, old)        # its data is used: gated (invariant 9)
     t_coll = planned_target(s_coll, new)
     changed: list[list] = []
@@ -903,7 +1257,8 @@ def plan(root, name: str, layers, *, window: int = WINDOW, processes: int | None
             "changed": len(changed), "changed_uids": [c[1] for c in changed[:SHOWN]],
             "parts": parts, "parts_only": sorted({u for p in parts for u in p["uids"]} - held)[:SHOWN],
             "snapshot": snap.snapshot_id if snap is not None else None,
-            "index_entries": index_held(s_coll, changed),
+            "index_entries": index_held(s_coll, changed), "published": shared, "names": files,
+            "attest": _attest_readiness(), "annotations": annotations_naming(root, name, old.collection_id),
             "shard_aside": str(shard_aside(root, name, old.collection_id)),
             "state_aside": str(state_aside(root, name, old.collection_id)), "codex": new}
 
@@ -931,7 +1286,7 @@ def _changes_step(root: Path, name: str, old: Codex, new: Codex, m: dict, *, win
     when a stop was honoured. Refused, leaving nothing, when nothing is cut
     otherwise."""
     from . import collection as col, records as rec
-    steps, ta = m["steps"], Path(m["state_aside"])
+    steps, ta = m["steps"], asides(root, name, m)[1]
     changed_file = ta / "changed.jsonl"
     ch = steps.get("changes") or {"rowid": 0, "documents": 0, "changed": 0, "errors": 0, "first_error": None,
                                   "errored": 0, "out_of_scope": 0, "parts_at": 0, "parts": [],
@@ -940,6 +1295,9 @@ def _changes_step(root: Path, name: str, old: Codex, new: Codex, m: dict, *, win
         return read_changed(changed_file)
     if old.collection_id != col.read(root, name).collection_id:
         raise CodexError("refit: the change set is computed before the switch, and the switch has begun")
+    why = staging_refusal(root, name, _old_snapshot(root, name, old))
+    if why:
+        raise CodexError(f"refit: {why}; nothing of the switch was written")
     s_coll = rec.local_collection(root, name, old)
     t_coll = planned_target(s_coll, new)
     if not ch.get("manifest_done"):
@@ -1042,13 +1400,14 @@ def run(root, name: str, layers, *, window: int = WINDOW, processes: int | None 
         m = None
     old = predecessor(root, name)
     new = new_codex(old, layers)
+    _refuse_official(root, name, old)
     if m is not None and m.get("done"):
         if m["to"]["collection_id"] == new.collection_id:
             log(f"[refit] {name}: done already ({new.collection_id[:23]}…)")
             return m
         # an EARLIER refit, finished: its marker joins what it set aside, out of
         # this one's way (the collection it made is this one's predecessor)
-        _rename(marker_path(root, name), Path(m["state_aside"]) / MARKER)
+        _rename(marker_path(root, name), asides(root, name, m)[1] / MARKER)
         m = None
     if m is not None and m["to"]["collection_id"] != new.collection_id:
         raise CodexError(f"refit: {marker_path(root, name)} records a refit to {m['to']['collection_id']}; "
@@ -1063,12 +1422,18 @@ def run(root, name: str, layers, *, window: int = WINDOW, processes: int | None 
         m = {"kind": "louise-refit", "name": name,
              "predecessor": {"name": name, "collection_id": old.collection_id, "space_id": old.space_id},
              "to": {"collection_id": new.collection_id, "space_id": new.space_id, "version": new.version},
-             "layers": [l.to_dict() for l in new.layers], "shard_aside": str(sa), "state_aside": str(ta),
-             "started": int(time.time()), "steps": {}, "done": False, "paused_here": bool(paused_here)}
+             "layers": [l.to_dict() for l in new.layers], "shard_aside": str(sa.relative_to(root / name)), "state_aside": str(ta.relative_to(root / name)),
+             "started": int(time.time()), "steps": {}, "done": False, "paused_here": bool(paused_here),
+             # what was shared under the old id (pin-run's checks), superseded: the
+             # node shared for testing only (`official_publication`)
+             "published": published(root, name, old)}
         ta.mkdir(parents=True, exist_ok=True)
         _save(root, name, m)
         log(f"[refit] {name}: {old.collection_id[:23]}… → {new.collection_id[:23]}… in place; what the old "
             f"Codex owned is set aside under {sa} and {ta}")
+        for item in m["published"]:
+            log(f"[refit] {name}: shared under the old id — {item}: superseded (shared for testing only, "
+                f"RULE 1); the peers holding the old id keep it and see a new collection")
     steps = m["steps"]
     changed_file = ta / "changed.jsonl"
 
@@ -1097,6 +1462,7 @@ def run(root, name: str, layers, *, window: int = WINDOW, processes: int | None 
         _index_writers(s_now, changed)
         try:
             if not sw.get("saved"):
+                sw["names"] = names_plan(root, name, old.collection_id)
                 sw["rows"] = _save_rows(manifest, ta / "saved.sqlite", changed, old)
                 sw["lance"] = lance_versions(s_now)
                 sw["saved"] = True
@@ -1122,6 +1488,18 @@ def run(root, name: str, layers, *, window: int = WINDOW, processes: int | None 
                 steps["switch"] = sw
                 _save(root, name, m)
                 log(f"[refit] {name}: the old codex.json and snapshots set aside in {sa}; the new Codex written")
+            if not sw.get("named"):
+                done_names = sw.setdefault("names_done", [])
+                _apply_names(root, name, sw.get("names") or [], done_names, old.collection_id, new.collection_id,
+                             ta, lambda: (steps.__setitem__("switch", sw), _save(root, name, m)))
+                sw["node_rows"] = _node_rows_aside(name, old.collection_id, ta / "node-saved.sqlite")
+                sw["named"] = True
+                steps["switch"] = sw
+                _save(root, name, m)
+                if sw.get("names") or sw["node_rows"]:
+                    log(f"[refit] {name}: naming the old id — "
+                        + ", ".join(f"{it['rel']} {it['action']}" for it in sw.get("names") or [])
+                        + (f"; node rows set aside {sw['node_rows']}" if sw["node_rows"] else ""))
             if not sw.get("staging"):
                 build = Path(root) / name / rec.STATE / rec.BUILD
                 if build.exists():
@@ -1158,6 +1536,10 @@ def run(root, name: str, layers, *, window: int = WINDOW, processes: int | None 
                     sw["reset_at"] = k + len(win)
                     steps["switch"] = sw
                     _save(root, name, m)
+                    if stop is not None and stop.is_set() and sw["reset_at"] < len(changed):
+                        log(f"[refit] {name}: stopped after {sw['reset_at']} of {len(changed)} document(s) "
+                            f"reset; run it again to resume")
+                        return {**m, "stopped": True}
             finally:
                 con.close()
         finally:
@@ -1196,13 +1578,28 @@ def run(root, name: str, layers, *, window: int = WINDOW, processes: int | None 
                               f"back: {name} holds {old.collection_id} as before")
         pf["done"] = True
         steps["proof"] = pf
-        m["lance_after"] = lance_versions(t_coll)
-        m["done"] = True
-        m["finished"] = int(time.time())
         _save(root, name, m)
         log(f"[refit] {name}: proven — {pf['compared']} unchanged embedded document(s) cut to exactly the "
             f"chunks the vector table holds, {pf['parts_compared']} unchanged part(s) to their chunk roots, "
             f"the change set holding no vector row and no index entry")
+
+    # ---- attest (03 §3.6 test 1 for the new id, still paused)
+    at = steps.get("attest") or {}
+    if not at.get("done"):
+        at = _attest(root, name, new, t_coll, steps, log)
+        if at["failed"]:
+            steps["attest"] = at
+            _save(root, name, m)
+            log(f"[refit] {name}: {', '.join(at['failed'])} FAILED for the new id; rolling back")
+            rollback(root, name, log=log)
+            raise RefitFailed(f"refit: {name}: {', '.join(at['failed'])} failed over the parts written again; "
+                              f"rolled back: {name} holds {old.collection_id} as before")
+        at["done"] = True
+        steps["attest"] = at
+        m["lance_after"] = lance_versions(t_coll)
+        m["done"] = True
+        m["finished"] = int(time.time())
+        _save(root, name, m)
     return m
 
 
@@ -1215,7 +1612,7 @@ def _recodex_file(root, name: str, collection_id: str, ta: Path, log) -> str:
     if not path.is_file():
         log(f"[refit] {name}: no collection file at {path}; none rewritten")
         return f"none at {path}"
-    kept = ta / f"{name}.toml"
+    kept = ta / KEPT_FILE
     if not kept.is_file():
         tmp = kept.with_name(kept.name + ".tmp")
         tmp.write_bytes(path.read_bytes())
@@ -1505,7 +1902,7 @@ def rollback(root, name: str, *, log: Callable[[str], None] = print) -> dict[str
         return _rollback_moves(root, name, m, log)
     carry_mod.refuse_without_locks(root, (name,), "hold collection refit --rollback")
     old_id, new_id = m["predecessor"]["collection_id"], m["to"]["collection_id"]
-    sa, ta = Path(m["shard_aside"]), Path(m["state_aside"])
+    sa, ta = asides(root, name, m)
     rejected_s, rejected_t = sa / "rejected", ta / "rejected"
     shard = col.shard_dir_of(root, name)
     steps = m.get("steps") or {}
@@ -1544,8 +1941,16 @@ def rollback(root, name: str, *, log: Callable[[str], None] = print) -> dict[str
             (cx.loads((rejected_s / "codex.json").read_bytes()) if (rejected_s / "codex.json").is_file() else old_cx)
         manifest = root / name / "state" / "manifest.sqlite"
         rb["rows_restored"] = _restore_rows(manifest, ta / "saved.sqlite", changed, old_cx, new_cx)
-        rb["index_marks_reset"] = _reset_index_marks(manifest, changed) if sw.get("reset_at") else 0
+        # ALWAYS: a stop after an index delete and before `reset_at` was saved
+        # left entries gone under marks the rows put back as indexed (the
+        # second read of 10cc6f34, 3); an extra re-index of the change set is
+        # the safe direction
+        rb["index_marks_reset"] = _reset_index_marks(manifest, changed)
         rb["rows"] = True
+        _save(root, name, m)
+    if (sw.get("named") or sw.get("node_rows") is not None) and not rb.get("node_rows"):
+        rb["node_rows_back"] = _node_rows_back(ta / "node-saved.sqlite")
+        rb["node_rows"] = True
         _save(root, name, m)
     # 3. the ask indexes' marker, 4. the collection file
     if (ta / "ask-marker.json").is_file() and not rb.get("ask_marker"):
@@ -1556,7 +1961,7 @@ def rollback(root, name: str, *, log: Callable[[str], None] = print) -> dict[str
         os.replace(tmp, marker)
         rb["ask_marker"] = True
         _save(root, name, m)
-    kept = ta / f"{name}.toml"
+    kept = ta / KEPT_FILE
     path = deposit.held_file(root, name)
     if kept.is_file() and not rb.get("file"):
         if not path.is_file() or path.read_bytes() != kept.read_bytes():
@@ -1565,7 +1970,12 @@ def rollback(root, name: str, *, log: Callable[[str], None] = print) -> dict[str
             os.replace(tmp, path)
         rb["file"] = True
         _save(root, name, m)
-    # 5. the files, by rename, each decided by what lies where
+    # 5. the files, by rename, each decided by what lies where: first those
+    # naming the old id, and the new id's own attestations
+    rb["names_back"] = _names_back(root, name, sw.get("names") or [], ta, rejected_t)
+    new_att = root / name / "state" / "attestations" / _hex(new_id)
+    if new_att.exists():
+        _rename(new_att, rejected_t / FILES / "state" / "attestations" / _hex(new_id))
     for p in (steps.get("changes") or {}).get("parts") or []:
         (shard / p["path"]).with_name(f".{Path(p['path']).name}.refit").unlink(missing_ok=True)   # our own temp
     for p in sorted(q for q in (sa / "parts").rglob("*") if q.is_file()) if (sa / "parts").is_dir() else []:
@@ -1604,7 +2014,7 @@ def _rollback_moves(root: Path, name: str, m: dict, log) -> dict[str, Any]:
     with them, out of the next refit's way. Each move skipped where it is
     done (a re-run finishes a stopped one)."""
     stamp = m["rollback"]["stamp"]
-    sa, ta = Path(m["shard_aside"]), Path(m["state_aside"])
+    sa, ta = asides(root, name, m)
     sa2, ta2 = sa.with_name(f"{sa.name}.rolled-back-{stamp}"), ta.with_name(f"{ta.name}.rolled-back-{stamp}")
     if sa.exists() and not sa2.exists():
         _rename(sa, sa2)

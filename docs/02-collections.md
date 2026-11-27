@@ -807,7 +807,18 @@ collection naming the old `collection_id` applies to the records as to a
 carry's twin's (`carry.records_twins_of`), until a rollback. The rollback is
 resumable: the vectors and the manifest's rows first (refused when a
 recorded version was pruned), then the files by rename; it empties the
-change set's index marks, so the worker indexes them again. It is a re-creation (case F) by RULE 1 that keeps the
+change set's index marks, so the worker indexes them again. WHAT WAS SHARED (the operator, 2026-11-27: "Look the other
+peer was a test peer and Gutenberg has been shared only for test
+purpose"): every collection on this node has been shared for testing only
+(RULE 1: no official publication so far), so a refit SUPERSEDES what was
+shared and never refuses for it — pin-run's checks list each item, the
+output says each one, the rows and files are set aside and a rollback puts
+them back; the peers holding the old id keep it and see a new collection.
+Once something is published officially (a certified collection, a
+certifier's pointer or anchor), the refit refuses, as pin-run does: one
+condition, `refit.official_publication`. Quarantine's first test is run
+again for the new id over the parts written again, still paused, and
+attested with this node's key (its attestations are keyed on the id). It is a re-creation (case F) by RULE 1 that keeps the
 name in place, for a collection nothing official was published from; the
 gate runs once for the new space. Gutenberg's PG 69207, one chunk of 8,621
 Nemotron tokens in a window of 8,175, is the case.

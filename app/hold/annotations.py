@@ -1677,7 +1677,7 @@ def _target_holder(root: Path, collection_id: str) -> tuple[str, Codex]:
     — the target itself, or its records twin (a same-records carry of it,
     02 §2.4 A1f: the claims apply to its records, and it is what the search
     reads) — the one with the newest snapshot; the target itself on a tie."""
-    from . import carry, collection as col
+    from . import carry, collection as col, refit
     from app.share import seeder
     cands = []
     for n, c in col._held(Path(root)):
@@ -1686,7 +1686,13 @@ def _target_holder(root: Path, collection_id: str) -> tuple[str, Codex]:
         twins = carry.records_twins_of(Path(root) / n / "state")      # a carry's, a refit's (A1l)
         if collection_id in (c.collection_id, *twins):
             cur = seeder.current_snapshot(col.shard_dir_of(Path(root), n))
-            cands.append(((cur.snapshot_id if cur is not None else ""), c.collection_id == collection_id, n, c))
+            # a REFIT in place of the target ranks as the target itself: it is
+            # the collection the target became, under the same name (A1l; the
+            # second read of 10cc6f34, 4: a sister whose carry names the old
+            # id tied with it, and the newest snapshot or the order won)
+            itself = c.collection_id == collection_id or refit.is_predecessor(Path(root) / n / "state",
+                                                                               collection_id)
+            cands.append(((cur.snapshot_id if cur is not None else ""), itself, n, c))
     if not cands:
         return col.resolve(Path(root), collection_id)
     _, _, n, c = max(cands, key=lambda x: (x[0], x[1]))
