@@ -72,6 +72,15 @@ server (LoadModel and Embedding/Rerank as LocalAI calls them), f16 weights:
 | cross-encoder, logits | within 0.0062 | within 0.078 | off by up to 18.9; the order 29 of 40 |
 | own abstract above the neighbour's | 40 of 40 (one tie: two records share an abstract) | the same | — |
 
+- **Not bit-identical to torch, and it cannot be.** With the GELU closed, what
+  remains is float rounding. f32 weights, flash attention OFF: worst 1 − 1.5e-12
+  (median 5.3e-13), 941 of 51,456 components the same bits, the rest differing
+  as float32 sums taken in another order do (ggml's tiles against torch's BLAS:
+  float addition is not associative). f32 weights, flash attention ON: 1 − 8.6e-8,
+  as the f16 weights with it (1 − 1.2e-7): the CPU's flash attention holds K and
+  V in f16. So the 1e-7 of the table is f16, of the weights and of the
+  attention, not the GELU. Bit-exactness is a run reproducing itself
+  (invariant 12); between implementations, the space's tolerance.
 - A GGUF WITHOUT the key, on this tree against the same tree before the GELU
   change: 67 of 67 vectors and 80 of 80 logits the same floats.
 - Token ids and counts are Hugging Face's, 67 of 67. f32 weights give the
