@@ -1336,6 +1336,10 @@ measured (published figures disagree).
 - **MEDCPT'S RERANKER PASSES ON LLAMA.CPP, THE SPEED IS THE OPERATOR'S CHOICE (München, 2026-11-27; medcpt-on-llama-cpp.md §6):**
   48 × 50, the same order; nearer the model than OpenVINO (largest score difference 0.0039 FA off, 0.0070 FA ON, OpenVINO
   0.0088); 312 / 224 / 111 ms per 50 documents. Recommended FA ON; OpenVINO stays until the operator says.
+  **ALL MEDCPT WORK HELD until Gutenberg's Nemotron run is done** (the operator, 2026-11-27, through München: "Don't touch
+  medcpt until Gutenberg nemo is done"): the reranker swap, the OpenVINO precision arms, the `GGML_SYCL_DYNAMIC_PRECISION=F32`
+  twin, the article and query encoders' port and new space. `engine-upstream.series` may be BUILT; its gates (which include
+  `vega-medcpt-query`) and its swap wait too. The gate results stay in München's /root/measure/medcpt-rerank/.
 - **TWO DEFECTS FROM THE NODE, STAGED WITH MEDCPT (2026-11-27; `engine-guard.series` = engine-pair + 0035 + 0036, `4b0da8dfcd96`; München
   holds `b77c50dd0fbb` and gates once):** (P34) a speech request on a card at 30.7 of 32 GB ended the backend - "level_zero backend
   failed with error: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)" caught by a matrix product's handler, exit 1: within a graph a

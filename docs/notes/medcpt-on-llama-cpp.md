@@ -333,6 +333,10 @@ OpenVINO kept (the status quo, if nothing is said), llama.cpp FA ON (recommended
 nearer the model, one engine for both MedCPT models; ~113 ms more per query), or FA
 off (nearest; ~200 ms more).
 
+**HELD (the operator, 2026-11-27, through München: "Don't touch medcpt until Gutenberg nemo
+is done").** Nothing of MedCPT moves until then: the reranker, the article and query
+encoders, the new pubmed space, the precision runs (encoder-precision.md).
+
 **The calibration's name.** A calibration names the model it was fitted for, and under
 another name it is not used: the merge falls back to rank (`merge_withheld`). Either the
 model keeps its name (`louise-rerank-medcpt`, its backend moved) and its calibration
