@@ -382,8 +382,18 @@ def _take_heir_locks(root: Path, name: str) -> list:
     locks: list = []
     try:
         for h in origin_heirs(root, name):
-            locks.append(lock_mod.take(lock_mod.state_dir(root, h), h,
-                                       f"forget {name}: its origin directory handed over to {h}"))
+            try:
+                locks.append(lock_mod.take(lock_mod.state_dir(root, h), h,
+                                           f"forget {name}: its origin directory handed over to {h}"))
+            except lock_mod.Held as e:
+                # the running worker holds a collection it runs: the forget
+                # asks for that collection's pause, never works around it
+                # (finding 5 of the third read; CLAUDE.md RULE 1)
+                err = CodexError(f"forget {name}: its origin directory goes to {h}, whose write lock is "
+                                 f"held ({e}). `louise node pause {h}`, run this again, then "
+                                 f"`louise node resume {h}`; nothing was removed")
+                err.exit_code = 3                       # type: ignore[attr-defined]
+                raise err from None
     except BaseException:
         for lk in locks:
             lk.release()

@@ -141,8 +141,9 @@ def test_the_hand_over_takes_the_heir_s_write_lock_before_anything(tmp_path):
     recreate.share_origin(root, "p", "q")
     held = lock_mod.take(lock_mod.state_dir(root, "q"), "q", "the worker")
     try:
-        with pytest.raises(lock_mod.Held):
+        with pytest.raises(CodexError, match=r"`louise node pause q`, run this again") as e:
             forget_mod.forget(root, "p")
+        assert e.value.exit_code == 3
         assert (root / "p.toml").is_file() and origin.is_dir(), "nothing removed"
     finally:
         held.release()
