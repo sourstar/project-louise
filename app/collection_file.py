@@ -25,7 +25,9 @@ annotate their files by hand, since a rewrite drops comments today.
 from __future__ import annotations
 
 import dataclasses
+import os
 import re
+import time
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -107,6 +109,36 @@ def recodex(path: Path, collection_id: str) -> str:
                          f"was written")
     _replace(path, out)
     return f"codex {str(before.get('codex'))[:23]}… → {collection_id[:23]}…"
+
+
+#: what a file set aside ends with: the loader reads `*.toml` alone
+ASIDE_SUFFIX = ".aside"
+
+
+def set_aside(path: Path) -> Path:
+    """A collection's file SET ASIDE IN ITS OWN DIRECTORY: renamed there to a
+    hidden name the loader skips (`*.toml` is what it reads), never moved
+    across filesystems (on the node /config is not /data: a move from one to
+    the other is EXDEV; the second read of 39f352f0, 1) and never deleted.
+    The new path; a file already set aside is returned as it is."""
+    path = Path(path)
+    out = path.with_name(f".{path.name}.{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}{ASIDE_SUFFIX}")
+    if not path.is_file():
+        raise SetRefused(f"{path} is not there to set aside")
+    os.replace(path, out)                                  # one directory: one rename
+    return out
+
+
+def restore_aside(aside: Path, path: Path) -> Path:
+    """A file `set_aside` put away, back at `path` (the same directory).
+    Refused over a file that is there."""
+    aside, path = Path(aside), Path(path)
+    if path.exists():
+        if not aside.exists():
+            return path                                     # restored before
+        raise SetRefused(f"{path} exists: {aside} is not put back over it")
+    os.replace(aside, path)
+    return path
 
 
 def _codex_toml_text(path: Path, *, codex: str, profile: str | None,

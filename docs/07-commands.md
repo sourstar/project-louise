@@ -216,11 +216,15 @@ louise hold
                                                                        file `create annotations` reads: a re-created target's annotations collection is created from it
                                                                        against the new target, every end read there and every pin checked (amended 2026-11-17); where
                                                                        the target's text moved (a new parser), with `--repin` (2026-11-18)
-  annotations retarget <collection> [--repin] [--dry-run]          (2026-11-27, A1l) the annotations collection re-created against the collection
-                                                                       its target became — a refit in place, a re-creation — in ONE command: its claims
-                                                                       exported, created against each target's holder at its latest snapshot (every end read,
-                                                                       every pin checked), then given the name; the old one kept as <name>.retargeted-<time>,
-                                                                       its file set aside in its state (its forget is the operator's). Resumable
+  annotations retarget <collection> [--repin] [--undo] [--dry-run] (2026-11-27, A1l) the annotations collection re-created against the collection
+                                                                       its target became — a refit's successor first — in ONE command: its claims exported,
+                                                                       created against each target's holder at its latest snapshot (every end read, every pin
+                                                                       checked; created again until its snapshot is there), its parts attested, then given the
+                                                                       name by `rename` (re-run while its rename.json says one is under way); the old one's file
+                                                                       set aside in its own directory, its folder tucked under <name>/state/.replaced/ — no
+                                                                       longer held, never deleted. Refused until the target's refit is done and gated. Resumable
+                                                                       from <root>/.retarget/<name>.json. `--undo` the swap backwards: the way back a refit's
+                                                                       rollback names (refused while an annotations collection names the new id)
   annotations update <collection> [--claims FILE] [--against TARGET=SNAPSHOT …] [--snapshot ID] [--dry-run] [--whole]
                                                                        (amended 2026-10-23, operator: updated, not replaced; 02 §2.10) the next snapshot of the SAME
                                                                        annotations collection: the claims checked against each target's newest snapshot (or

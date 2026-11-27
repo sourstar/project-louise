@@ -322,14 +322,14 @@ def cmd_create_annotations(a) -> int:
 
 
 def cmd_annotations_retarget(a) -> int:
-    """`hold annotations retarget <collection> [--repin] [--dry-run]`
+    """`hold annotations retarget <collection> [--repin] [--undo] [--dry-run]`
     (app/hold/retarget.py): an annotations collection whose target was
     replaced — a refit in place, a re-creation — re-created against the
-    collection the target became, in ONE command: its claims exported, the
-    new collection created from them against each target's holder (every end
-    read, every pin checked), then given the name; the old one kept under
-    another name, its file set aside. Resumable. Paused while it runs."""
-    from app.hold import collection as col, lock as lock_mod, retarget as rt
+    collection the target became, in ONE command, resumable; `--undo` the
+    swap backwards. Paused, and its write lock taken, while `<collection>`
+    holds a Codex: a resumed run whose old collection is already renamed
+    takes none (no stray lock folder under a name that holds nothing)."""
+    from app.hold import lock as lock_mod, retarget as rt
     root = Path(a.root)
     name = a.collection
     if a.dry_run:
@@ -337,18 +337,21 @@ def cmd_annotations_retarget(a) -> int:
         print(f"retarget {name} (a dry run: nothing written)")
         for t in p["targets"]:
             print(f"  target      {t['from'][:23]}… → {t['holder']} {t['to'][:23]}… at {t['snapshot']}"
-                  + ("" if t["moves"] else " (already its own id: nothing to do)"))
-        print(f"  steps       claims exported, {name}{rt.INTERIM} created against the holders, {name} kept as "
-              f"{name}{rt.ASIDE}<time> with its file set aside, {name}{rt.INTERIM} renamed {name}")
+                  + ("" if t["moves"] else " (already its own id: nothing to do)")
+                  + (f"; WAITS: {t['waits']}" if t["waits"] else ""))
+        print(f"  steps       claims exported, {name}{rt.INTERIM} created and attested, {name} renamed "
+              f"{name}{rt.ASIDE}<time> with its file set aside in its own directory, {name}{rt.INTERIM} renamed "
+              f"{name}, the old folder tucked under {name}/state/.replaced/ (no longer held, not deleted)")
         return 0
-    col.check_name(name)
     by = f"louise hold annotations retarget {name}"
-    paused_here = _hold_off_worker(root, name, by)
-    try:
-        lk = lock_mod.take(lock_mod.state_dir(root, name), name, by)
-    except lock_mod.Held as e:
-        _let_worker_back(name, by, paused_here)
-        raise _defer(f"{e}. `louise node pause {name}` first; then run this again: it resumes") from None
+    lk, paused_here = None, False
+    if (root / name / "shard" / "codex.json").is_file():
+        paused_here = _hold_off_worker(root, name, by)
+        try:
+            lk = lock_mod.take(lock_mod.state_dir(root, name), name, by)
+        except lock_mod.Held as e:
+            _let_worker_back(name, by, paused_here)
+            raise _defer(f"{e}. `louise node pause {name}` first; then run this again: it resumes") from None
     key = None
     try:
         from app.bundles import keys as node_keys
@@ -356,10 +359,14 @@ def cmd_annotations_retarget(a) -> int:
     except Exception:   # noqa: BLE001 — no key: its snapshot is held unsigned (09 §9.4)
         print("no node key: the new snapshot is written unsigned", file=sys.stderr)
     try:
-        rt.retarget(root, name, platform_image=preflight_create({}, a.platform_image), key=key, now=_utc_now(),
-                    repin=bool(a.repin), log=lambda m: print(m, flush=True))
+        if a.undo:
+            rt.undo(root, name, log=lambda m: print(m, flush=True))
+        else:
+            rt.retarget(root, name, platform_image=preflight_create({}, a.platform_image), key=key,
+                        now=_utc_now(), repin=bool(a.repin), log=lambda m: print(m, flush=True))
     finally:
-        lk.release()
+        if lk is not None:
+            lk.release()
         _let_worker_back(name, by, paused_here)
     return 0
 
@@ -8604,6 +8611,9 @@ def build_parser() -> argparse.ArgumentParser:
                                            "one kept, its file set aside (07 §7.3, amended 2026-11-17)")
     root_arg(p); p.add_argument("collection")
     p.add_argument("--repin", action="store_true", help="pin every claim anew where the target's text moved")
+    p.add_argument("--undo", action="store_true",
+                   help="the swap backwards: the old collection back, the retargeted one tucked away (the way "
+                        "back a refit's rollback names)")
     p.add_argument("--platform-image", default=None)
     p.add_argument("--dry-run", dest="dry_run", action="store_true",
                    help="the targets and the holder each answers by; writes nothing")

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -1254,16 +1255,14 @@ def test_r2_8_retarget_recreates_the_annotations_against_the_refit_collection(he
                         "--platform-image", PLATFORM]) == 0
     _, now_ann = col.resolve(root, "gb-editions")
     assert [t.collection_id for t in cx.targets_of(now_ann)] == [new.collection_id]
-    kept = [d.name for d in root.iterdir() if d.name.startswith("gb-editions.retargeted-")]
-    assert len(kept) == 1 and col.read(root, kept[0]).collection_id == codex.collection_id, "the old one kept"
-    assert not (root / f"{kept[0]}.toml").exists(), "its file set aside: the node no longer loads it"
+    assert not [d.name for d in root.iterdir() if d.name.startswith("gb-editions.retargeted-")], "not held"
+    (kept,) = (root / "gb-editions" / "state" / ".replaced").glob("*/collection")
+    assert cx.loads((kept / "shard" / "codex.json").read_bytes()).collection_id == codex.collection_id, \
+        "the old one kept, tucked away"
+    assert not list(root.glob("gb-editions.retargeted-*.toml")), "its file set aside: the node no longer loads it"
     assert (root / "gb-editions.toml").is_file()
-    from app.pack import records as pack_records
     from app.hold import seed
-    n_old = sum(s.records for s in seed.latest_snapshot(root, kept[0]).shards)
-    n_new = sum(s.records for s in seed.latest_snapshot(root, "gb-editions").shards)
-    assert n_old == n_new == 1
-    del pack_records
+    assert sum(s.records for s in seed.latest_snapshot(root, "gb-editions").shards) == 1
     assert not rt.plan(root, "gb-editions")["due"], "nothing more to do"
 
 
@@ -1272,3 +1271,260 @@ def test_r2_8_retarget_is_a_route_of_the_tree():
     path, p = ac.resolve(["hold", "annotations", "retarget"])
     assert ac.argv_for(path, p, {"collection": "gutenberg-book-editions", "dry_run": True}) == \
         ["hold", "annotations", "retarget", "--dry-run", "gutenberg-book-editions"]
+
+
+# ---- the third read of 39f352f0: retarget -----------------------------------------
+
+def _editions(root):
+    """gutenberg-book-editions' stand-in: claims about gb, naming its id."""
+    from app.hold import annotations as ann
+    from tests.hold.test_annotations import a_claim, claims_file
+    uids = sorted(_marks(root))
+    codex, _snap = ann.create(root, "gb-editions", target_ref=NAME, from_snapshot="2026-08",
+                              claims=claims_file(a_claim(uids[0], uids[1], subject_lang="en")),
+                              platform_image=PLATFORM, snapshot_id="2026-09", key=KEY, now=NOW,
+                              nonce="0f" * 16, log=lambda m: None)
+    return codex
+
+
+def _retarget(root, *extra):
+    return louise.main(["hold", "annotations", "retarget", "gb-editions", "--root", str(root),
+                        "--platform-image", PLATFORM, *extra])
+
+
+def _retargeted(root, new):
+    _, now_ann = col.resolve(root, "gb-editions")
+    assert [t.collection_id for t in cx.targets_of(now_ann)] == [new.collection_id]
+    from app.hold import seed
+    assert seed.latest_snapshot(root, "gb-editions").collection_id == now_ann.collection_id
+    return now_ann
+
+
+def test_r3_1_the_file_is_set_aside_in_its_own_directory_never_across_filesystems(held_gb, card, tmp_path,
+                                                                                 monkeypatch):
+    """On the node /config is not /data: the collection files live apart from
+    the collections, and a move from one to the other is EXDEV."""
+    import errno
+    from app.hold import deposit
+    root, old, _held_ = held_gb
+    cfg = tmp_path / "config-collections"
+    cfg.mkdir()
+    for p in root.glob("*.toml"):
+        p.rename(cfg / p.name)
+    monkeypatch.setattr(deposit, "held_file", lambda r, n: cfg / f"{n}.toml")
+    real = os.replace
+
+    def replace(src, dst):
+        a, b = Path(src).resolve(), Path(dst).resolve()
+        if (cfg in a.parents) != (cfg in b.parents):
+            raise OSError(errno.EXDEV, "Invalid cross-device link", str(src))
+        return real(src, dst)
+    monkeypatch.setattr(os, "replace", replace)
+    _editions(root)
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    assert _retarget(root) == 0
+    _retargeted(root, new)
+    assert (cfg / "gb-editions.toml").is_file()
+    assert [p.name for p in cfg.glob(".gb-editions.retargeted-*.aside")], "the old file set aside in its directory"
+    assert not list(cfg.glob("gb-editions.retargeted-*.toml")), "and not loaded"
+
+
+def test_r3_1_a_rerun_after_the_old_was_renamed_takes_no_stray_lock_and_finishes(held_gb, card, monkeypatch):
+    from app.hold import retarget as rt
+    root, old, _held_ = held_gb
+    _editions(root)
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    real = rt.rename_resumed
+    seen = {"n": 0}
+
+    def crash_after_out(r, a, b):
+        got = real(r, a, b)
+        seen["n"] += 1
+        if seen["n"] == 1:
+            raise _Boom("after the old was renamed")
+        return got
+    monkeypatch.setattr(rt, "rename_resumed", crash_after_out)
+    with pytest.raises(_Boom):
+        _retarget(root)
+    assert not (root / "gb-editions").exists(), "the name holds nothing now"
+    monkeypatch.setattr(rt, "rename_resumed", real)
+    assert _retarget(root) == 0
+    _retargeted(root, new)
+
+
+def test_r3_2_a_create_stopped_in_its_parts_is_resumed_and_its_snapshot_required(held_gb, card, monkeypatch):
+    from app.hold import annotations as ann
+    root, old, _held_ = held_gb
+    _editions(root)
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    real = ann.write_snapshot
+    seen = {"n": 0}
+
+    def stopped(*a, **k):
+        seen["n"] += 1
+        if seen["n"] == 1:
+            raise _Boom("SIGINT in the annotations' snapshot")
+        return real(*a, **k)
+    monkeypatch.setattr(ann, "write_snapshot", stopped)
+    with pytest.raises(_Boom):
+        _retarget(root)
+    assert (root / "gb-editions.retarget" / "shard" / "codex.json").is_file(), "a Codex and no snapshot"
+    assert _retarget(root) == 0
+    _retargeted(root, new)
+
+
+@pytest.mark.parametrize("side", ["out", "in"])
+def test_r3_3_a_kill_between_renames_folder_move_and_file_move_is_finished(held_gb, card, monkeypatch, side):
+    from app.hold import rename as rename_mod
+    root, old, _held_ = held_gb
+    _editions(root)
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    real = rename_mod._move
+    seen = {"files": 0}
+
+    def move(src, dst):
+        if str(dst).endswith(".toml"):
+            seen["files"] += 1
+            if seen["files"] == (1 if side == "out" else 2):
+                raise _Boom(f"killed between the {side} rename's folder and its file")
+        return real(src, dst)
+    monkeypatch.setattr(rename_mod, "_move", move)
+    with pytest.raises(_Boom):
+        _retarget(root)
+    monkeypatch.setattr(rename_mod, "_move", real)
+    assert _retarget(root) == 0
+    _retargeted(root, new)
+    assert (root / "gb-editions.toml").is_file() and not (root / "gb-editions.retarget.toml").exists()
+
+
+def test_r3_4_the_retired_copy_is_not_held_and_no_cascade_reads_it(held_gb, card):
+    from app.hold import cascade
+    root, old, _held_ = held_gb
+    _editions(root)
+    assert _refit(root, *FIT) == 0
+    _, new = col.resolve(root, NAME)
+    assert _retarget(root) == 0
+    names = [n for n, _c in col._held(root)]
+    assert not [n for n in names if ".retargeted-" in n], names
+    cascade.reset()
+    decl = cascade.declarations(root)
+    assert set(decl.sources) == {"gb-editions"}, decl.sources
+    assert cascade.annotators(root, new.collection_id) == ["gb-editions"]
+    assert refit_mod.annotations_naming(root, NAME, old.collection_id) == []
+    tucked = list((root / "gb-editions" / "state" / ".replaced").glob("*/collection/shard/codex.json"))
+    assert len(tucked) == 1, "kept, not deleted"
+
+
+def test_r3_5_a_refit_of_a_collection_with_no_snapshot_attests_nothing_and_finishes(held_gb, card, tmp_path):
+    root, old, _held_ = held_gb
+    snaps = root / NAME / "shard" / "snapshots"
+    snaps.rename(tmp_path / "snapshots-away")                 # a collection that froze none
+    assert _refit(root, *FIT) == 0
+    m = refit_mod.read_marker(root, NAME)
+    assert m["done"] and m["steps"]["attest"]["parts"] == [] and "no snapshot" in m["steps"]["attest"]["why"]
+
+
+def test_r3_6_retarget_waits_for_the_refit_to_be_gated(held_gb, card, monkeypatch, capsys):
+    root, old, _held_ = held_gb
+    _editions(root)
+    monkeypatch.setattr(louise, "cmd_embedder_cpu_reference", lambda a: 1)
+    assert _refit(root, *FIT) == 1
+    capsys.readouterr()
+    assert _retarget(root) != 0
+    assert "gate has not passed" in capsys.readouterr().err
+    assert col.read(root, "gb-editions").annotates[0].collection_id == old.collection_id
+
+
+def test_r3_6_a_rollback_is_refused_while_a_retarget_names_the_new_id_and_undo_is_the_way_back(held_gb, card,
+                                                                                               capsys):
+    root, old, _held_ = held_gb
+    ed = _editions(root)
+    assert _refit(root, *FIT) == 0
+    assert _retarget(root) == 0
+    capsys.readouterr()
+    assert _refit(root, extra=("--rollback",)) != 0
+    err = capsys.readouterr().err
+    assert "gb-editions" in err and "--undo" in err
+    assert _retarget(root, "--undo") == 0
+    assert col.read(root, "gb-editions").collection_id == ed.collection_id, "the old one back"
+    assert not [n for n, _c in col._held(root) if ".retarget" in n]
+    assert _refit(root, extra=("--rollback",)) == 0
+    assert col.read(root, NAME).collection_id == old.collection_id
+
+
+def test_r3_7_node_rows_set_aside_and_not_yet_recorded_come_back(held_gb, card, monkeypatch):
+    from app import node_state
+    root, old, _held_ = held_gb
+    _published_fixture(root, old)
+    real = refit_mod._node_rows_aside
+
+    def aside_then_crash(*a, **k):
+        real(*a, **k)
+        raise _Boom("after the node rows went, before the marker said so")
+    monkeypatch.setattr(refit_mod, "_node_rows_aside", aside_then_crash)
+    _first(root, old)
+    monkeypatch.setattr(refit_mod, "_node_rows_aside", real)
+    assert _refit(root, extra=("--rollback",)) == 0
+    n = sqlite3.connect(node_state.path())
+    assert n.execute("SELECT value FROM control WHERE key=?", (f"publish:{NAME}",)).fetchone() == ("2026-11-01 pass",)
+    n.close()
+
+
+def test_r3_8_the_retargeted_annotations_leave_quarantine_by_their_own_attested_roots(held_gb, card, signer):
+    from app import copy_state
+    from app.hold import envelope as env
+    root, old, _held_ = held_gb
+    _editions(root)
+    assert _refit(root, *FIT) == 0
+    assert _retarget(root) == 0
+    _, ann_codex = col.resolve(root, "gb-editions")
+    copy_state.reset_cache()
+    got = copy_state.evaluate(root, "gb-editions", ann_codex, licence="not-required",
+                              key=env.key_text(KEY.verify_key), before=False)
+    assert {t.name: t.status for t in got.tests}["roots"] == copy_state.PASSED, got.reasons
+
+
+def test_r3_9_retarget_takes_the_refits_successor_over_a_sister_with_a_newer_snapshot(held_gb, card, monkeypatch):
+    from types import SimpleNamespace
+    from app.hold import annotations as ann, retarget as rt
+    from app.share import seeder
+    root, old, _held_ = held_gb
+    assert _refit(root, *FIT) == 0
+    sis = root / "aa-sister" / "state"
+    sis.mkdir(parents=True)
+    (sis / "carry.json").write_text(json.dumps({"done": True, "from": old.collection_id, "to": "x"}))
+    a_sister = SimpleNamespace(collection_id="sha256:" + "ab" * 32, annotates=None, plugin="gutenberg")
+    real_held = col._held
+    monkeypatch.setattr(col, "_held", lambda r: [("aa-sister", a_sister), *real_held(r)])
+    monkeypatch.setattr(seeder, "current_snapshot", lambda d: SimpleNamespace(
+        snapshot_id="2026-12" if "aa-sister" in str(d) else "2026-08"))
+    assert ann._target_holder(root, old.collection_id)[0] == "aa-sister", "the newest snapshot wins there"
+    assert rt.holder_of(root, old.collection_id)[0] == NAME, "the refit's successor wins here"
+
+
+def test_r3_10_a_rollback_of_an_unfinished_refit_refuses_once_another_wrote(held_gb, card, monkeypatch, capsys):
+    from app import embeddings
+    root, old, held = held_gb
+    real = refit_mod._save
+
+    def stop_after_switch(r, n, m):
+        real(r, n, m)
+        if (m["steps"].get("switch") or {}).get("done"):
+            raise _Boom("after the switch")
+    monkeypatch.setattr(refit_mod, "_save", stop_after_switch)
+    _first(root, old)
+    monkeypatch.setattr(refit_mod, "_save", real)
+    _, new = col.resolve(root, NAME)
+    some = sorted(b for b in held if b != int(_marks(root)[_dense_uid(root)][0]))[0]
+    embeddings.upsert_chunks([{"id": f"gutenberg:{some}:77:1", "book_id": some, "lang": "en", "seq": 77,
+                               "chapter": "", "text": "written meanwhile", "vector": np.ones(new.space.dim, "float32")}],
+                             collection=_local(root, NAME), dtype=new.space.dtype)
+    capsys.readouterr()
+    assert _refit(root, extra=("--rollback",)) != 0
+    assert "other rows than the switch left" in capsys.readouterr().err
+    assert col.read(root, NAME).collection_id == new.collection_id, "nothing changed"
+    assert _held(root, [some])[some].get(f"gutenberg:{some}:77:1") == "written meanwhile", "never dropped"

@@ -1073,6 +1073,11 @@ def _attest(root: Path, name: str, new: Codex, t_coll, steps: dict, log) -> dict
     parts). Attestations are keyed on the id, so the new one has none until
     this runs, and an enforced quarantine would withhold it from search."""
     from . import check as chk, equivalence, seed
+    if not (steps.get("parts") or {}).get("snapshot"):
+        log(f"[refit] {name}: it holds no snapshot, so there is no part to check or attest; its quarantine "
+            f"waits for its first snapshot's checks, as any collection's")
+        return {"parts": [], "results": {}, "attestations": {}, "failed": [],
+                "why": "the collection holds no snapshot: nothing to attest"}
     snap = seed.latest_snapshot(root, name)
     parts = [p["path"] for p in (steps.get("changes") or {}).get("parts") or []]
     if not parts and snap.shards:
@@ -1465,6 +1470,8 @@ def run(root, name: str, layers, *, window: int = WINDOW, processes: int | None 
                 sw["names"] = names_plan(root, name, old.collection_id)
                 sw["rows"] = _save_rows(manifest, ta / "saved.sqlite", changed, old)
                 sw["lance"] = lance_versions(s_now)
+                sw["outside"] = _rows_outside(s_now, changed)
+                sw["top"] = _top(s_now)
                 sw["saved"] = True
                 steps["switch"] = sw
                 _save(root, name, m)
@@ -1866,6 +1873,33 @@ def _proof(root: Path, name: str, old: Codex, new: Codex, t_coll, changed: list[
 
 # ---- the rollback ---------------------------------------------------------------
 
+def _rows_outside(coll, changed: list[list]) -> dict[str, int]:
+    """Each vector table's rows that are NOT the change set's: the refit's own
+    writes delete the change set's rows only, so a count that moved here is
+    another writer's (the third read of 39f352f0, 10)."""
+    from app import embeddings
+    books = sorted({int(c[2]) for c in changed})
+    held = embeddings.held_chunks(coll, books) if books else None
+    mine = sum(len(held.of(b)) for b in books) if held is not None else 0
+    return {"outside": sum(int(t.count_rows()) for _d, t in _tables(coll)) - mine}
+
+
+def _written_since(root: Path, name: str, coll, m: dict) -> str | None:
+    """Why the collection was written by another since the switch saved it,
+    or None: its manifest grew, or its vector table holds other rows than the
+    change set's. Rows embedded meanwhile are never dropped in silence."""
+    from . import records as rec
+    sw = (m.get("steps") or {}).get("switch") or {}
+    changed = read_changed(asides(root, name, m)[1] / "changed.jsonl")
+    if sw.get("top") is not None and _top(coll) != int(sw["top"]):
+        return f"its manifest's last rowid moved {sw['top']} → {_top(coll)} since the switch"
+    if sw.get("outside") is not None:
+        now = _rows_outside(rec._local_collection(root, name, coll.codex), changed)
+        if now != sw["outside"]:
+            return f"its vector table holds other rows than the switch left ({sw['outside']} → {now})"
+    return None
+
+
 def _versions_gone(coll, versions: dict[str, int]) -> list[str]:
     """The recorded versions a restore needs that a table no longer holds (a
     maintainer prunes old versions: app/vector_index.py's keep window)."""
@@ -1915,6 +1949,20 @@ def rollback(root, name: str, *, log: Callable[[str], None] = print) -> dict[str
         raise CodexError(f"refit: the Codex set aside is {old_cx.collection_id}, the marker names {old_id}")
     coll = rec._local_collection(root, name, old_cx)
     if not rb.get("checked"):
+        from . import retarget as retarget_mod
+        moved = retarget_mod.naming(root, new_id)
+        if moved:
+            # an annotations collection a retarget moved to the new id would
+            # name a collection no longer held (the third read of 39f352f0, 6)
+            raise CodexError(f"refit --rollback: {', '.join(moved)} name(s) the new id {new_id[:23]}…, moved there "
+                             f"by a retarget; the way back is `louise hold annotations retarget <name> --undo` "
+                             f"for each, then this rollback; nothing was changed")
+        if not m.get("done") and sw.get("saved"):
+            why = _written_since(root, name, coll, m)
+            if why:
+                raise CodexError(f"refit --rollback: {why}: restoring the recorded versions would drop rows "
+                                 f"another writer added; finish the refit instead (the same command resumes it); "
+                                 f"nothing was changed")
         if m.get("done") and lance_versions(coll) != (m.get("lance_after") or {}):
             # the worker embeds into the new space once resumed: restoring the
             # tables' versions then would drop its rows under marks that say embedded
@@ -1948,7 +1996,7 @@ def rollback(root, name: str, *, log: Callable[[str], None] = print) -> dict[str
         rb["index_marks_reset"] = _reset_index_marks(manifest, changed)
         rb["rows"] = True
         _save(root, name, m)
-    if (sw.get("named") or sw.get("node_rows") is not None) and not rb.get("node_rows"):
+    if (ta / "node-saved.sqlite").is_file() and not rb.get("node_rows"):
         rb["node_rows_back"] = _node_rows_back(ta / "node-saved.sqlite")
         rb["node_rows"] = True
         _save(root, name, m)
