@@ -942,7 +942,6 @@
     account = got && got.account ? got.account.name : null;
     accountVoice = got && got.account ? got.account.voice : null;
     accountPhrases = got && got.account ? got.account.phrases : null;
-    loadWake();
     const ph = document.getElementById('voice-phrases');
     if (ph) {
       ph.checked = phrasesOn();

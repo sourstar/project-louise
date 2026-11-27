@@ -403,6 +403,10 @@ How it runs:
      default; while a sentence that holds the name (any of its forms) is
      read aloud, and 600 ms after, the page's gate hears nothing — the
      node's own voice can never call it, whatever the echo guard says.
+     THE COST, by the operator's words: an utterance in progress when the
+     mute starts is dropped, so "Philippe, stop" said over a sentence that
+     itself names Philippe is lost — said again once that sentence ends (or
+     a tap on the speaker) it is heard.
    - a hands-free switch beside the microphone;
    - the page keeps the microphone and cuts utterances with its energy
      gate, then `POST /ask/voice/heard`;
