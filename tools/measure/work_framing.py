@@ -106,6 +106,7 @@ def run(out: Path, runs: int, label: str, collections: list[str]) -> None:
                     got = chat.ask(question, collections=collections, call=recording(seen))
                     sources = [{**s, "work": s.get("work") or seen.get(s.get("uid"))} for s in got.get("sources") or []]
                     row = {"label": label, "run": r, "id": qid, "kind": kind, "question": question,
+                           "about_the_work": kind == "control_about_work",
                            "answer": got.get("answer"), "sources": sources}
                 except Exception as e:   # noqa: BLE001 — said in the file, the run goes on
                     row = {"label": label, "run": r, "id": qid, "kind": kind, "question": question,
@@ -124,10 +125,12 @@ def check(files: list[Path]) -> int:
             if "error" in row:
                 print(f"  {row['id']} run {row['run']}: ERROR {row['error']}")
                 continue
-            if row["kind"] == "control_about_work":
-                # what is checked here is that the answer still comes; literary
-                # sources are what such a question asks for
-                print(f"  {row['id']} run {row['run']} (about a work): answered, not checked for evidence")
+            if row.get("about_the_work") or row["kind"] == "control_about_work":
+                # architecture, 2026-11-27: a question ABOUT a literary work is
+                # judged by reading; the reader's verdict is recorded in the file
+                # (`verdict_by_reading`), the checker does not apply
+                said = row.get("verdict_by_reading") or "NOT YET READ"
+                print(f"  {row['id']} run {row['run']} (about the work): judged by reading: {said}")
                 continue
             flagged = as_evidence(row["answer"], row["sources"], row.get("question", ""))
             lit = sorted(literary_ns(row["sources"]))

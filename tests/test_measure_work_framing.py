@@ -28,13 +28,14 @@ def test_a_question_about_a_work_is_not_checked_for_evidence(tmp_path, capsys):
     f = tmp_path / "after.jsonl"
     lit = {"kind": "a literary work", "basis": "x"}
     f.write_text(json.dumps({"label": "after", "run": 0, "id": "cinque-maggio", "kind": "control_about_work",
+                             "about_the_work": True, "verdict_by_reading": "ok: the poem described as a poem",
                              "question": "Che cosa dice Il cinque maggio di Manzoni su Napoleone?",
                              "answer": "Il poema celebra Napoleone [2][5][9].",
                              "sources": [{"n": 2, "title": "Le tragedie", "work": lit},
                                          {"n": 5, "title": "Kihlautuneet", "work": lit},
                                          {"n": 9, "title": "Storia", "work": None}]}) + "\n", encoding="utf-8")
     assert wf.check([f]) == 0
-    assert "about a work" in capsys.readouterr().out
+    assert "judged by reading: ok: the poem described as a poem" in capsys.readouterr().out
 
 
 def test_a_literary_work_the_question_names_is_not_evidence_misused():
