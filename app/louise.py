@@ -332,7 +332,11 @@ def cmd_annotations_derive(a) -> int:
     from app import collections as collections_mod
     from app.hold import annotation_methods as am, collection as col
     name, _ = col.resolve(a.root, a.collection)
-    c = next((x for x in collections_mod.load_annotations() if x.name == name), None)
+    served, left_out = collections_mod.annotations_and_refusals()
+    why = next((r.reason for r in left_out if r.name == name), None)
+    if why:
+        raise CodexError(f"{name} is not served now: {why}")
+    c = next((x for x in served if x.name == name), None)
     method = getattr(c, "method", None)
     if not method:
         raise CodexError(f"{name} records no method: its claims are given by hand (`hold annotations "

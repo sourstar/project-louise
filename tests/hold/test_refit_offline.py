@@ -1175,3 +1175,147 @@ def test_every_reader_of_an_annotations_collection_leaves_it_out_mid_refit(held_
     assert ran == [], "the cascade does not run it"
     assert _refit(root, *FIT) == 0
     assert [a.name for a in as_the_node(collections_mod.load_annotations)] == ["gb-editions"]
+
+
+# ---- the fifth read of 51e96bc4 ---------------------------------------------------------------
+
+def _written_by_the_serial_stage(tmp_path, monkeypatch, status, text):
+    """The error the worker's SERIAL embed step writes (`_run_step` → its
+    error writer) for that answer."""
+    from app import config, db, worker
+    from app import embeddings
+    from app.verify import backend_gate
+    from tests.test_endpoint_classification import _collection
+    monkeypatch.setattr(worker, "_endpoint_paused", {})
+    monkeypatch.setattr(config, "BACKEND_GATE", "off")
+    backend_gate.reset_cache()
+    d = tmp_path / "serial-stage"
+    d.mkdir()
+    c = _collection(d, monkeypatch, concurrency=1)
+    real = embeddings.httpc.post
+    monkeypatch.setattr(embeddings.httpc, "post", _Refusing(status, text).post)
+    try:
+        con = db.connect(c)
+        row = con.execute("SELECT * FROM documents WHERE uid='fake:2'").fetchone()
+        worker._run_step(con, c, "embed", row)
+        error = con.execute("SELECT error FROM documents WHERE uid='fake:2'").fetchone()[0]
+        con.close()
+    finally:
+        monkeypatch.setattr(embeddings.httpc, "post", real)
+        backend_gate.reset_cache()
+    assert error and error.startswith("embed: "), error
+    return error
+
+
+@pytest.mark.parametrize("status, text", [
+    (422, "input is longer than the model's window"),
+    (500, "input (774 tokens) is too large to process. increase the physical batch size"),
+    (500, "VeGa: this input cannot be cut at the window exactly")])
+def test_the_serial_stage_s_window_refusal_is_cleared(held_gb, tmp_path, monkeypatch, capsys, status, text):
+    root, _old, _h, _e = held_gb
+    error = _written_by_the_serial_stage(tmp_path, monkeypatch, status, text)
+    assert refit_mod.clears(error), error
+    _reset_with(root, capsys, error, True)
+
+
+def test_a_vega_input_refusal_through_the_parallel_stage_is_cleared(held_gb, tmp_path, monkeypatch, capsys):
+    root, _old, _h, _e = held_gb
+    error = _written_by_the_embed_stage(tmp_path, monkeypatch, 500, "VeGa: this input cannot be cut exactly")
+    assert refit_mod.clears(error), error
+    _reset_with(root, capsys, error, True)
+
+
+def test_a_500_without_a_window_refusal_s_words_is_kept():
+    assert not refit_mod.clears("embed: InputRefused: embed server HTTP 500: the model crashed")
+    assert refit_mod.clears("embed: InputRefused: embed server HTTP 500: request (11187 tokens) exceeds the "
+                            "available context size (8192 tokens)")
+    assert refit_mod.clears("embed: InputRefused: embed server HTTP 422: anything at all")
+
+
+def test_documents_gaining_their_first_cut_are_a_change_even_when_they_are_the_only_one(
+        held_gb, monkeypatch, capsys):
+    """"Nothing to refit" is decided after the documents the old layers could
+    not cut and the new ones can are counted."""
+    from app import embeddings, fts, layers
+    root, old, _h, _e = held_gb
+    m = _marks(root)
+    other = next(u for u in m if u.endswith("10003"))
+    native = int(m[other][0])
+    coll = _local(root, NAME)
+    embeddings.delete_books([native], coll)
+    for g in fts.existing_groups(coll):
+        if fts.books_held(g, [native], coll):
+            fts.delete_books(g, [native], coll)
+    fts.close_all()
+    real = layers.chunks_for_document
+
+    def cut(c, row, *a, **k):
+        if c.codex.collection_id == old.collection_id and row["uid"] == other:
+            raise RuntimeError("no text the old layers can cut")
+        return real(c, row, *a, **k)
+    monkeypatch.setattr(layers, "chunks_for_document", cut)
+    wide = ("max_tokens=100000", f"tokenizer={_SHA}")         # cuts every fitting document as before
+    assert _refit(root, *wide, extra=("--dry-run",)) == 0
+    out = capsys.readouterr().out
+    assert f"affected    1 of 3 document(s) (bound 10): {other}" in out and "nothing to refit" not in out
+    assert _refit(root, *wide) == 0
+    assert _marks(root)[other][1:8] == (0, 0, 0, 0, 0, 0, 0)
+
+
+def test_the_uncut_line_names_the_error_of_the_document_it_shows(held_gb, capsys):
+    root, _old, _h, _e = held_gb
+    held_one = _no_source(root, 10008, vectors=True)       # first in rowid order: refused
+    shown = _no_source(root, 10009)                          # unchanged: the one the line shows
+    assert _refit(root, *FIT, extra=("--dry-run",)) == 2
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if ln.startswith("  uncut"))
+    assert shown in line and f"the first: {shown}:" in line and held_one not in line
+    refused = next(ln for ln in out.splitlines() if "old layers cannot cut hold" in ln)
+    assert held_one in refused
+
+
+def test_an_annotations_collection_left_out_mid_refit_is_said_wherever_one_is_read(held_gb, monkeypatch, capsys):
+    from fastapi import HTTPException
+    from app import collections as collections_mod, effective_config, query_service
+    from app.share import offer
+    root, _old, _h, ed = held_gb
+
+    def as_the_node(read):
+        with monkeypatch.context() as m:
+            m.setenv("LOUISE_ROOT", str(root.parent))
+            m.setattr(collections_mod, "collections_dir", lambda: root)
+            m.setattr(collections_mod, "config_toml_path", lambda n: root / f"{n}.toml")
+            return read()
+    restore = _killing(monkeypatch, refit_mod, "_drop_index_entries")
+    with pytest.raises(_Kill):
+        _refit(root, *FIT)
+    restore()
+    # `hold config show`
+    shown = as_the_node(effective_config.show)
+    assert any(r["name"] == "gb-editions" and "under way" in r["reason"] for r in shown["refused"]), shown
+    # a query naming it: refused with the reason, not "unknown"
+    with pytest.raises(HTTPException) as e:
+        as_the_node(lambda: query_service.resolve_annotations(["gb-editions"]))
+    assert e.value.status_code == 403 and "under way" in e.value.detail and "unknown" not in e.value.detail
+    # `annotations derive`
+    capsys.readouterr()
+    assert as_the_node(lambda: louise.main(["hold", "annotations", "derive", "gb-editions", "--root",
+                                            str(root)])) == 2
+    assert "is not served now" in capsys.readouterr().err
+    # held all the same: never offered as missing
+    assert ed.collection_id in as_the_node(offer.held_ids)
+    # the Library's refused list
+    from fastapi.testclient import TestClient
+    from app import config, spaces, web
+    monkeypatch.setattr(spaces, "resolve_embed_model_hash", lambda *a: ("abc123", False))
+    monkeypatch.setattr(web, "_ping", lambda url: True)
+    monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
+
+    from app.api import app as the_app
+
+    def page():
+        with TestClient(the_app) as c:
+            c.headers["X-Admin-Token"] = "sekrit"
+            return c.get("/admin/library").text
+    text = as_the_node(page)
+    assert "gb-editions" in text and "under way" in text

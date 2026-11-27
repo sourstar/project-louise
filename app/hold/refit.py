@@ -209,8 +209,9 @@ def cut_window(source, target, lo: int, hi: int) -> dict:
                     new_cuts = True
             except Exception:    # noqa: BLE001 — uncut at both layers
                 pass
-            first_uncut = first_uncut or f"{row['uid']}: {type(e).__name__}: {e}"[:300]
-            uncut.append([int(row["rowid"]), row["uid"], int(row["native_id"]), new_cuts])
+            said = f"{row['uid']}: {type(e).__name__}: {e}"[:300]
+            first_uncut = first_uncut or said
+            uncut.append([int(row["rowid"]), row["uid"], int(row["native_id"]), new_cuts, said])
             continue
         try:
             after = [(c["id"], c["text"]) for c in layers.chunks_for_document(target, row, sections, title=title)]
@@ -294,11 +295,23 @@ def _commit(con, fn) -> None:
 #: document is still deleted and cut again if its cut changed, and stays out
 #: of every selection until a human intervenes (the third read of 141b1d2e, 4).
 CLEARED_ERROR = r"^embed: (?:InputRefused: )?embed server HTTP (?:400|413|422|500)\b"
+#: ...and for a 500, the words of a WINDOW refusal in its body (the fifth read
+#: of 51e96bc4, 1): `embeddings._over_budget`'s llama-server and LocalAI
+#: spellings, and VeGa's input mark (`vega.tag.INPUT_MARK`)
+WINDOW_MARKS = ("too large to process", "exceeds the available context size")
 
 
 def clears(error: str | None) -> bool:
     import re
-    return error is None or re.match(CLEARED_ERROR, str(error)) is not None
+    from app.vega import tag as vtag
+    if error is None:
+        return True
+    m = re.match(CLEARED_ERROR, str(error))
+    if m is None:
+        return False
+    if "HTTP 500" not in str(error)[:m.end()]:
+        return True
+    return any(mark in str(error) for mark in (*WINDOW_MARKS, vtag.INPUT_MARK))
 
 
 def kept_errors(root: Path, name: str, codex: Codex, changed: list[list]) -> list[str]:
@@ -1183,21 +1196,23 @@ def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: 
         refuse(f"the new layers fail to cut {counts['errors']} document(s) ({', '.join(counts['failed'][:10])}"
                f"{' …' if counts['errors'] > 10 else ''}); the first: {counts['first_error']} — a document that "
                f"cannot be cut is never counted a change")
-    elif not changed:
-        refuse("the new window cuts no document otherwise: there is nothing to refit")
     # EVERY document the old layers cannot cut goes through `holding` (the
     # fourth read of caa9fd8f, 3): one holding rows refuses, whatever the new
     # layers make of it; one holding nothing is unchanged when the new layers
     # cannot cut it either, and a change (it gains its cut) when they can
     uncut = counts["uncut"]
     held_uncut = holding(rec._local_collection(root, name, old), uncut) if uncut else []
+    held_set = set(held_uncut)
+    error_of = {d[1]: d[4] for d in uncut}
     if held_uncut:
         refuse(f"{len(held_uncut)} document(s) the old layers cannot cut hold vector rows or index entries "
                f"({', '.join(held_uncut[:10])}{' …' if len(held_uncut) > 10 else ''}): what cut them is not this "
-               f"tree's — the first: {counts['first_uncut']}")
-    unheld = [d for d in uncut if d[1] not in set(held_uncut)]
-    changed += [d[:3] for d in unheld if d[3]]
+               f"tree's — the first: {error_of[held_uncut[0]]}")
+    unheld = [d for d in uncut if d[1] not in held_set]
+    changed += [d[:3] for d in unheld if d[3]]           # its first cut: a change, counted BEFORE "nothing"
     unchanged = [d[1] for d in unheld if not d[3]]
+    if not changed and not counts["errors"]:
+        refuse("the new window cuts no document otherwise: there is nothing to refit")
     bound = affected_bound(counts["documents"], affected_max)
     if len(changed) > bound:
         refuse(f"the new window cuts {len(changed)} of {counts['documents']} document(s) otherwise, more than "
@@ -1228,7 +1243,7 @@ def plan(root, name: str, layers, *, key=None, window: int = WINDOW, processes: 
             _release_index_writers(coll)
     return {"name": name, "from": old.collection_id, "to": new.collection_id, "changed": changed,
             "documents": counts["documents"], "bound": bound, "uncut": unchanged,
-            "first_uncut": counts["first_uncut"], "kept_errors": kept_errors(root, name, old, changed),
+            "first_uncut": error_of[unchanged[0]] if unchanged else None, "kept_errors": kept_errors(root, name, old, changed),
             "aside": aside_name(root, name, old.collection_id),
             "others_aside": {o: aside_name(root, o, col.resolve(root, o)[1].collection_id) for o in others},
             "parts": parts, "snapshot": latest["id"] if latest else None, "latest": latest, "others": others,

@@ -125,9 +125,9 @@ def _loaded(name: str | None):
     from app import collections as collections_mod
     with contextlib.redirect_stdout(sys.stderr):      # the loader logs; stdout is the result
         served, unreadable = collections_mod.load_all(skip_unreadable=True)
-        annotations = collections_mod.load_annotations()
+        annotations, left_out = collections_mod.annotations_and_refusals()
     refused = [(n, str(why)) for n, why in unreadable]
-    refused += [(r.name, r.reason) for r in collections_mod.refusals()
+    refused += [(r.name, r.reason) for r in [*collections_mod.refusals(), *left_out]
                 if r.name not in {n for n, _ in refused}]
     if name is None:
         return served, refused, annotations

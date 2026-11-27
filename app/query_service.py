@@ -125,7 +125,12 @@ def resolve_annotations(names: list[str] | None) -> list | None:
     the hits. An unknown name is the caller's error, said at once."""
     if names is None:
         return None
-    held = {a.name: a for a in collections_mod.load_annotations()}
+    served, left_out = collections_mod.annotations_and_refusals()
+    held = {a.name: a for a in served}
+    refused = {r.name: r.reason for r in left_out}
+    named = [n for n in names if n in refused]
+    if named:
+        raise HTTPException(403, "; ".join(f"{n}: not served: {refused[n]}" for n in named))
     unknown = [n for n in names if n not in held]
     if unknown:
         raise HTTPException(400, f"unknown annotations collection(s): {', '.join(unknown)}; "
