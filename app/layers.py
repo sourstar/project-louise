@@ -158,6 +158,15 @@ def check_params(params: Any, *, chunker: str, where: str) -> None:
             chunking_legal.check(params)
         except chunking_legal.LegalChunkerError as e:
             raise LayerError(f"{where}: {e}") from None
+    if chunker == chunking.FIXED and ("tokenizer" in params or "max_tokens" in params):
+        # the encoder's window, optional (chunking.chunk_fixed; operator 2026-11-27)
+        tok, mt = params.get("tokenizer"), params.get("max_tokens")
+        if not isinstance(tok, str) or not _SHA256.match(tok):
+            raise LayerError(f"{where}: a {chunker} layer that states the encoder's window names its "
+                             f"tokenizer by the sha256 of its tokenizer.json (`params.tokenizer`) beside "
+                             f"`max_tokens`: both or neither")
+        if not isinstance(mt, int) or isinstance(mt, bool) or mt < 64:
+            raise LayerError(f"{where}: a {chunker} layer's max_tokens is an integer of at least 64, got {mt!r}")
     if chunker == chunking.WIKIDATA_TEXT:
         tok = params.get("tokenizer")
         if not isinstance(tok, str) or not _SHA256.match(tok):
