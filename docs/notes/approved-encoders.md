@@ -314,10 +314,28 @@ something in it — never to make the four wrappers equal (RULE 1).
 
 | package | wrapper sha256 | REVISION | backend | |
 |---|---|---|---|---|
-| `vega-louise-llama-cpp` | 47bf02eaae7c01e4 | 1ac1ecc | `louise-sycl-f16-llama-cpp-ed93e3c1b2e2-stack-7c301a7ba437` | rebuilt and gated 2026-11-25, live since 23:45:20Z: main's wrapper (#882 — a repeated `LoadModel` answered "Model already loaded" is the same run) |
+| `vega-louise-llama-cpp` | 47bf02eaae7c01e4 | 1ac1ecc | `louise-sycl-f16-llama-cpp-aea955022a8f-stack-7c301a7ba437` | rebuilt in place and gated 2026-11-26, live since 23:32:33Z (the fade engine, below); before it `…-ed93e3c1b2e2-…`, rebuilt and gated 2026-11-25, live 23:45:20Z: main's wrapper (#882 — a repeated `LoadModel` answered "Model already loaded" is the same run) |
 | `vega-louise-llama-cpp-cpu` | 10833aab79818132 | 15e84e9 | `louise-cpu-llama-cpp-ea2417d91dcc` | untouched: the wrapper of its own build |
 | `vega-louise-openvino` | 10833aab79818132 | 15e84e9 | `louise-python-20261030` | untouched |
 | `vega-louise-pytorch` | 10833aab79818132 | 15e84e9 | `louise-python-20261021a` | untouched |
+
+**THE ENGINES AND THE SERVER, 2026-11-26/27 (München, the node; Tensor's series).**
+- **Live engine `aea955022a8f`** (since 2026-11-26 23:32:33Z):
+  - what it is: `engine-fade.series` = `engine-park.series` + 0030, the omnivoice fade-out on the speech's last kept 100 ms instead of on speech, so the last word at a full stop is no longer cut;
+  - the gates: byte check VEGA/1 = VEGA/2; the five llama.cpp gates PASS exact with their fingerprints unchanged (wikipedia 194 s, gutenberg 1984 s, pubmed query 68 s, NeuRIS 510 s, wikidata 516 s); 20 unloads, none of 1 s or more; step 5's MADLAD T4 375/379 identical, as under ed93e3c1b2e2;
+  - the backout copy: `/mnt/ssd3/apps/localai-backends-bak-fade-202611262303`;
+  - the first try was rolled back: gate 1's park was refused (412), because a question asked from the web during the gate cold-loaded five models. The pass now stops the web, and a gate's exit 3 (a deferral) is retried 3 times.
+- **Candidate engine `a4f65005d8c3`**: `engine-pace.series` at Tensor 20cb968c = `engine-fade.series` + 0033, amended.
+  - EVERY park's copy to the host goes in 256-MiB pieces, waiting while MemAvailable < reserve + piece, up to `GGML_SYCL_PARK_HOST_WAIT_MS` (30 s). At that bound the weights stay on the device (the 412/NO_MEMORY path).
+  - `GGML_SYCL_PARK_HOST_RESERVE` sets the reserve; unset, 0 or unreadable = 2 GiB.
+  - NAME_ONLY tag reproduced on the node.
+  - `3216ace3205f` (0033 pacing only where the env asked) is void: an unpaced park on ARC room could outrun the ARC.
+  - Its gates are those of the fade pass, plus: the paced-park gate on bge-m3 with the env; a park:true model WITHOUT the env under a 10-GiB allocation, which must show a paced copy and no OOM.
+- **Server, LocalAI `v5.0.1-7-g3d5a6a567`** (live since 2026-11-27 00:46:12Z):
+  - v5.0.1 + 0001 + 0011 + 0019 + 0024 (readiness poll) + 0027 (park) + 0029 (watchdog settings hang) + 0031 (a refused park logs its memory reading);
+  - run ids the same before and after the swap; nemotron's read from `hold embedder run`, the same run as the fade pass's gate 5.
+- **0032 is held until `a4f65005d8c3` is live**: a park counts the ZFS ARC's evictable part as room, no more than size − c_min, − 1 GiB, capped by a cgroup's room. Safe only with a paced engine.
+- **ZFS keeps 14 GiB free** (`zfs_arc_sys_free`, node-runbook.md §1), so 0032 is a second margin there.
 
 The difference between the two wrappers is #882 alone, and it acts only on a
 `LoadModel` repeated for a model the process already holds — which only the
