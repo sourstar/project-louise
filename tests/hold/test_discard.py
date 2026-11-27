@@ -244,6 +244,34 @@ def test_a_discard_after_a_build_moves_its_own_versions_never_the_build_s(isolat
     assert all((shard / e.path).stat().st_size == e.bytes for e in again.shards)
 
 
+def test_a_part_the_build_since_shares_stays_in_place_and_is_read_where_it_lies(
+        isolated_config, tmp_path, corpus_dir):
+    """Never a hard link (operator, 2026-11-27): a part the build since left
+    as it was stays at its path in the SHARD, one name; the discarded folder
+    names it (kept-in-place.json) beside a symbolic link, and the rebuild
+    reads it there. Replaced since, it is refused, never read as 2026-08's."""
+    import os
+    root, first, shard, _before = _rebuilt_after(tmp_path, corpus_dir)
+    said = _discard(root)
+    away = discard_mod.discarded_dir(root, "gutenberg", "2026-08")
+    kept = discard_mod.kept_in_place(away)
+    assert kept and said["kept_for_the_build_since"] == len(kept)
+    for rel, e in kept.items():
+        here = shard / rel
+        assert here.is_file() and not here.is_symlink() and here.stat().st_nlink == 1
+        assert (away / rel).is_symlink() and (away / rel).resolve() == here.resolve()
+        assert e["bytes"] == here.stat().st_size and e["shared_with"].startswith("the records build since")
+    assert not [p for p in away.rglob("*") if p.is_file() and not p.is_symlink() and p.stat().st_nlink > 1]
+    held = discard_mod.held_records(root, "gutenberg", "2026-08")
+    assert set(kept) <= set(held.paths)
+    rel = sorted(kept)[0]
+    tmp = (shard / rel).with_name("other")
+    tmp.write_bytes(b"other bytes")
+    os.replace(tmp, shard / rel)                    # a later build replaced it in place
+    with pytest.raises(CodexError, match="holds other bytes now"):
+        discard_mod.held_records(root, "gutenberg", "2026-08")
+
+
 def test_a_discard_made_the_old_way_is_repaired(isolated_config, tmp_path, corpus_dir):
     """The discard before the fix moved the parts at their PATHS: the build's.
     The snapshot made after it lists parts the SHARD no longer has; `repair`
@@ -275,11 +303,14 @@ def test_a_discard_made_the_old_way_is_repaired(isolated_config, tmp_path, corpu
     lost = [e.path for e in again.shards if not (shard / e.path).is_file()]
     assert lost, "the reconcile's refusal: the latest snapshot's parts are not at their paths"
     plan = discard_mod.repair(root, "gutenberg", "2026-08")
-    assert plan["applied"] is False and plan["back"] + plan["linked"] == len(lost) and plan["not_found"] == 0
+    assert plan["applied"] is False and plan["back"] + plan["kept_in_place"] == len(lost) \
+        and plan["not_found"] == 0
     discard_mod.repair(root, "gutenberg", "2026-08", dry_run=False)
     assert all((shard / e.path).stat().st_size == e.bytes for e in again.shards)
     assert not list(shard.rglob("*.2026-08.jsonl.zst")), "no superseded name left in the SHARD"
     for e in first.shards:
         assert (away / e.path).stat().st_size == e.bytes
     again2 = discard_mod.repair(root, "gutenberg", "2026-08")
-    assert again2["back"] == again2["linked"] == again2["aside"] == 0, "idempotent"
+    assert again2["back"] == again2["kept_in_place"] == again2["aside"] == 0, "idempotent"
+    assert not [p for p in shard.rglob("*") if p.is_file() and not p.is_symlink() and p.stat().st_nlink > 1], \
+        "no hard link anywhere in the SHARD"

@@ -24,6 +24,15 @@ marker) — never the rest of `index/`, which is the collection's text index
 and catalogue — and the edges its relation parts put into the manifest; the
 index maintainer derives them again from the snapshot that replaces it.
 
+A part the records build SINCE the snapshot left as it was belongs to both:
+it STAYS AT ITS PATH in the SHARD, nothing of it goes aside, and the
+discarded folder names it in `kept-in-place.json` (its root, bytes, file
+identity and the build that shares it) beside a symbolic link to it, so the
+rebuild reads it where it lies (never a hard link: operator, 2026-11-27,
+"Never use hard links, always consciously load from a path";
+app/file_copy.py). `held_records` checks each such part is still the file
+the discard left, its pieces root where it is not.
+
 Refused when it is not the latest snapshot (a later one's `previous` and
 delta name it), when this node served it (the seeding control names it),
 when this node published an attestation of the collection, or when the
@@ -41,6 +50,8 @@ from . import collection as col, shard as shard_mod, snapshot as sn
 from .codex import CodexError
 
 DISCARDED = ".discarded"
+#: the parts a discard left in place, in its discarded folder
+KEPT = "kept-in-place.json"
 #: the collection's index directory: its fts_dir (text index, `_catalog`)
 #: and, under it, the facets derived from a snapshot (app/ask/facets.py)
 INDEX = "index"
@@ -69,7 +80,60 @@ def held_records(root: Path, name: str, snapshot_id: str):
     if missing:
         raise CodexError(f"{name}: discarded snapshot {snapshot_id} lists {len(missing)} part(s) "
                          f"not held under {d} (first: {missing[0]})")
+    _check_kept(d, name, snapshot_id)
     return pack_build.HeldRecords(d, tuple(s.path for s in snap.shards))
+
+
+def kept_in_place(d: Path) -> dict[str, dict]:
+    """`{rel: {root, bytes, identity, at, shared_with}}`: the parts the
+    discard in `d` left at their paths in the SHARD; {} for none."""
+    import json
+    try:
+        got = json.loads((Path(d) / KEPT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return got if isinstance(got, dict) else {}
+
+
+def _write_kept(d: Path, kept: dict[str, dict]) -> None:
+    import json
+    tmp = Path(d) / f".{KEPT}.tmp"
+    tmp.write_text(json.dumps(kept, sort_keys=True, indent=1), encoding="utf-8")
+    os.replace(tmp, Path(d) / KEPT)
+
+
+def _keep(d: Path, rel: str, here: Path, root_: str, size: int, kept: dict[str, dict],
+          shared_with: str) -> None:
+    """`rel` left at `here`, in the SHARD: a RELATIVE symbolic link to it in
+    the discarded folder (it moves with the SHARD: a rename), and its entry
+    in `kept`, its place named relative to the SHARD."""
+    from ..file_copy import identity
+    link = Path(d) / rel
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(os.path.relpath(here, link.parent))
+    shard_dir = Path(d).parent.parent
+    kept[rel] = {"root": str(root_), "bytes": int(size), "identity": list(identity(here)),
+                 "at": Path(os.path.relpath(here, shard_dir)).as_posix(), "shared_with": shared_with}
+
+
+def _check_kept(d: Path, name: str, snapshot_id: str) -> None:
+    """Each part the discard left in place is still the file it left (its
+    identity), else still its bytes (its pieces root): a part replaced at
+    its path since is refused, never read as the snapshot's."""
+    from ..file_copy import identity
+    shard_dir = Path(d).parent.parent
+    for rel, e in sorted(kept_in_place(d).items()):
+        here = shard_dir / str(e.get("at") or rel)
+        try:
+            same = list(identity(here)) == list(e.get("identity") or ())
+        except OSError:
+            raise CodexError(f"{name}: discarded snapshot {snapshot_id}'s part {rel} was left in place "
+                             f"at {here}, which no longer holds it") from None
+        if not same and shard_mod.pieces_root_of(here) != e.get("root"):
+            raise CodexError(f"{name}: discarded snapshot {snapshot_id}'s part {rel}, left in place at "
+                             f"{here}, holds other bytes now (its pieces root is not {e.get('root')})")
 
 
 def _members(snap) -> list[str]:
@@ -157,7 +221,8 @@ def discard(root: Path, name: str, snapshot_id: str, *, con, node_con=None,
     sig = shard_dir / shard_mod.snapshot_sig_path(snapshot_id)
     # each part's OWN version, wherever it is: a build since may have kept it
     # under its superseded name and put the next version at the path; a part
-    # that build left as it was is both's, linked aside and kept in place
+    # that build left as it was is both's: KEPT IN PLACE (`_keep`), named in
+    # the discarded folder, never a second name for its bytes
     where = [(rel, version_of(shard_dir, rel, snapshot_id, size)) for rel, _root, size in _entries(snap)]
     since = _built_since(root, name, snap) or {}
     shared = {rel for rel, root_, _size in _entries(snap)
@@ -180,13 +245,18 @@ def discard(root: Path, name: str, snapshot_id: str, *, con, node_con=None,
                          f"cannot cross one (EXDEV) and nothing was moved")
     # the parts first, the snapshot file last: an interrupted discard still
     # names its snapshot in the SHARD, and a re-run moves what is left
+    kept = kept_in_place(dest)
+    entries = {rel: (root_, size) for rel, root_, size in _entries(snap)}
     for rel, src in where:
         if src is not None and src.is_file():
             (dest / rel).parent.mkdir(parents=True, exist_ok=True)
             if rel in shared and src == shard_dir / rel:
-                os.link(src, dest / rel)
+                _keep(dest, rel, src, *entries[rel], kept,
+                      "the records build since the snapshot (state/build/manifest.json)")
             else:
                 os.replace(src, dest / rel)
+    if kept:
+        _write_kept(dest, kept)
     relation_paths = [r.path for r in snap.relations]
     if relation_paths:
         has = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relations'").fetchone()
@@ -224,7 +294,9 @@ def repair(root: Path, name: str, snapshot_id: str, *, dry_run: bool = True) -> 
     and left its own snapshot's under their superseded names. Each part the
     LATEST snapshot lists and does not find at its path comes back from the
     discarded folder where its size is the latest's (moved where the
-    discarded snapshot listed other bytes, linked where the same); then each
+    discarded snapshot listed other bytes; moved and KEPT IN PLACE where the
+    same: a symbolic link to it and its entry in `kept-in-place.json` stay in
+    the discarded folder, never a hard link); then each
     part of the discarded snapshot still in the SHARD under its superseded
     name goes into the discarded folder. Nothing is deleted; a dry run says
     what would move. Idempotent."""
@@ -239,14 +311,14 @@ def repair(root: Path, name: str, snapshot_id: str, *, dry_run: bool = True) -> 
     if latest is None:
         raise CodexError(f"{name}: no snapshot in {shard_dir / 'snapshots'} to repair the parts of")
     old = {rel: (root_, size) for rel, root_, size in _entries(sn.load(old_path))}
-    back, linked, aside, missing = [], [], [], []
+    back, both, aside, missing = [], [], [], []
     for rel, root_, size in _entries(latest):
         here = shard_dir / rel
         if here.is_file():
             continue
         there = dest / rel
         if there.is_file() and there.stat().st_size == size:
-            (linked if old.get(rel, (None,))[0] == root_ else back).append(rel)
+            (both if old.get(rel, (None,))[0] == root_ else back).append(rel)
         else:
             missing.append(rel)
     for rel, (root_, size) in old.items():
@@ -254,16 +326,20 @@ def repair(root: Path, name: str, snapshot_id: str, *, dry_run: bool = True) -> 
         if kept.is_file() and kept.stat().st_size == size and (rel in back or not (dest / rel).is_file()):
             aside.append(rel)
     out = {"collection": name, "latest": latest.snapshot_id, "discarded": snapshot_id,
-           "back": len(back), "linked": len(linked), "aside": len(aside), "not_found": len(missing),
+           "back": len(back), "kept_in_place": len(both), "aside": len(aside), "not_found": len(missing),
            **({"first_not_found": missing[0]} if missing else {}), "applied": not dry_run}
     if dry_run:
         return out
     for rel in back:
         (shard_dir / rel).parent.mkdir(parents=True, exist_ok=True)
         os.replace(dest / rel, shard_dir / rel)
-    for rel in linked:
+    kept = kept_in_place(dest)
+    for rel in both:
         (shard_dir / rel).parent.mkdir(parents=True, exist_ok=True)
-        os.link(dest / rel, shard_dir / rel)
+        os.replace(dest / rel, shard_dir / rel)
+        _keep(dest, rel, shard_dir / rel, *old[rel], kept,
+              f"the latest snapshot {latest.snapshot_id}")
+        _write_kept(dest, kept)
     for rel in aside:
         (dest / rel).parent.mkdir(parents=True, exist_ok=True)
         os.replace(shard_mod.superseded_name(shard_dir / rel, snapshot_id), dest / rel)

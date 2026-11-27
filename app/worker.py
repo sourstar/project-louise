@@ -958,8 +958,8 @@ def _fts_copy_round(con, collection) -> bool:
     round that copied nothing is not progress, and the thread goes on to
     rdf and embed in the same round."""
     role = text_index.role(collection)
-    if not role.reader:
-        return False
+    if not role.reader or role.withheld:
+        return False                # withheld: her placement no longer holds (the boot said why)
     rows, walked = text_index.pending_rows(con, collection, fts_version=config.FTS_VERSION,
                                            entity_version=config.ENTITY_VERSION)
     if not rows:
@@ -6558,6 +6558,8 @@ def _sync_collections(all_collections, cons, last_discover, pipeline: bool = Fal
             _release_embedder(kept, cons[kept.name], "the switch")
         if prev.acquire_enabled != kept.acquire_enabled:
             _apply_acquire_switch(cons[kept.name], prev, kept)     # a fetch in flight ends at its unit
+        if prev != kept:
+            _recheck_shares(prev, kept, current)
         if (prev.acquire_enabled, prev.license_ack, prev.profile,
                 prev.extras, prev.peer_source, prev.snapshot) != \
                 (kept.acquire_enabled, kept.license_ack, kept.profile,
@@ -7986,15 +7988,12 @@ def run_forever():
             print(f"NOT SERVED: {c.name}: {reason}", file=sys.stderr)
         all_collections = [c for c in all_collections if c.name not in names]
 
-    # SISTERS SHARE ONE TEXT INDEX (app/text_index.py): groups are formed,
-    # joined and left HERE, before any stage and before this process opens an
-    # index — the one moment no thread of this worker holds one open
+    # A SISTER READING HER SISTER'S TEXT INDEX (app/text_index.py, the static
+    # share): each placement CHECKED here, before any stage — nothing moved,
+    # copied or reset; one that no longer holds is withheld, said
     try:
-        settled = text_index.settle(collections_mod.louise_root() / "collections", all_collections,
-                                    log=lambda m: print(f"[info:text-index] {m}", flush=True))
-        if settled["freed"]:
-            print(f"[info:text-index] {settled['freed'] / 2**30:.2f} GiB of duplicate text "
-                  f"indexes freed", flush=True)
+        text_index.settle(collections_mod.louise_root() / "collections", all_collections,
+                          log=lambda m: print(f"[info:text-index] {m}", flush=True))
     except Exception as e:   # noqa: BLE001 — every collection keeps the index it had
         print(f"[warn:text-index] not settled ({type(e).__name__}: {e}); every collection "
               f"keeps the index it had", flush=True)
@@ -8421,6 +8420,21 @@ def _start_oom_watch() -> None:
 
 
 # ---- forget (07 §7.3) -----------------------------------------------------
+def _recheck_shares(prev, kept, current) -> None:
+    """A live edit (profile, slices, run) that changes a collection's INDEX
+    IDENTITY re-checks every placement at once (`text_index.settle`, which
+    moves nothing): a sister who no longer matches has her text leg withheld
+    now, said, not at the next boot (the read of eef52262, 2)."""
+    try:
+        if text_index.identity(prev) == text_index.identity(kept):
+            return
+        text_index.settle(text_index._root_of(kept) or collections_mod.louise_root() / "collections",
+                          current, log=lambda m: print(f"[info:text-index] {m}", flush=True))
+    except Exception as e:   # noqa: BLE001 — said; the next round or boot checks again
+        print(f"[warn:text-index] {kept.name}: placements not re-checked ({type(e).__name__}: {e})",
+              flush=True)
+
+
 def retire_collection(name: str, timeout: float = 60.0) -> None:
     """`hold collection forget`, run by this worker's job thread (app/jobs.py,
     the DEPOSIT kind's op "forget"): the collection's threads told to stop
@@ -8449,10 +8463,22 @@ def retire_collection(name: str, timeout: float = 60.0) -> None:
             thread.join(timeout=max(0.0, deadline - time.time()))
     # its catalog writer too, held by path: the directory goes, and a
     # collection made again under this name would inherit a writer on
-    # deleted files (`catalog.release_under`)
+    # deleted files (`catalog.release_under`). Its text index's writers too,
+    # where a sister reads that index (`text_index.readers`): a forget then
+    # renames the folder to her, and a routed forget runs in a child process,
+    # so only THIS process can let go of the writer (and its tantivy lock)
+    # it holds there — only there: elsewhere a pause waits on no merge
     try:
-        from . import catalog
-        catalog.release_under(collections_mod.louise_root() / "collections" / name)
+        from . import catalog, text_index
+        held_at = collections_mod.louise_root() / "collections"
+        # any placement naming this index, held or not (a few dozen folders):
+        # letting go of a writer no one then needs costs nothing
+        rel = f"{name}/index"
+        if any((text_index.placement(held_at, d.name) or {}).get("dir") == rel
+               for d in (held_at.iterdir() if held_at.is_dir() else ())
+               if d.is_dir() and not d.name.startswith(".")):
+            fts.release_under(held_at / name / "index")
+        catalog.release_under(held_at / name)
     except Exception:   # noqa: BLE001 — the forget goes on; the next start holds nothing
         pass
     _gone.pop(name, None)

@@ -253,6 +253,214 @@ def shared_folders(root: Path, name: str) -> tuple[list[Path], list[Path]]:
     return removed, kept
 
 
+#: a hand-over's half-way name, beside the link it replaces
+def _half(link: Path) -> Path:
+    return link.with_name(f".{link.name}.handover")
+
+
+#: kept for a forget cut short by the version before the generic helper
+HANDOVER = ".origin.handover"
+
+
+def _finish_half(link: Path) -> bool:
+    """A hand-over cut short between its two renames, finished: True when
+    one was."""
+    half = _half(link)
+    if not (half.exists() and not half.is_symlink()):
+        return False
+    if link.is_symlink():
+        link.unlink()
+    os.rename(half, link)
+    return True
+
+
+def _relative_link(target: Path, link: Path) -> None:
+    """`link` made a RELATIVE symbolic link to `target`, computed between
+    their physical directories (it reaches the same directory wherever the
+    root is mounted). Atomic: a hidden name, renamed into place."""
+    link.parent.mkdir(parents=True, exist_ok=True)
+    rel = os.path.relpath(Path(target).resolve(), link.parent.resolve())
+    tmp = link.with_name(f".{link.name}.linking")
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    tmp.symlink_to(rel, target_is_directory=Path(target).is_dir())
+    os.replace(tmp, link)
+
+
+def _hand_over(target: Path, links: list[Path]) -> None:
+    """THE HAND-OVER (never a hard link: operator, 2026-11-27,
+    app/file_copy.py): `target` — a file or a directory a collection being
+    forgotten holds, which others read through symbolic links — MOVED to the
+    first of `links` (a rename to a hidden name beside it, the link removed,
+    the rename into its place: `_finish_half` completes one cut short), and
+    the other links pointed at it there, relative. Nothing is copied or
+    removed; the bytes keep one name."""
+    first, rest = links[0], links[1:]
+    os.rename(target, _half(first))
+    if first.is_symlink():
+        first.unlink()
+    os.rename(_half(first), first)
+    for o in rest:
+        _relative_link(first, o)
+
+
+def origin_heirs(root: Path, name: str) -> list[str]:
+    """The held collections whose `origin` is a symbolic link to `name`'s
+    own origin DIRECTORY (a re-creation or a sister reads it where it lies,
+    `recreate.share_origin`), by name."""
+    from . import deposit
+    root = Path(root)
+    own = root / name / "origin"
+    if own.is_symlink() or not own.is_dir():
+        return []
+    target = own.resolve()
+    out = []
+    for d in sorted(root.iterdir()) if root.is_dir() else []:
+        if d.name == name or d.name.startswith(".") or not d.is_dir():
+            continue
+        link = d / "origin"
+        try:
+            held = deposit.held_file(root, d.name).is_file()
+        except Exception:   # noqa: BLE001 — not a held collection's directory
+            held = False
+        if held and link.is_symlink() and link.resolve() == target:
+            out.append(d.name)
+    return out
+
+
+#: the origin hand-over's journal, at the collections root: written before
+#: its first rename, removed after its last relink
+def _journal(root: Path, name: str) -> Path:
+    return Path(root) / f".origin-handover.{name}.json"
+
+
+def _resume_origin(root: Path, journal: Path) -> None:
+    """A hand-over the journal names, completed from wherever it was cut:
+    the directory into the first heir's place (`_finish_half`, or the whole
+    move where nothing moved yet), then every other heir linked to it
+    there — each step repeatable — then the journal removed."""
+    import json
+    j = json.loads(journal.read_text(encoding="utf-8"))
+    own, heirs = Path(j["origin"]), [Path(h) for h in j["heirs"]]
+    first = heirs[0]
+    _finish_half(first)
+    if first.is_symlink() and own.is_dir() and not own.is_symlink():
+        _hand_over(own, heirs)
+    if first.is_dir() and not first.is_symlink():
+        for o in heirs[1:]:
+            if not (o.is_symlink() and o.resolve() == first.resolve()):
+                _relative_link(first, o)
+        _move_caches(own, first)
+    journal.unlink()
+
+
+def _move_caches(own: Path, first: Path) -> None:
+    """The derived caches keyed on the origin's resolved path (a plugin's
+    pack, the files cache: app/derived.py) moved to its new place's key, as
+    a rename moves them (`rename._cache_moves`): rebuilt never, carried.
+    One at both keys is left; a cache is re-creatable, so none stops the
+    hand-over."""
+    from .rename import _cache_moves, _move
+    for a, b in _cache_moves({"origin": [str(own), str(first)]}):
+        if a.exists() and b.exists():
+            continue
+        try:
+            _move(a, b)
+        except CodexError:
+            pass
+
+
+def _device(path: Path) -> int:
+    return os.stat(path).st_dev
+
+
+def _take_heir_locks(root: Path, name: str) -> list:
+    """The write lock of every collection `name`'s origin hand-over moves
+    things under, taken now — or Held (exit 3), naming the holder: `louise
+    node pause <heir>` first."""
+    from . import lock as lock_mod
+    locks: list = []
+    try:
+        for h in origin_heirs(root, name):
+            try:
+                locks.append(lock_mod.take(lock_mod.state_dir(root, h), h,
+                                           f"forget {name}: its origin directory handed over to {h}"))
+            except lock_mod.Held as e:
+                # the running worker holds a collection it runs: the forget
+                # asks for that collection's pause, never works around it
+                # (finding 5 of the third read; CLAUDE.md RULE 1)
+                err = CodexError(f"forget {name}: its origin directory goes to {h}, whose write lock is "
+                                 f"held ({e}). `louise node pause {h}`, run this again, then "
+                                 f"`louise node resume {h}`; nothing was removed")
+                err.exit_code = 3                       # type: ignore[attr-defined]
+                raise err from None
+    except BaseException:
+        for lk in locks:
+            lk.release()
+        raise
+    return locks
+
+
+def origin_moves_cross(root: Path, name: str) -> str | None:
+    """Why `name`'s origin hand-over cannot be a rename — its directory and
+    its first heir's on two filesystems — in words, or None. Asked before
+    anything of the forget is done, in its dry run too."""
+    heirs = origin_heirs(root, name)
+    if not heirs:
+        return None
+    own, dst = Path(root) / name / "origin", Path(root) / heirs[0]
+    if _device(own) != _device(dst):
+        return (f"forget {name}: its origin directory {own} is read by {', '.join(heirs)}, and {heirs[0]}'s "
+                f"directory {dst} is on another filesystem: the hand-over is a rename and cannot cross "
+                f"one (nothing is copied). Nothing was removed; move {own} onto {dst}'s filesystem "
+                f"first, or forget {', '.join(heirs)} first")
+    return None
+
+
+def hand_over_origin(root: Path, name: str, *, dry_run: bool = False) -> dict[str, Any] | None:
+    """`name`'s origin directory, read by other held collections through
+    their links, handed over (`_hand_over`) to the first of them by name —
+    never deleted with `name`; the others' links point at it there.
+    JOURNALED: the heirs are written down before the first rename, so a
+    hand-over cut at any step is completed by the next forget (`_resume_origin`),
+    every heir relinked. Journals left by any cut hand-over are completed
+    first. None when nobody reads it."""
+    import json
+    root = Path(root)
+    own = root / name / "origin"
+    if not dry_run:
+        for j in sorted(root.glob(".origin-handover.*.json")):
+            _resume_origin(root, j)
+        for d in sorted(root.iterdir()) if root.is_dir() else []:
+            if d.is_dir() and not d.name.startswith("."):
+                _finish_half(d / "origin")           # one cut before journals were written
+    heirs = origin_heirs(root, name)
+    if not heirs:
+        return None
+    out = {"origin": str(own), "to": heirs[0], "relinked": heirs[1:], "moved": not dry_run}
+    if not dry_run:
+        journal = _journal(root, name)
+        tmp = journal.with_name(journal.name + ".tmp")
+        tmp.write_text(json.dumps({"origin": str(own), "heirs": [str(root / h / "origin") for h in heirs]}),
+                       encoding="utf-8")
+        os.replace(tmp, journal)
+        _resume_origin(root, journal)
+    return out
+
+
+def handed_inodes(root: Path, name: str) -> set[tuple[int, int]]:
+    """The files `name`'s forget hands over rather than removes: its origin
+    directory's (`forget_plan` counts none of them as freed)."""
+    root = Path(root)
+    out: set[tuple[int, int]] = set()
+    if origin_heirs(root, name):
+        for p in (root / name / "origin").rglob("*"):
+            if p.is_file() and not p.is_symlink():
+                st = os.stat(p)
+                out.add((st.st_dev, st.st_ino))
+    return out
+
+
 def ack_heirs(root: Path, name: str, *, dry_run: bool = False) -> list[str]:
     """The held collections that pin the terms `name`'s acknowledgement
     records and hold no record of their own — each given a copy of it
@@ -285,6 +493,20 @@ def ack_heirs(root: Path, name: str, *, dry_run: bool = False) -> list[str]:
 
 def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
            retire: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """`_forget`, holding the write lock of every collection its origin
+    hand-over moves things under (finding H of the second read): taken
+    before anything is removed — one held refuses (exit 3), nothing done —
+    and let go when it ends."""
+    locks = [] if (dry_run or kinds) else _take_heir_locks(Path(root), name)
+    try:
+        return _forget(root, name, kinds=kinds, dry_run=dry_run, retire=retire)
+    finally:
+        for lk in locks:
+            lk.release()
+
+
+def _forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
+            retire: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Remove the copy at `<root>/<name>` and its held file — or, with
     `kinds`, only those members — and say what went. `retire` is the
     worker's hook that stops the collection's threads before anything under
@@ -307,6 +529,9 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
         codex = None                        # half gone already: finish the job
     if kinds:
         return _forget_vectors(root, name, codex, base, kinds=kinds, dry_run=dry_run)
+    crossing = origin_moves_cross(root, name)          # before step 1, the dry run too
+    if crossing:
+        raise CodexError(crossing)
     plan = [p for p in (held, base) if p.exists()]
     readers = read_through(root, name)
     if readers:
@@ -316,6 +541,19 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
             f"off, and remove the corpus with it. Nothing was removed. First, for each: "
             + "; ".join(f"`louise dev carry {name} {r} --share-origin --yes`" for r in sorted(readers)))
     from app import text_index
+    # A SISTER READING ITS TEXT INDEX (app/text_index.py, the static share):
+    # one whose placement holds gets the folder by rename at step 2c; more
+    # than one, or one withheld, and nothing is removed
+    text_index.invalidate()
+    sisters = text_index.readers(root, name)
+    # a forget cut short, re-run after a boot: this one no longer held, her
+    # placement withheld for that reason alone — the hand-over completes
+    if len(sisters) > 1 or any(text_index.withheld_at(root, r) and not (
+            not held.exists() and text_index.not_held(text_index.withheld_at(root, r), name)) for r in sisters):
+        raise CodexError(f"forget {name}: {', '.join(sisters)} read its text index ({name}/index), and "
+                         f"only one sister whose index identity still matches can be handed it. Nothing "
+                         f"was removed. First, for each: " + "; ".join(
+                             f"`louise hold collection unshare {r}`" for r in sisters))
     # THE ACKNOWLEDGEMENT OUTLIVES THE FORGET (2026-11-19, München): a held
     # collection pinning the same terms text with no record of its own was
     # acknowledged through this one's (04 §4.4, licensing.state_for's peer
@@ -324,13 +562,17 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     # carries it (`recreate.carry_ack`), so nothing is left unacknowledged
     # by a forget (invariant 9)
     handed = ack_heirs(root, name, dry_run=dry_run)
+    # an origin DIRECTORY another held collection reads through its link
+    # goes to it, never with this one (`hand_over_origin`, after its threads
+    # stopped; a forget cut short finishes it when run again)
+    origin_to = hand_over_origin(root, name, dry_run=True) if dry_run else None
     if dry_run:
         out: dict[str, Any] = {"collection": name, "dry_run": True,
                                "would_remove": [str(p) for p in plan], "removed": [],
-                               **({"ack_carried_to": handed} if handed else {})}
-        # a text index shared with sisters stays while one of them is held,
-        # and goes with its last member (app/text_index.py)
-        shared = text_index.leave_at_forget(root, name, dry_run=True)
+                               **({"ack_carried_to": handed} if handed else {}),
+                               **({"origin_handed_to": origin_to} if origin_to else {})}
+        # its text index, to the one sister that reads it (step 2c)
+        shared = text_index.hand_over(root, name, dry_run=True)
         if shared is not None:
             out["text_index"] = shared
         if not kinds:
@@ -351,6 +593,17 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     # 2. its threads, when this runs in the worker
     if retire is not None:
         retire(name)
+    # 2b. its origin directory, to the collection that reads it through a
+    #     link (`_hand_over`): never removed with it
+    origin_to = hand_over_origin(root, name)
+    # 2c. its text index, to the one sister that reads it: renamed into hers,
+    #     who writes it from now on (app/text_index.py `hand_over`)
+    if text_index.readers(root, name):
+        # the rename follows: this process's writers on the folder let go
+        # first (the worker's, for a routed forget; the tantivy lock with them)
+        from app import fts
+        fts.release_under(Path(root) / name / "index")
+    shared = text_index.hand_over(root, name)
     # 3. a never-share collection: every deposit erased, no trace (02 §2.9)
     erased = 0
     if codex is not None and deposit.is_deposit(codex) and base.exists():
@@ -368,14 +621,7 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
         elif target.is_dir():
             shutil.rmtree(target)
         removed.append(str(target))
-    # 5. a text index shared with sisters (app/text_index.py): kept while
-    #    another held member reads it — the next by name writes it if this
-    #    one did — and removed with its last member. Before the directory,
-    #    whose placement file says where the shared index is
-    shared = text_index.leave_at_forget(root, name)
-    if shared is not None and shared.get("removed"):
-        removed.append(shared["dir"])
-    # 6. the directory, whole
+    # 5. the directory, whole
     if base.exists():
         shutil.rmtree(base)
         removed.append(str(base))
@@ -383,6 +629,8 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
     out = {"collection": name, "erased_deposits": erased, "removed": removed}
     if handed:
         out["ack_carried_to"] = handed
+    if origin_to:
+        out["origin_handed_to"] = origin_to
     if shared is not None:
         out["text_index"] = shared
     return out

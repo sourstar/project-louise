@@ -107,7 +107,7 @@ louise hold
                 (a sister who changes only her ENCODER SIDE: S's layers, cleaning and records in a new space with
                  C's encoder side whole — encoder and engine, dim, dtype, ctx, cut, pooling, instructions, query
                  side, calibration set, reference and tolerance, carried, nothing embedded; her endpoint and model
-                 C's file's; her manifest and text index S's, linked, one index identity, so she joins S's group
+                 C's file's; her manifest and text index S's, her manifest copied and her text index S's OWN, read where it lies (`state/text-index.json` names `S/index`; never copied nor hard-linked; it moves nothing, so no node stop: routed; the static share, 2026-11-27), one index identity, so she reads S's
                  (docs/notes/sister-shared-index.md); her slices S's. gutenberg-nemo, 2026-11-27)
                                                                        case J, a SISTER INTO A HELD SPACE (added 2026-11-08, normattiva-nemo): `derive` of her sister S
                                                                        into C's space and layers; carry — her parts seeded from S's snapshot, S's manifest and text index
@@ -223,6 +223,7 @@ louise hold
               ack --web-sources [--yes]                                print the web-sources disclaimer; record this node's acceptance, once (04 §4.4)
               certify <collection> <snapshot>                          sign a snapshot as this collection's certifier
               forget <collection> [--kinds …] [--yes] [--dry-run] [--here]  stop holding: remove this peer's copy and its state; --here when no worker runs
+              unshare <collection>                                read no sister's text index any more: an empty index of its own, its fts marks reset, indexed again (its lock: `node pause` it first; 2026-11-27)
               rename <collection> <new-name> [--dry-run]               the same collection under another local name; nothing recomputed
               migrate <collection> [--apply]                           the 09 §9.3 fields a Codex predates added, each as null — collection_id moves; printed unless --apply
               update <collection> [--dry-run] [--retry]                (*amended 2026-11-17*, docs/notes/collection-updates.md) the update by cadence of a collection
@@ -312,7 +313,9 @@ louise hold
               create <to> --shards-from <from>[:<snapshot>] [--snapshot ID]
                                                                        seed the parts from another collection's byte-identical ones — refused unless every field
                                                                        that decides a record (02 §2.7), record_line, facets and the layers' chunkers agree — each
-                                                                       linked (a copy across devices) and checked against the source snapshot's root, the staging
+                                                                       COPIED: her own (operator, 2026-11-27, choice B; never a link — a reflink where the
+            filesystem clones blocks), after a preflight of its bytes, and checked against the
+            source snapshot's root, the staging
                                                                        claim and build database written as a build would leave them; then the ordinary create, of
                                                                        the source snapshot's period unless --snapshot names one (added 2026-10-09)
               delta <collection> <from> <to>                           what changed between two snapshots
@@ -324,7 +327,8 @@ louise hold
                                                                        record lines, cut afresh, and parses only what it did not list (added 2026-10-30,
                                                                        RULE 1: wikipedia-v8's 2026-09 listed 21.9 M twins of archive pages). Each part's OWN
                                                                        version moves: under its superseded name where a records build since put a newer one at
-                                                                       the path, which stays; a part that build left as it was is linked aside and kept
+                                                                       the path, which stays; a part that build left as it was stays at its path, named in the
+            discarded folder's kept-in-place.json beside a symbolic link (never a hard link, 2026-11-27)
                                                                        (2026-11-16, NeuRIS5). --repair: after a discard made before that, which moved the
                                                                        build's parts — the latest snapshot's come back, the discarded one's go aside; a dry run
                                                                        without --yes
@@ -589,7 +593,7 @@ louise dev                                                             operator 
                                                                        pooling, normalise, query, epoch) is equal, the target's latest snapshot names the source's
                                                                        parts, and the target is empty; re-pins the space row to the target's Codex and clears the
                                                                        source's coverage rows — but in the SAME space keeps them under their own part ids, as
-                                                                       provenance (never the target's coverage), hard-links the bundle tree with --copy and names
+                                                                       provenance (never the target's coverage), copies the bundle tree with --copy (never hard-links it, 2026-11-27) and names
                                                                        the predecessors in the carry marker (04 §4.5, 2026-10-22); --predecessor-rows does that
                                                                        after a same-space carry made before. --keep: then only the rows that archive produced (chunk_verification
                                                                        imported or verified) stay; every other is deleted and its document embedded again, a window
@@ -666,7 +670,7 @@ louise dev                                                             operator 
                                                                        again; each language stamped once used whole, before which the collection asks Cellar nothing
                                                                        per unit (bulk first). --dump: the dump's folder (default EURLEX_DATADUMP_DIR); --languages:
                                                                        comma-separated codes (default the collection's slices); --carry-from: an earlier eurlex corpus,
-                                                                       its units the dump did not give linked in without their notice, in the base or the history
+                                                                       its units the dump did not give copied in (never hard-linked, 2026-11-27) without their notice, in the base or the history
                                                                        slice (RULE 1). Writes (2026-11-15)
 ```
 
@@ -2787,14 +2791,38 @@ collection is another name.
 │   └── pubmed/
 │       ├── shard/           the copy, the SHARD (`drag/` until 2026-10-11): exactly the tree of 02 §2.6 — what `share` serves, and nothing else; the bytes may live on other storage, mounted here
 │       ├── state/           manifest.sqlite (with the origin's flagged issues, 06 §6.1), cursor, ack.json, attestations/, bundles/, lock — this peer's alone; frozen/: while the collection is frozen, the newer snapshot its alignment is read against, never in the copy (04 §4.3, added 2026-11-07)
-│       ├── index/           the text index of the parts held, and the facet values (05 §5.7); a sister sharing her text index keeps only her catalogue and facets here (state/text-index.json names the shared one, below)
+│       ├── index/           the text index of the parts held, and the facet values (05 §5.7); a sister reading her sister's text index keeps only her catalogue and facets here (state/text-index.json names `<sister>/index`)
 │       ├── lance/           the vector table search reads; while it is built, a link into the build area (`LOUISE_BUILD_DIR`, below); with a Lance root, a link into it (`LOUISE_LANCE_ROOT`, below)
 │       └── origin/          the origin files the records are parsed from — 06 §6.2's corpus directory, kept for records-vs-origin; the bytes may live on other storage, mounted here
-│   └── .text-index/<identity>/  ONE text index for sisters whose index would be the same byte for byte, written by one (`writer.json`), read by the others; formed, joined and left at the worker's boot (02 §2.7, amended 2026-11-10; app/text_index.py)
 ├── state/                   node.sqlite: the catalogue, coverage maps (09 §9.10), peers seen, runtime overrides; trust.json; web-sources-ack.json (09 §9.13); working-state.json (`node checkpoint`, §7.3); resident-budget.json (the resident budget's measured margin, at-rest and largest model sizes, card total and eviction penalty, written by the worker, read by `node resident show`; §7.3, 2026-11-08)
 └── keys/                    the peer key, at NODE_KEY_PATH
 ```
 
+
+**No hard links** (*amended 2026-11-27*, operator, verbatim: "Never use
+hard links, always consciously load from a path. It already happened that
+you deleted important files because you forgot the hard links"). Nothing
+makes a second name for a file. What two collections both use is read
+WHERE IT LIES, by its path: a sister's text index (her sister's own, set once at
+her creation, moving nothing; checked at boot, withheld in words when
+her identity no longer matches, `hold collection unshare` to index her own), a re-check's claims, a re-created collection's origin directory (a symbolic
+link, handed over at its holder's forget), a discarded snapshot's part the
+build since shares (kept in place). What becomes another owner's own is
+COPIED, a reflink where the filesystem clones blocks, after a preflight of
+its bytes: a sister's seeded SHARD parts (her own copy, operator's choice B
+of 2026-11-27; the standard alternative, content-addressed parts, is in
+hold/seed.py), a carried bundle tree, an earlier corpus's units. What an
+operation consumes is moved: a method's claims. A symbolic
+link names a path and deleting it never deletes its target: it is
+allowed; a COPY dereferences it (`cp -L`: the copy holds the bytes, never
+the link). A forget whose origin directory goes to a heir whose write lock
+is held refuses and names `louise node pause <heir>` (exit 3; nothing
+removed). The backend archives (tools/archive_backend.py) hold no hard-link
+entry: files sharing an inode are written whole, and an older archive's
+link entry is unpacked as a COPY of its target. A third party's runtime
+archive is refused if it holds a hard-link member, before it is
+extracted. app/file_copy.py; enforced by tests/test_no_hard_links.py,
+per line.
 
 One mount per kind, a folder per collection (amended 2026-10-12, operator):
 with `SHARDS_ROOT` and `ORIGINS_ROOT` set (environment: this node's

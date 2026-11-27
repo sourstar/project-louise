@@ -96,3 +96,17 @@ def test_the_ask_page_shows_every_withheld_leg():
     assert "Some collections were searched with a part missing." in text
     assert "wikipedia</span> no full-text search: 1 of its 10 text index(es) could not be searched" in text
     assert "pubmed</span> no meaning search (vectors): the run failed the gate" in text
+
+
+def test_a_sister_whose_read_index_is_gone_says_why_never_an_empty_leg(col, monkeypatch):  # noqa: F811
+    """The read of eef52262, 4: the folder she reads is gone (or her
+    placement is withheld): `legs_withheld` says it, never a silent []."""
+    from app import text_index
+    c, con = col
+    monkeypatch.setattr(text_index, "unread", lambda collection: "alpha/index, the index she reads, is gone: "
+                                                                  "`louise hold collection unshare x`")
+    monkeypatch.setattr(fts_mod, "existing_groups", lambda c: [])
+    plan = language_plan.plan("Moby", [c], False)
+    out = retrieval._search_one_collection(con, c, "Moby", 5, "hybrid", False, set(), plan)
+    legs = [leg for leg in retrieval._legs_withheld(c, out) if leg["leg"] == "text"]
+    assert len(legs) == 1 and "the index she reads, is gone" in legs[0]["reason"]

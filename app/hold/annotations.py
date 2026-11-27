@@ -1714,7 +1714,7 @@ def _held_claims(shard_tree: Path, snap) -> dict[tuple, tuple[int, dict[str, Any
 def update(root: Path, name: str, *, claims: bytes | Path | None = None,
            against: Sequence[tuple[str, str]] | None = None, snapshot_id: str | None = None,
            key=None, now: str | None = None, log=print, dry_run: bool = False,
-           clock: datetime | None = None, unheld: str = "refuse", private: bool = False,
+           clock: datetime | None = None, unheld: str = "refuse", hand_over: bool = False,
            guard=None, since: Mapping[str, str] | None = None, _in_memory: bool = False) -> Update:
     """`hold annotations update <name>` (02 §2.10, built 2026-10-23): the
     next snapshot of an annotations collection — the SAME collection, its
@@ -1738,7 +1738,8 @@ def update(root: Path, name: str, *, claims: bytes | Path | None = None,
 
     STREAMED (2026-11-10, as `create`; app/hold/annotations_stream.py):
     `claims` — the file's bytes or its path — is copied once into a
-    workspace (the claims held, re-checked, are hard-linked there instead)
+    workspace (the claims held, re-checked, are read where they lie, and a
+    method's output is moved there: never a hard link, app/file_copy.py)
     and read pass by pass on the parse pool; the previous snapshot's claims
     are kept as their identity digests, numbers and hashes (~40 bytes a
     claim), never as records. Every byte written, and the `Update` returned,
@@ -1750,9 +1751,10 @@ def update(root: Path, name: str, *, claims: bytes | Path | None = None,
     the target's live state, so a claim whose end the target's snapshot does
     not hold YET is set aside and named, as a re-check sets one aside, rather
     than refusing the file — the next snapshot of the target brings it in.
-    `private=True` says the file is the caller's own, which nobody writes
-    again: it is linked into the workspace, not copied (RULE 1; wikipedia's is
-    4.2 GB). `guard`, a context manager, is held around the snapshot's write
+    `hand_over=True` says the file is the caller's own and this update
+    consumes it (a method's output, in the method's workspace): it is MOVED
+    into the update's workspace, not copied (RULE 1; wikipedia's is 4.2 GB)
+    and never hard-linked (operator, 2026-11-27, app/file_copy.py). `guard`, a context manager, is held around the snapshot's write
     and its signature, so that a stop never leaves one written and unsigned
     (the method's child defers a stop until it ends).
 
@@ -1782,7 +1784,7 @@ def update(root: Path, name: str, *, claims: bytes | Path | None = None,
                 raise AnnotationsError(f"{plan.name} keeps no {CLAIMS_FILE} beside its SHARD to re-check: "
                                        f"give the claims file") from None
         else:
-            src = st.private_source(claims, work, link=private)
+            src = st.private_source(claims, work, hand_over=hand_over)
         with src:
             try:
                 return _update_stream(plan, src, work, recheck=recheck, key=key, now=now, log=log,
@@ -1976,6 +1978,11 @@ def _update_stream(plan: _UpdatePlan, src, work: Path, *, recheck: bool, key, no
             ad.settle(plan, served, held)
             held.pins = None
         form = {"targets": served.form, "pinned": 0, "read": 0}
+    # a source read WHERE IT LIES (`linked_source`) is checked to be the
+    # file it opened before each pass over it and at the end (never a hard
+    # link: operator, 2026-11-27, app/file_copy.py)
+    what = f"{plan.name}'s update"
+    src.still(what)
     sv = st.survey(src, plugins=tuple(by_plugin), keep_idents=True,
                    orders={p: (t.codex.slicing or {}).get("order", "bytes") for p, t in by_plugin.items()})
     _refuse_graph(plan, sv.graph)
@@ -2003,6 +2010,7 @@ def _update_stream(plan: _UpdatePlan, src, work: Path, *, recheck: bool, key, no
     at, hit = st._search(held.idents, sv.idents)
     sv.idents = None
     sort = st.ExternalSort(work)
+    src.still(what)
     dropped = st.check_pins(src, sv, tables, snapshots=snapshots, codices=codices, sort=sort,
                             version=codex.version, strip=recheck,
                             drop=recheck if drop is None else drop, fresh=~hit)
@@ -2027,12 +2035,14 @@ def _update_stream(plan: _UpdatePlan, src, work: Path, *, recheck: bool, key, no
     staging = plan.staging
     if staging.exists():
         shutil.rmtree(staging)
+    src.still(what)
     parts = st.ClaimParts(src, sv, None, tables, snapshots, codices, order=order, numbers=by_number,
                           strip=recheck)
     del order
     shards, relations, _ = parts.write_parts(
         staging, plan.sid, shard_records=int(codex.slicing.get("shard_records") or SHARD_RECORDS),
         container=cx.container_of(codex))
+    src.still(what)                                 # the end: every pass read the one file
     # `compute_delta(before, after)`: by uid, compared by content hash
     differ = (held.hashes[old] != parts.hashes[was]).any(axis=1)
     if held.odd:

@@ -490,14 +490,26 @@ def test_a_window_that_cuts_nothing_otherwise_is_refused(held_gb, capsys):
 
 
 def test_a_shared_text_index_and_an_official_publication_refuse(held_gb, monkeypatch, capsys):
+    """The static share, real (no placement stood in): gb's index read by a
+    sister refuses gb's refit naming her and `unshare`; her own refit is
+    refused too (she reads gb's)."""
+    import shutil
     from app import text_index
+    from app.hold import deposit
     root, old, _h, _e = held_gb
+    (root / "rd" / "state").mkdir(parents=True)
+    shutil.copy(root / NAME / "state" / "manifest.sqlite", root / "rd" / "state" / "manifest.sqlite")
+    deposit.held_file(root, "rd").write_text("", encoding="utf-8")
+    text_index.share(root, NAME, "rd", "x", log=lambda m: None)
     tree = _tree(root)
-    monkeypatch.setattr(text_index, "placement", lambda r, n: {"dir": ".text-index/x", "identity": "x"}
-                        if n in (NAME, "gb-editions") else None)
     assert _refit(root, *FIT) != 0
-    assert "shared with gb-editions" in capsys.readouterr().err
-    monkeypatch.setattr(text_index, "placement", lambda r, n: None)
+    err = capsys.readouterr().err
+    assert f"rd read {NAME}'s text index" in err and "`louise hold collection unshare rd`" in err
+    assert "reads gb/index" in refit_mod.shared_index_refusal(root, "rd")
+    assert _tree(root) == tree
+    text_index.unshare(root, "rd", log=lambda m: None)
+    assert refit_mod.shared_index_refusal(root, NAME) is None
+    tree = _tree(root)
     monkeypatch.setattr(refit_mod, "official_publication", lambda r, n, c: f"{n} is certified")
     assert _refit(root, *FIT) != 0
     assert "is certified" in capsys.readouterr().err

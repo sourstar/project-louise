@@ -132,9 +132,95 @@ def manual_reader(idx: tantivy.Index) -> tantivy.Index:
     return idx
 
 
+class IndexMissing(RuntimeError):
+    """A text index read elsewhere (a placement, app/text_index.py) that is
+    not there: refused, never made empty where it should be."""
+
+
+#: (manifest, group) a get_index found marked and holding no index: refused
+#: for this process's life (a writer makes a group's index before it marks)
+_marked_groups: set[tuple[str, str]] = set()
+
+
+def _marked_in(collection, group: str) -> bool:
+    """Whether the collection's manifest marks a document of `group`
+    indexed (`fts_done=1`): a document of one language marks its language's
+    group; a marked multilingual (`mul`) document marks every group its
+    sections can be in — each declared section language's and `other`
+    (`groups_for_lang`, as `delete_book` deletes it; the fourth read of
+    cf91b9ac). Read only where the group's index is missing: never on the
+    hot path."""
+    import sqlite3
+    from pathlib import Path
+    manifest = getattr(collection, "manifest_path", None)
+    if manifest is None or not Path(manifest).is_file():
+        return False
+    key = (str(manifest), group)
+    if key in _marked_groups:
+        return True
+    try:
+        con = sqlite3.connect(f"file:{manifest}?mode=ro", uri=True, timeout=30)
+        try:
+            langs = [r[0] for r in con.execute("SELECT DISTINCT lang FROM documents WHERE fts_done=1")]
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+    hit = any(group in groups_for_lang(collection, l) for l in langs)
+    if hit:
+        _marked_groups.add(key)
+    return hit
+
+
+def _refuse_missing(collection, root, group: str) -> None:
+    """A collection whose placement names an index directory that does not
+    exist is refused in words, never given an empty one made there: it
+    would answer every search with nothing while its marks say every
+    document is indexed (a carry that moved the index it reads, 2026-11-27).
+    A group missing INSIDE an existing directory is its writer's to make,
+    as it always was."""
+    from pathlib import Path
+    own = Path(getattr(collection, "fts_dir", root))
+    root = Path(root)
+    if root == own:
+        return
+    name = getattr(collection, "name", "?")
+    if not root.is_dir():
+        raise IndexMissing(f"{name}: its text index is read at {root} (state/text-index.json), which does "
+                           f"not exist; nothing is made there: `louise hold collection unshare {name}`")
+
+
+#: set while a WRITE opens its index (`_for_write`): only a write makes an
+#: index where the manifest marks the group indexed. A thread's own flag, so
+#: the signature every caller (and every test's stand-in) uses is unchanged
+_writing = threading.local()
+
+
+def _for_write(group: str, collection=None) -> tantivy.Index:
+    """`get_index` for a write (`index_books`, `rewrite_without`): it makes
+    the group's index where it is missing — the write puts its data there."""
+    _writing.on = True
+    try:
+        return get_index(group, collection)
+    finally:
+        _writing.on = False
+
+
 def get_index(group: str, collection=None) -> tantivy.Index:
+    """The group's index, opened once per process. A WRITE (`_for_write`:
+    `index_books`, `rewrite_without`) makes it where it is missing. A READ
+    never makes an empty index where the collection's manifest marks a
+    document of the group indexed (third read of 74c95825, 2026-11-27: a
+    search while a group is being formed made one, which would answer nothing
+    for them): it refuses in words (`IndexMissing`). A delete opens none that
+    is missing (`delete_book`, `delete_books`: nothing is held there)."""
     if collection is None:
         collection = collections_mod.default_collection()
+    why = text_index.withheld(collection)
+    if why:
+        # her placement no longer holds (the boot's check, app/text_index.py):
+        # her text leg is withheld in words, nothing is read or made
+        raise IndexMissing(f"{getattr(collection, 'name', '?')}: {why}")
     # Keyed on the physical path, not collection.name: two different
     # Collection instances can share a name (most concretely, in tests that
     # build ad-hoc Collections) while pointing at different fts_dirs — a
@@ -147,6 +233,7 @@ def get_index(group: str, collection=None) -> tantivy.Index:
             return _indexes[key]
         gate = _opening.setdefault(key, threading.Lock())
         epoch = _forgotten.get(key[0], 0)
+    _refuse_missing(collection, root, group)
     # THE OPEN IS OUTSIDE THE MODULE'S LOCK, under this index's own: two
     # callers of one index still open it once, and the open of another index
     # waits for nobody (`_opening`)
@@ -155,6 +242,13 @@ def get_index(group: str, collection=None) -> tantivy.Index:
             if key in _indexes:
                 return _indexes[key]             # opened while this caller waited
         path = root / group
+        if not getattr(_writing, "on", False) and not (path / "meta.json").is_file() \
+                and _marked_in(collection, group):
+            raise IndexMissing(f"{getattr(collection, 'name', '?')}: its manifest marks documents of the "
+                               f"{group!r} text index indexed, and {path} holds no index: none is made "
+                               f"empty there (it would answer nothing for them). The worker's boot "
+                               f"places the index again (`louise node restart`); a lost one is rebuilt "
+                               f"by `louise dev reindex`")
         path.mkdir(parents=True, exist_ok=True)
         from app import validity as validity_mod
         with_validity = validity_mod.declared(collection) is not None
@@ -413,8 +507,9 @@ def forget(fts_dir) -> int:
 
 def forget_missing() -> int:
     """Drop this process's handles on indexes whose directory is gone — a
-    shared text index removed with its last member (app/text_index.py),
-    whose path a group formed again with the same identity would reuse."""
+    collection's index renamed to a sister at its forget (app/text_index.py
+    `hand_over`), whose path a collection made again under the name would
+    reuse."""
     from pathlib import Path
     with _lock:
         for b in {k[0] for k in list(_indexes) + list(_writers) + list(_opening)}:
@@ -431,6 +526,24 @@ def forget_missing() -> int:
             _writers.pop(k, None)
             _opening.pop(k, None)
     return len(set(keys))
+
+
+def release_under(base) -> int:
+    """Let go of this process's writers, and drop its handles, on the
+    indexes under `base` — a forget about to rename that folder to the
+    sister who reads it (app/text_index.py `hand_over`): the tantivy writer
+    lock goes with the writer. How many writers went."""
+    b = str(base)
+    with _lock:
+        held = [(k, v) for k, v in _writers.items() if k[0] == b]
+        for k, _ in held:
+            _writers.pop(k, None)
+        for k in [k for k in _indexes if k[0] == b]:
+            _indexes.pop(k, None)
+    for _key, (writer, lock) in held:
+        with lock:
+            writer.wait_merging_threads()      # consumes it: the directory is free
+    return len(held)
 
 
 def close_all() -> None:
@@ -503,7 +616,7 @@ def index_books(entries, collection=None) -> None:
                 if g not in reached:
                     by_group.setdefault(g, []).append((MULTILINGUAL, book_id, [], None, None))
     for group, items in by_group.items():
-        idx = get_index(group, collection)
+        idx = _for_write(group, collection)
         algorithm = pystem_algorithm(group)
         writer, lock = _writer((str(base_of(collection)), group), idx)
         with lock:
@@ -714,6 +827,8 @@ def delete_book(lang: str, book_id: int, collection=None):
     if (lang or "") == MULTILINGUAL:
         groups = list(dict.fromkeys([group_for(l) for l in section_languages(collection)] + groups))
     for group in groups:
+        if not (base / group / "meta.json").is_file():
+            continue                    # nothing held there, and a delete makes no index
         idx = get_index(group, collection)
         writer, lock = _writer((str(base), group), idx)
         with lock:
@@ -748,6 +863,8 @@ def delete_books(group: str, book_ids, collection=None) -> int:
         return 0
     if not text_index.writes(collection):
         return len(ids)             # its writer deletes them (`delete_book`)
+    if not (base_of(collection) / group / "meta.json").is_file():
+        return len(ids)             # nothing held there, and a delete makes no index
     idx = get_index(group, collection)
     writer, lock = _writer((str(base_of(collection)), group), idx)
     with lock:
@@ -780,7 +897,7 @@ def rewrite_without(group: str, collection=None) -> int:
                            f"its records, never rewritten from its stored fields")
     if collection is not None and not text_index.writes(collection):
         raise ReaderWrite(f"{collection.name} reads a shared text index: its writer rewrites it")
-    idx = get_index(group, collection)
+    idx = _for_write(group, collection)
     writer, lock = _writer((str(base_of(collection)), group), idx)
     algorithm = pystem_algorithm(group)
     with lock:

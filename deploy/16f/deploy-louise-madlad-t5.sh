@@ -403,8 +403,8 @@ cd "$ROOT"
 rm -rf src.old && mkdir -p src.old
 for d in $TREE; do chmod -R u+w "src/$d" 2>/dev/null || true; mv "src/$d" src.old/ 2>/dev/null || true; mv "src.new/$d" src/; done
 for f in $FILES; do mv "src/$f" src.old/ 2>/dev/null || true; mv "src.new/$f" src/; done
-cp -a src/deploy src.old/deploy
-cp -a src.new/deploy/. src/deploy/
+cp -a --no-preserve=links src/deploy src.old/deploy
+cp -a --no-preserve=links src.new/deploy/. src/deploy/
 rm -rf src.new
 docker build -q -t louise-rag:local "$ROOT/src"
 echo "$COMMIT" > "$ROOT/src/.deployed-commit"

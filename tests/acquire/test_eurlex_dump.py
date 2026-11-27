@@ -136,9 +136,10 @@ def test_the_units_parse_as_parser_4_records(tmp_path, serial):
 
 def test_an_earlier_corpus_s_units_the_dump_did_not_give_are_carried_without_their_notice(tmp_path, serial):
     """RULE 1: the consolidation an earlier per-unit fetch landed (notice,
-    tree, items) — never in the dump — linked into the history slice with
-    its tree and items, the same bytes; the Formex act the dump built is
-    left as the dump built it."""
+    tree, items) — never in the dump — copied into the history slice with
+    its tree and items, the same bytes (never a hard link: app/file_copy.py),
+    the earlier corpus left whole; the Formex act the dump built is left as
+    the dump built it."""
     old = tmp_path / "old"
     for celex, _uuid, fx, _f in (FORMEX, CONS):
         unit = old / src.unit_rel("it", celex)
@@ -154,13 +155,35 @@ def test_an_earlier_corpus_s_units_the_dump_did_not_give_are_carried_without_the
     names = sorted(p.name for p in unit.iterdir())
     assert names == sorted(["CL1979D0491IT0040010.0001.doc.xml", "CL1979D0491IT0040010.0001.xml",
                             rdf.TREE_FILE])
-    assert (unit / rdf.TREE_FILE).stat().st_ino == \
-        (old / src.unit_rel("it", CONS[0]) / rdf.TREE_FILE).stat().st_ino, "linked, not copied"
+    was = old / src.unit_rel("it", CONS[0]) / rdf.TREE_FILE
+    assert (unit / rdf.TREE_FILE).read_bytes() == was.read_bytes()
+    assert (unit / rdf.TREE_FILE).stat().st_ino != was.stat().st_ino, "copied, never linked"
+    assert all(p.stat().st_nlink == 1 for p in unit.iterdir())
+    assert was.is_file(), "the earlier corpus is left whole"
     refs = {Path(r.locator).name: r for r in SOURCE.discover(DiscoverState(corpus_root=corpus))}
     assert set(refs) == {FORMEX[0], HTML[0], CONS[0]}
     doc = plugin_io.canonical_doc(SOURCE, {"native_id": refs[CONS[0]].native_id,
                                            "path": refs[CONS[0]].locator})
     assert doc.extra["history"] is True and doc.extra["work_celex"] == "31979D0491"
+
+
+def test_a_carry_that_does_not_fit_copies_nothing(tmp_path, monkeypatch, serial):
+    """The preflight: the units' bytes (an upper bound) against the free
+    space where the corpus is; short, nothing is copied and it says so."""
+    from app import file_copy
+    old = tmp_path / "old"
+    for celex, _uuid, fx, _f in (FORMEX, CONS):
+        unit = old / src.unit_rel("it", celex)
+        unit.mkdir(parents=True)
+        for f in fx.iterdir():
+            if f.name != MTD:
+                shutil.copy(f, unit / f.name)
+    corpus = tmp_path / "corpus"
+    eurlex_dump.build(_dump(tmp_path / "dump"), corpus, ["it"], log=lambda m: None)
+    monkeypatch.setattr(file_copy, "free_bytes", lambda where: 10)
+    with pytest.raises(file_copy.NoRoom, match="nothing was copied"):
+        eurlex_dump.carry(old, corpus, log=lambda m: None)
+    assert not (corpus / src.HISTORY / src.unit_rel("it", CONS[0])).exists()
 
 
 def test_a_parser_4_collection_s_per_unit_pass_is_held_back(monkeypatch, tmp_path):

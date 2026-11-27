@@ -88,14 +88,33 @@ def test_the_streamed_and_in_memory_drops_write_the_same_bytes(tmp_path):
     assert out[False] == out[True]
 
 
-def test_a_private_claims_file_is_linked_not_copied(tmp_path):
+def test_a_handed_over_claims_file_is_moved_never_copied_or_linked(tmp_path):
+    """A method's output is consumed by its update: MOVED into place, the
+    very bytes at no copy (RULE 1), one name only (never a hard link:
+    operator, 2026-11-27)."""
     a_target(tmp_path)
     make(tmp_path)
     src = tmp_path / "mine.jsonl"
-    src.write_bytes(claims_file(a_claim(), a_claim("pubmed:2", "pubmed:4")))
-    ann.update(tmp_path, NAME, claims=src, key=KEY, now=NOW, log=lambda m: None, clock=OCTOBER, private=True)
-    assert os.stat(src).st_ino == os.stat(tmp_path / NAME / "origin" / "claims.jsonl").st_ino, \
-        "the very bytes, at no copy (RULE 1)"
+    body = claims_file(a_claim(), a_claim("pubmed:2", "pubmed:4"))
+    src.write_bytes(body)
+    ino = os.stat(src).st_ino
+    ann.update(tmp_path, NAME, claims=src, key=KEY, now=NOW, log=lambda m: None, clock=OCTOBER, hand_over=True)
+    origin = tmp_path / NAME / "origin" / "claims.jsonl"
+    assert not src.exists(), "handed over: moved, not left behind"
+    assert os.stat(origin).st_ino == ino and origin.read_bytes() == body, "the very bytes, at no copy"
+    assert os.stat(origin).st_nlink == 1
+
+
+def test_claims_given_by_hand_are_copied_and_the_caller_keeps_theirs(tmp_path):
+    a_target(tmp_path)
+    make(tmp_path)
+    src = tmp_path / "mine.jsonl"
+    body = claims_file(a_claim(), a_claim("pubmed:2", "pubmed:4"))
+    src.write_bytes(body)
+    ann.update(tmp_path, NAME, claims=src, key=KEY, now=NOW, log=lambda m: None, clock=OCTOBER)
+    origin = tmp_path / NAME / "origin" / "claims.jsonl"
+    assert src.read_bytes() == body == origin.read_bytes()
+    assert os.stat(src).st_ino != os.stat(origin).st_ino and os.stat(src).st_nlink == 1
 
 
 def test_the_snapshot_is_written_whole_and_signed_inside_the_guard(tmp_path):
