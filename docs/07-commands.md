@@ -2713,7 +2713,7 @@ collection is another name.
 │       ├── index/           the text index of the parts held, and the facet values (05 §5.7); a sister sharing her text index keeps only her catalogue and facets here (state/text-index.json names the shared one, below)
 │       ├── lance/           the vector table search reads; while it is built, a link into the build area (`LOUISE_BUILD_DIR`, below); with a Lance root, a link into it (`LOUISE_LANCE_ROOT`, below)
 │       └── origin/          the origin files the records are parsed from — 06 §6.2's corpus directory, kept for records-vs-origin; the bytes may live on other storage, mounted here
-│   └── .text-index/<identity>/  ONE text index for sisters whose index would be the same byte for byte, written by one (`writer.json`), read by the others; formed, joined and left at the worker's boot (02 §2.7, amended 2026-11-10; app/text_index.py)
+│   └── .text-index/<id>/  ONE text index for sisters whose index would be the same byte for byte, written by one (`writer.json`), read by the others; a unique folder id made once, its identity recorded in `group.json` (2026-11-27); formed, joined and left at the worker's boot, a forming journalled in `.text-index/.forming/` and finished forward (02 §2.7, amended 2026-11-10; app/text_index.py)
 ├── state/                   node.sqlite: the catalogue, coverage maps (09 §9.10), peers seen, runtime overrides; trust.json; web-sources-ack.json (09 §9.13); working-state.json (`node checkpoint`, §7.3); resident-budget.json (the resident budget's measured margin, at-rest and largest model sizes, card total and eviction penalty, written by the worker, read by `node resident show`; §7.3, 2026-11-08)
 └── keys/                    the peer key, at NODE_KEY_PATH
 ```
@@ -2725,7 +2725,8 @@ you deleted important files because you forgot the hard links"). Nothing
 makes a second name for a file. What two collections both use is read
 WHERE IT LIES, by its path: a sister's text index (one group with her
 sister's, formed by rename at her creation: `louise node stop` first while
-the worker holds its writers), a re-check's claims, a re-created collection's origin directory (a symbolic
+the worker holds its writers; a forming is journalled before its first
+rename and finished forward), a re-check's claims, a re-created collection's origin directory (a symbolic
 link, handed over at its holder's forget), a discarded snapshot's part the
 build since shares (kept in place). What becomes another owner's own is
 COPIED, a reflink where the filesystem clones blocks, after a preflight of
@@ -2734,7 +2735,15 @@ of 2026-11-27; the standard alternative, content-addressed parts, is in
 hold/seed.py), a carried bundle tree, an earlier corpus's units. What an
 operation consumes is moved: a method's claims. A symbolic
 link names a path and deleting it never deletes its target: it is
-allowed. app/file_copy.py; enforced by tests/test_no_hard_links.py.
+allowed; a COPY dereferences it (`cp -L`: the copy holds the bytes, never
+the link). A forget whose origin directory goes to a heir whose write lock
+is held refuses and names `louise node pause <heir>` (exit 3; nothing
+removed). The backend archives (tools/archive_backend.py) hold no hard-link
+entry: files sharing an inode are written whole, and an older archive's
+link entry is unpacked as a COPY of its target. A third party's runtime
+archive is refused if it holds a hard-link member, before it is
+extracted. app/file_copy.py; enforced by tests/test_no_hard_links.py,
+per line.
 
 One mount per kind, a folder per collection (amended 2026-10-12, operator):
 with `SHARDS_ROOT` and `ORIGINS_ROOT` set (environment: this node's

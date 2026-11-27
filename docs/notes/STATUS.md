@@ -45,6 +45,18 @@ measured (published figures disagree).
   (deploy/localai patches 0010/0019, hard links made by the engine's Go code: Tensor's), and the hard
   links already on the node, which `find -links +1` lists (the app makes none from now on).
   docs/07 §7.8, app/file_copy.py.
+  **Third read of 74c95825:** a group folder is a unique id made once, its identity recorded inside
+  (`group.json`), so a lone member's folder is never adopted or reused; a sister joining a folder
+  others use is reconciled like the boot does, the writer kept; a forming is journalled before its
+  first rename and finished forward by a retry or the boot; a group whose every member moves keeps
+  its folder (rename and retag, no 54 GB copy); a read never makes an empty index the manifest
+  marks populated (a write makes it, a delete makes none); a copy dereferences symbolic links (`cp -L`); a forget whose heir's lock is held
+  names `louise node pause <heir>` (the worker does not pause it itself); tools/archive_backend.py
+  writes no hard-link entry and unpacks an old one as a copy; the guard is keyed per line, refuses a
+  third party's runtime archive holding a link member, and catches filterless extraction,
+  `unpack_archive`, `cp -d`/`--preserve=links|all`, `rsync -H`, `link`, `cpio -l`, `bsdtar`,
+  continued lines, scripts in strings and tests_campaign/; the room check before every seed is
+  checked by source order.
 
 ### 2026-11-26
 
