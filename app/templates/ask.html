@@ -148,6 +148,9 @@
     <label class="inline check" id="phrases-choice" hidden
            title="a short phrase while the answer is being searched; off, a tone instead">
       <input type="checkbox" id="voice-phrases" style="width:auto" checked> phrases while waiting</label>
+    {# the name hands-free is called by, every reader's own; empty, the node's #}
+    <label class="inline" id="wake-choice" hidden title="the name you call hands-free by; empty: the node's">name
+      <input id="wake-name" maxlength="32" style="width:8em" autocomplete="off" spellcheck="false"></label>
     {% endif %}
   </div>
   </details>

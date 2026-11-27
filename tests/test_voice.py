@@ -326,9 +326,9 @@ def test_an_account_keeps_its_voice_and_every_client_of_it_hears_it(two_voices, 
     monkeypatch.setattr(config, "ADMIN_TOKEN", "sekrit")
     _, token = users.add("ada", role="admin")
     c, h = TestClient(api.app), {"Authorization": f"Bearer {token}"}
-    assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None, "phrases": None}
+    assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None, "phrases": None, "wake_name": None}
     r = c.post("/ask/voice", headers=h, json={"voice": VOICE_B})
-    assert r.status_code == 200 and r.json()["account"] == {"name": "ada", "voice": VOICE_B, "phrases": None}
+    assert r.status_code == 200 and r.json()["account"] == {"name": "ada", "voice": VOICE_B, "phrases": None, "wake_name": None}
     assert f'voice = "{VOICE_B}"' in users.path().read_text(), "kept with the account, in users.toml"
     assert c.post("/v1/audio/speech", headers=h, json={"input": "Dante."}).status_code == 200
     assert calls[-1]["voice"] == VOICE_B, "a client naming no voice hears the account's"
@@ -353,7 +353,7 @@ def test_no_account_no_voice_kept_by_the_node_and_one_since_removed_is_the_nodes
     _, token = users.add("ada", role="admin")
     users.set_voice("ada", "localai://voice-profiles/gone")
     h = {"Authorization": f"Bearer {token}"}
-    assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None, "phrases": None}
+    assert c.get("/ask/voices", headers=h).json()["account"] == {"name": "ada", "voice": None, "phrases": None, "wake_name": None}
     c.post("/v1/audio/speech", headers=h, json={"input": "Dante."})
     assert calls[-1]["voice"] == VOICE_A, "a voice the server no longer holds: the node's, never an error"
 

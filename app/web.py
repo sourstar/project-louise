@@ -737,6 +737,54 @@ class AskPhrasesBody(BaseModel):
     on: bool
 
 
+class AskWakeNameBody(BaseModel):
+    name: str | None = Field(None, max_length=64)
+
+
+def _wake_name_for(request: Request, asked: str = "") -> str:
+    """THE NAME A READER CALLS HANDS-FREE BY (operator, 2026-11-27: "the
+    activation name can be customized"): the account's own, else the one
+    this browser keeps (`asked`, the page's, when it is a name), else the
+    node's `[speech] wake_name`, else Philippe."""
+    from . import auth, users, voice as node_voice, voice_wake
+    mine = users.wake_name_of(auth.account(getattr(request.state, "viewer", None)))
+    if mine:
+        return mine
+    if asked:
+        try:
+            return voice_wake.valid_name(asked)
+        except voice_wake.NameError_:
+            pass
+    return node_voice.settings_or_none().wake_name or voice_wake.DEFAULT_NAME
+
+
+@ask_router.get("/ask/voice/name")
+def ask_voice_name_now(request: Request, asked: str = ""):
+    """The name this reader calls hands-free by, and its written forms (the
+    page mutes hands-free while a sentence that holds one is read aloud):
+    `{"wake_name", "forms", "mine"}` — `mine`, whether the account keeps one.
+    `asked`: the name this browser keeps, for a reader without an account."""
+    from . import auth, users, voice_wake
+    name = _wake_name_for(request, asked)
+    return {"wake_name": name, "forms": list(voice_wake.forms_of(name)),
+            "mine": bool(users.wake_name_of(auth.account(getattr(request.state, "viewer", None))))}
+
+
+@ask_router.post("/ask/voice/name")
+def ask_voice_name(request: Request, body: AskWakeNameBody):
+    """The name a reader calls hands-free by, kept with the account; an empty
+    one goes back to the node's. 409 without an account — the browser keeps it."""
+    from . import auth, users, voice_wake
+    name = auth.account(getattr(request.state, "viewer", None))
+    if not name:
+        raise HTTPException(409, "no account: this browser keeps the choice")
+    try:
+        users.set_wake_name(name, voice_wake.valid_name(body.name) if body.name else None)
+    except (users.UserError, voice_wake.NameError_) as e:
+        raise HTTPException(400, str(e)) from None
+    return {"wake_name": _wake_name_for(request)}
+
+
 @ask_router.post("/ask/voice/phrases")
 def ask_voice_phrases(request: Request, body: AskPhrasesBody):
     """THE PHRASES THAT COVER THE WAIT, a reader's choice (operator,
@@ -1597,6 +1645,7 @@ async def ask_voice_heard(request: Request):
         follow = str(form.get("follow") or "") == "1"
         said = str(form.get("said") or "")[:HEARD_SAID_CHARS]
         page = re.sub(r"[^A-Za-z0-9-]", "", str(form.get("page") or ""))[:64]
+        asked_name = str(form.get("name") or "")[:64]
     finally:
         await form.close()
     seconds = max(0.0, (len(audio) - 44) / 32000.0)
@@ -1630,7 +1679,7 @@ async def ask_voice_heard(request: Request):
         text = str(json.loads(got.body or b"{}").get("text") or "")
     except ValueError:
         text = ""
-    out = voice_wake.heard(text, name=node_voice.settings_or_none().wake_name, follow=follow, said=said)
+    out = voice_wake.heard(text, name=_wake_name_for(request, asked_name), follow=follow, said=said)
     outcome = (f"addressed ({out.command or 'question'})" if out.addressed
                else f"dropped ({out.dropped})")
     print(f"{time.strftime('%H:%M:%S')} [voice] heard {seconds:.1f} s, vad {vad}, stt {stt_s} s: {outcome}",
