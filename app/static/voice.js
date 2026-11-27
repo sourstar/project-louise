@@ -406,7 +406,15 @@
   // OscillatorNode, nothing fetched. False where the browser gives no sound
   // (a context that is not running: suspended, interrupted, closed). Named a
   // TONE: "ping" is the voice ping (app/voice_ping.py) and /ask/active's.
-  const TONE_MS = 160, TONE_HZ = 880, TONE_GAIN = 0.12;
+  // PLAYED, NEVER HEARD (operator, 2026-11-27: "the ping when the microphone
+  // is ready is never playing"): every report since the tone was added says
+  // its context was running and it played (Android 10, Chrome) — at −18 dBFS
+  // for 160 ms, the instant the microphone gave sound, which is when Android
+  // moves the audio to its call mode and the media output is ducked or sent
+  // to the earpiece. Now −8 dBFS for 220 ms, TONE_DELAY_MS after the
+  // microphone is live, the route settled; the microphone stays deaf to it
+  // for that much longer (`deafEnd`).
+  const TONE_MS = 220, TONE_HZ = 880, TONE_GAIN = 0.4, TONE_DELAY_MS = 350;
   // the microphone hears the tone after the output's latency and the route's
   // (Bluetooth: 100-300 ms) and the capture's own buffering (a worklet window
   // of 2048 samples, ~46 ms); its windows are not counted until the audio
@@ -431,7 +439,7 @@
     toneLast = { state: toneCtx ? toneCtx.state : null, latency_ms: toneLatencyMs(), played: false };
     if (!toneCtx || toneCtx.state !== 'running') return false;
     try {
-      const t = toneCtx.currentTime, osc = toneCtx.createOscillator(), g = toneCtx.createGain();
+      const t = toneCtx.currentTime + TONE_DELAY_MS / 1000, osc = toneCtx.createOscillator(), g = toneCtx.createGain();
       osc.type = 'sine'; osc.frequency.value = TONE_HZ;
       g.gain.setValueAtTime(0, t);
       g.gain.linearRampToValueAtTime(TONE_GAIN, t + 0.02);            // no click at the start
@@ -449,7 +457,7 @@
   // output's latency, a margin, and the tone with its tail
   function deafEnd(r) {
     const captured = r.mode === 'recorder' ? Math.max(r.ms, r.decoded_ms || 0) + RECORDER_SLICE_MS : r.ms;
-    return captured + toneLatencyMs() + TONE_MARGIN_MS + TONE_TAIL_MS;
+    return captured + TONE_DELAY_MS + toneLatencyMs() + TONE_MARGIN_MS + TONE_TAIL_MS;
   }
 
   function release(r) {
