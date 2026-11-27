@@ -5,6 +5,10 @@
 # CUDA: LOUISE_TORCH_DETERMINISTIC (torch's deterministic algorithms, cuDNN's)
 # AND CUBLAS_WORKSPACE_CONFIG (cuBLAS's fixed workspace: without it torch
 # refuses its deterministic mode on CUDA) — the wrapper requires both. JSON, which is YAML.
+# LOUISE_COMPUTE_PRECISION bf16: what this file computed in UNSTATED, by the remote code (not
+# measured: no peer has a card): its config keeps torch_dtype bfloat16 where CUDA is available
+# and loads with torch_dtype "auto" — where the node's vega-jina-v3 computes in f32. f32 here
+# would be a new run, gated; the node's people decide (approved-encoders.md).
 {
   "name": "vega-jina-v3",
   "backend": "vega-louise-python",
@@ -25,6 +29,7 @@
     "dim:512"
   ],
   "env": {
+    "LOUISE_COMPUTE_PRECISION": "bf16",
     "LOUISE_TORCH_DETERMINISTIC": "1",
     "CUBLAS_WORKSPACE_CONFIG": ":4096:8"
   }

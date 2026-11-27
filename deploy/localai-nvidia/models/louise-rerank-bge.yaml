@@ -24,3 +24,5 @@ parameters:
     seed: 0
 reranking: true
 threads: 6
+env:
+    LOUISE_COMPUTE_PRECISION: "f16"

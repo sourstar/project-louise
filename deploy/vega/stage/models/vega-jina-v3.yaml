@@ -19,6 +19,9 @@
 # differ come in blocks by text, not by chance; with it set, measured on -20261020c
 # (docs/notes/approved-encoders.md, the torch row; louise-python-rebuild.md §5). The stated run
 # carries the env (invariant 12). JSON, which is YAML.
+# LOUISE_COMPUTE_PRECISION f32: what it computed in before it was stated — the remote code's
+# config sets torch_dtype float32 wherever CUDA is not available (the B70 is torch's XPU), and
+# the task now applies and checks it (approved-encoders.md "Compute precision, stated").
 {
   "name": "vega-jina-v3",
   "backend": "vega-louise-pytorch",
@@ -39,6 +42,7 @@
     "dim:512"
   ],
   "env": {
+    "LOUISE_COMPUTE_PRECISION": "f32",
     "NEO_CACHE_DIR": "/data/louise-cache/neo-cache",
     "LOUISE_TORCH_DETERMINISTIC": "1"
   }

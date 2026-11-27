@@ -101,6 +101,52 @@ def determinism(torch_mod, environ=None) -> bool:
     return True
 
 
+#: COMPUTE PRECISION, STATED (operator, 2026-11-27: "HALF FUCKING PRECISION AS A
+#: DEFAULT!!!"; docs/notes/approved-encoders.md "Compute precision, stated"):
+#: the MODEL's env says what it computes in, as it says the determinism switch,
+#: and the model is put in that dtype and checked — never the library's choice.
+#: Unstated, jina-v3 computed in what its remote code picked: `torch_dtype="auto"`
+#: and a config that keeps bfloat16 where CUDA is available and float32 elsewhere
+#: (xlm-roberta-flash-implementation, configuration_xlm_roberta.py) — f32 on the
+#: node's XPU, bf16 on an NVIDIA or ROCm card.
+PRECISION_ENV = "LOUISE_COMPUTE_PRECISION"
+#: the stated word -> torch's dtype
+TORCH_DTYPES = {"f32": "float32", "bf16": "bfloat16", "f16": "float16"}
+#: torch's fp32 matmul precision "highest": no TF32 on CUDA (cuBLAS), no bf16 or
+#: TF32 inside oneDNN's fp32 matmuls (CPU and XPU) — the same call covers all three
+FP32_MATMUL = "highest"
+
+
+def stated_precision(environ=None) -> str:
+    """The compute precision the model's env states; a ValueError naming the
+    variable when it states none, or a word torch has no dtype for."""
+    environ = os.environ if environ is None else environ
+    said = environ.get(PRECISION_ENV, "").strip()
+    if said not in TORCH_DTYPES:
+        raise ValueError(f"the model's env states no compute precision torch can apply "
+                         f"({PRECISION_ENV}={said!r}; one of {', '.join(TORCH_DTYPES)}): a "
+                         f"library's default is in nobody's statement")
+    return said
+
+
+def apply_precision(torch_mod, model, precision: str):
+    """The model in the stated dtype, and torch's fp32 matmuls at their full
+    precision, both READ BACK: a floating parameter or buffer in another dtype,
+    or a matmul precision torch does not report as set, refuses the load."""
+    dtype = getattr(torch_mod, TORCH_DTYPES[precision])
+    model = model.to(dtype=dtype)
+    torch_mod.set_float32_matmul_precision(FP32_MATMUL)
+    if torch_mod.get_float32_matmul_precision() != FP32_MATMUL:
+        raise RuntimeError(f"torch reports its fp32 matmul precision as "
+                           f"{torch_mod.get_float32_matmul_precision()!r}, not {FP32_MATMUL!r}")
+    other = sorted({str(t.dtype) for t in (*model.parameters(), *model.buffers())
+                    if t.is_floating_point() and t.dtype != dtype})
+    if other:
+        raise RuntimeError(f"the model holds {', '.join(other)} tensors after .to({dtype}): it "
+                           f"would not compute in the stated {precision}")
+    return model
+
+
 def sdpa_forward(self, qkv, causal=None, key_padding_mask=None):
     """`mha.SelfAttention.forward` with the same inputs and output, through
     `scaled_dot_product_attention`. qkv is (B, S, 3, H, D); the output (B, S,
@@ -153,6 +199,7 @@ def build_encoder(model_dir: str, device: str, adapter: str, dim: int, max_token
     """
     if dim not in WIDTHS:
         raise ValueError(f"width {dim}: one of {WIDTHS}")
+    precision = stated_precision()          # before any weight is read
     cache = hub_cache(model_dir)
     os.environ["HF_HUB_CACHE"] = cache
     os.environ["HF_HUB_OFFLINE"] = os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -170,6 +217,7 @@ def build_encoder(model_dir: str, device: str, adapter: str, dim: int, max_token
     # other LocalAI.
     model = AutoModel.from_pretrained(model_dir, trust_remote_code=True,
                                       cache_dir=cache).to(device).eval()
+    model = apply_precision(torch, model, precision)
     use_sdpa(model)
     adapters = getattr(model.config, "lora_adaptations", None) or ()
     if adapter not in adapters:

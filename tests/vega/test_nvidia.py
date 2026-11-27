@@ -13,7 +13,7 @@ import pytest
 
 from app.vega import loadopts, nvidia
 from app.vega.procfs import ProcFS
-from tests.vega.test_wrapper_logic import LOAD, _config, _load_with, _run_kw, vw
+from tests.vega.test_wrapper_logic import LOAD, STATED, _config, _env, _load_with, _run_kw, vw
 
 RTX = "0000:01:00.0"
 OTHER = "0000:02:00.0"
@@ -157,13 +157,13 @@ def test_llama_cpp_on_cuda_runs_one_sequence_and_a_card_read_as_nvidia_is_known(
     """cuBLAS disallows atomics by default: llama.cpp on CUDA needs `parallel:1`
     and no vendor variable — and a backend whose NAME names no vendor (the meta
     `llama-cpp`) is accepted on a card the wrapper READ as NVIDIA."""
-    vw.state_run(canon=_load_with({}, ("parallel:1",)), environ={}, **_run_kw(tmp_path, "cuda12-llama-cpp"))
+    vw.state_run(canon=_load_with({}, ("parallel:1",)), environ=_env({}), **_run_kw(tmp_path, "cuda12-llama-cpp"))
     with pytest.raises(loadopts.Unstatable, match="parallel:1"):
-        vw.state_run(canon=_load_with({}, ("parallel:4",)), environ={}, **_run_kw(tmp_path, "cuda13-llama-cpp"))
+        vw.state_run(canon=_load_with({}, ("parallel:4",)), environ=_env({}), **_run_kw(tmp_path, "cuda13-llama-cpp"))
     with pytest.raises(loadopts.Unstatable, match="names no vendor"):
-        vw.state_run(canon=_load_with({}, ("parallel:1",)), environ={},
+        vw.state_run(canon=_load_with({}, ("parallel:1",)), environ=_env({}),
                      **_run_kw(tmp_path / "unread", "llama-cpp"))
-    vw.state_run(canon=_load_with({}, ("parallel:1",)), environ={}, vendor="cuda",
+    vw.state_run(canon=_load_with({}, ("parallel:1",)), environ=_env({}), vendor="cuda",
                  **_run_kw(tmp_path / "read", "llama-cpp"))
 
 
@@ -173,13 +173,13 @@ def test_torch_on_cuda_needs_cublass_fixed_workspace_beside_torchs_switch(tmp_pa
     for name, vendor in (("cuda12-louise-python-20261021", None), ("louise-python-20261021", "cuda")):
         kw = _run_kw(tmp_path / name, name)
         with pytest.raises(loadopts.Unstatable, match="CUBLAS_WORKSPACE_CONFIG=:4096:8"):
-            vw.state_run(canon=_load_with(on, ("task:jina-v3", "device:cuda")), environ=on,
+            vw.state_run(canon=_load_with(on, ("task:jina-v3", "device:cuda")), environ=_env(on),
                          vendor=vendor, **kw)
-        vw.state_run(canon=_load_with(both, ("task:jina-v3", "device:cuda")), environ=both,
+        vw.state_run(canon=_load_with(both, ("task:jina-v3", "device:cuda")), environ=_env(both),
                      vendor=vendor, **kw)
     # on the CPU the workspace is no part of the contract
     kw = _run_kw(tmp_path / "cpu", "cuda12-louise-python-20261021", "cpu")
-    vw.state_run(canon=_load_with(on, ("task:jina-v3", "device:cpu")), environ=on, **kw)
+    vw.state_run(canon=_load_with(on, ("task:jina-v3", "device:cpu")), environ=_env(on), **kw)
 
 
 # ---- the configuration ------------------------------------------------------------
@@ -253,7 +253,7 @@ def _gate(tmp_path, stubs, smi, *, name="cuda12-llama-cpp", **host):
     cfg = vw.load_config(_config(tmp_path, backend=name, cards=CARDS,
                                  nvidia_smi="/usr/bin/nvidia-smi"), tmp_path / "backends")
     receipts = _Receipts()
-    gate = vw.Gate(cfg, backend, _Child(), receipts, stubs.pb, environ={},
+    gate = vw.Gate(cfg, backend, _Child(), receipts, stubs.pb, environ=_env({}),
                    hash_weights=lambda p: "sha256:" + "ab" * 32, procfs=ProcFS(proc),
                    proc_root=proc, sys_root=sys_, dpkg_status=tmp_path / "status", nvidia_smi=smi)
     return gate, receipts
@@ -266,7 +266,8 @@ def _load(tmp_path, stubs, **options) -> bytes:
     with weights.open("wb") as f:
         f.truncate(2400 * 2**20)                     # 2,400 MiB, sparse
     load = {"Model": "m.gguf", "ModelFile": str(weights), "ModelPath": str(weights.parent),
-            "ContextSize": 512, "Embeddings": True, "Options": ["parallel:1"]} | options
+            "ContextSize": 512, "Embeddings": True, "Options": ["parallel:1"],
+            "EnvVars": STATED} | options
     return json_format.ParseDict(load, stubs.pb.ModelOptions()).SerializeToString()
 
 
@@ -297,8 +298,8 @@ def test_a_torch_task_on_nvidia_carries_cublass_workspace_or_states_no_run(tmp_p
     for env, stated in ((on, False), (on | {"CUBLAS_WORKSPACE_CONFIG": ":4096:8"}, True)):
         where = tmp_path / str(stated)
         gate, receipts = _gate(where, stubs, _smi_around_a_load(0, 2700), name="louise-python-20261021")
-        gate.environ = env
-        raw = _load(where, stubs, Options=["task:jina-v3", "device:cuda"], EnvVars=env)
+        gate.environ = _env(env)
+        raw = _load(where, stubs, Options=["task:jina-v3", "device:cuda"], EnvVars=_env(env))
         answer = stubs.pb.Result.FromString(gate.load_model(raw, lambda raw: ok))
         assert answer.success is stated, answer.message
         if not stated:
@@ -319,7 +320,7 @@ def test_under_wsl2_the_one_named_card_is_read_through_dev_dxg_and_windows_drive
     receipts = _Receipts()
     cfg = vw.load_config(_config(tmp_path, backend="cuda12-llama-cpp", cards=CARDS,
                                  nvidia_smi="/usr/lib/wsl/lib/nvidia-smi"), tmp_path / "backends")
-    gate = vw.Gate(cfg, backend, _Child(), receipts, stubs.pb, environ={},
+    gate = vw.Gate(cfg, backend, _Child(), receipts, stubs.pb, environ=_env({}),
                    hash_weights=lambda p: "sha256:" + "ab" * 32, procfs=ProcFS(proc),
                    proc_root=proc, sys_root=tmp_path / "sys", dpkg_status=tmp_path / "status",
                    nvidia_smi=_smi_around_a_load(900, 3500))

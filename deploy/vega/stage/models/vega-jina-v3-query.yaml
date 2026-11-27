@@ -11,6 +11,7 @@
 # answers searches and embeds no corpus. env as vega-jina-v3's: LOUISE_TORCH_DETERMINISTIC set
 # (torch's defaults measured not reproducible on the B70, 2026-10-20).
 # JSON, which is YAML.
+# LOUISE_COMPUTE_PRECISION f32: as vega-jina-v3's (approved-encoders.md "Compute precision, stated").
 {
   "name": "vega-jina-v3-query",
   "backend": "vega-louise-pytorch",
@@ -31,6 +32,7 @@
     "dim:512"
   ],
   "env": {
+    "LOUISE_COMPUTE_PRECISION": "f32",
     "NEO_CACHE_DIR": "/data/louise-cache/neo-cache",
     "LOUISE_TORCH_DETERMINISTIC": "1"
   }

@@ -22,3 +22,5 @@ options:
     - parallel:1
     - pooling:cls
     - ubatch:512
+env:
+    LOUISE_COMPUTE_PRECISION: "f16"

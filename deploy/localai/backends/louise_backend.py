@@ -100,6 +100,61 @@ def openvino_device(value: str) -> str:
     return OPENVINO_DEVICES[value]
 
 
+#: COMPUTE PRECISION, STATED (operator, 2026-11-27, on learning that OpenVINO's
+#: GPU plugin runs MedCPT in f16 by its default: "HALF FUCKING PRECISION AS A
+#: DEFAULT!!!"; docs/notes/approved-encoders.md "Compute precision, stated").
+#: The model's env says what it computes in, VeGa's wrapper refuses a run that
+#: does not say (vega_wrapper.stated_precision), and an OpenVINO task passes it
+#: to the plugin and READS IT BACK: the plugin's defaults are f16 on the GPU
+#: and bf16 on a CPU that has it (the node's Ryzen 7600, convert_article.py).
+#: NOT USED YET: MedCPT, the only OpenVINO model, is held until gutenberg-nemo
+#: is done (operator, 2026-11-27) and keeps the plugin's defaults until then.
+PRECISION_ENV = "LOUISE_COMPUTE_PRECISION"
+PRECISIONS = ("f32", "bf16", "f16")
+#: OpenVINO's names for an element type (`ov.Type.get_type_name()` and the
+#: long forms its `str` and older releases give) -> the stated word
+_OPENVINO_TYPES = {"f32": "f32", "float32": "f32", "bf16": "bf16", "bfloat16": "bf16",
+                   "f16": "f16", "float16": "f16"}
+
+
+def stated_precision(environ: Mapping[str, str] | None = None) -> str:
+    """The compute precision the model's env states, or a LoadError naming it."""
+    environ = os.environ if environ is None else environ
+    said = environ.get(PRECISION_ENV, "").strip()
+    if said not in PRECISIONS:
+        raise LoadError(f"the model's env states no compute precision ({PRECISION_ENV}="
+                        f"{said!r}; one of {', '.join(PRECISIONS)}): a backend's default is in "
+                        f"nobody's statement")
+    return said
+
+
+def openvino_config(precision: str, cache_dir: str | None = None) -> dict[str, str]:
+    """`compile_model`'s config: the stated precision as INFERENCE_PRECISION_HINT
+    (and the model cache, where one is set — OpenVINO keys it on the config, so
+    the first start with the hint compiles once)."""
+    if precision not in PRECISIONS:
+        raise LoadError(f"precision {precision!r}: one of {', '.join(PRECISIONS)}")
+    return {"INFERENCE_PRECISION_HINT": precision, **({"CACHE_DIR": cache_dir} if cache_dir else {})}
+
+
+def openvino_precision(compiled: Any) -> str:
+    """What the compiled model computes in, as OpenVINO reads it back."""
+    value = compiled.get_property("INFERENCE_PRECISION_HINT")
+    name = value.get_type_name() if hasattr(value, "get_type_name") else str(value)
+    name = name.strip().lower().removeprefix("<type: '").removesuffix("'>")
+    return _OPENVINO_TYPES.get(name, name)
+
+
+def openvino_precision_holds(compiled: Any, precision: str) -> None:
+    """Refuse, in words, a compiled model that does not compute in the stated
+    precision: a plugin may take a hint it cannot honour (bf16 on a CPU
+    without it) and compute in another."""
+    got = openvino_precision(compiled)
+    if got != precision:
+        raise LoadError(f"OpenVINO compiled the model to compute in {got}, and its env states "
+                        f"{precision} ({PRECISION_ENV}): it is not loaded")
+
+
 def positive(value: str) -> int:
     n = int(value.strip())
     if n <= 0:

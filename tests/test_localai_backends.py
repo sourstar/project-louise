@@ -1112,6 +1112,7 @@ def test_jina_v3_loads_the_remote_code_from_the_folders_cache_whatever_the_env_s
     monkeypatch.setenv("TRANSFORMERS_CACHE", "/models")
     monkeypatch.setenv("HF_HOME", "/models")
     monkeypatch.setenv("HUGGINGFACE_HUB_CACHE", "/models")
+    monkeypatch.setenv("LOUISE_COMPUTE_PRECISION", "f32")      # the model's env states it
     seen: dict = {}
 
     class Attn:                                   # what `use_sdpa` looks for, by class name
@@ -1121,8 +1122,11 @@ def test_jina_v3_loads_the_remote_code_from_the_folders_cache_whatever_the_env_s
     class Model:
         config = SimpleNamespace(lora_adaptations=["retrieval.query", "retrieval.passage"])
 
-        def to(self, device):
-            seen["device"] = device
+        def to(self, device=None, dtype=None):
+            if device is not None:
+                seen["device"] = device
+            if dtype is not None:
+                seen["dtype"] = dtype
             return self
 
         def eval(self):
@@ -1130,6 +1134,12 @@ def test_jina_v3_loads_the_remote_code_from_the_folders_cache_whatever_the_env_s
 
         def modules(self):
             return [Attn()]
+
+        def parameters(self):
+            return []
+
+        def buffers(self):
+            return []
 
         def encode(self, texts, **kw):
             seen["encode"] = kw
@@ -1142,6 +1152,9 @@ def test_jina_v3_loads_the_remote_code_from_the_folders_cache_whatever_the_env_s
     fake_torch = types.ModuleType("torch")
     fake_torch.no_grad = lambda: __import__("contextlib").nullcontext()
     fake_torch.use_deterministic_algorithms = lambda flag: seen.setdefault("det", []).append(flag)
+    fake_torch.float32 = "float32"
+    fake_torch.set_float32_matmul_precision = lambda p: seen.__setitem__("matmul", p)
+    fake_torch.get_float32_matmul_precision = lambda: seen.get("matmul")
     fake_transformers = types.ModuleType("transformers")
     fake_transformers.AutoModel = SimpleNamespace(from_pretrained=from_pretrained)
     Model.config.task_instructions = {"retrieval.passage": "Represent the document for retrieval: ",
@@ -1166,6 +1179,7 @@ def test_jina_v3_loads_the_remote_code_from_the_folders_cache_whatever_the_env_s
     assert seen["tokenized"] == ("Represent the document for retrieval: ", False)
     assert seen["encode"] == {"task": "retrieval.passage", "truncate_dim": 512, "max_length": 1024 + 7 + 2}
     assert "det" not in seen, "determinism stays off unless the model's env asks"
+    assert seen["dtype"] == "float32" and seen["matmul"] == "highest", "the stated precision, applied"
     with pytest.raises(ValueError, match="adapter"):
         jina.build_encoder(str(tmp_path), "cpu", "classification", 512, 1024)
 

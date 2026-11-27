@@ -50,6 +50,7 @@
     "ubatch:8192"
   ],
   "env": {
+    "LOUISE_COMPUTE_PRECISION": "f16",
     "NEO_CACHE_DIR": "/data/louise-cache/neo-cache",
     "GGML_SYCL_ENABLE_DNN": "0",
     "GGML_SYCL_FA_ONEDNN": "0",

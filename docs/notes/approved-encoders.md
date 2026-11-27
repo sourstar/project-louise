@@ -657,6 +657,88 @@ and 2026-11-25 (omnivoice-on-our-backend.md §13: 2.24 s a sentence with the
 for the backbone on the B70 was not read from its log; if it is ever in
 doubt, the context's own line says it (`flash_attn = …`) at verbosity 4.
 
+## Compute precision, stated
+
+The operator, 2026-11-27, on learning that OpenVINO's GPU plugin runs MedCPT
+in f16 by its default: **"HALF FUCKING PRECISION AS A DEFAULT!!!"** A model's
+compute precision is STATED, APPLIED, VERIFIED and RECORDED, never left to a
+backend's default — the same kind of rule as the vendor's deterministic mode
+above.
+
+- **Stated**: `LOUISE_COMPUTE_PRECISION` = `f32` | `bf16` | `f16` in the model
+  file's `env`. An env variable, not an `options:` entry, because the env is
+  where every invariant-12 statement already lives (the vendor's mode,
+  `LOUISE_TORCH_DETERMINISTIC`, `LOUISE_BITEXACT_MEASURED`), it is the run's
+  engine `env` and so the Codex's `space.encoder.engine` with no new field
+  (09 §9.3 unchanged), and a backend that does not read it ignores it, where
+  louise-python refuses an option it does not know. It means the NARROWEST
+  floating-point type the forward pass rounds its products' inputs to. A
+  quantized weight's integer products (Q4_K × Q8_K) are the weights' format,
+  fixed by the weights digest, not a compute precision.
+- **Applied**: torch (jina-v3, MADLAD) puts the model in the stated dtype
+  (`model.to(dtype)`) and sets the fp32 matmul precision `"highest"` (no TF32
+  on CUDA, no bf16 or TF32 inside oneDNN's fp32 matmuls on the CPU and XPU).
+  MADLAD's `dtype:` option must say the same. OpenVINO passes it as
+  `INFERENCE_PRECISION_HINT` (`louise_backend.openvino_config`). llama.cpp
+  has no switch: the build decides.
+- **Verified**: torch reads every floating parameter and buffer back, and the
+  matmul precision; OpenVINO reads `compiled.get_property(
+  "INFERENCE_PRECISION_HINT")` back (`openvino_precision_holds`); each refuses
+  to load, in words, on a mismatch. VeGa's wrapper states no run whose file
+  states none, a word outside the three, a `dtype:` that says another, or a
+  claim its build does not compute — a SYCL-F16 llama.cpp engine
+  (`…-sycl-f16-…`) states f16, and f32 or bf16 on it is refused
+  (`vega_wrapper.stated_precision`, `BUILD_PRECISION`). For every model, not
+  only an embedder. tests/vega/test_compute_precision.py holds every staged
+  file to its value below; tests/test_compute_precision_backends.py the
+  read-backs.
+- **Recorded**: in the run's engine `env`, so in the receipts, the gate's
+  statement and the Codex engine. Two precisions are two runs.
+
+**Exempt, by name** (`vega_wrapper.PRECISION_EXEMPT`, the guard test's
+`EXEMPT`): their files are left as they were, and the wrapper states their
+runs exactly as before. When one is released, its row is stated here and it
+leaves both lists.
+
+**Every staged model, what it states, and the default it replaces.** Nothing
+is claimed f32 that does not compute in f32: every value is what the file ran
+with before it was stated, so no node run changes its numbers. "Not measured"
+means read from the build or the code, never from the card.
+
+| model file | engine | stated | before: the default it replaces | how it is known |
+|---|---|---|---|---|
+| the 21 `louise-chat-*`; the gallery's 17 chat and 3 `louise-sum-*` entries | llama.cpp SYCL-F16 (`vega-louise-llama-cpp`) | f16 | f16, by the build (`GGML_SYCL_F16`: half activations, oneMKL half in; upstream-bugs.md S1) | the build |
+| `louise-rerank-bge`, `louise-rerank-lamar`, `louise-rerank-nemotron-1b` | llama.cpp SYCL-F16 | f16 | f16, by the build | the build |
+| `louise-translate-madlad` | llama.cpp SYCL-F16, f32 KV cache | f16 | f16, by the build: the F16 weights' products are half; the f32 cache does not make them f32 | the build |
+| `louise-tts-omnivoice` | llama.cpp SYCL-F16, direct | f16 | f16, by the build | the build |
+| `vega-bge-m3`, `vega-granite`, `vega-harrier-oss-v1-0.6b`, `vega-nemotron-3-embed-1b`, `vega-qwen3-embedding-4b` | llama.cpp SYCL-F16 | f16 | f16, by the build | the build |
+| `vega-qwen3-embedding-4b-cpu` (the CPU reference) | llama.cpp CPU (`louise-cpu-llama-cpp-…`) | f16 | f16: ggml-cpu converts the activations to the weights' dot type on x86 — f16 for the F16 KV cache, Q8_K for the Q4_K weights. **The CPU reference is not an f32 reference** | the code, not measured |
+| `louise-translate-madlad-torch` | torch XPU | bf16 | bf16, its `dtype:bfloat16` (explicit already) | the file |
+| `vega-jina-v3`, `vega-jina-v3-query` | torch XPU | f32 | f32: the remote code loads `torch_dtype="auto"`, and its config keeps float32 wherever CUDA is not available (configuration_xlm_roberta.py) | the code; the vectors unchanged (`.to(float32)` of f32 tensors) |
+| `vega-dar-legal-it`, `vega-dar-legal-it-cpu`, NVIDIA's `vega-dar-legal-it` | torch | exempt (operator, 2026-11-27), not measured, not changed | — | — |
+| `vega-medcpt-article-ov`, `vega-medcpt-article-ov-cpu`, `louise-rerank-medcpt`, `vega-medcpt-article`, `vega-medcpt-query`, `vega-medcpt-query-cpu` | OpenVINO GPU and CPU; llama.cpp SYCL-F16 and CPU | held: OpenVINO GPU default f16, CPU default bf16; to be stated when released | the OpenVINO plugins' defaults (convert_article.py: bf16 on the Ryzen 7600's avx512_bf16, 0.99995–0.99999 against fp32); the GGUFs f16 by the build | the plugins' documentation and convert_article.py |
+| NVIDIA (deploy/localai-nvidia): `louise-chat-qwen3-8b`, `louise-rerank-bge`, `vega-bge-m3`, `vega-granite`, `vega-qwen3-embedding-4b` | llama.cpp CUDA | f16 | f16: cuBLAS takes the F16 tensors' activations in f16 (quantized ones in MMQ's 8 bits) | the code, not measured (no peer has a card) |
+| NVIDIA: `vega-bge-m3-cpu`, `vega-qwen3-embedding-4b-cpu` | the CUDA build on the CPU | f16 | f16, ggml-cpu as above | the code, not measured |
+| NVIDIA: `vega-jina-v3` | torch CUDA | **bf16** | **bf16**: the same remote code keeps its config's bfloat16 where CUDA is available — where the node's computes in f32 | the code, not measured. f32 here is a new run, gated: the node's people decide |
+| AMD desktop (deploy/localai-desktop): `louise-chat-qwen3-8b`, `louise-rerank-bge`, `vega-bge-m3`, `vega-granite`, `vega-qwen3-embedding-4b` | llama.cpp ROCm | f16 | f16: hipBLAS takes f16 inputs, as cuBLAS | the code, not measured |
+| AMD desktop: `vega-bge-m3-cpu`, `vega-qwen3-embedding-4b-cpu` | the ROCm build on the CPU | f16 | f16, ggml-cpu as above | the code, not measured |
+
+Not in the repo, so not stated here: the node's speech-to-text model (parakeet,
+LocalAI's gallery file on `…-parakeet-cpp`). An F32 GGUF with an f32 KV cache
+would compute f32 matmuls even on the SYCL-F16 build; none is staged, and one
+is measured before the wrapper's rule is widened for it.
+
+**What deploying it costs.** The wrapper is part of every run's engine image,
+so a rebuilt package states a new run for every model it serves, gated again —
+the env key adds nothing to that. The exempt models share packages:
+`vega-louise-llama-cpp` and `-cpu` serve MedCPT's query and article GGUFs,
+`vega-louise-openvino` MedCPT alone, `vega-louise-pytorch` DAR-legal-it beside
+jina-v3 and MADLAD. Rebuilding one restates its exempt models' runs too, though
+their files are untouched: under the holds, those packages wait, or the
+exempt runs are gated again. jina-v3 and MADLAD need a new louise-python tree
+(their model code changed). An OpenVINO model compiled with the hint keys
+OpenVINO's cache anew and compiles once (when MedCPT is released).
+
 ## Known limits of the Arc Pro B70 (2026-10-28)
 
 What the card, its driver (`libze-intel-gpu1 26.05.37020.3` in the LocalAI

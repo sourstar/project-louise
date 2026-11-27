@@ -20,5 +20,7 @@ options:
     - pooling:cls
     - ubatch:8192
 env:
+    # the compute precision, stated (approved-encoders.md "Compute precision, stated")
+    LOUISE_COMPUTE_PRECISION: "f16"
     # CLAUDE.md invariant 12: rocBLAS without atomics, bit-identical run to run
     ROCBLAS_DEFAULT_ATOMICS_MODE: "0"

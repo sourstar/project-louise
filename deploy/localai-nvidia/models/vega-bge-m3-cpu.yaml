@@ -21,3 +21,4 @@ options:
     - no_op_offload:true
 env:
     CUDA_VISIBLE_DEVICES: "-1"
+    LOUISE_COMPUTE_PRECISION: "f16"

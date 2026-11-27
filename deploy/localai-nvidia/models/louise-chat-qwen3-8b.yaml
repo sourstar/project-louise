@@ -26,3 +26,5 @@ reasoning_effort: none
 template:
     use_tokenizer_template: true
 threads: 6
+env:
+    LOUISE_COMPUTE_PRECISION: "f16"

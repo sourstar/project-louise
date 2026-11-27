@@ -1287,6 +1287,103 @@ def determinism_lacks(backend_name: str, canon: loadopts.Canon, device: str,
         f"backend whose runs are not shown to give back their own bytes is refused")
 
 
+#: COMPUTE PRECISION, STATED (operator, 2026-11-27, on learning that OpenVINO's
+#: GPU plugin runs MedCPT in f16 by its default: "HALF FUCKING PRECISION AS A
+#: DEFAULT!!!"). The same kind of rule as DETERMINISM: what a model computes in
+#: is in the MODEL's `env`, so the stated run carries it (the engine's `env`,
+#: and with it the Codex's `space.encoder.engine`), and a run whose file states
+#: none is never stated — any model, not only an embedder. What it means: the
+#: NARROWEST floating-point type the forward pass rounds its products' inputs to
+#: (OpenVINO's INFERENCE_PRECISION_HINT, torch's parameters' dtype under its
+#: fp32 matmul precision "highest", llama.cpp's build and its F16 tensors and
+#: KV cache). A quantized weight's integer products (Q4_K x Q8_K) are the
+#: weights' format, fixed by the weights digest, not a compute precision.
+#: docs/notes/approved-encoders.md, "Compute precision, stated".
+PRECISION_ENV = "LOUISE_COMPUTE_PRECISION"
+PRECISIONS = ("f32", "bf16", "f16")
+#: What a llama.cpp BUILD computes in, by the tokens of the engine's name, where
+#: the build alone decides it. GGML_SYCL_F16 (LocalAI's `intel-sycl-f16-…`, the
+#: node's `louise-sycl-f16-llama-cpp-…`): the matrix products take HALF
+#: activations, oneMKL's gemm half in (upstream-bugs.md S1). Every other build
+#: (CPU, CUDA, HIP, Vulkan) is not here: there the type follows the weights'
+#: (ggml-cpu converts the activations to the F16 tensors' f16 on x86; cuBLAS and
+#: hipBLAS take f16 inputs), stated in the file and NOT yet measured.
+BUILD_PRECISION: dict[frozenset[str], str] = {frozenset({"sycl", "f16"}): "f16"}
+#: a torch task's `dtype:` option (louise-python's madlad) in the stated words
+TORCH_DTYPE_PRECISION = {"float32": "f32", "bfloat16": "bf16", "float16": "f16"}
+#: EXEMPT from the rule, by name, each with its reason — as invariant 5's
+#: exemption list (tests/test_invariant_5_bandwidth.py). A load named here that
+#: states no precision is stated exactly as before the rule: its files are not
+#: touched, so none is asked of it; one that states a precision is held to it
+#: like any other. Named by what the load call says: a louise-python
+#: `task:`, or the weights' file name for a llama.cpp model (a name, so it can
+#: only relax: the exemption goes when its files are released). The guard test
+#: holds the staged files to the same list (tests/vega/test_compute_precision.py).
+_DAR_HELD = ("operator, 2026-11-27: \"Don't fucking touch dar legal\" (and earlier: "
+             "\"Keep DAR legal aside for now\")")
+_MEDCPT_HELD = "held until gutenberg-nemo is done (operator, 2026-11-27)"
+PRECISION_EXEMPT: dict[str, str] = {
+    "task:dar-legal-it": _DAR_HELD,
+    "task:medcpt-article": _MEDCPT_HELD,
+    "task:medcpt-rerank": _MEDCPT_HELD,
+    "weights:MedCPT-Article-Encoder-f16.gguf": _MEDCPT_HELD,
+    "weights:MedCPT-Query-Encoder-f16.gguf": _MEDCPT_HELD,
+}
+
+
+def precision_exempt(canon: loadopts.Canon) -> str | None:
+    """Why the load is exempt from stating its precision (PRECISION_EXEMPT),
+    None when it is not: its one `task:`, or its weights' file name, listed."""
+    tasks = _option_values(canon, "task")
+    if len(tasks) == 1 and f"task:{tasks[0]}" in PRECISION_EXEMPT:
+        return PRECISION_EXEMPT[f"task:{tasks[0]}"]
+    return PRECISION_EXEMPT.get(f"weights:{Path(canon.weights_path).name}")
+
+
+def build_precision(backend_name: str) -> str | None:
+    """What this llama.cpp engine's build computes in, None where the build
+    alone does not decide it."""
+    tokens = set(re.split(r"[-_]", backend_name.lower()))
+    if "llama" not in tokens:
+        return None
+    for needs, precision in BUILD_PRECISION.items():
+        if needs <= tokens:
+            return precision
+    return None
+
+
+def stated_precision(backend_name: str, canon: loadopts.Canon) -> str | None:
+    """The compute precision the model's env states, held to what the engine
+    is known to compute in. A file that states none, a word outside
+    PRECISIONS, a claim its build does not compute (f32 on a SYCL-F16
+    llama.cpp), or a torch `dtype:` that says another, is refused: never a
+    default, never a claim the engine does not hold. None for a load
+    PRECISION_EXEMPT names that states none (it is stated as before)."""
+    said = canon.env.get(PRECISION_ENV)
+    if said is None and precision_exempt(canon):
+        return None
+    if said is None:
+        raise loadopts.Unstatable(
+            f"the model's YAML states no compute precision: set env {PRECISION_ENV} to one of "
+            f"{', '.join(PRECISIONS)}, what the engine really computes in — a backend's default is "
+            f"in nobody's statement (docs/notes/approved-encoders.md, \"Compute precision, stated\")")
+    if said not in PRECISIONS:
+        raise loadopts.Unstatable(f"{PRECISION_ENV}={said!r} is not one of {', '.join(PRECISIONS)}")
+    built = build_precision(backend_name)
+    if built is not None and said != built:
+        raise loadopts.Unstatable(
+            f"{PRECISION_ENV}={said} on {backend_name}, whose build computes in {built} "
+            f"(GGML_SYCL_F16: half activations in its products, upstream-bugs.md S1): the run "
+            f"would claim a precision it does not compute in. State {built}, or run another build")
+    dtypes = _option_values(canon, "dtype")
+    for dtype in dtypes:
+        if TORCH_DTYPE_PRECISION.get(dtype) != said:
+            raise loadopts.Unstatable(
+                f"option dtype:{dtype} and {PRECISION_ENV}={said} say two precisions: the model's "
+                f"YAML states one")
+    return said
+
+
 def state_run(*, backend: RealBackend, canon: loadopts.Canon, environ: Mapping[str, str],
               device: str, pci: str | None, weights: str, tree: str, runtime: list[str],
               sys_root: Path = Path("/sys"), proc_root: Path = Path("/proc"),
@@ -1300,7 +1397,10 @@ def state_run(*, backend: RealBackend, canon: loadopts.Canon, environ: Mapping[s
 
     A run that does not hold its backend's determinism contract is refused,
     on any device (invariant 12, fail-closed: `determinism_lacks`): an answer
-    the same engine would not reproduce from the same input is not stated."""
+    the same engine would not reproduce from the same input is not stated.
+    Nor is one whose model states no compute precision, or one its engine does
+    not compute in (`stated_precision`): the precision rides in the engine's
+    `env`, so the run records it."""
     lacks = determinism_lacks(backend.name, canon, device, vendor)
     if lacks:
         raise loadopts.Unstatable(
@@ -1313,6 +1413,7 @@ def state_run(*, backend: RealBackend, canon: loadopts.Canon, environ: Mapping[s
     if missing:
         raise loadopts.Unstatable(f"the backend does not carry the environment it was loaded "
                                   f"with: {', '.join(missing)}")
+    stated_precision(backend.name, canon)
     driver = runs.driver_string(CPU if device == CPU else "card", pci=pci, sys_root=sys_root,
                                 proc_root=proc_root, runtime_lines=runtime,
                                 card_driver_line=card_driver_line)
@@ -1938,6 +2039,7 @@ class Gate:
             if self.keeps is not None:
                 self._keeps_start()
             log(f"{self.backend.name}: {Path(canon.weights_path).name} loaded on {device}, "
+                f"computing in {canon.env.get(PRECISION_ENV) or 'what it computed in before the rule (exempt)'}, "
                 f"run {run_id[:23]}…, files {hashed['tree'][:19]}… (installed from "
                 f"{self.backend.uri or 'nowhere recorded'}, the registry's digest "
                 f"{(self.backend.registry_digest or 'none')[:19]}…: informational)")

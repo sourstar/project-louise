@@ -109,7 +109,9 @@ def make_node(tmp_path, stubs, vega):
         weights.write_bytes(b"weights " * 1000)
         log = tmp_path / "backend.log"
         log.touch()
+        # the model's env as the backend carries it: the stated compute precision too
         env = dict(os.environ, FAKE_BACKEND_LOG=str(log), VEGA_TEST_ENV="on",
+                   LOUISE_COMPUTE_PRECISION="f32",
                    **({"FAKE_TOKENIZER": "1"} if tokenizer else {}),
                    **({"FAKE_TOKEN_IDS": "1"} if token_ids else {}),
                    **({"FAKE_CANARY_FAIL": canary_fail} if canary_fail else {}),
@@ -126,7 +128,8 @@ def make_node(tmp_path, stubs, vega):
                    "ModelPath": str(weights.parent), "ContextSize": 512, "Embeddings": True,
                    "RopeFreqBase": 10000.5,
                    "Options": ["device:cpu", "pairs:true", "parallel:1"] if pairs else ["device:cpu", "parallel:1"],
-                   "EnvVars": {"VEGA_TEST_ENV": "on"}, **(extra or {})}
+                   "EnvVars": {"VEGA_TEST_ENV": "on", "LOUISE_COMPUTE_PRECISION": "f32"},
+                   **(extra or {})}
         models = {"vega-fake": localai_fake.Model(f"127.0.0.1:{running.port}", options)}
         api = FastAPI()
         api.include_router(service.router(vega.receipts, vega.runs, vega.passes, vega.keeps))
@@ -159,7 +162,9 @@ def test_tagged_texts_come_back_with_receipts_and_the_run_is_what_was_launched(m
     assert engine["name"] == "localai/fake-llama-cpp" and engine["build"] == "v4.11.0"
     assert engine["args"] == ["${BACKEND}/run.sh", "--addr", "127.0.0.1:${PORT}"], \
         "relative to the backend, whose bytes image names (09 §9.3)"
-    assert engine["env"] == {"VEGA_TEST_ENV": "on"} and engine["device"] == "cpu"
+    assert engine["env"] == {"VEGA_TEST_ENV": "on", "LOUISE_COMPUTE_PRECISION": "f32"}, \
+        "the stated compute precision is recorded in the run (the engine's env)"
+    assert engine["device"] == "cpu"
     assert engine["options"]["ModelFile"] == "${WEIGHTS}"
     assert engine["options"]["ModelPath"] == "${MODELS}"
     assert engine["options"]["RopeFreqBase"] == "10000.5"

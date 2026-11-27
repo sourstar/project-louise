@@ -7,6 +7,8 @@
 # built by deploy/vega/stage/build_louise_backend.sh); the weights the same
 # host files, mounted read-only. To back out: swap the two names and reload.
 # JSON, which is YAML.
+# LOUISE_COMPUTE_PRECISION bf16: its `dtype:bfloat16`, which it must agree with (both refuse
+# otherwise: the wrapper, and the task at load).
 {
   "name": "louise-translate-madlad-torch",
   "backend": "vega-louise-pytorch",
@@ -27,6 +29,7 @@
     "max_items:512"
   ],
   "env": {
+    "LOUISE_COMPUTE_PRECISION": "bf16",
     "LOUISE_TORCH_DETERMINISTIC": "1",
     "NEO_CACHE_DIR": "/data/louise-cache/neo-cache"
   }

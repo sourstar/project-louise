@@ -191,10 +191,53 @@ def determinism(torch_mod, environ=None) -> bool:
     return True
 
 
+#: COMPUTE PRECISION, STATED (operator, 2026-11-27: "HALF FUCKING PRECISION AS A
+#: DEFAULT!!!"; docs/notes/approved-encoders.md "Compute precision, stated"),
+#: the same rule as jina-v3's (deploy/jina-embeddings-v3/server.py): the
+#: MODEL's env says what it computes in, and the load's `dtype` must say the same
+#: (the backend's own default, bfloat16, is never taken over a statement).
+PRECISION_ENV = "LOUISE_COMPUTE_PRECISION"
+TORCH_DTYPES = {"f32": "float32", "bf16": "bfloat16", "f16": "float16"}
+FP32_MATMUL = "highest"
+
+
+def stated_precision(environ=None) -> str:
+    """The compute precision the model's env states; a ValueError naming the
+    variable when it states none, or a word torch has no dtype for."""
+    environ = os.environ if environ is None else environ
+    said = environ.get(PRECISION_ENV, "").strip()
+    if said not in TORCH_DTYPES:
+        raise ValueError(f"the model's env states no compute precision torch can apply "
+                         f"({PRECISION_ENV}={said!r}; one of {', '.join(TORCH_DTYPES)}): a "
+                         f"library's default is in nobody's statement")
+    return said
+
+
+def apply_precision(torch_mod, model, precision: str):
+    """The model in the stated dtype, and torch's fp32 matmuls at their full
+    precision, both READ BACK (jina-v3's `apply_precision`, the same rule)."""
+    dtype = getattr(torch_mod, TORCH_DTYPES[precision])
+    model = model.to(dtype=dtype)
+    torch_mod.set_float32_matmul_precision(FP32_MATMUL)
+    if torch_mod.get_float32_matmul_precision() != FP32_MATMUL:
+        raise RuntimeError(f"torch reports its fp32 matmul precision as "
+                           f"{torch_mod.get_float32_matmul_precision()!r}, not {FP32_MATMUL!r}")
+    other = sorted({str(t.dtype) for t in (*model.parameters(), *model.buffers())
+                    if t.is_floating_point() and t.dtype != dtype})
+    if other:
+        raise RuntimeError(f"the model holds {', '.join(other)} tensors after .to({dtype}): it "
+                           f"would not compute in the stated {precision}")
+    return model
+
+
 def load(model_id: str, device: str, dtype_name: str, beams: int | None = None):
     """The real model: (count, generate, known, languages, release). `beams`
     is the load call's (the LocalAI backend's option); unset, BEAMS from the
-    environment, else one."""
+    environment, else one. `dtype_name` must be the stated precision's."""
+    precision = stated_precision()          # before any weight is read
+    if TORCH_DTYPES[precision] != dtype_name:
+        raise ValueError(f"dtype:{dtype_name} and {PRECISION_ENV}={precision} say two "
+                         f"precisions: the model's YAML states one")
     import torch
     from transformers import AutoTokenizer, T5ForConditionalGeneration
     determinism(torch)                      # before any kernel is chosen
@@ -207,6 +250,7 @@ def load(model_id: str, device: str, dtype_name: str, beams: int | None = None):
     # device as it is read: 364 MB of RSS after the load, measured.
     model = T5ForConditionalGeneration.from_pretrained(
         model_id, torch_dtype=dtype, low_cpu_mem_usage=True, device_map=device).eval()
+    model = apply_precision(torch, model, precision)
     unk = tok.unk_token_id
     vocab = tok.get_vocab()
     codes = {t[2:-1] for t in vocab if t.startswith("<2") and t.endswith(">")}

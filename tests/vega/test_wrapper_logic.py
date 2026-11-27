@@ -494,9 +494,24 @@ LOAD = json.dumps({"Model": "bge-m3.gguf", "ModelFile": "/models/bge-m3.gguf",
                    "ModelPath": "/models", "ContextSize": 8192, "Embeddings": True,
                    "RopeFreqBase": 10000.5, "Options": ["pairs:true"],
                    "EnvVars": {"NEO_CACHE_DIR": "/state/neo-cache"}})
+#: the compute precision every run-stating load here states (the rule:
+#: `vw.stated_precision`, docs/notes/approved-encoders.md "Compute precision,
+#: stated"). The backend carries the model's env, so a test's `environ` holds it
+#: too (`_env`); f16 is what the SYCL-F16 build computes, and no other fake here
+#: is a build the wrapper knows
+STATED = {vw.PRECISION_ENV: "f16"}
+
+
+def _env(env):
+    """The environment a backend loaded with `env` and the stated precision carries."""
+    return {**env, **STATED}
+
+
 #: a load that holds llama.cpp's determinism contract (one sequence at a time;
-#: invariant 12 fail-closed, 2026-10-20) — what the run-stating tests load
-LOAD_RUN = json.dumps(json.loads(LOAD) | {"Options": ["pairs:true", "parallel:1"]})
+#: invariant 12 fail-closed, 2026-10-20) and states its compute precision —
+#: what the run-stating tests load
+LOAD_RUN = json.dumps(json.loads(LOAD) | {"Options": ["pairs:true", "parallel:1"],
+                                          "EnvVars": _env({"NEO_CACHE_DIR": "/state/neo-cache"})})
 
 
 def test_the_options_are_canonical_as_the_model_pool_wrote_them():
@@ -549,18 +564,18 @@ def test_the_run_is_what_the_wrapper_launched(tmp_path):
     canon = vw.canon_from_protojson(LOAD_RUN)
     tree = vw.tree_digest(backend.directory)
     rid, run = vw.state_run(backend=backend, canon=canon,
-                            environ={"NEO_CACHE_DIR": "/state/neo-cache"}, device="cpu",
+                            environ=_env({"NEO_CACHE_DIR": "/state/neo-cache"}), device="cpu",
                             pci=None, weights="sha256:" + "11" * 32, tree=tree, runtime=[])
     assert rid == runs_mod.run_id(run)
     assert run["driver"] == "cpu" and run["weights"] == "sha256:" + "11" * 32
     assert run["engine"] == {
         "name": "localai/fake-llama-cpp", "build": "v4.11.0", "variant": None, "image": tree,
         "args": ["${BACKEND}/run.sh", "--addr", "127.0.0.1:${PORT}"],
-        "env": {"NEO_CACHE_DIR": "/state/neo-cache"}, "device": "cpu",
+        "env": _env({"NEO_CACHE_DIR": "/state/neo-cache"}), "device": "cpu",
         "options": canon.options}
     assert tree != DIGEST, "never the registry's digest"
     with pytest.raises(loadopts.Unstatable, match="NEO_CACHE_DIR"):
-        vw.state_run(backend=backend, canon=canon, environ={}, device="cpu", pci=None,
+        vw.state_run(backend=backend, canon=canon, environ=_env({}), device="cpu", pci=None,
                      weights="sha256:" + "11" * 32, tree=tree, runtime=[])
 
 
@@ -570,7 +585,7 @@ def test_the_run_is_a_valid_codex_engine(tmp_path):
     from app.hold.codex import _validate_engine, engine_from_dict
     backend = vw.real_backend(_backend_dir(tmp_path, name="fake-llama-cpp"))
     _rid, run = vw.state_run(backend=backend, canon=vw.canon_from_protojson(LOAD_RUN),
-                             environ={"NEO_CACHE_DIR": "/state/neo-cache"}, device="cpu",
+                             environ=_env({"NEO_CACHE_DIR": "/state/neo-cache"}), device="cpu",
                              pci=None, weights="sha256:" + "11" * 32,
                              tree=vw.tree_digest(backend.directory), runtime=[])
     _validate_engine(engine_from_dict(run["engine"], "engine"), "engine")
@@ -584,7 +599,7 @@ def test_an_upgrade_is_a_new_run_and_a_reinstall_of_the_same_bytes_is_not(tmp_pa
 
     def stated():
         tree = vw.tree_digest(d)
-        rid, run = vw.state_run(backend=backend, canon=canon, environ=env, device="cpu",
+        rid, run = vw.state_run(backend=backend, canon=canon, environ=_env(env), device="cpu",
                                 pci=None, weights="sha256:" + "11" * 32, tree=tree, runtime=[])
         return rid, run
     rid, run = stated()
@@ -604,11 +619,11 @@ def test_the_driver_lines_are_the_runs_runtime(tmp_path):
     (proc_root / "sys" / "kernel").mkdir(parents=True)
     (proc_root / "sys" / "kernel" / "osrelease").write_text("6.18.0\n")
     _rid, run = vw.state_run(backend=backend, canon=vw.canon_from_protojson(json.dumps(
-                                 json.loads(LOAD_RUN) | {"EnvVars": {"NEO_CACHE_DIR": "/state/neo-cache",
-                                                                     "GGML_SYCL_ENABLE_DNN": "0",
-                                                                     "GGML_SYCL_FA_ONEDNN": "0"}})),
-                             environ={"NEO_CACHE_DIR": "/state/neo-cache", "GGML_SYCL_ENABLE_DNN": "0",
-                                      "GGML_SYCL_FA_ONEDNN": "0"},
+                                 json.loads(LOAD_RUN) | {"EnvVars": _env({"NEO_CACHE_DIR": "/state/neo-cache",
+                                                                          "GGML_SYCL_ENABLE_DNN": "0",
+                                                                          "GGML_SYCL_FA_ONEDNN": "0"})})),
+                             environ=_env({"NEO_CACHE_DIR": "/state/neo-cache", "GGML_SYCL_ENABLE_DNN": "0",
+                                           "GGML_SYCL_FA_ONEDNN": "0"}),
                              device="Arc",
                              pci=None, weights="sha256:" + "11" * 32,
                              tree=vw.tree_digest(backend.directory),
@@ -629,7 +644,7 @@ def test_each_stack_names_its_vendors_deterministic_mode(name, env):
 
 
 def _load_with(env, options=("pairs:true", "parallel:1")):
-    return vw.canon_from_protojson(json.dumps(json.loads(LOAD) | {"EnvVars": env, "Options": list(options)}))
+    return vw.canon_from_protojson(json.dumps(json.loads(LOAD) | {"EnvVars": _env(env), "Options": list(options)}))
 
 
 @pytest.mark.parametrize("name, env", [
@@ -646,14 +661,14 @@ def test_a_card_run_without_its_vendors_deterministic_mode_is_never_stated(tmp_p
     (key, value), = env.items()
     rest = {k: v for k, v in vw.determinism_env(name).items() if k != key}
     with pytest.raises(loadopts.Unstatable, match=f"invariant 12.*{key}={value}"):
-        vw.state_run(canon=_load_with(rest), environ=rest, **kw)
+        vw.state_run(canon=_load_with(rest), environ=_env(rest), **kw)
     with pytest.raises(loadopts.Unstatable, match="invariant 12"):
-        vw.state_run(canon=_load_with({key: "1"}), environ={key: "1"}, **kw)
+        vw.state_run(canon=_load_with({key: "1"}), environ=_env({key: "1"}), **kw)
     full = vw.determinism_env(name)
-    _rid, run = vw.state_run(canon=_load_with(full), environ=full, **kw)
-    assert run["engine"]["env"] == full, "the run says it ran deterministic"
+    _rid, run = vw.state_run(canon=_load_with(full), environ=_env(full), **kw)
+    assert run["engine"]["env"] == _env(full), "the run says it ran deterministic"
     # the same backend on the CPU uses no card library: nothing is required
-    vw.state_run(canon=_load_with({}), environ={}, **(kw | {"device": "cpu"}))
+    vw.state_run(canon=_load_with({}), environ=_env({}), **(kw | {"device": "cpu"}))
 
 
 @pytest.mark.parametrize("left, timeout", [(9.223372035063293e18, None), (None, None),
@@ -822,8 +837,8 @@ def test_llama_cpp_runs_one_sequence_at_a_time_on_any_device(tmp_path, device):
     kw = _run_kw(tmp_path, "intel-sycl-f16-llama-cpp", device)
     for options in (("parallel:4",), ()):
         with pytest.raises(loadopts.Unstatable, match="invariant 12.*parallel:1"):
-            vw.state_run(canon=_load_with(env, options), environ=env, **kw)
-    vw.state_run(canon=_load_with(env, ("parallel:1",)), environ=env, **kw)
+            vw.state_run(canon=_load_with(env, options), environ=_env(env), **kw)
+    vw.state_run(canon=_load_with(env, ("parallel:1",)), environ=_env(env), **kw)
 
 
 @pytest.mark.parametrize("name, why", [
@@ -834,11 +849,11 @@ def test_llama_cpp_runs_one_sequence_at_a_time_on_any_device(tmp_path, device):
 ])
 def test_a_backend_without_a_known_contract_is_refused(tmp_path, name, why):
     with pytest.raises(loadopts.Unstatable, match=why):
-        vw.state_run(canon=_load_with({}, ("parallel:1",)), environ={}, **_run_kw(tmp_path, name))
+        vw.state_run(canon=_load_with({}, ("parallel:1",)), environ=_env({}), **_run_kw(tmp_path, name))
 
 
 def test_a_cuda_card_run_needs_no_vendor_env(tmp_path):
-    vw.state_run(canon=_load_with({}, ("parallel:1",)), environ={},
+    vw.state_run(canon=_load_with({}, ("parallel:1",)), environ=_env({}),
                  **_run_kw(tmp_path, "cuda12-llama-cpp"))
 
 
@@ -848,14 +863,14 @@ def test_louise_python_torch_tasks_need_torchs_switch_and_openvino_is_refused(tm
     on = {"LOUISE_TORCH_DETERMINISTIC": "1"}
     for task in ("dar-legal-it", "madlad", "jina-v3"):
         with pytest.raises(loadopts.Unstatable, match="invariant 12.*LOUISE_TORCH_DETERMINISTIC=1"):
-            vw.state_run(canon=_load_with({}, (f"task:{task}", "device:xpu")), environ={}, **kw)
-        _rid, run = vw.state_run(canon=_load_with(on, (f"task:{task}", "device:xpu")), environ=on, **kw)
-        assert run["engine"]["env"] == on
+            vw.state_run(canon=_load_with({}, (f"task:{task}", "device:xpu")), environ=_env({}), **kw)
+        _rid, run = vw.state_run(canon=_load_with(on, (f"task:{task}", "device:xpu")), environ=_env(on), **kw)
+        assert run["engine"]["env"] == _env(on)
     for task in ("medcpt-article", "medcpt-rerank"):
         with pytest.raises(loadopts.Unstatable, match="no deterministic mode"):
-            vw.state_run(canon=_load_with(on, (f"task:{task}", "device:xpu")), environ=on, **kw)
+            vw.state_run(canon=_load_with(on, (f"task:{task}", "device:xpu")), environ=_env(on), **kw)
     with pytest.raises(loadopts.Unstatable, match="no deterministic mode"):
-        vw.state_run(canon=_load_with(on, ("device:xpu",)), environ=on, **kw)
+        vw.state_run(canon=_load_with(on, ("device:xpu",)), environ=_env(on), **kw)
 
 
 @pytest.mark.parametrize("task", ["medcpt-article", "medcpt-rerank"])
@@ -866,10 +881,10 @@ def test_an_openvino_task_is_stated_only_measured_on_this_very_tree(tmp_path, ta
     opts = (f"task:{task}", "device:xpu")
     for env in ({}, {vw.MEASURED_ENV: "louise-python-20261020c"}):
         with pytest.raises(loadopts.Unstatable, match="not measured bit-exact on this tree"):
-            vw.state_run(canon=_load_with(env, opts), environ=env, **kw)
+            vw.state_run(canon=_load_with(env, opts), environ=_env(env), **kw)
     env = {vw.MEASURED_ENV: "louise-python-20261021a"}
-    _rid, run = vw.state_run(canon=_load_with(env, opts), environ=env, **kw)
-    assert run["engine"]["env"] == env, "the run says what it was measured on"
+    _rid, run = vw.state_run(canon=_load_with(env, opts), environ=_env(env), **kw)
+    assert run["engine"]["env"] == _env(env), "the run says what it was measured on"
 
 
 def test_the_wrapper_is_part_of_the_engine(tmp_path):
@@ -936,10 +951,10 @@ def test_one_setting_measured_near_exact_on_this_backend_may_be_relaxed(tmp_path
     kw, name = _sycl_kw(tmp_path)
     env = {"GGML_SYCL_ENABLE_DNN": "1", "GGML_SYCL_FA_ONEDNN": "0",
            vw.NEAR_EXACT_ENV: f"{name} GGML_SYCL_ENABLE_DNN"}
-    _rid, run = vw.state_run(canon=_load_with(env), environ=env, **kw)
-    assert run["engine"]["env"] == env, "the run states what it relaxed, and where it was measured"
+    _rid, run = vw.state_run(canon=_load_with(env), environ=_env(env), **kw)
+    assert run["engine"]["env"] == _env(env), "the run states what it relaxed, and where it was measured"
     exact = vw.determinism_env(name)
-    rid_exact, _ = vw.state_run(canon=_load_with(exact), environ=exact, **kw)
+    rid_exact, _ = vw.state_run(canon=_load_with(exact), environ=_env(exact), **kw)
     assert rid_exact != _rid, "the exact mode stays another run, available under its own model"
 
 
@@ -947,11 +962,11 @@ def test_relaxing_one_setting_never_relaxes_another_or_parallel(tmp_path):
     kw, name = _sycl_kw(tmp_path)
     env = {"GGML_SYCL_ENABLE_DNN": "1", vw.NEAR_EXACT_ENV: f"{name} GGML_SYCL_ENABLE_DNN"}
     with pytest.raises(loadopts.Unstatable, match="GGML_SYCL_FA_ONEDNN=0"):
-        vw.state_run(canon=_load_with(env), environ=env, **kw)
+        vw.state_run(canon=_load_with(env), environ=_env(env), **kw)
     env = {"GGML_SYCL_ENABLE_DNN": "1", "GGML_SYCL_FA_ONEDNN": "0",
            vw.NEAR_EXACT_ENV: f"{name} GGML_SYCL_ENABLE_DNN"}
     with pytest.raises(loadopts.Unstatable, match="parallel:1"):
-        vw.state_run(canon=_load_with(env, ("pairs:true", "parallel:4")), environ=env, **kw)
+        vw.state_run(canon=_load_with(env, ("pairs:true", "parallel:4")), environ=_env(env), **kw)
 
 
 @pytest.mark.parametrize("said, match", [
@@ -965,14 +980,14 @@ def test_a_relaxation_not_measured_for_this_run_is_refused(tmp_path, said, match
     env = {"GGML_SYCL_ENABLE_DNN": "1", "GGML_SYCL_FA_ONEDNN": "0",
            vw.NEAR_EXACT_ENV: said.format(name=name)}
     with pytest.raises(loadopts.Unstatable, match=match):
-        vw.state_run(canon=_load_with(env), environ=env, **kw)
+        vw.state_run(canon=_load_with(env), environ=_env(env), **kw)
 
 
 def test_a_cpu_run_has_no_mode_to_relax(tmp_path):
     kw, name = _sycl_kw(tmp_path)
     env = {vw.NEAR_EXACT_ENV: f"{name} GGML_SYCL_ENABLE_DNN"}
     with pytest.raises(loadopts.Unstatable, match="CPU"):
-        vw.state_run(canon=_load_with(env), environ=env, **(kw | {"device": "cpu"}))
+        vw.state_run(canon=_load_with(env), environ=_env(env), **(kw | {"device": "cpu"}))
 
 
 # ---- the determinism contract is the EMBEDDER's (operator, 2026-11-08: "determinism
@@ -980,7 +995,7 @@ def test_a_cpu_run_has_no_mode_to_relax(tmp_path):
 # can be dropped for any other model") ------------------------------------------------
 
 def _load_role(env, options, **role):
-    return vw.canon_from_protojson(json.dumps(json.loads(LOAD) | {"EnvVars": env, "Options": list(options)}
+    return vw.canon_from_protojson(json.dumps(json.loads(LOAD) | {"EnvVars": _env(env), "Options": list(options)}
                                               | {"Embeddings": False} | role))
 
 
@@ -990,8 +1005,8 @@ def test_a_chat_or_reranker_run_is_stated_without_the_vendors_mode(tmp_path, rol
     env = {"GGML_SYCL_ENABLE_DNN": "1", "GGML_SYCL_FA_ONEDNN": "1"}
     canon = _load_role(env, ("parallel:4",), **role)
     assert not vw.is_embedder(canon)
-    _rid, run = vw.state_run(canon=canon, environ=env, **kw)
-    assert run["engine"]["env"] == env, "what ran is still stated"
+    _rid, run = vw.state_run(canon=canon, environ=_env(env), **kw)
+    assert run["engine"]["env"] == _env(env), "what ran is still stated"
 
 
 def test_an_embedder_still_needs_its_vendors_mode_and_one_sequence(tmp_path):
@@ -1000,19 +1015,19 @@ def test_an_embedder_still_needs_its_vendors_mode_and_one_sequence(tmp_path):
     canon = _load_role(env, ("parallel:1",), Embeddings=True)
     assert vw.is_embedder(canon)
     with pytest.raises(loadopts.Unstatable, match="GGML_SYCL_FA_ONEDNN=0"):
-        vw.state_run(canon=canon, environ=env, **kw)
+        vw.state_run(canon=canon, environ=_env(env), **kw)
     env = {"GGML_SYCL_ENABLE_DNN": "0", "GGML_SYCL_FA_ONEDNN": "0"}
     with pytest.raises(loadopts.Unstatable, match="parallel:1"):
-        vw.state_run(canon=_load_role(env, ("parallel:4",), Embeddings=True), environ=env, **kw)
+        vw.state_run(canon=_load_role(env, ("parallel:4",), Embeddings=True), environ=_env(env), **kw)
 
 
 def test_a_backend_with_no_contract_serves_a_chat_model_but_never_an_embedder(tmp_path):
     backend = vw.real_backend(_backend_dir(tmp_path, name="vulkan-llama-cpp"))
     kw = dict(backend=backend, device="the card", pci=None, weights="sha256:" + "11" * 32,
               tree=vw.tree_digest(backend.directory), runtime=[], card_driver_line="dxg 1")
-    vw.state_run(canon=_load_role({}, ("parallel:1",)), environ={}, **kw)
+    vw.state_run(canon=_load_role({}, ("parallel:1",)), environ=_env({}), **kw)
     with pytest.raises(loadopts.Unstatable, match="no deterministic mode"):
-        vw.state_run(canon=_load_role({}, ("parallel:1",), Embeddings=True), environ={}, **kw)
+        vw.state_run(canon=_load_role({}, ("parallel:1",), Embeddings=True), environ=_env({}), **kw)
 
 
 # ---- the input lengths against the load's ubatch (operator, 2026-11-12: "for
