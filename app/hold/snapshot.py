@@ -1011,7 +1011,8 @@ def drop_replaced(shard_dir, previous: "Snapshot | None", current: "Snapshot") -
             continue
         kept = shard_mod.superseded_name(shard_dir / e.path, previous.snapshot_id)
         if kept.is_file():
-            kept.unlink()
+            from . import seeded
+            seeded.remove(kept)                 # its `.seeded.json` entry with it
             n += 1
     return n
 

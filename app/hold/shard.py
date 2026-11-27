@@ -561,7 +561,8 @@ def drop_past_period(target: Path, shard_dir: Path, period_of) -> list[Path]:
             continue
         for p in (version, *companions(shard_dir, rel, sid)):
             if p.is_file():
-                p.unlink()
+                from . import seeded
+                seeded.remove(p)                # its `.seeded.json` entry with it
                 dropped.append(p)
     return dropped
 
@@ -639,9 +640,14 @@ def keep_superseded(target: Path, shard_dir: Path | None, new_root: str, *,
             and not _companion_of_held_version(target, Path(shard_dir), sid):
         return None                       # its record version is gone: so is it
     dest = superseded_name(target, sid)
-    if dest.exists():
+    from . import seeded
+    if dest.exists() or dest.is_symlink():
+        if target.is_symlink() and dest.is_symlink() and dest.resolve() == target.resolve():
+            seeded.move(target, dest)           # a move cut short: finished
         return dest
-    target.replace(dest)
+    # the one move: a part read where her sister holds it keeps its link and
+    # its `.seeded.json` entry under the superseded name (hold/seeded.py)
+    seeded.move(target, dest)
     return dest
 
 

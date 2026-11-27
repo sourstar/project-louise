@@ -19,6 +19,15 @@ pieces root with the recorded one, once a process for each new file. A part
 whose bytes are no longer her snapshot's REFUSES (`Reissued`), naming it and
 her sister's newer snapshot: never a wrong answer.
 
+A SEEDED PART MOVED within her own SHARD — renamed aside under its
+superseded name when she builds a new version over it (shard.keep_superseded,
+02 §2.3), into a discarded folder and back (hold/discard.py) — goes through
+`move`, the one helper every such rename calls: the link made again at its
+new place, from its new depth, and its entry RE-KEYED there, `at` still
+naming the file it reaches in her sister's SHARD. A part dropped (a
+superseded version the origin no longer keeps) goes through `remove`. So the
+guard checks it, the forget hands it over, wherever it is.
+
 HER SISTER FORGOTTEN: her parts are handed over to the collection that reads
 them (hold/forget.py `hand_over_parts`, the mechanism the origin directory
 uses), never removed with her; and she is not renamed while read
@@ -104,9 +113,54 @@ def relative_link(target: Path, link: Path) -> None:
     os.replace(tmp, link)
 
 
-def entry(link: Path, root: str, size: int, from_name: str) -> dict[str, Any]:
+def entry(link: Path, root: str, size: int, from_name: str, at: str) -> dict[str, Any]:
+    """`at`: the file's path in `from_name`'s SHARD — what her forget hands
+    over, wherever this part is kept in ours (its own path, its superseded
+    name, a discarded folder)."""
     from ..file_copy import identity
-    return {"root": str(root), "bytes": int(size), "identity": list(identity(link)), "from": from_name}
+    return {"root": str(root), "bytes": int(size), "identity": list(identity(link)), "from": from_name,
+            "at": at}
+
+
+def at_of(rel: str, e: dict) -> str:
+    """The file's path in the holder's SHARD (`at`; the entry's own key
+    before 2026-11-27's re-keying)."""
+    return str(e.get("at") or rel)
+
+
+def move(src: Path, dst: Path) -> None:
+    """THE ONE MOVE of a part within a SHARD — aside under its superseded
+    name, into a discarded folder, back. A file of its own: renamed. A part
+    read where her sister holds it: the link made again at `dst` (relative,
+    from its new depth), its entry re-keyed there, then the old link
+    removed — so `.seeded.json` always follows it. A move cut short leaves
+    both links, the entry at one of them; run again, it finishes."""
+    src, dst = Path(src), Path(dst)
+    if not src.is_symlink():
+        os.replace(src, dst)
+        return
+    shard = _shard_root(src)
+    relative_link(src.resolve(), dst)
+    if shard is not None:
+        entries = dict(load(shard))
+        old, new = _rel(shard, src), _rel(shard, dst)
+        e = entries.pop(old, None)
+        if e is not None:
+            entries[new] = {**e, "at": at_of(old, e)}
+            write(shard, entries)
+    src.unlink()
+
+
+def remove(path: Path) -> None:
+    """A part dropped from a SHARD (a superseded version no longer kept):
+    removed, and, a part read by path, its entry with it."""
+    path = Path(path)
+    shard = _shard_root(path) if path.is_symlink() else None
+    path.unlink()
+    if shard is not None:
+        entries = dict(load(shard))
+        if entries.pop(_rel(shard, path), None) is not None:
+            write(shard, entries)
 
 
 def _shard_root(part: Path) -> Path | None:
@@ -125,25 +179,26 @@ def _shard_root(part: Path) -> Path | None:
         if d == d.parent:
             break
         d = d.parent
-    with _lock:
-        if len(_roots) > 4096:
-            _roots.clear()
-        _roots[key] = found
+    if found is not None:                   # a SHARD seeded later is found then
+        with _lock:
+            if len(_roots) > 4096:
+                _roots.clear()
+            _roots[key] = found
     return found
 
 
 def _rel(shard: Path, part: Path) -> str:
-    rel = Path(os.path.relpath(part, shard)).as_posix()
-    if rel.startswith(".discarded/"):               # a discarded snapshot's part (hold/discard.py)
-        rel = rel.split("/", 2)[2] if rel.count("/") >= 2 else rel
-    return rel
+    """The part's path in its SHARD, a discarded folder's included: the
+    key `move` keeps it under."""
+    return Path(os.path.relpath(part, shard)).as_posix()
 
 
-def _newer(part: Path, rel: str) -> str:
-    """Her sister's latest snapshot, read from the SHARD the link reaches."""
+def _newer(part: Path, at: str) -> str:
+    """Her sister's latest snapshot, read from the SHARD the link reaches
+    (`at`: the file's path there)."""
     try:
         target = part.resolve()
-        sister_shard = target.parents[len(Path(rel).parts) - 1]
+        sister_shard = target.parents[len(Path(at).parts) - 1]
         from app.share import seeder
         snap = seeder.current_snapshot(sister_shard)
         return snap.snapshot_id if snap is not None else "none"
@@ -187,7 +242,7 @@ def check(path: Path | str) -> None:
     sister = e.get("from") or "her sister"
     raise Reissued(
         f"{owner}: its part {rel} is read where {sister} holds it, and {sister} has re-issued it "
-        f"since (its latest snapshot: {_newer(part, rel)}): " +
+        f"since (its latest snapshot: {_newer(part, at_of(rel, e))}): " +
         ("the file is gone" if got is None else f"its pieces root is no longer {str(e.get('root'))[:23]}…, "
                                                  f"the one {owner}'s snapshot names") +
         f". Nothing was read from it. Take {sister}'s newer parts: `louise hold snapshot create {owner} "

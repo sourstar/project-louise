@@ -351,9 +351,11 @@ def hand_over_origin(root: Path, name: str, *, dry_run: bool = False) -> dict[st
 
 def hand_over_parts(root: Path, name: str, *, dry_run: bool = False) -> dict[str, Any] | None:
     """`name`'s SHARD parts other held collections read where they lie (a
-    sister's seed, hold/seeded.py), each handed over (`_hand_over`) to the
-    first of its readers by name — never deleted with `name`'s SHARD — and
-    the readers' records rewritten: the first holds it as its own now, the
+    sister's seed, hold/seeded.py — at a part's own path, its superseded
+    name, or in a discarded folder: the entry's `at` names the file in
+    `name`'s SHARD), each file handed over (`_hand_over`) to the first of
+    its readers by name — never deleted with `name`'s SHARD — and the
+    readers' records rewritten: the first holds it as its own now, the
     others read it from the first. A hand-over cut short is finished first.
     None when nobody reads any."""
     from . import collection as col, seeded
@@ -362,37 +364,38 @@ def hand_over_parts(root: Path, name: str, *, dry_run: bool = False) -> dict[str
     if not readers:
         return None
     shards = {r: col.shard_dir_of(root, r) for r in readers}
-    by_rel: dict[str, list[str]] = {}
-    for r, rels in readers.items():
-        for rel in rels:
-            by_rel.setdefault(rel, []).append(r)
+    records = {r: dict(seeded.load(shards[r])) for r in readers}
+    by_at: dict[str, list[tuple[str, str]]] = {}
+    for r, keys in readers.items():
+        for k in keys:
+            by_at.setdefault(seeded.at_of(k, records[r][k]), []).append((r, k))
     own = col.shard_dir_of(root, name)
-    total = sum((own / rel).stat().st_size for rel in by_rel if (own / rel).is_file())
-    out = {"to": {r: len(v) for r, v in sorted(readers.items())}, "parts": len(by_rel), "bytes": total,
+    total = sum((own / at).stat().st_size for at in by_at if (own / at).is_file())
+    out = {"to": {r: len(v) for r, v in sorted(readers.items())}, "parts": len(by_at), "bytes": total,
            "moved": not dry_run}
     if dry_run:
         return out
-    records = {r: dict(seeded.load(shards[r])) for r in readers}
     try:
-        for i, (rel, rs) in enumerate(sorted(by_rel.items())):
-            rs = sorted(rs)
-            first = shards[rs[0]] / rel
+        for i, (at, holders) in enumerate(sorted(by_at.items())):
+            holders = sorted(holders)
+            r0, k0 = holders[0]
+            first = shards[r0] / k0
             _finish_half(first)
             if first.is_symlink():
-                target = own / rel
+                target = own / at
                 if target.is_symlink() or not target.is_file():
                     continue                    # not a file of name's own: not name's to hand over
-                _hand_over(target, [shards[r] / rel for r in rs])
+                _hand_over(target, [shards[r] / k for r, k in holders])
             else:
                 # handed over already, by a forget cut short before its
                 # records were written: the others read it from the first
-                for r in rs[1:]:
-                    link = shards[r] / rel
+                for r, k in holders[1:]:
+                    link = shards[r] / k
                     if link.is_symlink() and link.resolve() != first.resolve():
                         seeded.relative_link(first, link)
-            records[rs[0]].pop(rel, None)       # its own part now
-            for r in rs[1:]:
-                records[r][rel] = {**records[r][rel], "from": rs[0]}
+            records[r0].pop(k0, None)           # its own part now
+            for r, k in holders[1:]:
+                records[r][k] = {**records[r][k], "from": r0, "at": k0}
             if i % 200 == 199:
                 for r in readers:
                     seeded.write(shards[r], records[r])
@@ -413,8 +416,12 @@ def handed_inodes(root: Path, name: str) -> set[tuple[int, int]]:
     if origin_heirs(root, name):
         paths += [p for p in (root / name / "origin").rglob("*") if p.is_file() and not p.is_symlink()]
     own = col.shard_dir_of(root, name)
-    for rels in seeded.readers(root, name).values():
-        paths += [own / rel for rel in rels if (own / rel).is_file() and not (own / rel).is_symlink()]
+    for r, keys in seeded.readers(root, name).items():
+        entries = seeded.load(col.shard_dir_of(root, r))
+        for k in keys:
+            p = own / seeded.at_of(k, entries.get(k) or {})
+            if p.is_file() and not p.is_symlink():
+                paths.append(p)
     for p in paths:
         st = os.stat(p)
         out.add((st.st_dev, st.st_ino))

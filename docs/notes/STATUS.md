@@ -33,7 +33,9 @@ measured (published figures disagree).
   - a seeded SHARD's parts (hold/seeded.py): a relative link each, named in `.seeded.json`; every
     read checks the part is still the one the snapshot names and refuses one the source has re-issued,
     naming it and the source's newer snapshot; the source's forget hands the parts over, its rename is
-    refused while they are read (gutenberg's SHARD is 95 GB: nothing copied).
+    refused while they are read (gutenberg's SHARD is 95 GB: nothing copied). A seeded part renamed
+    aside (its superseded name, a discarded folder) moves through one helper, `seeded.move`, which
+    re-keys its entry (`at` still names the source's file); a dropped one through `seeded.remove`.
 
   What becomes another owner's own is copied, a reflink where the filesystem clones blocks, after a
   preflight: a carried bundle tree, an earlier corpus's units. A method's claims are moved. Symbolic links are allowed. Not changed: the engine's voice-profile leases

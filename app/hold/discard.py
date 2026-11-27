@@ -103,16 +103,11 @@ def _write_kept(d: Path, kept: dict[str, dict]) -> None:
 
 
 def _move_part(src: Path, dst: Path) -> None:
-    """A part moved within the SHARD (aside, or back): renamed — or, a part
-    read where her sister holds it (a relative link, hold/seeded.py), a link
-    to the same file made at `dst` and the old one removed, so it still
-    reaches it from its new depth."""
-    if src.is_symlink():
-        from .seeded import relative_link
-        relative_link(src.resolve(), dst)
-        src.unlink()
-    else:
-        os.replace(src, dst)
+    """A part moved within the SHARD (aside, or back): the one move
+    (`seeded.move`) — renamed, or, read where her sister holds it, linked
+    again from its new depth with its `.seeded.json` entry re-keyed."""
+    from .seeded import move
+    move(src, dst)
 
 
 def _keep(d: Path, rel: str, here: Path, root_: str, size: int, kept: dict[str, dict],

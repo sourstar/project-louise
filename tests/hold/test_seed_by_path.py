@@ -128,4 +128,53 @@ def test_a_discard_moves_her_links_so_they_still_reach_the_parts(pair):  # noqa:
     away = discard_mod.discarded_dir(root, "new", snap.snapshot_id)
     for s in snap.shards:
         assert (away / s.path).is_symlink() and (away / s.path).stat().st_size == s.bytes
+    record = seeded.load(col.shard_dir_of(root, "new"))
+    for s in snap.shards:
+        key = f".discarded/{snap.snapshot_id}/{s.path}"
+        assert key in record and record[key]["at"] == s.path, "its entry moved with it"
     assert discard_mod.held_records(root, "new", snap.snapshot_id).paths
+
+
+# ---- a seeded part renamed aside: `.seeded.json` follows it ------------------
+
+def _rebuilt_over(root, snap):
+    """Her build puts a new version at a seeded part's path: the seeded one
+    goes aside under its superseded name (shard.keep_superseded)."""
+    from app.hold import shard as shard_mod
+    mine = col.shard_dir_of(root, "new")
+    rel = snap.shards[0].path
+    fresh = root / "fresh.part"
+    fresh.write_bytes((col.shard_dir_of(root, "old") / snap.shards[1].path).read_bytes())
+    shard_mod.promote(fresh, mine / rel, shard_dir=mine, new_root=shard_mod.pieces_root_of(fresh),
+                      until_next_snapshot=True)
+    aside = shard_mod.superseded_name(mine / rel, snap.snapshot_id)
+    return mine, rel, aside, aside.relative_to(mine).as_posix()
+
+
+def test_a_seeded_part_renamed_aside_keeps_its_entry_and_is_handed_over_at_the_forget(pair):  # noqa: F811
+    from app.hold import shard as shard_mod
+    root, _old, _new = pair
+    _held(root, "old", "new")
+    _out, snap = _seeded(root)
+    data = (col.shard_dir_of(root, "old") / snap.shards[0].path).read_bytes()
+    mine, rel, aside, key = _rebuilt_over(root, snap)
+    assert aside.is_symlink() and not (mine / rel).is_symlink(), "her new version at the path, hers"
+    record = seeded.load(mine)
+    assert rel not in record and record[key]["at"] == rel and record[key]["root"] == snap.shards[0].root
+    assert pack_records.read_index(aside).uids, "the superseded version reads, checked"
+    forget_mod.forget(root, "old")
+    assert aside.is_file() and not aside.is_symlink() and aside.read_bytes() == data
+    assert shard_mod.pieces_root_of(aside) == snap.shards[0].root, "it verifies: the snapshot's bytes"
+    assert seeded.load(mine) == {} and pack_records.read_index(aside).uids
+
+
+def test_a_superseded_seeded_part_her_sister_re_issues_is_refused_in_words(pair):  # noqa: F811
+    root, _old, _new = pair
+    _out, snap = _seeded(root)
+    mine, rel, aside, key = _rebuilt_over(root, snap)
+    theirs = col.shard_dir_of(root, "old")
+    _reissue(theirs / rel, (theirs / snap.shards[1].path).read_bytes())
+    with pytest.raises(seeded.Reissued, match=rf"its part {key} is read where old holds it"):
+        pack_records.read_index(aside)
+    seeded.remove(aside)                                    # dropped: the entry goes with it
+    assert key not in seeded.load(mine) and not aside.is_symlink()

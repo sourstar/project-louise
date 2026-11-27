@@ -132,7 +132,8 @@ def parts_of(snap) -> list[tuple[str, int, str]]:
     return out
 
 
-def _by_path(src: Path, dst: Path, rel: str, root: str, from_name: str, entries: dict[str, dict]) -> str:
+def _by_path(src: Path, dst: Path, rel: str, root: str, from_name: str, entries: dict[str, dict],
+             at: str | None = None) -> str:
     """`dst` a relative symbolic link to `src`, its bytes checked against
     `root` before it appears and named in `entries` (hold/seeded.py):
     "by_path", or "present" when it already was (a link to `src` — named,
@@ -143,7 +144,7 @@ def _by_path(src: Path, dst: Path, rel: str, root: str, from_name: str, entries:
             if (entries.get(rel) or {}).get("root") == root:
                 return "present"
             if shard_mod.pieces_root_of(dst) == root:       # a seed cut short: named now
-                entries[rel] = seeded.entry(dst, root, dst.stat().st_size, from_name)
+                entries[rel] = seeded.entry(dst, root, dst.stat().st_size, from_name, at or rel)
                 return "present"
         elif not dst.is_symlink() and shard_mod.pieces_root_of(dst) == root:
             return "present"                                # its own (a copy an older seed made)
@@ -161,7 +162,7 @@ def _by_path(src: Path, dst: Path, rel: str, root: str, from_name: str, entries:
             f"{src}: its pieces root is {got[:23]}… and the source snapshot "
             f"names {root[:23]}… — the source SHARD no longer holds that "
             f"snapshot's part (re-issued since?); nothing is seeded from it")
-    entries[rel] = seeded.entry(dst, root, dst.stat().st_size, from_name)
+    entries[rel] = seeded.entry(dst, root, dst.stat().st_size, from_name, at or rel)
     return "by_path"
 
 
@@ -179,14 +180,15 @@ def _seed_all(src_shard: Path, dst_shard: Path, parts, from_name: str, counts: d
     since = 0
     try:
         for path, _bytes, part_root in parts:
-            owner = (theirs.get(path) or {}).get("from") if (src_shard / path).is_symlink() else None
+            hop = theirs.get(path) if (src_shard / path).is_symlink() else None
+            owner = (hop or {}).get("from")
             if absent is not None and not (src_shard / path).is_file() \
                     and not ((dst_shard / path).exists() or (dst_shard / path).is_symlink()):
                 counts["absent"] += 1
                 absent.append(path)
                 continue
             counts[_by_path(src_shard / path, dst_shard / path, path, part_root, owner or from_name,
-                            entries)] += 1
+                            entries, seeded.at_of(path, hop) if hop else path)] += 1
             since += 1
             if since >= _SAVE_EVERY:
                 seeded.write(dst_shard, entries)
