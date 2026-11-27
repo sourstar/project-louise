@@ -1644,3 +1644,11 @@ THE LINES THAT DECIDE:
 A FAIL of any kind (an OOM above all) stops it there, and 0032 comes out
 (back to 0031) before anything else: the rule of the README.
 
+**The operator's decision (2026-11-27): "1, as recommended but tonight".** Tonight:
+R0, R1, R2 as above; if all pass, `zfs_arc_sys_free` from 14 GiB
+(15,032,385,536 B) down to 4 GiB (4,294,967,296 B) — above the engine's default
+reserve of 2 GiB, as the constraint asks — so the ARC can grow back; then R1
+once more on `qual-bge-m3-paced` and `qual-bge-m3-nores`. A fail stops it, 0032
+comes out first, and `zfs_arc_sys_free` stays at 14 GiB. The ARC's size and the
+disk's hit rate are watched for a day after.
+
