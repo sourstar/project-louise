@@ -476,12 +476,10 @@ def ready(lang: Any, *, asked: Any = None, account_voice: str | None = None,
     if len(have) < len(KINDS):
         if ahead:
             with _lock:
-                skip = want in _ahead_failed
-            if not skip:
+                back = _ahead_failed.get(want)
+            if back is None or time.monotonic() >= back[0]:
                 schedule(want)
         else:
-            with _lock:
-                _ahead_failed.discard(want)          # a reader asks: ahead may try it again
             schedule(want)
     return out
 
@@ -666,11 +664,15 @@ def _drain() -> None:
             _worker = None
 
 
-#: the pools whose making failed, skipped by `ahead` until a READER asks for
-#: one again (`ready(ahead=False)` takes it off): a model that fails is not
-#: asked every minute, forever, with nobody asking (architecture's read of
-#: 535b2f68, 1)
-_ahead_failed: set = set()
+#: the pools whose making failed: {want: (when ahead may ask again, the
+#: delay that set it)} — a BACKOFF, doubling from AHEAD_BACKOFF_S to
+#: AHEAD_BACKOFF_MAX_S, so a model that fails is not asked every minute
+#: with nobody asking, and the pools refill by themselves once it works
+#: (the operator's default; architecture's read of 535b2f68, 1). A success
+#: clears it.
+_ahead_failed: dict = {}
+AHEAD_BACKOFF_S = 60.0
+AHEAD_BACKOFF_MAX_S = 3600.0
 
 
 def ahead() -> int:
@@ -682,7 +684,7 @@ def ahead() -> int:
     MODEL IS NOT LOADED (the keeper preloads it for Ask, and evicts it when
     space is claimed): ahead never loads it into a full card — it makes up
     the pools once a reader's question has loaded it. A pool that failed is
-    skipped until a reader asks for it (`_ahead_failed`)."""
+    asked again only after its backoff (`_ahead_failed`)."""
     from app import model_load, voice as node_voice
     # nothing kept, or no speech model: nothing to make, nothing asked of the model server
     node = node_voice.settings_or_none()
@@ -745,7 +747,8 @@ def _fail(want: Want, why: str) -> None:
     with _lock:
         again = want in _failed
         _failed[want] = time.monotonic()
-        _ahead_failed.add(want)
+        delay = min(AHEAD_BACKOFF_MAX_S, 2 * _ahead_failed[want][1]) if want in _ahead_failed else AHEAD_BACKOFF_S
+        _ahead_failed[want] = (time.monotonic() + delay, delay)
     if again:
         return
     _say("warn", f"speech fillers: {_voice_said(want)} ({want.lang}) not made — {why}; asked again at the "
@@ -820,7 +823,7 @@ def _fill(want: Want) -> None:
             missing = [k for k in KINDS if k not in have]
             if not missing:
                 _failed.pop(want, None)
-                _ahead_failed.discard(want)
+                _ahead_failed.pop(want, None)
                 return
             kind = missing[0]
             text = _draw(want.lang, kind, _avoid(pool, kind, have))
@@ -861,7 +864,7 @@ def _fill(want: Want) -> None:
                 _write_atomic(pool / f"{clip_id}.json",
                               json.dumps(meta, ensure_ascii=False, sort_keys=True).encode("utf-8"))
                 _failed.pop(want, None)
-                _ahead_failed.discard(want)
+                _ahead_failed.pop(want, None)
             except OSError as e:
                 unwritten = e
         if unwritten is not None:

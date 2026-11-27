@@ -172,3 +172,14 @@ def test_an_upload_over_the_bound_is_refused_before_the_form_is_read(route):
     r = c.post("/ask/voice/heard", content=b"x" * 10, headers={
         "content-type": "multipart/form-data; boundary=b", "content-length": str(64 * 1024 * 1024)})
     assert r.status_code == 413
+
+
+
+def test_a_true_echo_name_included_is_dropped_and_the_same_words_out_of_order_are_taken():
+    """The operator's default: a contiguous run of the reading, name included."""
+    said = "As the king said: Philippe, stop the army at the river."
+    assert heard("Philippe, stop", said=said).dropped == "echo", "the node reading it aloud"
+    assert heard("stop, Philippe", said=said).dropped == "not addressed"
+    assert heard("Philippe stop", said="Philippe went home. Stop the army.").command == "stop", "not unbroken"
+    assert heard("Philippe, please stop", said=said).command is None and \
+        heard("Philippe, please stop", said=said).addressed, "a word not read: taken"

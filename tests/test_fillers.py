@@ -789,22 +789,32 @@ def test_ahead_never_loads_the_speech_model(node):
     assert fillers.ahead() == 0 and not node.calls
 
 
-def test_a_model_that_fails_is_not_asked_every_minute_by_ahead(node, monkeypatch):
-    """Probe: a 500 from the model gave 15 calls and 15 warns in three ticks."""
+def test_a_model_that_fails_is_asked_by_ahead_at_a_doubling_backoff(node, monkeypatch):
+    """Probe: a 500 from the model gave 15 calls and 15 warns in three
+    ticks. The operator's default: 60 s, 2 min, 4 min … 1 h per pool, one
+    warn an episode, a success resetting it."""
+    clock = [1000.0]
+    monkeypatch.setattr(fillers.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(fillers, "RETRY_AFTER_S", 0.0)
     node.status = 500
-    fillers.ahead()
-    node.filled()
-    first = len(node.calls)
     warns = lambda: [t for lv, t in node.lines if lv == "warn" and "not made" in t]  # noqa: E731
-    first_warns = len(warns())
-    assert first and first_warns
-    for _ in range(3):
+
+    def tick(at):
+        clock[0] = 1000.0 + at
+        before = len(node.calls)
         fillers.ahead()
         node.filled()
-    assert len(node.calls) == first, "skipped by ahead until a reader asks"
-    assert len(warns()) == first_warns, "one line an episode"
-    fillers.ready("it", admin=False)                  # a reader asks: tried again
+        return len(node.calls) > before
+    made = [at for at in range(0, 60 * 16, 30) if tick(at)]
+    # asked at 0, then 60 s after, then 120 s after that, then 240 s …
+    assert made == [0, 60, 180, 420, 900], made
+    assert len({w for w in warns()}) == len(warns()) and len(warns()) == len(fillers.LANGUAGES), \
+        "one line an episode a pool"
+    w = next(iter(fillers._ahead_failed))
+    assert fillers._ahead_failed[w][1] == 960.0
+    node.status = 200                                   # the model works again
+    clock[0] += 960.0
+    fillers.ahead()
     node.filled()
-    assert len(node.calls) > first
-    assert len(warns()) == first_warns, "the same episode: no new line"
+    assert not fillers._ahead_failed, "a success resets the backoff"
+    assert all(d <= fillers.AHEAD_BACKOFF_MAX_S for _, d in fillers._ahead_failed.values())

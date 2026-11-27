@@ -94,6 +94,15 @@ def _echo(words: list[str], said: str) -> bool:
     return sum(w in read for w in words) / len(words) >= ECHO_SHARE
 
 
+def _run(words: list[str], said: str) -> bool:
+    """Whether `words` are an unbroken run of the words of `said`."""
+    if not said or not words:
+        return False
+    read = fold(said).split()
+    n = len(words)
+    return any(read[i:i + n] == words for i in range(len(read) - n + 1))
+
+
 def _rest(text: str, skip: int) -> str:
     """`text` without its first `skip` words, and the separators after them."""
     parts = re.split(r"(\s+)", text.strip())
@@ -119,11 +128,17 @@ def heard(text: str, *, name: str | None = None, follow: bool = False, said: str
     THE NAME AND A COMMAND COME FIRST, never taken for an echo (architecture's
     read of 535b2f68, 2: "Philip, go on" over a reading of "Philip the
     Second would go on…" was dropped — history answers are full of Philip,
-    Felipe, Philipp). The echo share counts only the words AFTER the lead and
-    the name."""
+    Felipe, Philipp) — UNLESS the whole utterance, name included, is an
+    unbroken run of the words just read (`_run`: a true echo). The echo
+    share counts only the words AFTER the lead and the name."""
     words = fold(text).split()
     if not words:
         return Heard(False, dropped="nothing said")
+    # A TRUE ECHO, whatever it holds (the operator's default): the whole
+    # utterance, name included, an unbroken run of the words just read —
+    # the node reading "…Philippe, stop…" aloud
+    if _run(words, said):
+        return Heard(False, dropped="echo")
     forms = forms_of(name)
     at = 1 if words[0] in LEAD and len(words) > 1 else 0
     if words[at] in forms:
