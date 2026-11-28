@@ -599,20 +599,13 @@ def incomplete_due(corpus: Path, langs, *, now: float | None = None) -> list[tup
                     if entry.get("whole"):
                         continue            # judged whole, unchanged since
                 else:
-                    unit = Path(at)
-                    try:
-                        note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), LANGUAGES[lang],
-                                                celex)
-                    except (OSError, ValueError, from_tree.TreeError):
-                        note = None
-                    lacked = lacked_packages(unit, note) if note is not None else []
-                    misnamed = held_not_its_name(unit, celex) if note is not None else []
-                    whole = note is not None and not lacked and not misnamed
-                    # WHY it is not whole, said (architecture, 2026-11-28: `lacks: []`
-                    # meant nothing missing, a tree unreadable, or files another act's
-                    # bytes — the ambiguity bg 32006R1828 sat stuck on)
-                    why = (None if whole else "unreadable" if note is None
-                           else f"lacks {', '.join(lacked)}" if lacked else f"not its name: {'; '.join(misnamed)}")
+                    # THE ONE READING (review B4, 2026-11-28): the record's
+                    # origin_gaps, the fetch's judge and this are judge_unit.
+                    # WHY it is not whole, said (`lacks: []` once meant nothing
+                    # missing, a tree unreadable, or files another act's bytes —
+                    # the ambiguity bg 32006R1828 sat stuck on)
+                    state = judge_unit(Path(at), lang, celex)
+                    whole, why, lacked = state["whole"], state["why"], state["lacks"]
                     marks.append((lang, celex, "state", {"held": sig, "lacks": lacked, "whole": whole,
                                                          **({"why": why[:300]} if why else {})}))
                     if whole:
@@ -643,24 +636,60 @@ def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
     _mark(corpus, [(lang, celex, "tried", why[:300])])
 
 
-def judge_unit(unit: Path, lang: str, celex: str) -> dict:
+def judge_unit(unit: Path, lang: str, celex: str, note=None) -> dict:
     """A held unit's state from its files: `whole`, and where it is not,
-    `why` — "unreadable" (its tree does not read), "lacks <packages>", or
-    "not its name: <files>" (files holding another act's bytes) — with
-    `lacks` and the tree's own latest modification (`origin_modified`)."""
-    from ..plugins.eurlex import from_tree, rdf
-    from ..plugins.eurlex.source import LANGUAGES
-    from .cellar import lacked_packages
+    `why` — "unreadable" (its tree or its files do not read), "lacks
+    <parts>", or "not its name: <reasons>" (files holding another file's or
+    act's bytes) — with `lacks`, `gaps` (part → 09 §9.5's why) and the
+    tree's own latest modification (`origin_modified`). THE SAME READING AS
+    THE RECORD'S `origin_gaps` (source.unit_gaps, formex.gaps; architecture's
+    B1, 2026-11-28): whole exactly where a parser-6 record states none."""
+    from ..plugins.eurlex import formex, from_tree, rdf
+    from ..plugins.eurlex.source import LANGUAGES, unit_files, unit_gaps
+    if note is None:                    # the dump build gives the tree it holds in memory
+        try:
+            note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), LANGUAGES[lang], celex)
+        except (OSError, ValueError, KeyError, from_tree.TreeError):
+            return {"whole": False, "why": "unreadable", "lacks": [], "gaps": {}, "origin_modified": None}
+    modified = note.modified or note.last_modified
     try:
-        note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), LANGUAGES[lang], celex)
-    except (OSError, ValueError, KeyError, from_tree.TreeError):
-        return {"whole": False, "why": "unreadable", "lacks": [], "origin_modified": None}
-    lacked = lacked_packages(unit, note)
-    misnamed = [] if lacked else held_not_its_name(unit, celex)
-    why = (f"lacks {', '.join(lacked)}" if lacked else f"not its name: {'; '.join(misnamed)}" if misnamed
-           else None)
-    return {"whole": why is None, "why": why[:300] if why else None, "lacks": lacked,
-            "origin_modified": note.modified or note.last_modified}
+        files = held_for_judging(unit_files(unit))
+        view, packed = formex.unpack(files, read_whole=formex.is_wrapper)
+        tree_fmx = {it.name for it in note.items.get("fmx4", []) if it.name}
+        listed = tree_fmx | {m for m, pkg in packed.items() if pkg in tree_fmx}
+        found = unit_gaps(files, view, note, celex, listed)
+    except (OSError, formex.FormexError):
+        return {"whole": False, "why": "unreadable", "lacks": [], "gaps": {}, "origin_modified": modified}
+    lacked = [p for p, (why, _r) in found.items() if why == formex.ABSENT]
+    other = list(dict.fromkeys(r for why, rs in found.values() if why != formex.ABSENT for r in rs))
+    why = (f"lacks {', '.join(lacked)}" if lacked else None)
+    if other:
+        why = f"{why}; " if why else ""
+        why += f"not its name: {'; '.join(other)}"
+    return {"whole": not found, "why": why[:300] if why else None, "lacks": lacked,
+            "gaps": {p: w for p, (w, _r) in found.items()}, "origin_modified": modified}
+
+
+def held_for_judging(entries) -> dict:
+    """A unit's items as `formex.unpack` takes them, for a judge of names
+    against content (review B3, 2026-11-28: bodies reach 180 MB, the 43 OOM
+    kills of 2026-11-19): a wrapper whole and a package by its path (read
+    through, its wrapper member whole: `unpack(read_whole=is_wrapper)`),
+    every other file its first bytes, all `formex.gaps` reads."""
+    from ..plugins.eurlex import formex, rdf
+    from ..plugins.eurlex.source import NOTICE
+    out: dict = {}
+    for e in entries:
+        if e.name in (rdf.TREE_FILE, NOTICE):       # what the parse pops before reading the items
+            continue
+        if formex.is_package(e.name):
+            out[e.name] = Path(e.path)
+        elif formex.is_wrapper(e.name):
+            out[e.name] = Path(e.path).read_bytes()
+        else:
+            with open(e.path, "rb") as f:
+                out[e.name] = f.read(formex._HEAD_BYTES)
+    return out
 
 
 def mark_degraded(corpus: Path, lang: str, celex: str, state: dict) -> None:
@@ -720,6 +749,24 @@ def mark_deferred(corpus: Path, lang: str, celex: str, why: str) -> None:
     n-th such failure (`incomplete_due`, Q2)."""
     import time as _time
     _mark(corpus, [(lang, celex, "deferred", {"at": _time.time(), "why": why[:300]})])
+
+
+def _judge_held(at: Path, lang: str, code: str, celex: str, tree):
+    """(the unit's notice, judge_unit's state) from the tree the build holds
+    in memory; None where the tree states no work for it."""
+    try:
+        note = from_tree_notice(tree, code, celex)
+    except ValueError:
+        return None
+    return note, judge_unit(at, lang, celex, note)
+
+
+def from_tree_notice(tree, code: str, celex: str):
+    from ..plugins.eurlex import from_tree, rdf
+    try:
+        return from_tree.notice(rdf.scope(tree, code), code, celex)
+    except from_tree.TreeError as e:
+        raise ValueError(str(e)) from None
 
 
 def held_not_its_name(unit: Path, celex: str) -> list[str]:
@@ -911,18 +958,16 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
             # from the dump, or recorded for the API where the dump lacks it
             held_note = package_lacked(at, code, celex) if uuid in zipped else None
             reform = held_note is not None
-            if at is not None and not reform and held_not_its_name(at, celex):
-                # A HELD UNIT WHOSE FILES ARE NOT THEIR NAMES' (2026-11-19: the
-                # dump's 9 acts of 2014–15): the dump gives the same bytes, so
-                # the API's — Cellar serves them right (32015R0207 de)
-                try:
-                    note = from_tree.notice(rdf.scope(tree, code), code, celex)
-                except from_tree.TreeError:
-                    c["no-work"] += 1
-                    continue
+            judged = _judge_held(at, lang, code, celex, tree) if at is not None and not reform else None
+            if judged is not None and not judged[1]["whole"]:
+                # A HELD UNIT NOT WHOLE (2026-11-19: the dump's 9 acts of
+                # 2014–15, files not their names'; review B4, 2026-11-28: one
+                # its wrapper names a file it lacks): the dump gives the same
+                # bytes, so the API's — Cellar serves them right (32015R0207 de) —
+                # asked once, then degraded (judge_unit, as the record states it)
                 c["incomplete"] += 1
-                c["dump-not-its-name"] += 1
-                record(lang, celex, note, True, at)
+                c["dump-not-its-name" if "not its name" in (judged[1]["why"] or "") else "dump-lacks-a-part"] += 1
+                record(lang, celex, judged[0], True, at)
                 continue
             if at is not None and not refresh and not reform:
                 c["held"] += 1
@@ -999,6 +1044,16 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                         c["dump-not-its-name"] += 1
                         record(lang, celex, note, at is not None, at, held_note)
                         continue
+                    # as the record reads it (source.unit_gaps): a name the
+                    # wrapper wants, held under its doubled name, is no gap
+                    _w = formex._parse(view[text_wrapper], text_wrapper)
+                    _read, _al = formex.doubled_names(view, [*formex.main_names(_w), *formex.annex_names(_w)])
+                    if any(why == formex.ABSENT for why, _r in formex.gaps(_read, _w, text_wrapper).values()):
+                        # LANDED, AND THE API'S (review B4): the wrapper names a
+                        # file the dump does not hold. The record states it
+                        # absent; the unit is asked once, then degraded
+                        c["dump-lacks-a-part"] += 1
+                        record(lang, celex, note, True)
                 stated = _LG_DOC.search(view[text_wrapper]) if text_wrapper is not None else None
                 if stated and stated.group(1).decode().lower() != lang:
                     c["text-in-another-language"] += 1

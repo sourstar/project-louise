@@ -159,27 +159,77 @@ def swapped(places: dict[str, tuple[str, int, int, int, int] | None]) -> list[st
     return sorted(out)
 
 
-def not_its_name(files: dict[str, bytes], wrapper: ET.Element, wname: str) -> list[str]:
-    """Why the act's own files are not the ones their names say — each a
-    reason, none where they are (2026-11-19: the Data Dump's 9 acts of
-    2014–15, 32015D1735 a TIFF as its body's `.xml`, 32015R0207 its annex
-    under its body's name; Cellar serves them right). Only the files the
-    act's own wrapper names: a Special Edition unit holds another act's
-    files too, numbered in their own order."""
-    named = [n for n in dict.fromkeys([*main_names(wrapper), *annex_names(wrapper)]) if n in files]
-    why = [w for n in [wname, *named] if (w := misnamed(n, files[n][:_HEAD_BYTES])) is not None]
+#: 09 §9.5's `origin_gaps` kinds, as `gaps` gives them
+ABSENT, UNREADABLE, ANOTHERS = "absent", "unreadable", "another's: "
+
+
+def gaps(files: dict[str, bytes], wrapper: ET.Element | None, wname: str | None,
+         lacked=()) -> dict[str, tuple[str, list[str]]]:
+    """THE ONE READING OF WHAT A UNIT DID NOT GIVE (architecture's review of
+    parser 6, B1, 2026-11-28): part → (09 §9.5's `why`, the reasons said).
+    The record's `origin_gaps` (source.unit_gaps), the fetch's judge
+    (eurlex_dump.judge_unit) and `not_its_name` (the dump build, the parse's
+    refusal) all read it, so they cannot drift:
+      - each package of `lacked` (the tree lists it, the unit lacks it) and
+        each file the wrapper names and the unit lacks: "absent";
+      - a file not of its name's kind (`misnamed`), a wrapper that is not a
+        <DOC>: "unreadable" — unreadable AS THE FILE ITS NAME SAYS: its bytes
+        may read, they are not that file's;
+      - a non-wrapper .xml holding a <DOC>: "another's: <the wrapper's name>";
+      - files in each other's place (`swapped`): "another's: <the file whose
+        name the stated page is>", or "unreadable" where the stated place is
+        no file's name (a Special Edition's offset beside a swap: the file
+        reads, whose it is the unit does not say).
+    Only the files the act's own wrapper names, and that wrapper: a Special
+    Edition unit holds another act's files too, numbered in their own order."""
+    out: dict[str, tuple[str, list[str]]] = {}
+
+    def put(part: str, why: str, reason: str) -> None:
+        got = out.setdefault(part, (why, []))
+        if reason not in got[1]:
+            got[1].append(reason)
+
+    for p in lacked:
+        put(p, ABSENT, f"the tree lists {p}, the unit lacks it")
+    if wrapper is None or wname is None:
+        return out
+    names = list(dict.fromkeys([*main_names(wrapper), *annex_names(wrapper)]))
+    named = [n for n in names if n in files]
+    for n in [wname, *named]:
+        w = misnamed(n, files[n][:_HEAD_BYTES])
+        if w is not None:
+            put(n, UNREADABLE, w)
     # THE WRAPPER BY ITS CONTENT TOO (2026-11-21, 32013D0410 in 24 languages:
     # the dump's `…01005401.doc.xml` holds ANNEX VII, the wrapper is filed as
     # `…01005401.xml`, the ACT as `…01005801.xml`; Cellar serves them right)
     if wrapper.tag != "DOC":
-        why.append(f"{wname} holds <{wrapper.tag}>, not a wrapper")
+        put(wname, UNREADABLE, f"{wname} holds <{wrapper.tag}>, not a wrapper")
     for n, data in files.items():
         if not is_wrapper(n) and n.lower().endswith(".xml") and root_tag(data[:_HEAD_BYTES]) == "DOC":
-            why.append(f"{n} holds a wrapper (<DOC>)")
-    off = swapped({n: stated_place(n, files[n][:_HEAD_BYTES]) for n in named})
+            put(n, ANOTHERS + wname, f"{n} holds a wrapper (<DOC>)")
+    places = {n: stated_place(n, files[n][:_HEAD_BYTES]) for n in named}
+    off = swapped(places)
     if off:
-        why.append("in each other's place: " + ", ".join(off))
-    return why
+        reason = "in each other's place: " + ", ".join(off)
+        by_place = {(p[0], p[1], p[2]): n for n, p in places.items() if p is not None}
+        for n in off:
+            p = places[n]
+            holds = by_place.get((p[0], p[3], p[4])) if p is not None else None
+            put(n, ANOTHERS + holds if holds and holds != n else UNREADABLE, reason)
+    for n in names:
+        if n not in files:
+            put(n, ABSENT, f"{wname} names {n}, the unit lacks it")
+    return out
+
+
+def not_its_name(files: dict[str, bytes], wrapper: ET.Element, wname: str) -> list[str]:
+    """Why the act's own files are not the ones their names say — each a
+    reason, none where they are (2026-11-19: the Data Dump's 9 acts of
+    2014–15, 32015D1735 a TIFF as its body's `.xml`, 32015R0207 its annex
+    under its body's name; Cellar serves them right): `gaps`' reasons for
+    every part but an absent one."""
+    return list(dict.fromkeys(r for why, reasons in gaps(files, wrapper, wname).values()
+                              if why != ABSENT for r in reasons))
 
 
 #: what `misnamed` and `stated_place` read of a file
@@ -213,9 +263,12 @@ def is_package(name: str) -> bool:
     return bool(_PACKAGE.search(name or ""))
 
 
-def unpack(files: dict[str, Any]) -> tuple[dict[str, bytes], dict[str, str]]:
+def unpack(files: dict[str, Any], read_whole=None) -> tuple[dict[str, bytes], dict[str, str]]:
     """The manifestation's files as the reader takes them: every item, and
-    each package's members in its place. The package stays HELD as the
+    each package's members in its place. `read_whole(name)`: the members
+    read whole, the rest their first bytes (default: the text members; the
+    judge of a unit's names, `is_wrapper` alone — review B3, 2026-11-28: a
+    body reaches 180 MB and `gaps` reads only heads). The package stays HELD as the
     origin served it (invariant 11: the unit is what Cellar gave, and
     records-vs-origin compares those bytes); only the reading opens it.
     Returns (the files to read, member → the package it came from).
@@ -236,6 +289,7 @@ def unpack(files: dict[str, Any]) -> tuple[dict[str, bytes], dict[str, str]]:
     # only what is read below leaves the disk, its central directory, its text
     # members and its figures' first bytes. The same checks, the same answers;
     # an I/O error of the file is an OSError, as reading it whole raised.
+    whole_one = read_whole or _read_whole
     magic = {n: _magic(b) for n, b in files.items() if is_package(n)}
     out = Members({n: (b if isinstance(b, bytes) else _whole(b)) for n, b in files.items()
                    if magic.get(n) != _ZIP_MAGIC})
@@ -252,12 +306,12 @@ def unpack(files: dict[str, Any]) -> tuple[dict[str, bytes], dict[str, str]]:
                 # 27 EUR-Lex5 packages refused "over 1 GiB" were TIFF figures,
                 # 1.09-9.77 GB, beside 59-942 KB of XML; the act's text was lost
                 # to a guard against what the reader never reads)
-                if sum(i.file_size for i in infos if _read_whole(i.filename)) > PACKAGE_MAX:
+                if sum(i.file_size for i in infos if whole_one(i.filename)) > PACKAGE_MAX:
                     raise FormexError(f"{name}: its text members are over {PACKAGE_MAX} bytes")
                 for i in infos:
                     if not _MEMBER_NAME.match(i.filename) or i.filename in (".", ".."):
                         raise FormexError(f"{name}: member {i.filename!r} is not a plain file name")
-                    if _read_whole(i.filename):
+                    if whole_one(i.filename):
                         got = z.read(i)            # its CRC-32 checked
                     else:
                         # a figure: its first bytes only, what the checks of a
@@ -1118,18 +1172,31 @@ def doubled_names(files: dict[str, bytes], wanted: list[str]) -> tuple[dict[str,
     return out, aliases
 
 
-def parse(files: dict[str, bytes], celex: str | None = None, listed=None, adopted: str | None = None) -> Act:
+def parse(files: dict[str, bytes], celex: str | None = None, listed=None, adopted: str | None = None,
+          *, set_aside: bool = False) -> Act:
     """The manifestation's items by name → the act (`celex`'s, where the
     items hold more than one act: `own_wrapper`). Raises FormexError when
-    the wrapper, the body or an annex it names is missing or unreadable."""
+    the wrapper, the body or an annex it names is missing or unreadable.
+
+    `set_aside` (parser 6, the operator's rule, 2026-11-28: "keep the
+    record, mark it as degraded, mark the parts as missing"): a file the
+    wrapper names that is not the one its name says is SET ASIDE — not read,
+    so never another file's text in its place — and the act read from the
+    rest, the record stating it in `origin_gaps`. The wrapper itself not
+    being one, or the body set aside, still refuses: there is no act to
+    read."""
     wname, wrapper = wrapper_of(files, celex, listed, adopted)
     files, aliases = doubled_names(files, [*main_names(wrapper), *annex_names(wrapper)])
     # A FILE UNDER ANOTHER'S NAME is never read as what its name says: the
     # record would be another file's text in its place, every check passing
-    wrong = not_its_name(files, wrapper, wname)
-    if wrong:
+    found_gaps = gaps(files, wrapper, wname)
+    wrong = list(dict.fromkeys(r for why, rs in found_gaps.values() if why != ABSENT for r in rs))
+    aside = {n for n, (why, _r) in found_gaps.items() if why != ABSENT}
+    if wrong and (not set_aside or wname in aside or any(why == ANOTHERS + wname for why, _r in found_gaps.values())):
         raise FormexError(f"a file is not the one its name says ({'; '.join(wrong)}): the unit is "
                           f"fetched again from the origin")
+    if aside:
+        files = {n: b for n, b in files.items() if n not in aside}
     mains = main_names(wrapper)
     if not mains:
         raise FormexError("the wrapper names no DOC.MAIN.PUB/REF.PHYS file: no body to read")

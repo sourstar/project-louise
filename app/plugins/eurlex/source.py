@@ -703,6 +703,35 @@ def _say_once(message: str) -> None:
         print(message, flush=True)
 
 
+def unit_gaps(files: dict, view: dict, note, celex: str, listed=None) -> dict[str, tuple[str, list[str]]]:
+    """What a unit did not give, from its OWN files and tree
+    (`formex.gaps`, B1): the packages its tree lists for the form read and
+    it lacks, and its Formex wrapper's files. `files` the unit's items as
+    held (a package by its name), `view` them read (`formex.unpack`). The
+    record's `origin_gaps` and the fetch's judge (eurlex_dump.judge_unit)
+    are this, so a record states gaps exactly where the judge says "not
+    whole". A wrapper that is another act's (`own_wrapper` refuses it) is no
+    gap of this act: its text is read from the next form."""
+    from ...acquire.cellar import form_of
+    lacked = ([it.name for it in note.items.get("fmx4", []) if it.name and formex.is_package(it.name)
+               and it.name not in files] if form_of(note) == "fmx4" else [])
+    wname = wrapper = None
+    if any(formex.is_wrapper(n) for n in view):
+        try:
+            wname = formex.own_wrapper(view, celex, view.__getitem__, listed, note.date_document)
+            wrapper = formex._parse(view[wname], wname)
+        except formex.FormexError:
+            wname = wrapper = None
+    if wrapper is not None:
+        view, _aliases = formex.doubled_names(view, [*formex.main_names(wrapper), *formex.annex_names(wrapper)])
+    return formex.gaps(view, wrapper, wname, lacked)
+
+
+def origin_gaps_of(gaps: dict[str, tuple[str, list[str]]]) -> list[dict]:
+    """09 §9.5's shape: one entry a part, sorted by its bytes."""
+    return [{"part": p, "why": gaps[p][0]} for p in sorted(gaps, key=lambda s: s.encode("utf-8"))]
+
+
 def _not_their_names(files: dict, celex: str) -> list[str]:
     """`formex.not_its_name` on the unit's own bytes (their heads): [] where
     the unit holds no Formex wrapper of this act."""
@@ -951,7 +980,15 @@ class EurlexSource:
     #: `extra.body_root`, `extra.valid_from_provisional`. Parser 4 is not
     #: carried: EUR-Lex4, the one Codex naming it, published nothing and is
     #: re-created as EUR-Lex5 (RULE 1, 02 §2.4 A1c).
-    PARSER_VERSION = 5
+    #: PARSER 6 (2026-11-28, the operator's rule B): a record states what the
+    #: origin did not give it — 09 §9.5 `origin_gaps`, for a `record_line` 3
+    #: collection — read from the unit's OWN files (a verifier reproduces it
+    #: from the corpus, never from this node's ledger): a file the wrapper
+    #: names and the unit does not hold ("absent"), a file holding what
+    #: another file's name says ("another's: <that file>"), a file that is
+    #: not of its name's kind ("unreadable"). Nothing else moves: at
+    #: `record_line` 1 or 2 the line drops the key, so parser 5 is carried.
+    PARSER_VERSION = 6
     #: the facts from the tree (4) or from the notice (3)
     TREE_FACTS = True
     #: 06 §6.2: Cellar keeps every OJ act and every consolidated version at
@@ -982,9 +1019,10 @@ class EurlexSource:
 
     def at_parser_version(self, version: int) -> "EurlexSource | None":
         """This plugin parsing at `version`, for a collection whose Codex
-        names it (`collections.plugin_at`): 4 is this one, 3 the one that read
-        the facts from the notice (`EurlexSourceV3`)."""
-        return {5: self, 3: _V3}.get(int(version))
+        names it (`collections.plugin_at`): 6 is this one, 5 the one before
+        `origin_gaps` (`EurlexSourceV5`), 3 the one that read the facts from
+        the notice (`EurlexSourceV3`)."""
+        return {6: self, 5: _V5, 3: _V3}.get(int(version))
 
     # ---- discovery ---------------------------------------------------------------------------
 
@@ -1300,7 +1338,8 @@ class EurlexSource:
         stated_lang = notice_mod.CODE_OF.get(note.display_language or "", lang)
         try:
             if form == "fmx4":
-                act = formex.parse(view, celex, listed, note.date_document)
+                act = formex.parse(view, celex, listed, note.date_document,
+                                   set_aside=self.PARSER_VERSION >= 6)
                 for name in act.missing:
                     found.append(Issue("item-not-held", f"{act.wrapper_file} names {name}"))
             elif form in ("xhtml", "html"):
@@ -1528,6 +1567,8 @@ class EurlexSource:
             keys=sorted(keys),
             extra={k: v for k, v in extra.items() if v not in (None, "", [], {})},
             sections=sections,
+            origin_gaps=origin_gaps_of(unit_gaps(files, view, note, celex, listed))
+            if self.PARSER_VERSION >= 6 else [],
             raw_hash=raw.raw_hash,
             issues=found,
         )
@@ -1582,3 +1623,13 @@ class EurlexSourceV3(EurlexSource):
 
 
 _V3 = EurlexSourceV3()
+
+
+class EurlexSourceV5(EurlexSource):
+    """Parser 5, carried for the collections whose Codex names it
+    (EUR-Lex5.next): parser 6 without `origin_gaps` (which a `record_line`
+    1 or 2 line drops anyway)."""
+    PARSER_VERSION = 5
+
+
+_V5 = EurlexSourceV5()
