@@ -333,7 +333,9 @@ the response names it. The same reading names the language the query is
 written in, which a work's one hit is shown in (§5.3); a peer that reads
 it with a chat model turns the model's thinking off for the call and
 bounds it by its own timeout, and a reading that fails is said
-(`status: unavailable`) and asked again next time, never cached
+(`status: unchecked`, "languages: limit not checked": every language is
+searched; *amended 2026-11-28*, `unavailable` is now only a query no model
+translated) and asked again next time, never cached
 (*amended 2026-10-09*: the node's chat model thought through its whole
 budget and answered nothing, on every query measured). Where the reading
 is unavailable or names no language, the peer guesses it without a
