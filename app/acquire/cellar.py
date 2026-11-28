@@ -1271,6 +1271,7 @@ class CellarUnits:
         self._runs: dict[str, tuple] = {}           # corpus root → (the listing thread, {(year, lang): Event})
         self._order: dict[str, dict] = {}           # corpus root → {(year, lang): its place in the listing}
         self._held: dict[str, str] = {}             # corpus root → why the pass is held back mid-pass
+        self._degraded: dict[str, set] = {}         # corpus root → {(lang, celex)} marked degraded
 
     def _count(self, got: "Fetched") -> None:
         with self._lock:
@@ -1433,7 +1434,11 @@ class TreeUnits(CellarUnits):
                 held = _epoch(note.modified or note.last_modified)
             except (OSError, ValueError, from_tree.TreeError):
                 held = None
-            if held is not None and held >= remote.mtime and not self._reform(dest, remote, note):
+            if held is not None and held >= remote.mtime and (
+                    self._degraded_since(dest, unit) or not self._reform(dest, remote, note)):
+                # current, or DEGRADED and the origin shows no change since it
+                # was judged: never asked again on a plain pass (the operator's
+                # rule, 2026-11-28)
                 self._count(Fetched(files={}, moved=0, tree_from="held"))
                 return 0
         root = _corpus_of(dest, remote)
@@ -1474,6 +1479,11 @@ class TreeUnits(CellarUnits):
         if remote.mtime is None and root is not None:
             from . import eurlex_dump
             eurlex_dump.mark_fetched(root, unit["lang"], unit["celex"])   # asked first once
+            # STILL NOT WHOLE AFTER ITS ONE ASK: kept, marked degraded, and the
+            # pass carries on (the operator's rule, 2026-11-28; eurlex_dump.mark_degraded)
+            state = eurlex_dump.judge_unit(dest.parent, unit["lang"], unit["celex"])
+            if not state["whole"]:
+                eurlex_dump.mark_degraded(root, unit["lang"], unit["celex"], state)
         self._count(got)
         return got.moved
 
@@ -1675,6 +1685,14 @@ class TreeUnits(CellarUnits):
                     self._dates[key] = known
                     self._cover.setdefault(key, {})[(year, lang)] = cover[(year, lang)]
 
+    def _degraded_since(self, dest: Path, unit: dict) -> bool:
+        """Is this held unit marked degraded (eurlex_dump.mark_degraded)? The
+        corpus's degraded units are read once a pass (`prepare`), never per unit."""
+        root = _corpus_of_unit(dest)
+        with self._lock:
+            got = self._degraded.get(str(root.resolve())) if root is not None else None
+        return got is not None and (unit["lang"], unit["celex"]) in got
+
     def _reform(self, dest: Path, remote: RemoteFile, note) -> bool:
         """A held unit lacking the Formex package its tree lists is asked
         again, once the dump build has re-formed this language's units from
@@ -1706,7 +1724,8 @@ class TreeUnits(CellarUnits):
             # (review of 13743848, 1: an unset EURLEX_DATADUMP_DIR sent every
             # tree to Cellar)
             self._prepare_bulk_held(None, collection, langs, pending, endpoint)
-            return []
+            self._read_degraded(Path(collection.corpus_dir))
+            return _held_but_due(files, pending, Path(collection.corpus_dir))
         try:
             eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs, stop=_stop_requested)
         except (TransferAborted, HeldBack):
@@ -1716,7 +1735,14 @@ class TreeUnits(CellarUnits):
                            f"was not built ({type(e).__name__}: {str(e)[:300]}); bulk first, so Cellar is "
                            f"not asked for its units until it is") from e
         self._prepare_bulk_held(dumps.base, collection, langs, pending, endpoint)
-        return []
+        self._read_degraded(Path(collection.corpus_dir))
+        return _held_but_due(files, pending, Path(collection.corpus_dir))
+
+    def _read_degraded(self, corpus: Path) -> None:
+        from . import eurlex_dump
+        got = {(d["lang"], d["celex"]) for d in eurlex_dump.degraded(corpus)}
+        with self._lock:
+            self._degraded[str(corpus.resolve())] = got
 
     def _prepare_bulk_held(self, dump_base, collection, langs, pending, endpoint) -> None:
         """`_prepare_bulk`, whatever stops it holding the pass back (review of
@@ -2087,6 +2113,27 @@ class TreeUnits(CellarUnits):
         with self._lock:
             self._runs[key] = (thread, events, phase)
         thread.start()
+
+def _corpus_of_unit(dest: Path) -> Path | None:
+    """The corpus root of a unit's tree.json (`lang=<l>/<yyyy>/<CELEX>/tree.json`,
+    under `history/` or not)."""
+    p = Path(dest).parent.parent.parent.parent
+    return p.parent if p.name == "history" else p
+
+
+def _held_but_due(files: list[RemoteFile], pending: list[RemoteFile], corpus: Path) -> list[str]:
+    """The units asked first (no listing date: the ledger says them due) that
+    the engine would skip as fetched — held, their row done — named back to
+    it to be fetched in this pass (the engine's `prepare` answer, held files
+    revised in place). 2026-11-28, bg 32006R1828: held since 11-20 with two
+    Formex files in each other's place, due by the ledger every pass, skipped
+    by the engine every pass; the asked-first list never emptied and the
+    complete listing never ran. Fetched, it is marked (`mark_fetched`): asked
+    once, as every unit asked first, whatever Cellar answers."""
+    asked = {f.rel_path for f in pending}
+    return [f.rel_path for f in files
+            if is_unit(f) and f.mtime is None and f.rel_path not in asked and (corpus / f.rel_path).is_file()]
+
 
 def _corpus_of(dest: Path, remote: RemoteFile) -> Path | None:
     """The corpus root a unit's file lands under: `dest` less its rel_path."""

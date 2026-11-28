@@ -431,7 +431,11 @@ def _fold(record: dict, marks: list[dict]) -> dict:
         elif kind == "tried":
             entry["tried"] = value
         elif kind == "state" and isinstance(value, dict):
-            entry.update({k: value[k] for k in ("held", "lacks", "whole") if k in value})
+            entry.update({k: value[k] for k in ("held", "lacks", "whole", "why") if k in value})
+            if value.get("whole"):
+                entry.pop("why", None)              # whole now: no reason left
+        elif kind == "degraded" and isinstance(value, dict):
+            entry["degraded"] = value               # the operator's rule, 2026-11-28
         elif kind == "listed":
             entry.pop("waiting", None)           # its window came back listed: due at once, n from 0
         elif kind == "waiting" and isinstance(value, dict):
@@ -582,8 +586,16 @@ def incomplete_due(corpus: Path, langs, *, now: float | None = None) -> list[tup
                 if not entry.get("reform"):
                     continue
                 held, lacks = entry.get("held"), entry.get("lacks")
-                if held is not None and isinstance(lacks, list) and held == sig \
+                # A RECORD THAT NAMES NO PACKAGE LACKED (`lacks: []`, the build
+                # could not judge it: 2026-11-28, bg 32006R1828, held whole
+                # since 11-20) proves nothing by a stat: it is judged from its
+                # files once, as a changed unit is. Before, it stayed due on
+                # every pass while the engine skipped it as fetched, and the
+                # complete listing never had its turn
+                if held is not None and isinstance(lacks, list) and lacks and held == sig \
                         and not any(os.path.isfile(f"{at}/{n}") for n in lacks):
+                    pass                    # as the build found it: still lacking, due
+                elif held is not None and held == sig and "whole" in entry:
                     if entry.get("whole"):
                         continue            # judged whole, unchanged since
                 else:
@@ -594,8 +606,15 @@ def incomplete_due(corpus: Path, langs, *, now: float | None = None) -> list[tup
                     except (OSError, ValueError, from_tree.TreeError):
                         note = None
                     lacked = lacked_packages(unit, note) if note is not None else []
-                    whole = note is not None and not lacked and not held_not_its_name(unit, celex)
-                    marks.append((lang, celex, "state", {"held": sig, "lacks": lacked, "whole": whole}))
+                    misnamed = held_not_its_name(unit, celex) if note is not None else []
+                    whole = note is not None and not lacked and not misnamed
+                    # WHY it is not whole, said (architecture, 2026-11-28: `lacks: []`
+                    # meant nothing missing, a tree unreadable, or files another act's
+                    # bytes — the ambiguity bg 32006R1828 sat stuck on)
+                    why = (None if whole else "unreadable" if note is None
+                           else f"lacks {', '.join(lacked)}" if lacked else f"not its name: {'; '.join(misnamed)}")
+                    marks.append((lang, celex, "state", {"held": sig, "lacks": lacked, "whole": whole,
+                                                         **({"why": why[:300]} if why else {})}))
                     if whole:
                         continue
             out.append((lang, celex, entry.get("in_force")))
@@ -622,6 +641,56 @@ def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
     """A recorded incomplete unit Cellar did not give either (a failure that
     is not the endpoint going away): not asked first again."""
     _mark(corpus, [(lang, celex, "tried", why[:300])])
+
+
+def judge_unit(unit: Path, lang: str, celex: str) -> dict:
+    """A held unit's state from its files: `whole`, and where it is not,
+    `why` — "unreadable" (its tree does not read), "lacks <packages>", or
+    "not its name: <files>" (files holding another act's bytes) — with
+    `lacks` and the tree's own latest modification (`origin_modified`)."""
+    from ..plugins.eurlex import from_tree, rdf
+    from ..plugins.eurlex.source import LANGUAGES
+    from .cellar import lacked_packages
+    try:
+        note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), LANGUAGES[lang], celex)
+    except (OSError, ValueError, KeyError, from_tree.TreeError):
+        return {"whole": False, "why": "unreadable", "lacks": [], "origin_modified": None}
+    lacked = lacked_packages(unit, note)
+    misnamed = [] if lacked else held_not_its_name(unit, celex)
+    why = (f"lacks {', '.join(lacked)}" if lacked else f"not its name: {'; '.join(misnamed)}" if misnamed
+           else None)
+    return {"whole": why is None, "why": why[:300] if why else None, "lacks": lacked,
+            "origin_modified": note.modified or note.last_modified}
+
+
+def mark_degraded(corpus: Path, lang: str, celex: str, state: dict) -> None:
+    """THE OPERATOR'S RULE (2026-11-28, verbatim: "It may be a malformed
+    record that cannot be fixed, and it is pointless the keep idiotically
+    trying to fetch what might never exist. I propose to keep the record,
+    mark it as degraded, mark the parts as missing and carry on. Upon future
+    pollings of the source those degraded records are checked if their
+    records show an update."). A unit still not whole after its one ask
+    keeps its record and files and is marked degraded: why, the parts
+    missing, the origin's date it was judged against, when. It is asked
+    again only when the origin shows a change (the listing's date newer than
+    `origin_modified`: `cellar.TreeUnits.fetch`'s held check), or a newer
+    dump records it afresh."""
+    import time as _time
+    _mark(corpus, [(lang, celex, "degraded", {
+        "degraded": True, "why": state.get("why"), "lacks": state.get("lacks") or [],
+        "origin_modified": state.get("origin_modified"),
+        "at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())})])
+
+
+def degraded(corpus: Path) -> list[dict]:
+    """Every degraded unit, with its why (the card's and `hold issues`' count)."""
+    out = []
+    for lang, units in sorted(incomplete(corpus).items()):
+        for celex, entry in sorted(units.items()):
+            d = entry.get("degraded") if isinstance(entry, dict) else None
+            if isinstance(d, dict) and d.get("degraded"):
+                out.append({"lang": lang, "celex": celex, **d})
+    return out
 
 
 def mark_waiting(corpus: Path, lang: str, celex: str, why: str) -> None:
