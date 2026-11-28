@@ -2598,7 +2598,9 @@ is the collection being held:
 codex  = "sha256:…"                            # the collection_id this name holds; shard/codex.json's inner hash must equal it (09 §9.3)
 title  = "PubMed"                              # optional: the name every page shows for this collection on this peer (Library, Ask,
                                                # System), never published; else the Codex's descriptive.title up to its first " — ".
-                                               # Names two collections would share get " · " + their collection_id's first 6 hex
+                                               # Names two collections would share get " · " + their ENCODER's name, in as few of
+                                               # its words as tell them apart ("Project Gutenberg · Nemotron", "· Qwen3"; operator
+                                               # 2026-11-28, A), and where two share the encoder too, " · " + their collection_id's first 6 hex
                                                # (app/display_names.py; operator 2026-11-13). The card's "rename…" writes it and moves
                                                # no folder: the local name stays the folders', the files' and the command line's, and
                                                # `hold` commands also take the shown name where it is unique
