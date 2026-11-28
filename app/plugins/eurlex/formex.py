@@ -400,8 +400,13 @@ def tree(e: ET.Element) -> Any:
 
 @dataclass
 class Collect:
-    """What the text renderer sets aside while it lays out a section."""
+    """What the text renderer sets aside while it lays out a section.
+    `figures` (parser 6): an image's INCL.ELEMENT leaves `figure_token` of
+    its file where it stands, which the plugin turns into a plate's marker
+    (source.place_figures) — in a footnote's text too (architecture,
+    2026-11-28: an image a note references has a mark)."""
     section: str = ""
+    figures: bool = False
     notes: list[dict] = field(default_factory=list)
     references: list[dict] = field(default_factory=list)
     modifications: list[dict] = field(default_factory=list)
@@ -451,6 +456,13 @@ def inline(e: ET.Element, col: Collect | None = None) -> str:
         if c.tag == "NOTE":
             if col is not None:
                 _note(c, col)
+        elif c.tag == "INCL.ELEMENT" and c.attrib.get("TYPE") != "FORMEX.DOC":
+            # AN IMAGE WHERE IT STANDS (parser 6, the figures half; operator,
+            # 2026-11-28: "Carry the plates only"): its token, for its marker
+            # its own words (an ANNOTATION's legend, a TBL of labels) as before
+            if col is not None and col.figures and c.attrib.get("FILEREF"):
+                parts.append(figure_token(c.attrib["FILEREF"]))
+            parts.append(inline(c, col))
         elif c.tag in _CHAR_MARKS:
             parts.append(_char(c))
         elif c.tag in ("TBL", "GR.TBL"):
@@ -466,13 +478,25 @@ def inline(e: ET.Element, col: Collect | None = None) -> str:
     return norm("".join(parts))
 
 
+#: an image's place in a rendered text, until the plugin places its plate:
+#: two private-use characters around the file's own name
+TOKEN_OPEN, TOKEN_CLOSE = "\ue000", "\ue001"
+
+
+def figure_token(ref: str) -> str:
+    import os as _os
+    return TOKEN_OPEN + _os.path.basename(ref) + TOKEN_CLOSE
+
+
 def _note(e: ET.Element, col: Collect) -> None:
     """A footnote: its words to the record's notes; the processing
     instructions inside it (a consolidation's marks) collected as anywhere."""
     for x in e.iter():
         if x.tag is ET.ProcessingInstruction:
             col.pi(x)
-    col.note(e, inline(e, None))
+    # a footnote's words: its own references and marks are not the
+    # section's (as before); an image it places leaves its token
+    col.note(e, inline(e, Collect(figures=True) if col.figures else None))
 
 
 def _rows(tbl: ET.Element, col: Collect | None) -> list[str]:
@@ -545,6 +569,10 @@ def lines(e: ET.Element, depth: int, col: Collect, lead: str = "") -> list[str]:
             continue
         if c.tag == "NOTE":
             _note(c, col)
+        elif c.tag == "INCL.ELEMENT" and c.attrib.get("TYPE") != "FORMEX.DOC":
+            if col.figures and c.attrib.get("FILEREF"):
+                buf.append(figure_token(c.attrib["FILEREF"]))      # an image where it stands (parser 6)
+            buf.append(inline(c, col))                              # its own words, as before
         elif c.tag in _CHAR_MARKS:
             buf.append(_char(c))
         elif c.tag in _BLOCKS or c.tag in ("TITLE", "TI", "STI"):
@@ -1173,7 +1201,7 @@ def doubled_names(files: dict[str, bytes], wanted: list[str]) -> tuple[dict[str,
 
 
 def parse(files: dict[str, bytes], celex: str | None = None, listed=None, adopted: str | None = None,
-          *, set_aside: bool = False) -> Act:
+          *, set_aside: bool = False, figures: bool = False) -> Act:
     """The manifestation's items by name → the act (`celex`'s, where the
     items hold more than one act: `own_wrapper`). Raises FormexError when
     the wrapper, the body or an annex it names is missing or unreadable.
@@ -1213,7 +1241,7 @@ def parse(files: dict[str, bytes], celex: str | None = None, listed=None, adopte
     bname = next((n for n in held_mains if parsed[n].tag in _ACT_ROOTS), held_mains[0])
     root = parsed[bname]
     markup: dict[str, list] = {bname: attributes_of(root)}
-    col = Collect()
+    col = Collect(figures=figures)
     pub = wrapper.find("./PUBLICATION.REF/DATE")
     meta: dict[str, Any] = {}
     consleg: dict = {}

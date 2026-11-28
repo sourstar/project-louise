@@ -238,8 +238,9 @@ class _Reader(HTMLParser):
     the head's title and metas. `serial` numbers the blocks from there, so
     the items of one manifestation never share a number."""
 
-    def __init__(self, serial: int = 0) -> None:
+    def __init__(self, serial: int = 0, figures: bool = False) -> None:
         super().__init__(convert_charrefs=True)
+        self.figures = figures
         self.lines: list[_Line] = []
         self.markup: list[list] = []
         self.metas: list[dict] = []
@@ -275,6 +276,10 @@ class _Reader(HTMLParser):
             self._skip += 1
         if tag == "meta":
             self.metas.append(a)
+        if tag == "img" and self.figures and not self._skip and a.get("src"):
+            # AN IMAGE WHERE IT STANDS (parser 6): its token, for its marker
+            from .formex import figure_token
+            self._buf.append(figure_token(a["src"]))
         if tag == "title":
             self._in_title = True
         if tag == "a":
@@ -771,14 +776,15 @@ def _act(root: str, body_file: str, lang: str, title: str, note, read: _Read,
     return act
 
 
-def parse_html(files: dict[str, bytes], names: list[str], *, lang: str, root: str, note) -> Act:
+def parse_html(files: dict[str, bytes], names: list[str], *, lang: str, root: str, note,
+               figures: bool = False) -> Act:
     """An XHTML or legacy HTML manifestation, its items in `names` order."""
     lines: list[_Line] = []
     markup: dict[str, list] = {}
     heads: dict[str, dict] = {}
     serial = 0
     for name in names:
-        r = _Reader(serial)
+        r = _Reader(serial, figures)
         r.feed(files[name].decode("utf-8", errors="replace"))
         r.close()
         serial = r.serial
