@@ -252,7 +252,7 @@ Measured cost: archive.org served the 41 files in 44 s, the Met in 8 s. The
 shortcut lightens the Met's load. It does not shorten the run unless
 archive.org is fetched in parallel with the Met.
 
-**Open (invariant 11, entity information):** for the ~48 % of objects
+**DECIDED (operator, 2026-11-28: "1st option"): the API JSON for every object.** Was open (invariant 11, entity information): for the ~48 % of objects
 without images, the CSV holds `Dimensions` as a string, while the API JSON
 adds structured `measurements`. Fetching their JSON as well (~240 k requests,
 ~1–7 h at 10–80 req/s) keeps them.
