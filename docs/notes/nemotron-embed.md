@@ -598,6 +598,17 @@ measured afterwards, on every Nemotron collection at once. Rows so far: W1
   ~9 card-days at W1's c4 rate, ~190 GB at 2,048 f16. Then gutenberg-nemo,
   the old gutenberg backed up to tank and retired; then wikipedia-nemo, smart
   embedding only, the same way.
+- **gutenberg-nemo, MEASURED (München, 2026-11-28).** Created by the book
+  (`POST /api/hold/collection/new`), carried, gated, quarantine check PASS in
+  2,189 s; embedding began 06:20Z. Over 06:24:30–06:34:30Z, counted from her
+  manifest (documents with `embed_done = 1`): 59 documents, 12,242 chunks =
+  **20.4 chunks/s**, 9,041,748 tokens = **15,070 tokens/s** (≈ 739 tokens a
+  chunk; 747 corpus-wide). Her set: 79,866 documents, 10,502,213 chunks,
+  7,846,386,653 tokens, so **≈ 6.0 card-days** at that rate — half the
+  12–15 estimated on 2026-11-08 (6,750 tok/s). The worker's own line,
+  ramp-up included: 14.9 chunks/s at concurrency 4. Caveats: ten minutes, the
+  first 87 books; the night profile (12 cores, the card uncapped), gutenberg's
+  own acquisition running and nothing else on the card.
 
 ## What the operator gets
 
