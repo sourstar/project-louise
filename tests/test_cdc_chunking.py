@@ -137,7 +137,13 @@ def test_only_wikipedia_is_mutable_today():
     # own chunker, wikidata-text, so it does NOT get CDC either
     # wikisource (2026-11-23): a page is revised in place; its works are
     # books, CDC-cut as gutenberg's pieces are (its own `default_layers`)
-    assert mutable == {"wikipedia", "normattiva", "wikidata", "legi", "neuris", "eurlex", "wikisource"}
+    # met (2026-11-28): the Met revises its records and re-photographs its
+    # objects — and its records take the `abstract` chunker, one chunk per
+    # object, so it does NOT get CDC
+    assert mutable == {"wikipedia", "normattiva", "wikidata", "legi", "neuris", "eurlex", "wikisource",
+                       "met"}
+    assert chunking.chunker_name(collections_mod.PLUGIN_REGISTRY["met"].chunking_profile,
+                                 Mutability.MUTABLE) == chunking.ABSTRACT
     # normattiva akn_article; legi, neuris and eurlex the shared legal
     # layer's legal_article (2026-11-08): neither gets CDC
     assert chunking.chunker_name(collections_mod.PLUGIN_REGISTRY["normattiva"].chunking_profile,
