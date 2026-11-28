@@ -62,6 +62,9 @@ from app.hold.codex import CodexError
 
 MAX_ROUNDS = 6
 TEXT_CHARS = 600            # of a result's text the model sees
+#: of a result read with its neighbours (a literature search's first works,
+#: retrieval._attach_around): the work asked about, read, not glimpsed
+AROUND_CHARS = 5400
 HITS_PER_LIST = 10
 SYSTEM = (
     "You are Louise, a research assistant over the collections this peer holds. Louise has already "
@@ -232,7 +235,7 @@ def shown_search(query: str, result: dict[str, Any], sources: Sources, *,
     if reads is not None:
         from app import historical
         older, read = historical.read_sources(
-            [(n, {**h, "text": _trim(h.get("text")) or ""}) for n, fresh, h in numbered
+            [(n, {**h, "text": _body_of(h)}) for n, fresh, h in numbered
              if fresh and "text" in h], question or query, answer_lang)
         for r in read:
             sources.entries[r.n - 1]["reading"] = r.badge()
@@ -252,6 +255,8 @@ def shown_search(query: str, result: dict[str, Any], sources: Sources, *,
         if n in older:
             head += older[n][0]
             body = older[n][1]
+        elif h.get("around"):
+            body = _trim_to(h["around"], AROUND_CHARS)
         elif "text" in h:
             body = _trim(h.get("text")) or ""
         else:
@@ -283,6 +288,16 @@ def shown_search(query: str, result: dict[str, Any], sources: Sources, *,
     return "\n\n".join(blocks)
 
 
+def _body_of(h: dict) -> str:
+    """What the model reads of a result: its passage with what surrounds it
+    where it carries one (`around`), else its passage, trimmed."""
+    return _trim_to(h["around"], AROUND_CHARS) if h.get("around") else (_trim(h.get("text")) or "")
+
+
+def _trim_to(text: str, n: int) -> str:
+    return text if len(text) <= n else text[:n].rstrip() + " …"
+
+
 def _trim(text: Any) -> Any:
     if isinstance(text, str) and len(text) > TEXT_CHARS:
         return text[:TEXT_CHARS].rstrip() + " …"
@@ -301,7 +316,7 @@ def compact(name: str, result: Any) -> Any:
                 hit = {k: h.get(k) for k in ("uid", "snapshot_id", "rank", "title", "authors", "lang",
                                              "trust_level", "verified_on_use", "legs") if k in h}
                 if "text" in h:
-                    hit["text"] = _trim(h.get("text"))
+                    hit["text"] = _body_of(h)
                 if h.get("origin_url"):
                     hit["origin_url"] = h["origin_url"]
                 hits.append(hit)

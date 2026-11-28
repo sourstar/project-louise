@@ -628,3 +628,70 @@ def test_the_note_takes_the_language_whole_and_says_one_in_the_singular(lang, st
     from app import api
     r = {"hits": [], "kind_applied": "literature", "left_out": {"count": 1, "by_basis": {"x": 1}}}
     assert api.kind_note(r, lang).startswith(start)
+
+
+# ---- a work asked about is read, not glimpsed (the 9B's judged set, 2026-11-28) -------------
+
+def _long_book(tmp_path):
+    """War and Peace's real record, with a text that cuts into many chunks:
+    paragraph n says "Paragraph n." and words enough to fill chunks."""
+    from app import discovery, worker
+    from tests.test_work_kind import _collection
+    c = _collection(tmp_path, ids=(2600,))
+    txt = next((c.corpus_dir / "2600").glob("*.txt.utf8"))
+    txt.write_text("\n\n".join(f"Paragraph {n}. " + "The army crossed the river at dawn. " * 40
+                               for n in range(1, 41)), encoding="utf-8")
+    con = db_connect(c)
+    discovery.sync_collection(con, c)
+    for row in con.execute("SELECT * FROM documents").fetchall():
+        worker.stage_rdf(con, row, c)
+    if con.in_transaction:
+        con.execute("COMMIT")
+    from app import layers, plugin_io
+    row = dict(con.execute("SELECT uid, source, native_id, path, lang FROM documents").fetchone())
+    title, sections = plugin_io.title_and_sections(c.plugin_instance(), row, c)
+    cut = layers.chunks_for_document(c, row, sections, title=title)
+    return c, con, row, cut
+
+
+def db_connect(c):
+    from app import db
+    return db.connect(c)
+
+
+def test_a_literature_search_reads_the_first_works_passage_with_its_neighbours(isolated_config, tmp_path):
+    c, con, row, cut = _long_book(tmp_path)
+    assert len(cut) >= 5, "the fixture cuts into chunks"
+    mid = cut[len(cut) // 2]
+    hits = [{"chunk_id": mid["id"], "uid": row["uid"], "book_id": 2600, "text": mid["text"]}]
+    retrieval._attach_around(con, c, hits)
+    i = len(cut) // 2
+    assert hits[0]["around"] == "\n\n".join(x["text"] for x in cut[i - 1:i + 2]), "before, it, after: in order"
+    assert hits[0]["text"] == mid["text"], "the hit's own passage is unchanged"
+    first = [{"chunk_id": cut[0]["id"], "uid": row["uid"], "book_id": 2600, "text": cut[0]["text"]}]
+    retrieval._attach_around(con, c, first)
+    assert first[0]["around"] == cut[0]["text"] + "\n\n" + cut[1]["text"], "at the start: it and the next"
+
+
+def test_only_a_literature_search_reads_around_and_every_answer_path_reads_it(isolated_config, tmp_path, monkeypatch):
+    c, con, row, cut = _long_book(tmp_path)
+    mid = cut[len(cut) // 2]
+    monkeypatch.setattr(retrieval.refs, "get_store", lambda: None)
+    monkeypatch.setattr(retrieval.refs.RESOLVER, "resolve", lambda q, s: [])
+    hit = {"chunk_id": mid["id"], "uid": row["uid"], "book_id": 2600, "text": mid["text"], "score": 1.0,
+           "rrf": 0.03, "source_collection": "gutenberg", "source": "fts"}
+    monkeypatch.setattr(retrieval, "_search_one_collection", lambda *a, **kw: {
+        "catalog": [], "merged": [dict(hit)], "translations": {}, "timings": {}, "scope": {},
+        "kind_applied": kw.get("kind", "all") if isinstance(kw.get("kind", "all"), str) else "literature",
+        "kind_by": "the reader", "left_out": {"count": 0, "by_basis": {}}})
+    monkeypatch.setattr(retrieval, "_rerank_list", lambda q, hs, *a, **kw: (hs, False))
+    lit = retrieval.search(con, "Napoleon", k=5, collection=c, translate=False, kind="literature")
+    assert lit["hits"][0].get("around") and mid["text"] in lit["hits"][0]["around"]
+    plain = retrieval.search(con, "Napoleon", k=5, collection=c, translate=False)
+    assert "around" not in plain["hits"][0], "a search of another kind is as it was"
+    # the page's /v1 answer and the chat's tool answer both read it
+    _, user = retrieval.build_answer_messages("Napoleon", lit)[0:2]
+    assert cut[len(cut) // 2 - 1]["text"][:200] in user["content"]
+    from app.ask import chat
+    assert chat._body_of({"text": "x" * 900, "around": "y" * 6000}) == "y" * chat.AROUND_CHARS + " …"
+    assert chat._body_of({"text": "x" * 900}) == "x" * chat.TEXT_CHARS + " …"

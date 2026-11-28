@@ -631,6 +631,12 @@ in one short call, after the language plan and beside the legs (2 s from its sta
 question): unsure or no answer in time is `all`, never a silent narrowing.
 It is a filter, the reader's to see and undo (§5.6, WEIGHTS (4)): the Ask
 page shows it and one tap re-runs the question with another kind.
+*Amended 2026-11-28* (the 9B's judged set: a question about Manzoni's ode
+was answered from one chunk of it). In a `literature` search the first three
+results carry `around`: their passage with the passage before and after it,
+in the book's order, cut again from the record by its own layer. The answer
+reads `around` (up to 5,400 characters) where a result has one; the result,
+its passage and its citation are unchanged.
 
 *Amended 2026-11-11* (operator: the Ask page's saved PDF "available
 through the other interfaces too"). An MCP client is also offered one tool

@@ -1626,6 +1626,8 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
     # enqueues nothing.
     cancel.checkpoint()
     _attach_metadata_and_enqueue(con, collection, final)
+    if kind == "literature":
+        _attach_around(con, collection, final)
 
     timings["total"] = round((time.time() - t_total) * 1000, 1)
     result = {"query": query, "mode": mode, "translations": partial["translations"],
@@ -1763,6 +1765,59 @@ def _federated_want(n: int, k: int, rerank_depth: int) -> int:
     federation's cut (more than one collection), then the rerank's slice."""
     want = max(k * 4, rerank_depth)
     return min(want, max(config.FEDERATION_CANDIDATE_BUDGET, rerank_depth)) if n > 1 else want
+
+
+#: a literature search's first works, read with what surrounds their passage
+AROUND_HITS = 3
+#: the passages each side of the best one
+AROUND_EACH_SIDE = 1
+#: what the answer is given of a passage read with its neighbours
+AROUND_CHARS = 5400
+
+
+def result_kind_is_literature(kind) -> bool:
+    return _kind_now(kind)[0] == "literature"
+
+
+def _attach_around(con, collection, hits: list[dict]) -> None:
+    """A WORK ASKED ABOUT IS READ, NOT GLIMPSED (the 9B's judged set,
+    2026-11-28: "Che cosa dice Il cinque maggio di Manzoni" was answered
+    from ONE chunk of the ode — a few pages inside "Le tragedie, gl'inni
+    sacri e le odi" — and missed "Fu vera gloria?" and the closing, and
+    gave the poet's "servo encomio / codardo oltraggio" to Napoleon). In a
+    literature search the first AROUND_HITS hits carry `around`: their
+    passage with the AROUND_EACH_SIDE passages before and after it, in the
+    book's order, cut again from the record itself by its own layer
+    (invariant 3: the same chunks, `layers.chunks_for_document`). The
+    answer reads `around` where it is; the hit, its passage and its
+    citation are unchanged. A record that cannot be read here keeps its
+    passage alone; never a failed search."""
+    from . import layers as layers_mod, plugin_io
+    plugin = None
+    for h in hits[:AROUND_HITS]:
+        cid, uid = h.get("chunk_id"), h.get("uid")
+        if not cid or not uid:
+            continue
+        cancel.checkpoint()
+        try:
+            row = con.execute("SELECT uid, source, native_id, path, lang FROM documents WHERE uid=?",
+                              (uid,)).fetchone()
+            if row is None:
+                continue
+            row = dict(row)
+            plugin = plugin or collection.plugin_instance()
+            title, sections = plugin_io.title_and_sections(plugin, row, collection)
+            cut = layers_mod.chunks_for_document(collection, row, sections, title=title)
+            at = next((i for i, c in enumerate(cut) if c["id"] == cid), None)
+            if at is None:
+                continue
+            lo, hi = max(0, at - AROUND_EACH_SIDE), min(len(cut), at + AROUND_EACH_SIDE + 1)
+            if hi - lo > 1:
+                h["around"] = "\n\n".join(c["text"] for c in cut[lo:hi])
+        except cancel.Cancelled:
+            raise
+        except Exception:   # noqa: BLE001 — the passage alone, as before
+            continue
 
 
 def _merge_rrf_federated(lists: list[list[dict]]) -> list[dict]:
@@ -2007,6 +2062,8 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
         collection = collection_by_name[name]
         con = cancel.watch(db.connect(collection))
         _attach_metadata_and_enqueue(con, collection, hits)
+        if result_kind_is_literature(kind):
+            _attach_around(con, collection, hits[:AROUND_HITS])
 
     timings = {
         "languages": plan_ms,
@@ -2418,7 +2475,10 @@ def build_answer_messages(query: str, result: dict, answer_lang: str | None = No
         if h.get("chapter"):
             loc += f" {h['chapter']}"
         head = f"[{i}] {loc} — {h.get('title','?')} — {h.get('authors','?')} ({h.get('lang','?')})" + _work_said(h)
-        blocks.append(head + (h.get("reading") or "") + "\n" + h["text"][:1800])
+        # a literature search's first works with what surrounds their passage
+        # (`_attach_around`), else the passage
+        body = h["around"][:AROUND_CHARS] if h.get("around") else h["text"][:1800]
+        blocks.append(head + (h.get("reading") or "") + "\n" + body)
     if result["catalog"]:
         cat = "\n".join(f"- {c['title']} — {c['authors']} (book #{c['book_id']})"
                         for c in result["catalog"][:8])
