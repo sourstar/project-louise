@@ -134,7 +134,11 @@ about 1", the embedding):
 
 They report "description not compared with the picture", never "verified".
 
-**`model-agreement` (03 §3.2) is NOT planned for `describes`.** It re-runs
+**`model-agreement` (03 §3.2) is NOT planned for `describes`**, and 03
+§3.2's `model-agreement` row says so by name: "describes claims: not
+model-agreement; the qualitative check instead, reported as such", so the
+spec does not read as if a check were owed and missing (Architecture,
+2026-11-28). It re-runs
 the method and needs a measured floor, and the operator has made the
 picture-match qualitative. That qualitative check is recorded as what it is:
 a person looking, or an optional re-read (`hold check <c> --re-read N`, best
