@@ -1807,6 +1807,28 @@ the node's), kept as `voice` in `users.toml` and heard by every browser
 and client of the account; 409 without an account, where the browser
 keeps it.
 
+**THE USERS TAB** (*amended 2026-11-28*, operator: "on top a drop down
+menu to select the user. On the tab the user's first name and name (both
+optional), then the admin flag (off by default), the list of the models
+with the hide flag (off by default), the list of the annotations with the
+hide flag … and the list of the voices"; "every voice disabled by default:
+if there is no voice, the read aloud feature is disabled (not shown)";
+"I don't want to keep track of synthetic vs cloned"). `GET /admin/users`,
+one reader at a time; its first entry is the readers with no account. Per
+account in `users.toml`: `first_name`, `last_name`, `hide_collections`
+and `hide_annotations` (collection ids, so a rename keeps them) and
+`voices` (the voices enabled); `[guest]` holds the same three lists for
+readers with no account. `PATCH /admin/api/users/{name}` and
+`PATCH /admin/api/guest` write them. A collection or annotations
+collection a reader's lists hide does not exist for that reader, exactly
+as a hidden one (§7.8 `hidden`): not listed, searched, read nor consulted.
+A reader who is not an admin is read to only in a voice enabled for them,
+recorded or synthetic alike — the one chosen, else the answer language's,
+else the first — and with none enabled the page offers no reading aloud.
+An admin sees and hears everything; the last admin keeps the flag while no
+admin token is set. This supersedes the 2026-11-16 rule that a regular
+reader hears the synthetic voice of the answer's language.
+
 **The OpenAI-compatible endpoint** names its models (*same amendment*):
 `GET /v1/models` lists `louise` — every collection — and
 `louise/<name>` for each collection a search may use, so a client that

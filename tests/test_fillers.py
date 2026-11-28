@@ -625,8 +625,10 @@ def test_the_routes_answer_their_shape_to_each_reader_by_role(node, tmp_path):
     assert c.get("/ask/voice/fillers/not-an-id", headers=ADMIN).status_code == 404
     assert c.get("/ask/voice/fillers?lang=pt", headers=ADMIN).json() == {"lang": "pt", "voice": None, "ready": []}
     assert c.get("/ask/voice/fillers", headers=ADMIN).json()["ready"] == []
-    # a reader who is not an admin: the synthetic voice of the language, never the recorded one
+    # a reader who is not an admin: only the voices the users tab enables (2026-11-28),
+    # here the two synthetic ones — the language's, never the recorded one asked for
     _, token = users.add("bea")
+    users.set_profile("bea", voices=[SYNTH_IT, SYNTH_EN])
     bea = {"Authorization": f"Bearer {token}"}
     assert c.get(body["ready"][0]["url"], headers=bea).status_code == 404, "the admin's voice is the admin's"
     assert c.post("/ask/voice/fillers/used", headers=bea, json={"ids": [body["ready"][0]["id"]]}).json() == \

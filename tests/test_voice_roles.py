@@ -363,7 +363,7 @@ def test_a_synthetic_voice_no_longer_held_gives_way_and_none_held_reads_nothing(
         f'[speech]\ntts_model = "omnivoice-cpp"\ntts_voice = "{RECORDED}"\n', encoding="utf-8")
     n = len(calls)
     status, body, _ = speech.synthesize({"input": IT, "voice": RECORDED}, url="http://ai", admin=False)
-    assert status == 409 and b"admin only" in body and len(calls) == n, "never the recorded voice"
+    assert status == 409 and b"no voice is enabled" in body and len(calls) == n, "never the recorded voice"
 
 
 def test_the_routes_read_to_each_reader_by_role(node):
@@ -372,43 +372,51 @@ def test_the_routes_read_to_each_reader_by_role(node):
     _, user = users.add("bea")
     _, admin_user = users.add("ada", role="admin")
     as_user, as_admin_user = {"Authorization": f"Bearer {user}"}, {"Authorization": f"Bearer {admin_user}"}
+    # the users tab (2026-11-28): no voice enabled, nothing read aloud
+    assert c.post("/v1/audio/speech", headers=as_user, json={"input": IT}).status_code == 409
+    users.set_profile("bea", voices=[SYNTH_IT, SYNTH_EN])
     for h, want in ((as_user, SYNTH_IT), ({}, None), (ADMIN, RECORDED), (as_admin_user, RECORDED)):
         r = c.post("/v1/audio/speech", headers=h, json={"input": IT, "voice": RECORDED})
         if want is None:
             assert r.status_code == 401, "a guest, once a user exists: nobody"
             continue
         assert r.status_code == 200 and calls[-1]["voice"] == want, (h, calls[-1])
-    users.set_voice("bea", RECORDED)                       # kept before 2026-11-16: not used
+    users.set_voice("bea", RECORDED)                       # not enabled for her: not used
     c.post("/v1/audio/speech", headers=as_user, json={"input": EN})
     assert calls[-1]["voice"] == SYNTH_EN
 
 
-def test_a_user_has_no_voice_to_choose_and_cannot_keep_one(node):
+def test_a_user_chooses_among_the_voices_the_users_tab_enables_and_none_by_default(node):
+    """Operator, 2026-11-28: "every voice disabled by default: if there is no
+    voice, the read aloud feature is disabled (not shown)"; recorded or
+    synthetic alike ("I don't want to keep track of synthetic vs cloned")."""
     c = TestClient(api.app)
     _, token = users.add("bea")
     h = {"Authorization": f"Bearer {token}"}
     got = c.get("/ask/voices", headers=h).json()
-    assert got == {"voices": [], "default": None, "account": {"name": "bea", "voice": None, "phrases": None, "wake_name": None},
-                   "by_language": ["it", "en"]}
+    assert got["voices"] == [] and got["default"] is None and got["by_language"] == []
+    assert c.get("/ask/voice", headers=h).json()["output"]["available"] is False
+    assert 'id="speak"' not in c.get("/ask", headers=h).text, "no voice, no read-aloud shown"
     assert c.post("/ask/voice", headers=h, json={"voice": RECORDED}).status_code == 403
-    assert c.post("/ask/voice", headers=h, json={"voice": SYNTH_IT}).status_code == 403
-    assert users.voice_of("bea") is None
-    assert c.post("/ask/voice", headers=h, json={"voice": None}).status_code == 200
+    users.set_profile("bea", voices=[RECORDED, SYNTH_IT])
+    assert [v["voice"] for v in c.get("/ask/voices", headers=h).json()["voices"]] == [RECORDED, SYNTH_IT]
+    assert c.post("/ask/voice", headers=h, json={"voice": RECORDED}).status_code == 200
+    assert users.voice_of("bea") == RECORDED
+    assert c.post("/ask/voice", headers=h, json={"voice": SYNTH_EN}).status_code == 403, "not enabled for her"
+    users.set_profile("bea", voices=[SYNTH_IT])
+    assert users.voice_of("bea") is None, "a chosen voice no longer enabled is dropped"
     names = [v["name"] for v in c.get("/ask/voices", headers=ADMIN).json()["voices"]]
     assert names == ["Recorded", "Synthetic it", "Synthetic en"], "an admin chooses among them all"
 
 
-def test_a_guest_is_offered_the_answer_read_aloud_only_with_a_synthetic_voice(node, config_dir):
+def test_a_guest_is_read_to_only_in_the_voices_the_guests_entry_enables(node, config_dir):
     c = TestClient(api.app)
+    assert c.get("/ask/voice").json()["output"]["available"] is False, "none by default"
+    assert 'id="speak"' not in c.get("/ask").text
+    users.set_guest(voices=[SYNTH_IT])
     assert c.get("/ask/voice").json()["output"]["available"] is True
     assert 'id="speak"' in c.get("/ask").text
-    (config_dir / "platform.toml").write_text('[speech]\ntts_model = "omnivoice-cpp"\n', encoding="utf-8")
-    out = c.get("/ask/voice").json()["output"]
-    assert out["available"] is False and "--synthetic" in out["why"] and "admin only" in out["why"]
-    assert 'id="speak"' not in c.get("/ask").text, "no button where nothing would be read"
-    assert 'id="speak"' in c.get("/ask", headers=ADMIN).text, "an admin is read to in the recorded voice"
-    shown = voice.show()
-    assert shown["synthetic"] == {} and shown["offered_to_readers"]["available"] is False
+    assert 'id="speak"' in c.get("/ask", headers=ADMIN).text, "an admin is read to in any voice"
 
 
 def test_every_reader_route_says_who_is_asking():

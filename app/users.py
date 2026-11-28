@@ -68,6 +68,16 @@ class User:
     #: the name hands-free is called by, the reader's own (operator,
     #: 2026-11-27: "the activation name can be customized"); None: the node's
     wake_name: str | None = None
+    #: THE USERS TAB (operator, 2026-11-28): the person's first name and name,
+    #: both optional; what this reader may not see — collections and
+    #: annotations collections by `collection_id`, so a rename keeps the
+    #: choice — and the voices it may be read to in ("every voice disabled by
+    #: default: if there is no voice, the read aloud feature is disabled")
+    first_name: str | None = None
+    last_name: str | None = None
+    hide_collections: tuple[str, ...] = ()
+    hide_annotations: tuple[str, ...] = ()
+    voices: tuple[str, ...] = ()
 
     def state(self, now: dt.datetime | None = None) -> str:
         if self.revoked:
@@ -80,7 +90,24 @@ class User:
         """What may be shown: everything but the token's hash."""
         return {"name": self.name, "role": self.role, "created": self.created, "expires": self.expires,
                 "revoked": self.revoked, "state": self.state(), "voice": self.voice, "phrases": self.phrases, "wake_name": self.wake_name,
+                "first_name": self.first_name, "last_name": self.last_name,
+                "hide_collections": list(self.hide_collections), "hide_annotations": list(self.hide_annotations),
+                "voices": list(self.voices),
                 "last_seen": (seen or {}).get(self.name)}
+
+
+@dataclass(frozen=True)
+class Guest:
+    """What a reader with NO account is shown and read to in (the users tab's
+    first entry): the same lists as an account's, kept as `[guest]` in the
+    same file. Nothing hidden and no voice by default."""
+    hide_collections: tuple[str, ...] = ()
+    hide_annotations: tuple[str, ...] = ()
+    voices: tuple[str, ...] = ()
+
+    def public(self) -> dict:
+        return {"hide_collections": list(self.hide_collections),
+                "hide_annotations": list(self.hide_annotations), "voices": list(self.voices)}
 
 
 def path() -> Path:
@@ -137,9 +164,19 @@ def _q(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)        # a TOML basic string is a JSON string
 
 
-def _dump(users: list[User]) -> bytes:
+def _ids(v) -> str:
+    return "[" + ", ".join(_q(x) for x in v) + "]"
+
+
+def _dump(users: list[User], guest: "Guest | None" = None) -> bytes:
     out = ["# Louise users (07 §7.4). Written by `louise user …`, the admin API and a user's own voice;",
            "# a token is never stored, only its sha256. Edit with the CLI.", ""]
+    if guest is not None and (guest.hide_collections or guest.hide_annotations or guest.voices):
+        out.append("[guest]")
+        for key in ("hide_collections", "hide_annotations", "voices"):
+            if getattr(guest, key):
+                out.append(f"{key} = {_ids(getattr(guest, key))}")
+        out.append("")
     for u in sorted(users, key=lambda u: u.name):
         out.append("[[user]]")
         out.append(f"name = {_q(u.name)}")
@@ -156,15 +193,38 @@ def _dump(users: list[User]) -> bytes:
             out.append(f"phrases = {'true' if u.phrases else 'false'}")
         if u.wake_name:
             out.append(f"wake_name = {_q(u.wake_name)}")
+        if u.first_name:
+            out.append(f"first_name = {_q(u.first_name)}")
+        if u.last_name:
+            out.append(f"last_name = {_q(u.last_name)}")
+        for key in ("hide_collections", "hide_annotations", "voices"):
+            if getattr(u, key):
+                out.append(f"{key} = {_ids(getattr(u, key))}")
         out.append("")
     return "\n".join(out).encode("utf-8")
 
 
-def _parse(raw: bytes) -> list[User]:
+def _strings(row: dict, key: str) -> tuple[str, ...]:
+    v = row.get(key) or []
+    if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
+        raise UserError(f"{path()}: {key} is a list of ids, got {v!r}")
+    return tuple(dict.fromkeys(v))
+
+
+def _table(raw: bytes) -> dict:
     try:
-        data = tomllib.loads(raw.decode("utf-8"))
+        return tomllib.loads(raw.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
         raise UserError(f"{path()} does not read ({e}); nobody but the admin token gets in") from None
+
+
+def _parse_guest(raw: bytes) -> Guest:
+    row = _table(raw).get("guest") or {}
+    return Guest(*(_strings(row, k) for k in ("hide_collections", "hide_annotations", "voices")))
+
+
+def _parse(raw: bytes) -> list[User]:
+    data = _table(raw)
     out = []
     for row in data.get("user") or []:
         role = str(row.get("role") or "user")
@@ -174,30 +234,45 @@ def _parse(raw: bytes) -> list[User]:
                         created=str(row.get("created") or ""), expires=row.get("expires") or None,
                         revoked=row.get("revoked") or None, voice=str(row.get("voice") or "") or None,
                         phrases=row["phrases"] if isinstance(row.get("phrases"), bool) else None,
-                        wake_name=str(row.get("wake_name") or "") or None))
+                        wake_name=str(row.get("wake_name") or "") or None,
+                        first_name=str(row.get("first_name") or "") or None,
+                        last_name=str(row.get("last_name") or "") or None,
+                        hide_collections=_strings(row, "hide_collections"),
+                        hide_annotations=_strings(row, "hide_annotations"),
+                        voices=_strings(row, "voices")))
     return out
 
 
-_cache: tuple[tuple, list[User]] | None = None
+_cache: tuple[tuple, list[User], Guest] | None = None
 _cache_lock = threading.Lock()
 
 
-def load() -> list[User]:
-    """Every user in the file, read again only when the file changed."""
+def _load_all() -> tuple[list[User], Guest]:
     global _cache
     p = path()
     try:
         st = p.stat()
     except FileNotFoundError:
-        return []
+        return [], Guest()
     stamp = (str(p), st.st_ino, st.st_size, st.st_mtime_ns)
     with _cache_lock:
         if _cache is not None and _cache[0] == stamp:
-            return _cache[1]
-    users = _parse(p.read_bytes())
+            return _cache[1], _cache[2]
+    raw = p.read_bytes()
+    users, guest = _parse(raw), _parse_guest(raw)
     with _cache_lock:
-        _cache = (stamp, users)
-    return users
+        _cache = (stamp, users, guest)
+    return users, guest
+
+
+def load() -> list[User]:
+    """Every user in the file, read again only when the file changed."""
+    return _load_all()[0]
+
+
+def load_guest() -> Guest:
+    """What a reader with no account may see and hear (`[guest]`)."""
+    return _load_all()[1]
 
 
 @contextmanager
@@ -209,14 +284,21 @@ def _editing() -> Iterator[list[User]]:
     with open(p.with_name(".users.toml.lock"), "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
-            users = _parse(p.read_bytes()) if p.exists() else []
-            yield users
+            raw = p.read_bytes() if p.exists() else b""
+            users = _parse(raw) if raw else []
+            guest = [_parse_guest(raw) if raw else Guest()]
+            yield users if not _GUEST_EDIT.get() else (users, guest)
             tmp = p.with_name(".users.toml.tmp")
-            tmp.write_bytes(_dump(users))
+            tmp.write_bytes(_dump(users, guest[0]))
             os.chmod(tmp, 0o600)
             os.replace(tmp, p)
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+import contextvars
+#: `_editing` yields `(users, [guest])` instead of the users, for the guest's writer
+_GUEST_EDIT: contextvars.ContextVar[bool] = contextvars.ContextVar("users_guest_edit", default=False)
 
 
 def _index(users: list[User], name: str) -> int:
@@ -249,10 +331,99 @@ def add(name: str, *, role: str = "user", expires: str | None = None) -> tuple[U
 
 
 def set_role(name: str, role: str) -> User:
+    from app import config
     with _editing() as users:
         i = _index(users, name)
-        users[i] = replace(users[i], role=_role(role))
+        role = _role(role)
+        if role != "admin" and users[i].role == "admin" and not config.ADMIN_TOKEN \
+                and not any(u.role == "admin" and u.name != name and u.state() == "active" for u in users):
+            # no admin token and no other admin: nobody could undo it
+            raise UserError(f"{name} is the last admin and no admin token is set: make another admin first")
+        users[i] = replace(users[i], role=role)
         return users[i]
+
+
+def _clean(text: str | None, what: str) -> str | None:
+    t = (text or "").strip()
+    if len(t) > 120 or any(c in t for c in "\r\n\x00"):
+        raise UserError(f"{what} is one line of at most 120 characters")
+    return t or None
+
+
+def _id_list(values, what: str) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, str) or not all(isinstance(v, str) and v and len(v) <= 512 for v in values):
+        raise UserError(f"{what} is a list of ids")
+    return tuple(dict.fromkeys(values))
+
+
+def set_profile(name: str, *, first_name=..., last_name=..., hide_collections=..., hide_annotations=...,
+                voices=...) -> User:
+    """The users tab's values of one account; a value left out is kept."""
+    with _editing() as users:
+        i = _index(users, name)
+        u = users[i]
+        changes = {}
+        if first_name is not ...:
+            changes["first_name"] = _clean(first_name, "first name")
+        if last_name is not ...:
+            changes["last_name"] = _clean(last_name, "name")
+        for key, v in (("hide_collections", hide_collections), ("hide_annotations", hide_annotations),
+                       ("voices", voices)):
+            if v is not ...:
+                changes[key] = _id_list(v, key)
+        if "voices" in changes and u.voice and u.voice not in changes["voices"]:
+            changes["voice"] = None             # a chosen voice no longer allowed: the default again
+        users[i] = replace(u, **changes)
+        return users[i]
+
+
+def set_guest(*, hide_collections=..., hide_annotations=..., voices=...) -> Guest:
+    """The values for readers with no account (`[guest]`); a value left out is kept."""
+    token = _GUEST_EDIT.set(True)
+    try:
+        with _editing() as (_users, guest):
+            g = guest[0]
+            changes = {k: _id_list(v, k) for k, v in (("hide_collections", hide_collections),
+                                                      ("hide_annotations", hide_annotations),
+                                                      ("voices", voices)) if v is not ...}
+            guest[0] = replace(g, **changes)
+            return guest[0]
+    finally:
+        _GUEST_EDIT.reset(token)
+
+
+def _lists_of(viewer):
+    """The account or guest lists that apply to `viewer`; None for one who
+    sees all (an admin, the operator: app/viewing.py)."""
+    from app import viewing
+    if viewing.sees_all(viewer):
+        return None
+    try:
+        users_, guest = _load_all()
+    except UserError:
+        return Guest()          # a users file that does not read: nothing hidden for a reason we cannot read, no voice
+    if viewer is not None and getattr(viewer, "role", None) == "user":
+        u = next((u for u in users_ if u.name == viewer.name), None)
+        return u if u is not None else Guest()
+    if viewer is not None and getattr(viewer, "role", None) == "deposit":
+        return Guest()          # the depositor (LocalAGI): no list of its own, no voice
+    return guest                # a guest, and nobody
+
+
+def hidden_ids(viewer) -> frozenset[str]:
+    """The collection ids (collections and annotations) hidden for `viewer` by
+    the users tab; empty for one who sees all."""
+    got = _lists_of(viewer)
+    return frozenset() if got is None else frozenset((*got.hide_collections, *got.hide_annotations))
+
+
+def voices_allowed(viewer) -> frozenset[str] | None:
+    """The voices `viewer` may be read to in (none by default: no voice, no
+    read-aloud); None for one who may use every voice (an admin)."""
+    got = _lists_of(viewer)
+    return None if got is None else frozenset(got.voices)
 
 
 def set_expiry(name: str, expires: str | None) -> User:

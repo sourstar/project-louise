@@ -148,6 +148,8 @@
   let rec = null, busy = false, questionOn = false;
   // a long press just turned hands-free on or off: the click after it is not a tap
   let micHeld = false;
+  // hands-free is on: the button stays live (a tap mutes it) whatever the question does
+  let hfOn = false;
 
   // THE MICROPHONE'S THREE LOOKS (operator, 2026-11-12: "After speaking, the
   // button remains red; it shall instead turn grey while the query is
@@ -160,10 +162,11 @@
     mic.classList.toggle('rec', kind === 'rec');
     mic.classList.toggle('waking', kind === 'wake');
     mic.setAttribute('aria-pressed', kind === 'rec' || kind === 'wake' ? 'true' : 'false');
-    mic.disabled = kind === 'busy' || kind === 'wait';
-    mic.title = kind === 'rec' || kind === 'wake' ? 'stop recording'
+    mic.disabled = !hfOn && (kind === 'busy' || kind === 'wait');
+    mic.title = hfOn ? 'hands-free: tap to mute or listen again, hold to turn it off'
+      : kind === 'rec' || kind === 'wake' ? 'tap to cancel the recording'
       : kind === 'wait' ? 'the microphone comes back once the question is answered'
-      : 'speak the question' + (document.getElementById('hands-free') ? ' (hold: hands-free)' : '');
+      : 'tap: speak the question; hold: hands-free';
     if (status) { status.textContent = text || ''; status.hidden = !text; }
   }
   // at rest: grey while a question runs, else ready
@@ -284,6 +287,15 @@
     } catch (e) { /* the report is never in the way */ }
   }
   // the recording ends without a question: said, released, reported
+  // A SECOND TAP ABORTS (operator, 2026-11-28: "a second tap while it's
+  // recording aborts the recording and the mic goes back to idle"): nothing
+  // is sent, nothing asked; the recording's end of speech still sends it
+  function abortRec() {
+    const r = rec; if (!r) return;
+    const info = micInfo(r);
+    rec = null; release(r); busy = false; rest();
+    report('aborted', info);
+  }
   function fail(r, outcome, text) {
     if (rec !== r) return;
     const info = micInfo(r);
@@ -414,7 +426,9 @@
   // to the earpiece. Now −8 dBFS for 220 ms, TONE_DELAY_MS after the
   // microphone is live, the route settled; the microphone stays deaf to it
   // for that much longer (`deafEnd`).
-  const TONE_MS = 220, TONE_HZ = 880, TONE_GAIN = 0.4, TONE_DELAY_MS = 350;
+  // AND HEARD (operator, 2026-11-28: "make it fucking hearable!"): near full
+  // scale, −1 dBFS, 300 ms
+  const TONE_MS = 300, TONE_HZ = 880, TONE_GAIN = 0.9, TONE_DELAY_MS = 350;
   // the microphone hears the tone after the output's latency and the route's
   // (Bluetooth: 100-300 ms) and the capture's own buffering (a worklet window
   // of 2048 samples, ~46 ms); its windows are not counted until the audio
@@ -535,9 +549,9 @@
       mic.hidden = false;
       mic.addEventListener('click', () => {
         if (micHeld) { micHeld = false; return; }           // a long press, done at its own time
-        // hands-free on: the tap turns it off (one microphone at a time)
-        if (hf) { if (hfBox) { hfBox.checked = false; hfBox.dispatchEvent(new Event('change')); } else hfStop(); return; }
-        if (busy || (questionOn && !rec)) return; rec ? stop() : start();
+        // hands-free on: the tap mutes or unmutes it (operator, 2026-11-28)
+        if (hf) { hfMute(!hf.muted); return; }
+        if (busy || (questionOn && !rec)) return; rec ? abortRec() : start();
       });
     } else {
       mic.remove();
@@ -1274,7 +1288,26 @@
   // the longest a clip may be in flight: a hung node lets the next one go
   let HF_CLIP_MAX_MS = 15000;
   const HF_PAGE = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Math.random()).slice(2);
-  const hfBox = document.getElementById('hands-free'), hfChoice = document.getElementById('hands-free-choice');
+  // no switch any more (operator, 2026-11-28): a long press is the one way in
+  function hfToggle() {
+    const on = !hf;
+    try { localStorage.setItem(HF_KEY, on ? 'on' : 'off'); } catch (e) {}
+    if (on) { unlock(); toneUnlock(); hfStart(); } else hfStop();
+  }
+  // MUTED (operator, 2026-11-28: "Tap on the mic in hands free mode
+  // mutes/unmutes; the border stays green but the icon turns to the idle
+  // color and it's dashed"): the gate hears nothing; unmuted, the ready beep
+  function hfMute(on) {
+    const h = hf; if (!h) return;
+    h.muted = !!on; h.utt = null; h.pre = []; h.preMs = 0;
+    if (mic) mic.classList.toggle('hf-muted', h.muted);
+    hfSay(h.muted ? 'hands-free muted — tap the microphone to listen again' : '');
+    if (!h.muted && hfOn) hfBeep(h);         // still opening: hfStart beeps once it is live
+  }
+  // the ready beep, and the gate deaf to it (it hears the phone's own speaker)
+  function hfBeep(h) {
+    if (readyTone()) h.deafUntil = performance.now() + TONE_DELAY_MS + toneLatencyMs() + TONE_MS + TONE_MARGIN_MS + TONE_TAIL_MS;
+  }
   let hf = null;
   function hfSaid() {
     const r = reading; if (!r) return '';
@@ -1305,8 +1338,7 @@
       wakeName.name = d.wake_name; wakeName.forms = (d.forms || []).map(foldText);
       const box = document.getElementById('wake-name');
       if (box && document.activeElement !== box) box.value = d.mine || wakeName.browser ? d.wake_name : '';
-      if (hfChoice) hfChoice.title = 'the microphone stays on: say "' + wakeName.name + '" and the question, or "'
-        + wakeName.name + ', wait / go on / stop"';
+      wakeName.said = 'say "' + wakeName.name + '" and the question, or "' + wakeName.name + ', wait / go on / stop"';
     } catch (e) { /* the node's name, as the page was given it */ }
   }
   async function keepWake(name) {
@@ -1331,7 +1363,9 @@
     return performance.now() < wakeName.muteUntil;
   }
   function hfWindow(h, buf, rate) {
-    if (hfMuted()) { h.utt = null; h.pre = []; h.preMs = 0; return; }   // nothing heard, nothing cut
+    if (h.muted || hfMuted() || performance.now() < (h.deafUntil || 0)) {
+      h.utt = null; h.pre = []; h.preMs = 0; return;     // nothing heard, nothing cut
+    }
     let e = 0; for (let i = 0; i < buf.length; i++) e += buf[i] * buf[i];
     const rms = Math.sqrt(e / (buf.length || 1)), ms = buf.length * 1000 / rate;
     const loud = rms > Math.max(FLOOR_MIN, FLOOR_X * (h.floor === null ? 0 : h.floor));
@@ -1405,6 +1439,7 @@
   }
   async function hfStart() {
     if (hf) return;
+    toneUnlock();                                    // the ready beep's own context
     const h = { stream: null, ctx: null, src: null, node: null, rate: 0, floor: null, pre: [], preMs: 0, utt: null,
                 inflight: false, waiting: null, followUntil: 0, lock: null, counts: { addressed: 0, dropped: 0 } };
     hf = h;
@@ -1422,12 +1457,15 @@
       if (h.ctx.state === 'suspended') await h.ctx.resume().catch(() => {});
     } catch (e) {
       hfStop();
-      if (hfBox) hfBox.checked = false;
       say('hands-free could not open the microphone (' + ((e && (e.name || e.message)) || e) + ')');
       return;
     }
     hfLock(h);
-    if (mic) mic.classList.add('hands-free');
+    hfOn = true; rest();
+    // a tap while the microphone was opening muted it: it stays muted, and says so
+    if (mic) { mic.classList.add('hands-free'); mic.classList.toggle('hf-muted', !!h.muted); }
+    if (h.muted) { hfSay('hands-free muted — tap the microphone to listen again'); return; }
+    hfBeep(h);                                       // ready: the beep (operator, 2026-11-28)
     hfSay('hands-free: say "' + wakeName.name + '" and the question');
   }
   function hfStop() {
@@ -1437,7 +1475,8 @@
     if (h.ctx) h.ctx.close().catch(() => {});
     if (h.stream) h.stream.getTracks().forEach(t => t.stop());
     if (h.lock) h.lock.release().catch(() => {});
-    if (mic) mic.classList.remove('hands-free');
+    hfOn = false; rest();
+    if (mic) mic.classList.remove('hands-free', 'hf-muted');
     hfSay('');
   }
   document.addEventListener('visibilitychange', () => { if (hf && !hf.lock && document.visibilityState === 'visible') hfLock(hf); });
@@ -1462,8 +1501,7 @@
       press = { id: e.pointerId, x: e.clientX, y: e.clientY, timer: setTimeout(() => {
         press = null; micHeld = true;
         try { if (navigator.vibrate) navigator.vibrate(30); } catch (err) {}
-        hfBox.checked = !hfBox.checked;
-        hfBox.dispatchEvent(new Event('change'));
+        hfToggle();
       }, HOLD_MS) };
     });
     mic.addEventListener('pointermove', e => {
@@ -1472,8 +1510,7 @@
     });
     for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) mic.addEventListener(ev, drop);
     mic.addEventListener('contextmenu', e => e.preventDefault());
-    // said on the button from the start, not only once its state first changes
-    mic.title = (mic.title || 'speak the question').replace(/ \(hold: hands-free\)$/, '') + ' (hold: hands-free)';
+    rest();                              // its title says tap and hold from the start
   }
   const wakeBox = document.getElementById('wake-name'), wakeChoice = document.getElementById('wake-choice');
   if (mic && !mic.hidden) loadWake();
@@ -1481,14 +1518,7 @@
     if (wakeChoice) wakeChoice.hidden = false;
     wakeBox.addEventListener('change', () => keepWake(wakeBox.value));
   }
-  if (hfBox && mic && !mic.hidden) {
-    if (hfChoice) hfChoice.hidden = false;
-    hfHold();
-    hfBox.addEventListener('change', () => {
-      try { localStorage.setItem(HF_KEY, hfBox.checked ? 'on' : 'off'); } catch (e) {}
-      if (hfBox.checked) { unlock(); toneUnlock(); hfStart(); } else hfStop();
-    });
-  }
+  if (mic && !mic.hidden) hfHold();
 
   function startReading() {
     if (!player) player = new Audio();

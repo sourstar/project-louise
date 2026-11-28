@@ -31,6 +31,7 @@ try{var t=localStorage.getItem('louise-theme');if(t)document.documentElement.dat
   <a href="/admin/library" class="{{ 'active' if active=='library' else '' }}">Library</a>
   <a href="/admin/network" class="{{ 'active' if active=='network' else '' }}">Network</a>
   <a href="/admin/system" class="{{ 'active' if active=='system' else '' }}">System</a>
+  <a href="/admin/users" class="{{ 'active' if active=='users' else '' }}">Users</a>
   {% else %}
   {# a user's Library: the read-only cards (operator, 2026-11-16) #}
   <a href="/library" class="{{ 'active' if active=='library' else '' }}">Library</a>

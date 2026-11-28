@@ -2204,6 +2204,18 @@ class UserPatch(BaseModel):
     role: str | None = None
     expires: str | None = None      # "never" clears it
     voice: str | None = None        # a voice profile; "none" clears it (the node's)
+    # the users tab (operator, 2026-11-28); "" clears a name
+    first_name: str | None = None
+    last_name: str | None = None
+    hide_collections: list[str] | None = None     # collection ids
+    hide_annotations: list[str] | None = None     # annotations collection ids
+    voices: list[str] | None = None               # the voices enabled; none by default
+
+
+class GuestPatch(BaseModel):
+    hide_collections: list[str] | None = None
+    hide_annotations: list[str] | None = None
+    voices: list[str] | None = None
 
 
 def _users_call(fn, *args, **kw):
@@ -2237,9 +2249,62 @@ def users_patch(name: str, body: UserPatch):
         u = _users_call(users.set_expiry, name, body.expires)
     if body.voice is not None:
         u = _users_call(users.set_voice, name, None if body.voice in ("none", "") else body.voice)
+    profile = {k: getattr(body, k) for k in ("first_name", "last_name", "hide_collections",
+                                             "hide_annotations", "voices") if getattr(body, k) is not None}
+    if profile:
+        u = _users_call(users.set_profile, name, **profile)
     if u is None:
-        raise HTTPException(400, "nothing to change: role, expires, voice")
+        raise HTTPException(400, "nothing to change: role, expires, voice, first_name, last_name, "
+                                 "hide_collections, hide_annotations, voices")
     return u.public(users.seen())
+
+
+@admin_router.patch("/api/guest")
+def guest_patch(body: GuestPatch):
+    """The users tab's first entry: what a reader with no account may see and hear."""
+    from app import users
+    lists = {k: getattr(body, k) for k in ("hide_collections", "hide_annotations", "voices")
+             if getattr(body, k) is not None}
+    if not lists:
+        raise HTTPException(400, "nothing to change: hide_collections, hide_annotations, voices")
+    return _users_call(users.set_guest, **lists).public()
+
+
+#: the users tab's entry for readers with no account
+GUEST_ENTRY = "guests"
+
+
+@admin_router.get("/users", response_class=HTMLResponse)
+def users_page(request: Request, u: str | None = None):
+    """THE USERS TAB (operator, 2026-11-28): one reader at a time, chosen at
+    the top — their first name and name, the admin flag, and the collections,
+    annotations collections and voices, each with its flag (a collection or an
+    annotations collection hidden from them: off by default; a voice enabled
+    for them: off by default — no voice, no read-aloud). The first entry is
+    the readers with no account."""
+    from app import users, voice as voice_mod
+    try:
+        accounts = sorted(users.load(), key=lambda x: x.name)
+        guest = users.load_guest()
+        unreadable = None
+    except users.UserError as e:
+        accounts, guest, unreadable = [], users.Guest(), str(e)
+    names = [a.name for a in accounts]
+    chosen = u if u in names or u == GUEST_ENTRY else (names[0] if names else GUEST_ENTRY)
+    who = next((a for a in accounts if a.name == chosen), None)
+    lists = who if who is not None else guest
+    collections = [{"id": c.codex.collection_id, "name": c.name, "label": display_names.label(c.name),
+                    "hidden_everywhere": bool(getattr(c, "hidden", False))}
+                   for c in collections_mod.load_all() if getattr(c, "codex", None) is not None]
+    annotations = [{"id": a.codex.collection_id, "name": a.name, "label": display_names.label(a.name),
+                    "hidden_everywhere": bool(getattr(a, "hidden", False))}
+                   for a in collections_mod.load_annotations()]
+    return TEMPLATES.TemplateResponse(request, "users.html", {
+        "active": "users", "accounts": accounts, "chosen": chosen, "guest_entry": GUEST_ENTRY,
+        "who": who, "unreadable": unreadable,
+        "collections": collections, "annotations": annotations, "voices": voice_mod.all_voices(),
+        "hide_collections": set(lists.hide_collections), "hide_annotations": set(lists.hide_annotations),
+        "enabled_voices": set(lists.voices)})
 
 
 @admin_router.post("/api/users/{name}/reissue")

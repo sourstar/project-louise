@@ -201,17 +201,23 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(await until(() => louiseVoice.toneContext() && louiseVoice.toneContext().state === 'suspended', 3000),
         '2. and the tone\'s context sleeps once the recording is over', await page.evaluate(() => louiseVoice.toneContext().state));
 
-  // 3. tap and tap again: stopped by hand, in the page's answer language; the
-  //    question asked is replaced, one typed and not yet asked is added to
+  // 3. TAP AND TAP AGAIN ABORTS (operator, 2026-11-28: "a second tap while
+  //    it's recording aborts the recording and the mic goes back to idle"):
+  //    nothing sent; then a recording that ends by itself goes in the page's
+  //    answer language; the question asked is replaced, one typed and not
+  //    yet asked is added to
   await h.select('#lang', 'it');
   await page.click('#mic');
   await until(() => document.getElementById('mic').classList.contains('rec'), 4000);
   await sleep(700);
   await page.click('#mic');
-  check(await until(() => __posts.length === 2, 4000), '3. a tap stops it, and it posts');
+  await sleep(1500);
+  check(await page.evaluate(() => __posts.length === 1 && !document.getElementById('mic').classList.contains('rec')),
+        '3. a second tap aborts: nothing sent, the microphone idle', await page.evaluate(() => __posts.length));
+  await page.click('#mic');
+  check(await until(() => __posts.length === 2, 12000), '3. one that ends by itself is sent');
   const p2 = (await page.evaluate(() => __posts))[1];
   check(p2.fields.language === 'it', '3. the page\'s answer language goes with it', p2.fields);
-  check(wav(p2.bytes).samples < 16000 * 1.5, '3. as long as it was held', wav(p2.bytes).samples);
   check(await until(t => document.getElementById('q').value === t, 4000, TEXT),
         '3. the question already asked is replaced by the new one', await page.evaluate(() => document.getElementById('q').value));
   await relayed(4);
