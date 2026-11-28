@@ -654,6 +654,8 @@ def _long_book(tmp_path, name="gutenberg"):
     row = dict(con.execute("SELECT uid, source, native_id, path, lang FROM documents").fetchone())
     title, sections = plugin_io.title_and_sections(c.plugin_instance(), row, c)
     cut = layers.chunks_for_document(c, row, sections, title=title)
+    from app import fts
+    fts.index_book(row["lang"] or "en", 2600, cut, collection=c)   # the text index holds them, as the worker's stage does
     return c, con, row, cut
 
 
@@ -741,3 +743,20 @@ def test_the_search_says_what_reading_around_took(isolated_config, tmp_path, mon
     out = retrieval.search(con, "Napoleon", k=5, collection=c, translate=False, kind="literature")
     assert out["timings"]["around"] >= 0.0
     assert "around" not in retrieval.search(con, "Napoleon", k=5, collection=c, translate=False)["timings"]
+
+
+
+def test_a_neighbour_that_is_itself_a_hit_is_read_and_the_lookup_is_by_id(isolated_config, tmp_path, monkeypatch):
+    """The neighbours come from the text index by id (`fts.chunks_by_id`): no
+    record read, no cut (re-cutting measured 300 ms warm, 770 ms cold a hit)."""
+    from app import fts, layers
+    c, con, row, cut = _long_book(tmp_path)
+    monkeypatch.setattr(layers, "chunks_for_document", lambda *a, **kw: pytest.fail("no record is cut again"))
+    asked = []
+    real = fts.chunks_by_id
+    monkeypatch.setattr(fts, "chunks_by_id", lambda coll, ids: asked.append(list(ids)) or real(coll, ids))
+    hits = [{"chunk_id": cut[i]["id"], "uid": row["uid"], "text": cut[i]["text"]} for i in (3, 4)]
+    retrieval._attach_around(con, c, hits)
+    assert len(asked) == 1, "one lookup for every hit"
+    assert hits[0]["around"] == "\n\n".join(x["text"] for x in cut[2:5])
+    assert hits[1]["around"] == "\n\n".join(x["text"] for x in cut[3:6])

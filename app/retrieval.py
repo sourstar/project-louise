@@ -1789,37 +1789,39 @@ def _attach_around(con, collection, hits: list[dict]) -> None:
     gave the poet's "servo encomio / codardo oltraggio" to Napoleon). In a
     literature search the first AROUND_HITS hits carry `around`: their
     passage with the AROUND_EACH_SIDE passages before and after it, in the
-    book's order, cut again from the record itself by its own layer
-    (invariant 3: the same chunks, `layers.chunks_for_document`). The
-    answer reads `around` where it is; the hit, its passage and its
-    citation are unchanged. A record that cannot be read here keeps its
-    passage alone; never a failed search."""
-    from . import layers as layers_mod, plugin_io
-    plugin = None
-    for h in hits[:AROUND_HITS]:
-        cid, uid = h.get("chunk_id"), h.get("uid")
-        if not cid or not uid:
+    book's order. The neighbours are the record's OWN chunks — the ids
+    `<uid>:<seq±n>:<version>` its layer gave them (app/chunking.py), read
+    from the text index by id (`fts.chunks_by_id`), one lookup for all the
+    hits: re-reading and re-cutting the record measured 300 ms warm and
+    770 ms cold a hit on the live node (architecture's read of 0536b5da, 2;
+    München, 2026-11-28). The answer reads `around`; the hit, its passage
+    and its citation are unchanged. A neighbour the index lacks is left
+    out; none found leaves the passage alone; never a failed search."""
+    want: dict[int, list[str]] = {}
+    for n, h in enumerate(hits[:AROUND_HITS]):
+        cid = str(h.get("chunk_id") or "")
+        parts = cid.rsplit(":", 2)
+        if len(parts) != 3 or not parts[1].isdecimal() or not h.get("text"):
             continue
-        cancel.checkpoint()
-        try:
-            row = con.execute("SELECT uid, source, native_id, path, lang FROM documents WHERE uid=?",
-                              (uid,)).fetchone()
-            if row is None:
-                continue
-            row = dict(row)
-            plugin = plugin or collection.plugin_instance()
-            title, sections = plugin_io.title_and_sections(plugin, row, collection)
-            cut = layers_mod.chunks_for_document(collection, row, sections, title=title)
-            at = next((i for i, c in enumerate(cut) if c["id"] == cid), None)
-            if at is None:
-                continue
-            lo, hi = max(0, at - AROUND_EACH_SIDE), min(len(cut), at + AROUND_EACH_SIDE + 1)
-            if hi - lo > 1:
-                h["around"] = "\n\n".join(c["text"] for c in cut[lo:hi])
-        except cancel.Cancelled:
-            raise
-        except Exception:   # noqa: BLE001 — the passage alone, as before
-            continue
+        seq = int(parts[1])
+        want[n] = [f"{parts[0]}:{s}:{parts[2]}" for s in range(seq - AROUND_EACH_SIDE, seq + AROUND_EACH_SIDE + 1)
+                   if s >= 0]
+    if not want:
+        return
+    cancel.checkpoint()
+    try:
+        own = {str(h.get("chunk_id")) for h in hits[:AROUND_HITS]}
+        got = fts.chunks_by_id(collection, [c for ids in want.values() for c in ids if c not in own])
+    except Exception:   # noqa: BLE001 — the passages alone, as before
+        return
+    # a neighbour that is itself one of the hits: its own passage
+    mine = {str(x.get("chunk_id")): x.get("text") for x in hits[:AROUND_HITS] if x.get("text")}
+    for n, ids in want.items():
+        h = hits[n]
+        texts = [mine.get(c) or got.get(c) for c in ids]
+        texts = [t for t in texts if t]
+        if len(texts) > 1:
+            h["around"] = "\n\n".join(texts)
 
 
 def _merge_rrf_federated(lists: list[list[dict]]) -> list[dict]:
