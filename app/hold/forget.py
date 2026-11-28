@@ -505,6 +505,23 @@ def forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
             lk.release()
 
 
+def _release_name(name: str) -> list[str]:
+    """The node's rows kept by `name` that `forget` ends: its pause and its
+    freeze. Never raises: a node whose state does not open has none to end."""
+    from app import node_state
+    done = []
+    try:
+        if name in node_state.paused_collections():
+            node_state.set_paused(name, False, by=f"forget {name}")
+            done.append("pause")
+        if name in node_state.frozen_collections():
+            node_state.set_frozen(name, False, by=f"forget {name}")
+            done.append("freeze")
+    except Exception:   # noqa: BLE001 — the removal is done; nothing kept to end
+        pass
+    return done
+
+
 def _forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
             retire: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Remove the copy at `<root>/<name>` and its held file — or, with
@@ -626,7 +643,14 @@ def _forget(root: Path, name: str, *, kinds=None, dry_run: bool = False,
         shutil.rmtree(base)
         removed.append(str(base))
     text_index.invalidate()
+    # 6. what the node keeps BY THE NAME — a per-collection pause, a freeze —
+    #    goes with the collection (2026-11-28: the old EUR-Lex5's pause of
+    #    11-21 held the new EUR-Lex5 made under its name). A rename carries
+    #    them (app/hold/rename.py); a forget ends them
+    released = _release_name(name)
     out = {"collection": name, "erased_deposits": erased, "removed": removed}
+    if released:
+        out["released"] = released
     if handed:
         out["ack_carried_to"] = handed
     if origin_to:
