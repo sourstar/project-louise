@@ -114,3 +114,47 @@ def test_a_works_step_that_fails_is_the_searchs_failure_as_before(monkeypatch):
         return group_works
     with pytest.raises(RuntimeError, match="claim index"):
         retrieval._rerank_lists([(c, [1]) for c in cols], rerank_one)
+
+
+def test_the_list_with_the_longest_after_work_goes_first_and_overlaps_the_next(monkeypatch):
+    """München, 2026-11-28 (50 questions): rerank 20.6 s of 39.7 s at the
+    median, and wikipedia's works grouping 4.3 s — paid at the end when its
+    list came last on the one-slot reranker. Measured long, it goes first and
+    its after-work runs beside the next lists; the results keep their order."""
+    cols = {n: SimpleNamespace(name=n, reranker=BGE) for n in ("gutenberg", "wikidata", "wikipedia")}
+    monkeypatch.setattr(collections_mod, "reranker_for", lambda c: c.reranker)
+    monkeypatch.setattr(retrieval, "_AFTER_MS", {})
+    retrieval.note_after_ms("wikipedia", 4300.0)
+    order, lock = [], threading.Lock()
+
+    def rerank_one(item):
+        c, hits = item
+        with lock:
+            order.append(c.name)
+        time.sleep(0.1)                                   # the reranker's turn
+        after = 0.3 if c.name == "wikipedia" else 0.0     # its works grouping
+
+        def grouping():
+            time.sleep(after)
+            return [f"{c.name}:{h}" for h in hits], True, None
+        return grouping
+    per = [(cols[n], [1]) for n in ("gutenberg", "wikidata", "wikipedia")]
+    t0 = time.monotonic()
+    out = retrieval._rerank_lists(per, rerank_one)
+    wall = time.monotonic() - t0
+    assert order == ["wikipedia", "gutenberg", "wikidata"], order
+    assert [o[0][0] for o in out] == ["gutenberg:1", "wikidata:1", "wikipedia:1"], "results in their own order"
+    assert wall < 0.3 + 0.1 + 0.25, f"the after-work overlapped the next lists ({wall:.2f} s)"
+
+
+def test_lists_not_measured_keep_their_order(monkeypatch):
+    cols = [SimpleNamespace(name=n, reranker=BGE) for n in ("a", "b", "c")]
+    monkeypatch.setattr(collections_mod, "reranker_for", lambda c: c.reranker)
+    monkeypatch.setattr(retrieval, "_AFTER_MS", {})
+    order = []
+
+    def rerank_one(item):
+        order.append(item[0].name)
+        return [item[0].name], True, None
+    retrieval._rerank_lists([(c, [1]) for c in cols], rerank_one)
+    assert order == ["a", "b", "c"]
