@@ -840,7 +840,13 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await page.evaluate(() => {
     window.__toasts = []; const ts = toast; toast = function (m) { __toasts.push(m); return ts(m); };
     const c = new AudioContext();
-    navigator.mediaDevices.getUserMedia = async () => c.createMediaStreamDestination().stream;   // nothing but zeros
+    // nothing but zeros, on the CAR's route: a Bluetooth input waits for its
+    // first sound (the phone's own microphone does not: case 21b)
+    navigator.mediaDevices.getUserMedia = async () => {
+      const st = c.createMediaStreamDestination().stream;
+      Object.defineProperty(st.getAudioTracks()[0], 'label', { value: 'Car hands-free' });
+      return st;
+    };
   });
   const stt21 = posted.stt;
   await page.click('#mic');
@@ -854,6 +860,26 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(r21.outcome === 'silent' && r21.frames > 0 && r21.peak === 0 && r21.heard === false && r21.ms >= 8000,
         '21. reported: silent, with what came', r21);
   check(posted.stt === stt21, '21. silence is not sent to be written down', posted.stt - stt21);
+
+  // 21b. THE PHONE'S OWN MICROPHONE gives zeros until speech (its noise
+  //     suppression; operator, 2026-11-28: "it doesn't turn red and it doesn't
+  //     beep until the first sound is heard"): ready and the tone at once
+  posted.reports = [];
+  await page.evaluate(() => {
+    const c = new AudioContext();
+    navigator.mediaDevices.getUserMedia = async () => {
+      const st = c.createMediaStreamDestination().stream;
+      Object.defineProperty(st.getAudioTracks()[0], 'label', { value: 'Default' });
+      return st;
+    };
+  });
+  const tones21b = await page.evaluate(() => louiseVoice.tones());
+  const t21b = Date.now();
+  await page.click('#mic');
+  check(await until(() => document.getElementById('mic').classList.contains('rec'), 2000),
+        "21b. the phone's microphone: shown recording before any sound", Date.now() - t21b);
+  check(await until(t => louiseVoice.tones() > t, 2000, tones21b), '21b. and the ready tone sounds, before any sound');
+  await until(() => !document.getElementById('mic').classList.contains('rec'), 14000);
 
   // 22. the audio graph runs no callback (the car takes the output, the
   //     context's clock stalls: "Mic: no sound at all"): recorded the second

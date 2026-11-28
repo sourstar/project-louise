@@ -524,8 +524,12 @@ def test_the_microphone_turns_red_at_its_first_sound_not_when_it_is_opened():
         "his car takes about five seconds: the wait ends at the first sound or with the silence rule, not at three"
     assert "setTimeout(() => wake(r, 'timeout'), WAKE_MAX_MS)" in start, "never waited for without a bound"
     hear = js[js.index("function hear(r, buf, rate)"):js.index("// THE SECOND WAY TO RECORD")]
-    assert "if (top > 0) { r.live = true; wake(r, 'sound'); } else r.zero_ms += ms;" in hear, \
-        "a microphone that is on is never exactly zero; the zeros before it are counted"
+    # a BLUETOOTH route (the car) is live at its first sound; the phone's own
+    # microphone at its first audio, zeros or not (operator, 2026-11-28: its
+    # noise suppression gives zeros until speech, and it never turned red)
+    assert "if (top > 0 || (!r.bluetooth && r.ms + ms >= PHONE_WAKE_MS)) { r.live = true; wake(r, top > 0 ? 'sound' : 'route'); }" \
+        in hear, "the zeros before it are counted, the car's route waits for its sound"
+    assert "r.bluetooth = BLUETOOTH.test((track && track.label) || '');" in start
     wake = js[js.index("function wake(r, how)"):js.index("function release(r)")]
     assert "if (r.shown) return;" in wake and "micState('rec'" in wake and "r.wake_ms" in wake
     assert "clearTimeout(r.waking)" in js[js.index("function release(r)"):js.index("async function stop()")]

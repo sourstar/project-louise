@@ -1241,15 +1241,11 @@ def _publish_forever() -> None:
 
 def publish(c: ColdStart) -> None:
     """Write one cold start to the node's event log: the stdout line, and the
-    `events` table of the first collection's manifest, as every node line is
-    (db.NODE_STAGES)."""
+    `events` table of state/node.sqlite (`db.control`), as every node line is
+    since 2026-11-28 (operator, choice A)."""
     from contextlib import closing
-    from . import collections as collections_mod, db
+    from . import db
     text = message(c)
     level = "info" if c.outcome in ("loaded", RETURNED) else "warn"
-    collections = collections_mod.load_all()
-    if not collections:
-        print(f"{time.strftime('%H:%M:%S')} [node {level}:models] {text}", flush=True)
-        return
-    with closing(db.connect(collections[0])) as con:
+    with closing(db.control()) as con:
         db.log_event(con, level, "models", text)
