@@ -1302,7 +1302,7 @@
     h.muted = !!on; h.utt = null; h.pre = []; h.preMs = 0;
     if (mic) mic.classList.toggle('hf-muted', h.muted);
     hfSay(h.muted ? 'hands-free muted — tap the microphone to listen again' : '');
-    if (!h.muted) hfBeep(h);
+    if (!h.muted && hfOn) hfBeep(h);         // still opening: hfStart beeps once it is live
   }
   // the ready beep, and the gate deaf to it (it hears the phone's own speaker)
   function hfBeep(h) {
@@ -1462,7 +1462,9 @@
     }
     hfLock(h);
     hfOn = true; rest();
-    if (mic) { mic.classList.add('hands-free'); mic.classList.remove('hf-muted'); }
+    // a tap while the microphone was opening muted it: it stays muted, and says so
+    if (mic) { mic.classList.add('hands-free'); mic.classList.toggle('hf-muted', !!h.muted); }
+    if (h.muted) { hfSay('hands-free muted — tap the microphone to listen again'); return; }
     hfBeep(h);                                       // ready: the beep (operator, 2026-11-28)
     hfSay('hands-free: say "' + wakeName.name + '" and the question');
   }

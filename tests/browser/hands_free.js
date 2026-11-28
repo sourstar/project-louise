@@ -169,6 +169,18 @@ const check = (ok, what, d) => { console.log((ok ? 'PASS ' : 'FAIL ') + what + (
     return { rec: m.classList.contains('rec'), color: s.color, border: s.borderTopColor }; });
   check(!idle7.rec && idle7.color === idle7.border, '7. a second tap aborts: idle, icon and frame one colour', idle7);
   check(posts.length === before7, '7. and nothing is sent', posts.length - before7);
+  // 8. A TAP WHILE HANDS-FREE IS STILL OPENING THE MICROPHONE mutes it, and
+  //    it stays muted once open: the look says so, no beep, nothing sent
+  const tones8 = await p.evaluate(() => louiseVoice.tones()), before8 = posts.length;
+  await p.evaluate(() => { louiseVoice.handsFree.start(); document.getElementById('mic').click(); });
+  await p.waitForTimeout(3000);
+  const opened8 = await look();
+  check(opened8.on && opened8.muted && opened8.dash !== 'none', '8. muted while opening: muted once open', opened8);
+  check(await p.evaluate(t => louiseVoice.tones() === t, tones8), '8. and no ready beep while muted');
+  check(posts.length === before8, '8. and nothing is sent', posts.length - before8);
+  await p.evaluate(() => document.getElementById('mic').click());
+  check(await p.evaluate(t => louiseVoice.tones() > t, tones8), '8. unmuted: the beep');
+  await p.evaluate(() => louiseVoice.handsFree.stop());
   await b.close();
   console.log(fails ? `${fails} FAILED` : 'ALL PASSED');
   process.exit(fails ? 1 : 0);
