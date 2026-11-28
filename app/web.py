@@ -3095,6 +3095,14 @@ def _collection_shelf(collection: collections_mod.Collection,
         has_extras = bool(getattr(collection, "extras", ())) or (xc["total"] or 0) > 0
         louise_total = max(remote_total, fc["total"] or 0)
         extra_total = max(extra_remote_total, xc["total"] or 0)
+        # THE DOCUMENTS' TOTAL NEVER UNDER WHAT IS HELD, as the files' is not:
+        # a pass that lists only the units due (EUR-Lex's inventory against
+        # what is held) records ITS listing — one unit due, "docs_total": 1 —
+        # and the card read "232,435 / 1" (operator, 2026-11-28: "fetch is
+        # inconsistent"). The ledger's own count is the floor.
+        if docs_total is not None or docs_done is not None:
+            ledger_docs = (fc["total"] or 0) if spec.layout == "one-file-per-doc" else (docs_done or 0)
+            docs_total = max(int(docs_total or 0), ledger_docs, docs_done or 0)
         # The label's third state: no pass running AND every listed file
         # (Louise and, when opted in, extras) has landed. `complete` is
         # judged against the honest denominators — the origin's recorded

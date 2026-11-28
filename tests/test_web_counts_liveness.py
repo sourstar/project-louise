@@ -973,3 +973,27 @@ def test_a_cold_process_recounts_and_says_the_scans_interval(isolated_config):
     assert web._counts_ttl_for(key) == web._COUNTS_TTL_S, "the floor, before the row is read"
     assert web._stored_counts(c) is not None
     assert web._counts_ttl_for(key) == 450.0
+
+
+def test_the_documents_total_is_never_under_what_is_held(isolated_config, monkeypatch):
+    """Operator, 2026-11-28, the EUR-Lex card: "fetch is inconsistent —
+    232.435 / 1 (232.435/232.435)". EUR-Lex lists only the units due, and a
+    pass with one due recorded `docs_total: 1`; the files' total already took
+    the ledger as its floor, the documents' did not."""
+    import json as _json
+    from dataclasses import replace
+    from app.acquire import engine as acquire_engine
+    c = replace(collections_mod.default_collection(), acquire_enabled=True)
+    spec = web.ACQUIRE_REGISTRY[c.plugin]
+    monkeypatch.setitem(web.ACQUIRE_REGISTRY, c.plugin, replace(spec, layout="one-file-per-doc"))
+    con = db.connect(c)
+    for n in range(5):
+        con.execute("INSERT INTO fetch_files(source_id,rel_path,fetch_done,bytes_fetched) VALUES(?,?,1,1)",
+                    (spec.source_id, f"lang=it/{n}.xml"))
+    con.execute("INSERT INTO control(key,value) VALUES(?,?)",
+                (acquire_engine.LISTING_KEY,
+                 _json.dumps({"files_total": 1, "docs_total": 1, "bytes_total": 1, "profile": None,
+                              "ts": int(time.time())})))
+    fetched = web._collection_shelf(c, {})["fetched"]
+    assert fetched["docs_done"] == 5 and fetched["docs_total"] == 5, fetched
+    assert fetched["remote_total"] == 5
