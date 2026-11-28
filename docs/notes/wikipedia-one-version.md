@@ -76,7 +76,7 @@ not hold at this size; both are local, neither changes what peers exchange (09 Â
    (one part of 50,000 records), 69 MB in the parent on the pool. RSS on the pool (3 processes): 1 M claims in
    60 s, parent 421 MB; 2 M in 120 s, parent 556 MB, all processes 1.3 GB â€” so ~2 GB parent for 12.3 M.
    **`hold annotations update` streamed the same way** (2026-11-10): the previous snapshot's claims kept as
-   identity digest, number and hash (~40 bytes a claim), read a part a task; a re-check hard-links the held claims
+   identity digest, number and hash (~40 bytes a claim), read a part a task; a re-check reads the held claims where they lie (hard-linked until 2026-11-27)
    file into the workspace instead of copying it (RULE 1). Same bytes, result and log as the in-memory path
    (`tests/hold/test_annotations_update_stream.py`). Measured on the star, 200,000 claims held and a new file:
    in-memory 1,404 MB traced, 1.7 GB RSS, 30 s; streamed on the pool (3) 55 MB traced, parent 168 MB RSS, all

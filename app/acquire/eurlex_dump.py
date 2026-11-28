@@ -28,7 +28,9 @@ THE HISTORY SLICE (operator, 2026-11-15: "Add history as a download and
 embedding option"). A unit built from the dump is the base, `lang=<l>/…`.
 `carry` takes the units an earlier per-unit fetch landed (parser 3: notice,
 tree, items) that the dump did not give, keeps their items and tree — the
-same bytes (RULE 1) — and drops the notice, which parser 4 reads for nothing.
+same bytes, COPIED (RULE 1 reuses the bytes, never by a hard link: operator,
+2026-11-27, app/file_copy.py; the earlier corpus is left whole) — and drops
+the notice, which parser 4 reads for nothing.
 Their place: `history/lang=<l>/…` (a consolidated version, or an act its tree
 does not state in force) or the base (an act in force the dump lacked: one
 modified since, or new). The place is fixed when the unit is first held and
@@ -1155,7 +1157,7 @@ def build_newer(dump_dir: Path, corpus: Path, languages: list[str], *,
 
 def carry_chunk(units: list[str], corpus: str) -> Counter:
     """Each held parser-3 unit (`<old>/lang=<l>/<yyyy>/<CELEX>`) the new
-    corpus does not hold: its tree and its form's items linked in — the same
+    corpus does not hold: its tree and its form's items copied in — the same
     bytes — without its notice, at its place (module docstring)."""
     from ..plugins.eurlex import from_tree, rdf
     from ..plugins.eurlex.source import HISTORY, LANGUAGES, _CONSOLIDATED, unit_rel
@@ -1185,14 +1187,15 @@ def carry_chunk(units: list[str], corpus: str) -> Counter:
             continue
         history = bool(_CONSOLIDATED.match(celex)) or note.in_force is not True
         dest = root / (HISTORY if history else "") / rel
-        _link_unit(unit, dest, names + [rdf.TREE_FILE])
+        _copy_unit(unit, dest, names + [rdf.TREE_FILE])
         c["history" if history else "base"] += 1
     return c
 
 
-def _link_unit(unit: Path, dest: Path, names: list[str]) -> None:
-    """The files hard-linked (copied across devices) into a staging folder
-    beside `dest`, then swapped in; the tree last, as a landing writes it."""
+def _copy_unit(unit: Path, dest: Path, names: list[str]) -> None:
+    """The files COPIED (never hard-linked: app/file_copy.py) into a staging
+    folder beside `dest`, then swapped in; the tree last, as a landing
+    writes it. The earlier corpus keeps its own."""
     import shutil
     from ..plugins.eurlex import rdf
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1200,22 +1203,31 @@ def _link_unit(unit: Path, dest: Path, names: list[str]) -> None:
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir()
     for n in sorted(names, key=lambda n: (n == rdf.TREE_FILE, n)):
-        try:
-            os.link(unit / n, staging / n)
-        except OSError:
-            shutil.copy2(unit / n, staging / n)
+        shutil.copy2(unit / n, staging / n)
     os.replace(staging, dest)
+
+
+def bytes_chunk(units: list[str]) -> int:
+    """The bytes of the files under each unit: what `carry` copies at most
+    (it leaves the notice, other forms and the units held already)."""
+    from ..file_copy import tree_bytes
+    return sum(tree_bytes(u) for u in units)
 
 
 def carry(old: Path, corpus: Path, *, log: Callable[[str], None] = print, chunk: int = 2000) -> Counter:
     """`carry_chunk` over every unit of `old` (a parser-3 corpus), in chunks
-    over the parse pool."""
+    over the parse pool — after a preflight: the units' bytes, an upper
+    bound of what is copied, must fit where the corpus is (app/file_copy.py
+    `preflight`)."""
     from .. import parallel
+    from ..file_copy import preflight
     units = sorted(str(p) for lang in sorted(old.glob("lang=*")) for p in lang.glob("*/*") if p.is_dir()
                    and not p.name.startswith("."))
+    chunks = [units[i:i + chunk] for i in range(0, len(units), chunk)]
+    need = sum(n for _i, n in parallel.each_part_unordered(bytes_chunk, [(c,) for c in chunks]))
+    preflight(need, corpus, f"[eurlex-dump] carrying {len(units)} unit(s) from {old} (at most)")
     total: Counter = Counter()
-    for got in parallel.each_part(carry_chunk, [(units[i:i + chunk], str(corpus))
-                                                for i in range(0, len(units), chunk)]):
+    for got in parallel.each_part(carry_chunk, [(c, str(corpus)) for c in chunks]):
         total.update(got)
     log(f"[eurlex-dump] carried from {old}: " + ", ".join(f"{k} {v}" for k, v in sorted(total.items())))
     return total

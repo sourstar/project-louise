@@ -25,6 +25,40 @@ measured (published figures disagree).
   that is the most common size for consumer market"; "That's the purpose of all those optimizations and
   the quest for a universal embedder"). Measured on the B70: today's query encoders for one question come
   to 20.4 GB loaded, against 4.4 GB for one universal embedder. docs/notes/perugia-16gb-test.md.
+- **NO HARD LINKS (operator, verbatim: "Never use hard links, always consciously load from a path. It
+  already happened that you deleted important files because you forgot the hard links").** Every
+  `os.link` in app/ is gone, and tests/test_no_hard_links.py fails on any new one (Python by AST, shell
+  scripts by command). What two collections use is read where it lies, by its path:
+  - a case-J sister's text index: her sister's own, `<sister>/index`, named by her placement — THE
+    STATIC SHARE (operator's default B, after six reads found the automatic groups of 74c95825–19a5cf5d
+    losing data): set once at her creation (moving nothing: no node stop), her marks reconciled once; nothing
+    automatic at boot (a placement that no longer holds is withheld in words; `hold collection
+    unshare` gives her an empty index of her own); a forget hands it to its one reader by rename,
+    else refuses; an earlier version's `.text-index/` group is refused at boot, never migrated;
+  - a re-check's claims, with an identity check at each pass;
+  - a re-created collection's origin directory, through a symbolic link, handed over at its holder's
+    forget;
+  - a discarded snapshot's part that the build since shares (kept in place);
+
+  What becomes another owner's own is copied, a reflink where the filesystem clones blocks, after a
+  preflight: a sister's seeded SHARD parts, a carried bundle tree, an earlier corpus's units.
+  The seed was briefly built BY PATH (7f9270fe, 534b9d48: a relative link a part, checked at every
+  read, handed over at her sister's forget); the independent read found four defects in it, and the
+  operator chose B, HER OWN COPY (tank: 4.5 TB free, gutenberg's SHARD 95 GB). The links are gone;
+  the standard alternative, content-addressed parts (git's object store), is written down in
+  hold/seed.py and sister-shared-index.md. The sister's room check counts the seed's bytes. A method's claims are moved. Symbolic links are allowed. Not changed: the engine's voice-profile leases
+  (deploy/localai patches 0010/0019, hard links made by the engine's Go code: Tensor's), and the hard
+  links already on the node, which `find -links +1` lists (the app makes none from now on).
+  docs/07 §7.8, app/file_copy.py.
+  Also: a read never makes an empty index the manifest marks populated (a marked `mul` document
+  marks every group it can be in; a write makes it, a delete makes none); a copy dereferences
+  symbolic links (`cp -L`); a forget whose heir's lock is held names `louise node pause <heir>`;
+  tools/archive_backend.py writes no hard-link entry and unpacks an old one as a copy in its place in
+  the member order; the guard names each `tar -x` by exactly one line, refuses a third party's
+  runtime archive holding a link member before each extraction, and catches filterless extraction,
+  `unpack_archive`, `cp -d`/`--preserve=links|all`, `rsync -H`, `link`, `cpio -l`, `bsdtar`,
+  continued lines, scripts in strings and tests_campaign/; the room check before every seed is
+  checked by source order.
 
 ### 2026-11-26
 

@@ -51,6 +51,7 @@ from . import (auth, cancel, collections as collections_mod, config, db, discove
                 node_state, platform_config, query_service, reader, relay, retrieval, spaces)
 from . import translate as mt
 from . import collection_file
+from . import file_copy
 from . import display_names
 from . import node_mode
 from .ask_pdf import AskPdf
@@ -4548,9 +4549,11 @@ async def collection_bundle_import(name: str, request: Request,
     try:
         with tarfile.open(spool_path, "r:gz") as tar:
             entry.mkdir(parents=True, exist_ok=True)
-            # filter="data" (3.12) refuses path traversal, links, devices
-            tar.extractall(entry, filter="data")
-    except tarfile.TarError as e:
+            # "data" (3.12) refuses path traversal, devices and links leaving
+            # the destination; a hard-link member is refused too (never a
+            # second name for a file: app/file_copy.py)
+            tar.extractall(entry, filter=file_copy.refuse_hard_links("data"))
+    except (tarfile.TarError, file_copy.HardLinkMember) as e:
         shutil.rmtree(entry, ignore_errors=True)
         raise HTTPException(400, f"not a valid bundle tar.gz: {e}")
     finally:

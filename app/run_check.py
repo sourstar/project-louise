@@ -41,6 +41,7 @@ cannot finish cannot honour SIGTERM).
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
@@ -124,10 +125,11 @@ def answers(recipe, *, query: bool = False, how: str = "normalised",
             _stopping(stop, name)
             part = texts[i:i + SLICE]
             if collection is not None and not query:
-                out += embeddings.embed_chunks(collection, part, recipe=recipe, runs=seen)
+                out += embeddings.embed_chunks(collection, part, recipe=recipe, runs=seen,
+                                               timeout=_request_timeout(timeout))
             else:
                 out += embeddings.embed_calibration(recipe, part, query=query, runs=seen,
-                                                    asked=asked, timeout=timeout)
+                                                    asked=asked, timeout=_request_timeout(timeout))
         return out
 
     def one(texts: list[str], seen: set) -> list[list[float]]:
@@ -136,23 +138,24 @@ def answers(recipe, *, query: bool = False, how: str = "normalised",
             _stopping(stop, name)
             out += embeddings.embed_calibration(recipe, [text], query=query, runs=seen,
                                                 one_at_a_time=True, asked=asked,
-                                                timeout=timeout)
+                                                timeout=_request_timeout(timeout))
         return out
 
     def contribute(texts: list[str], seen: set) -> list[list[float]]:
         _stopping(stop, name)
+        bound = _request_timeout(timeout)       # read here: the lanes' threads have no look
         lanes = max(1, min(int(getattr(recipe, "concurrency", 1) or 1), len(texts)))
         if lanes == 1:
             return embeddings.embed_calibration(recipe, texts, query=query,
                                                 raw=True, runs=seen, asked=asked,
-                                                timeout=timeout)
+                                                timeout=bound)
         # as the worker does it: `lanes` documents in flight, each its own call
         groups = [list(range(k, len(texts), lanes)) for k in range(lanes)]
         with ThreadPoolExecutor(max_workers=lanes) as ex:
             parts = list(ex.map(
                 lambda idx: embeddings.embed_calibration(recipe, [texts[i] for i in idx],
                                                          query=query, raw=True, runs=seen,
-                                                         asked=asked, timeout=timeout),
+                                                         asked=asked, timeout=bound),
                 groups))
         out: list[Any] = [None] * len(texts)
         for idx, vectors in zip(groups, parts):
@@ -685,13 +688,13 @@ def _reloader(recipe, *, query: bool, stop=None, name: str = ""):
     import time
 
     def reload() -> None:
-        embeddings.reload_model(recipe, query=query)
+        embeddings.reload_model(recipe, query=query, timeout=_request_timeout(120.0))
         deadline = time.monotonic() + RELOAD_WAIT_S
         while True:
             _stopping(stop, name)
             try:
                 embeddings.embed_calibration(recipe, ["load"], query=query, runs=set(),
-                                             one_at_a_time=True)
+                                             one_at_a_time=True, timeout=_request_timeout(300.0))
                 return
             except Exception as e:                  # noqa: BLE001 — loading, or gone
                 if time.monotonic() > deadline:
@@ -901,16 +904,36 @@ def _validate_on_twin_or_shared(root: Path, name: str, codex: Codex, recipe, *, 
                                 on_run: Callable[[Any], None] | None = None) -> dict[str, Any]:
     from . import gate_twin
     server, model = _who(recipe, role == "query")
+    # A NODE THAT IS STOPPING STARTS NO GATE: no claim, no twin made, loaded or
+    # room made for it — the look's next side after a stop ends here
+    _stopping(stop, name)
     # ONE GATE AT A TIME ON A TWIN, taken before anything of it is touched:
-    # a second gate on the model defers, and never stops the first one's twin
-    claim = _claim_twin(server, gate_twin.name_of(model), name)
+    # a second gate on the model defers, and never stops the first one's twin.
+    # In the worker's look (`_look_and_keep`) the claim is THE LOOK'S, held
+    # across its roles: a symmetric encoder's document and query sides share
+    # one twin, and the second is gated after the first under the same claim
+    # — it never defers behind its own sibling (the node, 2026-11-27)
+    claims = getattr(_pass_local, "claims", None)
+    twin_key = (server, gate_twin.name_of(model))
+    if claims is not None:
+        for other in [k for k in claims if k != twin_key]:
+            claims.pop(other).release()     # another twin's: nobody waits on it for this role
+        claim = claims.get(twin_key) or _claim_twin(server, twin_key[1], name)
+        claims[twin_key] = claim
+    else:
+        claim = _claim_twin(server, twin_key[1], name)
+
+    def let_go_of_the_claim() -> None:
+        if claims is not None:
+            claims.pop(twin_key, None)
+        claim.release()
     try:
         twin = _twin_for(recipe, role, name, codex)
     except BaseException:
-        claim.release()
+        let_go_of_the_claim()
         raise
     if twin is None:
-        claim.release()
+        let_go_of_the_claim()
         with _pinned(recipe, role, "gate", name), _gate_running(recipe, role, root, name):
             return _validate(root, name, codex, recipe, role=role, key=key, now=now,
                              stop=stop, on_run=on_run)
@@ -935,7 +958,14 @@ def _validate_on_twin_or_shared(root: Path, name: str, codex: Codex, recipe, *, 
         _twin_busy.discard(main_key)
         # stopped BEFORE the claim goes: the next gate's twin is never this one's
         _let_go(server, twin_model)
-        claim.release()
+        if claims is None:
+            claim.release()             # a look's claim goes when the look ends
+
+
+#: the twin claims of the look running on THIS thread (`_look_and_keep`):
+#: (server, twin) -> its claim, released when the look ends. Absent on any
+#: other thread — the command line's gate claims per role, as before
+_pass_local = threading.local()
 
 
 class _TwinClaim:
@@ -1124,7 +1154,9 @@ def _validate(root: Path, name: str, codex: Codex, recipe, *, role: str = "docum
             # the Codex's requirement wins over the node's setting: a node may
             # be stricter than its collection, never looser (09 §9.3)
             exactness=(emb.EXACT if runs_mod.requires_exact(codex)
-                       else getattr(recipe, "exactness", emb.EXACT)))
+                       else getattr(recipe, "exactness", emb.EXACT)),
+            # a look whose collection was retired meanwhile keeps nothing
+            refuse=_keep_refused)
         _mark(codex, role, body["run"], body)      # measured now: nothing to re-check
         measured = contributing(recipe)
         if measured is not None:
@@ -1974,6 +2006,8 @@ def _gated_again(collection, role: str = "document") -> None:
 
 def reset_cache() -> None:
     _verdicts.clear()
+    with _guard:
+        _retired.clear()
     _answering.clear()
     _answering_at.clear()
     _heard_read.clear()
@@ -2147,6 +2181,9 @@ def _look(collection, stop: Callable[[], bool] | None,
         # a refused RECEIPT refuses one answer, not the run: not settled (the
         # seventh read), as a deferred gate is not
         _look_state.timed_out = _timed_out(e)
+        # ...and a deferred gate is a WAIT, said as one: never an error (CLAUDE.md,
+        # "Deferral is not failure"; the node, 2026-11-27)
+        _look_state.gate_deferred = isinstance(e, emb.GateDeferred)
         return False, str(e), run_id, not isinstance(e, (emb.GateDeferred, embeddings.ReceiptRefused))
     except Exception as e:                              # noqa: BLE001
         # the endpoint away: a deferral, retried — less often each time it
@@ -2411,13 +2448,300 @@ def verdict_outdated(collection) -> bool:
                         time.time())
 
 
+# ---- the look beside its caller (the node, 2026-11-27) ------------------------------
+#
+# gutenberg, after its refit gave it a new space: one SYMMETRIC encoder
+# (vega-qwen3-embedding-4b serves the document and the query side) and a new
+# run. Its document gate measured 1,984 s in the fade pass (approved-encoders.md),
+# the query side's after it, and it ran INSIDE the look, on whichever worker thread looked
+# first — the collection's embed producer, or the settle thread that settles
+# every collection — holding it for the whole of it. Every other caller of the
+# collection was let past the model's look lock by `_twin_busy` (meant for the
+# OTHER collections on the shared load) and looked again: probes of the model
+# beside the measurement, its document side and then its query side finding
+# the twin claimed by their own sibling and deferring as "another collection's
+# gate", logged as an error, every FAIL_TTL_S. SLOW_LOOK_S cuts nothing: it
+# only sorts a look that held its caller 30 s for the backoff.
+#
+# So ONE LOOK OF A COLLECTION RUNS AT A TIME, ON A THREAD OF ITS OWN, and it is
+# what `hold embedder check` is: one claim of the twin, the document side and
+# then the query side in turn, no bound on the measurement but the gate's own
+# (`stop` between slices). Its caller waits GATE_WAIT_S for it — below
+# SLOW_LOOK_S, so a quick look answers the caller that asked, exactly as
+# before — and is otherwise answered beside it (`_beside_a_look`), as every
+# later caller is until it ends: no second look, no probe beside the
+# measurement. The look keeps its verdict itself and says its transition on
+# its own connection once its caller has gone. SIGTERM: the gate asks `stop`
+# between slices and the look ends at the next one, keeping nothing
+# (invariant 2); `join_gates` is the worker's bounded wait for it.
+#
+# STANDARD, WRITTEN DOWN (CLAUDE.md): this is single-flight (Go's
+# golang.org/x/sync/singleflight: one call in flight per key, later callers
+# share its result) on a plain thread and an Event. A `concurrent.futures`
+# executor would carry the result as well; a dedicated one would pay when
+# looks of many collections had to be bounded in number, which nothing
+# measured asks for (a look is a probe, and at most one gate per model runs).
+
+#: how long a caller waits for the look it started before it is answered
+#: beside it: below SLOW_LOOK_S, so a look never holds its caller long enough
+#: to be backed off for it; a quick gate still answers the look that asked
+GATE_WAIT_S = 20.0
+#: place -> the look of that collection running now (`embed_allowed`)
+_in_flight: dict[str, "_Look"] = {}
+
+
+class _Look:
+    """One look of one collection, on its own thread (`_look_and_keep`). Its
+    writes to the manifest go to the CALLER's connection while the caller
+    waits — handed back in order, on the caller's thread, which owns it
+    (SQLite is thread-affine) — and to the look's own once the caller has
+    been answered beside it."""
+
+    def __init__(self, where: str, collection) -> None:
+        self.where, self.collection = where, collection
+        self.lock = threading.Lock()
+        self.done = threading.Event()
+        #: its collection was paused, forgotten or renamed (`retire`): the look
+        #: stops at the gate's next slice, keeps nothing and writes nothing
+        self.retired = threading.Event()
+        #: when (monotonic) the retirement's bound ends: its requests are held to it
+        self.retire_by: float | None = None
+        self.pending: list[tuple[Callable, tuple]] = []
+        self.attached = True
+        self.own_con = None
+        self.allowed = False
+        self.error: BaseException | None = None
+        self.thread: threading.Thread | None = None
+
+    def write(self, fn: Callable, *args) -> None:
+        """`fn(con, *args)`, on the right connection; a status write never
+        breaks the look. Nothing once the look is retired, and never on a
+        manifest that is not there (`_existing_manifest`): `db.connect`
+        would make the collection's directory again under a forget or a
+        rename, and the next side's statement would land in it."""
+        with self.lock:
+            if _given_up(self):
+                return
+            if self.attached:
+                self.pending.append((fn, args))
+                return
+            try:
+                if self.own_con is None:
+                    self.own_con = _existing_manifest(self.collection)
+                    if self.own_con is None:
+                        return
+                fn(self.own_con, *args)
+            except Exception as e:                      # noqa: BLE001
+                log.warning("%s: a run check's status could not be written: %s: %s",
+                            getattr(self.collection, "name", "?"), type(e).__name__, e)
+
+    def run(self, body: Callable[[], bool]) -> None:
+        try:
+            self.allowed = body()
+        except BaseException as e:                      # noqa: BLE001 — handed to the caller, or said
+            self.error = e
+        finally:
+            with _guard:
+                if _in_flight.get(self.where) is self:
+                    del _in_flight[self.where]
+            with self.lock:
+                self.done.set()
+                alone = not self.attached
+                con, self.own_con = self.own_con, None
+            if con is not None:
+                try:
+                    con.close()
+                except Exception:                       # noqa: BLE001
+                    pass
+            if alone and self.error is not None:
+                log.error("%s: the run check's look ended on %s: %s",
+                          getattr(self.collection, "name", "?"), type(self.error).__name__, self.error)
+
+    def wait(self, con, bound: float, beside: Callable[[], bool]) -> bool:
+        """The caller's: the look's verdict if it ends within `bound`, else
+        `beside()`. What the look wrote meanwhile is written now, on `con`."""
+        self.done.wait(bound)
+        with self.lock:
+            for fn, args in ([] if self.retired.is_set() else self.pending):
+                try:
+                    fn(con, *args)
+                except Exception as e:                  # noqa: BLE001
+                    log.warning("%s: a run check's status could not be written: %s: %s",
+                                getattr(self.collection, "name", "?"), type(e).__name__, e)
+            self.pending = []
+            self.attached = False
+            finished = self.done.is_set()
+        if not finished:
+            return beside()
+        if self.error is not None:
+            raise self.error
+        return self.allowed
+
+
+def _existing_manifest(collection):
+    """The collection's manifest opened to write and NEVER CREATED (`mode=rw`,
+    as `text_index._rw`): None where it is not there — a collection forgotten
+    or renamed under a look that outlived its retirement."""
+    import sqlite3
+    from . import db
+    path = Path(collection.manifest_path)
+    if not path.is_file():
+        return None
+    try:
+        con = sqlite3.connect(f"{path.resolve().as_uri()}?mode=rw", uri=True, timeout=30,
+                              isolation_level=None, factory=db.ManifestConnection)
+    except sqlite3.OperationalError:
+        return None
+    try:
+        con.collection_name = collection.name
+        db.wal(con)                   # invariant 6: every write-open of a manifest sets WAL
+        con.execute("PRAGMA busy_timeout=60000")
+    except BaseException:
+        con.close()                   # never left open behind a failed open
+        raise
+    return con
+
+
+def _keep_refused() -> str | None:
+    """`runs.keep`'s `refuse`: why the look running on this thread may not
+    keep a statement now — its collection retired meanwhile — or None."""
+    look = getattr(_pass_local, "look", None)
+    if look is not None and look.retired.is_set():
+        return "its collection was paused, forgotten or renamed while its gate measured"
+    return None
+
+
+def retire(collection, timeout: float) -> bool:
+    """THE COLLECTION'S RETIREMENT (`worker.retire_collection`: a pause, a
+    forget, a rename): its look, if one runs, is retired — its gate stops at
+    its next slice, its twin let go and its claim released, nothing kept,
+    nothing written, no verdict left — and waited for, `timeout` at most.
+    True when none is left. By its place, as the look is kept (`_place`)."""
+    name = collection if isinstance(collection, str) else collection.name
+    where = _place(_root(), name)
+    with _guard:
+        # A TOMBSTONE, set under the lock a look is started under: a caller
+        # that read "not paused" before the pause starts no look after it (the
+        # settle thread reads the pauses once a beat, the producer asks only
+        # the worker's stop) — until the worker takes the collection's lock
+        # again (`unretire`, from `worker._hold_locks`)
+        _retired.add(where)
+        look = _in_flight.get(where)
+    if look is None:
+        return True
+    by = time.monotonic() + max(0.0, timeout)
+    look.retire_by = min(by, look.retire_by) if look.retire_by is not None else by
+    look.retired.set()
+    t = look.thread
+    if t is None or t.ident is None or t is threading.current_thread():
+        return False
+    t.join(max(0.0, timeout))
+    return not t.is_alive()
+
+
+#: the places retired since the worker last took their lock (`retire`)
+_retired: set[str] = set()
+
+
+def unretire(collection) -> None:
+    """The worker runs the collection again (`worker._hold_locks` took its
+    lock): its looks may start."""
+    name = collection if isinstance(collection, str) else collection.name
+    with _guard:
+        _retired.discard(_place(_root(), name))
+
+
+#: THE NODE'S MODE HOLDS EVERY LOOK (`node pause`, seed-only, download only:
+#: nothing embeds): the worker says so here (`hold_looks_while`). None starts,
+#: and one running is stopped at its gate's next slice as a retired one is
+_node_holds: Callable[[], bool] = lambda: False
+
+
+def hold_looks_while(holds: Callable[[], bool]) -> None:
+    global _node_holds
+    _node_holds = holds
+
+
+def _held() -> bool:
+    try:
+        return bool(_node_holds())
+    except Exception:   # noqa: BLE001 — unread: nothing held
+        return False
+
+
+def _request_timeout(timeout: float) -> float:
+    """An encoder request's bound: `timeout`, or — for the look on this thread
+    once its collection was retired — what is left of the retirement's bound
+    (at least a second: the client takes no bound of zero). The request in
+    flight at the retirement keeps its own; the next one is held to this."""
+    look = getattr(_pass_local, "look", None)
+    by = getattr(look, "retire_by", None) if look is not None else None
+    if by is None:
+        return timeout
+    return max(1.0, min(float(timeout), by - time.monotonic()))
+
+
+def _set_gate_state(con, value: str) -> None:
+    from .verify import backend_gate
+    from . import db
+    try:
+        db.set_control(con, backend_gate.GATE_STATE_KEY, value)
+    except Exception:                                   # noqa: BLE001
+        pass        # a status write must never break the gate
+
+
+def _beside_a_look(collection, cached, now_answering: str | None, stamp: tuple | None = None) -> bool:
+    """A look of this collection runs now on its own thread — its gate,
+    perhaps for half an hour: this caller does not look again. It is answered
+    from the verdict there was: one that let the run heard embed stays so
+    (every answer is still checked before its write, invariant 1) — but not
+    while the look measures on the SHARED load, which a gate measures alone;
+    anything else waits for the look's verdict, which the look keeps."""
+    if cached is None or not cached[0]:
+        return False
+    if now_answering is not None and cached[3] != now_answering:
+        return False
+    if _suspect_since(collection, cached):
+        return False            # a context of the run failed its canary: the look gates it again
+    if (stamp if stamp is not None else _kept_stamp(collection)) != cached[4]:
+        return False            # the statements changed since (one set aside): the look gates again
+    where = _where(collection)
+    with _gating_lock:
+        if any(held[0] == where for held in _gating.values()):
+            return False
+    return True
+
+
+def gate_running(collection) -> bool:
+    """Is a look of `collection` (its gate, perhaps) running now?"""
+    with _guard:
+        return _where(collection) in _in_flight
+
+
+def join_gates(timeout: float) -> bool:
+    """THE WORKER'S STOP: wait, `timeout` at most, for the looks running now
+    to end. Their `stop` is the worker's, which the gate asks between slices:
+    each ends at its next slice, keeping nothing, its twin let go and its
+    claim released (invariant 2). True when none is left."""
+    deadline = time.monotonic() + max(0.0, timeout)
+    with _guard:
+        threads = [lk.thread for lk in _in_flight.values()
+                   if lk.thread is not None and lk.thread.ident is not None]   # started
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+    return not any(t.is_alive() for t in threads)
+
+
 def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) -> bool:
     """THE WORKER, before the embed stage of a version-3 collection. Cached,
     logs its transitions where the backend gate logs its own, never raises."""
     from . import db
-    from .verify import backend_gate
 
     where = _where(collection)
+    # RETIRED (paused, forgotten, renamed) and not taken again, or a node whose
+    # mode embeds nothing: no look starts, no probe is sent
+    if where in _retired or _held():
+        return False
     # ANOTHER COLLECTION'S GATE RUNS ON THIS MODEL: this one stands aside
     # until it ends, validated or not — its requests would be counted in the
     # gate's passes and defer them (München, 2026-11-11)
@@ -2449,6 +2773,13 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             and _query_kept(collection, cached[5], heard_now.get("query") if _asymmetric(collection) else None, now) \
             and not _suspect_since(collection, cached) and not _suspect_since(collection, cached, "query"):
         return cached[0]
+    # ONE LOOK OF A COLLECTION AT A TIME, beside its caller (`_Look`): one runs
+    # now — its gate, perhaps — and this caller does not look again, no probe
+    # beside the measurement and no role deferred behind its own sibling
+    with _guard:
+        flying = _in_flight.get(where)
+    if flying is not None:
+        return _beside_a_look(collection, cached, now_answering, stamp)
     with _guard:
         keys = _flights(collection)
         locks = [_looking.setdefault(k, threading.Lock()) for k in keys]
@@ -2467,11 +2798,72 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
                 h.release()
             return False
         held.append(lock)
+    look = _Look(where, collection)
+    with _guard:
+        # another caller started one meanwhile, or the collection was retired
+        # since the check above (the same lock as `retire`'s)
+        raced = where in _in_flight or where in _retired
+        if not raced:
+            _in_flight[where] = look
+    if raced:
+        for h in reversed(held):
+            h.release()
+        return _beside_a_look(collection, cached, now_answering, stamp)
+    def stopping() -> bool:
+        # the worker's stop, this collection's retirement (`retire`), or a
+        # node whose mode embeds nothing now
+        return _given_up(look) or (stop is not None and bool(stop()))
+    thread = threading.Thread(
+        target=contextvars.copy_context().run,
+        args=(look.run, lambda: _look_and_keep(look, collection, stopping, held, cached=cached, now=now,
+                                               heard_now=heard_now, now_answering=now_answering)),
+        name=f"run-check-{collection.name}", daemon=True)
+    try:
+        thread.start()
+        look.thread = thread            # only a started thread is ever joined
+    except BaseException:
+        with _guard:
+            _in_flight.pop(where, None)
+        for h in reversed(held):
+            h.release()
+        raise
+    return look.wait(con, GATE_WAIT_S, lambda: _beside_a_look(collection, cached, now_answering, stamp))
+
+
+def _given_up(look: "_Look") -> bool:
+    """Is `look` retired — its collection's, or the node's mode holding every
+    look? Either way it keeps nothing, writes nothing and leaves no verdict."""
+    if not look.retired.is_set() and _held():
+        look.retired.set()
+    return look.retired.is_set()
+
+
+def _retired_look(where: str) -> bool:
+    """A look whose collection was retired under it: no verdict, no backoff —
+    a resume looks at once — and nothing said (`_Look.write`)."""
+    _verdicts.pop(where, None)
+    return False
+
+
+def _look_and_keep(look: "_Look", collection, stop: Callable[[], bool] | None,
+                   held: list[threading.Lock], *, cached, now: float, heard_now: dict,
+                   now_answering: str | None) -> bool:
+    """THE LOOK, on its own thread (`embed_allowed`): ask which runs answer,
+    gate what is new — the document side, then the query side, in turn and
+    under one twin claim — keep the verdict, and say its transition. What it
+    writes to the manifest goes through `look` (the caller's connection while
+    the caller waits, its own after). The flight locks `held` and the twin
+    claims are released when it ends."""
+    from . import db
+
+    where = _where(collection)
+    _pass_local.claims = {}
+    _pass_local.look = look
     try:
         def log(message: str) -> None:
             # a context that did not reproduce its canary is an error to read
-            db.log_event(con, "error" if message.startswith("CANARY") else "info", "run-check",
-                         f"[{collection.name}] {message}"[:500])
+            look.write(db.log_event, "error" if message.startswith("CANARY") else "info", "run-check",
+                       f"[{collection.name}] {message}"[:500])
 
         doc_key = _flight(collection)
         slow_until = _slow_until(doc_key, now, now_answering)
@@ -2482,6 +2874,7 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             slow_until = max(slow_until or 0.0, gate_was[1])
         slow_n = gate_was[0] if gate_was is not None else 0
         same_run = cached is not None and (now_answering is None or cached[3] == now_answering)
+        gate_deferred = False
         if slow_until is not None and not _suspect_since(collection, cached) and (
                 cached is None or same_run or gate_was is not None):
             # (a run heard since — some process had an answer — is looked at: the
@@ -2496,8 +2889,9 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
                 allowed, reason, settled = cached[0], cached[1], (cached[6] if len(cached) > 6 else True)
             else:
                 allowed, settled = False, False
-                who = (f"the gate of run {str(now_answering)[:23]}…" if gate_was is not None
-                       and gate_was[1] >= slow_until else "the encoder")
+                # the GATE's backoff follows a gate that deferred: a wait too
+                gate_deferred = gate_was is not None and gate_was[1] >= slow_until
+                who = (f"the gate of run {str(now_answering)[:23]}…" if gate_deferred else "the encoder")
                 reason = (f"{who} held its last look {SLOW_LOOK_S:.0f} s or more "
                           f"({slow_n if gate_was is not None and gate_was[1] >= slow_until else enc_n} in a row); "
                           f"asked again at {time.strftime('%H:%M:%S', time.localtime(slow_until))}")
@@ -2505,7 +2899,11 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         else:
             t_look = _look_clock()
             _look_state.timed_out = False
+            _look_state.gate_deferred = False
             allowed, reason, run_id, settled = _look(collection, stop, log)
+            gate_deferred = bool(getattr(_look_state, "gate_deferred", False))
+            if _given_up(look):
+                return _retired_look(where)
             took = _look_clock() - t_look
             # THE ENCODER'S BACKOFF only where it did not answer its probe (no run
             # heard): it holds every collection on the model. A probe answered
@@ -2567,6 +2965,8 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             _look_state.timed_out = False
             query_run = _look_at_the_query_side(collection, stop, log, heard_by=query_heard)
             q_took = _look_clock() - t_q
+            if _given_up(look):
+                return _retired_look(where)
             if q_key is not None:
                 # the encoder's mark only where the query probe was not answered;
                 # a query gate that held its caller after it is the GATE's backoff,
@@ -2603,6 +3003,8 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         # ...THE ENCODER'S, not the collection's, and only for a look that held
         # its caller (`_slow`, `_note_look`; the ninth read: a backoff of every
         # unsettled look kept embedding paused 25 min after a LocalAI restart)
+        if _given_up(look):
+            return _retired_look(where)
         if slow_until is not None:
             expires = max(slow_until, time.time() + 1.0)
         else:
@@ -2610,15 +3012,23 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         _verdicts[where] = (allowed, reason, expires, run_id,
                             _kept_stamp(collection), query_run, settled, slow_n, _canary_counts(collection))
         if cached is None or cached[0] != allowed or cached[1] != reason:
-            db.log_event(con, "info" if allowed else "error", "run-check",
-                         (f"[{collection.name}] embedding "
-                          f"{'enabled' if allowed else 'PAUSED'}: {reason}")[:500])
-            try:
-                db.set_control(con, backend_gate.GATE_STATE_KEY, json.dumps(
-                    {"allowed": allowed, "reason": reason[:400], "ts": int(now)}))
-            except Exception:                           # noqa: BLE001
-                pass        # a status write must never break the gate
+            # A GATE THAT DEFERRED IS A WAIT, NOT A FAILURE (CLAUDE.md, "Deferral is
+            # not failure"): said at info, as a wait — a room short, a twin another
+            # gate holds, a node stopping, the gate's own backoff after one. An
+            # error is a verdict: a run refused, failed, a rule in the way
+            waits = not allowed and not settled and gate_deferred
+            look.write(db.log_event, "info" if allowed or waits else "error", "run-check",
+                       (f"[{collection.name}] embedding "
+                        f"{'enabled' if allowed else 'waits for its gate' if waits else 'PAUSED'}: "
+                        f"{reason}")[:500])
+            look.write(_set_gate_state, json.dumps(
+                {"allowed": allowed, "reason": reason[:400], "ts": int(now)}))
         return allowed
     finally:
+        _pass_local.look = None
+        claims = getattr(_pass_local, "claims", None) or {}
+        _pass_local.claims = None
+        for claim in claims.values():
+            claim.release()
         for h in reversed(held):
             h.release()

@@ -15,7 +15,7 @@ the archived current engine, and carry its vectors over unchanged".
 
 What this module gives the workflow's two steps of its own:
 
-  carry  `seed_parts` (the predecessor's parts, linked and checked against
+  carry  `seed_parts` (the predecessor's parts, COPIED and checked against
          their roots, the snapshot frozen again: hold/seed.py's G3),
          `share_origin` (the origin read where it lies), `sample` (N chunks
          of the records re-encoded by the new engine's run and held to the
@@ -183,7 +183,9 @@ def seed_parts(root: Path, pred_name: str, name: str, *, now: str,
                log: Callable[[str], None]) -> dict[str, Any]:
     """`name`'s SHARD seeded from the predecessor's latest snapshot (hold/
     seed.py's G3, what `hold snapshot create --shards-from` does): its parts
-    hard-linked and checked against their roots, its build database a
+    COPIED (her own, never a link: operator, 2026-11-27, choice B) and
+    checked against their
+    roots, its build database a
     build's, the snapshot frozen again and its parts held to the source's
     (`same_parts_or_withdraw`), signed where this peer has a key. A target
     already holding a snapshot of the same parts is nothing to do. The
@@ -226,9 +228,13 @@ def share_origin(root: Path, pred_name: str, name: str) -> str:
     target to `name`'s link, so `forget` keeps the folder (another held
     collection links it) and the manifest's stored paths resolve after the
     swap; `name`'s own empty folder there goes. An origin that is a directory
-    inside the predecessor is hard-linked file by file (hold/carry.py
-    `_link_tree`), so its forget frees none of it."""
-    from .carry import _link_tree
+    inside the predecessor is read WHERE IT LIES too: `name`'s `origin` is a
+    symbolic link to it (it was hard-linked file by file, so that the
+    predecessor's forget freed none of it; never a hard link now: operator,
+    2026-11-27, app/file_copy.py), and the predecessor's forget HANDS the
+    directory over to the collection whose link reads it instead of removing
+    it (hold/forget.py `origin_heirs`). A target already holding a directory
+    of files there (an earlier carry's) is left as it is."""
     src, dst = Path(root) / pred_name / "origin", Path(root) / name / "origin"
     if src.is_symlink():
         target = os.readlink(src)
@@ -255,8 +261,24 @@ def share_origin(root: Path, pred_name: str, name: str) -> str:
         os.replace(tmp, dst)
         return f"linked to {target}"
     if src.is_dir():
-        got = _link_tree(src, dst)
-        return f"hard-linked ({got['linked']} linked, {got['copied']} copied, {got['present']} present)"
+        target = src.resolve()
+        relative = os.path.relpath(src, dst.parent)        # moves with the root
+        if dst.is_symlink():
+            if dst.resolve() == target:
+                return f"reads {target} (already)"
+            raise CodexError(f"{dst} links to {dst.resolve()}: a re-created collection reads its "
+                             f"predecessor's origin, and nothing is linked over another")
+        if dst.is_dir():
+            if any(dst.iterdir()):
+                return "its own directory of files (an earlier carry's), left as it is"
+            dst.rmdir()
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dst.with_name("origin.recreate")
+        if tmp.is_symlink():
+            tmp.unlink()
+        tmp.symlink_to(relative, target_is_directory=True)
+        os.replace(tmp, dst)
+        return f"reads {target} where it lies (handed over at {pred_name}'s forget)"
     return "none (the predecessor holds no origin)"
 
 
@@ -418,8 +440,15 @@ def _bytes_under(path: Path) -> int:
 
 #: what the carry copies and `room` counts, by its path in the collection
 COPIED = ("lance", "index", "state/manifest.sqlite")
-#: what a case-J sister's carry copies: no vector of her sister's
-SISTER_PARTS = ("index", "state/manifest.sqlite")
+#: what a case-J sister's carry copies: no vector of her sister's — and her
+#: SHARD's parts, seeded from her sister's (`seed_parts`, COPIED: choice B)
+SHARD_PARTS = "shard"
+SISTER_PARTS = (SHARD_PARTS, "index", "state/manifest.sqlite")
+#: what a re-creation (case A) copies: its vector table, text index and
+#: manifest, its SHARD's parts (seeded, copied: choice B) and its bundle tree
+#: (copied in a same-space carry; counted always: the room is not short)
+BUNDLES = "state/bundles"
+RECREATE_PARTS = COPIED + (SHARD_PARTS, BUNDLES)
 #: and a re-cut (relayered) sister's: no text index either, the worker builds hers
 RECUT_SISTER_PARTS = ("state/manifest.sqlite",)
 
@@ -441,25 +470,49 @@ def _tree(root: Path, name: str, rel: str) -> Path:
     return vector_place.table_dir(root, name) if rel == "lance" else Path(root) / name / rel
 
 
-def to_copy(root: Path, pred_name: str, name: str, *, linked_index: bool = False,
+def to_copy(root: Path, pred_name: str, name: str, *, index_by_path: bool = False,
             parts: tuple[str, ...] = COPIED) -> dict[str, int]:
     """The bytes of each of `parts` (of `COPIED`) the target does not hold
     yet (a resumed carry counts only what is left), counted from the
-    predecessor's files by their size. `linked_index`: a sister's text
-    index, whose language groups are hard-linked (carry `_sister_index`):
-    only the rest of it counts. `parts`: what the carry copies — a case-J
+    predecessor's files by their size. `index_by_path`: a sister's text
+    index, whose language groups she reads where they lie (carry
+    `_sister_index`, `text_index.share`; never a hard link): only
+    the rest of it counts. `parts`: what the carry copies — a case-J
     sister copies no vector table (`SISTER_PARTS`), a re-cut one no text
     index either (`RECUT_SISTER_PARTS`); gutenberg-nemo's dry run counted
     gutenberg's 54-GB index and 19-GiB table it never copies (2026-11-27)."""
     from app import text_index
     out: dict[str, int] = {}
     for rel in parts:
+        if rel == SHARD_PARTS:
+            out[rel] = _seed_bytes(root, pred_name, name)
+            continue
         there, src = _tree(root, name, rel), _tree(root, pred_name, rel)
         if not there.exists() or (there.is_dir() and not any(there.iterdir())):
             out[rel] = _bytes_under(src) if src.exists() else 0
-            if rel == "index" and linked_index and src.is_dir():
-                out[rel] -= sum(_bytes_under(g) for g in text_index.group_dirs(src))
+            if rel == "index" and src.is_dir():
+                # her sister's language groups are where her placement puts
+                # them — `<pred>/index` itself, or the sister's index her placement
+                # names: read there by path (0), or copied from THERE
+                here = sum(_bytes_under(g) for g in text_index.group_dirs(src))
+                at = text_index.base(src)
+                out[rel] -= here
+                if not index_by_path:
+                    out[rel] += here if at == src else sum(_bytes_under(g) for g in text_index.group_dirs(at))
     return out
+
+
+def _seed_bytes(root: Path, pred_name: str, name: str) -> int:
+    """The bytes the seed copies (`seed_parts`): every part her sister's
+    latest snapshot names that her SHARD does not hold yet (a resumed seed
+    counts only what is left)."""
+    from . import collection as col, seed
+    try:
+        snap = seed.latest_snapshot(root, pred_name)
+    except CodexError:
+        return 0
+    dst = col.shard_dir_of(Path(root), name)
+    return sum(int(b) for path, b, _r in seed.parts_of(snap) if not (dst / path).is_file())
 
 
 def _lands(root: Path, name: str, rel: str) -> Path:
@@ -468,6 +521,15 @@ def _lands(root: Path, name: str, rel: str) -> Path:
     placed there (`vector_place.place_new`), and, before it is made (the dry
     run), where `new` will place it."""
     from app import vector_place
+    for kind, sub, env in ((SHARD_PARTS, "shard", "SHARDS_ROOT"), (BUNDLES, BUNDLES, "BUNDLES_ROOT")):
+        if rel == kind:
+            # its own filesystem (a link to `<ROOT>/<name>`, the bulk
+            # storage), and, before it is made, where `create` will link it
+            link = Path(root) / name / sub
+            if link.exists():
+                return link.resolve()
+            shared = os.getenv(env, "").strip()
+            return Path(shared) / name if shared else link
     if rel != "lance":
         return Path(root) / name / rel
     link = vector_place.table_dir(root, name)
@@ -479,7 +541,7 @@ def _lands(root: Path, name: str, rel: str) -> Path:
 
 
 def rooms(root: Path, pred_name: str, name: str, *, make: bool = True,
-          linked_index: bool = False, parts: tuple[str, ...] = COPIED) -> list[dict[str, Any]]:
+          index_by_path: bool = False, parts: tuple[str, ...] = COPIED) -> list[dict[str, Any]]:
     """`[{where, need, free}]`, one per filesystem the carry writes to: the
     predecessor's vector table, text index and manifest, each counted only
     where the target does not hold it yet (a resumed carry), on the
@@ -489,7 +551,7 @@ def rooms(root: Path, pred_name: str, name: str, *, make: bool = True,
     makes nothing: the free space is read where the target would be made."""
     import shutil
     dst = Path(root) / name
-    sizes = to_copy(root, pred_name, name, linked_index=linked_index, parts=parts)
+    sizes = to_copy(root, pred_name, name, index_by_path=index_by_path, parts=parts)
     if make:
         dst.mkdir(parents=True, exist_ok=True)
     by_fs: dict[int, dict[str, Any]] = {}
@@ -504,11 +566,11 @@ def rooms(root: Path, pred_name: str, name: str, *, make: bool = True,
 
 
 def room(root: Path, pred_name: str, name: str, *, make: bool = True,
-         linked_index: bool = False, parts: tuple[str, ...] = COPIED) -> tuple[int, int]:
+         index_by_path: bool = False, parts: tuple[str, ...] = COPIED) -> tuple[int, int]:
     """`(bytes the carry's copy needs, bytes free where it writes)` on the
     filesystem with the least to spare (`rooms`): one that cannot hold its
     share refuses the whole carry."""
-    worst = min(rooms(root, pred_name, name, make=make, linked_index=linked_index, parts=parts),
+    worst = min(rooms(root, pred_name, name, make=make, index_by_path=index_by_path, parts=parts),
                 key=lambda r: r["free"] - r["need"])
     return worst["need"], worst["free"]
 
@@ -516,7 +578,7 @@ def room(root: Path, pred_name: str, name: str, *, make: bool = True,
 def no_room(pred_name: str, name: str, need: int, free: int) -> str:
     """The carry's refusal when the copy does not fit (the run's and the dry
     run's one sentence)."""
-    return (f"carry: copying {pred_name}'s vector table, text index and manifest needs {human(need)} "
+    return (f"carry: copying {pred_name}'s SHARD parts, vector table, text index and manifest needs {human(need)} "
             f"and {human(free)} is free where {name} lives: nothing was copied. Free the space, then "
             f"run this again")
 
@@ -666,15 +728,18 @@ def human(n: int | None) -> str:
 def forget_plan(root: Path, name: str) -> dict[str, Any]:
     """What `hold collection forget <name>` would remove (its own dry run,
     app/hold/forget.py) and its size: every inode counted once, and FREED
-    only where every link to it is among what goes — the parts and bundles
-    the re-created collection hard-linked stay on disk."""
-    from .forget import forget
+    only where every name it has is among what goes — a part an earlier
+    carry hard-linked (before 2026-11-27; never since: app/file_copy.py)
+    stays on disk — and never what its forget hands over to the collection
+    that reads it: its origin directory (`forget.handed_inodes`)."""
+    from .forget import forget, handed_inodes
     plan = forget(Path(root), name, dry_run=True)
+    handed = handed_inodes(Path(root), name)
     seen: dict[tuple[int, int], list[int]] = {}
     for p in plan.get("would_remove") or ():
         p = Path(p)
         walk = [(str(p.parent), [], [p.name])] if not p.is_dir() or p.is_symlink() else os.walk(p)
-        for base, _dirs, names in walk:
+        for base, dirs, names in walk:
             for nm in names:
                 try:
                     st = os.lstat(Path(base) / nm)
@@ -683,6 +748,8 @@ def forget_plan(root: Path, name: str) -> dict[str, Any]:
                 if not stat.S_ISREG(st.st_mode):
                     continue
                 key = (st.st_dev, st.st_ino)
+                if key in handed:
+                    continue                        # handed over to its reader, never freed
                 if key in seen:
                     seen[key][2] += 1
                 else:

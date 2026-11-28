@@ -3,8 +3,9 @@
 `louise hold snapshot create <to> --shards-from <from>[:<snapshot>]` (07 §7.3;
 docs/notes/v5-migration.md G3). RULE 1: a new collection whose records are, by
 its Codex, the records another collection already holds does not parse its
-origin again. Its parts are the source snapshot's parts, linked (a hard link
-where the two SHARDs share a filesystem, a copy where they do not), each one
+origin again. Its parts are the source snapshot's parts, COPIED (never a
+hard link: operator, 2026-11-27, app/file_copy.py; a reflink where the
+filesystem clones blocks), after a preflight of the bytes they need, each one
 checked against the source snapshot's own `root` before it is put in place;
 its staging claim and build database are written as a build of it would have
 left them; and the snapshot that follows is the normal `snapshot create`.
@@ -21,12 +22,27 @@ Anything else may differ: that is what a new space is.
 Resumable and idempotent (invariant 2): a part already in place with the
 entry's root is left; one with another root is refused, never overwritten; a
 build database already written is compared with the snapshot, never rewritten.
+
+HER OWN COPY (operator, 2026-11-27, choice B of three; München measured tank
+at 4.5 TB free, gutenberg's SHARD is 95 GB, about 2 %): A was a relative link
+a part into her sister's SHARD (her sister's re-issue or forget then had to
+be followed by every read and hand-over: the independent read of 534b9d48
+found four defects in that machinery), C the standard below.
+
+THE STANDARD ALTERNATIVE, NOT ADOPTED: CONTENT-ADDRESSED STORAGE — one store
+of parts named by their pieces root, as git's object store names objects by
+their hash. Each SHARD names its parts in the store; a stored file never
+changes or moves; it goes only when no SHARD names it (a reference count,
+or a sweep of every SHARD's names). A seed is then a list of names, and a
+re-issue a new name, never a rewrite. It pays once several sisters share one
+corpus (each sister now costs a copy of it). Adopting it means changing how
+every SHARD writes, supersedes (02 §2.3's superseded names), drops and
+forgets a part, and what `share` serves from.
 """
 from __future__ import annotations
 
 import os
 import re
-import shutil
 import sqlite3
 from pathlib import Path
 from typing import Any, Callable
@@ -130,10 +146,11 @@ def parts_of(snap) -> list[tuple[str, int, str]]:
     return out
 
 
-def _link(src: Path, dst: Path, root: str) -> str:
-    """`dst` as `src`'s bytes, checked against `root` before it appears:
-    "linked", "copied", or "present" when it already was."""
+def _copy(src: Path, dst: Path, root: str) -> str:
+    """`dst` as a COPY of `src`'s bytes, checked against `root` before it
+    appears: "copied", or "present" when it already was."""
     from . import shard as shard_mod
+    from ..file_copy import _cp
     if dst.exists():
         if shard_mod.pieces_root_of(dst) == root:
             return "present"
@@ -147,12 +164,7 @@ def _link(src: Path, dst: Path, root: str) -> str:
     tmp = dst.with_name(f".{dst.name}.seed")
     tmp.unlink(missing_ok=True)
     try:
-        os.link(src, tmp)
-        how = "linked"
-    except OSError:
-        shutil.copyfile(src, tmp)
-        how = "copied"
-    try:
+        _cp(src, tmp)
         got = shard_mod.pieces_root_of(tmp)
         if got != root:
             raise CodexError(
@@ -162,7 +174,17 @@ def _link(src: Path, dst: Path, root: str) -> str:
         os.replace(tmp, dst)
     finally:
         tmp.unlink(missing_ok=True)
-    return how
+    return "copied"
+
+
+def _preflight(src_shard: Path, dst_shard: Path, parts: list[tuple[str, int, str]], what: str) -> None:
+    """The bytes of the parts the target does not hold yet, against the free
+    space on its SHARD's filesystem (app/file_copy.py): nothing is copied
+    when they do not fit."""
+    from ..file_copy import preflight
+    need = sum(int(b) for path, b, _r in parts
+               if not (dst_shard / path).exists() and (src_shard / path).is_file())
+    preflight(need, dst_shard, what)
 
 
 def _rows(con) -> dict[tuple[str, int], dict]:
@@ -255,7 +277,7 @@ def seed_holder(root, to_ref: str, from_ref: str, *, from_snapshot: str | None =
     """A HOLDER's seeding (Perugia, 2026-10-21): the target already holds the
     snapshot (fetched and signed by the peer that created it, `share fetch`
     of a records twin), so nothing is created or signed here — the parts
-    this peer's source holds are linked into the target's SHARD, checked
+    this peer's source holds are copied into the target's SHARD, checked
     against the snapshot's roots, and a part the source does not hold is
     ABSENT, not a refusal: a holder holds a selection (`kinds`, `slices`),
     and the fetch beat takes what its file asks for. The creator's seeding
@@ -274,18 +296,19 @@ def seed_holder(root, to_ref: str, from_ref: str, *, from_snapshot: str | None =
     mine = latest_snapshot(root, to_name, snap.snapshot_id)
     if sorted(parts_of(mine)) != sorted(parts_of(snap)):
         raise CodexError(f"{to_name}'s snapshot {mine.snapshot_id} does not name the parts {from_name}'s "
-                         f"names; a holder links only the parts of the snapshot it holds")
+                         f"names; a holder copies only the parts of the snapshot it holds")
     src_shard, dst_shard = col.shard_dir_of(root, from_name), col.shard_dir_of(root, to_name)
-    counts = {"linked": 0, "copied": 0, "present": 0, "absent": 0}
+    _preflight(src_shard, dst_shard, parts_of(snap), f"seeding {to_name}'s SHARD from {from_name}")
+    counts = {"copied": 0, "present": 0, "absent": 0}
     absent: list[str] = []
     for path, _bytes, part_root in parts_of(snap):
         if not (src_shard / path).is_file() and not (dst_shard / path).exists():
             counts["absent"] += 1
             absent.append(path)
             continue
-        counts[_link(src_shard / path, dst_shard / path, part_root)] += 1
+        counts[_copy(src_shard / path, dst_shard / path, part_root)] += 1
     log(f"[snapshot create] {to_name}: holds {snap.snapshot_id} already (fetched, signed by its creator); "
-        f"seeded from {from_name} — {counts['linked']} linked, {counts['copied']} copied, "
+        f"seeded from {from_name} — {counts['copied']} copied, "
         f"{counts['present']} already in place, {counts['absent']} not held by {from_name}"
         + (f" (e.g. {absent[0]}): a holder's selection, fetched if its file asks for them" if absent else ""))
     return {"from": src.collection_id, "to": to.collection_id, "snapshot_id": snap.snapshot_id,
@@ -318,9 +341,10 @@ def seed_shards(root, to_ref: str, from_ref: str, *, from_snapshot: str | None =
     rec._claim_staging(staging, to)
 
     src_shard, dst_shard = col.shard_dir_of(root, from_name), col.shard_dir_of(root, to_name)
-    counts = {"linked": 0, "copied": 0, "present": 0}
+    _preflight(src_shard, dst_shard, parts_of(snap), f"seeding {to_name}'s SHARD from {from_name}")
+    counts = {"copied": 0, "present": 0}
     for path, _bytes, part_root in parts_of(snap):
-        counts[_link(src_shard / path, dst_shard / path, part_root)] += 1
+        counts[_copy(src_shard / path, dst_shard / path, part_root)] += 1
 
     db = _write_build_db(root / from_name / rec.STATE / rec.BUILD / pack_build.BUILD_DIR
                          / pack_build.BUILD_DB,
@@ -329,7 +353,7 @@ def seed_shards(root, to_ref: str, from_ref: str, *, from_snapshot: str | None =
            "snapshot_id": snap.snapshot_id, "snapshot": snap.hash,
            "parts": counts, "build_db": db}
     log(f"[snapshot create] {to_name}: seeded from {from_name} {snap.snapshot_id} — "
-        f"{counts['linked']} linked, {counts['copied']} copied, "
+        f"{counts['copied']} copied, "
         f"{counts['present']} already in place; build database {db}")
     return out
 

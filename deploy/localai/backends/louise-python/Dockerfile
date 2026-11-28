@@ -41,6 +41,8 @@ for f in ("grpc_auth.py", "model_identity.py", "parent_watch.py"):
     open("/out/" + f, "wb").write(b)
     print(f, hashlib.sha256(b).hexdigest())
 PY
+# no hard links (operator, 2026-11-27): a hard-link member refuses the build
+RUN if tar -tvzf /python.tgz | grep -q '^h'; then echo "/python.tgz holds a hard-link member: refused" >&2; exit 1; fi
 RUN mkdir /out/python && tar -xzf /python.tgz -C /out/python --strip-components=1 \
  && python -m grpc_tools.protoc -I/proto --python_out=/out --grpc_python_out=/out backend.proto
 

@@ -475,6 +475,125 @@ def test_an_encoder_sister_has_her_sister_s_index_identity_and_slices(pair, card
     assert collections_mod.sister_refusal(alone, held=[alone]) is None
 
 
+def test_her_text_index_is_her_sister_s_own_read_by_path(pair, card, monkeypatch):
+    """Their index identities equal: at her creation she READS her sister's
+    own index (the static share, operator's default B): a placement naming
+    `old/index`, nothing moved, copied nor hard-linked (operator,
+    2026-11-27); her sister stays its only writer; the carry's proof reads
+    both through it."""
+    from app import text_index
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    g = root / "old" / "index" / "en"
+    g.mkdir(parents=True, exist_ok=True)
+    (g / "meta.json").write_text("{}", encoding="utf-8")
+    (g / "seg.store").write_bytes(b"the index")
+    ino = (g / "seg.store").stat().st_ino
+    monkeypatch.setattr(louise, "_index_identities", lambda root, a, b: ("id1", "id1"))
+    assert _new_enc(root) == 0
+    assert text_index.placement(root, "sis") == {"dir": "old/index", "identity": "id1", "writer": "old"}
+    assert text_index.placement(root, "old") is None and text_index.readers(root, "old") == ["sis"]
+    assert (g / "seg.store").stat().st_ino == ino, "where it lies: nothing moved or copied"
+    assert not text_index.group_dirs(root / "sis" / "index")
+    assert text_index.index_digest(root, "sis")["sha256"] == text_index.index_digest(root, "old")["sha256"]
+    assert not [f for f in root.rglob("*") if f.is_file() and not f.is_symlink() and f.stat().st_nlink > 1], \
+        "no hard link anywhere"
+
+
+def test_a_boot_between_her_make_and_her_carry_leaves_both_and_her_carry_shares(pair, card,
+                                                                                         monkeypatch):
+    """A worker boot (`settle`) between her make and her carry makes no
+    manifest for her and moves nothing of her sister's (nothing automatic at
+    boot); her carry then makes her read her sister's index."""
+    from app import text_index
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    g = root / "old" / "index" / "en"
+    g.mkdir(parents=True, exist_ok=True)
+    (g / "meta.json").write_text("{}", encoding="utf-8")
+    (g / "seg.store").write_bytes(b"the index")
+    monkeypatch.setattr(louise, "_index_identities", lambda root, a, b: ("id1", "id1"))
+    real = louise._whole_quota
+
+    def cut():
+        raise CodexError("the process is stopped here, after the make")
+    monkeypatch.setattr(louise, "_whole_quota", cut)
+    assert _new_enc(root) != 0
+    assert (root / "sis").is_dir() and not (root / "sis" / "state" / "manifest.sqlite").exists()
+    monkeypatch.setattr(text_index, "identity", lambda c: "id1")
+    monkeypatch.setattr(text_index, "content_key", lambda c: None)
+    said = []
+    out = text_index.settle(root, [_local(root, "old"), _local(root, "sis")], log=said.append)
+    assert out["served"] == [] and out["withheld"] == []
+    assert not (root / "sis" / "state" / "manifest.sqlite").exists(), "no empty manifest made for her"
+    assert text_index.placement(root, "old") is None and (g / "seg.store").read_bytes() == b"the index"
+    monkeypatch.setattr(louise, "_whole_quota", real)
+    assert _new_enc(root) == 0
+    assert text_index.placement(root, "sis")["dir"] == "old/index" and text_index.placement(root, "old") is None
+    assert (g / "seg.store").read_bytes() == b"the index"
+
+
+def test_her_creation_works_while_a_worker_runs_and_holds_her_sister_s_writer(pair, card, monkeypatch):
+    """The coordinator's call (2026-11-27): the share MOVES NOTHING and never
+    takes her sister's index writer, so `hold collection new --sister-of` —
+    the command POST /api/hold/collection/new runs — works while a worker
+    runs (its node-wide lock held) and holds her sister's tantivy writer;
+    she never takes or writes it."""
+    import fcntl
+    import os
+    import time
+    from app import api_commands, text_index
+    from app.hold import lock as lock_mod
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    g = root / "old" / "index" / "en"
+    g.mkdir(parents=True, exist_ok=True)
+    (g / "meta.json").write_text("{}", encoding="utf-8")
+    (g / "seg.store").write_bytes(b"the index")
+    lock = g / ".tantivy-writer.lock"
+    lock.write_bytes(b"")
+    before = {f.name: (f.stat().st_ino, f.stat().st_mtime_ns) for f in g.iterdir()}
+    monkeypatch.setattr(louise, "_index_identities", lambda root, a, b: ("id1", "id1"))
+    api_commands.resolve(["hold", "collection", "new"])          # routed: no Refused
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:                                            # the worker: its lock and the writer
+        wl = lock_mod.take_worker(root, "the node (worker)")
+        fd = os.open(lock, os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.write(w, b"1")
+        time.sleep(30)
+        wl.release()
+        os._exit(0)
+    try:
+        os.read(r, 1)
+        assert text_index.writer_held(root / "old" / "index") == "en"
+        assert _new_enc(root) == 0
+        assert text_index.placement(root, "sis")["dir"] == "old/index"
+        assert text_index.writer_held(root / "old" / "index") == "en", "the worker's still: never taken"
+        assert {f.name: (f.stat().st_ino, f.stat().st_mtime_ns) for f in g.iterdir()} == before, \
+            "nothing of her sister's index written"
+    finally:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+        os.close(r), os.close(w)
+
+
+def test_her_text_index_is_copied_where_the_identities_differ(pair, card, monkeypatch):
+    from app import text_index
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    g = root / "old" / "index" / "en"
+    g.mkdir(parents=True, exist_ok=True)
+    (g / "meta.json").write_text("{}", encoding="utf-8")
+    (g / "seg.store").write_bytes(b"the index")
+    monkeypatch.setattr(louise, "_index_identities", lambda root, a, b: ("id1", "id2"))
+    assert _new_enc(root) == 0
+    assert text_index.placement(root, "sis") is None
+    mine = root / "sis" / "index" / "en" / "seg.store"
+    assert mine.read_bytes() == b"the index" and mine.stat().st_ino != (g / "seg.store").stat().st_ino
+
+
 def test_a_sister_of_a_file_spelling_profile_holds_that_profile_and_acquires_nothing(pair, card, monkeypatch):
     """The older spelling (`profile`, as the node's gutenberg file had it):
     hers says the same, never `slices = []` beside it."""
@@ -593,8 +712,24 @@ def test_a_sister_s_room_counts_what_her_carry_copies(pair, card):
     _ready(root, old, card)
     full = recreate.to_copy(root, "old", "sis")
     assert full.get("lance", 0) > 0, "her sister holds vectors"
-    mine = recreate.to_copy(root, "old", "sis", linked_index=True, parts=recreate.SISTER_PARTS)
+    mine = recreate.to_copy(root, "old", "sis", index_by_path=True, parts=recreate.SISTER_PARTS)
     assert "lance" not in mine and mine["state/manifest.sqlite"] == full["state/manifest.sqlite"]
     assert set(recreate.to_copy(root, "old", "sis", parts=recreate.RECUT_SISTER_PARTS)) == {"state/manifest.sqlite"}
-    need, _ = recreate.room(root, "old", "sis", make=False, linked_index=True, parts=recreate.SISTER_PARTS)
+    need, _ = recreate.room(root, "old", "sis", make=False, index_by_path=True, parts=recreate.SISTER_PARTS)
     assert need < sum(full.values())
+
+
+@pytest.mark.parametrize("equal", [True, False])
+def test_the_dry_run_compares_the_index_identities_before_it_counts_the_room(pair, card, capsys,
+                                                                               monkeypatch, equal):
+    """Finding 8: the dry run says by path only where her index identity is
+    her sister's (as the carry compares them), a copy otherwise."""
+    root, old, _ = pair
+    _ready_nemo(root, old, card)
+    seen = []
+    monkeypatch.setattr(louise, "_planned_identities_equal",
+                        lambda *a: seen.append(a[:3]) or equal)
+    assert _new_enc(root, "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert seen and seen[0][1:3] == ("old", "sis")
+    assert ("shared with old's" in out) is equal and ("COPIED: her index identity" in out) is not equal

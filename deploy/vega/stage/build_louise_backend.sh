@@ -40,6 +40,11 @@ chmod 0755 "$P/run.sh"
 printf '{"name": "%s"}\n' "$NAME" > "$P/metadata.json"
 
 # the portable Python and the venv (relative links, as _makeVenvPortable)
+# no hard links (operator, 2026-11-27): an archive holding a hard-link
+# member is refused before anything is extracted from it
+if tar -tvzf /cache/python.tgz | grep -q '^h'; then
+  echo "/cache/python.tgz holds a hard-link member: refused (no hard links)" >&2; exit 1
+fi
 mkdir -p "$P/python"
 tar -xzf /cache/python.tgz -C "$P/python" --strip-components=1
 "$P/python/bin/python3" -m venv "$P/venv"

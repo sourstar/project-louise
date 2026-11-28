@@ -344,3 +344,25 @@ def test_a_thread_of_the_old_collection_is_not_handed_the_new_one():
         assert worker._live_collection(new) is new
     finally:
         worker._publish_collections([])
+
+
+def test_an_identity_edit_re_checks_the_placements_at_once(isolated_config, config_dir,
+                                                         quiet_discover, monkeypatch):
+    """The read of eef52262, 2: a live edit that changes a collection's text
+    index identity re-checks every placement in the same sync (the static
+    share), never at the next boot."""
+    from app import text_index
+    monkeypatch.setattr(spaces, "resolve_embed_model_hash", lambda *a: ("abc", False))
+    _write_toml(config_dir, "pm")
+    start = collections_mod.load_all()
+    cons = {c.name: db.connect(c) for c in start}
+    last_discover = {c.name: 0.0 for c in start}
+    monkeypatch.setattr(text_index, "identity", lambda c: f"{c.name}:{c.acquire_enabled}")
+    checked = []
+    monkeypatch.setattr(text_index, "settle",
+                        lambda root, cols, log=None: checked.append(sorted(c.name for c in cols)) or {})
+    result = worker._sync_collections(start, cons, last_discover)
+    assert checked == [], "no edit: nothing re-checked"
+    _write_toml(config_dir, "pm", extra='acquire_enabled = true\n')
+    worker._sync_collections(result, cons, last_discover)
+    assert checked and "pm" in checked[0]

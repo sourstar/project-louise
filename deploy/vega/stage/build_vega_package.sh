@@ -43,6 +43,11 @@ test -d "$P"
 find "$P" -mindepth 1 -maxdepth 1 ! -name run ! -name neo-cache ! -name file-digests.json -exec rm -rf {} +
 
 # the portable Python, as LocalAI's python backends carry it (libbackend.sh)
+# no hard links (operator, 2026-11-27): an archive holding a hard-link
+# member is refused before anything is extracted from it
+if tar -tvzf /cache/python.tgz | grep -q '^h'; then
+  echo "/cache/python.tgz holds a hard-link member: refused (no hard links)" >&2; exit 1
+fi
 mkdir -p "$P/python"
 tar -xzf /cache/python.tgz -C "$P/python" --strip-components=1
 "$P/python/bin/python3" -m venv "$P/venv"

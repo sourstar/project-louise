@@ -23,7 +23,6 @@ the worker does the rest at its next beat.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import threading
 import time
@@ -181,16 +180,17 @@ def _lt():
 
 def _place(share_root: Path, snapshot_id: str, member: str, rel_path: str,
            target: Path) -> Path:
-    """`<state>/share/<snapshot>/<member>/<rel_path>`, a hard link to the
-    SHARD's file (a symbolic link when the two cannot share one)."""
+    """`<state>/share/<snapshot>/<member>/<rel_path>`, a SYMBOLIC link to
+    the SHARD's file: the seed reads the file where it lies, by its path,
+    and removing the share tree removes only the links (never a hard link:
+    operator, 2026-11-27, app/file_copy.py). libtorrent opens the path, so
+    it reads through the link; a file the SHARD no longer holds is a
+    dangling link, which `publish`'s `is_file` check refuses."""
     link = share_root / snapshot_id / member / rel_path
     link.parent.mkdir(parents=True, exist_ok=True)
     if link.exists() or link.is_symlink():
         link.unlink()
-    try:
-        os.link(target, link)
-    except OSError:
-        link.symlink_to(target.resolve())
+    link.symlink_to(Path(target).resolve())
     return share_root / snapshot_id / member
 
 

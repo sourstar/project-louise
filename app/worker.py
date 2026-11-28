@@ -958,8 +958,8 @@ def _fts_copy_round(con, collection) -> bool:
     round that copied nothing is not progress, and the thread goes on to
     rdf and embed in the same round."""
     role = text_index.role(collection)
-    if not role.reader:
-        return False
+    if not role.reader or role.withheld:
+        return False                # withheld: her placement no longer holds (the boot said why)
     rows, walked = text_index.pending_rows(con, collection, fts_version=config.FTS_VERSION,
                                            entity_version=config.ENTITY_VERSION)
     if not rows:
@@ -5621,6 +5621,24 @@ _paused = threading.Event()          # set = the mode fetches nothing: paused, s
 _acquire_only = threading.Event()
 
 
+def _looks_held() -> bool:
+    """The node is PAUSED (`node pause`, or seed-only: nothing fetched,
+    parsed or embedded): no run check's look starts, and one running stops at
+    its gate's next slice as a paused collection's does (app/run_check.py
+    `hold_looks_while`). NOT download only: that is QUERY MODE's run mode
+    (app/node_mode.py `QUERY_RUN`), where a run a question hears must still be
+    gated, or the collection's search refuses its answers until embed mode."""
+    return _paused.is_set()
+
+
+def _hold_looks_to_the_mode() -> None:
+    from . import run_check
+    run_check.hold_looks_while(_looks_held)
+
+
+_hold_looks_to_the_mode()
+
+
 class _ParseHeld:
     """`is_set()` while the node's mode runs no parsing. A STOP for a scan,
     beside SIGTERM and the collection's removal: a scan already running when
@@ -6266,20 +6284,30 @@ def _join_pipeline_threads(timeout: float = 90.0) -> None:
     """Shutdown: each thread finishes its current document and exits (the
     stop event is checked between documents). The deadline is shared, and
     stragglers are daemon threads — a hung step cannot block SIGTERM's
-    exit-0 contract past the container's grace period."""
+    exit-0 contract past the container's grace period. ONE JOIN THAT RAISES
+    NEVER SKIPS THE OTHERS (`_joined`): what it skipped would be abandoned
+    mid-unit."""
     deadline = time.time() + timeout
+
+    def left() -> float:
+        return max(0.0, deadline - time.time())
     for thread, _ in list(_pipeline_threads.values()):
-        thread.join(timeout=max(0.0, deadline - time.time()))
+        _joined(thread.join, left)
     # the embed producers: what is in flight finishes (a long document stops
     # at its next slice) and is committed before the process exits
     for thread, _ in list(_embed_producers.values()):
-        thread.join(timeout=max(0.0, deadline - time.time()))
+        _joined(thread.join, left)
+    # a run check's look runs on a thread of its own (app/run_check.py `_Look`):
+    # its gate asks the stop between slices and ends at the next one, keeping
+    # nothing, its twin let go and its claim released
+    from . import run_check
+    _joined(run_check.join_gates, left)
     # scans stop at their next ref and commit the batch so far; give them
     # the same deadline so that commit lands before the process exits
     with _scan_lock:
         scans = list(_scan_threads.values())
     for thread in scans:
-        thread.join(timeout=max(0.0, deadline - time.time()))
+        _joined(thread.join, left)
     # Corpus and archive fetches too. They were never joined: a SIGTERM
     # abandoned them as daemon threads mid-pass — a listing unstoppable
     # anyway, a claim row left behind for the next boot to wait out. Their
@@ -6290,7 +6318,16 @@ def _join_pipeline_threads(timeout: float = 90.0) -> None:
         fetches = list(_acquire_threads.values())
     fetches += list(_archive_threads.values())
     for thread in fetches:
-        thread.join(timeout=max(0.0, deadline - time.time()))
+        _joined(thread.join, left)
+
+
+def _joined(join, left) -> None:
+    """One join of the shutdown, within what is left of its deadline; what it
+    raises is said, and the shutdown goes on to the next."""
+    try:
+        join(left())
+    except Exception as e:   # noqa: BLE001 — the next join still runs
+        print(f"[warn:worker] a join at shutdown raised {type(e).__name__}: {e}", flush=True)
 
 
 def _effective_embed_mode(collection, con=None) -> str:
@@ -6558,6 +6595,8 @@ def _sync_collections(all_collections, cons, last_discover, pipeline: bool = Fal
             _release_embedder(kept, cons[kept.name], "the switch")
         if prev.acquire_enabled != kept.acquire_enabled:
             _apply_acquire_switch(cons[kept.name], prev, kept)     # a fetch in flight ends at its unit
+        if prev != kept:
+            _recheck_shares(prev, kept, current)
         if (prev.acquire_enabled, prev.license_ack, prev.profile,
                 prev.extras, prev.peer_source, prev.snapshot) != \
                 (kept.acquire_enabled, kept.license_ack, kept.profile,
@@ -7986,15 +8025,12 @@ def run_forever():
             print(f"NOT SERVED: {c.name}: {reason}", file=sys.stderr)
         all_collections = [c for c in all_collections if c.name not in names]
 
-    # SISTERS SHARE ONE TEXT INDEX (app/text_index.py): groups are formed,
-    # joined and left HERE, before any stage and before this process opens an
-    # index — the one moment no thread of this worker holds one open
+    # A SISTER READING HER SISTER'S TEXT INDEX (app/text_index.py, the static
+    # share): each placement CHECKED here, before any stage — nothing moved,
+    # copied or reset; one that no longer holds is withheld, said
     try:
-        settled = text_index.settle(collections_mod.louise_root() / "collections", all_collections,
-                                    log=lambda m: print(f"[info:text-index] {m}", flush=True))
-        if settled["freed"]:
-            print(f"[info:text-index] {settled['freed'] / 2**30:.2f} GiB of duplicate text "
-                  f"indexes freed", flush=True)
+        text_index.settle(collections_mod.louise_root() / "collections", all_collections,
+                          log=lambda m: print(f"[info:text-index] {m}", flush=True))
     except Exception as e:   # noqa: BLE001 — every collection keeps the index it had
         print(f"[warn:text-index] not settled ({type(e).__name__}: {e}); every collection "
               f"keeps the index it had", flush=True)
@@ -8421,6 +8457,21 @@ def _start_oom_watch() -> None:
 
 
 # ---- forget (07 §7.3) -----------------------------------------------------
+def _recheck_shares(prev, kept, current) -> None:
+    """A live edit (profile, slices, run) that changes a collection's INDEX
+    IDENTITY re-checks every placement at once (`text_index.settle`, which
+    moves nothing): a sister who no longer matches has her text leg withheld
+    now, said, not at the next boot (the read of eef52262, 2)."""
+    try:
+        if text_index.identity(prev) == text_index.identity(kept):
+            return
+        text_index.settle(text_index._root_of(kept) or collections_mod.louise_root() / "collections",
+                          current, log=lambda m: print(f"[info:text-index] {m}", flush=True))
+    except Exception as e:   # noqa: BLE001 — said; the next round or boot checks again
+        print(f"[warn:text-index] {kept.name}: placements not re-checked ({type(e).__name__}: {e})",
+              flush=True)
+
+
 def retire_collection(name: str, timeout: float = 60.0) -> None:
     """`hold collection forget`, run by this worker's job thread (app/jobs.py,
     the DEPOSIT kind's op "forget"): the collection's threads told to stop
@@ -8444,15 +8495,46 @@ def retire_collection(name: str, timeout: float = 60.0) -> None:
     with _acquire_lock:
         fetch = _acquire_threads.get(name)
     threads += [t for t in (scan, fetch) if t is not None]
+    # ITS RUN CHECK'S LOOK TOO (app/run_check.py `retire`): its stop was the
+    # worker's alone, so a pause left its gate measuring for up to the rest of
+    # the pass — the twin held, every other gate on it deferred — and its own
+    # connection made a forgotten collection's directory again. Retired, its
+    # gate stops at its next slice, keeps nothing and writes nothing; waited
+    # for here, beside the others, before the lock goes
+    from . import run_check
+    bound = max(0.0, deadline - time.time())
+    try:
+        if not run_check.retire(name, bound):
+            # in a slice longer than the bound: it stops at the slice's end,
+            # its next request held to what is left of the bound, and keeps,
+            # writes and leaves nothing (app/run_check.py `retire`)
+            print(f"[warn:worker] {name}: its run check's look (thread run-check-{name}) still runs "
+                  f"after the retirement's bound of {bound:.1f} s; it stops at its gate's next slice "
+                  f"and keeps nothing", flush=True)
+    except Exception as e:   # noqa: BLE001 — the retirement goes on
+        print(f"[warn:worker] {name}: its run check's look could not be retired: "
+              f"{type(e).__name__}: {e}", flush=True)
     for thread in threads:
         if thread is not threading.current_thread():
             thread.join(timeout=max(0.0, deadline - time.time()))
     # its catalog writer too, held by path: the directory goes, and a
     # collection made again under this name would inherit a writer on
-    # deleted files (`catalog.release_under`)
+    # deleted files (`catalog.release_under`). Its text index's writers too,
+    # where a sister reads that index (`text_index.readers`): a forget then
+    # renames the folder to her, and a routed forget runs in a child process,
+    # so only THIS process can let go of the writer (and its tantivy lock)
+    # it holds there — only there: elsewhere a pause waits on no merge
     try:
-        from . import catalog
-        catalog.release_under(collections_mod.louise_root() / "collections" / name)
+        from . import catalog, text_index
+        held_at = collections_mod.louise_root() / "collections"
+        # any placement naming this index, held or not (a few dozen folders):
+        # letting go of a writer no one then needs costs nothing
+        rel = f"{name}/index"
+        if any((text_index.placement(held_at, d.name) or {}).get("dir") == rel
+               for d in (held_at.iterdir() if held_at.is_dir() else ())
+               if d.is_dir() and not d.name.startswith(".")):
+            fts.release_under(held_at / name / "index")
+        catalog.release_under(held_at / name)
     except Exception:   # noqa: BLE001 — the forget goes on; the next start holds nothing
         pass
     _gone.pop(name, None)
@@ -8490,6 +8572,10 @@ def _hold_locks(collections, paused: set[str], cons=None) -> list:
         try:
             _locks[name] = lock_mod.take(Path(c.manifest_path).parent, name,
                                          "the node (worker)")
+            # the collection runs again: its run check's looks may start
+            # (app/run_check.py `retire`'s tombstone)
+            from . import run_check
+            run_check.unretire(name)
             # a fresh event for what starts now; one still unwinding keeps its own,
             # set — cleared, a resume before its next poll read the retirement the
             # pause caused instead, and no re-arm (D7 again: the sixth read, run).

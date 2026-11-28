@@ -673,6 +673,37 @@ PRODUCER FOR WHAT YOU WAIT FOR, NOT FOR THE JOB IT USUALLY COMES WITH — and
 when you write a wait's request, time the thing requested against the
 thing needed.
 
+**28. A gate measured inside the look of whoever looked first.** 2026-11-27,
+gutenberg after its refit: one symmetric encoder (vega-qwen3-embedding-4b
+serves both sides), one new run, one twin `…--gate` for both. The gate (its
+document side 1,984 s in the fade pass) ran inside `embed_allowed` on the
+thread that looked first and held it throughout. The other caller of the
+same collection got past the model's look lock through `_twin_busy`, which
+was meant for the OTHER collections on the shared load. Every FAIL_TTL_S it
+probed the model beside the measurement, and both of its sides found the twin
+claimed by their own sibling: "another collection's gate", logged as error
+"embedding PAUSED". SLOW_LOOK_S cut nothing; it only sorted that caller's
+slow look into the gate's backoff. Paused, the collection let go of the twin
+within 90 s, and `hold embedder check` gated both sides in one process at once.
+→ `run_check._Look`: ONE LOOK OF A COLLECTION AT A TIME, on its own thread,
+which is what the command does: one twin claim, the document side then the
+query side, bounded only by the gate's `stop`. Its caller waits GATE_WAIT_S
+(20 s, below SLOW_LOOK_S), and a later caller is answered beside it with no
+probe. The look keeps its verdict, a deferral is said at info as a wait, and
+`join_gates` is the worker's stop. A look belongs to its collection: a pause,
+forget or rename retires it (`run_check.retire`, from `retire_collection`). It
+then stops at the gate's next slice and writes nothing, opening no manifest
+that is not there (`mode=rw`). `runs.keep` refuses it for each side. The
+retirement leaves a tombstone, so a caller that read "not paused" before the
+pause starts no look after it; `_hold_locks` clears the tombstone when it takes
+the lock again. The node's own pause (`node pause`, seed-only, download only)
+holds every look the same way. On fakes (tests/test_gate_pass.py,
+2 × 1,984 s, a settle beat each 60 s), before → after: 15 → 0 sides
+deferred behind their sibling, 29 → 0 probes beside the measurement, 1 → 0
+error events, 23 → 1 twin claim attempts. The rule: A LOOK THAT CAN RUN FOR
+HALF AN HOUR IS NOT A LOOK — run it beside its callers, once per key, and
+let a lock's exception for OTHERS never let the same key in twice.
+
 ## 6. Before you change the scheduler — the checklist
 
 1. **Read the worker log as a time series first.** It is the first

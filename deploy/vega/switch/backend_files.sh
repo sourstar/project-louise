@@ -43,5 +43,5 @@ bf_restore() {
 }
 
 bf_copy() {
-  tar -C "$1" --no-acls --no-xattrs -cf - . | tar -C "$2" --no-acls --no-xattrs --no-same-permissions -xf -
+  tar -C "$1" --no-acls --no-xattrs --hard-dereference -cf - . | tar -C "$2" --no-acls --no-xattrs --no-same-permissions -xf -
 }

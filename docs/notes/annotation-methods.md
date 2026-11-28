@@ -20,7 +20,7 @@ same collection, signed with the node key. Nobody uploads anything.
 |---|---|
 | Due check, each keeper pass (≤ 300 s) | The target's newest snapshot (a directory listing) against the claims' pin: `state/method.json`, or else the first claim's `target_snapshot`. One update a period (09 §9.4): if this period's snapshot is already written, it waits for the next and says so once. |
 | Method, in a child process | Writes the whole claim set into a workspace the worker holds (`.annotations-method.<name>`). |
-| Update, in a second child | `unheld="drop"`: a claim whose end the target's snapshot does not hold yet is set aside and named, not refused. The method reads the live manifest, which runs ahead of the snapshot. The claims file is hard-linked into place, not copied (RULE 1; wikipedia's is 4.2 GB). |
+| Update, in a second child | `unheld="drop"`: a claim whose end the target's snapshot does not hold yet is set aside and named, not refused. The method reads the live manifest, which runs ahead of the snapshot. The claims file is moved into place, not copied (RULE 1; wikipedia's is 4.2 GB; never hard-linked since 2026-11-27, app/file_copy.py). |
 | Marker | `state/method.json`: method, snapshot, `against`, counts. |
 
 Two methods exist. **`wikipedia-versions`** reads the wikipedia collection's manifest and page_props, which makes it a

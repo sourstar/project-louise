@@ -618,7 +618,7 @@ def finish(root: Path, name: str, method_name: str, claims: Path, *, key=None, n
     from . import annotations as ann
     method = get(method_name)
     got = ann.update(Path(root), name, claims=Path(claims), key=key, now=now, log=log, clock=clock,
-                     dry_run=dry_run, unheld="drop", private=True, guard=guard,
+                     dry_run=dry_run, unheld="drop", hand_over=True, guard=guard,
                      against=[tuple(a) for a in against] if against else None,
                      since=None if since is None else dict(since))
     out = got.to_dict()
