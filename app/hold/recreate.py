@@ -80,6 +80,45 @@ def interim_name(name: str) -> str:
 DISPLAY_KEYS = ("title",)
 
 
+#: what a re-creation (case F) records of its predecessor, in its own state:
+#: the family link app/rage/family.py reads (operator, 2026-11-28: an
+#: annotation "applies to all sisters and daughters")
+PREDECESSOR_FILE = "recreated-from.json"
+
+
+def record_predecessor(root: Path, name: str, predecessor_id: str) -> None:
+    """Case F's FAMILY LINK. A re-creation is a new collection by the format:
+    it may change what a sister may not (its parser, its record line: EUR-Lex
+    parser 5 → 6, 2026-11-28; "a sister keeps her sister's parser", 09 §9.3,
+    codex._validate_against_predecessor), and it is no daughter (RULE 1: it
+    is re-created INSTEAD of continued). So its Codex names no lineage, and
+    this local record of the collection it re-creates is what links the two
+    as one family. Written once at the make; idempotent.
+
+    STANDARD NOT ADOPTED, written down: a published lineage for a
+    re-creation — a fourth Codex relation, or `replaces` without a defect —
+    is what a peer reading another peer's family would need; it pays once a
+    re-created collection is published to peers (none today, operator:
+    "there are no other peers")."""
+    import json
+    p = Path(root) / name / "state" / PREDECESSOR_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps({"from": predecessor_id}, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def predecessor_of(state_dir: Path) -> str | None:
+    """The collection_id this collection re-creates (`record_predecessor`), or None."""
+    import json
+    try:
+        got = json.loads((Path(state_dir) / PREDECESSOR_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    v = got.get("from") if isinstance(got, dict) else None
+    return v if isinstance(v, str) and v else None
+
+
 def predecessor_display(root: Path, name: str) -> dict[str, str]:
     """THE PREDECESSOR'S DISPLAY KEYS, for a collection created under the
     interim name of a re-creation (`<pred>.next`) while `<pred>` is held: its

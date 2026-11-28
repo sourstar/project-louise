@@ -10,7 +10,10 @@ direction and at any depth, by
     `derived_from` (a sister's sister), `replaces.codex` (a corrective
     sister's predecessor);
   * a records carry (`carry.records_twin_of`): the collection whose records
-    this one holds byte for byte, by a carry this peer proved.
+    this one holds byte for byte, by a carry this peer proved;
+  * a re-creation (case F, `recreate.predecessor_of`): the collection it
+    re-creates, recorded beside it, since its Codex may change what a
+    sister's may not (the parser) and names no lineage.
 
 Ids the node no longer holds — a mother retired, the Codex a refit replaced —
 stay links: an annotations collection may name one, and its sisters are
@@ -55,6 +58,12 @@ def _links(root: Path, held: Iterable) -> list[tuple[str, str]]:
         twin = carry.records_twin_of(Path(root) / c.name / "state")
         if twin:
             edges.append((cid, twin))
+        # a re-creation's predecessor (case F, app/hold/recreate.py): no lineage
+        # in its Codex — it may change the parser — so recorded beside it
+        from app.hold import recreate
+        was = recreate.predecessor_of(Path(root) / c.name / "state")
+        if was:
+            edges.append((cid, was))
     return edges
 
 

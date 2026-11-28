@@ -40,6 +40,29 @@ def test_a_records_carry_is_a_link(tmp_path):
     assert set(family.family(tmp_path, "N", held)) == {"N", "G"}
 
 
+def test_a_re_creation_is_a_link_though_its_codex_names_no_lineage(tmp_path):
+    """Case F may change the parser (EUR-Lex 5 → 6), which a sister may not:
+    its Codex names no lineage, and the predecessor it recorded links them."""
+    from app.hold import recreate
+    recreate.record_predecessor(tmp_path, "eurlex", "OLD")
+    recreate.record_predecessor(tmp_path, "eurlex", "OLD")          # idempotent
+    held = [C("eurlex", "NEW"), C("eurlex-sister", "S", derived_from="NEW")]
+    assert set(family.family(tmp_path, "OLD", held)) == {"OLD", "NEW", "S"}, \
+        "an annotation of the predecessor reaches the re-creation and her sisters"
+    assert "NEW" in ask_ann.answers_for(tmp_path, "eurlex-sister", "S", held)
+
+
+def test_a_missing_or_unreadable_record_links_nothing(tmp_path):
+    from app.hold import recreate
+    state = tmp_path / "c" / "state"
+    assert recreate.predecessor_of(state) is None
+    state.mkdir(parents=True)
+    for bad in ("", "[]", '{"from": ""}', '{"from": 7}', "{not json"):
+        (state / recreate.PREDECESSOR_FILE).write_text(bad, encoding="utf-8")
+        assert recreate.predecessor_of(state) is None, bad
+    assert family.family(tmp_path, "C", [C("c", "C")]) == ("C",)
+
+
 def test_an_annotation_about_one_relative_applies_to_every_one(tmp_path):
     """Annotations target the mother; the daughter of her sister answers for it."""
     held = [C("mother", "M"), C("sister", "S", derived_from="M"), C("niece", "N", continues="S")]
