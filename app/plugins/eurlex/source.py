@@ -313,6 +313,9 @@ ISSUES = {
                     "no text and in no alternative (operator, 2026-11-26)",
     "item-not-its-form": "an item the origin lists under a manifestation is not of that form (a TIFF "
                          "page image declared application/pdf): held in the unit, not read as that form",
+    "files-not-their-names": "files of the unit hold another file's or act's bytes (two Formex items in "
+                             "each other's place): the record is kept as held, the unit marked degraded, "
+                             "and asked again only when the origin shows a change (operator, 2026-11-28)",
     "title-only": "the act's source holds no text but its title (an empty PREAMBLE and ENACTING.TERMS, no "
                   "annex): the record is held with its title and has no chunk",
     "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
@@ -698,6 +701,20 @@ def _say_once(message: str) -> None:
     if key not in _SAID:
         _SAID.add(key)
         print(message, flush=True)
+
+
+def _not_their_names(files: dict, celex: str) -> list[str]:
+    """`formex.not_its_name` on the unit's own bytes (their heads): [] where
+    the unit holds no Formex wrapper of this act."""
+    if not any(formex.is_wrapper(n) for n in files):
+        return []
+    try:
+        wname = formex.own_wrapper(files, celex, files.__getitem__)
+        wrapper = formex._parse(files[wname], wname)
+    except (KeyError, formex.FormexError):
+        return []
+    return formex.not_its_name({n: b[:formex._HEAD_BYTES] for n, b in files.items()
+                                if isinstance(b, (bytes, bytearray))}, wrapper, wname)
 
 
 def _formex_title_only(view: dict, act) -> bool:
@@ -1317,6 +1334,11 @@ class EurlexSource:
         # offered in a different format or there is a reference to the image
         # in the text, both work, just signal when an image has no alternative
         # form and no reference in the text"): said, never refused
+        misnamed = _not_their_names(files, celex)
+        if misnamed:
+            # DEGRADED, SAID (the operator's rule, 2026-11-28): the unit's files
+            # hold another act's bytes; the record is kept as the origin gave it
+            found.append(Issue("files-not-their-names", "; ".join(misnamed)[:300]))
         orphans = _orphan_images(view, form, note)
         if orphans:
             found.append(Issue("orphan-image", f"{len(orphans)} image(s) neither placed in the text nor offered "

@@ -761,3 +761,21 @@ def test_a_held_unit_judged_not_whole_is_fetched_once_and_leaves_the_asked_first
     monkeypatch.setattr(cellar.TreeUnits, "_bulk_of", lambda self, *a: (None, None))
     cellar.TreeUnits().fetch(SimpleNamespace(url="https://cellar.test"), f, corpus / rel)
     assert eurlex_dump.incomplete_due(corpus, {"it"}) == [], "fetched once and marked: no longer due"
+
+
+
+def test_the_state_says_why_a_held_unit_is_not_whole(tmp_path, serial, monkeypatch):  # noqa: F811
+    """Architecture, 2026-11-28: `lacks: []` meant nothing missing, a tree
+    unreadable, or files another act's bytes. The state now says which."""
+    import json
+    from tests.test_eurlex_package import PKG, _package
+    corpus, unit = _reform_corpus(tmp_path)
+    (unit / PKG).write_bytes(_package())                          # nothing missing
+    rec = json.loads((corpus / eurlex_dump.INCOMPLETE).read_text())
+    rec["it"][FORMEX[0]] = {"held": [0, 0, 0], "in_force": "true", "lacks": [], "reform": True, "tried": None}
+    (corpus / eurlex_dump.INCOMPLETE).write_text(json.dumps(rec))
+    monkeypatch.setattr(eurlex_dump, "held_not_its_name", lambda u, c: ["in each other's place: a.xml, b.xml"])
+    eurlex_dump.incomplete_due(corpus, {"it"})
+    entry = eurlex_dump.incomplete(corpus)["it"][FORMEX[0]]
+    assert entry["whole"] is False and entry["why"].startswith("not its name: in each other's place")
+    assert "a.xml" in entry["why"] and entry["lacks"] == [], "`lacks: []` now means only: nothing missing"
