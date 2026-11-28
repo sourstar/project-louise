@@ -97,6 +97,13 @@ const check = (ok, what, d) => { console.log((ok ? 'PASS ' : 'FAIL ') + what + (
   check(span >= 2500, '6. muted while the sentence that names it plays (3 s)', { span, samples: named.mute.length });
   const inside = named.heard.filter(t => named.mute.length && t > named.mute[0] + 100 && t < named.mute[named.mute.length - 1]);
   check(inside.length === 0, '6. no utterance heard while muted', { inside, heard: named.heard.length });
+  // a reading stopped while it says the name leaves no tail of deafness
+  await p.evaluate(() => { louiseVoice.asking(); document.getElementById('answer').textContent = 'Louis Philippe left.';
+                           louiseVoice.answerReady('en'); document.getElementById('speak').click(); });
+  await p.waitForTimeout(1500);
+  const cut = await p.evaluate(async () => { louiseVoice.asking(); await new Promise(ok => setTimeout(ok, 150));
+                                             return louiseVoice.handsFree.wake().muted; });
+  check(cut === false, '6. a reading stopped mid-name: not deaf after it', cut);
   const plain = await readAndWatch('King Louis abdicated in eighteen forty eight, and left for England.');
   check(plain.mute.length === 0, '6. a sentence without the name: never muted', plain.mute.length);
 
