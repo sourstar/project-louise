@@ -1044,8 +1044,11 @@ def build_chunk(mtd_paths: tuple[str, ...], uuids: list[str], langs: list[tuple[
                         c["dump-not-its-name"] += 1
                         record(lang, celex, note, at is not None, at, held_note)
                         continue
-                    if any(n not in view for n in formex.gaps(
-                            view, formex._parse(view[text_wrapper], text_wrapper), text_wrapper)):
+                    # as the record reads it (source.unit_gaps): a name the
+                    # wrapper wants, held under its doubled name, is no gap
+                    _w = formex._parse(view[text_wrapper], text_wrapper)
+                    _read, _al = formex.doubled_names(view, [*formex.main_names(_w), *formex.annex_names(_w)])
+                    if any(why == formex.ABSENT for why, _r in formex.gaps(_read, _w, text_wrapper).values()):
                         # LANDED, AND THE API'S (review B4): the wrapper names a
                         # file the dump does not hold. The record states it
                         # absent; the unit is asked once, then degraded
