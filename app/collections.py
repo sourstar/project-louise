@@ -897,61 +897,89 @@ def seen(collections) -> list:
     return [c for c in collections if not hidden_here(c)]
 
 
-def _held_files() -> list:
-    held: list = []
-    for load in (lambda: load_all(skip_unreadable=True)[0], load_annotations, load_locked):
+#: path -> ((mtime_ns, size), name if its file says hidden = true else None)
+_HIDDEN_FILES: dict[Path, tuple[tuple[int, int], str | None]] = {}
+
+
+def _hidden_in_files() -> set[str]:
+    """Every collection whose FILE says `hidden = true`, read from the files
+    themselves as `load_locked` pre-reads `locked` — so a file the loader
+    refuses (no encoder, vectors not reachable, an annotations collection
+    mid-refit) is hidden as well; the routes that read the collections on
+    disk still find those. A file that does not read is taken as hidden:
+    what cannot be judged is shown less, never more. Each file is read again
+    only when it changed (its size and mtime)."""
+    cfg_dir = collections_dir()
+    if not cfg_dir.is_dir():
+        return set()
+    out: set[str] = set()
+    for p in sorted(cfg_dir.glob("*.toml")):
         try:
-            held.extend(load())
-        except Exception:   # noqa: BLE001 — a file that does not load names nothing
-            pass
-    return held
+            st = p.stat()
+            key = (st.st_mtime_ns, st.st_size)
+            got = _HIDDEN_FILES.get(p)
+            if got is None or got[0] != key:
+                with open(p, "rb") as f:
+                    raw = tomllib.load(f)
+                name = raw.get("name") if isinstance(raw.get("name"), str) else p.stem
+                got = (key, name if raw.get("hidden") is True else None)
+                _HIDDEN_FILES[p] = got
+        except Exception:   # noqa: BLE001 — unreadable: hidden (fail-closed)
+            got = ((0, 0), p.stem)
+        if got[1]:
+            out.add(got[1])
+    return out
 
 
 def hidden_names_here() -> set[str]:
     """The local names a reader route must not show to the viewer being
-    answered: every held collection whose file says `hidden` — served,
-    annotations or locked."""
+    answered: every collection whose file says `hidden` — served,
+    annotations, locked or refused by the loader."""
     from . import viewing
     if viewing.sees_all(viewing.current()):
         return set()
-    return {c.name for c in _held_files() if getattr(c, "hidden", False)}
+    return _hidden_in_files()
 
 
-def closed_names_here() -> set[str]:
+def closed_names_here(held=None) -> set[str]:
     """What an OPEN reader route that reads the collections on disk
     (`hold.collection.resolve`, `list_named`: the graph walk, facets, figures)
-    must not show the viewer being answered: the hidden ones (07 §7.8) and,
-    to anyone but the operator, a deposit collection (07 §7.4: never an open
-    route's, as `load_public` says)."""
+    must not show the viewer being answered: to anyone but an admin and the
+    operator, the hidden ones (07 §7.8) and a deposit collection (07 §7.4:
+    never an open route's; searched with the deposit or the admin token).
+    `held`: the `(name, codex)` listing being filtered, where the caller has it."""
     from . import viewing
-    if viewing.current() is viewing.OPERATOR:
+    if viewing.sees_all(viewing.current()):
         return set()
-    held = _held_files()
-    shut = {c.name for c in held if is_private(c)}
-    if not viewing.sees_all(viewing.current()):
-        shut |= {c.name for c in held if getattr(c, "hidden", False)}
-    return shut
+    if held is None:
+        from .hold import collection as col
+        try:
+            held = col.list_named(louise_root() / "collections")
+        except Exception:   # noqa: BLE001 — no listing: the hidden ones alone
+            held = []
+    deposit = {n for n, c in held if getattr(c, "plugin", None) == "deposit"}
+    return _hidden_in_files() | deposit
 
 
 def resolve_seen(root: Path, ref: str):
     """`hold.collection.resolve` (07 §7.7's four forms) for an open reader
-    route: a collection the viewer being answered may not see
-    (`closed_names_here`) is the one nothing holds — the same answer, so the
-    route never says it exists."""
+    route, over the collections the viewer being answered may see
+    (`closed_names_here`) — so one they may not see is never resolved, never
+    named in an ambiguity, and refused with the very words a name nothing
+    holds is refused with."""
     from .hold import collection as col
-    from .hold.codex import CodexError
-    name, codex = col.resolve(root, ref)
-    if name in closed_names_here():
-        raise CodexError(f"no collection {ref!r} here")
-    return name, codex
+    held = col.list_named(root)
+    shut = closed_names_here(held)
+    return col.resolve_in(root, [(n, c) for n, c in held if n not in shut], ref)
 
 
 def listed_seen(root: Path) -> list:
     """`hold.collection.list_named`, without what the viewer being answered
     may not see (`closed_names_here`)."""
     from .hold import collection as col
-    shut = closed_names_here()
-    return [(n, c) for n, c in col.list_named(root) if n not in shut]
+    held = col.list_named(root)
+    shut = closed_names_here(held)
+    return [(n, c) for n, c in held if n not in shut]
 
 
 def locked_says(name: str) -> str:

@@ -886,7 +886,9 @@ def _ask_annotations() -> list[dict]:
     # what the Ask page's reader may see (07 §7.8 `hidden`, 07 §7.4): its
     # chips name neither a hidden annotations collection nor a hidden or
     # deposit collection it applies to
-    served = collections_mod.load_public()
+    from . import viewing
+    served = collections_mod.load_all() if viewing.sees_all(viewing.current()) \
+        else collections_mod.load_public()
     relatives = family.held_collections()
     out = []
     for a in collections_mod.seen(collections_mod.load_annotations()):

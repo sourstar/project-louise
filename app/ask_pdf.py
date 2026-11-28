@@ -769,9 +769,11 @@ def keep(question: str, answer: str, hits: list[dict], *, answer_lang: str | Non
     """The id a PDF link names for this answer."""
     pid = secrets.token_urlsafe(16)
     with _kept_lock:
+        from app import viewing
         _kept[pid] = (time.time() if now is None else now,
                       {"question": question, "answer": answer, "hits": list(hits or []),
-                       "answer_lang": answer_lang, "collections": list(collections or [])})
+                       "answer_lang": answer_lang, "collections": list(collections or [])},
+                      viewing.sees_all(viewing.current()))
         while len(_kept) > KEEP_MAX:
             _kept.popitem(last=False)
     return pid
@@ -787,4 +789,9 @@ def kept(pid: str, now: float | None = None) -> dict | None:
         if (time.time() if now is None else now) - got[0] > KEEP_S:
             del _kept[pid]
             return None
-        return got[1]
+    # an answer kept for an admin may cite what this reader may not see
+    # (07 §7.8 `hidden`): never theirs while anything is hidden from them
+    from app import collections as collections_mod, viewing
+    if got[2] and not viewing.sees_all(viewing.current()) and collections_mod.hidden_names_here():
+        return None
+    return got[1]

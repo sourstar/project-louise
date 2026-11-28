@@ -82,6 +82,10 @@ def _deposit_collection(name: str, *, locked_ok: bool = False):
     c = collections_mod.by_name(name)
     if c is None and locked_ok:
         c = collections_mod.locked_by_name(name)
+    # one hidden from this caller (07 §7.8 `hidden`: the deposit token is not
+    # an admin) is the name nothing holds — its own deposit collections aside
+    if name in collections_mod.hidden_names_here() and not (c is not None and collections_mod.is_private(c)):
+        raise LocalAgiError(404, "NOT_FOUND", f"no collection {name!r}")
     if c is None and collections_mod.locked_by_name(name) is not None:
         raise LocalAgiError(409, "LOCKED", f"{name} is locked: kept as it is, nothing is deposited "
                                            f"into it; an entry can still be deleted (07 §7.8)")

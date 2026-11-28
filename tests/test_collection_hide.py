@@ -179,20 +179,21 @@ def test_named_it_is_the_name_nothing_holds(node):
 
 def test_the_routes_on_disk_shut_it_and_a_deposit_one(node, monkeypatch):
     """The graph walk, facets and figures read the collections on disk: a
-    hidden one is shut to a reader, and a deposit one to anyone but the
-    operator (07 §7.4, as `load_public`)."""
+    hidden one is shut to a reader, and a deposit one too (07 §7.4, as
+    `load_public`); an admin and the operator see both."""
     root, _ = node
-    real = collections_mod.is_private
-    monkeypatch.setattr(collections_mod, "is_private", lambda c: c.name == "gutenberg" or real(c))
+    real = col.list_named(root / "collections")
+    as_deposit = [(n, types.SimpleNamespace(plugin="deposit") if n == "gutenberg" else c) for n, c in real]
     with viewing.as_viewer(USER):
-        assert collections_mod.closed_names_here() == {"gutenberg", "secret"}
-        assert collections_mod.listed_seen(root / "collections") == []
-        with pytest.raises(CodexError, match="no collection 'secret' here"):
+        assert collections_mod.closed_names_here(as_deposit) == {"gutenberg", "secret"}
+        assert collections_mod.listed_seen(root / "collections") == \
+            [(n, c) for n, c in real if n == "gutenberg"]
+        with pytest.raises(CodexError, match="no collection 'secret'"):
             collections_mod.resolve_seen(root / "collections", "secret")
     with viewing.as_viewer(ADMIN):
-        assert collections_mod.closed_names_here() == {"gutenberg"}
-        assert [n for n, _ in collections_mod.listed_seen(root / "collections")] == ["secret"]
-    assert collections_mod.closed_names_here() == set(), "the operator sees all on disk"
+        assert collections_mod.closed_names_here(as_deposit) == set()
+        assert [n for n, _ in collections_mod.listed_seen(root / "collections")] == ["gutenberg", "secret"]
+    assert collections_mod.closed_names_here(as_deposit) == set(), "the operator sees all on disk"
 
 
 def test_the_default_collection_of_the_api_is_one_the_reader_may_see(node, monkeypatch):
@@ -215,7 +216,7 @@ def test_hidden_annotations_are_never_consulted_for_a_reader(monkeypatch):
     held = [_ann("works"), _ann("admin-notes", hidden=True)]
     monkeypatch.setattr(collections_mod, "load_annotations", lambda: held)
     monkeypatch.setattr(collections_mod, "annotations_and_refusals", lambda: (held, []))
-    monkeypatch.setattr(collections_mod, "_held_files", lambda: held)
+    monkeypatch.setattr(collections_mod, "_hidden_in_files", lambda: {"admin-notes"})
     with viewing.as_viewer(USER):
         assert [a.name for a in ask_ann._held()] == ["works"]
         assert [a.name for a in ask_ann._held(held)] == ["works"], "a list given is filtered too"
@@ -264,3 +265,78 @@ def test_with_nothing_hidden_a_kept_result_is_reused_as_before():
         sid = web.keep_search("q", {"hits": []})
     with viewing.as_viewer(USER):
         assert web.kept_search(sid, "q") == {"hits": []}
+
+
+# ---- the review's findings (2026-11-28) -------------------------------------
+
+def test_a_hidden_file_the_loader_refuses_is_still_shut_on_disk(node):
+    """A file `load_all` refuses (here: it names no encoder) is not served, but
+    its folder is on disk, where the graph walk, facets and figures read."""
+    root, write = node
+    write("secret", 'hidden = true\nembed = "bogus"\n')
+    assert "secret" not in _names(collections_mod.load_all(skip_unreadable=True)[0])
+    with viewing.as_viewer(USER):
+        assert "secret" in collections_mod.hidden_names_here()
+        assert [n for n, _ in collections_mod.listed_seen(root / "collections")] == ["gutenberg"]
+
+
+def test_refused_in_the_words_a_name_nothing_holds_is_refused_in(node):
+    root, _ = node
+    with viewing.as_viewer(USER):
+        with pytest.raises(CodexError) as hidden:
+            collections_mod.resolve_seen(root / "collections", "secret")
+        with pytest.raises(CodexError) as absent:
+            collections_mod.resolve_seen(root / "collections", "absent")
+    assert str(hidden.value) == str(absent.value).replace("'absent'", "'secret'")
+
+
+def test_a_shared_display_name_resolves_to_the_one_the_reader_sees(node):
+    """Both are "Project Gutenberg": the node's resolve names both; a reader's
+    resolves to the visible one and never names the hidden one."""
+    root, _ = node
+    with pytest.raises(CodexError, match="secret"):
+        col.resolve(root / "collections", "Project Gutenberg")
+    with viewing.as_viewer(USER):
+        name, _codex = collections_mod.resolve_seen(root / "collections", "Project Gutenberg")
+    assert name == "gutenberg"
+
+
+def test_the_relay_thread_searches_as_the_one_who_asked(monkeypatch):
+    """The Ask page's only search path runs in a thread of its own."""
+    import threading
+    from app import relay
+    monkeypatch.setattr(viewing, "_default", None)          # the web process
+    seen, done = [], threading.Event()
+
+    def fn(job):
+        seen.append(viewing.current())
+        done.set()
+
+    with viewing.as_viewer(ADMIN):
+        relay.start("search", "boss", fn)
+    assert done.wait(5) and seen == [ADMIN]
+
+
+def test_an_admins_kept_pdf_is_never_a_readers(node):
+    from app import ask_pdf
+    with viewing.as_viewer(ADMIN):
+        pid = ask_pdf.keep("q", "a", [])
+        assert ask_pdf.kept(pid)["question"] == "q"
+    with viewing.as_viewer(USER):
+        assert ask_pdf.kept(pid) is None
+
+
+def test_localagi_says_a_hidden_name_is_unknown(node):
+    from app import localagi
+    with viewing.as_viewer(DEPOSIT):
+        with pytest.raises(localagi.LocalAgiError) as hidden:
+            localagi._deposit_collection("secret")
+        with pytest.raises(localagi.LocalAgiError) as absent:
+            localagi._deposit_collection("absent")
+    assert (hidden.value.status, hidden.value.code) == (absent.value.status, absent.value.code) == \
+        (404, "NOT_FOUND")
+
+
+def test_the_lifespan_makes_the_web_fail_closed_and_the_suite_puts_it_back():
+    viewing.serve_readers()
+    assert viewing.current() is None

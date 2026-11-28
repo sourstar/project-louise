@@ -52,8 +52,12 @@ WEB_DEADMAN_S = 120.0
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from . import fdlimit
+    from . import fdlimit, viewing
     fdlimit.raise_soft()                 # the soft open-files limit to the hard one (app/fdlimit.py)
+    # THIS PROCESS ANSWERS READERS (07 §7.8 `hidden`, app/viewing.py): outside a
+    # request nobody is looking — however uvicorn was started (app/web_main.py
+    # says it too, before the app loads)
+    viewing.serve_readers()
     # THE WEB'S MEMORY (operator, 2026-11-22: "less than 1GB"): one Lance
     # Session for the process, before any table is opened, and its freed heap
     # given back after a while without a question (app/idle_trim.py; platform.toml [web] idle_trim_s)
@@ -281,7 +285,7 @@ def status():
 
 def _safe_vectors():
     try:
-        return embeddings.stats()["vectors"]
+        return embeddings.stats(_collection())["vectors"]      # the reader's default (07 §7.8 `hidden`)
     except Exception:
         return 0
 
@@ -294,11 +298,12 @@ def stats():
           SUM(fts_done) fts_done, SUM(embed_done=1) embed_done,
           SUM(tokens) tokens
         FROM documents WHERE in_scope=1 GROUP BY lang ORDER BY books DESC LIMIT 30""")]
-    usage = con.execute("""
+    log = _log_con()                    # query_log lives in the default's manifest, whoever asks
+    usage = log.execute("""
         SELECT COUNT(*) queries, AVG(total_ms) avg_ms,
           SUM(CASE WHEN ts > strftime('%s','now')-86400 THEN 1 ELSE 0 END) last24h
         FROM query_log""").fetchone()
-    recent = [dict(r) for r in con.execute(
+    recent = [dict(r) for r in log.execute(
         "SELECT ts,endpoint,query,mode,total_ms,n_results FROM query_log "
         "ORDER BY id DESC LIMIT 15")]
     def du(path):
@@ -999,19 +1004,22 @@ def reindex(book_id: int):
     web.invalidate_counts(_collection())
     return {"ok": True}
 
-_summary_jobs: dict[int, str] = {}   # book_id -> "running" | error string
+#: (collection, book_id) -> "running" | error string: a job is its collection's,
+#: so a reader's default (07 §7.8 `hidden`) never shows another's
+_summary_jobs: dict[tuple[str, int], str] = {}
 _summary_lock = threading.Lock()
 
-def _run_summary(book_id: int, force: bool):
-    con = db.connect()   # sqlite connections are per-thread
+def _run_summary(collection, book_id: int, force: bool):
+    con = db.connect(collection)   # sqlite connections are per-thread
+    key = (collection.name, book_id)
     try:
         summarize.summarize_book(con, book_id, force=force)
         with _summary_lock:
-            _summary_jobs.pop(book_id, None)
+            _summary_jobs.pop(key, None)
     except Exception as e:
         with _summary_lock:
-            _summary_jobs[book_id] = f"{type(e).__name__}: {e}"[:300]
-        db.log_event(con, "error", "summary", str(e)[:300], _uid(book_id))
+            _summary_jobs[key] = f"{type(e).__name__}: {e}"[:300]
+        db.log_event(con, "error", "summary", str(e)[:300], f"{collection.plugin}:{book_id}")
 
 @app.post("/api/books/{book_id}/summary", dependencies=[Depends(auth.require_admin)])
 def make_summary(book_id: int, force: bool = False):
@@ -1022,12 +1030,13 @@ def make_summary(book_id: int, force: bool = False):
         cached = summarize.get_cached(con, book_id)
         if cached:
             return {"status": "done", **cached}
+    collection = _collection()
     with _summary_lock:
-        state = _summary_jobs.get(book_id)
+        state = _summary_jobs.get((collection.name, book_id))
         if state == "running":
             return {"status": "running"}
-        _summary_jobs[book_id] = "running"
-    threading.Thread(target=_run_summary, args=(book_id, force), daemon=True).start()
+        _summary_jobs[(collection.name, book_id)] = "running"
+    threading.Thread(target=_run_summary, args=(collection, book_id, force), daemon=True).start()
     return {"status": "started"}
 
 @app.get("/api/books/{book_id}/summary")
@@ -1036,13 +1045,14 @@ def summary_status(book_id: int):
     web._refuse_withheld(_collection(), "its summaries are served")
     con = _con()
     cached = summarize.get_cached(con, book_id)
+    key = (_collection().name, book_id)
     with _summary_lock:
-        state = _summary_jobs.get(book_id)
+        state = _summary_jobs.get(key)
     if state == "running":
         return {"status": "running"}
     if state:
         with _summary_lock:
-            _summary_jobs.pop(book_id, None)
+            _summary_jobs.pop(key, None)
         return {"status": "error", "error": state}
     if cached:
         return {"status": "done", **cached}
