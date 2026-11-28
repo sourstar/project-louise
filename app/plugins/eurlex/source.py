@@ -703,6 +703,34 @@ def _say_once(message: str) -> None:
         print(message, flush=True)
 
 
+def _origin_gaps(view: dict, act, celex: str) -> list[dict]:
+    """09 §9.5's `origin_gaps` of a Formex act, from the unit's own files:
+    each part the wrapper names and the unit does not hold "absent"; each
+    file holding what another file of the unit is named for "another's:
+    <that file>" (its own BIB.INSTANCE page against the names' pages,
+    `formex.stated_place`); each file not of its name's kind "unreadable".
+    A rendition (no Formex) states none."""
+    if act is None or getattr(act, "rendered_sections", None) is not None:
+        return []
+    gaps: dict[str, str] = {name: "absent" for name in (getattr(act, "missing", None) or [])}
+    heads = {n: b[:formex._HEAD_BYTES] for n, b in view.items() if isinstance(b, (bytes, bytearray))}
+    try:
+        wrapper = formex._parse(view[act.wrapper_file], act.wrapper_file)
+    except (KeyError, formex.FormexError):
+        return [{"part": p, "why": w} for p, w in sorted(gaps.items())]
+    named = [n for n in dict.fromkeys([*formex.main_names(wrapper), *formex.annex_names(wrapper)]) if n in heads]
+    for n in named:
+        if formex.misnamed(n, heads[n]) is not None:
+            gaps.setdefault(n, "unreadable")
+    places = {n: formex.stated_place(n, heads[n]) for n in named}
+    by_name_place = {(p[0], p[1], p[2]): n for n, p in places.items() if p is not None}
+    for n in formex.swapped(places):
+        p = places[n]
+        holds = by_name_place.get((p[0], p[3], p[4])) if p is not None else None
+        gaps.setdefault(n, f"another's: {holds}" if holds and holds != n else "unreadable")
+    return [{"part": p, "why": gaps[p]} for p in sorted(gaps, key=lambda s: s.encode("utf-8"))]
+
+
 def _not_their_names(files: dict, celex: str) -> list[str]:
     """`formex.not_its_name` on the unit's own bytes (their heads): [] where
     the unit holds no Formex wrapper of this act."""
@@ -951,7 +979,15 @@ class EurlexSource:
     #: `extra.body_root`, `extra.valid_from_provisional`. Parser 4 is not
     #: carried: EUR-Lex4, the one Codex naming it, published nothing and is
     #: re-created as EUR-Lex5 (RULE 1, 02 §2.4 A1c).
-    PARSER_VERSION = 5
+    #: PARSER 6 (2026-11-28, the operator's rule B): a record states what the
+    #: origin did not give it — 09 §9.5 `origin_gaps`, for a `record_line` 3
+    #: collection — read from the unit's OWN files (a verifier reproduces it
+    #: from the corpus, never from this node's ledger): a file the wrapper
+    #: names and the unit does not hold ("absent"), a file holding what
+    #: another file's name says ("another's: <that file>"), a file that is
+    #: not of its name's kind ("unreadable"). Nothing else moves: at
+    #: `record_line` 1 or 2 the line drops the key, so parser 5 is carried.
+    PARSER_VERSION = 6
     #: the facts from the tree (4) or from the notice (3)
     TREE_FACTS = True
     #: 06 §6.2: Cellar keeps every OJ act and every consolidated version at
@@ -984,7 +1020,7 @@ class EurlexSource:
         """This plugin parsing at `version`, for a collection whose Codex
         names it (`collections.plugin_at`): 4 is this one, 3 the one that read
         the facts from the notice (`EurlexSourceV3`)."""
-        return {5: self, 3: _V3}.get(int(version))
+        return {6: self, 5: _V5, 3: _V3}.get(int(version))
 
     # ---- discovery ---------------------------------------------------------------------------
 
@@ -1528,6 +1564,7 @@ class EurlexSource:
             keys=sorted(keys),
             extra={k: v for k, v in extra.items() if v not in (None, "", [], {})},
             sections=sections,
+            origin_gaps=_origin_gaps(view, act, celex) if self.PARSER_VERSION >= 6 else [],
             raw_hash=raw.raw_hash,
             issues=found,
         )
@@ -1582,3 +1619,13 @@ class EurlexSourceV3(EurlexSource):
 
 
 _V3 = EurlexSourceV3()
+
+
+class EurlexSourceV5(EurlexSource):
+    """Parser 5, carried for the collections whose Codex names it
+    (EUR-Lex5.next): parser 6 without `origin_gaps` (which a `record_line`
+    1 or 2 line drops anyway)."""
+    PARSER_VERSION = 5
+
+
+_V5 = EurlexSourceV5()
