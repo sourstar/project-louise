@@ -1,9 +1,10 @@
-# A collection of images — how it fits, and what architecture must decide
+# A collection of images — how it fits, and what is decided
 
-*PROPOSED, 2026-11-28, for the operator and the Architecture session.
-Nothing is built.* The operator, 2026-11-28: "I want to create a collection
-with mostly, or only, images. It's a new kind of collection and I believe
-that an image to text has to be used."
+*PROPOSED, 2026-11-28; revised the same day with the Architecture
+session's answer (relayed by München). Nothing is built.* The operator,
+2026-11-28: "I want to create a collection with mostly, or only, images.
+It's a new kind of collection and I believe that an image to text has to be
+used."
 
 ## 1. What already exists
 
@@ -11,7 +12,7 @@ that an image to text has to be used."
 |---|---|---|
 | figures carried as bytes | `record_line` 2, 09 §9.5 `figures`, member `figures-<slice>` (§9.16); decided 2026-09-08 ([figures-in-the-corpus.md](figures-in-the-corpus.md)) | the image itself travels, named by hash, optional to a peer; outside `content_hash` |
 | previews | app/ask/preview.py (EUR-Lex5, 2026-11-26) | a hit can show the picture |
-| a machine reading carried as a member | [ocr-in-rage.md](ocr-in-rage.md) option B, `ocr-<slice>` — PROPOSED, not decided | the exact mechanism an image-to-text reading needs |
+| a machine reading carried as a member | [ocr-in-rage.md](ocr-in-rage.md) option B, `ocr-<slice>` — PROPOSED, not decided | the mechanism OCR of the images needs |
 | `modality` in the Codex | 02 §2.1, 06 §6.1, 09 §9.3: `text` · `dna` | the door to a picture space — nothing behind it built; no image calibration set (03, 09 §9.12) |
 
 Today a record is text; a picture is found only by its caption.
@@ -19,68 +20,83 @@ Today a record is text; a picture is found only by its caption.
 ## 2. What the rules already decide
 
 - **The image is the corpus; the origin's own words about it are the
-  record** (invariant 11): title, description, author, date, licence,
-  categories, EXIF — every field the origin states, `extra.<name>` where no
-  §9.5 key fits. An image with metadata is already searchable by text with
-  no model at all.
-- **A model's reading is made ONCE and carried, never re-made per node**
-  (ocr-in-rage.md §2): two cards decode different tokens, so a text re-made
-  per node cuts different chunks and the network's vectors stop meeting.
-- **It goes through RAGE** (invariant 7, rage.md): one more verb beside OCR,
-  its engine frozen in the Codex like an encoder's, gated on fixed images
-  before any reading is admitted.
-- **It is labelled.** A hit whose text a model wrote says "described by
-  <model>", as an annotation names its method.
-- **The licence gate covers the reading** (invariant 9).
+  record** (invariant 11): title, description, author, date, categories,
+  EXIF, and each file's own LICENCE — Commons and Europeana licence per
+  file. The collection's licence class is the strictest it admits.
+- **Text IN the image is corpus**: OCR's reading is the image collection's
+  own (`ocr-<slice>`, ocr-in-rage.md B).
+- **A model's reading is made ONCE and carried**, never re-made per node
+  (ocr-in-rage.md §2).
+- **A VLM's description is NOT the image collection's data.** It brings
+  what the model knows (it names places, people, works), and no prompt
+  guarantees "seen, not known". Holding it in the image collection
+  (the former option D1) is proposing an outside source for a collection's
+  own data — itself the error (CLAUDE.md). Dropped.
+- **An annotations collection cannot carry it either**: annotations are
+  never embedded or ranked (02 §2.10, invariant 4), so an image could never
+  be found by its description.
 
-## 3. The one hard point: a description is not only the corpus
+## 3. The order (Architecture, 2026-11-28)
 
-OCR reads what is IN the image. A vision-language model also brings what
-it KNOWS: "the Pantheon in Rome, 2nd century" when the photograph shows a
-domed portico and its metadata says nothing. That is outside information
-entering a collection's own data — the fundamental rule
-("A collection has only the information contained in its corpus"). Two
-honest readings, the operator's to choose:
+1. **The corpus-only collection, no VLM.** The origin's metadata plus OCR,
+   in an existing text space. Rule-clean, no new model.
+2. **The described collection**, if the operator wants image-to-text: its
+   OWN TEXT COLLECTION whose origin is the describer run on the image
+   collection — one record per image, keyed on it, the method named, hits
+   labelled "described by <model>", meeting the images at ask time by key.
+   Needs an amendment to 02 §2.10 or a new collection kind (§5, the
+   operator's question).
+3. **A multimodal space (R2), written down.** Rule-clean by construction —
+   an embedding is no shown fact and the pixels are the corpus — and
+   deferred for its cost alone: `modality = "image"`, an image calibration
+   set, invariant 12 for an image tower, no image reranker. A second space
+   on the same collection when added (invariant 1).
 
-| | rule | pros | cons |
-|---|---|---|---|
-| **D1** | the description is the collection's, held as `describe-<slice>`, prompt limited to what is visible ("describe what is shown; do not name places, people or works"), labelled | searchable at once; one member, the OCR mechanism | the prompt cannot fully stop the model naming things; the line between "seen" and "known" is judged by a model |
-| **D2** | the description is an ANNOTATIONS collection about the image collection (method: the model), already allowed outside sources (operator, 2026-11-16, choice A) | the fundamental rule untouched; the model free to name what it recognises; replaced without touching the images | a second collection; the description meets the images at ask time only — embedding it means embedding the annotations collection |
+## 4. One RAGE verb, one receipt, two members
 
-Recommendation: **D2** — it is the shape the fundamental rule already has an
-answer for, and the model's recognition (the most useful part) is kept.
+- `read(image, mode = ocr | describe)`, through RAGE (invariant 7).
+- Shared: the run and its receipt — engine, the prompt text (hashed),
+  decoding parameters, image hash → text hash — so both verify the same way.
+- NOT shared: the member. OCR is `ocr-<slice>` in the image collection;
+  descriptions are the described collection's records.
+- **The gate**: the engine frozen in the Codex, greedy decoding, the run
+  reproduces itself (invariant 12). Beyond it: another card decodes other
+  tokens, so a verifier cannot ask for bytes. Acceptance is DEFINED and
+  MEASURED before anything is published — e.g. the verifier's re-reading,
+  embedded in the space, within cosine X of the carried text, or a
+  token-level bound — X taken from a run on two cards.
 
-## 4. How the picture is found — two routes
+## 5. The operator's question: where the described collection fits
 
-| | route | pros | cons |
-|---|---|---|---|
-| **R1** | **image → text → the existing text space** (operator's instinct): origin metadata + OCR + description embedded as text | everything reused: text encoders, their calibration, the gate, the text reranker, FTS, the Ask page; no new modality | finds what was SAID about a picture, never what it looks like; quality capped by the describer; card time per image to describe |
-| R2 | a multimodal space: `modality = "image"`, an image–text encoder (SigLIP 2 or jina-clip class, behind HTTP), text queries into the same space | finds by look ("a red staircase"); no describer, no outside-knowledge question | largest change on the list: a new modality, an image calibration set, invariant-12 measurement for an image tower, chunks that are figures, a verifier must hold the figures member to re-embed; no image reranker |
-| R1 then R2 | R1 now; R2 as a second space on the same collection (a node runs several spaces side by side, invariant 1) | usable soon; R2 is added, not substituted | two builds |
+What it is: a collection of text that a model wrote about another
+collection's images, searchable, each hit saying which model wrote it.
 
-Recommendation: **R1 then R2**, R2 written down here and built when a
-collection whose metadata is thin proves R1 short.
+| choice | pros | cons |
+|---|---|---|
+| **amend 02 §2.10**: an annotations collection whose claims are text MAY be embedded and ranked when its Codex says so | one kind fewer; reuses `annotates`, `method` and the "by <model>" label already built | changes invariant 4's "annotations never rank"; every annotations reader must learn the exception |
+| **a new collection kind, "derived reading"**: a text collection whose origin is a read run over another collection, `derives_from` + run receipt in the Codex | invariant 4 untouched; a clean name for a clean thing; reusable for translations later | a new kind: Codex field, closed lists in 02/06/09, a wizard case in new-collection.md |
+| status quo: no described collection | nothing to build; step 1 still gives metadata + OCR search | an image with thin metadata and no text in it is found by nothing |
 
-## 5. The steps, in the project's order
+Recommendation: **a new kind** — it keeps invariant 4 whole. If the
+operator says nothing, step 1 proceeds alone and step 2 waits.
 
-1. **The origin** (operator): which collection — Wikimedia Commons,
-   Europeana, a museum's open-access set, the operator's own files
-   (deposit)? The bulk-first rule applies if it is a dump. This decides the
-   licence class and how much metadata there is.
-2. **Architecture decides** D1/D2, R1/R2, and the shared member with
-   ocr-in-rage.md Q1 (one "read" verb, two modes: OCR and describe).
-3. **The plugin** (06): origin form recorded ("THE ORIGIN FORM, and why"),
-   `record_line` 2, every origin field kept, `origin_hash` per image.
-4. **The describer**: a VLM on llama.cpp's multimodal server (mtmd) behind
-   RAGE; measured as invariant 12 measures encoders (same image, same card,
-   reproduces itself; greedy decoding; [measuring.md](measuring.md)).
-5. **The collection** through `louise hold collection new`
-   ([new-collection.md](new-collection.md)), case A (or H for D2's
-   annotations).
+## 6. Steps once the origin is named
 
-## 6. What it would amend
+1. **The origin** (operator): Commons, Europeana, a museum set, a deposit.
+   Bulk first if it has a dump.
+2. **The plugin** (06): origin form recorded ("THE ORIGIN FORM, and why"),
+   `record_line` 2, every origin field kept, per-file licence,
+   `origin_hash` per image.
+3. **OCR** per ocr-in-rage.md (its engine measured on 100 images).
+4. **The collection** through `louise hold collection new`
+   ([new-collection.md](new-collection.md)), case A.
+5. **The describer** (if §5 is answered): VLM on llama.cpp's multimodal
+   server behind RAGE; X measured on two cards; then the described
+   collection.
 
-09 §9.16 (the `describe-<slice>` or shared `read-<slice>` member) and §9.3
-(the describer's engine block, inside `collection_id`); 03 §3.3 (the gate on
-fixed images); 05/08 (the "described by" label); for R2 also 02 §2.4, 06
-§6.1, 09 §9.3 and §9.12 (`modality = "image"`, an image calibration set).
+## 7. What it would amend
+
+09 §9.16 (`ocr-<slice>`) and §9.3 (the read engine's block, inside
+`collection_id`); 03 §3.3 (the read gate and its measured acceptance); 05/08
+(the "read by OCR" and "described by" labels); 02 §2.10 or a new kind (§5);
+for R2, 02 §2.4, 06 §6.1, 09 §9.3 and §9.12.
