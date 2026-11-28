@@ -732,4 +732,4 @@ def test_the_dry_run_compares_the_index_identities_before_it_counts_the_room(pai
     assert _new_enc(root, "--dry-run") == 0
     out = capsys.readouterr().out
     assert seen and seen[0][1:3] == ("old", "sis")
-    assert ("shared with old's" in out) is equal and ("COPIED: her index identity" in out) is not equal
+    assert ("read from old's own index by path" in out) is equal and ("COPIED: her index identity" in out) is not equal
