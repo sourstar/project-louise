@@ -1008,7 +1008,7 @@ reader needs at the command line:
   controls and `--set` leave the same bytes (app/collection_file.py) —
   then applies it. The keys are the file's editable values, as `config
   show` names them: `embed` (`embed_mode` too: `off`, `on-demand`, `all`,
-  `p2p`), `share`, `locked` (*added 2026-11-27*), `title`, `slices`, `kinds`, `share_slices`,
+  `p2p`), `share`, `locked` (*added 2026-11-27*), `hidden` (*added 2026-11-28*), `title`, `slices`, `kinds`, `share_slices`,
   `share_kinds` (comma-separated; `all` lifts a narrowing),
   `encoder.url`, `encoder.query_url`, `encoder.api`,
   `encoder.embed_model`, `encoder.query_model`, `reranker.url` (empty:
@@ -2642,6 +2642,13 @@ locked = true                                  # optional (2026-11-27, operator:
                                                # sister reads its text index (docs/notes/sister-shared-index.md): she is
                                                # unshared, or locked, first. `hold collection lock|unlock`, `--set locked=…`
                                                # (app/collection_lock.py, docs/notes/collection-lock.md)
+hidden = true                                  # optional (2026-11-28, operator: "hides the collection to the non admin users"):
+                                               # SHOWN TO ADMINS ONLY. Run as any other — fetched, embedded, shared as `share`
+                                               # says — and to every viewer who is not an admin (§7.4: a user, the depositor, a
+                                               # guest) as if it did not exist: not listed, searched or read, its claims (an
+                                               # annotations collection's) never attached, shown or walked; named, it is unknown.
+                                               # Absent = false. The Library's hide box, `--set hidden=…`
+                                               # (collections.hidden_from, docs/notes/collection-hide.md)
 share_slices = ["year=1980-1984"]              # optional: serving narrowed to these slices (`share --slices`); absent = all held
 share_kinds  = ["records"]                     # optional: and these member kinds (`share --kinds`); terms, validation,
                                                # calibration and seals are served whatever it says (amended 2026-10-07)

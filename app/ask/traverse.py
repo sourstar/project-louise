@@ -215,6 +215,17 @@ def walk(con, codex, snapshot, start: str, *, relation: str | None = None, depth
     return out
 
 
+def _listed(root: Path) -> list[tuple[str, Any]]:
+    """`list_named` without what the viewer may not see (07 §7.8 `hidden`, 07 §7.4)."""
+    from app import collections as collections_mod
+    return collections_mod.listed_seen(root)
+
+
+def _resolved(root: Path, ref: str) -> tuple[str, Any]:
+    from app import collections as collections_mod
+    return collections_mod.resolve_seen(root, ref)
+
+
 def _targets_of(root: Path, codex) -> list[tuple[str, Any]]:
     """(name, Codex) of each collection an annotations Codex annotates and
     this peer holds (several at Codex version 9, 09 §9.3)."""
@@ -228,7 +239,7 @@ def _targets_of(root: Path, codex) -> list[tuple[str, Any]]:
     # by a records carry (app/rage/family.py; annotations.answers_for)
     from app.rage import family
     relatives = family.held_collections()
-    return [(n, c) for n, c in col.list_named(root)
+    return [(n, c) for n, c in _listed(root)
             if want & set(answers_for(root, n, c.collection_id, relatives))]
 
 
@@ -258,10 +269,10 @@ def traverse(id_: str, *, relation: str | None = None, depth: int = 1, collectio
     root = Path(root) if root is not None else collections_mod.louise_root() / "collections"
     prefix = id_.split(":", 1)[0]
     if collection:
-        name, codex = col.resolve(root, collection)
+        name, codex = _resolved(root, collection)
         targets = [(name, codex)]
     else:
-        targets = [(n, c) for n, c in col.list_named(root)]
+        targets = _listed(root)
         owned = [(n, c) for n, c in targets if c.plugin == prefix or prefix in _annotates_plugins(root, c)]
         targets = owned or targets
     edges: list[dict[str, Any]] = []
@@ -269,7 +280,7 @@ def traverse(id_: str, *, relation: str | None = None, depth: int = 1, collectio
     held, unheld = [], []
     for asked in resolve_in or ():
         try:
-            held.append(col.resolve(root, asked))
+            held.append(_resolved(root, asked))
         except CodexError:
             unheld.append(asked)
     with Elsewhere(root, held, tuple(unheld)) as elsewhere:

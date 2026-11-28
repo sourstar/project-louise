@@ -141,9 +141,14 @@ def carry(fn: Callable[..., Any]) -> Callable[..., Any]:
     thread pool, whose threads do not inherit a ContextVar. Without it, a
     federated search's per-collection legs would never see the token."""
     token = _current.get()
+    # and the viewer (app/viewing.py): what a pool thread may show is the
+    # request's, never the process default's
+    from app import viewing
+    seen = viewing.captured()
 
     def carried(*args: Any, **kwargs: Any) -> Any:
-        return run(token, fn, *args, **kwargs)
+        with viewing.restored(seen):
+            return run(token, fn, *args, **kwargs)
     return carried
 
 

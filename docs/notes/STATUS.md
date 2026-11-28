@@ -25,6 +25,14 @@ measured (published figures disagree).
   nothing searches, shares, fetches for, processes or loads the models of it; the Library shows it on a
   Locked card with rename…, export bundle, remove… and its lock box; `hold collection lock|unlock`.
   docs/notes/collection-lock.md.
+- **A COLLECTION CAN BE HIDDEN FROM READERS WHO ARE NOT ADMINS (operator: "collections whose embedding is in
+  progress and still too low to produce results … Same for annotations").** `hidden = true` in its file
+  (07 §7.8): it runs as any other, and to a user, the depositor or a guest it does not exist — not listed,
+  searched, read, nor its claims consulted. The viewer is a ContextVar the gate sets (app/viewing.py),
+  fail-closed in the web process. Closed on the way: the graph walk, facets, figures and the Ask chips did
+  not apply 07 §7.4's deposit rule. docs/notes/collection-hide.md.
+- **A RE-CREATION KEEPS ITS ANNOTATIONS FAMILY** (case F records its predecessor beside it, read by
+  app/rage/family.py; #993).
 
 ### 2026-11-27
 

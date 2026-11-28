@@ -52,8 +52,12 @@ WEB_DEADMAN_S = 120.0
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    from . import fdlimit
+    from . import fdlimit, viewing
     fdlimit.raise_soft()                 # the soft open-files limit to the hard one (app/fdlimit.py)
+    # THIS PROCESS ANSWERS READERS (07 §7.8 `hidden`, app/viewing.py): outside a
+    # request nobody is looking — however uvicorn was started (app/web_main.py
+    # says it too, before the app loads)
+    viewing.serve_readers()
     # THE WEB'S MEMORY (operator, 2026-11-22: "less than 1GB"): one Lance
     # Session for the process, before any table is opened, and its freed heap
     # given back after a while without a question (app/idle_trim.py; platform.toml [web] idle_trim_s)
@@ -99,10 +103,29 @@ app.add_middleware(idle_trim.IdleClock)
 
 def _con():
     # one connection per request keeps things simple; SQLite WAL handles it
+    return db.connect(_collection())
+
+
+def _log_con():
+    """The default collection's manifest, where query_log lives, whoever asks."""
     return db.connect()
 
+
 def _collection():
-    return collections_mod.default_collection()
+    """The default collection (`collections.default_collection`), as the
+    viewer being answered may see it: to a reader who is not an admin, never
+    a hidden one (07 §7.8 `hidden`) nor a deposit one (07 §7.4) — the first
+    collection they may see instead; 404 where there is none."""
+    from fastapi import HTTPException
+    from . import viewing
+    c = collections_mod.default_collection()
+    if viewing.sees_all(viewing.current()) or not (collections_mod.is_private(c)
+                                                   or collections_mod.hidden_here(c)):
+        return c
+    shown = collections_mod.load_public()
+    if not shown:
+        raise HTTPException(404, "no collection is served here")
+    return shown[0]
 
 def _uid(book_id: int) -> str:
     return f"{_collection().plugin}:{book_id}"
@@ -262,7 +285,7 @@ def status():
 
 def _safe_vectors():
     try:
-        return embeddings.stats()["vectors"]
+        return embeddings.stats(_collection())["vectors"]      # the reader's default (07 §7.8 `hidden`)
     except Exception:
         return 0
 
@@ -275,11 +298,12 @@ def stats():
           SUM(fts_done) fts_done, SUM(embed_done=1) embed_done,
           SUM(tokens) tokens
         FROM documents WHERE in_scope=1 GROUP BY lang ORDER BY books DESC LIMIT 30""")]
-    usage = con.execute("""
+    log = _log_con()                    # query_log lives in the default's manifest, whoever asks
+    usage = log.execute("""
         SELECT COUNT(*) queries, AVG(total_ms) avg_ms,
           SUM(CASE WHEN ts > strftime('%s','now')-86400 THEN 1 ELSE 0 END) last24h
         FROM query_log""").fetchone()
-    recent = [dict(r) for r in con.execute(
+    recent = [dict(r) for r in log.execute(
         "SELECT ts,endpoint,query,mode,total_ms,n_results FROM query_log "
         "ORDER BY id DESC LIMIT 15")]
     def du(path):
@@ -299,9 +323,14 @@ def stats():
 def events(after: int = 0, limit: int = 60):
     con = _con()
     rows = []
+    # a line naming a collection hidden from this reader is not theirs to read
+    # (07 §7.8 `hidden`): every log line names its collection
+    hidden = collections_mod.hidden_names_here()
     for r in con.execute(
             "SELECT * FROM events WHERE id>? ORDER BY id DESC LIMIT ?", (after, limit)):
         d = dict(r)
+        if hidden and any(n in str(d.get("message") or "") for n in hidden):
+            continue
         d["book_id"] = _display_id(d.pop("doc_uid", None))
         rows.append(d)
     return {"events": rows}
@@ -975,19 +1004,22 @@ def reindex(book_id: int):
     web.invalidate_counts(_collection())
     return {"ok": True}
 
-_summary_jobs: dict[int, str] = {}   # book_id -> "running" | error string
+#: (collection, book_id) -> "running" | error string: a job is its collection's,
+#: so a reader's default (07 §7.8 `hidden`) never shows another's
+_summary_jobs: dict[tuple[str, int], str] = {}
 _summary_lock = threading.Lock()
 
-def _run_summary(book_id: int, force: bool):
-    con = db.connect()   # sqlite connections are per-thread
+def _run_summary(collection, book_id: int, force: bool):
+    con = db.connect(collection)   # sqlite connections are per-thread
+    key = (collection.name, book_id)
     try:
         summarize.summarize_book(con, book_id, force=force)
         with _summary_lock:
-            _summary_jobs.pop(book_id, None)
+            _summary_jobs.pop(key, None)
     except Exception as e:
         with _summary_lock:
-            _summary_jobs[book_id] = f"{type(e).__name__}: {e}"[:300]
-        db.log_event(con, "error", "summary", str(e)[:300], _uid(book_id))
+            _summary_jobs[key] = f"{type(e).__name__}: {e}"[:300]
+        db.log_event(con, "error", "summary", str(e)[:300], f"{collection.plugin}:{book_id}")
 
 @app.post("/api/books/{book_id}/summary", dependencies=[Depends(auth.require_admin)])
 def make_summary(book_id: int, force: bool = False):
@@ -998,12 +1030,13 @@ def make_summary(book_id: int, force: bool = False):
         cached = summarize.get_cached(con, book_id)
         if cached:
             return {"status": "done", **cached}
+    collection = _collection()
     with _summary_lock:
-        state = _summary_jobs.get(book_id)
+        state = _summary_jobs.get((collection.name, book_id))
         if state == "running":
             return {"status": "running"}
-        _summary_jobs[book_id] = "running"
-    threading.Thread(target=_run_summary, args=(book_id, force), daemon=True).start()
+        _summary_jobs[(collection.name, book_id)] = "running"
+    threading.Thread(target=_run_summary, args=(collection, book_id, force), daemon=True).start()
     return {"status": "started"}
 
 @app.get("/api/books/{book_id}/summary")
@@ -1012,13 +1045,14 @@ def summary_status(book_id: int):
     web._refuse_withheld(_collection(), "its summaries are served")
     con = _con()
     cached = summarize.get_cached(con, book_id)
+    key = (_collection().name, book_id)
     with _summary_lock:
-        state = _summary_jobs.get(book_id)
+        state = _summary_jobs.get(key)
     if state == "running":
         return {"status": "running"}
     if state:
         with _summary_lock:
-            _summary_jobs.pop(book_id, None)
+            _summary_jobs.pop(key, None)
         return {"status": "error", "error": state}
     if cached:
         return {"status": "done", **cached}
@@ -1054,7 +1088,7 @@ def _search_and_log(body: SearchBody) -> dict:
                          **({"annotations": body.annotations} if body.annotations is not None else {}),
                           verify=body.verify, rerank_depth=body.rerank_depth,
                           all_languages=body.all_languages, kind=body.kind)
-    con = _con()   # query_log lives in the default collection's manifest regardless
+    con = _log_con()   # query_log lives in the default collection's manifest regardless
     db.log_query(con, "search", body.query, body.mode, body.k, result["timings"],
                  len(result["hits"]), _source_qualified_ids(result["hits"]))
     return result
@@ -1512,7 +1546,7 @@ def kind_note(result: dict, lang: str | None = None) -> str:
 
 
 def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None):
-    con = _con()   # query_log lives in the default collection's manifest regardless
+    con = _log_con()   # query_log lives in the default collection's manifest regardless
     prompt = _fit_answer(body, query, result)
     reads = prompt.reads
     rid = f"chatcmpl-{uuid.uuid4().hex[:12]}"
@@ -1680,7 +1714,7 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     note and a warn line, where before it ended exactly like a whole one.
     Every answer gets one log line with its size and timing, so the next
     report has a measurement."""
-    con = con if con is not None else _con()
+    con = con if con is not None else _log_con()
     if prompt is None:
         prompt = _fit_answer(body, query, result)
     reads = prompt.reads

@@ -166,7 +166,12 @@ def start(kind: str, owner: str | None, fn: Callable[[Job], None], *,
              f"relay {job.id[:8]} {kind} {job.state} after {job.ended - job.created:.1f} s"
              + (f": {job.reason}" if job.reason else ""))
 
-    threading.Thread(target=run, name=f"relay-{kind}", daemon=True).start()
+    # the request's context goes with it — the viewer above all (07 §7.8
+    # `hidden`, app/viewing.py): a thread does not inherit a ContextVar, and
+    # without it an admin's relay would search as nobody
+    import contextvars
+    threading.Thread(target=contextvars.copy_context().run, args=(run,), name=f"relay-{kind}",
+                     daemon=True).start()
     return job
 
 

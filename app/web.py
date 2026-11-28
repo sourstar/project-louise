@@ -883,10 +883,15 @@ def _ask_annotations() -> list[dict]:
     collection whose target this node does not hold is still listed."""
     from .hold.codex import targets_of
     from .rage import family
-    served = collections_mod.load_all()
+    # what the Ask page's reader may see (07 §7.8 `hidden`, 07 §7.4): its
+    # chips name neither a hidden annotations collection nor a hidden or
+    # deposit collection it applies to
+    from . import viewing
+    served = collections_mod.load_all() if viewing.sees_all(viewing.current()) \
+        else collections_mod.load_public()
     relatives = family.held_collections()
     out = []
-    for a in collections_mod.load_annotations():
+    for a in collections_mod.seen(collections_mod.load_annotations()):
         targets = targets_of(a.codex)
         # every collection the claims apply to, its family included (app/rage/family.py)
         names = [n for t in targets for n in _applies_to(t.collection_id, served, relatives)]
@@ -1842,10 +1847,17 @@ SEARCH_TTL_S = 600.0
 _searches_lock = threading.Lock()
 
 
+def _looker() -> str:
+    """Who a kept result was made for, as far as hiding goes (07 §7.8
+    `hidden`): one made for an admin may hold what another reader may not see."""
+    from . import viewing
+    return "all" if viewing.sees_all(viewing.current()) else "reader"
+
+
 def keep_search(query: str, result: dict) -> str:
     sid = secrets.token_urlsafe(16)
     with _searches_lock:
-        _SEARCHES[sid] = (time.time(), query, result)
+        _SEARCHES[sid] = (time.time(), query, result, _looker())
         while len(_SEARCHES) > _SEARCHES_MAX:
             _SEARCHES.popitem(last=False)
     return sid
@@ -1859,6 +1871,10 @@ def kept_search(sid: str | None, query: str) -> dict | None:
     with _searches_lock:
         got = _SEARCHES.get(sid)
     if got is None or time.time() - got[0] > SEARCH_TTL_S or got[1] != query:
+        return None
+    if got[3] == "all" and _looker() != "all" and collections_mod.hidden_names_here():
+        # an admin's result may hold what this reader may not see (07 §7.8
+        # `hidden`): never their answer while anything is hidden from them
         return None
     return got[2]
 
@@ -1876,7 +1892,9 @@ def _ask_result(body: AskQueryBody) -> dict:
     # carry it; a single-collection hit is resolved from its source prefix
     # (the plugin id) to the first collection of that plugin
     by_plugin = {}
-    for c in collections_mod.load_all():
+    # what this reader may search (07 §7.8 `hidden`, 07 §7.4): never naming a
+    # hidden or deposit collection of the same plugin
+    for c in collections_mod.load_public():
         by_plugin.setdefault(c.plugin, c.name)
     for h in result.get("hits", []):
         plugin = str(h.get("chunk_id", "")).split(":", 1)[0]
@@ -3302,6 +3320,8 @@ def _collection_shelf(collection: collections_mod.Collection,
         # words; None where it is not in force for it (`desired_embed_mode`)
         "embed_mode_choice": collections_mod.desired_embed_mode(collection)[1],
         "share": bool(getattr(collection, "share", False)),
+        # 07 §7.8 `hidden` (2026-11-28): the hide box and the badge
+        "hidden": bool(getattr(collection, "hidden", False)),
         # the SHARE box on every collection that can be served (a public
         # Codex, 04 §4.3) — never only where the p2p line happens to be
         # cached (operator, 2026-11-01: "some collections are missing it")
@@ -3484,6 +3504,7 @@ def _annotations_shelf(collection, served: list) -> dict:
         "note": note,
         "kinds": list(collection.kinds or ()),
         "share": collection.share,
+        "hidden": bool(getattr(collection, "hidden", False)),
         "source": getattr(collection, "source", "origin"),
         "license": _license_state(collection),
         "copy_state": _copy_state(collection),
@@ -4402,6 +4423,25 @@ def collection_lock_box(name: str, body: LockBody):
     except Exception:   # noqa: BLE001
         pass
     return {"ok": True, "persisted": True, **out}
+
+
+class HiddenBody(BaseModel):
+    hidden: bool
+
+
+@admin_router.post("/library/{name}/hidden")
+def collection_hide_box(name: str, body: HiddenBody):
+    """The card's hide box (operator, 2026-11-28: "hides the collection to
+    the non admin users"; 07 §7.8 `hidden`): shown to admins only. Written to
+    the collection's file through its one writer, as `--set hidden=…`; every
+    reader route reads the file's listing again at its next request. A
+    locked collection's file takes no other value (400, its reason)."""
+    _held_or_404(name, locked_ok=True)
+    try:
+        out = collection_file.set_values(name, {"hidden": "true" if body.hidden else "false"})
+    except collection_file.SetRefused as e:
+        raise HTTPException(400, str(e)) from None
+    return {"ok": True, "persisted": True, "hidden": bool(out.get("hidden", body.hidden))}
 
 
 _p2p_cache: dict[str, tuple[float, dict | None]] = {}

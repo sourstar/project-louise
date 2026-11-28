@@ -169,7 +169,7 @@ def listing(collection: str, field: str | None = None, under: str | None = None,
     from app.hold import collection as col
     from app.share import coverage as cov, seeder
     root = Path(root) if root is not None else collections_mod.louise_root() / "collections"
-    name, codex = col.resolve(root, collection)
+    name, codex = collections_mod.resolve_seen(root, collection)    # never a hidden one's (07 §7.8)
     snap = seeder.cached_snapshot(col.shard_dir_of(root, name))
     sid = snap.snapshot_id if snap else None
     index_dir = root / name / "index"

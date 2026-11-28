@@ -169,6 +169,12 @@
       <label class="check" title="kept as it is: not searched or shared, nothing fetched or processed, its models not loaded for it; it can then only be renamed, exported or removed. Untick to serve it again">
         <input type="checkbox" data-lock onchange="setLocked('{{ c.name }}', this.checked, this)">lock</label>
     </div>
+    {# HIDDEN (operator, 2026-11-28; 07 §7.8 `hidden`): shown to admins only —
+       it keeps running; to a reader who is not an admin it does not exist #}
+    <div style="flex:0 0 auto;min-width:0;align-self:flex-end;padding-bottom:6px">
+      <label class="check" title="shown to admins only: it keeps fetching and embedding, and a reader who is not an admin does not see, search or read it. Untick to show it to every reader">
+        <input type="checkbox" data-hide {{ 'checked' if c.hidden }} onchange="setHidden('{{ c.name }}', this.checked, this)">hide</label>
+    </div>
   </div>
   {# WHICH HELD SLICES ARE EMBEDDED (07 §7.8 `embed_slices`; operator,
      2026-11-07: wikidata's grow dialog showed its 14 held families checked,
@@ -345,7 +351,7 @@
    ("also:"); they are not a search leg and are not selectable there. #}
 {% for a in annotations %}
 <div class="panel" data-collection="{{ a.name }}" data-kind="annotations">
-  <h2><span data-label title="local name {{ a.name }}: its folders and the command line use it; Options › rename… changes only this name">{{ label(a.name) }}</span> <span class="badge">annotations</span></h2>
+  <h2><span data-label title="local name {{ a.name }}: its folders and the command line use it; Options › rename… changes only this name">{{ label(a.name) }}</span> <span class="badge">annotations</span>{% if a.hidden %} <span class="badge brass" title="shown to admins only: its claims are never attached, shown or walked for a reader who is not an admin">hidden</span>{% endif %}</h2>
   <div>
     {# one badge per target: several at Codex version 9 (02 §2.10, amended 2026-10-20) #}
     {% for t in a.targets|default([a], true) %}
@@ -396,6 +402,12 @@
     <div>
       <label class="check" title="kept as it is: not searched or shared, nothing fetched or processed, its models not loaded for it; it can then only be renamed, exported or removed. Untick to serve it again">
         <input type="checkbox" data-lock onchange="setLocked('{{ a.name }}', this.checked, this)">lock</label>
+    </div>
+    {# HIDDEN (operator, 2026-11-28: "I may want to keep some annotations for
+       admin purpose only"; 07 §7.8 `hidden`) #}
+    <div>
+      <label class="check" title="shown to admins only: its claims are never attached, shown or walked for a reader who is not an admin. Untick to show them to every reader">
+        <input type="checkbox" data-hide {{ 'checked' if a.hidden }} onchange="setHidden('{{ a.name }}', this.checked, this)">hide</label>
     </div>
     {# operator, 2026-11-13: "I want a checkbox in the gui" — shown where a
        method this node runs can make the claims (annotation_methods.not_fitting);
@@ -710,6 +722,13 @@ async function setLocked(name,on,box){
     setTimeout(()=>location.reload(),2500)}
   // refused: the reason stays in sight and the box as it was — no reload
   catch(e){toast('lock refused: '+e);if(box)box.checked=!on}
+}
+// hidden (07 §7.8 `hidden`): written to the collection's file; read again by
+// every reader route at its next request — nothing to reload
+async function setHidden(name,on,box){
+  try{await postJSON('/admin/library/'+name+'/hidden',{hidden:on});
+    toast(name+(on?': hidden — shown to admins only; it keeps running':': shown to every reader again')+' — saved to collections/'+name+'.toml')}
+  catch(e){toast('hide refused: '+e);if(box)box.checked=!on}
 }
 async function setShare(name,on,mode){
   if(!on&&mode==='p2p'&&!confirm(name+' embeds in all p2p mode, which publishes what it embeds; disabling sharing switches it to all local. Proceed?')){location.reload();return}
