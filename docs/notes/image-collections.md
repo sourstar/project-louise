@@ -130,3 +130,37 @@ it cannot see. Making it describe means:
 - about 0.9 GB more on a card the 35B already nearly fills;
 - card time: 141 k images at an unmeasured few seconds each is days, so
   this is measured on 100 images first (measuring.md).
+
+## 9. DECIDED 2026-11-28 by the operator: Met Open Access, and a new kind
+
+The operator: "Met Open Access, and a new kind for descriptions".
+
+- **The origin is the Met's own Open Access**, not archive.org's 2014 copy.
+  Probed 2026-11-28: `collectionapi.metmuseum.org/public/collection/v1/objects`
+  lists **503,480 objects**. Per object, the API JSON holds the full record
+  (constituents with ULAN and Wikidata URLs, dates, medium, measurements,
+  `isPublicDomain`), plus `primaryImage` (original), `primaryImageSmall`
+  (web-large) and `additionalImages`. Only public-domain objects carry
+  images. The bulk is the Open Access CSV (`metmuseum/openaccess`, CC0),
+  which has no image URLs. `/v1/search` was retired on 2026-10-01; its
+  replacement is `/v1.1/search`, paginated.
+- **The image form is the original**, by invariant 11: web-large holds less
+  than the origin gave. One painting measured 8,291,194 B original against
+  272,007 B web-large (30×). The total is NOT counted: assuming 1–4 MB on
+  average over a few hundred thousand files, 0.5–2 TB. It is counted on a
+  sample before acquisition, and it is the node's room that decides when,
+  not whether. Images are a figures part a peer may hold or not. The
+  describer and the previews read a resized copy as derived data
+  (`LOUISE_CACHE_DIR`).
+- **The metadata comes from the bulk first**: every record the CSV can give
+  is built from it. The API is then asked per object only for what the CSV
+  lacks (the image URLs, the constituents' detail). Which form is THE
+  record's origin unit (the CSV row, or the API JSON, which is richer) is
+  recorded beside the plugin, with its reason ("THE ORIGIN FORM, and why").
+- **The descriptions are a new collection kind, "derived reading"**: a text
+  collection whose origin is a `read(describe)` run over another
+  collection's images, with `derives_from` and the run's receipt in its
+  Codex. It is embedded, ranked and labelled "described by <model>", and
+  meets the images by key at ask time. Invariant 4 stays whole. The
+  amendment, to 02, 06 and 09 and new-collection.md's cases, is
+  Architecture's to draft.
