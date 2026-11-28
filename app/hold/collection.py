@@ -303,7 +303,13 @@ def resolve(root: Path, ref: str) -> tuple[str, Codex]:
     held = _held(root)
     if not held:
         raise CodexError(f"no collections under {root}")
+    return resolve_in(root, held, ref)
 
+
+def resolve_in(root: Path, held: list, ref: str) -> tuple[str, Codex]:
+    """`resolve` among `held` alone (`(name, codex)` pairs): what a reader
+    route may see (`collections.resolve_seen`, 07 §7.8 `hidden`), refused in
+    the same words as a name nothing holds."""
     exact = [(n, c) for n, c in held if c.collection_id == _normalise(ref)]
     if exact:
         return exact[0]

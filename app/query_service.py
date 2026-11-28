@@ -95,8 +95,13 @@ def resolve_collections(names: list[str] | None, *,
     # of "all" without being named as withheld, and, when named, unknown —
     # the same answer as a name nothing holds, so the route does not even
     # say that it exists.
-    visible = (lambda c: True) if private else \
-        (lambda c: not collections_mod.is_private(c))
+    # A HIDDEN collection (07 §7.8 `hidden`, 2026-11-28) the same way, to a
+    # viewer who is not an admin (app/viewing.py): it does not exist for them.
+    # A deposit collection on its depositor's own route stays the depositor's
+    # (02 §2.9): hiding is about readers, and it is never on an open route
+    visible = (lambda c: collections_mod.is_private(c) or not collections_mod.hidden_here(c)) \
+        if private else \
+        (lambda c: not collections_mod.is_private(c) and not collections_mod.hidden_here(c))
     if names is None:
         return [c for c in collections_mod.load_all()
                 if visible(c) and withheld_reason(c) is None]
@@ -132,8 +137,11 @@ def resolve_annotations(names: list[str] | None) -> list | None:
     if names is None:
         return None
     served, left_out = collections_mod.annotations_and_refusals()
-    held = {a.name: a for a in served}
-    refused = {r.name: r.reason for r in left_out}
+    # a hidden one (07 §7.8 `hidden`) is unknown to a viewer who is not an
+    # admin — named, it is the name nothing holds
+    hidden = collections_mod.hidden_names_here()
+    held = {a.name: a for a in served if a.name not in hidden}
+    refused = {r.name: r.reason for r in left_out if r.name not in hidden}
     named = [n for n in names if n in refused]
     if named:
         raise HTTPException(403, "; ".join(f"{n}: not served: {refused[n]}" for n in named))
@@ -153,6 +161,8 @@ def withheld_from(names: list[str] | None, *, private: bool = False) -> list[dic
     for c in collections_mod.load_all():
         if collections_mod.is_private(c) and not private:
             continue
+        if collections_mod.hidden_here(c):
+            continue                    # 07 §7.8 `hidden`: never named to a viewer who is not an admin
         reason = withheld_reason(c)
         if reason:
             entry = {"collection": c.name, "reason": reason}

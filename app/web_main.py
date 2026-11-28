@@ -18,8 +18,13 @@ def main(argv: list[str] | None = None) -> int:
     # PID 1 answers SIGTERM while uvicorn and the app load (the kernel gives
     # PID 1 no default action); uvicorn installs its own once it serves
     signal.signal(signal.SIGTERM, _stopped_while_loading)
-    from . import log_file
+    from . import log_file, viewing
     log_file.tee_std("web")
+    # THIS PROCESS ANSWERS READERS (07 §7.8 `hidden`, app/viewing.py): outside
+    # a request — a thread that lost the request's viewer — nobody is looking,
+    # and nobody sees a hidden collection. Here, not at import: a test process
+    # stays the operator's outside its requests, whatever it imported
+    viewing.serve_readers()
     import uvicorn
     sys.argv = ["uvicorn", *(sys.argv[1:] if argv is None else argv)]
     return uvicorn.main()

@@ -511,6 +511,11 @@ class Collection:
     # `load_annotations` refuse it (`LOCKED_SAYS`); `load_locked` lists it
     # (docs/notes/collection-lock.md)
     locked: bool = False
+    # 07 §7.8 `hidden` (operator, 2026-11-28): SHOWN TO ADMINS ONLY — run as
+    # any other (fetched, embedded, shared as its `share` says), and to every
+    # viewer who is not an admin as if it did not exist: not listed, searched,
+    # read, nor its claims attached (`hidden_from`; docs/notes/collection-hide.md)
+    hidden: bool = False
     #: why `embed_mode_default` is not what the file says: `embed = "p2p"`
     #: with `share = false` runs as `all` — p2p publishes what it embeds, and
     #: a node that does not share can publish nothing (07 §7.8, 2026-10-19)
@@ -694,6 +699,7 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
     if not isinstance(share, bool):
         raise ValueError(f"{where}: share is true or false (07 §7.8), got {share!r}")
     locked = _parse_locked(raw, where)
+    hidden = _parse_hidden(raw, where)
     share_slices = _parse_share_list(raw.get("share_slices"), "share_slices", where)
     share_kinds = _parse_share_list(raw.get("share_kinds"), "share_kinds", where)
     embed_slices = _parse_share_list(raw.get("embed_slices"), "embed_slices", where)
@@ -812,6 +818,7 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
         embed_select=embed_select,
         source=source,
         locked=locked,
+        hidden=hidden,
     )
 
 
@@ -840,6 +847,7 @@ def _annotations_collection(path: Path, raw: dict[str, Any], name: str, codex,
     slices = _parse_slices(raw["slices"], where) if "slices" in raw else "all"
     method = _parse_method(raw.get("method"), where)
     locked = _parse_locked(raw, where)
+    hidden = _parse_hidden(raw, where)
     return Collection(
         name=name, plugin=codex.plugin, profile=None, embed_mode_default="off",
         corpus_dir=d / "shard", manifest_path=d / "state" / "manifest.sqlite",
@@ -847,7 +855,7 @@ def _annotations_collection(path: Path, raw: dict[str, Any], name: str, codex,
         license_ack=_codex_ack(codex, d / "state"), embed=None, codex=codex,
         title=title, slices=slices, kinds=kinds, share=share,
         share_slices=share_slices, share_kinds=share_kinds,
-        source="shard", method=method, locked=locked)
+        source="shard", method=method, locked=locked, hidden=hidden)
 
 
 def _parse_locked(raw: dict[str, Any], where) -> bool:
@@ -856,6 +864,122 @@ def _parse_locked(raw: dict[str, Any], where) -> bool:
     if not isinstance(locked, bool):
         raise ValueError(f"{where}: locked is true or false (07 §7.8), got {locked!r}")
     return locked
+
+
+def _parse_hidden(raw: dict[str, Any], where) -> bool:
+    """07 §7.8 `hidden` (2026-11-28): true or false, absent = false."""
+    hidden = raw.get("hidden", False)
+    if not isinstance(hidden, bool):
+        raise ValueError(f"{where}: hidden is true or false (07 §7.8), got {hidden!r}")
+    return hidden
+
+
+def hidden_from(viewer, collection) -> bool:
+    """Is `collection` hidden from `viewer` (07 §7.8 `hidden`, operator
+    2026-11-28: "hides the collection to the non admin users")? Hidden to
+    every viewer who is not an admin (`auth.admin`): a user, the depositor,
+    a guest, and NOBODY (None) — a reader route that lost its viewer shows
+    less, never more. The node's own processes (`viewing.OPERATOR`) see it."""
+    if not getattr(collection, "hidden", False):
+        return False
+    from . import viewing
+    return not viewing.sees_all(viewer)
+
+
+def hidden_here(collection) -> bool:
+    """`hidden_from` the viewer of the request being answered (app/viewing.py)."""
+    from . import viewing
+    return hidden_from(viewing.current(), collection)
+
+
+def seen(collections) -> list:
+    """`collections` without those hidden from the viewer being answered."""
+    return [c for c in collections if not hidden_here(c)]
+
+
+#: path -> ((mtime_ns, size), name if its file says hidden = true else None)
+_HIDDEN_FILES: dict[Path, tuple[tuple[int, int], str | None]] = {}
+
+
+def _hidden_in_files() -> set[str]:
+    """Every collection whose FILE says `hidden = true`, read from the files
+    themselves as `load_locked` pre-reads `locked` — so a file the loader
+    refuses (no encoder, vectors not reachable, an annotations collection
+    mid-refit) is hidden as well; the routes that read the collections on
+    disk still find those. A file that does not read is taken as hidden:
+    what cannot be judged is shown less, never more. Each file is read again
+    only when it changed (its size and mtime)."""
+    cfg_dir = collections_dir()
+    if not cfg_dir.is_dir():
+        return set()
+    out: set[str] = set()
+    for p in sorted(cfg_dir.glob("*.toml")):
+        try:
+            st = p.stat()
+            key = (st.st_mtime_ns, st.st_size)
+            got = _HIDDEN_FILES.get(p)
+            if got is None or got[0] != key:
+                with open(p, "rb") as f:
+                    raw = tomllib.load(f)
+                name = raw.get("name") if isinstance(raw.get("name"), str) else p.stem
+                got = (key, name if raw.get("hidden") is True else None)
+                _HIDDEN_FILES[p] = got
+        except Exception:   # noqa: BLE001 — unreadable: hidden (fail-closed)
+            got = ((0, 0), p.stem)
+        if got[1]:
+            out.add(got[1])
+    return out
+
+
+def hidden_names_here() -> set[str]:
+    """The local names a reader route must not show to the viewer being
+    answered: every collection whose file says `hidden` — served,
+    annotations, locked or refused by the loader."""
+    from . import viewing
+    if viewing.sees_all(viewing.current()):
+        return set()
+    return _hidden_in_files()
+
+
+def closed_names_here(held=None) -> set[str]:
+    """What an OPEN reader route that reads the collections on disk
+    (`hold.collection.resolve`, `list_named`: the graph walk, facets, figures)
+    must not show the viewer being answered: to anyone but an admin and the
+    operator, the hidden ones (07 §7.8) and a deposit collection (07 §7.4:
+    never an open route's; searched with the deposit or the admin token).
+    `held`: the `(name, codex)` listing being filtered, where the caller has it."""
+    from . import viewing
+    if viewing.sees_all(viewing.current()):
+        return set()
+    if held is None:
+        from .hold import collection as col
+        try:
+            held = col.list_named(louise_root() / "collections")
+        except Exception:   # noqa: BLE001 — no listing: the hidden ones alone
+            held = []
+    deposit = {n for n, c in held if getattr(c, "plugin", None) == "deposit"}
+    return _hidden_in_files() | deposit
+
+
+def resolve_seen(root: Path, ref: str):
+    """`hold.collection.resolve` (07 §7.7's four forms) for an open reader
+    route, over the collections the viewer being answered may see
+    (`closed_names_here`) — so one they may not see is never resolved, never
+    named in an ambiguity, and refused with the very words a name nothing
+    holds is refused with."""
+    from .hold import collection as col
+    held = col.list_named(root)
+    shut = closed_names_here(held)
+    return col.resolve_in(root, [(n, c) for n, c in held if n not in shut], ref)
+
+
+def listed_seen(root: Path) -> list:
+    """`hold.collection.list_named`, without what the viewer being answered
+    may not see (`closed_names_here`)."""
+    from .hold import collection as col
+    held = col.list_named(root)
+    shut = closed_names_here(held)
+    return [(n, c) for n, c in held if n not in shut]
 
 
 def locked_says(name: str) -> str:
@@ -1579,13 +1703,13 @@ def is_private(collection) -> bool:
     never-share is not only about peers, and a guest on the LAN is not the
     depositor. Searched only with the deposit token or the admin token
     (07 §7.4)."""
-    codex = getattr(collection, "codex", None)
-    return codex is not None and codex.plugin == "deposit"
+    return getattr(getattr(collection, "codex", None), "plugin", None) == "deposit"
 
 
 def load_public() -> list:
-    """Every collection an open route may name, list or search."""
-    return [c for c in load_all() if not is_private(c)]
+    """Every collection an open route may name, list or search — for the
+    viewer being answered: a hidden one only for an admin (`seen`)."""
+    return seen(c for c in load_all() if not is_private(c))
 
 
 def default_collection() -> Collection:

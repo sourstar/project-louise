@@ -19,7 +19,7 @@
   <div id="annotation-chips">
     {% for a in annotations %}
     <span class="chip ann on" data-name="{{ a.name }}" onclick="toggleChip(this)"
-          title="{{ a.title }} — annotates {{ label(a.target) if a.target else 'a collection not held here' }} from snapshot {{ a.from_snapshot }}">{{ label(a.name) }}{% if a.target %} <small>→ {{ label(a.target) }}</small>{% endif %}</span>
+          title="{{ a.title }} — annotates {{ a.applies_to|map('label_of')|join(' · ') if a.applies_to else 'a collection not held here' }} (the collection it was made for and its family) from snapshot {{ a.from_snapshot }}">{{ label(a.name) }}{% if a.applies_to %} <small>→ {{ a.applies_to|map('label_of')|join(' · ') }}</small>{% endif %}</span>
     {% endfor %}
   </div>
   {% endif %}
