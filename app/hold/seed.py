@@ -358,9 +358,29 @@ def seed_shards(root, to_ref: str, from_ref: str, *, from_snapshot: str | None =
     return out
 
 
-#: what a seeded part must reproduce of its source part, beyond its bytes
-SAME = ("root", "records_root", "first_id", "last_id", "records", "chunks", "chunks_root",
-        "tokens", "bytes")
+#: what a seeded part must reproduce of its source part, beyond its bytes.
+#: NOT `tokens`: it is chunks × the SPACE's ctx (snapshot.Shard), so a sister
+#: in another space — an encoder sister, `--encoder-from` — states it for her
+#: own ctx (München, 2026-11-28: gutenberg-nemo's carry withdrawn for
+#: "lang=ar/1: tokens 32764 != 32768", 4 chunks × 8191 against × 8192). It is
+#: held to `chunks × ctx` of HER Codex instead (`part_differences`)
+SAME = ("root", "records_root", "first_id", "last_id", "records", "chunks", "chunks_root", "bytes")
+
+
+def part_differences(have: dict, want: dict, ctx: int) -> list[str]:
+    """What the seeded parts `have` (by (slice, n)) do not reproduce of the
+    source's `want`: a part missing or extra, a SAME field that differs, or a
+    `tokens` that is not its own `chunks × ctx`."""
+    bad = [f"{k[0]}/{k[1]}: {'missing' if k not in have else 'extra'}"
+           for k in sorted(set(have) ^ set(want))]
+    for k in sorted(set(have) & set(want)):
+        for f in SAME:
+            if getattr(have[k], f) != getattr(want[k], f):
+                bad.append(f"{k[0]}/{k[1]}: {f} {getattr(have[k], f)!r} != {getattr(want[k], f)!r}")
+        if have[k].tokens != have[k].chunks * ctx:
+            bad.append(f"{k[0]}/{k[1]}: tokens {have[k].tokens!r} != chunks × ctx "
+                       f"{have[k].chunks * ctx!r}")
+    return bad
 
 
 def same_parts_or_withdraw(root, to_name: str, snap, from_ref: str,
@@ -377,12 +397,8 @@ def same_parts_or_withdraw(root, to_name: str, snap, from_ref: str,
     src = latest_snapshot(root, from_name, from_snapshot or snap.snapshot_id)
     have = {(s.slice, s.n): s for s in snap.shards}
     want = {(s.slice, s.n): s for s in src.shards}
-    bad = [f"{k[0]}/{k[1]}: {'missing' if k not in have else 'extra'}"
-           for k in sorted(set(have) ^ set(want))]
-    for k in sorted(set(have) & set(want)):
-        for f in SAME:
-            if getattr(have[k], f) != getattr(want[k], f):
-                bad.append(f"{k[0]}/{k[1]}: {f} {getattr(have[k], f)!r} != {getattr(want[k], f)!r}")
+    _to, mine = col.resolve(root, to_name)
+    bad = part_differences(have, want, mine.space.ctx)
     if bad:
         d = col.shard_dir_of(root, to_name)
         for p in (d / shard_mod.snapshot_path(snap.snapshot_id),

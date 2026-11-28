@@ -1794,3 +1794,20 @@ def test_a_forget_that_would_cut_a_sister_off_its_corpus_is_refused(pair, tmp_pa
     out = forget.forget(root, "old")
     assert not (root / "old").exists() and str(corpora / "old") not in out["removed"]
     assert Path(_path(root, "re", uid).split("::")[0]).read_bytes() == b"the corpus"
+
+
+def test_a_seeded_part_s_tokens_follow_her_own_space_s_ctx():
+    """München, 2026-11-28: gutenberg-nemo (an encoder sister, Nemotron ctx
+    8191) was withdrawn for "lang=ar/1: tokens 32764 != 32768" against
+    gutenberg (ctx 8192). `tokens` is chunks × the space's ctx: held to HER
+    ctx, never to her sister's; every other field still to the source's."""
+    from types import SimpleNamespace as P
+    want = {("lang=ar", 1): P(root="r", records_root="rr", first_id="a", last_id="b", records=2,
+                             chunks=4, chunks_root="c", tokens=4 * 8192, bytes=10)}
+    mine = {("lang=ar", 1): P(root="r", records_root="rr", first_id="a", last_id="b", records=2,
+                             chunks=4, chunks_root="c", tokens=4 * 8191, bytes=10)}
+    assert seed.part_differences(mine, want, 8191) == []
+    # the same chunks stated at the wrong ctx, or other chunks: refused
+    assert seed.part_differences(mine, want, 8192) == ["lang=ar/1: tokens 32764 != chunks × ctx 32768"]
+    other = {k: P(**{**vars(v), "chunks": 5, "tokens": 5 * 8191}) for k, v in mine.items()}
+    assert seed.part_differences(other, want, 8191) == ["lang=ar/1: chunks 5 != 4"]
