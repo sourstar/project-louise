@@ -2509,7 +2509,7 @@ names one schema, the one its section fixes:
 | `louise-codex` | 12 | §9.3 (12 since 2026-11-18: `annotates[].select`, written for an annotations Codex with a selected target alone; 11 since 2026-11-02: `space.document`; 10 since 2026-11-01: `space.exactness`, written for a space that requires bit-exact runs alone; 5 since 2026-10-08: a layer's `input`; 6 since 2026-10-08: a backend engine, and written for a Codex that carries one alone — every other is written at 5; 7 since 2026-10-09: `annotates`, written for an annotations Codex alone, 02 §2.10; 8 since 2026-10-18: `space.cut`, written for a space that declares the token cut alone; 9 since 2026-10-20: `slicing.container`, `annotates` as a list, the claim types `mention`, `relation`, `community` and, since 2026-11-16, `language-stage` — written for a Codex that declares one of them alone) |
 | `louise-snapshot` | 2 | §9.4 |
 | `louise-snapshot-sig` | 1 | §9.4 |
-| record line | 2 | §9.5 |
+| record line | 3 | §9.5 (`3` adds `origin_gaps`, *amended 2026-11-28*; a Codex's `record_line` names which a collection writes, §9.3) |
 | part index (`LOUISE-PACK-IDX1`) | 1 | §9.5 |
 | figures container index (`LOUISE-FIGURES-1`) | 1 | §9.5 |
 | `louise-index` | 1 | §9.6 |
