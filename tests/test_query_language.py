@@ -65,7 +65,7 @@ def test_the_guess_stands_in_when_the_reading_is_unavailable(isolated_config, mo
     monkeypatch.setattr(llm, "language_restriction", lambda q: None)
     monkeypatch.setattr(llm, "translate_query", lambda q, langs: {"en": "the white whale"})
     plan = language_plan.plan("la caccia alla balena bianca", [c], True)
-    assert plan.status == "unavailable"
+    assert plan.status == "unchecked", "the limit not checked; translated all the same (operator, 2026-11-28)"
     assert (plan.query_lang, plan.query_lang_by) == ("it", "guess")
 
 

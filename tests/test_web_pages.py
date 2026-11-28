@@ -1763,3 +1763,29 @@ def test_the_library_does_not_offer_run_everything_in_query_mode(client):
     assert got["download/seeding only"] is True, "the mode the node is in"
     assert got["seeding only"] is False and got["pause"] is False
     assert "embed mode runs everything" in html
+
+
+def test_one_unreadable_manifest_never_takes_the_library_down(client, monkeypatch):
+    """Operator, 2026-11-28: "Library tab now gives internal server error" —
+    EUR-Lex5.next's manifest header overwritten ("file is not a database"),
+    and every card was lost with it. The others render; it is named, with why."""
+    import sqlite3
+    from dataclasses import replace
+    from app import collections as collections_mod, web
+    real = collections_mod.default_collection()
+    broken = replace(real, name="EUR-Lex5.next")
+    monkeypatch.setattr(collections_mod, "load_all", lambda *a, **k: [real, broken])
+    monkeypatch.setattr(collections_mod, "load_public", lambda *a, **k: [real, broken])
+    shelf = web._collection_shelf
+
+    def card(c, *a, **kw):
+        if c.name == "EUR-Lex5.next":
+            raise sqlite3.DatabaseError("file is not a database")
+        return shelf(c, *a, **kw)
+    monkeypatch.setattr(web, "_collection_shelf", card)
+    r = client.get("/admin/library", headers={"X-Admin-Token": "sekrit"})
+    assert r.status_code == 200
+    assert f'data-collection="{real.name}"' in r.text, "the other cards render"
+    assert 'data-collection="EUR-Lex5.next" data-kind="refused"' in r.text
+    assert "its manifest cannot be read (DatabaseError: file is not a database)" in r.text
+    assert client.get("/library").status_code in (200, 303, 307, 401), "the users' Library renders too"

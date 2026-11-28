@@ -373,7 +373,12 @@ def plan(query: str, collections, translate: bool, every: bool = False) -> Langu
     if found is None:
         found = llm.language_restriction(query_core)
         if found is None:
-            status, found = "unavailable", ([], query_core)
+            # the chat model did not say whether the query limits its
+            # languages: every language is searched. NOT "not translated" —
+            # the translations below may well come (operator, 2026-11-28:
+            # "languages: query not translated" beside "fan-out: 8 main
+            # languages, by the translation model")
+            status, found = "unchecked", ([], query_core)
     only, core = found
     query_lang, query_lang_by = _query_lang(found, core or query_core, collections, held)
     if only:
@@ -392,7 +397,7 @@ def plan(query: str, collections, translate: bool, every: bool = False) -> Langu
     ask = [t for t in targets if t != query_lang]
     translations, by = _translations(core, ask) if ask else ({}, "")
     if ask and not translations:
-        status = "unavailable"
+        status = "unavailable"                 # not translated: the query as typed alone
     result = LanguagePlan(core=core or query_core, only=tuple(only),
                           translations=translations, status=status, by=by, every=every,
                           query_lang=query_lang, query_lang_by=query_lang_by,

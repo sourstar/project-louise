@@ -3825,6 +3825,24 @@ def _refuse_withheld(collection, use: str) -> None:
         raise HTTPException(403, str(e)) from None
 
 
+def _shelves(collections, measured, worker_state) -> tuple[list[dict], list[dict]]:
+    """Each collection's card, and those that cannot be read: ONE UNREADABLE
+    MANIFEST NEVER TAKES THE PAGE DOWN (operator, 2026-11-28: "Library tab
+    now gives internal server error" — EUR-Lex5.next's manifest header was
+    overwritten, "file is not a database", and every card was lost with it).
+    The rest render; the broken one is named, with why, among the refused."""
+    shelves, broken = [], []
+    for c in collections:
+        try:
+            shelves.append(_collection_shelf(c, measured, worker_state))
+        except (sqlite3.DatabaseError, OSError) as e:
+            print(f"{time.strftime('%H:%M:%S')} [{c.name} err:library] its card cannot be read: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            broken.append({"name": c.name, "reason": f"its manifest cannot be read ({type(e).__name__}: {e}); "
+                                                     f"not shown until it is repaired"})
+    return shelves, broken
+
+
 @admin_router.get("/library", response_class=HTMLResponse)
 def library_page(request: Request):
     collections = collections_mod.load_all()
@@ -3834,7 +3852,7 @@ def library_page(request: Request):
     # "waiting for the index" (true only while the worker runs) from
     # "waiting for the operator".
     worker_state = node_state.worker_state()
-    shelves = [_collection_shelf(c, measured, worker_state) for c in collections]
+    shelves, broken = _shelves(collections, measured, worker_state)
     # 02 §2.10: the annotations collections this node holds — held, checked
     # and shared like any collection, never ingested, embedded or ranked, so
     # `load_all` leaves them out and the shelf's stages do not apply. Shown
@@ -3859,7 +3877,7 @@ def library_page(request: Request):
               for c in collections_mod.load_locked()]
     locked_names = {x["name"] for x in locked}
     refused = [{"name": r.name, "reason": r.reason} for r in [*collections_mod.refusals(), *left_out]
-               if r.name not in locked_names]
+               if r.name not in locked_names] + broken
     return TEMPLATES.TemplateResponse(request, "library.html", {
         "active": "library",
         "refused": refused,
@@ -3897,7 +3915,7 @@ def user_library_page(request: Request):
     (auth.READER_PATHS)."""
     measured = _worker_stats()
     worker_state = node_state.worker_state()
-    shelves = [_collection_shelf(c, measured, worker_state) for c in collections_mod.load_public()]
+    shelves, _broken = _shelves(collections_mod.load_public(), measured, worker_state)
     return TEMPLATES.TemplateResponse(request, "user_library.html", {
         "active": "library", "shelves": shelves, "worker_state": worker_state,
         "readonly": True})
