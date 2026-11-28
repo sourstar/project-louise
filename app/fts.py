@@ -944,6 +944,30 @@ def book_chunks(group: str, book_id: int, collection=None) -> list[dict]:
     return out
 
 
+def chunks_by_id(collection, chunk_ids: list[str]) -> dict[str, str]:
+    """{chunk id: stored text} of the chunks named, over every group — a term
+    query on the raw `chunk_id` field per id, no text query and no corpus
+    file: what a passage's neighbours cost (retrieval._attach_around; a
+    record read and cut again measured 300 ms warm, 770 ms cold, on the
+    live node, 2026-11-28). An id the index does not hold is absent."""
+    out: dict[str, str] = {}
+    want = [c for c in dict.fromkeys(chunk_ids) if c]
+    if not want:
+        return out
+    for group in existing_groups(collection):
+        idx = get_index(group, collection)
+        idx.reload()
+        q = tantivy.Query.boolean_query(
+            [(tantivy.Occur.Should, tantivy.Query.term_query(idx.schema, "chunk_id", c)) for c in want])
+        searcher = idx.searcher()
+        for _score, addr in searcher.search(q, len(want)).hits:
+            doc = searcher.doc(addr)
+            out.setdefault(doc["chunk_id"][0], doc["body"][0])
+        if len(out) == len(want):
+            break
+    return out
+
+
 def chunk_counts(collection, book_ids: list[int]) -> dict[int, int]:
     """How many chunks the text index holds for each of `book_ids`, summed
     over every language group (a document's sections can land in several,

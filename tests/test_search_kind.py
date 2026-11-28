@@ -628,3 +628,135 @@ def test_the_note_takes_the_language_whole_and_says_one_in_the_singular(lang, st
     from app import api
     r = {"hits": [], "kind_applied": "literature", "left_out": {"count": 1, "by_basis": {"x": 1}}}
     assert api.kind_note(r, lang).startswith(start)
+
+
+# ---- a work asked about is read, not glimpsed (the 9B's judged set, 2026-11-28) -------------
+
+def _long_book(tmp_path, name="gutenberg"):
+    """War and Peace's real record, with a text that cuts into many chunks:
+    paragraph n says "Paragraph n." and words enough to fill chunks."""
+    from app import discovery, worker
+    import dataclasses
+    from tests.test_work_kind import _collection
+    c = _collection(tmp_path, ids=(2600,))
+    if name != "gutenberg":
+        c = dataclasses.replace(c, name=name)
+    txt = next((c.corpus_dir / "2600").glob("*.txt.utf8"))
+    txt.write_text("\n\n".join(f"Paragraph {n}. " + "The army crossed the river at dawn. " * 40
+                               for n in range(1, 41)), encoding="utf-8")
+    con = db_connect(c)
+    discovery.sync_collection(con, c)
+    for row in con.execute("SELECT * FROM documents").fetchall():
+        worker.stage_rdf(con, row, c)
+    if con.in_transaction:
+        con.execute("COMMIT")
+    from app import layers, plugin_io
+    row = dict(con.execute("SELECT uid, source, native_id, path, lang FROM documents").fetchone())
+    title, sections = plugin_io.title_and_sections(c.plugin_instance(), row, c)
+    cut = layers.chunks_for_document(c, row, sections, title=title)
+    from app import fts
+    fts.index_book(row["lang"] or "en", 2600, cut, collection=c)   # the text index holds them, as the worker's stage does
+    return c, con, row, cut
+
+
+def db_connect(c):
+    from app import db
+    return db.connect(c)
+
+
+def test_a_literature_search_reads_the_first_works_passage_with_its_neighbours(isolated_config, tmp_path):
+    c, con, row, cut = _long_book(tmp_path)
+    assert len(cut) >= 5, "the fixture cuts into chunks"
+    mid = cut[len(cut) // 2]
+    hits = [{"chunk_id": mid["id"], "uid": row["uid"], "book_id": 2600, "text": mid["text"]}]
+    retrieval._attach_around(con, c, hits)
+    i = len(cut) // 2
+    assert hits[0]["around"] == "\n\n".join(x["text"] for x in cut[i - 1:i + 2]), "before, it, after: in order"
+    assert hits[0]["text"] == mid["text"], "the hit's own passage is unchanged"
+    first = [{"chunk_id": cut[0]["id"], "uid": row["uid"], "book_id": 2600, "text": cut[0]["text"]}]
+    retrieval._attach_around(con, c, first)
+    assert first[0]["around"] == cut[0]["text"] + "\n\n" + cut[1]["text"], "at the start: it and the next"
+
+
+def test_only_a_literature_search_reads_around_and_every_answer_path_reads_it(isolated_config, tmp_path, monkeypatch):
+    c, con, row, cut = _long_book(tmp_path)
+    mid = cut[len(cut) // 2]
+    monkeypatch.setattr(retrieval.refs, "get_store", lambda: None)
+    monkeypatch.setattr(retrieval.refs.RESOLVER, "resolve", lambda q, s: [])
+    hit = {"chunk_id": mid["id"], "uid": row["uid"], "book_id": 2600, "text": mid["text"], "score": 1.0,
+           "rrf": 0.03, "source_collection": "gutenberg", "source": "fts"}
+    monkeypatch.setattr(retrieval, "_search_one_collection", lambda *a, **kw: {
+        "catalog": [], "merged": [dict(hit)], "translations": {}, "timings": {}, "scope": {},
+        "kind_applied": kw.get("kind", "all") if isinstance(kw.get("kind", "all"), str) else "literature",
+        "kind_by": "the reader", "left_out": {"count": 0, "by_basis": {}}})
+    monkeypatch.setattr(retrieval, "_rerank_list", lambda q, hs, *a, **kw: (hs, False))
+    lit = retrieval.search(con, "Napoleon", k=5, collection=c, translate=False, kind="literature")
+    assert lit["hits"][0].get("around") and mid["text"] in lit["hits"][0]["around"]
+    plain = retrieval.search(con, "Napoleon", k=5, collection=c, translate=False)
+    assert "around" not in plain["hits"][0], "a search of another kind is as it was"
+    # the page's /v1 answer and the chat's tool answer both read it
+    _, user = retrieval.build_answer_messages("Napoleon", lit)[0:2]
+    assert cut[len(cut) // 2 - 1]["text"][:200] in user["content"]
+    from app.ask import chat
+    assert chat._body_of({"text": "x" * 900, "around": "y" * 6000}) == "y" * chat.AROUND_CHARS + " …"
+    assert chat._body_of({"text": "x" * 900}) == "x" * chat.TEXT_CHARS + " …"
+
+
+
+def test_a_federated_literature_search_reads_around_the_first_three_of_the_whole_list(
+        isolated_config, tmp_path, monkeypatch):
+    """Architecture's read of 0536b5da, 1: each collection's first three got
+    `around` — up to nine books read for one question."""
+    a, con_a, row_a, cut_a = _long_book(tmp_path / "a", "gutenberg")
+    b, con_b, row_b, cut_b = _long_book(tmp_path / "b", "gutenberg-nemo")
+    monkeypatch.setattr(retrieval.refs, "get_store", lambda: None)
+    monkeypatch.setattr(retrieval.refs.RESOLVER, "resolve", lambda q, s: [])
+    by = {a.name: (row_a, cut_a), b.name: (row_b, cut_b)}
+
+    def legs(con, c, *x, **kw):
+        row, cut = by[c.name]
+        hits = [{"chunk_id": cut[i]["id"], "uid": row["uid"], "book_id": 2600 + i, "text": cut[i]["text"],
+                 "score": 1.0, "rrf": 0.03, "source": "fts"} for i in (2, 4, 6, 8)]
+        return {"catalog": [], "merged": hits, "translations": {}, "timings": {"catalog": 0.0}, "scope": {},
+                "kind_applied": "literature", "kind_by": "the reader", "left_out": {"count": 0, "by_basis": {}}}
+    monkeypatch.setattr(retrieval, "_search_one_collection", legs)
+    monkeypatch.setattr(retrieval, "_rerank_list", lambda q, hs, *x, **kw: (hs, False))
+    monkeypatch.setattr(retrieval, "_one_hit_per_work", lambda ranked, *x, **kw: ranked)
+    out = retrieval.federated_search([a, b], "Napoleon", k=8, translate=False, kind="literature")
+    around = [h for h in out["hits"] if h.get("around")]
+    assert len(out["hits"]) >= 6 and len(around) == 3, [(h["source_collection"], bool(h.get("around"))) for h in out["hits"]]
+    assert around == out["hits"][:3], "the first three of the whole list"
+    assert "around" in out["timings"] and out["timings"]["around"] >= 0.0
+
+
+def test_the_search_says_what_reading_around_took(isolated_config, tmp_path, monkeypatch):
+    c, con, row, cut = _long_book(tmp_path)
+    mid = cut[len(cut) // 2]
+    monkeypatch.setattr(retrieval.refs, "get_store", lambda: None)
+    monkeypatch.setattr(retrieval.refs.RESOLVER, "resolve", lambda q, s: [])
+    monkeypatch.setattr(retrieval, "_search_one_collection", lambda *x, **kw: {
+        "catalog": [], "merged": [{"chunk_id": mid["id"], "uid": row["uid"], "book_id": 2600, "text": mid["text"],
+                                   "score": 1.0, "rrf": 0.03, "source_collection": "gutenberg", "source": "fts"}],
+        "translations": {}, "timings": {}, "scope": {}, "kind_applied": kw.get("kind", "all"), "kind_by": "the reader",
+        "left_out": {"count": 0, "by_basis": {}}})
+    monkeypatch.setattr(retrieval, "_rerank_list", lambda q, hs, *x, **kw: (hs, False))
+    out = retrieval.search(con, "Napoleon", k=5, collection=c, translate=False, kind="literature")
+    assert out["timings"]["around"] >= 0.0
+    assert "around" not in retrieval.search(con, "Napoleon", k=5, collection=c, translate=False)["timings"]
+
+
+
+def test_a_neighbour_that_is_itself_a_hit_is_read_and_the_lookup_is_by_id(isolated_config, tmp_path, monkeypatch):
+    """The neighbours come from the text index by id (`fts.chunks_by_id`): no
+    record read, no cut (re-cutting measured 300 ms warm, 770 ms cold a hit)."""
+    from app import fts, layers
+    c, con, row, cut = _long_book(tmp_path)
+    monkeypatch.setattr(layers, "chunks_for_document", lambda *a, **kw: pytest.fail("no record is cut again"))
+    asked = []
+    real = fts.chunks_by_id
+    monkeypatch.setattr(fts, "chunks_by_id", lambda coll, ids: asked.append(list(ids)) or real(coll, ids))
+    hits = [{"chunk_id": cut[i]["id"], "uid": row["uid"], "text": cut[i]["text"]} for i in (3, 4)]
+    retrieval._attach_around(con, c, hits)
+    assert len(asked) == 1, "one lookup for every hit"
+    assert hits[0]["around"] == "\n\n".join(x["text"] for x in cut[2:5])
+    assert hits[1]["around"] == "\n\n".join(x["text"] for x in cut[3:6])
