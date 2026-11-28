@@ -51,9 +51,17 @@ def _log(msg: str) -> None:
 
 def steps() -> list[tuple[str, str, Callable[[], object]]]:
     """(name, server, warm) for every model the question path always or
-    slowly needs, in the order a question meets them."""
+    slowly needs: THE CHAT MODEL FIRST (operator, 2026-11-28, option B, after
+    the first question after a deploy waited on the 35B's 64-s cold load —
+    the language check gave up at 25 s, the kind was not decided, and the
+    rerank ran beside the load: 57 s in all), then the translator and the
+    rerankers, the order a question meets them. The card makes room for it
+    as it does for any load (the keeper's reclaimer: MADLAD and an encoder
+    left the card for the 35B that day)."""
     from app import collections as collections_mod, config, llm, model_load, retrieval, translate
     out: list[tuple[str, str, Callable[[], object]]] = []
+    if config.CHAT_API == "openai" and config.CHAT_URL and config.CHAT_MODEL:
+        out.append((config.CHAT_MODEL, model_load.server_of(config.CHAT_URL), llm.warm))
     if config.TRANSLATE_MODEL and config.TRANSLATE_URL:
         out.append((config.TRANSLATE_MODEL, model_load.server_of(config.TRANSLATE_URL), translate.warm))
     seen: set[tuple[str, str]] = set()
@@ -67,8 +75,6 @@ def steps() -> list[tuple[str, str, Callable[[], object]]]:
             continue
         seen.add((r.url, r.model))
         out.append((r.model, model_load.server_of(r.url), lambda r=r: retrieval._warm_reranker(r)))
-    if config.CHAT_API == "openai" and config.CHAT_URL and config.CHAT_MODEL:
-        out.append((config.CHAT_MODEL, model_load.server_of(config.CHAT_URL), llm.warm))
     return out
 
 
