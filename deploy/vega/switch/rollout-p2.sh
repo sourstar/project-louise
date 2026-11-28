@@ -133,7 +133,7 @@ check() {   # retried while the worker still holds the collection; its own statu
 }
 for c in gutenberg normattiva pubmed wikipedia; do
   echo "--- $c"
-  $L node pause "$c" >/dev/null
+  $L node pause "$c" >/dev/null || [ $? -eq 3 ]   # 3: its unit outlasted the wait; the check waits on
   check "$c" || { echo "THE GATE FAILED on $c: it stays paused; BACKOUT below"; exit 1; }
   $L node resume "$c" >/dev/null
 done

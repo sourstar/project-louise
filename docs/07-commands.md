@@ -432,7 +432,13 @@ louise node
   stop                                                                 the worker finishes its current units, commits, exits 0 — asked through state/node.sqlite, which
                                                                        every container of the node shares; it does not wait (built 2026-10-25)
   show                                                                 state per collection, the current stage, the last round's cost, overrides in force
-  pause [<collection>] [--acquire-only | --seed-only]                  a runtime override: the node's mode — nothing, seeding only, or download and seeding only — until resume; it survives a restart (§7.8)
+  pause [<collection>] [--acquire-only | --seed-only] [--wait SECONDS]
+                                                                       a runtime override: the node's mode — nothing, seeding only, or download and seeding only — until resume; it survives a restart (§7.8).
+                                                                       ONE collection's pause WAITS until it is applied: until the worker has let go of the collection's write lock, at the end of
+                                                                       its current unit, or no worker runs it — said once ("waiting for the worker to finish <collection>'s current unit…"), then
+                                                                       exit 0. At most --wait (default 120 s: the worker's retirement of the collection's threads, 60 s at most, and a round to
+                                                                       reach it; 0: not at all, the pause recorded and nothing waited for); past it, exit 3 — the route's 503, a deferral — the
+                                                                       pause recorded and still being applied. The node's own pause releases no lock and waits for nothing (amended 2026-11-28)
   resume [<collection>]                                                the node goes back to what its mode of use runs — everything in embed mode and in custom mode,
                                                                        query mode's own run mode in query mode (amended 2026-11-25) — or one collection
   mode [embed|query|custom]                                            the node's MODE OF USE, read or switched (added 2026-11-25, operator; a third mode and the word
@@ -2296,7 +2302,13 @@ answer: `collection forget`, `vectors check --drop` and `dev migrate schema`
 — and `collection migrate --apply`, the Codex-field
 migration of 2026-09, the same way. `node pause <collection>` releases
 the lock at the end of the current unit, and those then run (built
-2026-10-06; `dev migrate schema` 2026-10-07). A reader never blocks a
+2026-10-06; `dev migrate schema` 2026-10-07). The pause waits for that
+release, bounded (`--wait`, 120 s), and a writing command that finds a
+PAUSED collection still held by the worker waits for it within the same
+bound instead of refusing at once, saying so once; past the bound it exits
+3, the pause still being applied — 3 for the four too, since a retry is
+then the answer. Any other holder, or a collection not paused, is refused
+at once as before (amended 2026-11-28). A reader never blocks a
 writer or is blocked by one: the state database runs in write-ahead
 mode, and a writer that reads first begins immediately, never deferred.
 Two nodes on one machine are two roots (§7.8) and share nothing.
