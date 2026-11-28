@@ -114,14 +114,14 @@ def test_without_the_admin_token_nothing_runs(client):
 
 # ---- the worker's command thread ------------------------------------------
 
-def _serve_until(predicate, monkeypatch, run):
+def _serve_until(predicate, monkeypatch, run, within: float = 10):
     monkeypatch.setattr(ac, "run", run)
     stop = threading.Event()
     t = threading.Thread(target=jobs.serve_commands, args=(stop,),
                          kwargs={"poll_s": 0.01, "log": lambda m: None})
     t.start()
     try:
-        deadline = time.time() + 10
+        deadline = time.time() + within
         while not predicate() and time.time() < deadline:
             time.sleep(0.02)
     finally:
@@ -165,3 +165,29 @@ def test_the_child_is_the_cli_itself(isolated_config, tmp_path, monkeypatch):
     monkeypatch.setenv("LOUISE_ROOT", str(tmp_path))
     got = ac.run(["hold", "collection", "nothing-here"], timeout=60)
     assert got["exit"] == 2 and got["status"] == 409 and "invalid choice" in got["message"]
+
+
+def test_a_routed_pause_answers_200_once_applied_and_503_past_its_bound(client, monkeypatch):
+    """`POST /api/node/pause` for one collection (München, 2026-11-28; docs/
+    notes/manual-steps.md, 5): queued, run by the worker's command thread as
+    the CLI itself, its wait's exit the job's status."""
+    from app.hold import lock as lock_mod
+    real_run = ac.run
+    state = lock_mod.state_dir(config.louise_root() / "collections", "c")
+    in_its_unit = lock_mod.take(state, "c", lock_mod.WORKER)        # the worker, finishing its unit
+    try:
+        r = client.post("/api/node/pause", json={"collection": "c", "wait": 0.5})
+        assert r.status_code == 202, r.text
+        job_id = r.json()["id"]
+        assert jobs.get(job_id).args["argv"] == ["node", "pause", "--wait", "0.5", "c"]
+        assert _serve_until(lambda: jobs.get(job_id).state == jobs.FAILED, monkeypatch, real_run, within=90)
+    finally:
+        in_its_unit.release()
+    got = client.get(r.json()["job"]).json()["result"]
+    assert got["exit"] == 3 and got["status"] == 503 and "still being applied" in got["message"]
+    assert got["output"]["applied"] is False and got["output"]["paused"] == ["c"]
+    r = client.post("/api/node/pause", json={"collection": "c"})     # the default bound, the lock free
+    job_id = r.json()["id"]
+    assert _serve_until(lambda: jobs.get(job_id).state == jobs.DONE, monkeypatch, real_run, within=90)
+    got = client.get(r.json()["job"]).json()["result"]
+    assert got["exit"] == 0 and got["status"] == 200 and got["output"]["applied"] is True

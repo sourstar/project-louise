@@ -1061,19 +1061,13 @@ def _hold_off_worker(root, name: str, by: str, *, wait_s: float | None = None) -
     already (a rerun), its unit is waited for, at most `wait_s`; past that the
     gate's own refusal says who holds it. True when THIS paused her: only
     then does `_let_worker_back` resume her, so an operator's pause stands."""
-    import time as _time
     from app import node_state
     from app.hold import lock as lock_mod
     here = name not in node_state.paused_collections()
     if here:
         node_state.set_paused(name, True, by=by)
-    deadline = _time.monotonic() + (WORKER_LET_GO_S if wait_s is None else wait_s)
-    state = lock_mod.state_dir(Path(root), name)
-    while _time.monotonic() < deadline:
-        who = lock_mod.holder(state)
-        if who is None or who.get("what") != "the node (worker)":
-            break
-        _time.sleep(2.0)
+    lock_mod.wait_while_held(lock_mod.state_dir(Path(root), name),
+                             WORKER_LET_GO_S if wait_s is None else wait_s)
     return here
 
 
@@ -1597,12 +1591,13 @@ def _sister_new(a, say) -> int:
         try:
             for n in sorted({her_sister_name, name}):
                 try:
-                    locks.append(lock_mod.take(lock_mod.state_dir(root, n), n,
-                                               f"louise hold collection new --sister-of {her_sister_name} (carry)"))
+                    locks.append(_take_lock(root, n,
+                                            f"louise hold collection new --sister-of {her_sister_name} (carry)"))
                 except lock_mod.Held as e:
-                    raise _defer(f"{e}. The carry needs both collections still: `louise node pause "
-                                 f"{her_sister_name}` ({name} is paused since it was made); then run this "
-                                 f"again: it resumes at the carry") from None
+                    raise _defer(f"{e}. " + ("" if e.waited is not None else
+                                             f"The carry needs both collections still: `louise node pause "
+                                             f"{her_sister_name}` ({name} is paused since it was made); ")
+                                 + "Then run this again: it resumes at the carry") from None
             run.at("carry", f"from {her_sister_name}: its parts, then its manifest and text index, none of "
                             f"its vectors")
             _whole_quota()
@@ -2239,12 +2234,13 @@ def _recreate_carry(a, run, name: str, codex, pred, measured: dict, say) -> None
     try:
         for n in sorted({a.name, name}):
             try:
-                locks.append(lock_mod.take(lock_mod.state_dir(root, n), n,
-                                           f"louise hold collection new --re-create {a.name} (carry)"))
+                locks.append(_take_lock(root, n, f"louise hold collection new --re-create {a.name} (carry)"))
             except lock_mod.Held as e:
-                raise _defer(f"{e}. The carry needs both collections still: `louise node pause {a.name}` "
-                             f"({name} is paused since it was made); the worker lets go at the end of "
-                             f"its unit. Then run this again: it resumes at the carry") from None
+                raise _defer(f"{e}. " + ("" if e.waited is not None else
+                                         f"The carry needs both collections still: `louise node pause {a.name}` "
+                                         f"({name} is paused since it was made); the worker lets go at the end "
+                                         f"of its unit. ")
+                             + "Then run this again: it resumes at the carry") from None
         run.at("carry", f"from {a.name}: its parts, a sample of {a.sample} chunk(s) re-encoded by the new "
                         f"run, then its manifest, text index and vector table")
         # the pass over the parts (the snapshot's roots, the sample's cuts) on
@@ -2393,8 +2389,7 @@ def _recreate_swap(a, run, name: str, codex, say) -> int:
     text = kept.get("file") or (run.done("carry") or {}).get("file")
     if name != a.name:
         try:
-            lk = lock_mod.take(lock_mod.state_dir(root, name), name,
-                               f"louise hold collection new --re-create {a.name} (swap)")
+            lk = _take_lock(root, name, f"louise hold collection new --re-create {a.name} (swap)")
         except lock_mod.Held as e:
             raise _defer(f"{e}. Then run this again: it resumes at the swap") from None
         try:
@@ -2445,8 +2440,7 @@ def _recreate_take_over(root: Path, name: str, codex, say) -> dict:
         raise CodexError(f"swap: {name} is not paused, and its vector table moves from the build area "
                          f"now: `louise node pause {name}`, then run this again")
     try:
-        lk = lock_mod.take(lock_mod.state_dir(root, name), name,
-                           f"louise hold collection new --re-create {name} (swap: the vector table)")
+        lk = _take_lock(root, name, f"louise hold collection new --re-create {name} (swap: the vector table)")
     except lock_mod.Held as e:
         raise _defer(f"{e}. Then run this again: it resumes at the swap") from None
     stop = threading.Event()
@@ -3148,12 +3142,42 @@ _cli_locks: list = []
 def _take_write_lock(root, name: str, what: str, *, exit_code: int = 3):
     """A `hold` command that writes takes the collection's lock or exits 3
     naming the holder — 2 for the four whose later retry is not the answer
-    (07 §7.7). Held until the command ends: `main` releases."""
-    from app.hold import lock as lock_mod
+    (07 §7.7). Held until the command ends: `main` releases. A paused
+    collection the worker still holds is waited for (`_take_lock`)."""
     root = Path(root) if root else _default_root()
-    lock = lock_mod.take(lock_mod.state_dir(root, name), name, what, exit_code=exit_code)
+    lock = _take_lock(root, name, what, exit_code=exit_code)
     _cli_locks.append(lock)
     return lock
+
+
+#: THE PAUSE'S BOUND (docs/notes/manual-steps.md, 5): how long `node pause
+#: <collection>` waits for the worker to let go of the collection's write
+#: lock, and how long a writing command that finds a PAUSED collection still
+#: the worker's waits for it. The worker lets go at its next round
+#: (worker._hold_locks), once `retire_collection` has waited for the
+#: collection's threads to finish their unit — at most 60 s, its own deadline,
+#: after which it lets go whatever they do: 60 s for the retirement and 60 s
+#: for the round in hand to reach it. Measured on the node (München,
+#: 2026-11-28): 80 s from the pause to the release, 20-90 s earlier that
+#: night. tests/hold/test_write_lock.py holds it above the retirement's.
+PAUSE_WAIT_S = 120.0
+
+
+def _say_err(message: str) -> None:
+    print(f"louise: {message}", file=sys.stderr, flush=True)
+
+
+def _take_lock(root, name: str, what: str, *, exit_code: int = 3):
+    """The collection's write lock under `root`, now, or `Held` — except
+    where the collection's pause is recorded and the worker still holds it,
+    finishing its unit: it is waited for, at most PAUSE_WAIT_S, said once
+    (`lock.take_waiting`). Another holder, or a collection not paused, is
+    refused at once. Not added to the command's locks: the caller releases."""
+    from app import node_state
+    from app.hold import lock as lock_mod
+    return lock_mod.take_waiting(lock_mod.state_dir(Path(root), name), name, what,
+                                 exit_code=exit_code, wait_s=PAUSE_WAIT_S,
+                                 still=lambda: name in node_state.paused_collections(), say=_say_err)
 
 
 def _release_cli_locks() -> None:
@@ -3252,19 +3276,58 @@ def _run_releasing(a) -> int:
 
 
 def cmd_node_pause(a) -> int:
-    """`node pause [<collection>] [--acquire-only | --seed-only]` (07 §7.3):
-    the node's mode, or one collection — whose write lock the worker releases
-    at the end of its current unit and runs nothing for until `resume`."""
+    """`node pause [<collection>] [--acquire-only | --seed-only] [--wait S]`
+    (07 §7.3): the node's mode, or one collection — whose write lock the
+    worker releases at the end of its current unit and runs nothing for until
+    `resume`; that release is waited for (`_pause_applied`). The node's own
+    pause releases no lock — the worker keeps every collection's writer while
+    paused — so it has nothing to wait for and `--wait` is not read there."""
     from app import node_state
     if a.collection:
         names = node_state.set_paused(a.collection, True,
                                       by=f"louise node pause {a.collection} ({node_state.invoker()})")
-        _print({"paused": sorted(names)})
-        return 0
+        wait_s = PAUSE_WAIT_S if a.wait is None else a.wait
+        if wait_s <= 0:
+            _print({"paused": sorted(names)})
+            return 0
+        return _pause_applied(a.collection, names, wait_s)
     state = "acquire-only" if a.acquire_only else "seed-only" if a.seed_only else "paused"
     node_state.set_worker_state(state, by=f"louise node pause{' --acquire-only' if a.acquire_only else ' --seed-only' if a.seed_only else ''}")
     _print({"node": state, "store": str(node_state.path())})
     return 0
+
+
+def _pause_applied(name: str, names: set[str], wait_s: float) -> int:
+    """A collection's pause, waited for until it is APPLIED: the worker has
+    let go of the collection's write lock, or no worker runs it (its lock is
+    free or another writer's). München, 2026-11-28: the pause returned at
+    once, the jobs POSTed 1-5 s after it were refused at the carry, and the
+    worker let go 80 s later (docs/notes/manual-steps.md, 5). 0 once applied;
+    past `wait_s`, 3 — a deferral, the route's 503 — the pause recorded and
+    still being applied. Said once, on stderr; stdout is the answer."""
+    import time as _time
+    from app import node_state
+    from app.hold import lock as lock_mod
+    state = lock_mod.state_dir(_default_root(), name)
+    t0 = _time.monotonic()
+    who = lock_mod.holder(state)
+    if who is not None and who.get("what") == lock_mod.WORKER:
+        _say_err(f"waiting for the worker to finish {name}'s current unit (at most {wait_s:g} s)…")
+        who = lock_mod.wait_while_held(state, wait_s,
+                                       still=lambda: name in node_state.paused_collections())
+    else:
+        who = None
+    waited = round(_time.monotonic() - t0, 1)
+    if who is not None:
+        if name not in node_state.paused_collections():
+            _say_err(f"deferred: {name}'s pause was withdrawn (`node resume {name}`) before the worker "
+                     f"let go of it: the worker keeps running it")
+        else:
+            _say_err(f"deferred: {name}'s pause is recorded and still being applied: the worker has not "
+                     f"let go of its write lock after {wait_s:g} s; it does at the end of its current "
+                     f"unit. A command that needs the lock waits for it itself, {PAUSE_WAIT_S:g} s more")
+    _print({"paused": sorted(names), "applied": who is None, "waited_s": waited})
+    return 0 if who is None else 3
 
 
 #: `louise dev`'s instruments (07 §7.3, §7.6): verb -> the tools module it
@@ -8136,6 +8199,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("collection", nargs="?", default=None)
     p.add_argument("--acquire-only", action="store_true", dest="acquire_only")
     p.add_argument("--seed-only", action="store_true", dest="seed_only")
+    p.add_argument("--wait", type=float, default=None, metavar="SECONDS",
+                   help=f"one collection's pause: wait at most this long for the worker to let go of its "
+                        f"write lock (default {PAUSE_WAIT_S:g}; 0: do not wait); exit 3 past it")
     p.set_defaults(fn=cmd_node_pause)
     p = nverbs.add_parser("show", help="state per collection, the current stage, the last round's cost, "
                                       "the overrides in force, the verbs running under the node")
