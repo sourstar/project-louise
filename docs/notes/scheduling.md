@@ -690,7 +690,10 @@ which is what the command does: one twin claim, the document side then the
 query side, bounded only by the gate's `stop`. Its caller waits GATE_WAIT_S
 (20 s, below SLOW_LOOK_S), and a later caller is answered beside it with no
 probe. The look keeps its verdict, a deferral is said at info as a wait, and
-`join_gates` is the worker's stop. On fakes (tests/test_gate_pass.py,
+`join_gates` is the worker's stop. A look belongs to its collection: a pause,
+forget or rename retires it (`run_check.retire`, from `retire_collection`). It
+then stops at the gate's next slice and writes nothing, opening no manifest
+that is not there (`mode=rw`). `runs.keep` refuses it for each side. On fakes (tests/test_gate_pass.py,
 2 × 1,984 s, a settle beat each 60 s), before → after: 15 → 0 sides
 deferred behind their sibling, 29 → 0 probes beside the measurement, 1 → 0
 error events, 23 → 1 twin claim attempts. The rule: A LOOK THAT CAN RUN FOR

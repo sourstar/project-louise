@@ -63,6 +63,7 @@ class Node:
         self.clock = [time.time()]
         self.block: dict[tuple[str, str], threading.Event] = {}
         self.measuring = threading.Event()
+        self.deaf = False               # a slice longer than any bound: the stop is not asked
         self.on_beat = None
         self.beats = GATE_S // BEAT_S
         mp = monkeypatch
@@ -110,21 +111,25 @@ class Node:
     def gate(self, root, name, codex, recipe, *, role="document", stop=None, **kw):
         """The gate's measurement: GATE_S of it, in beats; the gate asks
         `stop` between slices (`run_check._stopping`), so does this."""
-        run_check._stopping(stop, name)
+        if not self.deaf:
+            run_check._stopping(stop, name)
         self.gates.append((name, role, recipe.query_model if role == "query" else recipe.model))
         self.measuring.set()
         wait = self.block.get((name, role))
         while wait is not None and not wait.wait(0.01):
-            run_check._stopping(stop, name)
+            if not self.deaf:
+                run_check._stopping(stop, name)
         for _ in range(self.beats):
             self.clock[0] += BEAT_S
-            run_check._stopping(stop, name)
+            if not self.deaf:
+                run_check._stopping(stop, name)
             if self.on_beat is not None:
                 self.on_beat()
-        d = hold_runs.directory(root, name)
-        d.mkdir(parents=True, exist_ok=True)
-        (d / f"{role}-fake.json").write_text("{}", encoding="utf-8")
-        body = {"run": RUN, "passed": 16, "median": 0.99999, "batch_invariant": True}
+        body = {"run": RUN, "role": role, "passed": 16, "median": "0.99999", "batch_invariant": True}
+        # kept as `runs.validate` keeps it: the real `keep`, with the look's
+        # refusal where the look has one
+        refuse = {"refuse": run_check._keep_refused} if hasattr(run_check, "_keep_refused") else {}
+        hold_runs.keep(root, name, {"body": body}, **refuse)
         self.kept[(name, role)] = body
         return body
 
@@ -135,10 +140,11 @@ def sym(node, endpoint, monkeypatch):
     assert codex.space.query.encoder is not None, "a query side to gate"
     n = Node(root, monkeypatch)
     assert run_check._flights(collection) == [f"{SERVER} {MODEL}"], "symmetric: one model, one twin"
+    real_join = getattr(run_check, "join_gates", None)     # a test may stub it
     yield n, collection
     for e in n.block.values():
         e.set()
-    run_check.join_gates(10) if hasattr(run_check, "join_gates") else None
+    real_join(10) if real_join is not None else None
     for t in _started:          # a caller held by its gate ends before the fixtures go
         t.join(30)
     _started.clear()
@@ -354,3 +360,172 @@ def test_sigterm_mid_gate_ends_the_look_at_its_next_slice_and_keeps_nothing(sym,
         time.sleep(0.01)
     assert backend_gate.embed_allowed(con, collection) is True
     assert [r for _, r, _ in n.gates] == ["document", "document", "query"]
+
+
+# ---- the read of 1847af32: a look meets its collection's retirement ------------------
+
+def _gone_or_moved(n, how: str):
+    """A forget takes the collection's directory away; a rename moves it."""
+    import shutil
+    here = n.root / "gutenberg"
+    if how == "forget":
+        shutil.rmtree(here)
+    elif how == "rename":
+        os.rename(here, n.root / "gutenberg-renamed")
+
+
+def _nothing_kept_anywhere(n) -> None:
+    assert n.kept == {}, "no statement kept"
+    assert not (n.root / "gutenberg").exists() or \
+        not list(hold_runs.directory(n.root, "gutenberg").glob("*.json"))
+    moved = hold_runs.directory(n.root, "gutenberg-renamed")
+    assert not moved.is_dir() or not list(moved.glob("*.json")), "nor under its new name"
+
+
+@pytest.mark.parametrize("how", ["pause", "forget", "rename"])
+def test_a_retirement_mid_look_ends_it_within_the_bound(sym, how):
+    """`worker.retire_collection` — a pause, a forget, a rename — joined every
+    thread of the collection but its look, whose stop was the worker's alone:
+    the gate went on measuring, the twin held. Now the look is retired: it
+    ends at the gate's next slice within the retirement's bound, its twin let
+    go and its claim released, nothing kept, no verdict and no backoff left —
+    and a resume looks at once."""
+    n, collection = sym
+    n.beats = 0
+    n.block[("gutenberg", "document")] = threading.Event()     # measuring, asking the stop
+    _in_thread(_settle(collection), timeout=10)
+    assert n.measuring.wait(5)
+    lock = run_check.twin_lock_path(SERVER, TWIN)
+    t0 = time.monotonic()
+    worker.retire_collection("gutenberg", timeout=5.0)
+    took = time.monotonic() - t0
+    assert not run_check.gate_running(collection) and took < 5.0, \
+        f"the look still measures {took:.1f} s after its collection's retirement"
+    assert _claim_free(lock) and n.let_go == [TWIN], "its twin let go, its claim released"
+    where = run_check._where(collection)
+    assert where not in run_check._verdicts and run_check._gate_slow == {}, "no verdict, no backoff"
+    events = _events(collection)
+    assert not [m for _, m in events if "embedding " in m and ("waits" in m or "PAUSED" in m)], events
+    _gone_or_moved(n, how)
+    _nothing_kept_anywhere(n)
+    if how == "pause":                                          # the resume
+        n.block.clear()
+        con = db.connect(collection)
+        backend_gate.embed_allowed(con, collection)
+        assert _join_gates() and backend_gate.embed_allowed(con, collection) is True
+    else:
+        assert how != "forget" or not (n.root / "gutenberg").exists()
+
+
+@pytest.mark.parametrize("how", ["forget", "rename"])
+def test_a_look_that_outlives_its_retirement_makes_nothing_again(sym, how):
+    """A slice longer than the retirement's bound: the look is still in its
+    gate when the directory goes. Its own connection was `db.connect`, which
+    made the forgotten collection's directory and manifest again, and the
+    query side's statement then landed in it. Now a retired look writes
+    nothing, opens no manifest that is not there, and keeps nothing."""
+    n, collection = sym
+    n.beats, n.deaf = 0, True
+    n.block[("gutenberg", "document")] = threading.Event()     # deaf to the stop
+    _in_thread(_settle(collection), timeout=10)
+    assert n.measuring.wait(5)
+    worker.retire_collection("gutenberg", timeout=0.2)        # its bound passes
+    assert run_check.gate_running(collection), "still in the slice"
+    _gone_or_moved(n, how)
+    n.block[("gutenberg", "document")].set()
+    assert _join_gates()
+    assert not (n.root / "gutenberg").exists(), "nothing made again where the collection was"
+    _nothing_kept_anywhere(n)
+
+
+def test_a_retired_look_keeps_nothing_for_either_side(sym, tmp_path):
+    """`runs.keep` refuses, for each side, a look retired meanwhile — and a
+    collection whose directory is gone."""
+    n, _ = sym
+    look = run_check._Look("place", None)
+    run_check._pass_local.look = look
+    try:
+        for role in ("document", "query"):
+            body = {"run": RUN, "role": role, "passed": 16}
+            assert hold_runs.keep(n.root, "gutenberg", {"body": body},
+                                  refuse=run_check._keep_refused).is_file()
+        look.retired.set()
+        for role in ("document", "query"):
+            with pytest.raises(run_check.emb.GateDeferred, match="paused, forgotten or renamed"):
+                hold_runs.keep(n.root, "gutenberg", {"body": {"run": RUN, "role": role}},
+                               refuse=run_check._keep_refused)
+    finally:
+        run_check._pass_local.look = None
+    with pytest.raises(hold_runs.CodexError, match="no such collection"):
+        hold_runs.keep(tmp_path, "gone", {"body": {"run": RUN, "role": "document"}})
+
+
+def test_join_gates_skips_a_look_not_started_and_one_join_never_skips_the_others(sym, monkeypatch):
+    """`join_gates` met a look whose thread was not started yet (it was set
+    before `start()`): RuntimeError, and `_join_pipeline_threads` then skipped
+    the scans and fetches after it."""
+    n, collection = sym
+    look = run_check._Look("not-started", collection)
+    look.thread = threading.Thread(target=lambda: None)
+    monkeypatch.setitem(run_check._in_flight, "not-started", look)
+    assert run_check.join_gates(0.5) is True
+
+    class Scan:
+        joined: list = []
+
+        def join(self, timeout=None):
+            self.joined.append(timeout)
+
+    def raises(timeout):
+        raise RuntimeError("cannot join thread before it is started")
+    monkeypatch.setattr(run_check, "join_gates", raises)
+    scan = Scan()
+    monkeypatch.setitem(worker._scan_threads, "a-scan", scan)
+    worker._join_pipeline_threads(timeout=1.0)
+    assert scan.joined, "the scans are joined after a join that raised"
+
+
+def test_a_caller_beside_a_look_stands_aside_once_the_statements_changed(sym, monkeypatch):
+    """Beside a look, a caller was answered from the verdict there was, about
+    the same run — even where the kept statements had changed since (one set
+    aside, the look gating again): its stream would disturb its own
+    collection's re-gate. The stamp is held to as the cache holds it."""
+    n, collection = sym
+    n.beats = 0
+    con = db.connect(collection)
+    backend_gate.embed_allowed(con, collection)
+    assert _join_gates() and backend_gate.embed_allowed(con, collection) is True
+    n.clock[0] += run_check.PASS_TTL_S + 1                   # the verdict is due again
+    held = threading.Event()
+    monkeypatch.setattr(run_check, "recheck", lambda *a, **k: held.wait(10) or True)
+    try:
+        t, out = _in_thread(_settle(collection), timeout=10)
+        assert not t.is_alive() and run_check.gate_running(collection)
+        assert out.get("value") is True, "beside it, the verdict about the same run stands"
+        (doc,) = hold_runs.directory(n.root, "gutenberg").glob("document-*.json")
+        doc.rename(doc.with_name(doc.name + ".aside"))          # set aside meanwhile
+        t, out = _in_thread(_settle(collection), timeout=10)
+        assert out.get("value") is False, "the statements changed: the caller stands aside"
+    finally:
+        held.set()
+    assert _join_gates()
+
+
+def test_sigterm_for_real_the_shutdown_ends_a_look_within_its_deadline(sym):
+    """No stub: the worker's own stop and its own shutdown join, a look in the
+    middle of its measurement."""
+    n, collection = sym
+    n.beats = 0
+    n.block[("gutenberg", "document")] = threading.Event()
+    _in_thread(_settle(collection, stop=worker._stop.is_set), timeout=10)
+    assert n.measuring.wait(5) and run_check.gate_running(collection)
+    lock = run_check.twin_lock_path(SERVER, TWIN)
+    worker._stop.set()                                          # SIGTERM
+    try:
+        t0 = time.monotonic()
+        worker._join_pipeline_threads(timeout=5.0)
+        took = time.monotonic() - t0
+    finally:
+        worker._stop.clear()
+    assert not run_check.gate_running(collection) and took < 5.0, f"{took:.1f} s"
+    assert _claim_free(lock) and n.let_go == [TWIN] and n.kept == {}

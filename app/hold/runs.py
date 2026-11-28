@@ -350,9 +350,20 @@ def parks_counted(root: Path, name: str, codex: Codex, role: str, run_id: str,
     return _parks_counted(parks_for_space(root, name, codex, role, run_id, body, signer=signer), body)
 
 
-def keep(root: Path, name: str, statement: dict[str, Any]) -> Path:
-    """Write a statement, pass or fail, where its run and role put it."""
+def keep(root: Path, name: str, statement: dict[str, Any], *,
+         refuse: Callable[[], str | None] | None = None) -> Path:
+    """Write a statement, pass or fail, where its run and role put it.
+
+    `refuse`: asked just before the write, for each side — the worker's look
+    (app/run_check.py `_keep_refused`) says there that its collection was
+    paused, forgotten or renamed while the gate measured: then nothing is
+    kept (`GateDeferred`), and the run is gated when the collection runs
+    again. A collection whose directory is gone is refused here too."""
     body = statement["body"]
+    why = refuse() if refuse is not None else None
+    if why:
+        raise emb.GateDeferred(f"{name}: {why}; the statement is not kept, and the run is gated "
+                               f"again when the collection runs")
     if not (Path(root) / name).is_dir():
         raise CodexError(f"{Path(root) / name}: no such collection here (renamed or forgotten while its run "
                          f"was tested); the statement is not kept, and the run is tested again")
@@ -817,7 +828,8 @@ def validate(root: Path, name: str, codex: Codex, *, role: str, reference,
              now: str, items=None,
              on_run: Callable[[emb.Run], None] | None = None,
              cpu_reference=None, reload=None, exactness: str = emb.EXACT,
-             fresh=None, park=None) -> dict[str, Any]:
+             fresh=None, park=None,
+             refuse: Callable[[], str | None] | None = None) -> dict[str, Any]:
     """Run the gate against one stated run and KEEP the statement — pass or
     fail: "a failure is kept too, so the run is not retried against the same
     set" (07 §7.3). Returns the statement's body. Embedding is the caller's:
@@ -845,7 +857,7 @@ def validate(root: Path, name: str, codex: Codex, *, role: str, reference,
                 f"from {others or 'an endpoint that stated none'} too; it is "
                 f"inconclusive, nothing is kept, and it is tried again")
     statement = emb.statement(run, codex, key, now=now)
-    keep(root, name, statement)
+    keep(root, name, statement, refuse=refuse)
     if run.contexts:
         record_contexts(root, name, role, stated.run_id, contexts=run.contexts,
                         closest=run.context_variation, at=now)
