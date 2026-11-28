@@ -727,6 +727,80 @@ def unit_gaps(files: dict, view: dict, note, celex: str, listed=None) -> dict[st
     return formex.gaps(view, wrapper, wname, lacked)
 
 
+_TOKEN = re.compile(re.escape(formex.TOKEN_OPEN) + "([^" + formex.TOKEN_CLOSE + "]*)"
+                    + re.escape(formex.TOKEN_CLOSE))
+#: a note's place among the sections handed to RAGE's plates (split back after)
+_NOTE_HEADING = "\x00note"
+
+
+def strip_tokens(value):
+    """A rendered value without image tokens (a plate's marker stands in the
+    sections' and the notes' text only), recursively."""
+    if isinstance(value, str):
+        return _TOKEN.sub("", value) if formex.TOKEN_OPEN in value else value
+    if isinstance(value, list):
+        return [strip_tokens(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(strip_tokens(v) for v in value)
+    if isinstance(value, dict):
+        return {k: strip_tokens(v) for k, v in value.items()}
+    return value
+
+
+def _with_title(act, title: str):
+    import dataclasses
+    return dataclasses.replace(act, title=title) if title != act.title else act
+
+
+def plate_unit(unit_dir: Path):
+    """RAGE's view of a unit's items (app/rage/figures.py `Unit`): every file
+    but its tree and notice, by path, its packages' members read in place."""
+    from app.rage import figures as plates
+    return plates.Unit({e.name: Path(e.path) for e in unit_files(Path(unit_dir))
+                        if e.name not in (rdf_mod.TREE_FILE, NOTICE)})
+
+
+def held_plates(view: dict, form: str | None, note) -> list[str] | None:
+    """The images that are plates or orphans (architecture, 2026-11-28, as
+    `_orphan_images` reads them): every image the view holds, unless another
+    manifestation of the expression offers them or they are a PDF's page
+    scans — then none is, and an unreferenced one is no gap."""
+    images = [n for n, b in view.items() if _image_kind(n, b)]
+    if not images or any(items and f != form for f, items in (note.items or {}).items()):
+        return None
+    if form is not None and form.startswith("pdf") and any(
+            it.name in view and _is_pdf(view[it.name]) for it in note.items.get(form, []) if it.name):
+        return None
+    return images
+
+
+def _place_plates(unit_dir: Path, sections, notes: list[dict], view: dict, form, note):
+    """EUR-Lex's walk handed to RAGE (app/rage/figures.py, #998): each token
+    the readers left becomes `plates.SENTINEL` and one `plates.Ref`, the
+    sections first, then the notes' texts (architecture, 2026-11-28), and
+    `plates.place` makes the markers, the figures and the gaps."""
+    from app.rage import figures as plates
+    texts = [(strip_tokens(h), t) for h, t in sections]
+    texts += [(_NOTE_HEADING, n["text"]) for n in notes if isinstance(n.get("text"), str)]
+    refs: list = []
+
+    def sentinel(m: re.Match) -> str:
+        name, _sep, caption = m.group(1).partition(formex.TOKEN_SEP)
+        refs.append(plates.Ref(name, caption))
+        return plates.SENTINEL
+
+    texts = [(h, _TOKEN.sub(sentinel, t) if formex.TOKEN_OPEN in t else t) for h, t in texts]
+    held = held_plates(view, form, note)
+    if not refs and not held:
+        return texts[:len(sections)], notes, [], {}
+    with plate_unit(unit_dir) as unit:
+        got = plates.place(texts, refs, unit, held_images=held)
+    out_sections, rest = got.sections[:len(sections)], iter(got.sections[len(sections):])
+    out_notes = [{**n, "text": next(rest)[1]} if isinstance(n.get("text"), str) else n for n in notes]
+    gaps = {g["part"]: (g["why"], [f"{g['part']}: {g['why']} (the text's images)"]) for g in got.gaps}
+    return out_sections, out_notes, got.figures, gaps
+
+
 def origin_gaps_of(gaps: dict[str, tuple[str, list[str]]]) -> list[dict]:
     """09 §9.5's shape: one entry a part, sorted by its bytes."""
     return [{"part": p, "why": gaps[p][0]} for p in sorted(gaps, key=lambda s: s.encode("utf-8"))]
@@ -1016,6 +1090,18 @@ class EurlexSource:
         {"field": "extra.sector", "kind": "flat", "separator": None, "authority": None},
         {"field": "subjects", "kind": "flat", "separator": None, "authority": None},
     ]
+
+    def iter_figures(self, unit_dir: Path, native_id: int, hrefs: dict[str, str]):
+        """`(hash, bytes)` one plate at a time, for the container pass
+        (`plugin_io.figure_items`): RAGE's (`plates.iter_figures`), one open
+        of each of the unit's packages."""
+        from app.rage import figures as plates
+        with plate_unit(unit_dir) as unit:
+            yield from plates.iter_figures(unit, hrefs)
+
+    def read_figures(self, unit_dir: Path, native_id: int, hrefs: dict[str, str]) -> dict[str, bytes]:
+        """`iter_figures`, all at once, for the callers that take bytes."""
+        return dict(self.iter_figures(unit_dir, native_id, hrefs))
 
     def at_parser_version(self, version: int) -> "EurlexSource | None":
         """This plugin parsing at `version`, for a collection whose Codex
@@ -1339,7 +1425,7 @@ class EurlexSource:
         try:
             if form == "fmx4":
                 act = formex.parse(view, celex, listed, note.date_document,
-                                   set_aside=self.PARSER_VERSION >= 6)
+                                   set_aside=self.PARSER_VERSION >= 6, figures=self.PARSER_VERSION >= 6)
                 for name in act.missing:
                     found.append(Issue("item-not-held", f"{act.wrapper_file} names {name}"))
             elif form in ("xhtml", "html"):
@@ -1347,7 +1433,8 @@ class EurlexSource:
                 # (`…01001401` page 14, `…01001501` page 15), the notice's order
                 # does not (32010D0699 lists the annexed draft first)
                 names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
-                act = rendition.parse_html(files, names, lang=stated_lang, root=root_tag, note=note)
+                act = rendition.parse_html(files, names, lang=stated_lang, root=root_tag, note=note,
+                                           figures=self.PARSER_VERSION >= 6)
             elif form is not None:
                 listed_names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
                 # A PDF MANIFESTATION'S ITEMS BY THEIR CONTENT (2026-11-25,
@@ -1545,6 +1632,15 @@ class EurlexSource:
         if own_eli and own_eli != work_eli:
             keys.add(PROFILE.key(own_eli))
         sections = formex.sections(act)
+        plates_placed: list = []
+        plate_gaps: dict[str, tuple[str, list[str]]] = {}
+        if self.PARSER_VERSION >= 6:
+            sections, notes, plates_placed, plate_gaps = _place_plates(
+                unit, sections, extra.get("notes") or [], view, form, note)
+            if notes:
+                extra["notes"] = notes
+            act = _with_title(act, strip_tokens(act.title or ""))
+            extra = strip_tokens(extra)
         if act.rendered_sections is None and not any(text.strip() for _, text in sections) \
                 and _formex_title_only(view, act):
             # A CHUNKLESS DOCUMENT STATES WHY (lesson E1, 2026-11-25: 41 Formex
@@ -1567,7 +1663,8 @@ class EurlexSource:
             keys=sorted(keys),
             extra={k: v for k, v in extra.items() if v not in (None, "", [], {})},
             sections=sections,
-            origin_gaps=origin_gaps_of(unit_gaps(files, view, note, celex, listed))
+            figures=plates_placed,
+            origin_gaps=origin_gaps_of({**plate_gaps, **unit_gaps(files, view, note, celex, listed)})
             if self.PARSER_VERSION >= 6 else [],
             raw_hash=raw.raw_hash,
             issues=found,

@@ -279,7 +279,7 @@ class _Reader(HTMLParser):
         if tag == "img" and self.figures and not self._skip and a.get("src"):
             # AN IMAGE WHERE IT STANDS (parser 6): its token, for its marker
             from .formex import figure_token
-            self._buf.append(figure_token(a["src"]))
+            self._buf.append(figure_token(a["src"], norm(a.get("alt") or "").replace("\ue001", "")))
         if tag == "title":
             self._in_title = True
         if tag == "a":

@@ -483,9 +483,14 @@ def inline(e: ET.Element, col: Collect | None = None) -> str:
 TOKEN_OPEN, TOKEN_CLOSE = "\ue000", "\ue001"
 
 
-def figure_token(ref: str) -> str:
+TOKEN_SEP = "\x1e"
+
+
+def figure_token(ref: str, caption: str = "") -> str:
+    """An image's place: its file's own name and its caption (an html alt;
+    "" for Formex, whose legend stands in the text already)."""
     import os as _os
-    return TOKEN_OPEN + _os.path.basename(ref) + TOKEN_CLOSE
+    return TOKEN_OPEN + _os.path.basename(ref) + (TOKEN_SEP + caption if caption else "") + TOKEN_CLOSE
 
 
 def _note(e: ET.Element, col: Collect) -> None:
