@@ -460,6 +460,18 @@ class FiguresUnsupported(RuntimeError):
     """
 
 
+def figure_items(plugin, row, hrefs: dict[str, str]):
+    """`(hash, bytes)` of ONE record's plates, one at a time where the
+    plugin can give them so (`iter_figures`, RAGE's plates: app/rage/
+    figures.py), else from `figure_bytes`. The container pass spools each
+    as it comes (`hold.figures.FrameSpool`), so a record's plates are never
+    all held at once — EUR-Lex's acts hold up to ~10 GB of them."""
+    if hasattr(plugin, "iter_figures"):
+        yield from plugin.iter_figures(Path(row["path"]), int(row["native_id"]), dict(hrefs))
+        return
+    yield from figure_bytes(plugin, row, hrefs).items()
+
+
 def figure_bytes(plugin, row, hrefs: dict[str, str]) -> dict[str, bytes]:
     """`{hash: href}` for ONE record -> `{hash: bytes}`, as the origin
     ships them.

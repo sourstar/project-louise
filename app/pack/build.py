@@ -955,19 +955,27 @@ def _write_figures(plugin, pack_dir: Path, slice_name: str, shard_n: int,
     for figure_hash, (row, href) in plates.items():
         by_record.setdefault(row["uid"], (row, {}))[1][figure_hash] = href
 
-    data: dict[str, bytes] = {}
+    # ONE PLATE HELD AT A TIME (RAGE's plates, 2026-11-28): each is compressed
+    # as it is read and spooled beside the pack; the container is written from
+    # the spool in hash order — the same bytes `write_container` writes
+    # (an unnamed file beside the container it becomes: on the pack's own
+    # disk, never a tmpfs, and nothing left behind whatever ends the pass)
+    spool = figures_mod.FrameSpool(figures_mod.container_dir(pack_dir, slice_name))
     for uid, (row, wanted) in by_record.items():
         try:
-            data.update(plugin_io.figure_bytes(plugin, row, wanted))
+            for figure_hash, plate in plugin_io.figure_items(plugin, row, wanted):
+                spool.add(figure_hash, plate)
         except Exception as e:
+            spool.close()
             raise ValueError(
                 f"{uid}: the record names {len(wanted)} plate(s) and they "
                 f"could not be read ({type(e).__name__}: {e}). A record line "
                 f"may not name a plate its container cannot carry (09 §9.5); "
                 f"fix the plugin, do not pack."
             ) from e
-    missing = sorted(set(plates) - set(data))
+    missing = sorted(h for h in plates if h not in spool)
     if missing:
+        spool.close()
         # The plugin answered without raising and came back short. Named
         # here rather than discovered by `write_container`, whose error
         # would be about a hash it was never given.
@@ -976,7 +984,7 @@ def _write_figures(plugin, pack_dir: Path, slice_name: str, shard_n: int,
             f"returned no bytes for {len(missing)} named plate(s), first "
             f"{missing[0][:19]}… (09 §9.5)")
     path = figures_mod.path_for(pack_dir, slice_name, shard_n)
-    info = figures_mod.write_container(path, data)
+    info = spool.write(path)
     log(f"[pack build] {slice_name}: shard {shard_n} carries {info.figures} "
         f"plate(s), {info.bytes / 1e6:.1f} MB")
 
