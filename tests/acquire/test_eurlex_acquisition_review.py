@@ -716,3 +716,48 @@ def test_a_record_naming_no_package_lacked_is_judged_from_its_files_not_due_fore
     assert read
     read.clear()
     assert eurlex_dump.incomplete_due(corpus, {"it"}) == [] and read == [], "judged once: a stat again"
+
+
+def test_a_unit_asked_first_that_the_engine_would_skip_is_named_back_to_be_fetched(tmp_path):
+    """bg 32006R1828: held, its row done, due by the ledger (two files in each
+    other's place): the engine skipped it every pass and the asked-first list
+    never emptied. `prepare` names it back, so it is fetched once and marked."""
+    from app.acquire.spec import RemoteFile
+    corpus = tmp_path / "corpus"
+    rel = cellar.rel_path("bg", "32006R1828")
+    (corpus / rel).parent.mkdir(parents=True)
+    (corpus / rel).write_bytes(b"{}")
+    held = RemoteFile(rel_path=rel, mtime=None, remote=cellar.encode("32006R1828", "bg"))
+    other = RemoteFile(rel_path=cellar.rel_path("bg", "32006R0001"), mtime=None, remote="x")
+    listed = RemoteFile(rel_path=cellar.rel_path("bg", "32006R0002"), mtime=5, remote="y")
+    (corpus / listed.rel_path).parent.mkdir(parents=True)
+    (corpus / listed.rel_path).write_bytes(b"{}")
+    assert cellar._held_but_due([held, other, listed], [other], corpus) == [rel], \
+        "held and skipped: named back; pending or listed by date: not"
+
+
+def test_a_held_unit_judged_not_whole_is_fetched_once_and_leaves_the_asked_first_list(tmp_path, serial, monkeypatch):  # noqa: F811
+    """Architecture's read of 969bb40f, the live shape (bg 32006R1828): judged
+    NOT whole with `lacks: []` (two files in each other's place), its row
+    done, so the engine skipped it every pass. `prepare` names it back
+    (`_held_but_due`), the engine fetches it, `mark_fetched` follows: after
+    one pass it is not due."""
+    import json
+    from types import SimpleNamespace
+    from app.acquire.spec import RemoteFile
+    from tests.test_eurlex_package import PKG, _package
+    corpus, unit = _reform_corpus(tmp_path)
+    (unit / PKG).write_bytes(_package())
+    rec = json.loads((corpus / eurlex_dump.INCOMPLETE).read_text())
+    rec["it"][FORMEX[0]] = {"held": eurlex_dump._sig(unit / rdf.TREE_FILE), "in_force": "true",
+                            "lacks": [], "whole": False, "reform": True, "tried": None}
+    (corpus / eurlex_dump.INCOMPLETE).write_text(json.dumps(rec))
+    assert [c for _l, c, _f in eurlex_dump.incomplete_due(corpus, {"it"})] == [FORMEX[0]], "due by the ledger"
+    rel = cellar.rel_path("it", FORMEX[0])
+    f = RemoteFile(rel_path=rel, mtime=None, remote=cellar.encode(FORMEX[0], "it"))
+    assert cellar._held_but_due([f], [], corpus) == [rel], "named back to the engine (line: prepare's return)"
+    monkeypatch.setattr(cellar, "fetch_unit_from_tree",
+                        lambda *a, **k: cellar.Fetched(files={rdf.TREE_FILE: 1}, moved=1, tree_from="cellar"))
+    monkeypatch.setattr(cellar.TreeUnits, "_bulk_of", lambda self, *a: (None, None))
+    cellar.TreeUnits().fetch(SimpleNamespace(url="https://cellar.test"), f, corpus / rel)
+    assert eurlex_dump.incomplete_due(corpus, {"it"}) == [], "fetched once and marked: no longer due"

@@ -1706,7 +1706,7 @@ class TreeUnits(CellarUnits):
             # (review of 13743848, 1: an unset EURLEX_DATADUMP_DIR sent every
             # tree to Cellar)
             self._prepare_bulk_held(None, collection, langs, pending, endpoint)
-            return []
+            return _held_but_due(files, pending, Path(collection.corpus_dir))
         try:
             eurlex_dump.build_newer(dumps.base, Path(collection.corpus_dir), langs, stop=_stop_requested)
         except (TransferAborted, HeldBack):
@@ -1716,7 +1716,7 @@ class TreeUnits(CellarUnits):
                            f"was not built ({type(e).__name__}: {str(e)[:300]}); bulk first, so Cellar is "
                            f"not asked for its units until it is") from e
         self._prepare_bulk_held(dumps.base, collection, langs, pending, endpoint)
-        return []
+        return _held_but_due(files, pending, Path(collection.corpus_dir))
 
     def _prepare_bulk_held(self, dump_base, collection, langs, pending, endpoint) -> None:
         """`_prepare_bulk`, whatever stops it holding the pass back (review of
@@ -2087,6 +2087,20 @@ class TreeUnits(CellarUnits):
         with self._lock:
             self._runs[key] = (thread, events, phase)
         thread.start()
+
+def _held_but_due(files: list[RemoteFile], pending: list[RemoteFile], corpus: Path) -> list[str]:
+    """The units asked first (no listing date: the ledger says them due) that
+    the engine would skip as fetched — held, their row done — named back to
+    it to be fetched in this pass (the engine's `prepare` answer, held files
+    revised in place). 2026-11-28, bg 32006R1828: held since 11-20 with two
+    Formex files in each other's place, due by the ledger every pass, skipped
+    by the engine every pass; the asked-first list never emptied and the
+    complete listing never ran. Fetched, it is marked (`mark_fetched`): asked
+    once, as every unit asked first, whatever Cellar answers."""
+    asked = {f.rel_path for f in pending}
+    return [f.rel_path for f in files
+            if is_unit(f) and f.mtime is None and f.rel_path not in asked and (corpus / f.rel_path).is_file()]
+
 
 def _corpus_of(dest: Path, remote: RemoteFile) -> Path | None:
     """The corpus root a unit's file lands under: `dest` less its rel_path."""
