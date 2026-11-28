@@ -1420,8 +1420,11 @@ not count toward a level.
 
 **What `hold check --json` prints.** `{collection_id, snapshot_id,
 snapshot_hash, checks: [{check, result: "pass" · "fail" ·
-"inconclusive", detail, attestation: id or null}]}`; `attestation` is
+"inconclusive", detail, attestation: id or null, secs}]}`; `attestation` is
 the id of the attestation the run produced, `null` when inconclusive.
+`secs` (*added 2026-11-28*) is how long the check took, wall clock, to a
+tenth of a second: the report's and the log line's, never the
+attestation's.
 
 **Worked example.** A peer re-embeds sixteen chunks of one PubMed part
 and finds a second producer's bundle compliant with the first:
