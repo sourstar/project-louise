@@ -5621,6 +5621,21 @@ _paused = threading.Event()          # set = the mode fetches nothing: paused, s
 _acquire_only = threading.Event()
 
 
+def _looks_held() -> bool:
+    """The node's mode embeds nothing now (paused, seed-only, download only):
+    no run check's look starts, and one running stops at its gate's next
+    slice as a paused collection's does (app/run_check.py `hold_looks_while`)."""
+    return _paused.is_set() or _acquire_only.is_set()
+
+
+def _hold_looks_to_the_mode() -> None:
+    from . import run_check
+    run_check.hold_looks_while(_looks_held)
+
+
+_hold_looks_to_the_mode()
+
+
 class _ParseHeld:
     """`is_set()` while the node's mode runs no parsing. A STOP for a scan,
     beside SIGTERM and the collection's removal: a scan already running when
@@ -8484,8 +8499,15 @@ def retire_collection(name: str, timeout: float = 60.0) -> None:
     # gate stops at its next slice, keeps nothing and writes nothing; waited
     # for here, beside the others, before the lock goes
     from . import run_check
+    bound = max(0.0, deadline - time.time())
     try:
-        run_check.retire(name, max(0.0, deadline - time.time()))
+        if not run_check.retire(name, bound):
+            # in a slice longer than the bound: it stops at the slice's end,
+            # its next request held to what is left of the bound, and keeps,
+            # writes and leaves nothing (app/run_check.py `retire`)
+            print(f"[warn:worker] {name}: its run check's look (thread run-check-{name}) still runs "
+                  f"after the retirement's bound of {bound:.1f} s; it stops at its gate's next slice "
+                  f"and keeps nothing", flush=True)
     except Exception as e:   # noqa: BLE001 — the retirement goes on
         print(f"[warn:worker] {name}: its run check's look could not be retired: "
               f"{type(e).__name__}: {e}", flush=True)
@@ -8547,6 +8569,10 @@ def _hold_locks(collections, paused: set[str], cons=None) -> list:
         try:
             _locks[name] = lock_mod.take(Path(c.manifest_path).parent, name,
                                          "the node (worker)")
+            # the collection runs again: its run check's looks may start
+            # (app/run_check.py `retire`'s tombstone)
+            from . import run_check
+            run_check.unretire(name)
             # a fresh event for what starts now; one still unwinding keeps its own,
             # set — cleared, a resume before its next poll read the retirement the
             # pause caused instead, and no re-arm (D7 again: the sixth read, run).

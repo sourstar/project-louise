@@ -693,7 +693,11 @@ probe. The look keeps its verdict, a deferral is said at info as a wait, and
 `join_gates` is the worker's stop. A look belongs to its collection: a pause,
 forget or rename retires it (`run_check.retire`, from `retire_collection`). It
 then stops at the gate's next slice and writes nothing, opening no manifest
-that is not there (`mode=rw`). `runs.keep` refuses it for each side. On fakes (tests/test_gate_pass.py,
+that is not there (`mode=rw`). `runs.keep` refuses it for each side. The
+retirement leaves a tombstone, so a caller that read "not paused" before the
+pause starts no look after it; `_hold_locks` clears the tombstone when it takes
+the lock again. The node's own pause (`node pause`, seed-only, download only)
+holds every look the same way. On fakes (tests/test_gate_pass.py,
 2 × 1,984 s, a settle beat each 60 s), before → after: 15 → 0 sides
 deferred behind their sibling, 29 → 0 probes beside the measurement, 1 → 0
 error events, 23 → 1 twin claim attempts. The rule: A LOOK THAT CAN RUN FOR

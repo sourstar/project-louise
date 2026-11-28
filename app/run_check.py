@@ -125,10 +125,11 @@ def answers(recipe, *, query: bool = False, how: str = "normalised",
             _stopping(stop, name)
             part = texts[i:i + SLICE]
             if collection is not None and not query:
-                out += embeddings.embed_chunks(collection, part, recipe=recipe, runs=seen)
+                out += embeddings.embed_chunks(collection, part, recipe=recipe, runs=seen,
+                                               timeout=_request_timeout(timeout))
             else:
                 out += embeddings.embed_calibration(recipe, part, query=query, runs=seen,
-                                                    asked=asked, timeout=timeout)
+                                                    asked=asked, timeout=_request_timeout(timeout))
         return out
 
     def one(texts: list[str], seen: set) -> list[list[float]]:
@@ -137,23 +138,24 @@ def answers(recipe, *, query: bool = False, how: str = "normalised",
             _stopping(stop, name)
             out += embeddings.embed_calibration(recipe, [text], query=query, runs=seen,
                                                 one_at_a_time=True, asked=asked,
-                                                timeout=timeout)
+                                                timeout=_request_timeout(timeout))
         return out
 
     def contribute(texts: list[str], seen: set) -> list[list[float]]:
         _stopping(stop, name)
+        bound = _request_timeout(timeout)       # read here: the lanes' threads have no look
         lanes = max(1, min(int(getattr(recipe, "concurrency", 1) or 1), len(texts)))
         if lanes == 1:
             return embeddings.embed_calibration(recipe, texts, query=query,
                                                 raw=True, runs=seen, asked=asked,
-                                                timeout=timeout)
+                                                timeout=bound)
         # as the worker does it: `lanes` documents in flight, each its own call
         groups = [list(range(k, len(texts), lanes)) for k in range(lanes)]
         with ThreadPoolExecutor(max_workers=lanes) as ex:
             parts = list(ex.map(
                 lambda idx: embeddings.embed_calibration(recipe, [texts[i] for i in idx],
                                                          query=query, raw=True, runs=seen,
-                                                         asked=asked, timeout=timeout),
+                                                         asked=asked, timeout=bound),
                 groups))
         out: list[Any] = [None] * len(texts)
         for idx, vectors in zip(groups, parts):
@@ -686,13 +688,13 @@ def _reloader(recipe, *, query: bool, stop=None, name: str = ""):
     import time
 
     def reload() -> None:
-        embeddings.reload_model(recipe, query=query)
+        embeddings.reload_model(recipe, query=query, timeout=_request_timeout(120.0))
         deadline = time.monotonic() + RELOAD_WAIT_S
         while True:
             _stopping(stop, name)
             try:
                 embeddings.embed_calibration(recipe, ["load"], query=query, runs=set(),
-                                             one_at_a_time=True)
+                                             one_at_a_time=True, timeout=_request_timeout(300.0))
                 return
             except Exception as e:                  # noqa: BLE001 — loading, or gone
                 if time.monotonic() > deadline:
@@ -2004,6 +2006,8 @@ def _gated_again(collection, role: str = "document") -> None:
 
 def reset_cache() -> None:
     _verdicts.clear()
+    with _guard:
+        _retired.clear()
     _answering.clear()
     _answering_at.clear()
     _heard_read.clear()
@@ -2500,6 +2504,8 @@ class _Look:
         #: its collection was paused, forgotten or renamed (`retire`): the look
         #: stops at the gate's next slice, keeps nothing and writes nothing
         self.retired = threading.Event()
+        #: when (monotonic) the retirement's bound ends: its requests are held to it
+        self.retire_by: float | None = None
         self.pending: list[tuple[Callable, tuple]] = []
         self.attached = True
         self.own_con = None
@@ -2514,7 +2520,7 @@ class _Look:
         would make the collection's directory again under a forget or a
         rename, and the next side's statement would land in it."""
         with self.lock:
-            if self.retired.is_set():
+            if _given_up(self):
                 return
             if self.attached:
                 self.pending.append((fn, args))
@@ -2586,9 +2592,13 @@ def _existing_manifest(collection):
                               isolation_level=None, factory=db.ManifestConnection)
     except sqlite3.OperationalError:
         return None
-    con.collection_name = collection.name
-    db.wal(con)                       # invariant 6: every write-open of a manifest sets WAL
-    con.execute("PRAGMA busy_timeout=60000")
+    try:
+        con.collection_name = collection.name
+        db.wal(con)                   # invariant 6: every write-open of a manifest sets WAL
+        con.execute("PRAGMA busy_timeout=60000")
+    except BaseException:
+        con.close()                   # never left open behind a failed open
+        raise
     return con
 
 
@@ -2610,15 +2620,65 @@ def retire(collection, timeout: float) -> bool:
     name = collection if isinstance(collection, str) else collection.name
     where = _place(_root(), name)
     with _guard:
+        # A TOMBSTONE, set under the lock a look is started under: a caller
+        # that read "not paused" before the pause starts no look after it (the
+        # settle thread reads the pauses once a beat, the producer asks only
+        # the worker's stop) — until the worker takes the collection's lock
+        # again (`unretire`, from `worker._hold_locks`)
+        _retired.add(where)
         look = _in_flight.get(where)
     if look is None:
         return True
+    by = time.monotonic() + max(0.0, timeout)
+    look.retire_by = min(by, look.retire_by) if look.retire_by is not None else by
     look.retired.set()
     t = look.thread
     if t is None or t.ident is None or t is threading.current_thread():
         return False
     t.join(max(0.0, timeout))
     return not t.is_alive()
+
+
+#: the places retired since the worker last took their lock (`retire`)
+_retired: set[str] = set()
+
+
+def unretire(collection) -> None:
+    """The worker runs the collection again (`worker._hold_locks` took its
+    lock): its looks may start."""
+    name = collection if isinstance(collection, str) else collection.name
+    with _guard:
+        _retired.discard(_place(_root(), name))
+
+
+#: THE NODE'S MODE HOLDS EVERY LOOK (`node pause`, seed-only, download only:
+#: nothing embeds): the worker says so here (`hold_looks_while`). None starts,
+#: and one running is stopped at its gate's next slice as a retired one is
+_node_holds: Callable[[], bool] = lambda: False
+
+
+def hold_looks_while(holds: Callable[[], bool]) -> None:
+    global _node_holds
+    _node_holds = holds
+
+
+def _held() -> bool:
+    try:
+        return bool(_node_holds())
+    except Exception:   # noqa: BLE001 — unread: nothing held
+        return False
+
+
+def _request_timeout(timeout: float) -> float:
+    """An encoder request's bound: `timeout`, or — for the look on this thread
+    once its collection was retired — what is left of the retirement's bound
+    (at least a second: the client takes no bound of zero). The request in
+    flight at the retirement keeps its own; the next one is held to this."""
+    look = getattr(_pass_local, "look", None)
+    by = getattr(look, "retire_by", None) if look is not None else None
+    if by is None:
+        return timeout
+    return max(1.0, min(float(timeout), by - time.monotonic()))
 
 
 def _set_gate_state(con, value: str) -> None:
@@ -2678,6 +2738,10 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
     from . import db
 
     where = _where(collection)
+    # RETIRED (paused, forgotten, renamed) and not taken again, or a node whose
+    # mode embeds nothing: no look starts, no probe is sent
+    if where in _retired or _held():
+        return False
     # ANOTHER COLLECTION'S GATE RUNS ON THIS MODEL: this one stands aside
     # until it ends, validated or not — its requests would be counted in the
     # gate's passes and defer them (München, 2026-11-11)
@@ -2736,7 +2800,9 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
         held.append(lock)
     look = _Look(where, collection)
     with _guard:
-        raced = where in _in_flight         # another caller started one meanwhile
+        # another caller started one meanwhile, or the collection was retired
+        # since the check above (the same lock as `retire`'s)
+        raced = where in _in_flight or where in _retired
         if not raced:
             _in_flight[where] = look
     if raced:
@@ -2744,8 +2810,9 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             h.release()
         return _beside_a_look(collection, cached, now_answering, stamp)
     def stopping() -> bool:
-        # the worker's stop, or this collection's retirement (`retire`)
-        return look.retired.is_set() or (stop is not None and bool(stop()))
+        # the worker's stop, this collection's retirement (`retire`), or a
+        # node whose mode embeds nothing now
+        return _given_up(look) or (stop is not None and bool(stop()))
     thread = threading.Thread(
         target=contextvars.copy_context().run,
         args=(look.run, lambda: _look_and_keep(look, collection, stopping, held, cached=cached, now=now,
@@ -2761,6 +2828,14 @@ def embed_allowed(con, collection, *, stop: Callable[[], bool] | None = None) ->
             h.release()
         raise
     return look.wait(con, GATE_WAIT_S, lambda: _beside_a_look(collection, cached, now_answering, stamp))
+
+
+def _given_up(look: "_Look") -> bool:
+    """Is `look` retired — its collection's, or the node's mode holding every
+    look? Either way it keeps nothing, writes nothing and leaves no verdict."""
+    if not look.retired.is_set() and _held():
+        look.retired.set()
+    return look.retired.is_set()
 
 
 def _retired_look(where: str) -> bool:
@@ -2827,7 +2902,7 @@ def _look_and_keep(look: "_Look", collection, stop: Callable[[], bool] | None,
             _look_state.gate_deferred = False
             allowed, reason, run_id, settled = _look(collection, stop, log)
             gate_deferred = bool(getattr(_look_state, "gate_deferred", False))
-            if look.retired.is_set():
+            if _given_up(look):
                 return _retired_look(where)
             took = _look_clock() - t_look
             # THE ENCODER'S BACKOFF only where it did not answer its probe (no run
@@ -2890,7 +2965,7 @@ def _look_and_keep(look: "_Look", collection, stop: Callable[[], bool] | None,
             _look_state.timed_out = False
             query_run = _look_at_the_query_side(collection, stop, log, heard_by=query_heard)
             q_took = _look_clock() - t_q
-            if look.retired.is_set():
+            if _given_up(look):
                 return _retired_look(where)
             if q_key is not None:
                 # the encoder's mark only where the query probe was not answered;
@@ -2928,7 +3003,7 @@ def _look_and_keep(look: "_Look", collection, stop: Callable[[], bool] | None,
         # ...THE ENCODER'S, not the collection's, and only for a look that held
         # its caller (`_slow`, `_note_look`; the ninth read: a backoff of every
         # unsettled look kept embedding paused 25 min after a LocalAI restart)
-        if look.retired.is_set():
+        if _given_up(look):
             return _retired_look(where)
         if slow_until is not None:
             expires = max(slow_until, time.time() + 1.0)

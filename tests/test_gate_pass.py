@@ -408,11 +408,15 @@ def test_a_retirement_mid_look_ends_it_within_the_bound(sym, how):
     assert not [m for _, m in events if "embedding " in m and ("waits" in m or "PAUSED" in m)], events
     _gone_or_moved(n, how)
     _nothing_kept_anywhere(n)
-    if how == "pause":                                          # the resume
+    if how == "pause":                                          # the resume: its lock taken again
         n.block.clear()
-        con = db.connect(collection)
-        backend_gate.embed_allowed(con, collection)
-        assert _join_gates() and backend_gate.embed_allowed(con, collection) is True
+        worker._hold_locks([collection], set())
+        try:
+            con = db.connect(collection)
+            backend_gate.embed_allowed(con, collection)
+            assert _join_gates() and backend_gate.embed_allowed(con, collection) is True
+        finally:
+            worker._release_locks()
     else:
         assert how != "forget" or not (n.root / "gutenberg").exists()
 
@@ -529,3 +533,167 @@ def test_sigterm_for_real_the_shutdown_ends_a_look_within_its_deadline(sym):
         worker._stop.clear()
     assert not run_check.gate_running(collection) and took < 5.0, f"{took:.1f} s"
     assert _claim_free(lock) and n.let_go == [TWIN] and n.kept == {}
+
+
+# ---- the second read of 20ebd29e ------------------------------------------------------
+
+def _wait_for(pred, bound: float = 5.0) -> bool:
+    t0 = time.monotonic()
+    while not pred():
+        if time.monotonic() - t0 > bound:
+            return False
+        time.sleep(0.01)
+    return True
+
+
+def test_no_look_starts_after_its_collections_retirement_until_its_lock_is_taken_again(sym):
+    """THE PROBE'S RACE: the settle thread reads the pauses once a beat, and
+    the producer asks only the worker's stop — so a caller that read "not
+    paused" before the pause looked AFTER the retirement, a look nobody
+    retires. The retirement leaves a tombstone: no look, no probe, until the
+    worker takes the collection's lock again."""
+    n, collection = sym
+    n.beats = 0
+    worker.retire_collection("gutenberg", timeout=1.0)        # nothing running: the pause
+    assert _settle(collection)() is False                       # the beat that read "not paused"
+    assert n.probes == [] and n.gates == [] and not run_check.gate_running(collection), \
+        f"{len(n.probes)} probe(s), {len(n.gates)} gate(s) after the retirement"
+    worker._hold_locks([collection], set())                     # the resume: its lock taken again
+    try:
+        con = db.connect(collection)
+        backend_gate.embed_allowed(con, collection)
+        assert _join_gates() and backend_gate.embed_allowed(con, collection) is True
+    finally:
+        worker._release_locks()
+
+
+def test_a_retirement_that_outlives_its_bound_is_said(sym, capsys):
+    n, collection = sym
+    n.beats, n.deaf = 0, True
+    n.block[("gutenberg", "document")] = threading.Event()
+    _in_thread(_settle(collection), timeout=10)
+    assert n.measuring.wait(5)
+    capsys.readouterr()
+    worker.retire_collection("gutenberg", timeout=0.2)
+    said = capsys.readouterr().out
+    assert "gutenberg: its run check's look (thread run-check-gutenberg) still runs after the " \
+           "retirement's bound of 0.2 s" in said, said
+
+
+def test_a_retired_looks_next_request_is_held_to_what_is_left_of_the_bound(sym, monkeypatch):
+    """The request in flight keeps its own bound; the look's NEXT one is held
+    to what is left of the retirement's, not the card's 300 s."""
+    n, collection = sym
+    asked = []
+    monkeypatch.setattr(run_check.embeddings, "embed_calibration",
+                        lambda recipe, texts, **kw: asked.append(kw["timeout"]) or [[0.0]] * len(texts))
+    recipe = collections_mod.recipe_for(collection)
+    look = run_check._Look("place", collection)
+    run_check._pass_local.look = look
+    try:
+        run_check.answers(recipe, how="one")(["a text"])
+        look.retire_by = time.monotonic() + 2.0
+        look.retired.set()
+        run_check.answers(recipe, how="one")(["a text"])
+        run_check.answers(recipe, how="contribute")(["a text", "another"])
+    finally:
+        run_check._pass_local.look = None
+    assert asked[0] == 300 and all(t <= 2.0 for t in asked[1:]), asked
+
+
+def test_the_node_pause_stops_a_look_as_a_collections_pause_does(sym):
+    """`node pause` (and seed-only, download only): nothing embeds, so a look
+    running stops at its gate's next slice — nothing kept, its twin let go,
+    no verdict left — and none starts until the mode embeds again."""
+    n, collection = sym
+    n.beats = 0
+    n.block[("gutenberg", "document")] = threading.Event()
+    _in_thread(_settle(collection), timeout=10)
+    assert n.measuring.wait(5)
+    lock = run_check.twin_lock_path(SERVER, TWIN)
+    worker._paused.set()                                        # node pause
+    try:
+        assert _wait_for(lambda: not run_check.gate_running(collection)), "still measuring, the node paused"
+        assert _claim_free(lock) and n.kept == {} and n.let_go == [TWIN]
+        assert run_check._where(collection) not in run_check._verdicts, "no verdict left"
+        probes = len(n.probes)
+        assert _settle(collection)() is False and len(n.probes) == probes, "no look while paused"
+    finally:
+        worker._paused.clear()
+    n.block.clear()
+    con = db.connect(collection)
+    backend_gate.embed_allowed(con, collection)
+    assert _join_gates() and backend_gate.embed_allowed(con, collection) is True
+
+
+def test_a_manifest_that_cannot_be_set_to_wal_is_not_left_open(sym, monkeypatch):
+    n, collection = sym
+    db.connect(collection).close()                              # the manifest is there
+    opened = []
+
+    class Recorded(db.ManifestConnection):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            opened.append(self)
+    monkeypatch.setattr(db, "ManifestConnection", Recorded)
+
+    def wal(con, **k):
+        raise db.sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(db, "wal", wal)
+    with pytest.raises(db.sqlite3.OperationalError):
+        run_check._existing_manifest(collection)
+    (con,) = opened
+    with pytest.raises(db.sqlite3.ProgrammingError):
+        con.execute("SELECT 1")                                 # closed
+
+
+@pytest.mark.parametrize("how", ["pause", "forget", "gone"])
+def test_a_retirement_during_the_query_side_writes_and_makes_nothing(sym, how):
+    """The document side kept, the QUERY side measuring when the collection
+    goes: paused (its manifest there: the look writes nothing to it),
+    forgotten (retired, its directory gone), or gone under it without a
+    retirement (its manifest is never made again: no `db.connect`)."""
+    import shutil
+    n, collection = sym
+    n.beats, n.deaf = 0, True
+    n.block[("gutenberg", "query")] = threading.Event()
+    _in_thread(_settle(collection), timeout=10)
+    assert _wait_for(lambda: ("gutenberg", "query", TWIN) in n.gates), n.gates
+    assert ("gutenberg", "document") in n.kept
+    if how in ("pause", "forget"):
+        worker.retire_collection("gutenberg", timeout=0.2)    # the slice outlives it
+    written = len(_events(collection))
+    if how in ("forget", "gone"):
+        shutil.rmtree(n.root / "gutenberg")
+    n.block[("gutenberg", "query")].set()
+    assert _join_gates()
+    if how == "pause":
+        assert len(_events(collection)) == written, _events(collection)[written:]
+    else:
+        assert not (n.root / "gutenberg").exists(), "the manifest made again where the collection was"
+    assert ("gutenberg", "query") not in n.kept
+
+
+def test_the_real_validate_hands_the_looks_refusal_to_keep(node, endpoint, monkeypatch):
+    """`run_check._validate` itself, not a fake: a look retired meanwhile keeps
+    no statement, because the real gate's keep is handed `_keep_refused`."""
+    from app.hold import embedder as emb
+    root, collection, codex = node
+    recipe = collections_mod.recipe_for(collection)
+    monkeypatch.setattr(run_check, "stated_run", lambda recipe, **k: emb.StatedRun(
+        run_id=RUN, engine={"options": {}}, weights="sha256:" + "3c" * 32, driver="cpu"))
+
+    def measured(root, name, codex, *, role, refuse=None, **kw):
+        body = {"run": RUN, "role": role, "passed": 16}
+        hold_runs.keep(root, name, {"body": body}, refuse=refuse)
+        return body
+    monkeypatch.setattr(hold_runs, "validate", measured)
+    look = run_check._Look("place", collection)
+    look.retired.set()
+    run_check._pass_local.look = look
+    try:
+        with pytest.raises(emb.GateDeferred, match="paused, forgotten or renamed"):
+            run_check._validate(root, "gutenberg", codex, recipe, role="document")
+    finally:
+        run_check._pass_local.look = None
+    assert not hold_runs.path_for(root, "gutenberg", RUN, "document").exists(), "nothing kept"
