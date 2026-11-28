@@ -21,6 +21,15 @@ testbench for all the collections and models to come"). It:
 - **measures** itself: the card's busy share, who held it, the gaps, the
   query-under-load harness.
 
+**The ingestion rule** (operator, 2026-11-26: "the RAGE ingestion API to be
+extended for image OCR and adding of text layer to pdf … This is
+architecture's call"; 2026-11-28, on EUR-Lex's figures written in its
+plugin: "Why the fuck this is not a fucking part of RAGE API???", "I TOLD
+YOU TO DO IT!"): what more than one collection does with its origin —
+images, OCR, a PDF's text layer — is RAGE's, built once here and called by
+the plugins. A plugin keeps only what is its origin's own (how its files
+say where an image stands). A second copy in a plugin is a defect.
+
 **The base rule** (operator, 2026-11-01, step 2 of the GPU programme: "these
 optimizations are only part of the common collections backend (that is not
 the localai backend, but louise's engine…)"): how collections are embedded is
