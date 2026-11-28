@@ -511,6 +511,11 @@ class Collection:
     # `load_annotations` refuse it (`LOCKED_SAYS`); `load_locked` lists it
     # (docs/notes/collection-lock.md)
     locked: bool = False
+    # 07 §7.8 `hidden` (operator, 2026-11-28): SHOWN TO ADMINS ONLY — run as
+    # any other (fetched, embedded, shared as its `share` says), and to every
+    # viewer who is not an admin as if it did not exist: not listed, searched,
+    # read, nor its claims attached (`hidden_from`; docs/notes/collection-hide.md)
+    hidden: bool = False
     #: why `embed_mode_default` is not what the file says: `embed = "p2p"`
     #: with `share = false` runs as `all` — p2p publishes what it embeds, and
     #: a node that does not share can publish nothing (07 §7.8, 2026-10-19)
@@ -694,6 +699,7 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
     if not isinstance(share, bool):
         raise ValueError(f"{where}: share is true or false (07 §7.8), got {share!r}")
     locked = _parse_locked(raw, where)
+    hidden = _parse_hidden(raw, where)
     share_slices = _parse_share_list(raw.get("share_slices"), "share_slices", where)
     share_kinds = _parse_share_list(raw.get("share_kinds"), "share_kinds", where)
     embed_slices = _parse_share_list(raw.get("embed_slices"), "embed_slices", where)
@@ -812,6 +818,7 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
         embed_select=embed_select,
         source=source,
         locked=locked,
+        hidden=hidden,
     )
 
 
@@ -840,6 +847,7 @@ def _annotations_collection(path: Path, raw: dict[str, Any], name: str, codex,
     slices = _parse_slices(raw["slices"], where) if "slices" in raw else "all"
     method = _parse_method(raw.get("method"), where)
     locked = _parse_locked(raw, where)
+    hidden = _parse_hidden(raw, where)
     return Collection(
         name=name, plugin=codex.plugin, profile=None, embed_mode_default="off",
         corpus_dir=d / "shard", manifest_path=d / "state" / "manifest.sqlite",
@@ -847,7 +855,7 @@ def _annotations_collection(path: Path, raw: dict[str, Any], name: str, codex,
         license_ack=_codex_ack(codex, d / "state"), embed=None, codex=codex,
         title=title, slices=slices, kinds=kinds, share=share,
         share_slices=share_slices, share_kinds=share_kinds,
-        source="shard", method=method, locked=locked)
+        source="shard", method=method, locked=locked, hidden=hidden)
 
 
 def _parse_locked(raw: dict[str, Any], where) -> bool:
@@ -856,6 +864,31 @@ def _parse_locked(raw: dict[str, Any], where) -> bool:
     if not isinstance(locked, bool):
         raise ValueError(f"{where}: locked is true or false (07 §7.8), got {locked!r}")
     return locked
+
+
+def _parse_hidden(raw: dict[str, Any], where) -> bool:
+    """07 §7.8 `hidden` (2026-11-28): true or false, absent = false."""
+    hidden = raw.get("hidden", False)
+    if not isinstance(hidden, bool):
+        raise ValueError(f"{where}: hidden is true or false (07 §7.8), got {hidden!r}")
+    return hidden
+
+
+def hidden_from(viewer, collection) -> bool:
+    """Is `collection` hidden from `viewer` (07 §7.8 `hidden`, operator
+    2026-11-28: "hides the collection to the non admin users")? Hidden to
+    every viewer who is not an admin (`auth.admin`): a user, the depositor,
+    a guest, and NOBODY (None) — a reader route that lost its viewer shows
+    less, never more."""
+    if not getattr(collection, "hidden", False):
+        return False
+    from . import auth
+    return not auth.admin(viewer)
+
+
+def seen_by(viewer, collections) -> list:
+    """`collections` without those hidden from `viewer`."""
+    return [c for c in collections if not hidden_from(viewer, c)]
 
 
 def locked_says(name: str) -> str:

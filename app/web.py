@@ -3302,6 +3302,8 @@ def _collection_shelf(collection: collections_mod.Collection,
         # words; None where it is not in force for it (`desired_embed_mode`)
         "embed_mode_choice": collections_mod.desired_embed_mode(collection)[1],
         "share": bool(getattr(collection, "share", False)),
+        # 07 §7.8 `hidden` (2026-11-28): the hide box and the badge
+        "hidden": bool(getattr(collection, "hidden", False)),
         # the SHARE box on every collection that can be served (a public
         # Codex, 04 §4.3) — never only where the p2p line happens to be
         # cached (operator, 2026-11-01: "some collections are missing it")
@@ -3484,6 +3486,7 @@ def _annotations_shelf(collection, served: list) -> dict:
         "note": note,
         "kinds": list(collection.kinds or ()),
         "share": collection.share,
+        "hidden": bool(getattr(collection, "hidden", False)),
         "source": getattr(collection, "source", "origin"),
         "license": _license_state(collection),
         "copy_state": _copy_state(collection),
@@ -4402,6 +4405,25 @@ def collection_lock_box(name: str, body: LockBody):
     except Exception:   # noqa: BLE001
         pass
     return {"ok": True, "persisted": True, **out}
+
+
+class HiddenBody(BaseModel):
+    hidden: bool
+
+
+@admin_router.post("/library/{name}/hidden")
+def collection_hide_box(name: str, body: HiddenBody):
+    """The card's hide box (operator, 2026-11-28: "hides the collection to
+    the non admin users"; 07 §7.8 `hidden`): shown to admins only. Written to
+    the collection's file through its one writer, as `--set hidden=…`; every
+    reader route reads the file's listing again at its next request. A
+    locked collection's file takes no other value (400, its reason)."""
+    _held_or_404(name, locked_ok=True)
+    try:
+        out = collection_file.set_values(name, {"hidden": "true" if body.hidden else "false"})
+    except collection_file.SetRefused as e:
+        raise HTTPException(400, str(e)) from None
+    return {"ok": True, "persisted": True, "hidden": bool(out.get("hidden", body.hidden))}
 
 
 _p2p_cache: dict[str, tuple[float, dict | None]] = {}
