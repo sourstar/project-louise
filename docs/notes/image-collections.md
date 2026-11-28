@@ -215,3 +215,44 @@ plugin's source module, as tests/test_invariant_11_origin_form.py requires.
      never a weight on another list."
 4. **One PR.** Its sweep adds the annotations Codex version, the worker's
    stages for annotations, and 05's merge.
+
+## 12. DECIDED 2026-11-28: the bulk, and archive.org as a RULE 1 shortcut
+
+The operator: "CSV bulk download, then the images from archive.org that fit
+the file name and size, then the API requests of the remaining. By the book
+in the ingestion pipeline: CSV bulk download and API request of the images.
+We take a shortcut if it fits (rule 1), otherwise we go by the book."
+
+**By the book (the plugin, what a verifier reproduces):** the Open Access
+CSV is the bulk. The API's per-object JSON is fetched for the objects with
+images, kept whole, and gives the image URLs. The images come from
+images.metmuseum.org.
+
+**The shortcut (an operator pass, never the plugin).** archive.org's
+`metropolitanmuseumofart-gallery` copy, measured 2026-11-28 on 41
+public-domain objects present in both:
+- 24 match: the Met's current file is byte-for-byte
+  `jpegtran -optimize -copy none` (libjpeg-turbo 2.1.5) of archive.org's,
+  with its 18-byte JFIF APP0 removed;
+- 17 differ (re-photographed, or truncated at 1 MiB);
+- all 24 matches had the Met's size, and all 17 mismatches did not.
+
+Acceptance, per file:
+- the Met's `primaryImage` file name and HEAD `Content-Length` equal those
+  of the rebuilt file;
+- else it is fetched from the Met.
+
+The Met's server (IIS) offers no content hash, so a size is evidence, not
+proof. Before publication, a random 1 % of the accepted files is fetched
+whole from the Met and compared byte for byte. ONE mismatch voids the
+shortcut, and every accepted file is fetched by the book. `origin_hash` is
+always over the bytes held, which are the Met's bytes.
+
+Measured cost: archive.org served the 41 files in 44 s, the Met in 8 s. The
+shortcut lightens the Met's load. It does not shorten the run unless
+archive.org is fetched in parallel with the Met.
+
+**Open (invariant 11, entity information):** for the ~48 % of objects
+without images, the CSV holds `Dimensions` as a string, while the API JSON
+adds structured `measurements`. Fetching their JSON as well (~240 k requests,
+~1–7 h at 10–80 req/s) keeps them.
