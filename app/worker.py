@@ -6274,6 +6274,11 @@ def _join_pipeline_threads(timeout: float = 90.0) -> None:
     # at its next slice) and is committed before the process exits
     for thread, _ in list(_embed_producers.values()):
         thread.join(timeout=max(0.0, deadline - time.time()))
+    # a run check's look runs on a thread of its own (app/run_check.py `_Look`):
+    # its gate asks the stop between slices and ends at the next one, keeping
+    # nothing, its twin let go and its claim released
+    from . import run_check
+    run_check.join_gates(max(0.0, deadline - time.time()))
     # scans stop at their next ref and commit the batch so far; give them
     # the same deadline so that commit lands before the process exits
     with _scan_lock:
