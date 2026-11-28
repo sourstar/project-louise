@@ -51,6 +51,8 @@
   <span class="badge brass" id="lang-only" title="the query asked for documents in these languages only — remove that from the question to search every language">only: {{ result.language.only|join(', ') }}</span>
   {% elif result.language and result.language.status == 'unavailable' %}
   <span class="badge err" title="no model could translate the question: every language was searched with it as typed">languages: query not translated</span>
+  {% elif result.language and result.language.status == 'unchecked' %}
+  <span class="badge err" title="the chat model did not answer in time whether the question limits its languages (&quot;only in German&quot;): every language was searched">languages: limit not checked</span>
   {% endif %}
   {# THE SEARCH'S KIND, SAID AND ONE TAP FROM CHANGED (docs/notes/
      fact-fiction-search.md; operator, 2026-11-27): facts leave the literary
