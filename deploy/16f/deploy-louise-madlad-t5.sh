@@ -385,6 +385,12 @@ if [ -n "${TESTS_EXTRA:-}" ]; then
   DROPPED=$(printf '%s\n' $EXTRA | grep -E '(^|/)conftest\.py$' || true)
   [ -z "$DROPPED" ] || say "3c. TESTS_EXTRA: dropped (pytest loads them itself): $(echo $DROPPED)"
   EXTRA=$(printf '%s\n' $EXTRA | grep -vE '(^|/)conftest\.py$' | tr -s ' \t\n' ' ' || true)
+  # IN THE TREE'S ORDER, EACH ONCE, as a whole run collects them (f4ebb4e's second
+  # stop, 2026-11-28: tests/hold/test_collection_new_sister.py, then
+  # tests/test_collection_file.py, then tests/hold/test_codex.py lost every fixture of
+  # tests/hold/conftest.py — pytest left the package and came back, and the module it
+  # came back to was collected without the package's fixtures; sorted, 77 passed)
+  EXTRA=$(printf '%s\n' $EXTRA | sort -u | tr -s ' \t\n' ' ' || true)
   # an empty list would run pytest on the whole tree: a mistake, said and stopped
   [ -n "${EXTRA// /}" ] || { echo "TESTS_EXTRA: no test path in $TESTS_EXTRA"; exit 1; }
   say "3c. the release's own tests: $(printf '%s\n' $EXTRA | grep -c .) path(s) (TESTS_EXTRA)"
