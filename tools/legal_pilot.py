@@ -545,9 +545,12 @@ def pool(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *,
     ids: set[int] = set()
     per: list[dict[str, Any]] = []
 
-    def found_by(limit: int) -> set:
-        return {_native_of(h.get("uid")) for h in _hits(search_fn(q["question"], collections=[name],
-                                                                   limit=limit, as_of=as_of))} - {None}
+    def found_by(limit: int) -> tuple[set, int]:
+        """The records, and how many HITS the search answered: the hits can be
+        chunks, a record carrying two (architecture's read of 6f0be24f), so
+        whether the search cut is decided on the hits, never the records."""
+        hits = _hits(search_fn(q["question"], collections=[name], limit=limit, as_of=as_of))
+        return {_native_of(h.get("uid")) for h in hits} - {None}, len(hits)
     for i, q in enumerate(questions):
         relevant = {int(x) for x in q["relevant_doc_ids"] if int(x) in gold and gold[int(x)].held}
         if not relevant:
@@ -556,12 +559,12 @@ def pool(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *,
             break
         reranked = rerank
         if rerank:
-            found = found_by(depth)
+            found, _n = found_by(depth)
         else:
             with reranker_override("off"):
-                found = found_by(depth + 1)
-            if len(found) > depth:          # the search cuts here: the reranker decides what stays
-                found, reranked = found_by(depth), True
+                found, n_hits = found_by(depth + 1)
+            if n_hits > depth:              # the search cuts here: the reranker decides what stays
+                (found, _n), reranked = found_by(depth), True
         golds = {_native_of(gold[x].uid) for x in relevant} - {None}
         ids |= found | golds
         per.append({"index": i, "text_records": len(found), "gold_records": len(golds),

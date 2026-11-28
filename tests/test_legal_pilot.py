@@ -513,3 +513,21 @@ def test_the_pool_reranks_only_where_the_search_cuts(built):
     assert got["reranked"] == "all" and all(r == real for _lim, r in calls)
     got = lp.pool(built, QUESTIONS, gold, depth=5, search_fn=text, sample=1)
     assert len(got["questions"]) == 1 and got["sample"] == 1
+
+
+
+def test_a_record_with_two_hits_at_the_cut_is_reranked(built):
+    """Architecture's read of 6f0be24f: depth+1 hits of which two are one
+    record read as <= depth records, while the search DID cut."""
+    from app import collections as collections_mod
+    cov = lp.coverage(built, CORPUS, QUESTIONS)
+    gold = {int(k): lp.gold_from(v) for k, v in cov["gold"].items()}
+    calls = []
+
+    def text(q, *, collections, limit, as_of):
+        r = collections_mod.reranker_for(built.collection)
+        calls.append((limit, r))
+        uids = [DEC_A_ID, DEC_A_ID, DEC_A_ID + 1]                  # 3 hits, 2 records
+        return {"lists": [{"hits": [_hit(f"normattiva:{u}", j) for j, u in enumerate(uids[:limit])]}]}
+    got = lp.pool(built, QUESTIONS, gold, depth=2, search_fn=text)
+    assert got["reranked_questions"] == len(got["questions"]) > 0, "3 hits at depth 2: the search cut"
