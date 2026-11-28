@@ -576,8 +576,22 @@ def reader_voice(lang: str | None, held: list[dict], node: Any, *, asked: Any = 
     if admin:
         mine = next((v for v in (asked or None, account_voice or None) if v and held_profile(v, held)), None)
         return True, voice_for(mine or node.tts_voice or None, held)
+    # THE USERS TAB (operator, 2026-11-28: "every voice disabled by default: if
+    # there is no voice, the read aloud feature is disabled"): only the voices
+    # this reader's account (or the guests' entry) enables, recorded or
+    # synthetic alike — the one asked, the account's, the language's, the first
+    from app import users, viewing
+    allowed = users.voices_allowed(viewing.current())
+    synthetic = node_voice.synthetic(node)
+    if allowed is not None:
+        def ok(v):
+            return bool(v) and v in allowed and held_profile(v, held)
+        recorded = [p.get("voice") for p in sorted(held, key=lambda p: str(p.get("created_at") or ""))]
+        voice = next((v for v in (asked or None, account_voice or None, synthetic.get(lang or ""),
+                                  *recorded, *synthetic.values()) if ok(v)), None)
+        return voice is not None, voice
     # the voice of that same language: voice and tag never disagree
-    voice = synthetic_for(lang, node_voice.synthetic(node), held)
+    voice = synthetic_for(lang, synthetic, held)
     return voice is not None, voice
 
 
@@ -595,8 +609,8 @@ CONTEXT_CHARS = 2000
 
 
 #: what a reader who is not an admin is told when no synthetic voice is held
-NO_SYNTHETIC = (b'{"error": {"message": "no synthetic voice is set on this node, and a recorded '
-                b'voice is read to an admin only"}}')
+NO_SYNTHETIC = (b'{"error": {"message": "no voice is enabled for this reader: the Users tab '
+                b'enables them, one by one"}}')
 
 
 #: the text-to-speech model's own steps where `[speech] tts_steps` is unset

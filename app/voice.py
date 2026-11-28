@@ -127,7 +127,14 @@ def offered(admin: bool = True) -> dict[str, Any]:
         why = f"{platform_config.platform_path()} does not load ({e})"
         return {"input": {"available": False, "why": why}, "output": {"available": False, "why": why}}
     output = _offer(s.tts_model, "text-to-speech", FLAGS["tts_model"])
-    if output["available"] and not admin and not synthetic(s):
+    from app import users, viewing
+    allowed = users.voices_allowed(viewing.current()) if not admin else None
+    if output["available"] and allowed is not None:
+        # THE USERS TAB: no voice enabled for this reader, no read-aloud shown
+        if not allowed:
+            output = {"available": False,
+                      "why": "no voice is enabled for this reader: the Users tab enables them, one by one"}
+    elif output["available"] and not admin and not synthetic(s):
         output = {"available": False,
                   "why": "no synthetic voice is set on this node, and a recorded voice is read to an "
                          f"admin only: `louise node speech set {FLAGS['synthetic_voices']} "
@@ -147,7 +154,19 @@ def voices(account: str | None = None, admin: bool = True) -> dict[str, Any]:
     node reads no answer aloud. FOR A READER WHO IS NOT AN ADMIN, nothing to
     choose: the voice follows the answer's language (`by_language`, the
     languages the node has a synthetic voice for). Never raises."""
-    from app import speech, users
+    from app import speech, users, viewing
+    allowed = users.voices_allowed(viewing.current()) if not admin else None
+    if not admin and allowed is not None:
+        # THE USERS TAB: the voices this reader may be read to in, to choose among
+        mine = ({"name": account, "voice": users.voice_of(account), "phrases": users.phrases_of(account),
+                 "wake_name": users.wake_name_of(account)} if account else None)
+        if not (offered(admin=False).get("output") or {}).get("available"):
+            return {"voices": [], "default": None, "account": mine, "by_language": []}
+        shown = [v for v in all_voices() if v["voice"] in allowed]
+        if mine and mine["voice"] not in {v["voice"] for v in shown}:
+            mine = {**mine, "voice": None}
+        return {"voices": shown, "default": shown[0]["voice"] if shown else None, "account": mine,
+                "by_language": []}
     if not admin:
         return {"voices": [], "default": None,
                 "account": {"name": account, "voice": None, "phrases": users.phrases_of(account),
@@ -173,6 +192,26 @@ def voices(account: str | None = None, admin: bool = True) -> dict[str, Any]:
     return {"voices": out, "default": speech.voice_for(node.tts_voice or None, found), "account": mine}
 
 
+def all_voices() -> list[dict[str, Any]]:
+    """Every voice the node can read in, recorded or synthetic alike (the users
+    tab's list, operator 2026-11-28: "I don't want to keep track of synthetic
+    vs cloned"): the model server's profiles in the order recorded, then the
+    synthetic voices the node names that are no profile. Never raises."""
+    from app import speech
+    try:
+        found = sorted(speech.profiles(server()), key=lambda p: str(p.get("created_at") or ""))
+    except Exception:   # noqa: BLE001 — a server that does not answer: the named ones alone
+        found = []
+    out = [{"name": str(p.get("name") or p.get("voice")), "voice": p["voice"], "language": p.get("language")}
+           for p in found if p.get("voice")]
+    have = {v["voice"] for v in out}
+    for lang, v in synthetic().items():
+        if v not in have:
+            out.append({"name": v, "voice": v, "language": lang})
+            have.add(v)
+    return out
+
+
 def choose(account: str | None, voice: str | None, admin: bool = True) -> dict[str, Any]:
     """An account's voice set from the Ask page (`POST /ask/voice`): one of
     `voices`' or None for the node's. Raises ValueError for a reader with no
@@ -182,10 +221,11 @@ def choose(account: str | None, voice: str | None, admin: bool = True) -> dict[s
     if not account:
         raise ValueError("no account: this browser keeps the voice")
     if not admin:
-        if voice:
-            raise NotAllowed("this account's voice follows the language of the answer; "
-                             "only an admin chooses a voice")
-        users.set_voice(account, None)
+        from app import viewing
+        allowed = users.voices_allowed(viewing.current())
+        if voice and (allowed is None or voice not in allowed):
+            raise NotAllowed("that voice is not enabled for this account (the Users tab)")
+        users.set_voice(account, voice or None)
         return voices(account, admin=False)
     if voice and voice not in {v["voice"] for v in voices(account)["voices"]}:
         raise ValueError(f"{voice!r} is not one of the node's voices")
