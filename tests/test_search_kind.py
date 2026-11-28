@@ -632,12 +632,15 @@ def test_the_note_takes_the_language_whole_and_says_one_in_the_singular(lang, st
 
 # ---- a work asked about is read, not glimpsed (the 9B's judged set, 2026-11-28) -------------
 
-def _long_book(tmp_path):
+def _long_book(tmp_path, name="gutenberg"):
     """War and Peace's real record, with a text that cuts into many chunks:
     paragraph n says "Paragraph n." and words enough to fill chunks."""
     from app import discovery, worker
+    import dataclasses
     from tests.test_work_kind import _collection
     c = _collection(tmp_path, ids=(2600,))
+    if name != "gutenberg":
+        c = dataclasses.replace(c, name=name)
     txt = next((c.corpus_dir / "2600").glob("*.txt.utf8"))
     txt.write_text("\n\n".join(f"Paragraph {n}. " + "The army crossed the river at dawn. " * 40
                                for n in range(1, 41)), encoding="utf-8")
@@ -695,3 +698,46 @@ def test_only_a_literature_search_reads_around_and_every_answer_path_reads_it(is
     from app.ask import chat
     assert chat._body_of({"text": "x" * 900, "around": "y" * 6000}) == "y" * chat.AROUND_CHARS + " …"
     assert chat._body_of({"text": "x" * 900}) == "x" * chat.TEXT_CHARS + " …"
+
+
+
+def test_a_federated_literature_search_reads_around_the_first_three_of_the_whole_list(
+        isolated_config, tmp_path, monkeypatch):
+    """Architecture's read of 0536b5da, 1: each collection's first three got
+    `around` — up to nine books read for one question."""
+    a, con_a, row_a, cut_a = _long_book(tmp_path / "a", "gutenberg")
+    b, con_b, row_b, cut_b = _long_book(tmp_path / "b", "gutenberg-nemo")
+    monkeypatch.setattr(retrieval.refs, "get_store", lambda: None)
+    monkeypatch.setattr(retrieval.refs.RESOLVER, "resolve", lambda q, s: [])
+    by = {a.name: (row_a, cut_a), b.name: (row_b, cut_b)}
+
+    def legs(con, c, *x, **kw):
+        row, cut = by[c.name]
+        hits = [{"chunk_id": cut[i]["id"], "uid": row["uid"], "book_id": 2600 + i, "text": cut[i]["text"],
+                 "score": 1.0, "rrf": 0.03, "source": "fts"} for i in (2, 4, 6, 8)]
+        return {"catalog": [], "merged": hits, "translations": {}, "timings": {"catalog": 0.0}, "scope": {},
+                "kind_applied": "literature", "kind_by": "the reader", "left_out": {"count": 0, "by_basis": {}}}
+    monkeypatch.setattr(retrieval, "_search_one_collection", legs)
+    monkeypatch.setattr(retrieval, "_rerank_list", lambda q, hs, *x, **kw: (hs, False))
+    monkeypatch.setattr(retrieval, "_one_hit_per_work", lambda ranked, *x, **kw: ranked)
+    out = retrieval.federated_search([a, b], "Napoleon", k=8, translate=False, kind="literature")
+    around = [h for h in out["hits"] if h.get("around")]
+    assert len(out["hits"]) >= 6 and len(around) == 3, [(h["source_collection"], bool(h.get("around"))) for h in out["hits"]]
+    assert around == out["hits"][:3], "the first three of the whole list"
+    assert "around" in out["timings"] and out["timings"]["around"] >= 0.0
+
+
+def test_the_search_says_what_reading_around_took(isolated_config, tmp_path, monkeypatch):
+    c, con, row, cut = _long_book(tmp_path)
+    mid = cut[len(cut) // 2]
+    monkeypatch.setattr(retrieval.refs, "get_store", lambda: None)
+    monkeypatch.setattr(retrieval.refs.RESOLVER, "resolve", lambda q, s: [])
+    monkeypatch.setattr(retrieval, "_search_one_collection", lambda *x, **kw: {
+        "catalog": [], "merged": [{"chunk_id": mid["id"], "uid": row["uid"], "book_id": 2600, "text": mid["text"],
+                                   "score": 1.0, "rrf": 0.03, "source_collection": "gutenberg", "source": "fts"}],
+        "translations": {}, "timings": {}, "scope": {}, "kind_applied": kw.get("kind", "all"), "kind_by": "the reader",
+        "left_out": {"count": 0, "by_basis": {}}})
+    monkeypatch.setattr(retrieval, "_rerank_list", lambda q, hs, *x, **kw: (hs, False))
+    out = retrieval.search(con, "Napoleon", k=5, collection=c, translate=False, kind="literature")
+    assert out["timings"]["around"] >= 0.0
+    assert "around" not in retrieval.search(con, "Napoleon", k=5, collection=c, translate=False)["timings"]

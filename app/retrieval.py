@@ -1627,7 +1627,9 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
     cancel.checkpoint()
     _attach_metadata_and_enqueue(con, collection, final)
     if kind == "literature":
-        _attach_around(con, collection, final)
+        t_around = time.time()
+        _attach_around(con, collection, final[:AROUND_HITS])
+        timings["around"] = round((time.time() - t_around) * 1000, 1)
 
     timings["total"] = round((time.time() - t_total) * 1000, 1)
     result = {"query": query, "mode": mode, "translations": partial["translations"],
@@ -2058,12 +2060,19 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
     # This WRITES (the lazy-embed queue): nothing is enqueued for a search
     # nobody is waiting for.
     cancel.checkpoint()
+    # THE FIRST THREE OF THE WHOLE LIST read around, never each collection's
+    # first three (architecture's read of 0536b5da, 1)
+    first = {id(h) for h in final[:AROUND_HITS]} if result_kind_is_literature(kind) else set()
+    around_ms = 0.0
     for name, hits in by_collection.items():
         collection = collection_by_name[name]
         con = cancel.watch(db.connect(collection))
         _attach_metadata_and_enqueue(con, collection, hits)
-        if result_kind_is_literature(kind):
-            _attach_around(con, collection, hits[:AROUND_HITS])
+        mine = [h for h in hits if id(h) in first]
+        if mine:
+            t_around = time.time()
+            _attach_around(con, collection, mine)
+            around_ms += (time.time() - t_around) * 1000
 
     timings = {
         "languages": plan_ms,
@@ -2071,6 +2080,7 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
         "fts": max((t.get("fts", 0.0) for t in timings_per_collection.values()), default=0.0),
         "dense": max((t.get("dense", 0.0) for t in timings_per_collection.values()), default=0.0),
         "rerank": rerank_ms,
+        **({"around": round(around_ms, 1)} if first else {}),
         "per_collection": timings_per_collection,
         # what each list's rerank was made of (`_rerank_parts`); lists that
         # share a reranker ran one after the other (`_rerank_lists`)
