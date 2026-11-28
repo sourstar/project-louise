@@ -102,13 +102,23 @@ app.add_middleware(auth.ViewerGate)
 app.add_middleware(idle_trim.IdleClock)
 
 def _con():
-    # one connection per request keeps things simple; SQLite WAL handles it
-    return db.connect(_collection())
+    # one connection per request keeps things simple; SQLite WAL handles it.
+    # A manifest that cannot be opened is said — 503 and why — never a 500
+    c = _collection()
+    try:
+        return db.connect(c)
+    except Exception as e:  # noqa: BLE001 — sorted: a lock is raised as before
+        why = db.unreadable(e)
+        if why is None:
+            raise
+        raise HTTPException(503, f"{c.name}: {why}") from None
 
 
 def _log_con():
-    """The default collection's manifest, where query_log lives, whoever asks."""
-    return db.connect()
+    """The default collection's manifest, where query_log lives, whoever asks
+    — or the control fallback where it cannot be opened (`db.control`): a
+    log line never fails the request it logs."""
+    return db.control()
 
 
 def _collection():
@@ -258,7 +268,14 @@ def _node_mode_now() -> str:
 
 @app.get("/api/status")
 def status():
-    con = _con()
+    try:
+        con = _con()
+    except HTTPException as e:
+        if e.status_code != 503:
+            raise
+        # the node's own state, without the default collection's numbers
+        return {"worker_state": node_state.worker_state(), "mode": _node_mode_now(),
+                "unreadable": e.detail}
     scope = db.get_scope(con)
     # ONE STATUS (2026-11-07): the counts are the Library card's — the one
     # scan (app/status.py `full_scan_sql`), cached with its TTL and stored

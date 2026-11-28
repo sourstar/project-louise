@@ -70,12 +70,30 @@ def _get_routes():
 
 
 def _sweep(client) -> dict:
+    """The pages that crashed: a 500, or a 5xx that does not say why (a
+    route that serves the damaged collection's own data answers 503 and
+    names it)."""
     failed = {}
     for path in _get_routes():
         r = client.get(path, headers=ADMIN)
-        if r.status_code >= 500:
+        if r.status_code == 500 or (r.status_code > 500 and "cannot be opened" not in r.text):
             failed[path] = r.status_code
     return failed
+
+
+def test_a_damaged_first_collection_takes_no_page_down(isolated_config, monkeypatch, tmp_path):
+    """The node's case exactly (2026-11-28): EUR-Lex5.next sorted FIRST, so
+    she was `default_collection()`, the control manifest every
+    `db.connect()` without a collection opens — the System tab's scope read
+    among them ("/admin/system" 500 three times until the restore)."""
+    from app.api import app
+    real, broken = _node(monkeypatch, tmp_path)
+    monkeypatch.setattr(collections_mod, "load_all",
+                        lambda *, skip_unreadable=False: ([broken, real], []) if skip_unreadable else [broken, real])
+    monkeypatch.setattr(collections_mod, "load_public", lambda *a, **k: [broken, real])
+    with TestClient(app, raise_server_exceptions=False) as client:
+        _damage(broken.manifest_path)
+        assert not _sweep(client)
 
 
 def test_the_sweep_reaches_the_pages():
@@ -114,3 +132,20 @@ def test_a_locked_manifest_is_not_refused_at_start():
     from app import spaces
     assert spaces.unreadable(sqlite3.OperationalError("database is locked")) is None
     assert spaces.unreadable(sqlite3.DatabaseError("file is not a database"))
+
+
+def test_the_query_log_goes_to_the_control_fallback_when_the_control_manifest_does_not_open(
+        isolated_config, monkeypatch, tmp_path, capsys):
+    """A question is never failed by its log line: the control manifest
+    unreadable, `db.control()` opens the node's fallback and says so."""
+    real, broken = _node(monkeypatch, tmp_path)
+    monkeypatch.setattr(collections_mod, "load_all",
+                        lambda *, skip_unreadable=False: ([broken, real], []) if skip_unreadable else [broken, real])
+    _damage(broken.manifest_path)
+    con = db.control()
+    try:
+        db.log_query(con, "search", "chi era Garibaldi?", "hybrid", 10, {}, 0, [])
+        assert con.execute("SELECT COUNT(*) FROM query_log").fetchone()[0] == 1
+    finally:
+        con.close()
+    assert "[EUR-Lex5.next err:control] its manifest cannot be opened" in capsys.readouterr().out
