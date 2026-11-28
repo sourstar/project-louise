@@ -257,8 +257,9 @@
   /* a phone keeps :hover on the button last tapped: the accent border stayed
      on the microphone after speaking — red in the warm themes (operator,
      2026-11-12: "the button remains red"). Without a hover, no hover look. */
-  @media (hover:none){.voice-btn:not(.rec):not(.on):hover{border-color:var(--line)}
-    #mic:not(.hands-free):hover{border-color:var(--muted)} #mic.hands-free:hover{border-color:var(--ok)}}
+  @media (hover:none){.voice-btn:not(.rec):not(.on):hover{border-color:var(--line)}}
+  /* the microphone keeps its own frame: idle-coloured, green in hands-free */
+  @media (hover:none){#mic:not(.hands-free):hover{border-color:var(--muted)} #mic.hands-free:hover{border-color:var(--ok)}}
   @keyframes mic-pulse{50%{box-shadow:0 0 0 3px rgba(224,80,80,.35)}}
   #mic-status{margin:4px 0 0}
   .answer-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
