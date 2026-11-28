@@ -30,8 +30,10 @@ from __future__ import annotations
 import math
 import re
 
+import dataclasses
 import hashlib
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -76,6 +78,11 @@ class Outcome:
     seed: bytes | None = None
     shards: tuple[str, ...] = ()
     why: str = ""
+    #: how long the check took, wall clock — the report's and the log's, never
+    #: the attestation's (signed and published, 09 §9.8): a split of a run's
+    #: time by check is measured, not inferred (München, 2026-11-28: a 36.5-min
+    #: scheduled check whose report named no time)
+    secs: float | None = field(default=None, compare=False)
 
     @property
     def attestable(self) -> bool:
@@ -106,7 +113,8 @@ class Report:
                 "snapshot_hash": self.snapshot_hash,
                 "checks": [{"check": o.check, "result": o.result,
                             "detail": o.detail,
-                            "attestation": self.attestations.get(o.check)}
+                            "attestation": self.attestations.get(o.check),
+                            "secs": None if o.secs is None else round(o.secs, 1)}
                            for o in self.outcomes]}
 
 
@@ -1518,6 +1526,7 @@ def run(root, name: str, codex, snapshot: snap.Snapshot, *, seed: bytes,
               origin_is_copy=bool(origin_is_copy))
     outcomes = []
     for c in want:
+        began = time.monotonic()
         try:
             o = CHECKS[c](ctx)
         except CheckError:
@@ -1537,7 +1546,8 @@ def run(root, name: str, codex, snapshot: snap.Snapshot, *, seed: bytes,
             o = Outcome(c, INCONCLUSIVE, {"error": f"{type(e).__name__}"},
                         why=f"the check itself failed: {type(e).__name__}: "
                             f"{e}"[:400])
-        say(f"{o.result.upper():<13} {o.check:<18} {o.why}")
+        o = dataclasses.replace(o, secs=time.monotonic() - began)
+        say(f"{o.result.upper():<13} {o.check:<18} {o.why} ({o.secs:.0f} s)")
         outcomes.append(o)
     return Report(codex.collection_id, snapshot.snapshot_id, snapshot.hash,
                   tuple(outcomes))
