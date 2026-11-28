@@ -41,10 +41,9 @@
   {% if voice.input.available %}<div id="mic-status" class="note" role="status" aria-live="polite" hidden></div>{% endif %}
   {# HANDS-FREE (docs/notes/hands-free-voice.md step 1): the microphone left on,
      the page called by name; shown by voice.js where the microphone is #}
-  {% if voice.input.available %}<label class="inline check" id="hands-free-choice" hidden
-    title="the microphone stays on: say &quot;{{ wake_name }}&quot; and the question, or &quot;{{ wake_name }}, wait / go on / stop&quot;">
-    <input type="checkbox" id="hands-free" style="width:auto"> hands-free</label>
-  <script>window.louiseWakeName={{ wake_name|tojson }};</script>{% endif %}
+  {# no switch (operator, 2026-11-28: "Hands free check box shall be removed"):
+     a long press on the microphone turns it on and off #}
+  {% if voice.input.available %}<script>window.louiseWakeName={{ wake_name|tojson }};</script>{% endif %}
   {# ONE QUESTION, ONE BUTTON (operator, 2026-10-30: "ask and search are
      confusing" — "Search only", "AI summary"). The switch says what Ask
      gives: the passages alone, or the passages at once and an answer
@@ -244,14 +243,22 @@
   #mic{flex:0 0 auto;min-width:44px;padding:0 10px;
        /* a long press is the page's (hands-free), not the phone's menu or a selection */
        touch-action:manipulation;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
-  #mic.rec{border-color:var(--err);color:var(--err);animation:mic-pulse 1.2s ease-in-out infinite}
+  /* THE MICROPHONE'S LOOK (operator, 2026-11-28): idle, the icon and the
+     frame one colour, solid; recording a question, the icon alone green;
+     hands-free, icon and frame green; hands-free muted, the frame green and
+     the icon back to the idle colour, dashed */
+  #mic{color:var(--muted);border-color:var(--muted)}
+  #mic.rec{color:var(--ok);border-color:var(--muted)}
+  #mic.hands-free{color:var(--ok);border-color:var(--ok)}
+  #mic.hands-free.hf-muted{color:var(--muted)}
+  #mic.hands-free.hf-muted svg, #mic.waking svg{stroke-dasharray:3 2.5}
   /* opened and not yet giving sound (a car's Bluetooth switching to its call profile): not red, dashed */
-  #mic.waking{border-style:dashed;opacity:.75}
-  #mic.hands-free{border-color:var(--ok, var(--accent));box-shadow:0 0 0 2px var(--ok, var(--accent)) inset}
+  #mic.waking{opacity:.75}
   /* a phone keeps :hover on the button last tapped: the accent border stayed
      on the microphone after speaking — red in the warm themes (operator,
      2026-11-12: "the button remains red"). Without a hover, no hover look. */
-  @media (hover:none){.voice-btn:not(.rec):not(.on):hover{border-color:var(--line)}}
+  @media (hover:none){.voice-btn:not(.rec):not(.on):hover{border-color:var(--line)}
+    #mic:not(.hands-free):hover{border-color:var(--muted)} #mic.hands-free:hover{border-color:var(--ok)}}
   @keyframes mic-pulse{50%{box-shadow:0 0 0 3px rgba(224,80,80,.35)}}
   #mic-status{margin:4px 0 0}
   .answer-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
