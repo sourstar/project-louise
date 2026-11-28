@@ -213,6 +213,7 @@
       <td>{{ u.expires or 'never' }}</td><td>{{ u.last_seen or '—' }}</td><td>{{ u.created }}</td></tr>
     {% endfor %}
   </table>
+  <div class="note">What each reader is called, may see and hears: the <a href="/admin/users">Users</a> tab.</div>
   <details class="more"><summary>Command line</summary>
     <div class="note">Users are changed from the command line: <code>louise user add | list | role | expire | reissue | revoke | remove</code>.</div>
   </details>

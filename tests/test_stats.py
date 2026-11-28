@@ -401,7 +401,7 @@ def test_telemetry_is_published_by_a_thread_the_work_cannot_block(
     deadline = time.time() + 5
     payload = None
     while time.time() < deadline:
-        payload, _ = db.read_worker_stats(db.connect())
+        payload, _ = db.read_worker_stats(db.control())      # the node's samples: state/node.sqlite
         if payload:
             break
         time.sleep(0.05)

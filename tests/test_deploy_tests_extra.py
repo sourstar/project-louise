@@ -60,14 +60,14 @@ def test_a_list_file_runs_its_paths_in_the_staged_image(tmp_path):
     rc, out, calls = _run(tmp_path, str(listing))
     assert rc == 0, out
     assert len(calls) == 1 and "louise-rag:staged" in calls[0] and "-m pytest" in calls[0]
-    assert calls[0].split("no:cacheprovider", 1)[1].split() == ["tests/test_a.py", "tests/ask/"]
+    assert calls[0].split("no:cacheprovider", 1)[1].split() == ["tests/ask/", "tests/test_a.py"], "in the tree's order"
     assert "2 path(s)" in out
 
 
 def test_the_paths_themselves_are_taken_too(tmp_path):
     rc, out, calls = _run(tmp_path, "tests/test_a.py tests/ask/test_b.py")
     assert rc == 0, out
-    assert calls[0].split("no:cacheprovider", 1)[1].split() == ["tests/test_a.py", "tests/ask/test_b.py"]
+    assert calls[0].split("no:cacheprovider", 1)[1].split() == ["tests/ask/test_b.py", "tests/test_a.py"], "in the tree's order"
 
 
 @pytest.mark.parametrize("extra", ["tests/test_missing.py", "tests/test_a.py tests/nope/"])
@@ -81,3 +81,34 @@ def test_an_empty_list_stops_the_deploy_instead_of_running_every_test(tmp_path):
     listing.write_text("# nothing yet\n\n")
     rc, out, calls = _run(tmp_path, str(listing))
     assert rc != 0 and "no test path" in out and calls == []
+
+
+def test_a_conftest_in_the_list_is_dropped_and_said(tmp_path):
+    """f4ebb4e, 2026-11-28: tests/acquire/conftest.py named as a path collided
+    with tests/conftest.py at collection and the deploy stopped."""
+    listing = tmp_path / "tests-extra-def"
+    listing.write_text("tests/test_a.py\ntests/acquire/conftest.py\ntests/conftest.py\n")
+    rc, out, calls = _run(tmp_path, str(listing))
+    assert rc == 0, out
+    assert "dropped (pytest loads them itself): tests/acquire/conftest.py tests/conftest.py" in out
+    (call,) = calls
+    assert call.split("cacheprovider ", 1)[1] == "tests/test_a.py"
+
+
+def test_a_list_of_conftests_only_is_refused(tmp_path):
+    listing = tmp_path / "tests-extra-ghi"
+    listing.write_text("tests/acquire/conftest.py\n")
+    rc, out, calls = _run(tmp_path, str(listing))
+    assert rc == 1 and "no test path" in out and calls == []
+
+
+def test_the_paths_run_in_the_trees_order_each_once(tmp_path):
+    """f4ebb4e's second stop (2026-11-28): a list that left tests/hold for a
+    file outside it and came back lost the package's fixtures; in the tree's
+    order, as a whole run collects, it passed. A path named twice runs once."""
+    listing = tmp_path / "tests-extra-jkl"
+    listing.write_text("tests/test_a.py tests/ask/test_b.py tests/test_a.py\n")
+    rc, out, calls = _run(tmp_path, str(listing))
+    assert rc == 0, out
+    (call,) = calls
+    assert call.split("cacheprovider ", 1)[1] == "tests/ask/test_b.py tests/test_a.py"

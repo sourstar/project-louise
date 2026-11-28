@@ -10,8 +10,14 @@ const wav = ms => { const n = Math.round(16 * ms), b = Buffer.alloc(44 + 2 * n);
   b.write('RIFF', 0); b.writeUInt32LE(36 + 2 * n, 4); b.write('WAVE', 8); b.write('fmt ', 12); b.writeUInt32LE(16, 16);
   b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22); b.writeUInt32LE(16000, 24); b.writeUInt32LE(32000, 28);
   b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34); b.write('data', 36); b.writeUInt32LE(2 * n, 40); return b; };
-const PAGE = '<textarea id="q"></textarea><div id="answer"></div><button id="mic">mic</button>'
-  + '<div id="mic-status"></div><label id="hands-free-choice" hidden><input type="checkbox" id="hands-free"></label>'
+// the page's own rules for the microphone (ask.html), its look under test
+const ROOT = require('path').resolve(require('path').dirname(process.argv[2]), '..', '..');
+const MIC_CSS = fs.readFileSync(ROOT + '/app/templates/ask.html', 'utf8').split('\n')
+  .filter(l => /^\s*#mic[.:{ ]/.test(l) && l.includes('}') && !/@media/.test(l)).join('\n');
+const PAGE = '<style>:root{--muted:#7f909d;--ok:#6fbf73;--line:#333}#mic{border:2px solid}' + MIC_CSS + '</style>'
+  + '<textarea id="q"></textarea><div id="answer"></div>'
+  + '<button id="mic"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"><rect x="9" y="2" width="6" height="12" rx="3"/></svg></button>'
+  + '<div id="mic-status"></div>'
   + '<button id="speak">read</button><script>window.asked=[];window.go=()=>{asked.push(document.getElementById("q").value)}</script>'
   + '<script src="/v.js"></script>';
 let fails = 0;
@@ -43,12 +49,14 @@ const check = (ok, what, d) => { console.log((ok ? 'PASS ' : 'FAIL ') + what + (
     return r.fulfill({ status: 204, body: '' });
   });
   await p.goto('http://localhost/');
-  check(await p.evaluate(() => !document.getElementById('hands-free-choice').hidden), '1. the switch is shown beside the microphone');
+  check(await p.evaluate(() => !document.getElementById('hands-free')), '1. no switch: the long press is the way in');
 
   // 2. an addressed question is asked; the name alone opens the continuation window
   script = [{ wait: 0, answer: { addressed: true, command: 'listen', text: null } },
             { wait: 0, answer: { addressed: true, command: null, text: 'chi era Garibaldi?' } }];
-  await p.evaluate(() => { const b = document.getElementById('hands-free'); b.checked = true; b.dispatchEvent(new Event('change')); });
+  await p.evaluate(() => louiseVoice.handsFree.start());
+  await p.waitForTimeout(1500);
+  check(await p.evaluate(() => louiseVoice.tones() >= 1), '2. hands-free ready: the beep', await p.evaluate(() => louiseVoice.tones()));
   for (let t = 0; t < 200 && posts.length < 2; t++) await p.waitForTimeout(100);
   check(posts.length >= 2 && posts.every(x => x.riff), '2. each utterance goes to the node as a WAV', posts);
   check(posts[1] && posts[1].follow === true && posts[0].follow === false, '2. the name alone: the next one goes without it', posts.slice(0, 2));
@@ -107,10 +115,24 @@ const check = (ok, what, d) => { console.log((ok ? 'PASS ' : 'FAIL ') + what + (
   const plain = await readAndWatch('King Louis abdicated in eighteen forty eight, and left for England.');
   check(plain.mute.length === 0, '6. a sentence without the name: never muted', plain.mute.length);
 
-  // 4. a tap on the microphone turns hands-free off and closes it
+  // 4. A TAP IN HANDS-FREE MUTES AND UNMUTES (operator, 2026-11-28): the frame
+  //    stays green, the icon back to the idle colour and dashed; nothing heard
+  const look = () => p.evaluate(() => { const m = document.getElementById('mic'), s = getComputedStyle(m);
+    return { on: louiseVoice.handsFree.on(), muted: m.classList.contains('hf-muted'), color: s.color,
+             border: s.borderTopColor, dash: getComputedStyle(m.querySelector('svg') || m).strokeDasharray }; });
+  const before4 = posts.length;
   await p.evaluate(() => document.getElementById('mic').click());
-  check(await p.evaluate(() => !louiseVoice.handsFree.on() && !document.getElementById('hands-free').checked),
-        '4. a tap on the microphone turns it off');
+  const muted = await look();
+  check(muted.on && muted.muted && muted.color !== muted.border && muted.dash !== 'none',
+        '4. a tap mutes: still on, frame green, icon idle and dashed', muted);
+  await p.waitForTimeout(8000);
+  check(posts.length === before4, '4. muted: nothing is sent', posts.length - before4);
+  const tones4 = await p.evaluate(() => louiseVoice.tones());
+  await p.evaluate(() => document.getElementById('mic').click());
+  const listening = await look();
+  check(await p.evaluate(t => louiseVoice.tones() > t, tones4), '4. unmuted: the beep again');
+  check(listening.on && !listening.muted && listening.color === listening.border, '4. a second tap: listening again, icon and frame green', listening);
+  await p.evaluate(() => louiseVoice.handsFree.stop());
 
   // 5. A LONG PRESS turns hands-free on and off (operator, 2026-11-27: "can you
   //    recognize a long pressure on the mic button?"); a tap stays a tap
@@ -121,7 +143,7 @@ const check = (ok, what, d) => { console.log((ok ? 'PASS ' : 'FAIL ') + what + (
     if (moveBy) { await p.waitForTimeout(100); await p.mouse.move(cx + moveBy, cy); }
     await p.waitForTimeout(ms); await p.mouse.up(); await p.waitForTimeout(200);
   };
-  const state = () => p.evaluate(() => ({ on: louiseVoice.handsFree.on(), box: document.getElementById('hands-free').checked,
+  const state = () => p.evaluate(() => ({ on: louiseVoice.handsFree.on(), box: louiseVoice.handsFree.on(),
                                           rec: document.getElementById('mic').classList.contains('rec') }));
   await hold(900);
   let st = await state();
@@ -136,6 +158,29 @@ const check = (ok, what, d) => { console.log((ok ? 'PASS ' : 'FAIL ') + what + (
   await hold(80);
   st = await state();
   check(!st.on && !st.box && st.rec, '5. a tap is still one spoken question', st);
+  // 7. NOT IN HANDS-FREE (operator, 2026-11-28): recording, the icon alone
+  //    green; a second tap ABORTS — nothing sent, back to idle
+  const rec7 = await look();
+  check(rec7.color !== rec7.border, '7. recording: the icon green, the frame its idle colour', rec7);
+  const before7 = posts.length;
+  await p.evaluate(() => document.getElementById('mic').click());
+  await p.waitForTimeout(800);
+  const idle7 = await p.evaluate(() => { const m = document.getElementById('mic'), s = getComputedStyle(m);
+    return { rec: m.classList.contains('rec'), color: s.color, border: s.borderTopColor }; });
+  check(!idle7.rec && idle7.color === idle7.border, '7. a second tap aborts: idle, icon and frame one colour', idle7);
+  check(posts.length === before7, '7. and nothing is sent', posts.length - before7);
+  // 8. A TAP WHILE HANDS-FREE IS STILL OPENING THE MICROPHONE mutes it, and
+  //    it stays muted once open: the look says so, no beep, nothing sent
+  const tones8 = await p.evaluate(() => louiseVoice.tones()), before8 = posts.length;
+  await p.evaluate(() => { louiseVoice.handsFree.start(); document.getElementById('mic').click(); });
+  await p.waitForTimeout(3000);
+  const opened8 = await look();
+  check(opened8.on && opened8.muted && opened8.dash !== 'none', '8. muted while opening: muted once open', opened8);
+  check(await p.evaluate(t => louiseVoice.tones() === t, tones8), '8. and no ready beep while muted');
+  check(posts.length === before8, '8. and nothing is sent', posts.length - before8);
+  await p.evaluate(() => document.getElementById('mic').click());
+  check(await p.evaluate(t => louiseVoice.tones() > t, tones8), '8. unmuted: the beep');
+  await p.evaluate(() => louiseVoice.handsFree.stop());
   await b.close();
   console.log(fails ? `${fails} FAILED` : 'ALL PASSED');
   process.exit(fails ? 1 : 0);

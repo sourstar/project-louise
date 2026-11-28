@@ -34,6 +34,7 @@ file sets it, so there is nothing to reset it to, and an expiry would turn
 a node held at acquire-only back into a running one, encoder and all, on
 every deploy. Do not "fix" it.
 """
+import json
 import sqlite3
 import time
 from contextlib import closing
@@ -191,6 +192,24 @@ def runs(state: str, activity: str) -> bool:
     return mode_runs(state, activity) and network_runs(activity) and profile_runs(activity)
 
 
+#: THE NODE'S OWN TELEMETRY (operator, 2026-11-28, choice A): the query log and
+#: the node-wide events, here — never in the first collection's manifest, where
+#: one damaged header (EUR-Lex5.next's) failed the System tab and would have
+#: failed every question's log line. The same columns as a manifest's tables
+#: (app/db.py SCHEMA), so `db.log_query` and `db.log_event` write either.
+_QUERY_LOG = ("CREATE TABLE IF NOT EXISTS query_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, "
+              "endpoint TEXT, query TEXT, mode TEXT, k INTEGER, t_catalog REAL, t_fts REAL, t_dense REAL, "
+              "t_rerank REAL, t_llm REAL, total_ms REAL, n_results INTEGER, books TEXT)")
+_EVENTS = ("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, "
+           "level TEXT, stage TEXT, doc_uid TEXT, message TEXT)")
+_QUERY_LOG_TS = "CREATE INDEX IF NOT EXISTS idx_query_log_ts ON query_log(ts)"
+
+
+def ensure_schema(con: sqlite3.Connection) -> None:
+    for ddl in (_SCHEMA, _LEASES, _USE, _QUERY_LOG, _EVENTS, _QUERY_LOG_TS):
+        con.execute(ddl)
+
+
 def path() -> Path:
     """Beside `collections/` under the one root — the same file
     `admission.connect(<root>/collections)` opens."""
@@ -206,9 +225,7 @@ def connect() -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     db.wal(con)                        # two openers of a fresh file: the loser waits
     con.execute("PRAGMA busy_timeout=60000")
-    con.execute(_SCHEMA)
-    con.execute(_LEASES)
-    con.execute(_USE)
+    ensure_schema(con)
     return con
 
 
@@ -510,6 +527,55 @@ def adopt_legacy(node_con: sqlite3.Connection, legacy_cons: list) -> Move:
         except sqlite3.Error:
             pass    # an inert copy: nothing reads it, and the next boot retries
     return Move(adopted)
+
+
+#: control key: the query log was copied here from the manifests (once)
+QUERY_LOG_MOVED_KEY = "query_log_moved"
+_QUERY_LOG_COLUMNS = ("ts, endpoint, query, mode, k, t_catalog, t_fts, t_dense, t_rerank, t_llm, "
+                      "total_ms, n_results, books")
+
+
+def adopt_query_log(node_con: sqlite3.Connection, legacy_cons: list) -> int | None:
+    """Copy the query log out of the collection manifests, ONCE (operator,
+    2026-11-28, choice A). Every manifest given is read: the log followed the
+    first collection, so its rows are wherever that was over time. One
+    transaction, the mark set inside it (invariant 2): all or nothing.
+
+    The rows copied, or None when nothing was done: already moved, or a
+    manifest given that cannot be read (`None` in `legacy_cons`, or one that
+    raises) — then nothing is copied and nothing marked, and the next boot
+    tries again; the questions asked meanwhile are logged here already.
+
+    The manifests keep their rows: nothing reads them any more, and an image
+    rolled back to before this change finds its log where it left it."""
+    if db.get_control(node_con, QUERY_LOG_MOVED_KEY) is not None:
+        return None
+    rows: list[tuple] = []
+    sources: list[str] = []
+    for con in legacy_cons:
+        if con is None:
+            return None
+        try:
+            got = con.execute(f"SELECT {_QUERY_LOG_COLUMNS} FROM query_log").fetchall()
+        except sqlite3.Error:
+            return None
+        rows.extend(tuple(r) for r in got)
+        sources.append(f"{getattr(con, 'collection_name', '?')}: {len(got)}")
+    rows.sort(key=lambda r: (r[0] or 0))
+    node_con.execute("BEGIN IMMEDIATE")
+    try:
+        if db.get_control(node_con, QUERY_LOG_MOVED_KEY) is not None:     # another process, meanwhile
+            node_con.execute("ROLLBACK")
+            return None
+        node_con.executemany(f"INSERT INTO query_log({_QUERY_LOG_COLUMNS}) "
+                             f"VALUES({','.join('?' * 13)})", rows)
+        db.set_control(node_con, QUERY_LOG_MOVED_KEY,
+                       json.dumps({"at": int(time.time()), "rows": len(rows), "from": sources}))
+        node_con.execute("COMMIT")
+    except BaseException:
+        node_con.execute("ROLLBACK")
+        raise
+    return len(rows)
 
 
 # ---- one collection paused (07 §7.3 `node pause <collection>`, §7.7) --------

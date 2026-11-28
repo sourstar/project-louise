@@ -938,10 +938,10 @@ def _log_translation(lang: str, items: int, got: int, cached: int, missed: int, 
     """One log line per stream request, so what the page did with a
     translation can be read back from the web log (2026-10-28: the answer
     stayed untranslated and nothing recorded whether it was asked for,
-    translated or missed). Through the default collection's manifest, as
-    the query log is; never fatal."""
+    translated or missed). Through the node's own log (state/node.sqlite,
+    `db.control`), as the query log is; never fatal."""
     try:
-        con = db.connect()
+        con = db.control()
         try:
             db.log_event(con, "warn" if cut else "info", "translate",
                          f"stream into {lang}: {items} items — {got} translated ({cached} cached), "
@@ -1919,7 +1919,7 @@ def _ask_result(body: AskQueryBody) -> dict:
     _attach_figures(result)
     _attach_plates(result)
     _attach_history(result, body)
-    con = db.connect()   # query_log lives in the default collection's manifest regardless
+    con = db.control()   # the query log is the node's (state/node.sqlite)
     # .get, not [...]: when every collection is withheld `run_search`
     # returns {hits, withheld} with no `timings` at all, and a KeyError
     # here answered the whole query with a 500 — the licence gate's own
@@ -2204,6 +2204,18 @@ class UserPatch(BaseModel):
     role: str | None = None
     expires: str | None = None      # "never" clears it
     voice: str | None = None        # a voice profile; "none" clears it (the node's)
+    # the users tab (operator, 2026-11-28); "" clears a name
+    first_name: str | None = None
+    last_name: str | None = None
+    hide_collections: list[str] | None = None     # collection ids
+    hide_annotations: list[str] | None = None     # annotations collection ids
+    voices: list[str] | None = None               # the voices enabled; none by default
+
+
+class GuestPatch(BaseModel):
+    hide_collections: list[str] | None = None
+    hide_annotations: list[str] | None = None
+    voices: list[str] | None = None
 
 
 def _users_call(fn, *args, **kw):
@@ -2237,9 +2249,62 @@ def users_patch(name: str, body: UserPatch):
         u = _users_call(users.set_expiry, name, body.expires)
     if body.voice is not None:
         u = _users_call(users.set_voice, name, None if body.voice in ("none", "") else body.voice)
+    profile = {k: getattr(body, k) for k in ("first_name", "last_name", "hide_collections",
+                                             "hide_annotations", "voices") if getattr(body, k) is not None}
+    if profile:
+        u = _users_call(users.set_profile, name, **profile)
     if u is None:
-        raise HTTPException(400, "nothing to change: role, expires, voice")
+        raise HTTPException(400, "nothing to change: role, expires, voice, first_name, last_name, "
+                                 "hide_collections, hide_annotations, voices")
     return u.public(users.seen())
+
+
+@admin_router.patch("/api/guest")
+def guest_patch(body: GuestPatch):
+    """The users tab's first entry: what a reader with no account may see and hear."""
+    from app import users
+    lists = {k: getattr(body, k) for k in ("hide_collections", "hide_annotations", "voices")
+             if getattr(body, k) is not None}
+    if not lists:
+        raise HTTPException(400, "nothing to change: hide_collections, hide_annotations, voices")
+    return _users_call(users.set_guest, **lists).public()
+
+
+#: the users tab's entry for readers with no account
+GUEST_ENTRY = "guests"
+
+
+@admin_router.get("/users", response_class=HTMLResponse)
+def users_page(request: Request, u: str | None = None):
+    """THE USERS TAB (operator, 2026-11-28): one reader at a time, chosen at
+    the top — their first name and name, the admin flag, and the collections,
+    annotations collections and voices, each with its flag (a collection or an
+    annotations collection hidden from them: off by default; a voice enabled
+    for them: off by default — no voice, no read-aloud). The first entry is
+    the readers with no account."""
+    from app import users, voice as voice_mod
+    try:
+        accounts = sorted(users.load(), key=lambda x: x.name)
+        guest = users.load_guest()
+        unreadable = None
+    except users.UserError as e:
+        accounts, guest, unreadable = [], users.Guest(), str(e)
+    names = [a.name for a in accounts]
+    chosen = u if u in names or u == GUEST_ENTRY else (names[0] if names else GUEST_ENTRY)
+    who = next((a for a in accounts if a.name == chosen), None)
+    lists = who if who is not None else guest
+    collections = [{"id": c.codex.collection_id, "name": c.name, "label": display_names.label(c.name),
+                    "hidden_everywhere": bool(getattr(c, "hidden", False))}
+                   for c in collections_mod.load_all() if getattr(c, "codex", None) is not None]
+    annotations = [{"id": a.codex.collection_id, "name": a.name, "label": display_names.label(a.name),
+                    "hidden_everywhere": bool(getattr(a, "hidden", False))}
+                   for a in collections_mod.load_annotations()]
+    return TEMPLATES.TemplateResponse(request, "users.html", {
+        "active": "users", "accounts": accounts, "chosen": chosen, "guest_entry": GUEST_ENTRY,
+        "who": who, "unreadable": unreadable,
+        "collections": collections, "annotations": annotations, "voices": voice_mod.all_voices(),
+        "hide_collections": set(lists.hide_collections), "hide_annotations": set(lists.hide_annotations),
+        "enabled_voices": set(lists.voices)})
 
 
 @admin_router.post("/api/users/{name}/reissue")
@@ -2908,7 +2973,7 @@ def _worker_stats() -> dict:
     """The worker's published per-collection snapshot, or {} when it is
     silent or stale. Read once per page: it is one control-table row."""
     try:
-        con = db.read_only_connect()
+        con = db.read_only_control()          # published by the worker into state/node.sqlite
         if con is None:
             return {}
         try:
@@ -3760,6 +3825,24 @@ def _refuse_withheld(collection, use: str) -> None:
         raise HTTPException(403, str(e)) from None
 
 
+def _shelves(collections, measured, worker_state) -> tuple[list[dict], list[dict]]:
+    """Each collection's card, and those that cannot be read: ONE UNREADABLE
+    MANIFEST NEVER TAKES THE PAGE DOWN (operator, 2026-11-28: "Library tab
+    now gives internal server error" — EUR-Lex5.next's manifest header was
+    overwritten, "file is not a database", and every card was lost with it).
+    The rest render; the broken one is named, with why, among the refused."""
+    shelves, broken = [], []
+    for c in collections:
+        try:
+            shelves.append(_collection_shelf(c, measured, worker_state))
+        except (sqlite3.DatabaseError, OSError) as e:
+            print(f"{time.strftime('%H:%M:%S')} [{c.name} err:library] its card cannot be read: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            broken.append({"name": c.name, "reason": f"its manifest cannot be read ({type(e).__name__}: {e}); "
+                                                     f"not shown until it is repaired"})
+    return shelves, broken
+
+
 @admin_router.get("/library", response_class=HTMLResponse)
 def library_page(request: Request):
     collections = collections_mod.load_all()
@@ -3769,7 +3852,7 @@ def library_page(request: Request):
     # "waiting for the index" (true only while the worker runs) from
     # "waiting for the operator".
     worker_state = node_state.worker_state()
-    shelves = [_collection_shelf(c, measured, worker_state) for c in collections]
+    shelves, broken = _shelves(collections, measured, worker_state)
     # 02 §2.10: the annotations collections this node holds — held, checked
     # and shared like any collection, never ingested, embedded or ranked, so
     # `load_all` leaves them out and the shelf's stages do not apply. Shown
@@ -3794,7 +3877,7 @@ def library_page(request: Request):
               for c in collections_mod.load_locked()]
     locked_names = {x["name"] for x in locked}
     refused = [{"name": r.name, "reason": r.reason} for r in [*collections_mod.refusals(), *left_out]
-               if r.name not in locked_names]
+               if r.name not in locked_names] + broken
     return TEMPLATES.TemplateResponse(request, "library.html", {
         "active": "library",
         "refused": refused,
@@ -3832,7 +3915,7 @@ def user_library_page(request: Request):
     (auth.READER_PATHS)."""
     measured = _worker_stats()
     worker_state = node_state.worker_state()
-    shelves = [_collection_shelf(c, measured, worker_state) for c in collections_mod.load_public()]
+    shelves, _broken = _shelves(collections_mod.load_public(), measured, worker_state)
     return TEMPLATES.TemplateResponse(request, "user_library.html", {
         "active": "library", "shelves": shelves, "worker_state": worker_state,
         "readonly": True})
@@ -4095,7 +4178,7 @@ def collection_remove(name: str, body: "RemoveBody | None" = None):
         except deposit.DepositError as e:
             raise HTTPException(409, f"{e} — `louise hold collection forget {name} --yes --here` removes "
                                      f"it in this process when no worker runs") from None
-        con = db.connect()
+        con = db.control()
         db.log_event(con, "info", "control",
                      f"collection {name!r} forgotten via admin UI: this node's copy and its state removed")
         return {"ok": True, "mode": "forget", **out,
@@ -4106,7 +4189,7 @@ def collection_remove(name: str, body: "RemoveBody | None" = None):
         raise HTTPException(400, f"{name!r} has no TOML file to retire")
     retired = toml_path.with_name(f"{name}.toml.removed-{int(time.time())}")
     toml_path.rename(retired)
-    con = db.connect()
+    con = db.control()
     db.log_event(con, "info", "control",
                  f"collection {name!r} removed via admin UI (TOML retired to "
                  f"{retired.name}; data kept on disk)")
@@ -4743,7 +4826,7 @@ def _bandwidth_payload() -> dict:
         # per subscriber, and connect() re-runs the schema script and the
         # ALTER TABLE migrations each call — write-path work on a manifest
         # the pipeline threads are already contending for.
-        con = db.read_only_connect()
+        con = db.read_only_control()          # the worker's samples: state/node.sqlite
         if con is not None:
             worker_rates, age = db.read_worker_rates(con)
             # the seeding table rides the SAME cheap reader (one read-only
@@ -4838,7 +4921,7 @@ def set_bandwidth_override(body: BandwidthOverrideBody):
     message = (f"bandwidth override {'cleared' if rate_bps is None else body.rate} "
                f"({body.hours}h)")
     try:
-        db.log_event(db.connect(), "info", "control", message)
+        db.log_event(db.control(), "info", "control", message)
     except Exception:   # noqa: BLE001 — the override is set; the event is a courtesy
         print(f"[info:control] {message}", flush=True)
     return {"ok": True, "rate_bps": rate_bps, "hours": body.hours}
@@ -4941,10 +5024,27 @@ def _effective_config() -> dict:
     override = node_state.bandwidth_override()
     tier3 = {"mode (state/node.sqlite, survives a restart)": node_mode.current(),
              "worker_state (state/node.sqlite)": node_state.worker_state(),
-             "scope (control table)": db.get_scope(db.connect()),
+             "scope (control table)": _control_scope(),
              "bandwidth override (state/node.sqlite, expires)":
                  _rate(override) if override else "(none)"}
     return {"tier1": tier1, "tier2": tier2, "tier2_platform": tier2_platform, "tier3": tier3}
+
+
+def _control_scope():
+    """The control table's scope, or why it cannot be read (2026-11-28: the
+    System tab answered 500 while the control manifest's header was
+    overwritten)."""
+    try:
+        con = db.connect()
+    except Exception as e:  # noqa: BLE001 — sorted: a lock is raised as before
+        why = db.unreadable(e)
+        if why is None:
+            raise
+        return f"(cannot be read: {why})"
+    try:
+        return db.get_scope(con)
+    finally:
+        con.close()
 
 
 def _idle_trim_said() -> str:
@@ -5003,6 +5103,19 @@ def _recent_events_all(limit: int = 60) -> list[dict]:
     counts are small and the alternative (a UNION over attached databases)
     would couple the page to every manifest being attachable at once."""
     rows: list[dict] = []
+    # THE NODE'S OWN LINES (state/node.sqlite, `db.control`): the worker's,
+    # the scheduler's, the seeder's, the control events — since 2026-11-28;
+    # older node lines stay in the manifests they were written to, read below
+    try:
+        con = db.read_only_control()
+        if con is not None:
+            try:
+                for r in con.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)):
+                    rows.append({**dict(r), "collection": "node"})
+            finally:
+                con.close()
+    except Exception:   # noqa: BLE001 — the node's log missing must not blank the rest
+        pass
     for collection in collections_mod.load_all():
         try:
             con = db.connect(collection)

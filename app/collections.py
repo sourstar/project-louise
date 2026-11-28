@@ -880,10 +880,16 @@ def hidden_from(viewer, collection) -> bool:
     every viewer who is not an admin (`auth.admin`): a user, the depositor,
     a guest, and NOBODY (None) — a reader route that lost its viewer shows
     less, never more. The node's own processes (`viewing.OPERATOR`) see it."""
-    if not getattr(collection, "hidden", False):
-        return False
     from . import viewing
-    return not viewing.sees_all(viewer)
+    if viewing.sees_all(viewer):
+        return False
+    if getattr(collection, "hidden", False):
+        return True
+    # THE USERS TAB (operator, 2026-11-28): what this reader's own account (or
+    # the guests' entry) hides, by collection id — a rename keeps it
+    from . import users
+    cid = getattr(getattr(collection, "codex", None), "collection_id", None)
+    return bool(cid) and cid in users.hidden_ids(viewer)
 
 
 def hidden_here(collection) -> bool:
@@ -897,8 +903,8 @@ def seen(collections) -> list:
     return [c for c in collections if not hidden_here(c)]
 
 
-#: path -> ((mtime_ns, size), name if its file says hidden = true else None)
-_HIDDEN_FILES: dict[Path, tuple[tuple[int, int], str | None]] = {}
+#: path -> ((mtime_ns, size), name if its file says hidden = true else None, (name, codex id))
+_HIDDEN_FILES: dict[Path, tuple] = {}
 
 
 def _hidden_in_files() -> set[str]:
@@ -922,13 +928,28 @@ def _hidden_in_files() -> set[str]:
                 with open(p, "rb") as f:
                     raw = tomllib.load(f)
                 name = raw.get("name") if isinstance(raw.get("name"), str) else p.stem
-                got = (key, name if raw.get("hidden") is True else None)
+                codex = raw.get("codex") if isinstance(raw.get("codex"), str) else None
+                got = (key, name if raw.get("hidden") is True else None, (name, codex))
                 _HIDDEN_FILES[p] = got
         except Exception:   # noqa: BLE001 — unreadable: hidden (fail-closed)
-            got = ((0, 0), p.stem)
+            got = ((0, 0), p.stem, (p.stem, None))
         if got[1]:
             out.add(got[1])
     return out
+
+
+def _named_ids() -> list[tuple[str, str]]:
+    """(local name, collection id) of every collection file that names a Codex
+    (`_hidden_in_files` reads them; its cache is shared)."""
+    _hidden_in_files()
+    return [got[2] for got in _HIDDEN_FILES.values() if len(got) > 2 and got[2][1]]
+
+
+def _user_hidden_names() -> set[str]:
+    """The names the viewer's own account (or the guests' entry) hides."""
+    from . import users, viewing
+    ids = users.hidden_ids(viewing.current())
+    return {n for n, cid in _named_ids() if cid in ids} if ids else set()
 
 
 def hidden_names_here() -> set[str]:
@@ -938,7 +959,7 @@ def hidden_names_here() -> set[str]:
     from . import viewing
     if viewing.sees_all(viewing.current()):
         return set()
-    return _hidden_in_files()
+    return _hidden_in_files() | _user_hidden_names()
 
 
 def closed_names_here(held=None) -> set[str]:
@@ -958,7 +979,11 @@ def closed_names_here(held=None) -> set[str]:
         except Exception:   # noqa: BLE001 — no listing: the hidden ones alone
             held = []
     deposit = {n for n, c in held if getattr(c, "plugin", None) == "deposit"}
-    return _hidden_in_files() | deposit
+    # by the users tab too, matched on the ids the listing itself holds
+    from . import users
+    ids = users.hidden_ids(viewing.current())
+    mine = {n for n, c in held if getattr(c, "collection_id", None) in ids} if ids else set()
+    return _hidden_in_files() | _user_hidden_names() | deposit | mine
 
 
 def resolve_seen(root: Path, ref: str):
@@ -1715,7 +1740,9 @@ def load_public() -> list:
 def default_collection() -> Collection:
     """The first collection load_all() returns — used wherever no explicit
     collection is given (single-collection call sites predating P0.5's
-    federation), and as the CONTROL manifest (worker state, seeding table).
+    federation). NOT the node's control any more: its state, query log,
+    node-wide events and the worker's samples are in state/node.sqlite
+    (`db.control`; operator, 2026-11-28, choice A).
     With zero collections the control manifest falls back to
     DATA_DIR/manifest.db (`_control_fallback`) so the node keeps running;
     it is NOT listed anywhere and no pipeline runs on it."""

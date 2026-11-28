@@ -396,6 +396,16 @@ How it runs:
      20 s at most, at least 300 ms loud; one clip in flight, a newer one
      replacing a waiting one (architecture, 2026-11-27); the screen kept on;
      a tap on the microphone turns it off. Measured next: M1–M4.
+   - *Amended 2026-11-28 (operator): THE MICROPHONE BUTTON IS THE ONE CONTROL.*
+     No switch. A long press (600 ms) turns hands-free on and off; in it, a
+     tap mutes and unmutes. A tap outside it records one question, and a
+     second tap while it records ABORTS it (nothing sent; its end of speech
+     still sends it). The look: idle, icon and frame one colour, solid;
+     recording a question, the icon alone green; hands-free, icon and frame
+     green; hands-free muted, the frame green, the icon idle-coloured and
+     dashed. The ready beep (−1 dBFS, 300 ms, 350 ms after the microphone
+     is live) sounds for a tapped question, when hands-free starts and when
+     it is unmuted; the gate is deaf to it.
    - *Amended 2026-11-27 (operator: "the activation name can be customized,
      and every time in the speech there is that name the mic is muted"):*
      the name is the reader's own (Settings › name, with the account or in

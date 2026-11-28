@@ -469,7 +469,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "collect":
         if args.from_query_log:
             from app import collections as collections_mod
-            qs = queries_from_log(collections_mod.default_collection().manifest_path)
+            from app import node_state     # the query log is the node's (2026-11-28, choice A)
+            qs = queries_from_log(node_state.path())
         elif args.queries:
             qs = [q.strip() for q in Path(args.queries).read_text(encoding="utf-8").splitlines()
                   if q.strip()]

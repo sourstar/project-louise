@@ -222,3 +222,16 @@ def test_no_fast_drive_no_cache_work(node, monkeypatch):
     tmp, root, cfg, codex = node
     monkeypatch.setattr(config, "CACHE_DIR", None)
     assert rn.rename(root, "old", "new", dry_run=True)["caches"] == []
+
+
+def test_a_forget_ends_the_pause_and_the_freeze_kept_by_its_name(node):
+    """2026-11-28: the old EUR-Lex5's per-collection pause of 11-21, kept by
+    name, held the new EUR-Lex5 made under the same name after the forget. A
+    rename carries them; a forget ends them."""
+    from app.hold import forget as forget_mod
+    _tmp, root, _cfg, _codex = node
+    node_state.set_paused("old", True, by="louise node pause old")
+    node_state.set_frozen("old", True, by="louise node freeze old")
+    out = forget_mod.forget(root, "old")
+    assert out["released"] == ["pause", "freeze"]
+    assert "old" not in node_state.paused_collections() and "old" not in node_state.frozen_collections()

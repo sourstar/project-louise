@@ -201,17 +201,23 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(await until(() => louiseVoice.toneContext() && louiseVoice.toneContext().state === 'suspended', 3000),
         '2. and the tone\'s context sleeps once the recording is over', await page.evaluate(() => louiseVoice.toneContext().state));
 
-  // 3. tap and tap again: stopped by hand, in the page's answer language; the
-  //    question asked is replaced, one typed and not yet asked is added to
+  // 3. TAP AND TAP AGAIN ABORTS (operator, 2026-11-28: "a second tap while
+  //    it's recording aborts the recording and the mic goes back to idle"):
+  //    nothing sent; then a recording that ends by itself goes in the page's
+  //    answer language; the question asked is replaced, one typed and not
+  //    yet asked is added to
   await h.select('#lang', 'it');
   await page.click('#mic');
   await until(() => document.getElementById('mic').classList.contains('rec'), 4000);
   await sleep(700);
   await page.click('#mic');
-  check(await until(() => __posts.length === 2, 4000), '3. a tap stops it, and it posts');
+  await sleep(1500);
+  check(await page.evaluate(() => __posts.length === 1 && !document.getElementById('mic').classList.contains('rec')),
+        '3. a second tap aborts: nothing sent, the microphone idle', await page.evaluate(() => __posts.length));
+  await page.click('#mic');
+  check(await until(() => __posts.length === 2, 12000), '3. one that ends by itself is sent');
   const p2 = (await page.evaluate(() => __posts))[1];
   check(p2.fields.language === 'it', '3. the page\'s answer language goes with it', p2.fields);
-  check(wav(p2.bytes).samples < 16000 * 1.5, '3. as long as it was held', wav(p2.bytes).samples);
   check(await until(t => document.getElementById('q').value === t, 4000, TEXT),
         '3. the question already asked is replaced by the new one', await page.evaluate(() => document.getElementById('q').value));
   await relayed(4);
@@ -834,7 +840,13 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   await page.evaluate(() => {
     window.__toasts = []; const ts = toast; toast = function (m) { __toasts.push(m); return ts(m); };
     const c = new AudioContext();
-    navigator.mediaDevices.getUserMedia = async () => c.createMediaStreamDestination().stream;   // nothing but zeros
+    // nothing but zeros, on the CAR's route: a Bluetooth input waits for its
+    // first sound (the phone's own microphone does not: case 21b)
+    navigator.mediaDevices.getUserMedia = async () => {
+      const st = c.createMediaStreamDestination().stream;
+      Object.defineProperty(st.getAudioTracks()[0], 'label', { value: 'Car hands-free' });
+      return st;
+    };
   });
   const stt21 = posted.stt;
   await page.click('#mic');
@@ -848,6 +860,26 @@ const sentenceOf = size => KNOWN[(size - 44 - 8000) / 20 - 1];
   check(r21.outcome === 'silent' && r21.frames > 0 && r21.peak === 0 && r21.heard === false && r21.ms >= 8000,
         '21. reported: silent, with what came', r21);
   check(posted.stt === stt21, '21. silence is not sent to be written down', posted.stt - stt21);
+
+  // 21b. THE PHONE'S OWN MICROPHONE gives zeros until speech (its noise
+  //     suppression; operator, 2026-11-28: "it doesn't turn red and it doesn't
+  //     beep until the first sound is heard"): ready and the tone at once
+  posted.reports = [];
+  await page.evaluate(() => {
+    const c = new AudioContext();
+    navigator.mediaDevices.getUserMedia = async () => {
+      const st = c.createMediaStreamDestination().stream;
+      Object.defineProperty(st.getAudioTracks()[0], 'label', { value: 'Default' });
+      return st;
+    };
+  });
+  const tones21b = await page.evaluate(() => louiseVoice.tones());
+  const t21b = Date.now();
+  await page.click('#mic');
+  check(await until(() => document.getElementById('mic').classList.contains('rec'), 2000),
+        "21b. the phone's microphone: shown recording before any sound", Date.now() - t21b);
+  check(await until(t => louiseVoice.tones() > t, 2000, tones21b), '21b. and the ready tone sounds, before any sound');
+  await until(() => !document.getElementById('mic').classList.contains('rec'), 14000);
 
   // 22. the audio graph runs no callback (the car takes the output, the
   //     context's clock stalls: "Mic: no sound at all"): recorded the second

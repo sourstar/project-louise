@@ -306,7 +306,9 @@ def page_query(year: int, languages: tuple[str, ...], offset: int, force: bool =
 def _answer_of(fn: Callable[[], Any], *, poll_s: float = 1.0) -> Any:
     """`fn()` in a daemon thread, its answer awaited while a stop is checked
     every `poll_s`: a stop raises TransferAborted at once, and the thread is
-    left to its own bound (SPARQL_TIMEOUT_S), its answer dropped."""
+    left to its own bound (SPARQL_TIMEOUT_S), its answer dropped. So `fn`
+    must touch nothing the caller closes once this raises: its connection is
+    its own (`_thread_client`)."""
     import threading
     box: dict[str, Any] = {}
 
@@ -328,6 +330,44 @@ def _answer_of(fn: Callable[[], Any], *, poll_s: float = 1.0) -> Any:
     return box.get("value")
 
 
+#: the TLS context the threads' own clients share: the CA bundle parsed once
+#: (`httpx.create_ssl_context`, what a default Client builds; an SSLContext
+#: is safe to share between threads — a connection is not)
+_ssl_context = None
+_ssl_lock = threading.Lock()
+
+
+def _thread_client(client) -> tuple[Any, bool]:
+    """THE ABANDONED THREAD OWNS ITS SOCKET (2026-11-28, EUR-Lex5.next's
+    manifest: its header overwritten from byte 5 by a TLS 1.2 alert record,
+    \x15\x03\x03, its first 5 bytes intact). A
+    stop raised in `_answer_of` left the SPARQL thread reading while the
+    caller's `with httpx.Client(...)` closed the client — and its pool closed
+    the socket that thread still read. Linux hands a freed descriptor's
+    number to the next open(), a manifest in the worker; the abandoned
+    OpenSSL then read that file's first 5 bytes ("SQLit") as a record header
+    and wrote its alert after them. A descriptor is closed only by the thread
+    that reads it: the query gets a client of its own, closed in that thread.
+
+    `(client, owned)`: a client with a socket pool (`httpx.HTTPTransport`)
+    gives a new one, owned; anything else (a test's MockTransport, a fake)
+    holds no socket and is used as it is.
+
+    The standard way, written down (CLAUDE.md, the wheel): a reader blocked on
+    a socket is woken by `shutdown(SHUT_RDWR)`, which frees no descriptor, and
+    the reader closes it; httpx does not expose its sockets, and an async
+    client cancelled with its task (anyio) would — a rewrite of Cellar's
+    client for one query, not worth it while a query's own client costs one
+    TLS handshake against queries of seconds to minutes."""
+    global _ssl_context
+    if not isinstance(getattr(client, "_transport", None), httpx.HTTPTransport):
+        return client, False
+    with _ssl_lock:
+        if _ssl_context is None:
+            _ssl_context = httpx.create_ssl_context()
+    return httpx.Client(verify=_ssl_context, follow_redirects=client.follow_redirects), True
+
+
 def sparql(client: httpx.Client, base: str, query: str, *, what: str = "the SPARQL query",
            charge: Callable[[int], None] = budget.acquire_bytes) -> list[dict]:
     """The SPARQL 1.1 Protocol: the query POSTed as a form field, the JSON
@@ -339,6 +379,15 @@ def sparql(client: httpx.Client, base: str, query: str, *, what: str = "the SPAR
     timeout = httpx.Timeout(SPARQL_TIMEOUT_S, connect=min(TIMEOUT_S, SPARQL_TIMEOUT_S))
 
     def once() -> tuple[int, bytes]:
+        # run in `_answer_of`'s thread, which a stop abandons: its own client
+        own, owned = _thread_client(client)
+        try:
+            return _once(own)
+        finally:
+            if owned:
+                own.close()
+
+    def _once(client) -> tuple[int, bytes]:
         with client.stream("POST", url, data={"query": query, "format": "application/sparql-results+json"},
                            headers=_headers({"Accept": "application/sparql-results+json"}),
                            timeout=timeout) as r:
