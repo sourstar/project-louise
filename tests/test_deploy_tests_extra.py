@@ -81,3 +81,22 @@ def test_an_empty_list_stops_the_deploy_instead_of_running_every_test(tmp_path):
     listing.write_text("# nothing yet\n\n")
     rc, out, calls = _run(tmp_path, str(listing))
     assert rc != 0 and "no test path" in out and calls == []
+
+
+def test_a_conftest_in_the_list_is_dropped_and_said(tmp_path):
+    """f4ebb4e, 2026-11-28: tests/acquire/conftest.py named as a path collided
+    with tests/conftest.py at collection and the deploy stopped."""
+    listing = tmp_path / "tests-extra-def"
+    listing.write_text("tests/test_a.py\ntests/acquire/conftest.py\ntests/conftest.py\n")
+    rc, out, calls = _run(tmp_path, str(listing))
+    assert rc == 0, out
+    assert "dropped (pytest loads them itself): tests/acquire/conftest.py tests/conftest.py" in out
+    (call,) = calls
+    assert call.split("cacheprovider ", 1)[1] == "tests/test_a.py"
+
+
+def test_a_list_of_conftests_only_is_refused(tmp_path):
+    listing = tmp_path / "tests-extra-ghi"
+    listing.write_text("tests/acquire/conftest.py\n")
+    rc, out, calls = _run(tmp_path, str(listing))
+    assert rc == 1 and "no test path" in out and calls == []
