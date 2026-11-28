@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Users — {{ site_title() }}{% endblock %}
+{% block content %}
+<h1>Users</h1>
+{# THE USERS TAB (operator, 2026-11-28): one reader at a time, chosen at the
+   top; what they are called, whether they are an admin, and what they may
+   see and hear. Every change is written at once to users.toml (07 §7.4). #}
+{% if unreadable %}
+<div class="panel"><div class="note" style="color:var(--err)">{{ unreadable }}</div></div>
+{% endif %}
+<div class="panel">
+  <label for="user-pick">Reader</label>
+  <select id="user-pick" onchange="location.href='/admin/users?u='+encodeURIComponent(this.value)">
+    <option value="{{ guest_entry }}" {{ 'selected' if chosen == guest_entry }}>Readers with no account</option>
+    {% for a in accounts %}
+    <option value="{{ a.name }}" {{ 'selected' if chosen == a.name }}>{{ a.name }}{% if a.first_name or a.last_name %} — {{ a.first_name or '' }} {{ a.last_name or '' }}{% endif %}{% if a.role == 'admin' %} (admin){% endif %}</option>
+    {% endfor %}
+  </select>
+  {% if not accounts %}<div class="note">No account yet: <code>louise user add &lt;name&gt;</code> creates one, and from then on Ask needs a token.</div>{% endif %}
+</div>
+
+{% if who %}
+<div class="panel" data-user="{{ who.name }}">
+  <h2>{{ who.name }}</h2>
+  <div class="row">
+    <div><label>First name <input id="first-name" value="{{ who.first_name or '' }}" maxlength="120"
+         onchange="patchUser({first_name:this.value})"></label></div>
+    <div><label>Name <input id="last-name" value="{{ who.last_name or '' }}" maxlength="120"
+         onchange="patchUser({last_name:this.value})"></label></div>
+  </div>
+  <label class="check" title="an admin sees and hears everything, and reaches every page of the node">
+    <input type="checkbox" data-admin {{ 'checked' if who.role == 'admin' }}
+           onchange="patchUser({role:this.checked?'admin':'user'},this)">admin</label>
+  {% if who.role == 'admin' %}<div class="note">An admin sees every collection and hears every voice: the lists below apply once the flag is off.</div>{% endif %}
+</div>
+{% endif %}
+
+<div class="panel" id="lists">
+  <h2>Collections</h2>
+  {% for c in collections %}
+  <label class="check" title="hidden from {{ 'this reader' if who else 'readers with no account' }}">
+    <input type="checkbox" data-list="hide_collections" value="{{ c.id }}" {{ 'checked' if c.id in hide_collections }}
+           onchange="saveList('hide_collections')">hide</label> {{ c.label }}{% if c.hidden_everywhere %} <span class="badge brass" title="hidden from every reader who is not an admin (the Library's hide box)">hidden for all</span>{% endif %}<br>
+  {% else %}<div class="note">No collection is served.</div>{% endfor %}
+
+  <h2>Annotations</h2>
+  {% for a in annotations %}
+  <label class="check"><input type="checkbox" data-list="hide_annotations" value="{{ a.id }}" {{ 'checked' if a.id in hide_annotations }}
+           onchange="saveList('hide_annotations')">hide</label> {{ a.label }}{% if a.hidden_everywhere %} <span class="badge brass">hidden for all</span>{% endif %}<br>
+  {% else %}<div class="note">No annotations collection is held.</div>{% endfor %}
+
+  <h2>Voices</h2>
+  <div class="note">Every voice is off until enabled here; with none, the answer is not read aloud.</div>
+  {% for v in voices %}
+  <label class="check"><input type="checkbox" data-list="voices" value="{{ v.voice }}" {{ 'checked' if v.voice in enabled_voices }}
+           onchange="saveList('voices')">on</label> {{ v.name }}{% if v.language %} <span class="note">({{ v.language }})</span>{% endif %}<br>
+  {% else %}<div class="note">The node offers no voice.</div>{% endfor %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const WHO = {{ (who.name if who else None)|tojson }};
+async function sendJSON(method,url,body){
+  const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok) throw (d.detail||r.statusText);
+  return d;
+}
+async function patchUser(body,box){
+  try{await sendJSON('PATCH','/admin/api/users/'+encodeURIComponent(WHO),body);toast('saved to users.toml')}
+  catch(e){toast('not saved: '+e);if(box)box.checked=!box.checked}
+}
+async function saveList(key){
+  const ids=[...document.querySelectorAll('input[data-list="'+key+'"]:checked')].map(b=>b.value);
+  try{
+    if(WHO) await sendJSON('PATCH','/admin/api/users/'+encodeURIComponent(WHO),{[key]:ids});
+    else await sendJSON('PATCH','/admin/api/guest',{[key]:ids});
+    toast('saved to users.toml')}
+  catch(e){toast('not saved: '+e);location.reload()}
+}
+</script>
+{% endblock %}
