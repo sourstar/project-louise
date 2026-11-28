@@ -697,3 +697,21 @@ def test_the_real_validate_hands_the_looks_refusal_to_keep(node, endpoint, monke
     finally:
         run_check._pass_local.look = None
     assert not hold_runs.path_for(root, "gutenberg", RUN, "document").exists(), "nothing kept"
+
+
+def test_query_mode_s_run_mode_holds_no_look():
+    """Download only is query mode's run mode (app/node_mode.py QUERY_RUN):
+    a run a question hears is still gated there, so it holds no look. Only a
+    paused node does."""
+    from app import worker
+    worker._paused.clear()
+    worker._acquire_only.set()
+    try:
+        assert not worker._looks_held()
+    finally:
+        worker._acquire_only.clear()
+    worker._paused.set()
+    try:
+        assert worker._looks_held()
+    finally:
+        worker._paused.clear()

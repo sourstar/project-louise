@@ -5622,10 +5622,13 @@ _acquire_only = threading.Event()
 
 
 def _looks_held() -> bool:
-    """The node's mode embeds nothing now (paused, seed-only, download only):
-    no run check's look starts, and one running stops at its gate's next
-    slice as a paused collection's does (app/run_check.py `hold_looks_while`)."""
-    return _paused.is_set() or _acquire_only.is_set()
+    """The node is PAUSED (`node pause`, or seed-only: nothing fetched,
+    parsed or embedded): no run check's look starts, and one running stops at
+    its gate's next slice as a paused collection's does (app/run_check.py
+    `hold_looks_while`). NOT download only: that is QUERY MODE's run mode
+    (app/node_mode.py `QUERY_RUN`), where a run a question hears must still be
+    gated, or the collection's search refuses its answers until embed mode."""
+    return _paused.is_set()
 
 
 def _hold_looks_to_the_mode() -> None:
