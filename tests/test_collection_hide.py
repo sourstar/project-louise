@@ -229,7 +229,9 @@ def test_hidden_annotations_are_never_consulted_for_a_reader(monkeypatch):
 
 # ---- a result kept for the answer -------------------------------------------
 
-def test_an_admins_kept_result_is_never_a_readers_answer():
+def test_an_admins_kept_result_is_never_a_readers_answer(node):
+    """While anything is hidden from the reader (here `secret`); with nothing
+    hidden, a kept result is anyone's, as before."""
     from app import web
     with viewing.as_viewer(ADMIN):
         sid = web.keep_search("q", {"hits": ["from a hidden one"]})
@@ -254,3 +256,11 @@ def test_a_vector_store_and_localagi_search_do_not_find_it(node):
         assert openai_stores._store(req, "gutenberg").name == "gutenberg"
     with viewing.as_viewer(MASTER):
         assert openai_stores._store(req, "secret").name == "secret"
+
+
+def test_with_nothing_hidden_a_kept_result_is_reused_as_before():
+    from app import web
+    with viewing.as_viewer(ADMIN):
+        sid = web.keep_search("q", {"hits": []})
+    with viewing.as_viewer(USER):
+        assert web.kept_search(sid, "q") == {"hits": []}

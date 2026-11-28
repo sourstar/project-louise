@@ -1870,8 +1870,10 @@ def kept_search(sid: str | None, query: str) -> dict | None:
         got = _SEARCHES.get(sid)
     if got is None or time.time() - got[0] > SEARCH_TTL_S or got[1] != query:
         return None
-    if got[3] == "all" and _looker() != "all":
-        return None                 # an admin's result is never another reader's answer (07 §7.8 `hidden`)
+    if got[3] == "all" and _looker() != "all" and collections_mod.hidden_names_here():
+        # an admin's result may hold what this reader may not see (07 §7.8
+        # `hidden`): never their answer while anything is hidden from them
+        return None
     return got[2]
 
 

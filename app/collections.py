@@ -1675,8 +1675,7 @@ def is_private(collection) -> bool:
     never-share is not only about peers, and a guest on the LAN is not the
     depositor. Searched only with the deposit token or the admin token
     (07 §7.4)."""
-    codex = getattr(collection, "codex", None)
-    return codex is not None and codex.plugin == "deposit"
+    return getattr(getattr(collection, "codex", None), "plugin", None) == "deposit"
 
 
 def load_public() -> list:

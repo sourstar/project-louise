@@ -118,7 +118,9 @@ def test_the_page_offers_each_annotations_collection_as_a_chip_and_remembers_the
     _two_annotations(monkeypatch)
     coll = SimpleNamespace(name="gutenberg", plugin="gutenberg",
                            codex=SimpleNamespace(collection_id="cid-gutenberg", plugin="gutenberg"))
-    monkeypatch.setattr(web.collections_mod, "load_all", lambda *a, **k: [coll])
+    # the loader's two shapes: the worker's form returns (served, unreadable)
+    monkeypatch.setattr(web.collections_mod, "load_all",
+                        lambda *a, **k: ([coll], []) if k.get("skip_unreadable") else [coll])
     page = client.get("/ask").text
     assert 'id="annotation-chips"' in page and "Annotations consulted" in page
     assert 'class="chip ann on" data-name="gutenberg-book-editions"' in page
