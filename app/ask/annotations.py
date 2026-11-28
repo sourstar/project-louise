@@ -13,8 +13,11 @@ may group a work's versions by it; the lists are not reordered for it.
 Which claims apply: those of an annotations collection this peer holds and
 may use (a copy in quarantine attaches nothing and is named under
 `withheld`, as any copy is — 05 §5.3), whose `annotates.collection_id` is
-the result's collection, read from a target snapshot at or after
-`annotates.from_snapshot`.
+the result's collection OR ANY OF ITS FAMILY — its mother, sisters and
+daughters at any depth, by lineage and by a records carry (app/rage/family.py,
+operator 2026-11-28) — read from a target snapshot at or after
+`annotates.from_snapshot`; each claim still judged against the record it lands
+on (`state`: current, or stale where that record's text changed).
 
 COST: the claims of a copy are indexed once per snapshot
 (`annotations.index_of`, keyed on the SHARD's path); per search, one manifest
@@ -89,14 +92,22 @@ def _target_rows(collection, uids: Iterable[str]) -> dict[str, dict[str, Any]]:
     return out
 
 
-def answers_for(root, name: str, collection_id: str | None) -> tuple[str, ...]:
+def answers_for(root, name: str, collection_id: str | None, held=None) -> tuple[str, ...]:
     """The collection ids an annotations target may name for the collection
-    held as `name`: its own, and the one a same-records carry brought its
-    records from (`carry.records_twin_of`, its own `state/carry.json`) —
-    claims about those records are claims about these (02 §2.4 A1f)."""
+    held as `name`: its FAMILY (app/rage/family.py; operator, 2026-11-28: "An
+    annotation refers to the corpus of a collection, thus applies to all
+    sisters and daughters" — A, "Add this rule to RAGE"): itself, its mother,
+    its sisters and daughters, at any depth, by its lineage and by a records
+    carry (`carry.records_twin_of`, 02 §2.4 A1f). Each claim attached is
+    still judged against the record it lands on (`state_of`). `held`: the
+    collections whose links count (default: every one held here)."""
     from app.hold import carry
+    from app.rage import family
     twin = carry.records_twin_of(Path(root) / name / "state")
-    return tuple(dict.fromkeys(i for i in (collection_id, twin) if i))
+    extra = [(collection_id, twin)] if collection_id and twin else []
+    ids = family.family(root, collection_id, family.held_collections() if held is None else held,
+                        extra=extra)
+    return ids or tuple(i for i in (twin,) if i)
 
 
 def target_among(codex, ids: Iterable[str]):
@@ -144,8 +155,10 @@ def attach(lists: list[dict[str, Any]], source_of: dict[int, Any], contexts: dic
     if not held or not by_coll:
         return []
     withheld, usable = [], []
+    from app.rage import family
+    relatives = family.held_collections()      # read once a search: a dozen files, cached Codices
     targets = {i for n in by_coll if n in contexts
-               for i in answers_for(root, n, contexts[n]["collection_id"])}
+               for i in answers_for(root, n, contexts[n]["collection_id"], relatives)}
     from app.hold.codex import targets_of
     for a in held:
         if not any(t.collection_id in targets for t in targets_of(a.codex)):
@@ -160,7 +173,7 @@ def attach(lists: list[dict[str, Any]], source_of: dict[int, Any], contexts: dic
     from app.hold import collection as col
     for name, hits in by_coll.items():
         ctx = contexts.get(name) or {}
-        ids = answers_for(root, name, ctx.get("collection_id"))
+        ids = answers_for(root, name, ctx.get("collection_id"), relatives)
         mine = [a for a in usable
                 if (t := target_among(a.codex, ids)) is not None
                 and ann.applies_from(t.from_snapshot, ctx.get("snapshot_id"))]

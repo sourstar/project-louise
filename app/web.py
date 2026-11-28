@@ -3418,9 +3418,16 @@ def _annotations_shelf(collection, served: list) -> dict:
     # the card names it; Perugia, 2026-10-21: gutenberg-book-editions said
     # "a collection this node does not hold" about the retired gutenberg) —
     # else one the node holds without serving (`show` reads the tree, 09 §9.3)
-    names = [next((c.name for c in served
-                   if t.collection_id in answers_for(root, c.name, getattr(c.codex, "collection_id", None))),
-                  None) for t in targets]
+    from .rage import family
+    relatives = family.held_collections()
+    # the target ITSELF where it is served, else the first of its family that
+    # is (app/rage/family.py): the card names the collection the claims were made for
+    names = [next((c.name for c in served if getattr(c.codex, "collection_id", None) == t.collection_id),
+                  None)
+             or next((c.name for c in served
+                      if t.collection_id in answers_for(root, c.name, getattr(c.codex, "collection_id", None),
+                                                        relatives)), None)
+             for t in targets]
     if any(n is None for n in names):
         try:
             shown = col.show(root, collection.name)["targets"]
