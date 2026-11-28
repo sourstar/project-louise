@@ -37,7 +37,7 @@ async def _json(request: Request) -> Any:
 
 def _log(level: str, text: str) -> None:
     try:
-        with closing(db.connect()) as con:
+        with closing(db.control()) as con:
             db.log_event(con, level, "share", text[:500])
     except Exception:   # noqa: BLE001 — the event is a courtesy
         pass

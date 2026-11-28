@@ -378,6 +378,50 @@ def wal(con, *, tries: int = 50, pause_s: float = 0.1) -> str:
     raise last
 
 
+def unreadable(e: BaseException) -> str | None:
+    """Why a manifest that raised `e` on opening cannot be used, or None for
+    what is not the file's fault: a lock or a busy file waits — deferral is
+    not failure (CLAUDE.md) — and is raised as it always was."""
+    if isinstance(e, sqlite3.OperationalError) and any(w in str(e) for w in ("locked", "busy")):
+        return None
+    if isinstance(e, (sqlite3.DatabaseError, OSError)):
+        return (f"its manifest cannot be opened ({type(e).__name__}: {e}): not served, shared or "
+                f"searched until it is repaired — a snapshot of state/ restored, or the collection "
+                f"re-created")
+    return None
+
+
+def control() -> sqlite3.Connection:
+    """THE NODE'S OWN TELEMETRY: `state/node.sqlite` (operator, 2026-11-28,
+    choice A) — the query log, the node-wide events, the worker's published
+    samples (rates, stats, model pins, the seeding table). Never a
+    collection's manifest: they followed the first collection, and EUR-Lex5
+    .next's overwritten header failed the System tab with it. A manifest
+    connection's class, so `log_event` says `node`."""
+    from . import node_state
+    p = node_state.path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(p, timeout=60, isolation_level=None, factory=ManifestConnection)
+    con.collection_name = "node"
+    con.row_factory = sqlite3.Row
+    wal(con)
+    con.execute("PRAGMA busy_timeout=60000")
+    node_state.ensure_schema(con)
+    return con
+
+
+def read_only_control() -> sqlite3.Connection | None:
+    """`control()` for the polling paths, as `read_only_connect` is for a
+    manifest: no DDL, no write lock; None before the file exists."""
+    from . import node_state
+    p = node_state.path()
+    if not p.exists():
+        return None
+    con = sqlite3.connect(p.resolve().as_uri() + "?mode=ro", uri=True, timeout=5, check_same_thread=False)
+    con.row_factory = sqlite3.Row
+    return con
+
+
 def connect(collection=None, *, shared: bool = False) -> sqlite3.Connection:
     """The collection's manifest. `shared`: the connection may be handed from
     one thread to another (never used by two at once) — the embed stage's
@@ -905,10 +949,10 @@ def log_event(con, level, stage, message, doc_uid=None):
     way (tests, tools) simply print without it.
 
     A NODE_STAGES line says `node` instead. The fair-share lines cover every
-    collection and are written through the first collection's manifest —
-    the node has no event log of its own — so they printed as gutenberg's
-    ("why is gutenberg logging about the other plugins?", operator,
-    2026-09-18)."""
+    collection and were written through the first collection's manifest, so
+    they printed as gutenberg's ("why is gutenberg logging about the other
+    plugins?", operator, 2026-09-18); the node has its own log since
+    2026-11-28 (state/node.sqlite, `db.control`), whose lines say `node`."""
     stamp = time.strftime("%H:%M:%S")
     tag = f" #{doc_uid}" if doc_uid else ""
     who = "node" if stage in NODE_STAGES else getattr(con, "collection_name", "")

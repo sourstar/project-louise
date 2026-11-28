@@ -938,10 +938,10 @@ def _log_translation(lang: str, items: int, got: int, cached: int, missed: int, 
     """One log line per stream request, so what the page did with a
     translation can be read back from the web log (2026-10-28: the answer
     stayed untranslated and nothing recorded whether it was asked for,
-    translated or missed). Through the default collection's manifest, as
-    the query log is; never fatal."""
+    translated or missed). Through the node's own log (state/node.sqlite,
+    `db.control`), as the query log is; never fatal."""
     try:
-        con = db.connect()
+        con = db.control()
         try:
             db.log_event(con, "warn" if cut else "info", "translate",
                          f"stream into {lang}: {items} items — {got} translated ({cached} cached), "
@@ -1919,7 +1919,7 @@ def _ask_result(body: AskQueryBody) -> dict:
     _attach_figures(result)
     _attach_plates(result)
     _attach_history(result, body)
-    con = db.connect()   # query_log lives in the default collection's manifest regardless
+    con = db.control()   # the query log is the node's (state/node.sqlite)
     # .get, not [...]: when every collection is withheld `run_search`
     # returns {hits, withheld} with no `timings` at all, and a KeyError
     # here answered the whole query with a 500 — the licence gate's own
@@ -2973,7 +2973,7 @@ def _worker_stats() -> dict:
     """The worker's published per-collection snapshot, or {} when it is
     silent or stale. Read once per page: it is one control-table row."""
     try:
-        con = db.read_only_connect()
+        con = db.read_only_control()          # published by the worker into state/node.sqlite
         if con is None:
             return {}
         try:
@@ -4178,7 +4178,7 @@ def collection_remove(name: str, body: "RemoveBody | None" = None):
         except deposit.DepositError as e:
             raise HTTPException(409, f"{e} — `louise hold collection forget {name} --yes --here` removes "
                                      f"it in this process when no worker runs") from None
-        con = db.connect()
+        con = db.control()
         db.log_event(con, "info", "control",
                      f"collection {name!r} forgotten via admin UI: this node's copy and its state removed")
         return {"ok": True, "mode": "forget", **out,
@@ -4189,7 +4189,7 @@ def collection_remove(name: str, body: "RemoveBody | None" = None):
         raise HTTPException(400, f"{name!r} has no TOML file to retire")
     retired = toml_path.with_name(f"{name}.toml.removed-{int(time.time())}")
     toml_path.rename(retired)
-    con = db.connect()
+    con = db.control()
     db.log_event(con, "info", "control",
                  f"collection {name!r} removed via admin UI (TOML retired to "
                  f"{retired.name}; data kept on disk)")
@@ -4826,7 +4826,7 @@ def _bandwidth_payload() -> dict:
         # per subscriber, and connect() re-runs the schema script and the
         # ALTER TABLE migrations each call — write-path work on a manifest
         # the pipeline threads are already contending for.
-        con = db.read_only_connect()
+        con = db.read_only_control()          # the worker's samples: state/node.sqlite
         if con is not None:
             worker_rates, age = db.read_worker_rates(con)
             # the seeding table rides the SAME cheap reader (one read-only
@@ -4921,7 +4921,7 @@ def set_bandwidth_override(body: BandwidthOverrideBody):
     message = (f"bandwidth override {'cleared' if rate_bps is None else body.rate} "
                f"({body.hours}h)")
     try:
-        db.log_event(db.connect(), "info", "control", message)
+        db.log_event(db.control(), "info", "control", message)
     except Exception:   # noqa: BLE001 — the override is set; the event is a courtesy
         print(f"[info:control] {message}", flush=True)
     return {"ok": True, "rate_bps": rate_bps, "hours": body.hours}
@@ -5024,10 +5024,27 @@ def _effective_config() -> dict:
     override = node_state.bandwidth_override()
     tier3 = {"mode (state/node.sqlite, survives a restart)": node_mode.current(),
              "worker_state (state/node.sqlite)": node_state.worker_state(),
-             "scope (control table)": db.get_scope(db.connect()),
+             "scope (control table)": _control_scope(),
              "bandwidth override (state/node.sqlite, expires)":
                  _rate(override) if override else "(none)"}
     return {"tier1": tier1, "tier2": tier2, "tier2_platform": tier2_platform, "tier3": tier3}
+
+
+def _control_scope():
+    """The control table's scope, or why it cannot be read (2026-11-28: the
+    System tab answered 500 while the control manifest's header was
+    overwritten)."""
+    try:
+        con = db.connect()
+    except Exception as e:  # noqa: BLE001 — sorted: a lock is raised as before
+        why = db.unreadable(e)
+        if why is None:
+            raise
+        return f"(cannot be read: {why})"
+    try:
+        return db.get_scope(con)
+    finally:
+        con.close()
 
 
 def _idle_trim_said() -> str:
@@ -5086,6 +5103,19 @@ def _recent_events_all(limit: int = 60) -> list[dict]:
     counts are small and the alternative (a UNION over attached databases)
     would couple the page to every manifest being attachable at once."""
     rows: list[dict] = []
+    # THE NODE'S OWN LINES (state/node.sqlite, `db.control`): the worker's,
+    # the scheduler's, the seeder's, the control events — since 2026-11-28;
+    # older node lines stay in the manifests they were written to, read below
+    try:
+        con = db.read_only_control()
+        if con is not None:
+            try:
+                for r in con.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)):
+                    rows.append({**dict(r), "collection": "node"})
+            finally:
+                con.close()
+    except Exception:   # noqa: BLE001 — the node's log missing must not blank the rest
+        pass
     for collection in collections_mod.load_all():
         try:
             con = db.connect(collection)
