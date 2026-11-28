@@ -57,16 +57,17 @@ for a derived-reading Codex and for no other. So no Codex, space or
 | key | type | meaning |
 |---|---|---|
 | `derives_from` | `{collection_id, snapshot}` | the collection read and the snapshot read. Required at 13, ABSENT below it |
-| `read.mode` | `"describe"` (· `"ocr"` once ocr-in-rage.md is decided) | what the run does to a figure |
+| `read.mode` | `"describe"` (a closed enum; `"ocr"` joins only with ocr-in-rage.md's own decision and amendment) | what the run does to a figure |
 | `read.encoder` | `{weights: "sha256:…", projector: "sha256:…", precision: "F16"…, label}` | the model's weights digest, its vision projector's digest, and the projector's precision, stated and never defaulted (operator, 2026-11-27) |
-| `read.engine` | the engine block, as `space.encoder.engine` (build, image, args, env, device) | frozen. Any engine may contribute once its run passes the read gate (§4 below) |
+| `read.engine` | the engine block, as `space.encoder.engine` (build, image, args, env, device, slots) | frozen. The ONE engine that writes the collection's records. Other engines verify (`records-vs-origin`) and never contribute: another card decodes other text, so two writers would make the collection's bytes depend on who read what. Distributed contribution stays an embedding thing (Architecture, 2026-11-28) |
 | `read.prompt` | `{sha256, text}` | the prompt, byte-exact, and its hash |
+| `read.set` | the read set's id | the 16 fixed figures of the read gate (§4) |
 | `read.decoding` | `{temperature: 0, seed, max_tokens, top_k: 1}` | greedy decoding. Anything else is refused at create |
 | `read.input` | `{max_side, format}` | how a figure is resized before reading. It is derived and deterministic: the same figure bytes always give the same input bytes |
 | `read.acceptance` | `{metric, bound, measured_on: [device, device]}` | the measured cross-card bound (§4 below) |
 
 Fixed, as for annotations:
-- `plugin` is `"reading"` and uids are `reading:<n>`;
+- `plugin` is `"reading"`. A uid is content-derived, `reading:<read uid>:<figure sha256, first 16 hex>`, so a re-creation never renumbers, and idempotence keys on it (invariant 2);
 - `origin.spec` is `{source_id: "reading", nonce}`, `unit` `"figure"` and
   `cutoff_rule` `"record-date"`;
 - `record_line` is 1, and `modality` is `"text"`.
@@ -76,12 +77,15 @@ Fixed, as for annotations:
 A derived-reading record is a §9.5 record line 1 with these fields:
 
 - `sections` is `[["", <the model's text>]]`.
-- `title` is the read record's title, copied. It is the one field copied, so
-  that a hit can be named; it is labelled as the read collection's.
+- `title` is ABSENT. Every fact a result shows comes from the collection's
+  own corpus, never from another collection, so the hit names the read
+  record at ask time, by key, as annotations are named (Architecture,
+  2026-11-28).
 - `origin_hash` is the sha256 of the FIGURE's bytes, as `figures-<slice>`
   carries them.
-- `origin` is `{collection_id, snapshot, uid, figure: <index>}`: the read
-  record and which of its figures.
+- `origin` is `{collection_id, snapshot, uid, figure_sha256}`: the read
+  record, and its figure by hash. A position would be renumbered by a figure
+  added before it.
 - `extra.read_receipt` is `{input_sha256, output_sha256, run}`: the input
   bytes after `read.input`, and the text's hash.
 
@@ -93,9 +97,13 @@ the snapshot's `delta` as `unread`, and a later snapshot reads it.
 
 **The gate, before any record is written.** It is invariant 12 applied to a
 generative reading:
-- the same 16 fixed figures (shipped like the calibration set, one set per
-  modality, 09 §9.12) are read one at a time, again in reverse order, over
-  three fresh loads;
+- the read set's 16 figures are read one at a time, again in reverse
+  order, over three fresh loads, and as the producer runs: its batch and
+  concurrency (the server's slots), since a slot count can change greedy
+  bytes on llama.cpp. The read set is 16 fixed CC0 figures from the Met's
+  own public-domain set (a painting, a photograph, an object, text in an
+  image, a drawing, …), shipped in the platform image with their sha256 like
+  `calibration/<set>.jsonl`, and named in `read.set`;
 - on the producer's own card and build, every reading reproduces its own
   BYTES. A run that does not FAILS.
 
@@ -146,12 +154,15 @@ decodes other tokens, so a verifier cannot ask for bytes:
   the read gate).
 
 The figures amendment found thirteen closed lists where three were expected
-(figures-amendment-plan.md). This draft has not been swept for the rest.
+(figures-amendment-plan.md). The sweep for the rest is a PRECONDITION:
+nothing is applied before it.
 
-## 8. Open, for Architecture
+## 8. Reviewed by Architecture, 2026-11-28
 
-1. The read set: 16 figures of which collection? A fixed set shipped in the
-   platform image, like `calibration/<set>.jsonl`, is proposed.
-2. Is `title` copied (§3), or left absent with the hit naming the read record
-   at ask time? Copying is simpler; absence is purer.
-3. Should `ocr` join `read.mode` now or with ocr-in-rage.md's decision?
+Five corrections, applied above: one writing engine; the figure keyed by
+sha256; content-derived uids; the gate run as the producer runs; and the
+closed-list sweep made a precondition (§7). The three answers: the read set
+is Met CC0 figures named in `read.set`; `title` is absent; `ocr` waits for
+its own decision. Next: the sweep, then ONE PR applying 02, 03, 05, 06, 07,
+08, 09 and new-collection.md, with tests for Codex 13 (round-trip, the keys
+refused below 13, greedy decoding enforced at create).
