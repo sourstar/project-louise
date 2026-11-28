@@ -338,6 +338,20 @@ def validate_boot(collections: list) -> None:
             con.close()
 
 
+def unreadable(e: BaseException) -> str | None:
+    """Why a manifest that raised `e` on opening cannot be served, or None
+    for what is not the file's fault: a lock or a busy file waits — deferral
+    is not failure (CLAUDE.md) — and is raised as it always was."""
+    import sqlite3
+    if isinstance(e, sqlite3.OperationalError) and any(w in str(e) for w in ("locked", "busy")):
+        return None
+    if isinstance(e, (sqlite3.DatabaseError, OSError)):
+        return (f"its manifest cannot be opened ({type(e).__name__}: {e}): not served, shared or "
+                f"searched until it is repaired — a snapshot of state/ restored, or the collection "
+                f"re-created")
+    return None
+
+
 def refuse_boot(collections: list) -> list[tuple]:
     """The node's boot check: validate each collection, refuse the ones
     that fail, and keep the rest.
@@ -357,7 +371,18 @@ def refuse_boot(collections: list) -> list[tuple]:
     validate_chunking_config()
     refused: list[tuple] = []
     for collection in collections:
-        con = db.connect(collection)
+        try:
+            con = db.connect(collection)
+        except Exception as e:  # noqa: BLE001 — sorted below: refused, or the old raise
+            why = unreadable(e)
+            if why is None:
+                raise
+            # A MANIFEST THAT DOES NOT OPEN IS THAT COLLECTION'S REFUSAL
+            # (2026-11-28, EUR-Lex5.next's header overwritten: "file is not
+            # a database"). It raised here, and the web's start and the
+            # worker's went down with every other collection (invariant 1)
+            refused.append((collection, why))
+            continue
         try:
             _validate_one(con, collection)
         except (BootValidationError, collections_mod.NoEncoder) as e:
