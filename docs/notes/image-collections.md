@@ -261,3 +261,18 @@ adds structured `measurements`. Fetching their JSON as well (~240 k requests,
 archive.org shortcut is dropped. Every image is fetched from
 images.metmuseum.org by the plugin, and every object's JSON from the API.
 The measurement above stays as the record of why the shortcut was considered.
+
+## 13. The encoder: Nemotron (operator, 2026-11-28)
+
+The operator: "the met collection uses nemo as embedder". The encoder is
+Nemotron-3-Embed-1B on llama.cpp ([nemotron-embed.md](nemotron-embed.md);
+`vega-nemotron-3-embed-1b`), as the legal collections use it
+(eurlex-recipe.toml, legi-recipe.toml and neuris-recipe.toml are the
+templates). Codex version 11: `space.document` "passage: ", the queries
+"query: ". The collection is made through `louise hold collection new`, case
+A, or case E if the space is copied from a held Nemotron collection, which
+skips calibrating again.
+
+The `describes` annotations' space is proposed on the SAME encoder and form.
+Pros: one model on the card for both lists, and the merge (05 §5.6) compares
+like with like. Cons: none found. It is raised with the amendment's PR.
