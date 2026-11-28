@@ -1528,7 +1528,9 @@
           // hands-free deaf while the node says its name (`hfMuted`), and a moment after
           r.now = r.items[i]; r.now.names = mentionsName(r.now.text);
           await play(r, url);
-          if (r.now && r.now.names) wakeName.muteUntil = performance.now() + WAKE_TAIL_MS;
+          // the tail only after a sentence that PLAYED to its end: a reading
+          // stopped mid-name leaves nothing playing to be deaf to
+          if (reading === r && !r.paused && r.now && r.now.names) wakeName.muteUntil = performance.now() + WAKE_TAIL_MS;
           r.now = null;
           r.playing = false; r.items[i].t.end = now();
         }
