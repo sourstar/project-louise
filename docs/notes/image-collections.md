@@ -184,3 +184,34 @@ The two forms the Met serves, both probed 2026-11-28:
 its bytes). The CSV is not used. The bulk-first rule binds legal collections,
 and here the bulk lacks what the collection is for. This choice goes into the
 plugin's source module, as tests/test_invariant_11_origin_form.py requires.
+
+## 11. Architecture's position on the annotation route (2026-11-28, via München)
+
+1. **The Met as a plain plugin collection**: yes, with no spec change. Start.
+2. **No exception to 08 or invariant 11.** 02 §2.10's trust model already
+   covers this: a claim is attributed by its method and pinned to content
+   hashes, and claims written by a language model are allowed. Describing is
+   the collection's `method` (07 §7.8). The publishing node re-runs it when
+   the Met moves, on the producer card, behind the read gate.
+3. **The §2.10 and invariant 4 amendment, narrow:**
+   - Only "describes" claims, whose object is TEXT, are embedded. Every other
+     claim kind stays a fact-by-key.
+   - The annotations Codex gains a `space` at a new version, and is refused
+     below it.
+   - Its encoder is gated (invariant 12). The worker cuts and embeds that
+     collection alone.
+   - It ranks as its OWN list in the cross-collection merge (05 §5.6), never
+     as a weight on the Met's list.
+   - A hit shows the Met record by key, with the description beside it,
+     labelled "described by <model>". A record found by both lists is shown
+     once, saying both.
+   - The checks carry over: the receipt, the signature and the vectors are
+     automatic; "description not compared with the picture" is said; "looked
+     at by" is recorded.
+   - Invariant 4's new wording is the operator's to give (München puts it to
+     them): "…NEVER enter a ranking as items or weights — except an
+     annotations collection's text claims, searched as that collection's own
+     list in the cross-collection merge, each hit labelled with its method,
+     never a weight on another list."
+4. **One PR.** Its sweep adds the annotations Codex version, the worker's
+   stages for annotations, and 05's merge.
