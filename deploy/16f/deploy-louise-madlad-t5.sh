@@ -379,6 +379,12 @@ if [ -n "${TESTS_EXTRA:-}" ]; then
   else
     EXTRA=$TESTS_EXTRA
   fi
+  # a conftest.py is no test: pytest loads it by itself, and named as a path two
+  # of them collide on the module name "conftest" (f4ebb4e, 2026-11-28: the deploy
+  # stopped at collection). Dropped here, and said
+  DROPPED=$(printf '%s\n' $EXTRA | grep -E '(^|/)conftest\.py$' || true)
+  [ -z "$DROPPED" ] || say "3c. TESTS_EXTRA: dropped (pytest loads them itself): $(echo $DROPPED)"
+  EXTRA=$(printf '%s\n' $EXTRA | grep -vE '(^|/)conftest\.py$' | tr -s ' \t\n' ' ' || true)
   # an empty list would run pytest on the whole tree: a mistake, said and stopped
   [ -n "${EXTRA// /}" ] || { echo "TESTS_EXTRA: no test path in $TESTS_EXTRA"; exit 1; }
   say "3c. the release's own tests: $(printf '%s\n' $EXTRA | grep -c .) path(s) (TESTS_EXTRA)"
