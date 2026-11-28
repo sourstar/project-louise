@@ -222,3 +222,23 @@ def test_group_sizes_counts_each_groups_own_index(isolated_config):
     fts.index_book("de", 3, chunk(3, "eine Waljagd auf See"), c)
     sizes = fts.group_sizes(c)
     assert sizes.get("fr") == 2 and sizes.get("de") == 1, sizes
+
+
+def test_a_limit_not_checked_is_said_as_such_never_as_not_translated(isolated_config, monkeypatch):
+    """Operator, 2026-11-28: "languages: query not translated" beside "fan-out:
+    8 main languages, by the translation model" — the chat model had not
+    answered whether the query limits its languages; the translation model had
+    translated it."""
+    from app import language_plan, web
+    c = collections_mod.default_collection()
+    monkeypatch.setattr(language_plan.fts, "existing_groups", lambda collection=None: ["en", "it"])
+    monkeypatch.setattr(language_plan, "main_languages", lambda c, share=None: ("en", "it"))
+    monkeypatch.setattr(llm, "language_restriction", lambda q: None)
+    monkeypatch.setattr(language_plan, "_translations", lambda core, targets: ({t: core + "!" for t in targets},
+                                                                               "translation model"))
+    plan = language_plan.plan("whaling history", [c], True)
+    assert plan.translations and plan.summary()["status"] == "unchecked"
+    html = web.TEMPLATES.env.get_template("_ask_results.html").render(
+        result={"hits": [], "timings": {}, "translations": plan.translations, "language": plan.summary()})
+    assert "limit not checked" in html and "not translated" not in html
+    assert language_plan.plan("whaling history", [c], True) is not plan, "asked again next time, never cached"

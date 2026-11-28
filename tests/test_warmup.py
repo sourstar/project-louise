@@ -32,9 +32,11 @@ def path(monkeypatch):
     return done
 
 
-def test_the_translator_each_distinct_reranker_and_the_chat_model_in_order(path):
+def test_the_chat_model_first_then_the_translator_and_each_distinct_reranker(path):
+    """Operator, 2026-11-28, option B: the first question after a deploy
+    waited on the 35B's cold load, warmed last."""
     warmup.warm_all("test")
-    assert path == ["translate", "louise-rerank-bge", "louise-rerank-medcpt", "chat"]
+    assert path == ["chat", "translate", "louise-rerank-bge", "louise-rerank-medcpt"]
 
 
 def test_a_paused_node_warms_nothing_and_says_why(path, monkeypatch, capsys):
@@ -50,7 +52,7 @@ def test_a_paused_node_warms_nothing_and_says_why(path, monkeypatch, capsys):
     assert "the node is paused" in said and "a question loads what it needs" in said
     monkeypatch.setattr(node_state, "peek_worker_state", lambda: "running")
     warmup.warm_all("test")
-    assert path == ["translate", "louise-rerank-bge", "louise-rerank-medcpt", "chat"]
+    assert path == ["chat", "translate", "louise-rerank-bge", "louise-rerank-medcpt"]
     path.clear()
     monkeypatch.setattr(resident, "preloads", lambda state=None: (_ for _ in ()).throw(RuntimeError("unread")))
     warmup.warm_all("test")
@@ -67,7 +69,7 @@ def test_a_failed_warm_is_said_and_the_next_one_still_goes(path, monkeypatch, ca
         raise model_load.LoadTimeout("model loading took longer than 60 s", model="m", bound_s=60)
     monkeypatch.setattr(translate, "warm", boom)
     warmup.warm_all("test")
-    assert path == ["louise-rerank-bge", "louise-rerank-medcpt", "chat"]
+    assert path == ["chat", "louise-rerank-bge", "louise-rerank-medcpt"]
     assert "not warmed (test): LoadTimeout" in capsys.readouterr().out
 
 
