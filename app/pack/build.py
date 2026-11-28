@@ -876,7 +876,13 @@ def _record_of(collection, plugin, row) -> tuple[dict, int, bytes, dict[str, str
     # text, its caption already lives in `sections`, so gaining plates
     # changes no content hash and re-uses every text vector (02 §2.3).
     plates: dict[str, str] = {}
-    if getattr(getattr(collection, "codex", None), "record_line", 1) == 2:
+    line = int(getattr(getattr(collection, "codex", None), "record_line", 1) or 1)
+    if line >= 3:
+        # 09 §9.5 `origin_gaps`: what the origin did not give for this record,
+        # as the parse found it (`CanonicalDoc.origin_gaps`); `[]` when whole.
+        # After `content_hash`: what the record holds is unchanged
+        record["origin_gaps"] = records.origin_gaps(getattr(doc, "origin_gaps", None))
+    if line >= 2:
         record["figures"] = [f.as_record() for f in (doc.figures or [])]
         # WHERE THE BYTES ARE, for the container pass — {hash: href}, and
         # never the bytes themselves. The child has the epub open and could
@@ -1113,7 +1119,7 @@ def _pack_slices(collection, con_src, con_build, pack_dir: Path, *, records_per_
                 # because a plate arriving rewrites a record line and so moves
                 # the shard's own root, and a shard recorded without its
                 # container would be served naming plates nothing holds.
-                if record_line == 2 and part["plates"]:
+                if int(record_line) >= 2 and part["plates"]:
                     _write_figures(plugin, pack_dir, slice_name, part["n"], part["plates"], log)
                 # 09 §9.4's shard entry. Three roots, and each answers a
                 # different question: `root` is what the transport and the

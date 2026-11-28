@@ -237,7 +237,12 @@ _ABSOLUTE_PATH_RE = re.compile(r"""(?:^|[\s:=,;'"(\[])/""")
 #: the member kind and the plugin side of the amendment, none of which is
 #: built (docs/notes/figures-amendment-plan.md). Refused at create with
 #: that reason rather than accepted and quietly written without plates.
-RECORD_LINES = (1, 2)
+RECORD_LINES = (1, 2, 3)
+#: 3 (2026-11-28, operator: "keep the record, mark it as degraded, mark the
+#: parts as missing"; "B"): line 2 with `origin_gaps`, what the origin did not
+#: give for the record (09 §9.5). Every line from 2 carries `figures`.
+FIGURES_FROM_LINE = 2
+GAPS_FROM_LINE = 3
 #: The DEFAULT, and it stays 1: "a figureless collection created under a
 #: later format writes `version` 2 with `record_line` 1" (§9.3). A
 #: collection gets plates by asking for them, never by being created after
@@ -248,7 +253,7 @@ RECORD_LINE_BUILT = 1
 #: `SHARD.MEMBER_KINDS`'s `figures`, `app/hold/figures.py`'s containers, the
 #: `figures` key in `pack/build._record_of`, and a plugin that yields
 #: plates (`gutenberg-epub`).
-RECORD_LINES_WRITABLE = (1, 2)
+RECORD_LINES_WRITABLE = (1, 2, 3)
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")

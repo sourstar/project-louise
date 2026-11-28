@@ -688,7 +688,7 @@ def _record_line(recipe: dict[str, Any]) -> int:
     """
     want = int(recipe.get("record_line", codex_mod.RECORD_LINE_BUILT))
     if want not in codex_mod.RECORD_LINES:
-        raise TemplateError(f"record_line is 1 or 2 (09 §9.3), got {want!r}")
+        raise TemplateError(f"record_line is 1, 2 or 3 (09 §9.3), got {want!r}")
     if want not in codex_mod.RECORD_LINES_WRITABLE:
         raise TemplateError(
             f"record_line {want} is not writable by this build. "
@@ -742,7 +742,7 @@ def _validation(recipe: dict[str, Any]) -> Validation:
     # would make a peer's collection unreadable rather than unserved, and
     # would have made this node's own previous attempt unloadable too,
     # which is how the placement was found.
-    if _record_line(recipe) == 2 and "figures" not in checks:
+    if _record_line(recipe) >= 2 and "figures" not in checks:
         raise TemplateError(
             "recipe: record_line = 2 carries plates, so validation.checks "
             "must name `figures` (09 §9.8). Nothing else re-hashes a plate "
