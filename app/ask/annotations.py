@@ -36,10 +36,12 @@ FIELD = "annotations"
 
 
 def _held(collections=None) -> list:
-    if collections is not None:
-        return list(collections)
+    """The annotations collections consulted: `collections`, else every one
+    held — never one hidden from the viewer being answered (07 §7.8
+    `hidden`: its claims are not attached, shown or walked for them)."""
     from app import collections as collections_mod
-    return collections_mod.load_annotations()
+    return collections_mod.seen(collections_mod.load_annotations() if collections is None
+                                else collections)
 
 
 def _withheld(a) -> str | None:

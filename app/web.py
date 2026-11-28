@@ -883,10 +883,13 @@ def _ask_annotations() -> list[dict]:
     collection whose target this node does not hold is still listed."""
     from .hold.codex import targets_of
     from .rage import family
-    served = collections_mod.load_all()
+    # what the Ask page's reader may see (07 §7.8 `hidden`, 07 §7.4): its
+    # chips name neither a hidden annotations collection nor a hidden or
+    # deposit collection it applies to
+    served = collections_mod.load_public()
     relatives = family.held_collections()
     out = []
-    for a in collections_mod.load_annotations():
+    for a in collections_mod.seen(collections_mod.load_annotations()):
         targets = targets_of(a.codex)
         # every collection the claims apply to, its family included (app/rage/family.py)
         names = [n for t in targets for n in _applies_to(t.collection_id, served, relatives)]
@@ -1842,10 +1845,17 @@ SEARCH_TTL_S = 600.0
 _searches_lock = threading.Lock()
 
 
+def _looker() -> str:
+    """Who a kept result was made for, as far as hiding goes (07 §7.8
+    `hidden`): one made for an admin may hold what another reader may not see."""
+    from . import viewing
+    return "all" if viewing.sees_all(viewing.current()) else "reader"
+
+
 def keep_search(query: str, result: dict) -> str:
     sid = secrets.token_urlsafe(16)
     with _searches_lock:
-        _SEARCHES[sid] = (time.time(), query, result)
+        _SEARCHES[sid] = (time.time(), query, result, _looker())
         while len(_SEARCHES) > _SEARCHES_MAX:
             _SEARCHES.popitem(last=False)
     return sid
@@ -1860,6 +1870,8 @@ def kept_search(sid: str | None, query: str) -> dict | None:
         got = _SEARCHES.get(sid)
     if got is None or time.time() - got[0] > SEARCH_TTL_S or got[1] != query:
         return None
+    if got[3] == "all" and _looker() != "all":
+        return None                 # an admin's result is never another reader's answer (07 §7.8 `hidden`)
     return got[2]
 
 
@@ -1876,7 +1888,9 @@ def _ask_result(body: AskQueryBody) -> dict:
     # carry it; a single-collection hit is resolved from its source prefix
     # (the plugin id) to the first collection of that plugin
     by_plugin = {}
-    for c in collections_mod.load_all():
+    # what this reader may search (07 §7.8 `hidden`, 07 §7.4): never naming a
+    # hidden or deposit collection of the same plugin
+    for c in collections_mod.load_public():
         by_plugin.setdefault(c.plugin, c.name)
     for h in result.get("hits", []):
         plugin = str(h.get("chunk_id", "")).split(":", 1)[0]

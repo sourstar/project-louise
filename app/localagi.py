@@ -193,7 +193,10 @@ async def create(body: CreateBody):
 @_wrap
 async def list_collections():
     """Deposit collections, and every held collection read-only (D2)."""
-    names = sorted(c.name for c in collections_mod.load_all())
+    # never one hidden from this caller (07 §7.8 `hidden`: the deposit token is
+    # not an admin), its own deposit collections aside (02 §2.9)
+    names = sorted(c.name for c in collections_mod.load_all()
+                   if collections_mod.is_private(c) or not collections_mod.hidden_here(c))
     return ok({"collections": names})
 
 
@@ -291,7 +294,7 @@ async def search(name: str, body: SearchBody):
     memory's business."""
     from . import query_service
     c = collections_mod.by_name(name)
-    if c is None:
+    if c is None or (collections_mod.hidden_here(c) and not collections_mod.is_private(c)):
         raise LocalAgiError(404, "NOT_FOUND", f"no collection {name!r}")
     k = max(1, min(int(body.max_results or 5), 100))
     try:

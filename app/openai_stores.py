@@ -88,7 +88,10 @@ def _depositor(request: Request) -> bool:
 def _store(request: Request, store_id: str, *, write: bool = False):
     c = collections_mod.by_name(store_id)
     private = c is not None and collections_mod.is_private(c)
-    if c is None or (private and not _depositor(request)) or collections_mod.is_annotations(c):
+    # a HIDDEN one (07 §7.8 `hidden`) is the store nothing holds to a viewer
+    # who is not an admin — the depositor included
+    if c is None or (private and not _depositor(request)) or collections_mod.is_annotations(c) \
+            or (collections_mod.hidden_here(c) and not private):
         raise OpenAIError(404, f"No vector store found with id '{store_id}'.", code="not_found")
     if write:
         if not _depositor(request):
@@ -237,8 +240,9 @@ async def list_stores(request: Request, limit: int = 20, order: str = "desc",
     def held():
         out = []
         for c in collections_mod.load_all():
-            if collections_mod.is_annotations(c):
-                continue
+            if collections_mod.is_annotations(c) or (collections_mod.hidden_here(c)
+                                                     and not collections_mod.is_private(c)):
+                continue                    # 07 §7.8 `hidden`: listed to an admin only
             if collections_mod.is_private(c):
                 if show_private:
                     out.append(store_object(c))

@@ -634,7 +634,8 @@ def _names() -> dict[str, str]:
     """collection_id -> the local name this node holds it under."""
     from app import collections as collections_mod
     out: dict[str, str] = {}
-    for c in collections_mod.load_all():
+    # never a collection hidden from the viewer being answered (07 §7.8 `hidden`)
+    for c in collections_mod.seen(collections_mod.load_all()):
         cid = getattr(getattr(c, "codex", None), "collection_id", None)
         if cid:
             out[cid] = c.name

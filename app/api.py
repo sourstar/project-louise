@@ -99,10 +99,29 @@ app.add_middleware(idle_trim.IdleClock)
 
 def _con():
     # one connection per request keeps things simple; SQLite WAL handles it
+    return db.connect(_collection())
+
+
+def _log_con():
+    """The default collection's manifest, where query_log lives, whoever asks."""
     return db.connect()
 
+
 def _collection():
-    return collections_mod.default_collection()
+    """The default collection (`collections.default_collection`), as the
+    viewer being answered may see it: to a reader who is not an admin, never
+    a hidden one (07 §7.8 `hidden`) nor a deposit one (07 §7.4) — the first
+    collection they may see instead; 404 where there is none."""
+    from fastapi import HTTPException
+    from . import viewing
+    c = collections_mod.default_collection()
+    if viewing.sees_all(viewing.current()) or not (collections_mod.is_private(c)
+                                                   or collections_mod.hidden_here(c)):
+        return c
+    shown = collections_mod.load_public()
+    if not shown:
+        raise HTTPException(404, "no collection is served here")
+    return shown[0]
 
 def _uid(book_id: int) -> str:
     return f"{_collection().plugin}:{book_id}"
@@ -299,9 +318,14 @@ def stats():
 def events(after: int = 0, limit: int = 60):
     con = _con()
     rows = []
+    # a line naming a collection hidden from this reader is not theirs to read
+    # (07 §7.8 `hidden`): every log line names its collection
+    hidden = collections_mod.hidden_names_here()
     for r in con.execute(
             "SELECT * FROM events WHERE id>? ORDER BY id DESC LIMIT ?", (after, limit)):
         d = dict(r)
+        if hidden and any(n in str(d.get("message") or "") for n in hidden):
+            continue
         d["book_id"] = _display_id(d.pop("doc_uid", None))
         rows.append(d)
     return {"events": rows}
@@ -1054,7 +1078,7 @@ def _search_and_log(body: SearchBody) -> dict:
                          **({"annotations": body.annotations} if body.annotations is not None else {}),
                           verify=body.verify, rerank_depth=body.rerank_depth,
                           all_languages=body.all_languages, kind=body.kind)
-    con = _con()   # query_log lives in the default collection's manifest regardless
+    con = _log_con()   # query_log lives in the default collection's manifest regardless
     db.log_query(con, "search", body.query, body.mode, body.k, result["timings"],
                  len(result["hits"]), _source_qualified_ids(result["hits"]))
     return result
@@ -1512,7 +1536,7 @@ def kind_note(result: dict, lang: str | None = None) -> str:
 
 
 def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None):
-    con = _con()   # query_log lives in the default collection's manifest regardless
+    con = _log_con()   # query_log lives in the default collection's manifest regardless
     prompt = _fit_answer(body, query, result)
     reads = prompt.reads
     rid = f"chatcmpl-{uuid.uuid4().hex[:12]}"
@@ -1680,7 +1704,7 @@ def answer_parts(body: ChatBody, query: str, result: dict, t0: float, *,
     note and a warn line, where before it ended exactly like a whole one.
     Every answer gets one log line with its size and timing, so the next
     report has a measurement."""
-    con = con if con is not None else _con()
+    con = con if con is not None else _log_con()
     if prompt is None:
         prompt = _fit_answer(body, query, result)
     reads = prompt.reads

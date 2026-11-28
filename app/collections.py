@@ -879,16 +879,79 @@ def hidden_from(viewer, collection) -> bool:
     2026-11-28: "hides the collection to the non admin users")? Hidden to
     every viewer who is not an admin (`auth.admin`): a user, the depositor,
     a guest, and NOBODY (None) — a reader route that lost its viewer shows
-    less, never more."""
+    less, never more. The node's own processes (`viewing.OPERATOR`) see it."""
     if not getattr(collection, "hidden", False):
         return False
-    from . import auth
-    return not auth.admin(viewer)
+    from . import viewing
+    return not viewing.sees_all(viewer)
 
 
-def seen_by(viewer, collections) -> list:
-    """`collections` without those hidden from `viewer`."""
-    return [c for c in collections if not hidden_from(viewer, c)]
+def hidden_here(collection) -> bool:
+    """`hidden_from` the viewer of the request being answered (app/viewing.py)."""
+    from . import viewing
+    return hidden_from(viewing.current(), collection)
+
+
+def seen(collections) -> list:
+    """`collections` without those hidden from the viewer being answered."""
+    return [c for c in collections if not hidden_here(c)]
+
+
+def _held_files() -> list:
+    held: list = []
+    for load in (lambda: load_all(skip_unreadable=True)[0], load_annotations, load_locked):
+        try:
+            held.extend(load())
+        except Exception:   # noqa: BLE001 — a file that does not load names nothing
+            pass
+    return held
+
+
+def hidden_names_here() -> set[str]:
+    """The local names a reader route must not show to the viewer being
+    answered: every held collection whose file says `hidden` — served,
+    annotations or locked."""
+    from . import viewing
+    if viewing.sees_all(viewing.current()):
+        return set()
+    return {c.name for c in _held_files() if getattr(c, "hidden", False)}
+
+
+def closed_names_here() -> set[str]:
+    """What an OPEN reader route that reads the collections on disk
+    (`hold.collection.resolve`, `list_named`: the graph walk, facets, figures)
+    must not show the viewer being answered: the hidden ones (07 §7.8) and,
+    to anyone but the operator, a deposit collection (07 §7.4: never an open
+    route's, as `load_public` says)."""
+    from . import viewing
+    if viewing.current() is viewing.OPERATOR:
+        return set()
+    held = _held_files()
+    shut = {c.name for c in held if is_private(c)}
+    if not viewing.sees_all(viewing.current()):
+        shut |= {c.name for c in held if getattr(c, "hidden", False)}
+    return shut
+
+
+def resolve_seen(root: Path, ref: str):
+    """`hold.collection.resolve` (07 §7.7's four forms) for an open reader
+    route: a collection the viewer being answered may not see
+    (`closed_names_here`) is the one nothing holds — the same answer, so the
+    route never says it exists."""
+    from .hold import collection as col
+    from .hold.codex import CodexError
+    name, codex = col.resolve(root, ref)
+    if name in closed_names_here():
+        raise CodexError(f"no collection {ref!r} here")
+    return name, codex
+
+
+def listed_seen(root: Path) -> list:
+    """`hold.collection.list_named`, without what the viewer being answered
+    may not see (`closed_names_here`)."""
+    from .hold import collection as col
+    shut = closed_names_here()
+    return [(n, c) for n, c in col.list_named(root) if n not in shut]
 
 
 def locked_says(name: str) -> str:
@@ -1617,8 +1680,9 @@ def is_private(collection) -> bool:
 
 
 def load_public() -> list:
-    """Every collection an open route may name, list or search."""
-    return [c for c in load_all() if not is_private(c)]
+    """Every collection an open route may name, list or search — for the
+    viewer being answered: a hidden one only for an admin (`seen`)."""
+    return seen(c for c in load_all() if not is_private(c))
 
 
 def default_collection() -> Collection:
