@@ -263,9 +263,12 @@ def is_package(name: str) -> bool:
     return bool(_PACKAGE.search(name or ""))
 
 
-def unpack(files: dict[str, Any]) -> tuple[dict[str, bytes], dict[str, str]]:
+def unpack(files: dict[str, Any], read_whole=None) -> tuple[dict[str, bytes], dict[str, str]]:
     """The manifestation's files as the reader takes them: every item, and
-    each package's members in its place. The package stays HELD as the
+    each package's members in its place. `read_whole(name)`: the members
+    read whole, the rest their first bytes (default: the text members; the
+    judge of a unit's names, `is_wrapper` alone — review B3, 2026-11-28: a
+    body reaches 180 MB and `gaps` reads only heads). The package stays HELD as the
     origin served it (invariant 11: the unit is what Cellar gave, and
     records-vs-origin compares those bytes); only the reading opens it.
     Returns (the files to read, member → the package it came from).
@@ -286,6 +289,7 @@ def unpack(files: dict[str, Any]) -> tuple[dict[str, bytes], dict[str, str]]:
     # only what is read below leaves the disk, its central directory, its text
     # members and its figures' first bytes. The same checks, the same answers;
     # an I/O error of the file is an OSError, as reading it whole raised.
+    whole_one = read_whole or _read_whole
     magic = {n: _magic(b) for n, b in files.items() if is_package(n)}
     out = Members({n: (b if isinstance(b, bytes) else _whole(b)) for n, b in files.items()
                    if magic.get(n) != _ZIP_MAGIC})
@@ -302,12 +306,12 @@ def unpack(files: dict[str, Any]) -> tuple[dict[str, bytes], dict[str, str]]:
                 # 27 EUR-Lex5 packages refused "over 1 GiB" were TIFF figures,
                 # 1.09-9.77 GB, beside 59-942 KB of XML; the act's text was lost
                 # to a guard against what the reader never reads)
-                if sum(i.file_size for i in infos if _read_whole(i.filename)) > PACKAGE_MAX:
+                if sum(i.file_size for i in infos if whole_one(i.filename)) > PACKAGE_MAX:
                     raise FormexError(f"{name}: its text members are over {PACKAGE_MAX} bytes")
                 for i in infos:
                     if not _MEMBER_NAME.match(i.filename) or i.filename in (".", ".."):
                         raise FormexError(f"{name}: member {i.filename!r} is not a plain file name")
-                    if _read_whole(i.filename):
+                    if whole_one(i.filename):
                         got = z.read(i)            # its CRC-32 checked
                     else:
                         # a figure: its first bytes only, what the checks of a

@@ -774,7 +774,10 @@ def test_the_state_says_why_a_held_unit_is_not_whole(tmp_path, serial, monkeypat
     rec = json.loads((corpus / eurlex_dump.INCOMPLETE).read_text())
     rec["it"][FORMEX[0]] = {"held": [0, 0, 0], "in_force": "true", "lacks": [], "reform": True, "tried": None}
     (corpus / eurlex_dump.INCOMPLETE).write_text(json.dumps(rec))
-    monkeypatch.setattr(eurlex_dump, "held_not_its_name", lambda u, c: ["in each other's place: a.xml, b.xml"])
+    from app.plugins.eurlex import source as src
+    swap = ["in each other's place: a.xml, b.xml"]
+    monkeypatch.setattr(src, "unit_gaps", lambda *a: {"a.xml": ("another's: b.xml", swap),
+                                                       "b.xml": ("another's: a.xml", swap)})
     eurlex_dump.incomplete_due(corpus, {"it"})
     entry = eurlex_dump.incomplete(corpus)["it"][FORMEX[0]]
     assert entry["whole"] is False and entry["why"].startswith("not its name: in each other's place")

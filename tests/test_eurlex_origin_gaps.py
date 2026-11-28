@@ -137,3 +137,56 @@ def test_parser_5_still_refuses_files_in_each_other_s_place(tmp_path):
     (ref,) = SOURCE.discover(DiscoverState(corpus_root=tmp_path))
     with pytest.raises(UnindexableDocument, match="not the one its name says"):
         plugin_io.canonical_doc(SOURCE.at_parser_version(5), {"native_id": ref.native_id, "path": ref.locator})
+
+
+@pytest.mark.parametrize("shape", sorted(UNITS))
+def test_the_dump_build_s_ledger_agrees_too(tmp_path, shape):
+    """B4: `incomplete_due` judges a recorded unit by `judge_unit`, so the
+    ledger says whole exactly where the record states no gap."""
+    import json
+    unit = _unit(tmp_path, UNITS[shape]())
+    (tmp_path / eurlex_dump.INCOMPLETE).write_text(json.dumps(
+        {"it": {CELEX: {"in_force": "true", "reform": True}}}))
+    due = eurlex_dump.incomplete_due(tmp_path, {"it"})
+    entry = eurlex_dump.incomplete(tmp_path)["it"][CELEX]
+    judged = eurlex_dump.judge_unit(unit, "it", CELEX)
+    assert entry["whole"] == judged["whole"] and bool(due) == (not judged["whole"]), (shape, entry, judged)
+
+
+def test_the_judge_reads_a_large_body_by_its_head_only(tmp_path, monkeypatch):
+    """B3: bodies reach 180 MB (2026-11-19's OOM kills). The judge reads every
+    file but the wrapper by its first bytes, loose or in a package."""
+    from tests.test_eurlex_package import _package
+    big = _items(FX)[BODY] + b"<!--" + b"x" * (8 << 20) + b"-->"
+    loose = _unit(tmp_path / "loose", {**_items(FX), BODY: big, rdf.TREE_FILE: _scoped((FX / MTD).read_bytes())})
+    packed = _unit(tmp_path / "packed", {PKG: _package({**_items(FX), BODY: big}),
+                                         rdf.TREE_FILE: _scoped(_packaged_mtd())})
+    held = eurlex_dump.held_for_judging(src.unit_files(loose))
+    assert len(held[BODY]) == formex._HEAD_BYTES and held[WNAME] == _items(FX)[WNAME]
+    view, _ = formex.unpack(eurlex_dump.held_for_judging(src.unit_files(packed)), read_whole=formex.is_wrapper)
+    assert len(view[BODY]) == formex._HEAD_BYTES, "a package's body member: its head only"
+    for u in (loose, packed):
+        assert eurlex_dump.judge_unit(u, "it", CELEX)["whole"], u
+
+
+def test_the_dump_build_lands_a_unit_lacking_a_named_part_and_leaves_it_to_the_api(tmp_path, serial):
+    """B4 on the bulk path: the wrapper names an annex the dump does not hold.
+    Landed (its text is there), recorded, asked once, then degraded — never
+    "whole" in the ledger while its record states the annex absent."""
+    import json
+    import zipfile
+    from tests.test_eurlex_package import UUID
+    folder = tmp_path / "dump" / "datadump-it"
+    folder.mkdir(parents=True)
+    (folder / "datadump.json").write_text(json.dumps({"language": "it", "created": "2026-11-15T01:00:00+01:00"}))
+    with zipfile.ZipFile(folder / "LEG_IT_FMX.zip", "w") as z:
+        for n, b in _with_annexes(_annex(10), _annex(12), drop=A2).items():
+            z.writestr(f"{UUID}/fmx4/{n}", b)
+    with zipfile.ZipFile(folder / "LEG_MTD.zip", "w") as z:
+        z.writestr(f"{UUID}/tree_non_inferred.rdf", (FX / MTD).read_bytes())
+    corpus = tmp_path / "corpus"
+    got = eurlex_dump.build(tmp_path / "dump", corpus, ["it"], log=lambda m: None)["it"]
+    assert got["built"] == 1 and got["dump-lacks-a-part"] == 1, got
+    assert [c for _l, c, _f in eurlex_dump.incomplete_due(corpus, {"it"})] == [CELEX]
+    # (the fixture's tree lists neither annex, so the build lands neither)
+    assert {"part": A2, "why": "absent"} in _record(corpus).origin_gaps
