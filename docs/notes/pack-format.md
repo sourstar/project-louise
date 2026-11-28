@@ -490,6 +490,7 @@ verifier needs, so it is recorded here with its reason:
 | wikidata | the official **JSON entity dump** of the dated run, with its md5/sha1 sums | complete and checksummed; the Hugging Face corpus drops `snaktype`, statement ids, `datatype`, badges, `modified`, `lastrevid` (D1); the plugin's note, `app/plugins/wikidata/source.py` |
 | deposit | **the bytes as the client sent them**; a URL source's page as fetched | no other copy exists anywhere; the plugin's note, `app/plugins/deposit/source.py` |
 | embedded | the producer's **parquet shards** as published | the only rows its vectors attach to; the plugin's note, `app/plugins/embedded/source.py` |
+| met | each object's **API JSON** (`/public/collection/v1/objects/<id>`), kept whole, for every object, plus the **original image files** it names (`primaryImage`, `additionalImages`); the **Open Access CSV** fetched first as the bulk and held beside them | the JSON holds every CSV column and more (constituents as a list, structured measurements, the image URLs); the CSV alone would hold less and no image; the 600-px `primaryImageSmall` rendition is 30× smaller and not taken. `origin_hash` covers the JSON; each image is named by its sha256 (docs/notes/image-collections.md §10, §12); the plugin's note, `app/plugins/met/source.py` |
 
 Each registered plugin records its choice in its own `source.py`, under
 "THE ORIGIN FORM, and why", beside the plugin as invariant 11 asks;

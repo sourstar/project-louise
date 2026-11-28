@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config, vector_place
-from .plugins import (deposit, embedded, eurlex, gutenberg, legi, neuris, normattiva, pubmed,
+from .plugins import (deposit, embedded, eurlex, gutenberg, legi, met, neuris, normattiva, pubmed,
                       wikidata, wikipedia, wikisource)
 from .plugins.base import CorpusSource
 
@@ -29,6 +29,8 @@ PLUGIN_REGISTRY: dict[str, CorpusSource] = {
     "eurlex": eurlex.SOURCE,
     "gutenberg": gutenberg.SOURCE,
     "legi": legi.SOURCE,
+    # The Met's Open Access: metadata and images (docs/notes/image-collections.md)
+    "met": met.SOURCE,
     "neuris": neuris.SOURCE,
     "normattiva": normattiva.SOURCE,
     "pubmed": pubmed.SOURCE,
