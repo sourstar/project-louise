@@ -276,3 +276,11 @@ skips calibrating again.
 The `describes` annotations' space is proposed on the SAME encoder and form.
 Pros: one model on the card for both lists, and the merge (05 §5.6) compares
 like with like. Cons: none found. It is raised with the amendment's PR.
+
+## 14. The describer test: the 35B alone (operator, 2026-11-28)
+
+"Only the add on for mine": `mmproj-F16.gguf` is placed for the installed
+Qwen3.6-35B-A3B (München, a separate model entry). No other model is
+downloaded. The 100-image test (image-describer-survey.md) runs on the 35B
+alone, under SYCL and Vulkan, and measures seconds per image and whether a
+rerun is byte-identical, with one slot and at the planned concurrency.
