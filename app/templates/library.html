@@ -349,10 +349,15 @@
   <div>
     {# one badge per target: several at Codex version 9 (02 §2.10, amended 2026-10-20) #}
     {% for t in a.targets|default([a], true) %}
-    {% if t.target %}
+    {# WHAT THE CLAIMS APPLY TO (operator, 2026-11-28: an annotation "applies to
+       all sisters and daughters"; app/rage/family.py): the collection they were
+       made for first, then the rest of its family held here #}
+    {% if t.applies_to %}
+    <span class="badge lapis" data-applies-to title="made for collection_id {{ t.target_id }}; applies to its whole family held here — sisters and daughters. A claim about a record another version of it changed may not apply there">annotates: {{ t.applies_to|map('label_of')|join(' · ') }}</span>
+    {% elif t.target %}
     <span class="badge lapis" title="target collection_id {{ t.target_id }}">annotates: {{ label(t.target) }}</span>
     {% else %}
-    <span class="badge brass" title="{{ t.target_id }}">annotates a collection this node does not hold</span>
+    <span class="badge brass" title="{{ t.target_id }}">annotates a collection this node does not hold, nor any of its family</span>
     {% endif %}
     <span class="badge brass" title="the target snapshot the claims were checked against; a claim is attached to no answer read from an earlier one (02 §2.10)">from snapshot: {{ t.from_snapshot }}</span>
     {% endfor %}

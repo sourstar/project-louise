@@ -111,6 +111,8 @@ TEMPLATES.env.globals["site_title"] = site_title_mod.title
 # short title, unique on the node (app/display_names.py) — every page shows
 # it where it showed the local name, which stays the folders' and the CLI's
 TEMPLATES.env.globals["label"] = display_names.label
+#: the same, as a filter, for a list of keys (`names|map('label_of')`)
+TEMPLATES.env.filters["label_of"] = display_names.label
 # The node's four modes, their words and what each runs — the ONE table the
 # worker reads (app/node_state.py: MODE_RUNS), as template GLOBALS: a page
 # cannot be rendered without them, so a button cannot promise what the node
@@ -859,18 +861,37 @@ def ask_save_pdf(request: Request, body: AskPdf):
         "Content-Disposition": f'attachment; filename="{ask_pdf.filename(body.question, when)}"',
         "Cache-Control": "no-store"})
 
+def _applies_to(target_id: str, served: list, relatives: list | None = None) -> list[str]:
+    """The served collections an annotations target applies to — the one it
+    was made for first, then the rest of its family (app/rage/family.py,
+    operator 2026-11-28: "applies to all sisters and daughters") — by local
+    name; [] where no relative is served."""
+    from .ask.annotations import answers_for
+    from .rage import family
+    root = collections_mod.louise_root() / "collections"
+    relatives = family.held_collections() if relatives is None else relatives
+    own = [c.name for c in served if getattr(c.codex, "collection_id", None) == target_id]
+    rest = [c.name for c in served if c.name not in own
+            and target_id in answers_for(root, c.name, getattr(c.codex, "collection_id", None), relatives)]
+    return own + rest
+
+
 def _ask_annotations() -> list[dict]:
     """The annotations collections the Ask page offers as a choice (05 §5.3,
     amended 2026-10-19): each with the local name of the collection it
     annotates, so the chip can say what it is about. Never raises: a
     collection whose target this node does not hold is still listed."""
     from .hold.codex import targets_of
-    served = {getattr(c.codex, "collection_id", None): c.name for c in collections_mod.load_all()}
+    from .rage import family
+    served = collections_mod.load_all()
+    relatives = family.held_collections()
     out = []
     for a in collections_mod.load_annotations():
         targets = targets_of(a.codex)
-        names = [served.get(t.collection_id) for t in targets]
-        out.append({"name": a.name, "target": " + ".join(n for n in names if n) or None,
+        # every collection the claims apply to, its family included (app/rage/family.py)
+        names = [n for t in targets for n in _applies_to(t.collection_id, served, relatives)]
+        out.append({"name": a.name, "target": " + ".join(dict.fromkeys(names)) or None,
+                    "applies_to": list(dict.fromkeys(names)),
                     "from_snapshot": ", ".join(t.from_snapshot for t in targets),
                     "title": a.title or a.codex.descriptive.title})
     return out
@@ -3453,7 +3474,10 @@ def _annotations_shelf(collection, served: list) -> dict:
         "target_id": target.collection_id,
         "from_snapshot": target.from_snapshot,
         # every target (09 §9.3, amended 2026-10-20: a list at version 9)
-        "targets": [{"target": n, "target_id": t.collection_id, "from_snapshot": t.from_snapshot}
+        # what each target's claims APPLY to: the one they were made for and
+        # its family (app/rage/family.py), the card's badge (operator, 2026-11-28)
+        "targets": [{"target": n, "target_id": t.collection_id, "from_snapshot": t.from_snapshot,
+                     "applies_to": _applies_to(t.collection_id, served, relatives)}
                     for t, n in zip(targets, names)],
         "snapshot": snapshot_id,
         "claims": claims,
