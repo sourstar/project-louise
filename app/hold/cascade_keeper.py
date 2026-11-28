@@ -136,8 +136,9 @@ def _publish_newest(root: Path, name: str, codex) -> None:
     """A source's newest signed snapshot has its published marker: a stat,
     and the backfill where it has none."""
     from . import collection as col
-    if codex is None:
-        return
+    from app import collections as collections_mod
+    if codex is None or collections_mod.is_locked(name):
+        return                              # a LOCKED source: nothing written for it (07 §7.8 `locked`)
     pub = cascade.listing(col.shard_dir_of(root, name)).newest_signed
     if pub is not None and not cascade.published_path(root, name, pub).is_file():
         cascade.backfill(root, name, codex.collection_id, pub)
@@ -294,8 +295,11 @@ def _one(root: Path, a: str, decl, *, now: datetime, failed: dict, log, run, sto
     from . import snapshot as sn
     from .annotations import CLAIMS_FILE, AnnotationsError, update_snapshot_id
     from . import refit
+    from app import collections as collections_mod
     if refit.boot_refusal(root / a / "state"):
         return None                         # mid-refit: not run, as not served (app/hold/refit.py)
+    if collections_mod.is_locked(a):
+        return None                         # LOCKED (07 §7.8 `locked`): kept as it is, its method not re-run
     method = decl.methods.get(a)
     if method is None and not (root / a / "origin" / CLAIMS_FILE).is_file():
         return None                         # held from a peer: it takes its publisher's snapshots
@@ -380,8 +384,11 @@ def _one(root: Path, a: str, decl, *, now: datetime, failed: dict, log, run, sto
         if f["annotations"]:
             up = cascade.woken(root, s)
             if up is not None and up.get("state") in cascade.PENDING:
+                from app import collections as collections_mod
+                locked = (", and it is locked: nothing runs for it until it is unlocked"
+                          if collections_mod.is_locked(s) else "")
                 waits.append(f"waits for {s}, whose own update is {up.get('state')}"
-                             + (f" ({up['says']})" if up.get("says") else ""))
+                             + (f" ({up['says']})" if up.get("says") else "") + locked)
         why = cascade.update_in_flight(root, s, f["codex"], now=now)
         if why:
             waits.append(why)

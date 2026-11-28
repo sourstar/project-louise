@@ -540,8 +540,15 @@ def _clear_versions(manifest: Path, *, log: Callable[[str], None]) -> int:
 SISTER_EMPTIED = ("embed_queue", "verify_queue", "chunk_hashes", "chunk_verification", "bundles",
                   "bundle_evidence", "genesis_imports")
 #: and the control rows that speak of them: the gate's last verdict on the
-#: source's runs, what the share paths fetched and served, a publication
-SISTER_CONTROL = ("embed_gate", "share_fetch", "share_served", "torrent_published")
+#: source's runs, what the share paths fetched and served, a publication —
+#: and THE SOURCE'S PROGRESS: the Library's stored counts (`document_counts`,
+#: app/status.py STORED_KEY, shown while a cold page recounts) and its stage
+#: rate samples (`stage_rate`, STAGE_RATE_KEY, what the ETA is measured
+#: from). Kept, the sister's card said "embedded 79,866 / 79,866" on her
+#: first morning — the source's — and her ETA was its encoder's (operator,
+#: gutenberg-nemo, 2026-11-28: "reported as fully embedded in the gui")
+SISTER_CONTROL = ("embed_gate", "share_fetch", "share_served", "torrent_published",
+                  "document_counts", "stage_rate")
 SISTER_CONTROL_PREFIXES = ("publish:",)
 
 

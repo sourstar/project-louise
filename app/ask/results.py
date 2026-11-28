@@ -158,6 +158,10 @@ def result_of(collection, ctx: dict[str, Any], hit: dict[str, Any], rank: int, *
         out["origin_url"] = _origin_url(collection, hit) or hit.get("origin_url")
     else:
         out["text"] = hit.get("text")
+        if hit.get("around"):
+            # a literature search's first works, with what surrounds the passage
+            # (retrieval._attach_around): what the answer reads
+            out["around"] = hit["around"]
     if hit.get("editions"):
         # 05 §5.3 (amended 2026-10-09): the work's other editions, grouped
         # under its one hit (app/ask/works.py)

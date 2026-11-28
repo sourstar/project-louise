@@ -225,6 +225,7 @@ louise hold
               forget <collection> [--kinds …] [--yes] [--dry-run] [--here]  stop holding: remove this peer's copy and its state; --here when no worker runs
               unshare <collection>                                read no sister's text index any more: an empty index of its own, its fts marks reset, indexed again (its lock: `node pause` it first; 2026-11-27)
               rename <collection> <new-name> [--dry-run]               the same collection under another local name; nothing recomputed
+              lock <collection> | unlock <collection>                 kept as it is / served again: the file's `locked` (§7.8; added 2026-11-27)
               migrate <collection> [--apply]                           the 09 §9.3 fields a Codex predates added, each as null — collection_id moves; printed unless --apply
               update <collection> [--dry-run] [--retry]                (*amended 2026-11-17*, docs/notes/collection-updates.md) the update by cadence of a collection
                                                                        whose origin publishes dated runs and whose plugin declares how the origin says a run is
@@ -1007,7 +1008,7 @@ reader needs at the command line:
   controls and `--set` leave the same bytes (app/collection_file.py) —
   then applies it. The keys are the file's editable values, as `config
   show` names them: `embed` (`embed_mode` too: `off`, `on-demand`, `all`,
-  `p2p`), `share`, `title`, `slices`, `kinds`, `share_slices`,
+  `p2p`), `share`, `locked` (*added 2026-11-27*), `title`, `slices`, `kinds`, `share_slices`,
   `share_kinds` (comma-separated; `all` lifts a narrowing),
   `encoder.url`, `encoder.query_url`, `encoder.api`,
   `encoder.embed_model`, `encoder.query_model`, `reranker.url` (empty:
@@ -2598,7 +2599,9 @@ is the collection being held:
 codex  = "sha256:…"                            # the collection_id this name holds; shard/codex.json's inner hash must equal it (09 §9.3)
 title  = "PubMed"                              # optional: the name every page shows for this collection on this peer (Library, Ask,
                                                # System), never published; else the Codex's descriptive.title up to its first " — ".
-                                               # Names two collections would share get " · " + their collection_id's first 6 hex
+                                               # Names two collections would share get " · " + their ENCODER's name, in as few of
+                                               # its words as tell them apart ("Project Gutenberg · Nemotron", "· Qwen3"; operator
+                                               # 2026-11-28, A), and where two share the encoder too, " · " + their collection_id's first 6 hex
                                                # (app/display_names.py; operator 2026-11-13). The card's "rename…" writes it and moves
                                                # no folder: the local name stays the folders', the files' and the command line's, and
                                                # `hold` commands also take the shown name where it is unique
@@ -2629,6 +2632,16 @@ embed  = "on-demand"                           # off | on-demand | all | p2p: wh
                                                # all = every part itself ("all local"), p2p = the parts rendezvous gives this node,
                                                # published as it goes ("all p2p", 04 §4.5) — p2p needs share = true (below; 2026-10-19)
 share  = true
+locked = true                                  # optional (2026-11-27, operator: "It simply stays frozen as it is"): KEPT AS IT IS —
+                                               # not searched or shared, nothing fetched or processed for it, its models not
+                                               # loaded for it (another collection's use of them aside); it can only be renamed,
+                                               # exported or removed. Absent = false. The node refuses it as it refuses a file
+                                               # naming no encoder (§7.8 "Refusals"), and shows it on a Locked card with those
+                                               # three acts and its lock box; every other command naming it exits 2, and its
+                                               # file takes no other value but `title` until it is unlocked. Refused while a
+                                               # sister reads its text index (docs/notes/sister-shared-index.md): she is
+                                               # unshared, or locked, first. `hold collection lock|unlock`, `--set locked=…`
+                                               # (app/collection_lock.py, docs/notes/collection-lock.md)
 share_slices = ["year=1980-1984"]              # optional: serving narrowed to these slices (`share --slices`); absent = all held
 share_kinds  = ["records"]                     # optional: and these member kinds (`share --kinds`); terms, validation,
                                                # calibration and seals are served whatever it says (amended 2026-10-07)

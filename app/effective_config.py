@@ -193,5 +193,9 @@ def apply(name: str | None = None) -> dict[str, Any]:
     for c in sorted(annotations, key=lambda c: c.name):
         applied.append({"name": c.name, "annotations": True,
                         "method": getattr(c, "method", None), "picked_up": ANNOTATIONS_PICKUP})
+    locked = [n for n, why in refused if why == collections_mod.locked_says(n)]
     return {"applied": applied,
-            "refused": [{"name": n, "reason": why} for n, why in refused]}
+            # LOCKED (07 §7.8 `locked`): kept as it is, not a file to repair —
+            # so not among the refused, which `hold config apply` exits 1 for
+            "locked": locked,
+            "refused": [{"name": n, "reason": why} for n, why in refused if n not in locked]}

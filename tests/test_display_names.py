@@ -50,6 +50,43 @@ def test_sisters_that_share_a_name_are_told_apart_by_their_collection_id_whateve
     assert got == {"a": "PubMed · 3f2a1c", "b": "pubmed · 9b1e02"}
 
 
+def test_sisters_that_share_a_name_are_told_apart_by_their_encoder():
+    """Operator, 2026-11-28, choice A: "Project Gutenberg · a96778" and
+    "· 4048ce" were read one for the other — the one fully embedded for the
+    one just begun. A shared name is followed by its encoder, in the fewest
+    of its words that tell the sisters apart."""
+    g = "Project Gutenberg — public-domain books"
+    got = dn.labels([dn.Entry("gutenberg", H1, None, g, "Qwen3-Embedding-4B-Q4_K_M"),
+                     dn.Entry("gutenberg-nemo", H2, None, g,
+                              "nvidia/Nemotron-3-Embed-1B-BF16 (c0c9fea9; f16 GGUF, llama.cpp 3f8af15a)")])
+    assert got == {"gutenberg": "Project Gutenberg · Qwen3", "gutenberg-nemo": "Project Gutenberg · Nemotron"}
+    # one family, two sizes: as many words as tell them apart
+    got = dn.labels([dn.Entry("a", H1, None, g, "Qwen3-Embedding-4B"),
+                     dn.Entry("b", H2, None, g, "Qwen3-Embedding-8B")])
+    assert got == {"a": "Project Gutenberg · Qwen3-Embedding-4B", "b": "Project Gutenberg · Qwen3-Embedding-8B"}
+    # ONE encoder, another difference ("No, chunking may differ"): the encoder and the id's prefix
+    got = dn.labels([dn.Entry("a", H1, None, g, "Qwen3-Embedding-4B"),
+                     dn.Entry("b", H2, None, g, "Qwen3-Embedding-4B"),
+                     dn.Entry("c", H3, None, g, "nvidia/Nemotron-3-Embed-1B")])
+    assert got == {"a": "Project Gutenberg · Qwen3 · 3f2a1c", "b": "Project Gutenberg · Qwen3 · 9b1e02",
+                   "c": "Project Gutenberg · Nemotron"}
+    # no encoder named (an annotations collection): the id's prefix, as before
+    got = dn.labels([dn.Entry("a", H1, None, g), dn.Entry("b", H2, None, g, "MedCPT-Article-Encoder")])
+    assert got == {"a": "Project Gutenberg · 3f2a1c", "b": "Project Gutenberg · MedCPT"}
+    # an unshared name has no postfix whatever its encoder
+    assert dn.labels([dn.Entry("a", H1, None, g, "Qwen3-Embedding-4B")]) == {"a": "Project Gutenberg"}
+
+
+def test_the_encoder_is_read_from_the_codex():
+    import types
+    c = types.SimpleNamespace(name="g", title=None, codex=types.SimpleNamespace(
+        collection_id=H1, descriptive=types.SimpleNamespace(title="T"),
+        space=types.SimpleNamespace(encoder=types.SimpleNamespace(label="nvidia/Nemotron-3 (x)"))))
+    assert dn.entry_of(c).encoder == "nvidia/Nemotron-3 (x)"
+    assert dn.encoder_words("nvidia/Nemotron-3-Embed-1B-BF16 (c0c9fea9; f16)") == \
+        ["Nemotron", "3", "Embed", "1B", "BF16"]
+
+
 def test_names_stay_unique_whatever_the_titles_say():
     """A title written like another's postfixed name: the keys tell them apart."""
     got = dn.labels([E("a", H1, None, "X"), E("b", H2, None, "X"), E("c", H3, "X · 3f2a1c", None)])

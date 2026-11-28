@@ -359,22 +359,38 @@ def _sample_write(con, key: str, payload: str) -> None:
             pass
 
 
-def _collection_or_404(name: str) -> collections_mod.Collection:
+def _not_served(name: str) -> HTTPException:
+    """No served collection is `name`: a 404 — or a 409 saying it is LOCKED
+    and what a locked collection allows (07 §7.8 `locked`, RULE 2)."""
+    if collections_mod.locked_by_name(name) is not None:
+        from . import collection_lock
+        return HTTPException(409, collection_lock.refusal(name, "worked on") or f"{name} is locked")
+    return HTTPException(404, f"no such collection: {name!r}")
+
+
+def _collection_or_404(name: str, *, locked_ok: bool = False) -> collections_mod.Collection:
+    """A collection the worker runs. `locked_ok`: a LOCKED one too — for the
+    three acts it allows (rename, export, remove; operator, 2026-11-27)."""
     c = collections_mod.by_name(name)
+    if c is None and locked_ok:
+        c = collections_mod.locked_by_name(name)
     if c is None:
-        raise HTTPException(404, f"no such collection: {name!r}")
+        raise _not_served(name)
     return c
 
 
-def _held_or_404(name: str) -> collections_mod.Collection:
+def _held_or_404(name: str, *, locked_ok: bool = False) -> collections_mod.Collection:
     """A collection the node HOLDS — one the worker runs, or an annotations
     collection (02 §2.10), which `load_all` leaves out because it is never
-    ingested or embedded. For the controls both have: sharing, removal."""
+    ingested or embedded. For the controls both have: sharing, removal.
+    `locked_ok`: a LOCKED one too, for rename, export, remove and its lock."""
     c = collections_mod.by_name(name)
     if c is None:
         c = next((a for a in collections_mod.load_annotations() if a.name == name), None)
+    if c is None and locked_ok:
+        c = collections_mod.locked_by_name(name)
     if c is None:
-        raise HTTPException(404, f"no such collection: {name!r}")
+        raise _not_served(name)
     return c
 
 
@@ -3095,6 +3111,14 @@ def _collection_shelf(collection: collections_mod.Collection,
         has_extras = bool(getattr(collection, "extras", ())) or (xc["total"] or 0) > 0
         louise_total = max(remote_total, fc["total"] or 0)
         extra_total = max(extra_remote_total, xc["total"] or 0)
+        # THE DOCUMENTS' TOTAL NEVER UNDER WHAT IS HELD, as the files' is not:
+        # a pass that lists only the units due (EUR-Lex's inventory against
+        # what is held) records ITS listing — one unit due, "docs_total": 1 —
+        # and the card read "232,435 / 1" (operator, 2026-11-28: "fetch is
+        # inconsistent"). The ledger's own count is the floor.
+        if docs_total is not None or docs_done is not None:
+            ledger_docs = (fc["total"] or 0) if spec.layout == "one-file-per-doc" else (docs_done or 0)
+            docs_total = max(int(docs_total or 0), ledger_docs, docs_done or 0)
         # The label's third state: no pass running AND every listed file
         # (Louise and, when opted in, extras) has landed. `complete` is
         # judged against the honest denominators — the origin's recorded
@@ -3711,10 +3735,18 @@ def library_page(request: Request):
     # RULE 2: a collection held but not served — its file names no encoder
     # this node runs, or another refusal — is shown HERE with the reason in
     # plain words, where the operator looks, not only on the System page
-    refused = [{"name": r.name, "reason": r.reason} for r in [*collections_mod.refusals(), *left_out]]
+    # LOCKED (07 §7.8 `locked`): on their own cards, with the three acts a
+    # locked collection allows — not among the collections waiting for a cause
+    locked = [{"name": c.name, "source": c.source, "reason": collections_mod.locked_says(c.name),
+               "annotations": collections_mod.is_annotations(c)}
+              for c in collections_mod.load_locked()]
+    locked_names = {x["name"] for x in locked}
+    refused = [{"name": r.name, "reason": r.reason} for r in [*collections_mod.refusals(), *left_out]
+               if r.name not in locked_names]
     return TEMPLATES.TemplateResponse(request, "library.html", {
         "active": "library",
         "refused": refused,
+        "locked": locked,
         "shelves": shelves,
         "annotations": annotations,
         "offered": offered,
@@ -3996,8 +4028,9 @@ def collection_remove(name: str, body: "RemoveBody | None" = None):
       retires the collection's threads first — removes this node's copy and
       its state (app/hold/forget.py), so the collection can be taken again
       under any name. Its bytes are the peers' to serve again. A node whose
-      worker is not running is told the command to run by hand."""
-    collection = _held_or_404(name)
+      worker is not running is told the command to run by hand.
+    A LOCKED collection is removed all the same (07 §7.8 `locked`)."""
+    collection = _held_or_404(name, locked_ok=True)
     mode = (body.mode if body is not None and body.mode else None) or (
         "forget" if getattr(collection, "source", "origin") == "shard" else "retire")
     if mode not in ("retire", "forget"):
@@ -4233,7 +4266,7 @@ def collection_title(name: str, body: TitleBody):
     page shows, written as the collection file's `title` through its one
     writer — no folder, path, manifest or cache is touched, and the key stays
     the local name. Empty: the Codex's name again (app/display_names.py)."""
-    _held_or_404(name)
+    _held_or_404(name, locked_ok=True)
     title = (body.title or "").strip()
     if "\n" in title or "\r" in title:
         raise HTTPException(400, "a name is one line")
@@ -4312,6 +4345,32 @@ def collection_share(name: str, body: ShareBody):
         pass
     return {"ok": True, "share": body.share, "embed_mode": embed_mode, "embed_mode_changed": changed_mode,
             "persisted": True, "applied_now": applied_now}
+
+
+class LockBody(BaseModel):
+    locked: bool
+
+
+@admin_router.post("/library/{name}/lock")
+def collection_lock_box(name: str, body: LockBody):
+    """The card's lock box (operator, 2026-11-27; 07 §7.8 `locked`): kept as
+    it is — not searched or shared, nothing fetched or processed, its models
+    not loaded for it; only renamed, exported or removed. Written to the
+    collection's file as `hold collection lock|unlock` writes it
+    (app/collection_lock.py); the worker lets it go, or takes it back, at its
+    next round. 400 with the reason where the lock is refused."""
+    from . import collection_lock
+    _held_or_404(name, locked_ok=True)
+    try:
+        out = collection_lock.lock(name) if body.locked else collection_lock.unlock(name)
+    except collection_lock.LockRefused as e:
+        raise HTTPException(400, str(e)) from None
+    display_names.invalidate()
+    try:
+        node_state.request_digest()       # 04 §4.5: what this node serves changed
+    except Exception:   # noqa: BLE001
+        pass
+    return {"ok": True, "persisted": True, **out}
 
 
 _p2p_cache: dict[str, tuple[float, dict | None]] = {}
@@ -4474,7 +4533,7 @@ def collection_bundle_export(name: str, body: BundleExportBody):
     from fastapi.responses import JSONResponse
     from . import jobs
     from .bundles import export as bundle_export
-    collection = _collection_or_404(name)
+    collection = _collection_or_404(name, locked_ok=True)
     # invariant 9, "not exchanged": the download is a signed, shareable bundle
     _refuse_withheld(collection, "its vectors are exported as a bundle")
     con = db.connect(collection)
@@ -4498,7 +4557,7 @@ def collection_bundle_download(name: str, job_id: int):
     only if it lies in this collection's export workspace."""
     from . import jobs
     from .bundles import export as bundle_export
-    collection = _collection_or_404(name)
+    collection = _collection_or_404(name, locked_ok=True)
     job = jobs.get(job_id)
     if job is None or job.kind != jobs.EXPORT or job.args.get("collection") != name:
         raise HTTPException(404, f"no export job {job_id} for {name}")

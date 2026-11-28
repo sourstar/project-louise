@@ -1491,7 +1491,8 @@ def _sister_ready(root, old):
     con.execute("INSERT INTO chunk_verification(chunk_id, uid, state) VALUES(?, ?, 'imported')",
                 (first + "#0", first))
     con.execute("INSERT INTO control(key, value) VALUES('embed_gate', '{}'), ('publish:x', '1'), "
-                "('slice_scope', 'kept')")
+                "('slice_scope', 'kept'), ('document_counts', '{\"counts\": {\"embed_done\": 9}, \"at\": 1}'), "
+                "('stage_rate', '{}')")
     con.commit()
     con.close()
     (root / "old" / "index").mkdir(parents=True, exist_ok=True)
@@ -1525,6 +1526,8 @@ def test_a_sister_copies_the_manifest_and_index_and_says_none_of_its_vectors_hel
             assert con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] == 0, t
         keys = {k for (k,) in con.execute("SELECT key FROM control")}
         assert "embed_gate" not in keys and "publish:x" not in keys and "slice_scope" in keys
+        # the source's progress is not hers: her card recounts, her ETA is measured afresh
+        assert "document_counts" not in keys and "stage_rate" not in keys
         assert con.execute("SELECT space_id, dim FROM space").fetchone() == (bge.space_id, 1024)
     finally:
         con.close()

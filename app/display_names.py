@@ -21,13 +21,18 @@ A collection has two names:
        "Normattiva");
     3. else the key.
   Where two collections held here would show the same name (compared
-  without case), each is followed by " · " and the first `POSTFIX_HEX`
-  hexadecimal characters of its collection_id, more where those agree. The
-  postfix tells sisters apart whatever differs between them — encoder,
-  chunking, layers, slices — and a collection keeps it while its name is
-  shared: a third sister never changes the others'. The card's badges say
-  WHAT differs; the operator's own title replaces the postfix wherever words
-  are wanted, since a unique title needs none.
+  without case), each is followed by " · " and ITS ENCODER'S NAME (operator,
+  2026-11-28, choice A: "Project Gutenberg · a96778" and "· 4048ce" were read
+  one for the other, the one fully embedded for the one just begun): the
+  Codex's `space.encoder.label`, its organisation and its parenthesis left
+  out, in as few of its words as tell the sisters apart — "Project Gutenberg
+  · Nemotron", "· Qwen3". Read from the Codex each time, so a refit's new
+  encoder renames it by itself. Sisters with ONE encoder differ by something
+  else (operator, 2026-11-13: "No, chunking may differ"), so theirs is
+  followed by " · " and the first `POSTFIX_HEX` hexadecimal characters of its
+  collection_id, more where those agree; so is a collection whose Codex names
+  no encoder. The operator's own title replaces the postfix wherever other
+  words are wanted, since a unique title needs none.
 
 STANDARD NOT ADOPTED, written down (CLAUDE.md): this is the label/identifier
 split of every catalogue (a DOI and its title; a Kubernetes object's `name`
@@ -38,6 +43,7 @@ collection_id.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from collections import defaultdict
@@ -60,6 +66,17 @@ class Entry(NamedTuple):
     collection_id: str | None      # "sha256:<hex>", or None (no Codex)
     file_title: str | None         # the collection file's `title`
     codex_title: str | None        # the Codex's descriptive.title
+    encoder: str | None = None     # the Codex's space.encoder.label
+
+
+def encoder_words(label: str | None) -> list[str]:
+    """The words of an encoder's label that name it: without its parenthesis
+    and its organisation — "nvidia/Nemotron-3-Embed-1B-BF16 (c0c9fea9; …)" is
+    ["Nemotron", "3", "Embed", "1B", "BF16"]."""
+    if not label:
+        return []
+    name = label.split("(", 1)[0].strip().rsplit("/", 1)[-1]
+    return [w for w in re.split(r"[-_\s]+", name) if w]
 
 
 def short_title(codex_title: str | None) -> str:
@@ -91,12 +108,8 @@ def labels(entries: Iterable[Entry]) -> dict[str, str]:
         if len(members) == 1:
             out[members[0].key] = base_name(members[0])
             continue
-        n = POSTFIX_HEX
-        longest = max(len(_hex(e)) for e in members)
-        while n < longest and len({_hex(e)[:n] for e in members}) < len(members):
-            n += 1
-        for e in members:
-            out[e.key] = f"{base_name(e)}{POSTFIX_SEPARATOR}{_hex(e)[:n]}"
+        for e, postfix in _postfixes(members).items():
+            out[e.key] = f"{base_name(e)}{POSTFIX_SEPARATOR}{postfix}"
     # a title that happens to read like another's postfixed name: the key
     # tells them apart, so the names stay unique whatever the titles say
     seen: dict[str, list[str]] = defaultdict(list)
@@ -109,10 +122,48 @@ def labels(entries: Iterable[Entry]) -> dict[str, str]:
     return out
 
 
+def _hex_postfixes(members: list[Entry]) -> dict[Entry, str]:
+    """Each member's collection_id, at its shortest distinguishing prefix,
+    `POSTFIX_HEX` at least (Git's abbreviated object names)."""
+    n = POSTFIX_HEX
+    longest = max(len(_hex(e)) for e in members)
+    while n < longest and len({_hex(e)[:n] for e in members}) < len(members):
+        n += 1
+    return {e: _hex(e)[:n] for e in members}
+
+
+def _postfixes(members: list[Entry]) -> dict[Entry, str]:
+    """What follows a shared name: each member's encoder, in the fewest of its
+    words that no member with ANOTHER encoder shares; where members share an
+    encoder, that and their collection_id's prefix; with no encoder named,
+    the prefix alone."""
+    words = {e: [w.casefold() for w in encoder_words(e.encoder)] for e in members}
+    shown = {e: encoder_words(e.encoder) for e in members}
+    named = [e for e in members if words[e]]
+    out: dict[Entry, str] = {}
+    for e in named:
+        others = [o for o in named if o is not e and words[o] != words[e]]
+        n = next((n for n in range(1, len(words[e]) + 1)
+                  if not any(words[o][:n] == words[e][:n] for o in others)), len(words[e]))
+        out[e] = "-".join(shown[e][:n])
+    alike: dict[tuple, list[Entry]] = defaultdict(list)
+    for e in named:
+        alike[tuple(words[e])].append(e)
+    for group in alike.values():
+        if len(group) > 1:
+            for e, hx in _hex_postfixes(group).items():
+                out[e] = f"{out[e]}{POSTFIX_SEPARATOR}{hx}"
+    unnamed = [e for e in members if not words[e]]
+    if unnamed:
+        out.update(_hex_postfixes(unnamed))
+    return out
+
+
 def entry_of(collection) -> Entry:
     codex = getattr(collection, "codex", None)
+    encoder = getattr(getattr(getattr(codex, "space", None), "encoder", None), "label", None)
     return Entry(collection.name, getattr(codex, "collection_id", None), getattr(collection, "title", None),
-                 getattr(getattr(codex, "descriptive", None), "title", None))
+                 getattr(getattr(codex, "descriptive", None), "title", None), encoder or None)
 
 
 def resolve(name: str, entries: Iterable[Entry]) -> list[str]:
@@ -149,7 +200,10 @@ def held() -> dict[str, str]:
             return _cache[2]
     try:
         served, _ = collections_mod.load_all(skip_unreadable=True)
-        found = labels([entry_of(c) for c in [*served, *collections_mod.load_annotations()]])
+        # a LOCKED collection keeps its name on its card (07 §7.8 `locked`), and
+        # takes part in the postfix rule, so locking one renames no other
+        found = labels([entry_of(c) for c in [*served, *collections_mod.load_annotations(),
+                                              *collections_mod.load_locked()]])
     except Exception:  # noqa: BLE001 — names are a courtesy; a key is always right
         found = {}
     with _lock:

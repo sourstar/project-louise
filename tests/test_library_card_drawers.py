@@ -146,10 +146,14 @@ def test_every_card_has_a_closed_details_and_a_closed_options_line(client):
 def test_embed_mode_and_share_stay_in_sight_and_every_button_is_under_options(client):
     card = _cards(client.get("/admin/library").text)["gutenberg"]
     select = [c for c in card["controls"] if c["tag"] == "select"]
-    share = [c for c in card["controls"] if c["tag"] == "input" and c["attrs"].get("type") == "checkbox"]
+    boxes = [c for c in card["controls"] if c["tag"] == "input" and c["attrs"].get("type") == "checkbox"]
+    share = [c for c in boxes if "setShare(" in c["attrs"]["onchange"]]
+    # the lock box beside it (operator, 2026-11-27: "a "lock" checkbox per collection")
+    lock = [c for c in boxes if "setLocked(" in c["attrs"]["onchange"]]
     assert len(select) == 1 and "setEmbedMode(" in select[0]["attrs"]["onchange"]
-    assert len(share) == 1 and "setShare(" in share[0]["attrs"]["onchange"]
-    assert select[0]["drawer"] is None and share[0]["drawer"] is None, "the two controls stay in sight"
+    assert len(share) == 1 and len(lock) == 1 and len(boxes) == 2
+    assert select[0]["drawer"] is None and share[0]["drawer"] is None and lock[0]["drawer"] is None, \
+        "the controls stay in sight"
     buttons = _buttons(card)
     assert {"grow profile…", "clear errors & retry…", "reprocess lexical index…", "rescan…",
             "export bundle", "import bundle…", "remove…"} <= set(buttons)
@@ -364,7 +368,9 @@ def test_an_annotations_card_has_the_same_two_lines(client, monkeypatch):
     assert [(d["drawer"], d["summary"].strip(), d["open"]) for d in card["drawers"]] == [
         ("details", "Details", False), ("options", "Options", False)]
     share = [c for c in card["controls"] if c["attrs"].get("type") == "checkbox"]
-    assert len(share) == 1 and share[0]["drawer"] is None
+    # its share box and its lock box (operator, 2026-11-27), both in sight
+    assert len(share) == 2 and all(c["drawer"] is None for c in share)
+    assert sorted(c["attrs"]["onchange"].split("(")[0] for c in share) == ["setLocked", "setShare"]
     others = [c for c in card["controls"] if c not in share]
     assert others and all(c["drawer"] == "options" for c in others), others
     assert _buttons(card)["remove…"]["attrs"]["onclick"] == "removeCollection('pubmed-same-work', 'shard')"

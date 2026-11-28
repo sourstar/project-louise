@@ -1626,6 +1626,10 @@ def search(con, query: str, k: int = 12, mode: str = "hybrid",
     # enqueues nothing.
     cancel.checkpoint()
     _attach_metadata_and_enqueue(con, collection, final)
+    if kind == "literature":
+        t_around = time.time()
+        _attach_around(con, collection, final[:AROUND_HITS])
+        timings["around"] = round((time.time() - t_around) * 1000, 1)
 
     timings["total"] = round((time.time() - t_total) * 1000, 1)
     result = {"query": query, "mode": mode, "translations": partial["translations"],
@@ -1763,6 +1767,61 @@ def _federated_want(n: int, k: int, rerank_depth: int) -> int:
     federation's cut (more than one collection), then the rerank's slice."""
     want = max(k * 4, rerank_depth)
     return min(want, max(config.FEDERATION_CANDIDATE_BUDGET, rerank_depth)) if n > 1 else want
+
+
+#: a literature search's first works, read with what surrounds their passage
+AROUND_HITS = 3
+#: the passages each side of the best one
+AROUND_EACH_SIDE = 1
+#: what the answer is given of a passage read with its neighbours
+AROUND_CHARS = 5400
+
+
+def result_kind_is_literature(kind) -> bool:
+    return _kind_now(kind)[0] == "literature"
+
+
+def _attach_around(con, collection, hits: list[dict]) -> None:
+    """A WORK ASKED ABOUT IS READ, NOT GLIMPSED (the 9B's judged set,
+    2026-11-28: "Che cosa dice Il cinque maggio di Manzoni" was answered
+    from ONE chunk of the ode — a few pages inside "Le tragedie, gl'inni
+    sacri e le odi" — and missed "Fu vera gloria?" and the closing, and
+    gave the poet's "servo encomio / codardo oltraggio" to Napoleon). In a
+    literature search the first AROUND_HITS hits carry `around`: their
+    passage with the AROUND_EACH_SIDE passages before and after it, in the
+    book's order. The neighbours are the record's OWN chunks — the ids
+    `<uid>:<seq±n>:<version>` its layer gave them (app/chunking.py), read
+    from the text index by id (`fts.chunks_by_id`), one lookup for all the
+    hits: re-reading and re-cutting the record measured 300 ms warm and
+    770 ms cold a hit on the live node (architecture's read of 0536b5da, 2;
+    München, 2026-11-28). The answer reads `around`; the hit, its passage
+    and its citation are unchanged. A neighbour the index lacks is left
+    out; none found leaves the passage alone; never a failed search."""
+    want: dict[int, list[str]] = {}
+    for n, h in enumerate(hits[:AROUND_HITS]):
+        cid = str(h.get("chunk_id") or "")
+        parts = cid.rsplit(":", 2)
+        if len(parts) != 3 or not parts[1].isdecimal() or not h.get("text"):
+            continue
+        seq = int(parts[1])
+        want[n] = [f"{parts[0]}:{s}:{parts[2]}" for s in range(seq - AROUND_EACH_SIDE, seq + AROUND_EACH_SIDE + 1)
+                   if s >= 0]
+    if not want:
+        return
+    cancel.checkpoint()
+    try:
+        own = {str(h.get("chunk_id")) for h in hits[:AROUND_HITS]}
+        got = fts.chunks_by_id(collection, [c for ids in want.values() for c in ids if c not in own])
+    except Exception:   # noqa: BLE001 — the passages alone, as before
+        return
+    # a neighbour that is itself one of the hits: its own passage
+    mine = {str(x.get("chunk_id")): x.get("text") for x in hits[:AROUND_HITS] if x.get("text")}
+    for n, ids in want.items():
+        h = hits[n]
+        texts = [mine.get(c) or got.get(c) for c in ids]
+        texts = [t for t in texts if t]
+        if len(texts) > 1:
+            h["around"] = "\n\n".join(texts)
 
 
 def _merge_rrf_federated(lists: list[list[dict]]) -> list[dict]:
@@ -2003,10 +2062,19 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
     # This WRITES (the lazy-embed queue): nothing is enqueued for a search
     # nobody is waiting for.
     cancel.checkpoint()
+    # THE FIRST THREE OF THE WHOLE LIST read around, never each collection's
+    # first three (architecture's read of 0536b5da, 1)
+    first = {id(h) for h in final[:AROUND_HITS]} if result_kind_is_literature(kind) else set()
+    around_ms = 0.0
     for name, hits in by_collection.items():
         collection = collection_by_name[name]
         con = cancel.watch(db.connect(collection))
         _attach_metadata_and_enqueue(con, collection, hits)
+        mine = [h for h in hits if id(h) in first]
+        if mine:
+            t_around = time.time()
+            _attach_around(con, collection, mine)
+            around_ms += (time.time() - t_around) * 1000
 
     timings = {
         "languages": plan_ms,
@@ -2014,6 +2082,7 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
         "fts": max((t.get("fts", 0.0) for t in timings_per_collection.values()), default=0.0),
         "dense": max((t.get("dense", 0.0) for t in timings_per_collection.values()), default=0.0),
         "rerank": rerank_ms,
+        **({"around": round(around_ms, 1)} if first else {}),
         "per_collection": timings_per_collection,
         # what each list's rerank was made of (`_rerank_parts`); lists that
         # share a reranker ran one after the other (`_rerank_lists`)
@@ -2418,7 +2487,10 @@ def build_answer_messages(query: str, result: dict, answer_lang: str | None = No
         if h.get("chapter"):
             loc += f" {h['chapter']}"
         head = f"[{i}] {loc} — {h.get('title','?')} — {h.get('authors','?')} ({h.get('lang','?')})" + _work_said(h)
-        blocks.append(head + (h.get("reading") or "") + "\n" + h["text"][:1800])
+        # a literature search's first works with what surrounds their passage
+        # (`_attach_around`), else the passage
+        body = h["around"][:AROUND_CHARS] if h.get("around") else h["text"][:1800]
+        blocks.append(head + (h.get("reading") or "") + "\n" + body)
     if result["catalog"]:
         cat = "\n".join(f"- {c['title']} — {c['authors']} (book #{c['book_id']})"
                         for c in result["catalog"][:8])
