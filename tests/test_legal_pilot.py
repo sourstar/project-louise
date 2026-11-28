@@ -484,3 +484,25 @@ def test_the_pool_s_chunks_are_counted_from_the_manifest():
     con.executemany("INSERT INTO documents VALUES (?,?)", [("normattiva:1", 10), ("normattiva:2", 5),
                                                            ("normattiva:3", 7)])
     assert lp.pool_chunks(con, [1, 2, 9], "normattiva") == 15
+
+
+def test_the_pool_is_a_recall_set_taken_without_the_reranker_unless_asked(built):
+    """Architecture, 2026-11-28: ~5 s a question reranked, ~70 min for the
+    Normattiva pool. A recall set needs the text leg's own top `depth`; the
+    pool's file says which way it was built."""
+    from app import collections as collections_mod
+    cov = lp.coverage(built, CORPUS, QUESTIONS)
+    gold = {int(k): lp.gold_from(v) for k, v in cov["gold"].items()}
+    seen = []
+
+    def text(q, *, collections, limit, as_of):
+        seen.append(collections_mod.reranker_for(built.collection))
+        return {"lists": [{"hits": [_hit(f"normattiva:{DEC_A_ID}", 0)]}]}
+    got = lp.pool(built, QUESTIONS, gold, depth=50, search_fn=text)
+    assert got["reranked"] is False and seen and all(r is None for r in seen), "no reranker during the pool"
+    seen.clear()
+    real = collections_mod.reranker_for(built.collection)
+    got = lp.pool(built, QUESTIONS, gold, depth=50, search_fn=text, rerank=True)
+    assert got["reranked"] is True and all(r == real for r in seen), "as before 2026-11-28"
+    got = lp.pool(built, QUESTIONS, gold, depth=50, search_fn=text, sample=1)
+    assert len(got["questions"]) == 1 and got["sample"] == 1
