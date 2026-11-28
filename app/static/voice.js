@@ -71,6 +71,10 @@
   // before it gives sound. What the wait cost is measured each time and goes
   // to the node with the recording's report (`wake_ms`, `first_ms`, `zero_ms`).
   const WAKE_MAX_MS = SILENT_MS;
+  // the phone's own microphone: ready after this much audio, zeros or not;
+  // a Bluetooth input is told by its label (the car's "Car hands-free")
+  const PHONE_WAKE_MS = 150;
+  const BLUETOOTH = /blue\s*tooth|\bbt\b|hands[- ]?free|\bcar\b|vehicle|\bsco\b|a2dp|airpods|buds/i;
   // a piece this short is read with the next (an "art." the segmenter cut off)
   const MIN_SENTENCE = 24;
   // A PIECE ENDING IN AN INITIAL OR A TITLE ends no sentence (operator,
@@ -189,7 +193,17 @@
     // the first window at all, and the first that is not all zeros: the
     // microphone's route is up, and the page says so (`wake`)
     if (r.first_ms === null) r.first_ms = Math.round(performance.now() - r.opened);
-    if (!r.live) { if (top > 0) { r.live = true; wake(r, 'sound'); } else r.zero_ms += ms; }
+    // THE PHONE'S OWN MICROPHONE IS LIVE AT ITS FIRST WINDOW (operator,
+    // 2026-11-28: "it doesn't turn red and it doesn't beep until the first
+    // sound is heard"): its noise suppression gives exact zeros until speech
+    // — zero_ms within 30-200 ms of wake_ms on every recording that day, and
+    // one that never woke — so waiting for a non-zero sample waited for the
+    // reader's voice. Only a Bluetooth route (a car's, a headset's call
+    // profile, ~5 s of zeros while it switches) waits for its first sound.
+    if (!r.live) {
+      if (top > 0 || (!r.bluetooth && r.ms + ms >= PHONE_WAKE_MS)) { r.live = true; wake(r, top > 0 ? 'sound' : 'route'); }
+      else r.zero_ms += ms;
+    }
     // the ready tone as the microphone hears it, on the AUDIO's own clock
     // (`r.ms`, where this window starts): neither speech nor the floor
     // The FLOOR still follows its minimum there: speech that starts inside
@@ -333,6 +347,8 @@
                 opened: performance.now(), first_ms: null, wake_ms: null, zero_ms: 0, live: false,
                 woke: null, shown: false, waking: null };
     const track = stream.getAudioTracks()[0];
+    // the route the browser gave: a Bluetooth one waits for its first sound
+    r.bluetooth = BLUETOOTH.test((track && track.label) || '');
     if (track) {
       track.addEventListener('mute', () => { r.mutes++; });
       track.addEventListener('ended', () => fail(r, 'ended', 'the microphone was taken away from the page — ' + CAR_HINT));
@@ -406,7 +422,7 @@
     // the ready tone says it without the screen, once the microphone is red —
     // and only for a microphone that gives sound: not after WAKE_MAX_MS of
     // nothing. The microphone hears it: its windows are not counted (`hear`)
-    if (how === 'sound' && readyTone()) r.deaf_end_ms = deafEnd(r);
+    if ((how === 'sound' || how === 'route') && readyTone()) r.deaf_end_ms = deafEnd(r);
   }
 
   // THE READY TONE (operator, 2026-11-26: "Send a gentle ping when the
