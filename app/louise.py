@@ -1534,8 +1534,8 @@ def _sister_new(a, say) -> int:
             print(f"  to carry    {src['documents'] if src['documents'] is not None else '?'} documents' "
                   f"manifest and the text index's catalogue, no vector ({her_sister_name} keeps its "
                   f"{src['vectors'] if src['vectors'] is not None else '?'}); her text index "
-                  + (f"shared with {her_sister_name}'s (one group, formed by rename: `louise node "
-                     f"stop` first), never copied or linked" if by_path else
+                  + (f"read from {her_sister_name}'s own index by path ({her_sister_name} stays its only "
+                     f"writer; nothing moved, copied or linked; the node may run)" if by_path else
                      f"COPIED: her index identity is not {her_sister_name}'s (or could not be read)"))
         print(f"  room        {recreate.human(need)} needed, {recreate.human(free)} free: "
               + ("enough" if free >= need else "SHORT, the carry refuses"))
@@ -1663,7 +1663,8 @@ def _sister_new(a, say) -> int:
                                 f"worker indexes every document with her own layer")
             else:
                 # her text index is her sister's, SHARED when their identities
-                # are equal (one group, formed by rename; never copied or
+                # are equal (the static share: she reads `<sister>/index` by
+                # path, her sister its only writer; never copied or
                 # hard-linked: operator, 2026-11-27); otherwise a copy of her
                 # own. The room counts everything she copies first — her
                 # SHARD's parts (her own copy, choice B), her index's
