@@ -30,6 +30,7 @@ import contextvars
 import json
 import re
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -1486,6 +1487,33 @@ def _attach_work_fields(con, collection, hits: list[dict], query: str) -> list[d
     return work_dedup.prefer_originals(hits, query=query)
 
 
+#: the last measured after-work of each collection's list (its works
+#: grouping, `works_ms`), by name: what `_rerank_lists` orders a reranker's
+#: turn by. Process-local, overwritten by each question; a collection not yet
+#: measured counts 0 and keeps its place
+_AFTER_MS: dict[str, float] = {}
+_AFTER_LOCK = threading.Lock()
+
+
+def note_after_ms(name: str, ms: float) -> None:
+    with _AFTER_LOCK:
+        _AFTER_MS[name] = float(ms)
+
+
+def _turn_order(idx: list[int], per_collection: list) -> list[int]:
+    """A reranker's lists, the LONGEST AFTER-WORK FIRST (München, 2026-11-28:
+    over 50 questions rerank was 20.6 s of 39.7 s at the median, the lists of
+    the one-slot reranker in turn, and wikipedia's works grouping 4.3 s of its
+    list — which, when its list came last, the question waited for with the
+    reranker idle). A list's after-work runs beside the NEXT list's rerank,
+    so the one whose after-work is longest goes first. Ties, and collections
+    not measured yet, keep their order (`sorted` is stable). The results are
+    each list's own: only when they are computed moves."""
+    with _AFTER_LOCK:
+        after = dict(_AFTER_MS)
+    return sorted(idx, key=lambda i: -after.get(getattr(per_collection[i][0], "name", ""), 0.0))
+
+
 def _rerank_lists(per_collection: list, rerank_one) -> list:
     """`rerank_one` over each (collection, list), in their order. LISTS THAT
     SHARE A RERANKER GO ONE AFTER THE OTHER, each with its whole budget from
@@ -1522,7 +1550,7 @@ def _rerank_lists(per_collection: list, rerank_one) -> list:
             ThreadPoolExecutor(max_workers=max(1, len(per_collection)), thread_name_prefix="works") as after:
         def rerank_in_turn(idx: list[int]) -> list:
             got = []
-            for i in idx:
+            for i in _turn_order(idx, per_collection):
                 cancel.checkpoint()         # the caller has gone: the next list's call is not made
                 step = rerank_one(per_collection[i])
                 got.append((i, after.submit(cancel.carry(step)) if callable(step) else step))
@@ -2031,6 +2059,7 @@ def federated_search(collections: list, query: str, k: int = 12, mode: str = "hy
             grouped = _one_hit_per_work(ranked, collection, plan, show_in, annotations, limit=k, timings=split)
             for key, v in _works_parts(t_works, split).items():
                 parts[key] = round(v, 1) if isinstance(v, float) else v
+            note_after_ms(collection.name, parts.get("works_ms", 0) or 0)
             # the list's own time: its rerank and its works, as the line has always said it
             parts["rerank"] = round(parts.get("rerank", 0) + parts["works_ms"], 1)
             rerank_parts[collection.name] = parts
