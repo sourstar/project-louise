@@ -696,3 +696,23 @@ def test_a_second_build_of_one_corpus_never_waits_and_says_who_holds_it(tmp_path
     eurlex_dump._LANGS.clear()
     eurlex_dump._MTDS.clear()
     assert eurlex_dump.build(dump, corpus, ["it"], log=lambda m: None)["it"]["held"] == 2, "released with it"
+
+
+def test_a_record_naming_no_package_lacked_is_judged_from_its_files_not_due_forever(tmp_path, serial, monkeypatch):  # noqa: F811
+    """2026-11-28, bg 32006R1828 on the node: a re-form record with `held` its
+    tree's identity and `lacks: []` (the build could not judge it), held whole
+    since 11-20, stayed due on every pass while the engine skipped it as
+    fetched — and the complete listing never had its turn."""
+    import json
+    from tests.test_eurlex_package import PKG, _package
+    corpus, unit = _reform_corpus(tmp_path)
+    (unit / PKG).write_bytes(_package())                          # held whole
+    rec = json.loads((corpus / eurlex_dump.INCOMPLETE).read_text())
+    rec["it"][FORMEX[0]] = {"held": eurlex_dump._sig(unit / rdf.TREE_FILE), "in_force": "true",
+                            "lacks": [], "reform": True, "tried": None}
+    (corpus / eurlex_dump.INCOMPLETE).write_text(json.dumps(rec))
+    read = _no_reads(monkeypatch)
+    assert eurlex_dump.incomplete_due(corpus, {"it"}) == [], "judged from its files: whole, not due"
+    assert read
+    read.clear()
+    assert eurlex_dump.incomplete_due(corpus, {"it"}) == [] and read == [], "judged once: a stat again"

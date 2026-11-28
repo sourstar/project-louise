@@ -582,8 +582,16 @@ def incomplete_due(corpus: Path, langs, *, now: float | None = None) -> list[tup
                 if not entry.get("reform"):
                     continue
                 held, lacks = entry.get("held"), entry.get("lacks")
-                if held is not None and isinstance(lacks, list) and held == sig \
+                # A RECORD THAT NAMES NO PACKAGE LACKED (`lacks: []`, the build
+                # could not judge it: 2026-11-28, bg 32006R1828, held whole
+                # since 11-20) proves nothing by a stat: it is judged from its
+                # files once, as a changed unit is. Before, it stayed due on
+                # every pass while the engine skipped it as fetched, and the
+                # complete listing never had its turn
+                if held is not None and isinstance(lacks, list) and lacks and held == sig \
                         and not any(os.path.isfile(f"{at}/{n}") for n in lacks):
+                    pass                    # as the build found it: still lacking, due
+                elif held is not None and held == sig and "whole" in entry:
                     if entry.get("whole"):
                         continue            # judged whole, unchanged since
                 else:
