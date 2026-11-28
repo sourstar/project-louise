@@ -109,5 +109,36 @@ Every row passes, both runs, with the same results:
 Before step 1 (after-35b-ec5bde3), napoleon-death, caesar and cinque-maggio
 were flagged in both runs.
 
-**Step 1 on the 9B:** owed. The 9B serves only embed mode, so it runs at the
-next embed mode. Step 1 is done when this row passes too.
+**Step 1 on the 9B** (München, live 02e4b78, embed mode from 15:18Z,
+louise-chat 9B, 2 runs at 15:20–15:25Z with the same answers;
+/root/measure/judged-work/framing/after-around.{log,jsonl}, after-around-backend.ndjson).
+It passes: none of the 6 fact and control questions cites a literary source,
+in either run. Step 1 is done on both chat models.
+
+cinque-maggio, with the answer reading the passages around the first three
+hits (`around`, main 0536b5da / 4c63dd78 / 3ad8e67b; 05 §5.6). Before it, the
+9B read one chunk of the ode: it gave "servo encomio / codardo oltraggio" to
+Napoleon, and missed the ode's ending. Now:
+
+| Bug's check | Before `around` | With `around` |
+|---|---|---|
+| "Fu vera gloria? … Ai posteri l'ardua sentenza" | missing | quoted |
+| the closing faith ("il Dio che atterra e suscita, che affanna e consola") | missing | quoted |
+| "servo encomio / codardo oltraggio" said of Napoleon | yes | gone |
+
+The answer still has two weak points:
+- "Napoleone si sia nominato" is a clumsy paraphrase of "Ei si nomò".
+- From source [3], De Amicis says the ode was suggested by his mother. That
+  is the source's claim, cited as such, and it is not verified.
+
+The cost, from the chat backend's own timings (all 27 calls):
+
+| | Prompt tokens | Prefill |
+|---|---|---|
+| cinque-maggio before `around` (warm) | 4,010 | 2,391 ms |
+| cinque-maggio with `around`, run 0 (cold) | 8,392 | 5,150 ms |
+| cinque-maggio with `around`, run 1 (warm) | 8,392 | 2,807 ms |
+| the fact questions (unchanged: `around` is literature only) | 3,5xx–3,8xx | 1.2–1.6 s |
+
+So the work read whole costs +4,382 tokens (×2.1) and +0.42 s of warm
+prefill on the 9B, for literature searches alone.
