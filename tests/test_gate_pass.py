@@ -232,9 +232,15 @@ def test_the_caller_is_not_held_for_the_measurement(sym):
     p, out = _in_thread(_settle(collection), timeout=3)
     held = time.monotonic() - t0
     try:
-        assert not p.is_alive() and n.measuring.is_set(), \
-            f"the caller was held for the measurement ({held:.1f} s and counting)"
-        assert out.get("value") is False and held < 5
+        # BY THE ORDER OF EVENTS, not a clock (München, 2026-11-28: under the
+        # staging run's load the caller was answered before the measuring
+        # thread reached its mark, and the old joint check failed): the
+        # caller is back, and the measurement runs on beside it — still held
+        # by its block, which only this test releases
+        assert not p.is_alive(), f"the caller was held for the measurement ({held:.1f} s and counting)"
+        assert out.get("value") is False
+        assert n.measuring.wait(10), "the measurement runs beside the answered caller"
+        assert not n.block[("gutenberg", "document")].is_set(), "and is still running"
         probes, events = len(n.probes), len(_events(collection))
         for _ in range(3):
             t, again = _in_thread(_settle(collection), timeout=10)
