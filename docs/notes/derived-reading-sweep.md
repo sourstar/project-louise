@@ -35,3 +35,15 @@ What still binds the annotations route is below.*
 
 Stale, outside the amendment: 09 §9.18 still says "record line | 2", while
 `record_line` 3 exists (09-formats.md:2512).
+
+**Binding on the annotations route** (Architecture, 2026-11-28, via München):
+- uids are `annotations:<n>`;
+- `origin_hash` is BLAKE2b-128 (the sha256 stays in the receipt);
+- `title` is `""` when there is none;
+- `origin` is a string locator naming the Met record and the figure's sha256;
+- the new annotations Codex version states the `>=` inheritance for
+  `exactness` and the document instruction.
+
+The build's scope is item 6: the validator, stage selection, the
+`copy_state` origin check and ask-time ranking, each with tests. The stale
+§9.18 row is fixed on main (#1012).
