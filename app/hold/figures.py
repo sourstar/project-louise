@@ -167,6 +167,66 @@ def write_container(path: Path, plates: Mapping[str, bytes]) -> ContainerInfo:
                                for h, data in ordered))
 
 
+class FrameSpool:
+    """A container's plates COMPRESSED AS THEY ARE READ, kept on disk until
+    the container is written in hash order (RAGE's plates, 2026-11-28:
+    EUR-Lex's acts hold up to ~10 GB of TIFFs each, its largest plate 565
+    MB). `write_container` takes every plate of a shard in memory at once;
+    this holds ONE plate at a time and writes exactly the same bytes — the
+    same codec, the same frames, the same order (`write_frames`).
+
+    `add` verifies each plate against its name before it is spooled, as
+    `write_container` does; a hash given twice is stored once.
+
+    STANDARD NOT ADOPTED, written down: a streamed zstd frame
+    (pyarrow `CompressedOutputStream`) would bound the memory to a buffer
+    rather than one plate, but its frames are not `write_container`'s bytes,
+    so a container would differ by how it was built. It pays if a plate ever
+    outgrows the web's and the pass's memory (08 §8.7's caps bound display,
+    not storage)."""
+
+    def __init__(self, directory: Path) -> None:
+        import tempfile
+        Path(directory).mkdir(parents=True, exist_ok=True)
+        self._file = tempfile.TemporaryFile(dir=directory)
+        self._at: dict[str, tuple[int, int, int]] = {}     # hash -> (raw length, offset, frame length)
+        self._codec = _codec()
+
+    def add(self, key: str, data: bytes) -> None:
+        want = bare(key)
+        if want in self._at:
+            return
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != want:
+            raise FigureError(
+                f"figure bytes hash to {actual[:12]}… but the record names "
+                f"{want[:12]}… — the plate and the record line disagree")
+        frame = self._codec.compress(data, asbytes=True)
+        offset = self._file.seek(0, 2)
+        self._file.write(frame)
+        self._at[want] = (len(data), offset, len(frame))
+
+    def __contains__(self, key: str) -> bool:
+        return bare(key) in self._at
+
+    def __len__(self) -> int:
+        return len(self._at)
+
+    def write(self, path: Path) -> ContainerInfo:
+        def frames():
+            for h in sorted(self._at):
+                length, offset, flen = self._at[h]
+                self._file.seek(offset)
+                yield h, length, self._file.read(flen)
+        try:
+            return write_frames(path, frames())
+        finally:
+            self._file.close()
+
+    def close(self) -> None:
+        self._file.close()
+
+
 def write_frames(path: Path, frames: Iterable[tuple[str, int, bytes]]) -> ContainerInfo:
     """Write a container from its plates' zstd frames, already compressed:
     `(hash hex, raw length, frame)` in hash order. `write_container`'s

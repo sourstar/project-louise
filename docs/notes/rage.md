@@ -21,6 +21,15 @@ testbench for all the collections and models to come"). It:
 - **measures** itself: the card's busy share, who held it, the gaps, the
   query-under-load harness.
 
+**The ingestion rule** (operator, 2026-11-26: "the RAGE ingestion API to be
+extended for image OCR and adding of text layer to pdf … This is
+architecture's call"; 2026-11-28, on EUR-Lex's figures written in its
+plugin: "Why the fuck this is not a fucking part of RAGE API???", "I TOLD
+YOU TO DO IT!"): what more than one collection does with its origin —
+images, OCR, a PDF's text layer — is RAGE's, built once here and called by
+the plugins. A plugin keeps only what is its origin's own (how its files
+say where an image stands). A second copy in a plugin is a defect.
+
 **The base rule** (operator, 2026-11-01, step 2 of the GPU programme: "these
 optimizations are only part of the common collections backend (that is not
 the localai backend, but louise's engine…)"): how collections are embedded is
@@ -65,6 +74,7 @@ rewrite — each still sits beside the code it calls).
 | fill | requests filled across documents | `app/embeddings.py` `Coalescer`, `coalescing`, `batch_size` |
 | admission | the gate, and the run check before each write | `app/run_check.py`, `app/hold/runs.py` |
 | CPU reference | the encoder's CPU twin's answers to the set, the model's and not a collection's: kept once in the node's store by the space's key and resolved there by every caller (the gate, `cpu-reference`, `collection new`, which inherits it); the twin's name determined (`<model>-cpu`) (operator, 2026-11-22) | `app/rage/reference.py`; the files `app/hold/cpu_reference.py`; near-exact-runs.md §2 |
+| plates | what every collection does with its origin's images (operator, 2026-11-28: "Why the fuck this is not a fucking part of RAGE API???"): Gutenberg's proven rules made common — the plugin writes `SENTINEL` where an image stands and names it (`Ref`); RAGE makes the marker `[Illustration: …]`, the aligned `figures` entry (the Nth marker is `figures[N]`), the streamed SHA-256 and size, the "absent" and "unplaced" gaps, and reads the plates back one at a time for the container pass, which spools them (`hold.figures.FrameSpool`: one plate held, the same container bytes) | `app/rage/figures.py`; `plugin_io.figure_items` |
 | bench | one collection's row for a window (busy, chunks/s, lost, gaps, alone); searches under corpus load; the card per minute | `app/rage/bench.py` (`louise dev schedule-report --bench`), `tools/measure/query_under_load.py`, `louise dev schedule-report --gpu` |
 
 The standards it uses instead of its own inventions: dynamic batching as
