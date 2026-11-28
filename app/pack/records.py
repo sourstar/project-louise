@@ -125,7 +125,10 @@ RECORD_KEYS_BY_LINE = {1: RECORD_KEYS, 2: RECORD_KEYS_2, 3: RECORD_KEYS_3}
 
 #: a gap's `why` (09 §9.5 `origin_gaps`): the part absent at the origin, served
 #: unreadable, or holding another entity's bytes ("another's: <its key>")
-GAP_WHYS = ("absent", "unreadable")
+#: 09 §9.5's `why`s: "unplaced" (operator, 2026-11-28: "if there is no mark
+#: there is no mark, consider the article degraded"): a part the origin gives
+#: and its text places nowhere — an image no marker stands for
+GAP_WHYS = ("absent", "unreadable", "unplaced")
 GAP_ANOTHERS = "another's: "
 
 
@@ -144,7 +147,7 @@ def origin_gaps(value) -> list[dict]:
         part, why = g["part"], g["why"]
         if not isinstance(part, str) or not part or not isinstance(why, str) or not (
                 why in GAP_WHYS or (why.startswith(GAP_ANOTHERS) and len(why) > len(GAP_ANOTHERS))):
-            raise ShardFormatError(f"origin_gaps: part is a name, why is absent | unreadable | "
+            raise ShardFormatError(f"origin_gaps: part is a name, why is absent | unreadable | unplaced | "
                                    f"another's: <key> (09 §9.5), got {g!r}")
         if part in out:
             raise ShardFormatError(f"origin_gaps: {part!r} named twice (09 §9.5)")
