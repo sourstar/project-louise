@@ -164,3 +164,23 @@ The operator: "Met Open Access, and a new kind for descriptions".
   meets the images by key at ask time. Invariant 4 stays whole. The
   amendment, to 02, 06 and 09 and new-collection.md's cases, is
   Architecture's to draft.
+
+## 10. The Met plugin: THE ORIGIN FORM, and why (2026-11-28)
+
+The operator's revision, the same day: "1. The collection carry only the
+metadata and the images, no change of specs. 2. We make an annotation with
+the description and the embedding of the description." So the Met collection
+is an ordinary plugin collection, `record_line` 2. The descriptions are
+discussed with Architecture in [derived-reading-sweep.md](derived-reading-sweep.md).
+
+The two forms the Met serves, both probed 2026-11-28:
+
+| form | what it holds | pros | cons |
+|---|---|---|---|
+| **the API JSON per object** (`/v1/objects/<id>`), objects listed by `/v1/objects` (503,480 ids) | every CSV column, plus `constituents` as a list (role, ULAN, Wikidata, gender), structured `measurements`, `primaryImage`, `additionalImages`, `objectURL` | the superset: nothing the Met states is lost (invariant 11); one unit per object, re-fetchable by id for `records-vs-origin`; the image URLs are where the images are | 503k requests through the transfer manager (invariant 5): hours, not minutes |
+| the Open Access CSV (`metmuseum/openaccess`, `MetObjects.csv`, 341,135,952 B) | one row per object; several artists joined by `\|` | one download | no image URLs, no structured measurements: holding only it would mean holding less than the origin gives |
+
+**Chosen: the API JSON**, kept whole as the origin unit (`origin_hash` over
+its bytes). The CSV is not used. The bulk-first rule binds legal collections,
+and here the bulk lacks what the collection is for. This choice goes into the
+plugin's source module, as tests/test_invariant_11_origin_form.py requires.
