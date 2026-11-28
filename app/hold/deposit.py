@@ -329,10 +329,18 @@ def next_native_id() -> int:
 # --------------------------------------------------------------------------
 # deposits
 
-def _collection(name: str):
+def _collection(name: str, *, locked_ok: bool = False):
+    """The deposit collection `name`. `locked_ok`: a LOCKED one too (07 §7.8
+    `locked`) — read, and erased (a removal, and a privacy duty, 02 §2.9);
+    never written to."""
     from app import collections as collections_mod
     c = collections_mod.by_name(name)
+    if c is None and locked_ok:
+        c = collections_mod.locked_by_name(name)
     if c is None:
+        if collections_mod.is_locked(name):
+            raise DepositError(f"{name} is locked: kept as it is, nothing is deposited into it; "
+                               f"unlock it first (07 §7.8 `locked`)")
         raise DepositError(f"no collection {name!r} is held")
     if c.codex is None or not is_deposit(c.codex):
         raise DepositError(f"{name!r} is not a deposit collection; only a deposit "
@@ -510,7 +518,7 @@ def _index(collection, con, uid: str) -> None:
 def _erase_one(name: str, key: str) -> list[str]:
     """`hold deposit erase` — remove the deposit `key`, leaving no trace
     (02 §2.9); the remaining keys."""
-    collection = _collection(name)
+    collection = _collection(name, locked_ok=True)
     with closing(_connect(collection)) as con:
         if _row(con, key) is None:
             raise DepositError(f"{name!r} holds no deposit {key!r}")
@@ -522,7 +530,7 @@ def _erase_one(name: str, key: str) -> list[str]:
 def _reset(name: str) -> int:
     """Every deposit erased, and ONE purge after them rather than one each
     — the reset of 07 §7.4. Returns how many were erased."""
-    collection = _collection(name)
+    collection = _collection(name, locked_ok=True)
     with closing(_connect(collection)) as con:
         keys = _keys(con)
         for key in keys:
@@ -643,7 +651,7 @@ def _keys(con) -> list[str]:
 
 def keys(name: str) -> list[str]:
     """`hold deposit list` — the collection's keys, oldest deposit first."""
-    collection = _collection(name)
+    collection = _collection(name, locked_ok=True)
     with closing(_connect(collection, write=False)) as con:
         return _keys(con)
 
@@ -652,7 +660,7 @@ def show(name: str, key: str) -> dict[str, Any]:
     """`hold deposit show` — the deposit's whole text and its chunk count,
     which is what LocalAGI's `GetEntryContent` reads (07 §7.4)."""
     from app import plugin_io
-    collection = _collection(name)
+    collection = _collection(name, locked_ok=True)
     with closing(_connect(collection, write=False)) as con:
         row = _row(con, key)
         if row is None:

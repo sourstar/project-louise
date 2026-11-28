@@ -167,7 +167,7 @@
        moves to "Locked" below (app/collection_lock.py) #}
     <div style="flex:0 0 auto;min-width:0;align-self:flex-end;padding-bottom:6px">
       <label class="check" title="kept as it is: not searched or shared, nothing fetched or processed, its models not loaded for it; it can then only be renamed, exported or removed. Untick to serve it again">
-        <input type="checkbox" data-lock onchange="setLocked('{{ c.name }}', this.checked)">lock</label>
+        <input type="checkbox" data-lock onchange="setLocked('{{ c.name }}', this.checked, this)">lock</label>
     </div>
   </div>
   {# WHICH HELD SLICES ARE EMBEDDED (07 §7.8 `embed_slices`; operator,
@@ -390,7 +390,7 @@
        moves to "Locked" below (app/collection_lock.py) #}
     <div>
       <label class="check" title="kept as it is: not searched or shared, nothing fetched or processed, its models not loaded for it; it can then only be renamed, exported or removed. Untick to serve it again">
-        <input type="checkbox" data-lock onchange="setLocked('{{ a.name }}', this.checked)">lock</label>
+        <input type="checkbox" data-lock onchange="setLocked('{{ a.name }}', this.checked, this)">lock</label>
     </div>
     {# operator, 2026-11-13: "I want a checkbox in the gui" — shown where a
        method this node runs can make the claims (annotation_methods.not_fitting);
@@ -467,7 +467,7 @@
     <div class="row">
       <div>
         <label class="check" title="untick to serve it again: searched, shared as its file says, fetched for and processed from the worker's next round">
-          <input type="checkbox" data-lock checked onchange="setLocked('{{ l.name }}', this.checked)">lock</label>
+          <input type="checkbox" data-lock checked onchange="setLocked('{{ l.name }}', this.checked, this)">lock</label>
       </div>
     </div>
     <div class="actions">
@@ -698,11 +698,13 @@ async function setMethod(name,method,on){
 }
 // the lock (07 §7.8 `locked`): written to the collection's file; the worker
 // lets it go, or takes it back, at its next round
-async function setLocked(name,on){
-  try{const d=await postJSON('/admin/library/'+name+'/lock',{locked:on});
+async function setLocked(name,on,box){
+  try{await postJSON('/admin/library/'+name+'/lock',{locked:on});
     toast(name+(on?': locked — kept as it is; not searched or shared, nothing fetched or processed, its models not loaded for it':': unlocked — served again from the worker\'s next round')+' — saved to collections/'+name+'.toml');
-    location.reload()}
-  catch(e){toast('lock failed: '+e);location.reload()}
+    // the card moves (to Locked, or back): after the toast has been read
+    setTimeout(()=>location.reload(),2500)}
+  // refused: the reason stays in sight and the box as it was — no reload
+  catch(e){toast('lock refused: '+e);if(box)box.checked=!on}
 }
 async function setShare(name,on,mode){
   if(!on&&mode==='p2p'&&!confirm(name+' embeds in all p2p mode, which publishes what it embeds; disabling sharing switches it to all local. Proceed?')){location.reload();return}

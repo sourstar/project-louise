@@ -362,7 +362,7 @@ def _sample_write(con, key: str, payload: str) -> None:
 def _not_served(name: str) -> HTTPException:
     """No served collection is `name`: a 404 — or a 409 saying it is LOCKED
     and what a locked collection allows (07 §7.8 `locked`, RULE 2)."""
-    if collections_mod.is_locked(name):
+    if collections_mod.locked_by_name(name) is not None:
         from . import collection_lock
         return HTTPException(409, collection_lock.refusal(name, "worked on") or f"{name} is locked")
     return HTTPException(404, f"no such collection: {name!r}")

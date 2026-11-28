@@ -67,24 +67,74 @@ def sisters_reading(name: str, root: Path | None = None) -> list[str]:
     return [r for r in readers if r != name and not collections_mod.is_locked(r)]
 
 
-def lock(name: str, *, root: Path | None = None) -> dict[str, Any]:
-    """Lock collection `name`: its file says `locked = true`. The worker lets
-    it go at its next round (its current unit finished and committed,
-    invariant 2), a search and sharing leave it out at once, the keeper
-    unloads what only it used. LockRefused, nothing written, where a sister
-    reads its text index."""
-    from . import collection_file
-    if collections_mod.is_locked(name):
-        return {"collection": name, "locked": True, "says": f"{name} was already locked"}
+def sisters_fetched_for(name: str) -> list[str]:
+    """The served collections whose origin folder `name` fetches for them
+    (the one-acquirer rule, `collections._one_acquirer`): locked, it would
+    stop fetching for them, and nothing would say why."""
+    try:
+        served = collections_mod.load_all(skip_unreadable=True)[0]
+    except Exception:                                   # noqa: BLE001 — another file's fault
+        return []
+    return [c.name for c in served if c.name != name and getattr(c, "acquire_by", None) == name]
+
+
+def why_not_lock(name: str, root: Path | None = None) -> str | None:
+    """Why `name` may not be locked now — a lock must change nothing for a
+    collection still served — or None."""
     readers = sisters_reading(name, root)
     if readers:
         who = ", ".join(readers)
-        raise LockRefused(
-            f"{name}'s text index is read by {who} (one index for sisters with the same documents, "
-            f"docs/notes/sister-shared-index.md). Locked, {name} would stop indexing for "
-            f"{'them' if len(readers) > 1 else 'her'} too, and the text leg would miss every document "
-            f"taken in after the lock. `louise hold collection unshare {readers[0]}` first (an index "
-            f"of her own, built again by the worker), or lock {who} as well")
+        return (f"{name}'s text index is read by {who} (one index for sisters with the same "
+                f"documents, docs/notes/sister-shared-index.md). Locked, {name} would stop indexing "
+                f"for {'them' if len(readers) > 1 else 'her'} too, and the text leg would miss every "
+                f"document taken in after the lock. `louise hold collection unshare {readers[0]}` first "
+                f"(an index of her own, built again by the worker), or lock {who} as well")
+    fetched = sisters_fetched_for(name)
+    if fetched:
+        who = ", ".join(fetched)
+        return (f"{name} fetches the origin folder {who} {'read' if len(fetched) > 1 else 'reads'} "
+                f"(one acquirer a folder, 02 §2.7). Locked, {name} would stop fetching for "
+                f"{'them' if len(fetched) > 1 else 'her'} too. Lock {who} as well")
+    return None
+
+
+def why_not_unlock(name: str, root: Path | None = None) -> str | None:
+    """Why `name` may not be unlocked now — served, it would read an index
+    or an origin folder a locked collection keeps — or None."""
+    writer = index_writer(name, root)
+    if writer is not None and collections_mod.is_locked(writer):
+        # served, she would search an index nobody writes: the worker's settle
+        # withholds her text leg (text_index.settle), and the reason stays in
+        # her placement until the next boot
+        return (f"{name} reads {writer}'s text index, and {writer} is locked: unlock {writer} "
+                f"first, then {name}")
+    me = collections_mod.locked_by_name(name)
+    if me is not None:
+        import dataclasses
+        try:
+            held = [*collections_mod.load_all(skip_unreadable=True)[0],
+                    *(c for c in collections_mod.load_locked() if c.name != name),
+                    dataclasses.replace(me, locked=False)]
+            after = next(c for c in collections_mod._one_acquirer(held) if c.name == name)
+        except Exception:                               # noqa: BLE001 — unsure: the file says it
+            after = None
+        by = getattr(after, "acquire_by", None)
+        if by and collections_mod.is_locked(by):
+            return (f"{name} reads {by}'s origin folder, which {by} fetches, and {by} is locked: "
+                    f"unlock {by} first, then {name}")
+    return None
+
+
+def lock(name: str) -> dict[str, Any]:
+    """Lock collection `name`: its file says `locked = true`. The worker lets
+    it go at its next round (its current unit finished and committed,
+    invariant 2), a search and sharing leave it out at once, the keeper
+    unloads what only it used. LockRefused, nothing written, where the lock
+    would change something for a collection still served (`why_not_lock`,
+    asked by the file's writer, so `--set locked=true` asks it too)."""
+    from . import collection_file
+    if collections_mod.is_locked(name):
+        return {"collection": name, "locked": True, "says": f"{name} was already locked"}
     try:
         written = collection_file.set_values(name, {"locked": "true"})
     except collection_file.SetRefused as e:
@@ -106,24 +156,17 @@ def index_writer(name: str, root: Path | None = None) -> str | None:
     return w if w and w != name else None
 
 
-def unlock(name: str, *, root: Path | None = None) -> dict[str, Any]:
+def unlock(name: str) -> dict[str, Any]:
     """Unlock collection `name`: the line removed from its file. Served again
     at the worker's next round, as at a boot — its statements are kept, so a
-    run already gated is not gated again."""
+    run already gated is not gated again. LockRefused where it would read
+    what a locked collection keeps (`why_not_unlock`)."""
     from . import collection_file
     if not collections_mod.config_toml_path(name).is_file():
         raise LockRefused(f"{name}: no such collection on this node "
                           f"({collections_mod.config_toml_path(name)} does not exist)")
     if not collections_mod.is_locked(name):
         return {"collection": name, "locked": False, "says": f"{name} was not locked"}
-    writer = index_writer(name, root)
-    if writer is not None and collections_mod.is_locked(writer):
-        # served, she would search an index nobody writes: the worker's settle
-        # withholds her text leg (text_index.settle), and the reason stays in
-        # her placement until the next boot
-        raise LockRefused(
-            f"{name} reads {writer}'s text index, and {writer} is locked: unlock {writer} first, "
-            f"then {name}")
     try:
         written = collection_file.set_values(name, {"locked": "false"})
     except collection_file.SetRefused as e:

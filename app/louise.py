@@ -3143,7 +3143,7 @@ def cmd_collection_lock(a) -> int:
     from app import collection_lock
     name = col.name_of(a.root, a.collection)
     try:
-        _print(collection_lock.lock(name, root=Path(a.root) if a.root else None))
+        _print(collection_lock.lock(name))
     except collection_lock.LockRefused as e:
         print(f"louise hold collection lock: {e}", file=sys.stderr)
         return 2
@@ -3156,7 +3156,7 @@ def cmd_collection_unlock(a) -> int:
     from app import collection_lock
     name = col.name_of(a.root, a.collection)
     try:
-        _print(collection_lock.unlock(name, root=Path(a.root) if a.root else None))
+        _print(collection_lock.unlock(name))
     except collection_lock.LockRefused as e:
         print(f"louise hold collection unlock: {e}", file=sys.stderr)
         return 2
@@ -3170,12 +3170,25 @@ def cmd_collection_unlock(a) -> int:
 #: added tomorrow is refused on a locked collection until it is listed
 _LOCK_ALLOWS = frozenset({
     "cmd_collection_rename", "cmd_collection_forget", "cmd_vectors_export",
+    "cmd_annotations_claims",                            # an export: its claims to a file
+    "cmd_deposit_erase",                                 # a removal, and a privacy duty (02 §2.9)
     "cmd_collection_lock", "cmd_collection_unlock",
     # read only
-    "cmd_node_health", "cmd_source_list", "cmd_deposit_list", "cmd_deposit_show",
+    "cmd_source_list", "cmd_deposit_list", "cmd_deposit_show",
     "cmd_records_show", "cmd_issues_list", "cmd_config_show", "cmd_rage_settings_show",
-    "cmd_vectors_show",
+    "cmd_vectors_show", "cmd_snapshot_list", "cmd_snapshot_delta", "cmd_index_show",
 })
+#: the arguments that name a collection, where a command names it otherwise
+#: than `collection` (the second read of the lock, 2026-11-28): each is
+#: checked as `collection` is
+_LOCK_ARGS: dict[str, tuple[str, ...]] = {
+    "cmd_collection_migrate": ("name",),
+    "cmd_collection_new": ("name", "sister_of"),         # --re-create --name, --sister-of
+    "cmd_create": ("name",),
+    "cmd_derive": ("collection", "name"),
+    "cmd_share_fetch": ("collection", "name"),
+    "cmd_dev_carry": ("source", "target"),
+}
 
 
 def _locked_refusal(a) -> str | None:
@@ -3185,11 +3198,12 @@ def _locked_refusal(a) -> str | None:
     `collection_file.set_values`, which refuses any other value of a locked
     file (app/collection_lock.py)."""
     fn = getattr(getattr(a, "fn", None), "__name__", "")
-    if not fn or fn in _LOCK_ALLOWS or not hasattr(a, "collection"):
+    if not fn or fn in _LOCK_ALLOWS or fn == "cmd_config_apply":
         return None
-    if fn == "cmd_config_apply":
-        return None
-    named = a.collection if isinstance(a.collection, (list, tuple)) else [a.collection]
+    named: list = []
+    for attr in _LOCK_ARGS.get(fn, ("collection",)):
+        v = getattr(a, attr, None)
+        named += list(v) if isinstance(v, (list, tuple)) else [v]
     from app import collection_lock
     for n in named:
         if not isinstance(n, str) or not n:

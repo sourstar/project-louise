@@ -52,7 +52,10 @@ or `locked_by_name()`:
 - a new wikidata collection's dump (`plugins/wikidata/source._corpus_for`):
   read where a locked one holds it, not downloaded again;
 - an annotations method's loop check (`cascade`): a loop through a locked
-  collection would go live at its unlock;
+  collection would go live at its unlock — while the cascade keeper itself
+  never runs it, nor writes a published marker for a locked source
+  (`cascade_keeper._one`, `_publish_newest`: they list what is on disk, not
+  `load_all`);
 - `node show`, which lists it as `locked` with its reason;
 - the three acts and the lock box (§3).
 
@@ -69,17 +72,24 @@ or `locked_by_name()`:
 |---|---|
 | rename | the Library's rename… (the file's `title`, the one other value a locked file takes: `collection_file.LOCKED_SETTABLE`); `hold collection rename` (its local name and folders) |
 | export | the Library's export bundle (`_collection_or_404(…, locked_ok=True)`, `jobs._export`); `hold vectors export` |
-| remove | the Library's remove… (retire or forget); `hold collection forget` |
+| remove | the Library's remove… (retire or forget); `hold collection forget`; a deposit's `hold deposit erase` (a privacy duty, 02 §2.9) |
 | unlock | its lock box; `hold collection unlock`; `hold config apply --set locked=false` |
-| read | `hold config show`, `vectors show`, `records show`, `node health`, … (`louise._LOCK_ALLOWS`) |
+| export | also `hold annotations claims` (its claims to a file) |
+| read | `hold config show`, `vectors show`, `records show`, `snapshot list|delta`, `index show`, `deposit list|show`, … (`louise._LOCK_ALLOWS`) |
 
 Everything else is refused before it acts, saying it is locked and how to
 unlock it: any other command naming it (exit 2; `louise._locked_refusal`, a
-WHITELIST, so a command added later is refused until listed), any other
+WHITELIST, so a command added later is refused until listed; it reads every
+argument that names a collection — `collection`, and `--name`, `--sister-of`,
+`dev carry`'s two — `louise._LOCK_ARGS`), any other
 value of its file (`collection_file.set_values`), any other Library route
 (409, `web._not_served`).
 
 ## 4. The refusals of the lock itself
+
+THE LOCK CHANGES NOTHING FOR A COLLECTION STILL SERVED. Its refusals are
+asked by the file's one writer (`collection_file.set_values`), so the lock
+box, `hold collection lock|unlock` and `--set locked=…` ask the same ones.
 
 **A writer whose text index a sister reads** (docs/notes/sister-shared-index.md)
 is not locked: locked, it stops indexing for both, and her text leg misses
@@ -88,15 +98,22 @@ lock must not do to another collection. She is unshared first (`hold
 collection unshare <sister>`, an index of her own built again by the
 worker), or locked as well. Locking the reader is always allowed.
 
+**An ancestor that fetches a served sister's origin folder** (the one-acquirer
+rule) is not locked either: locked, it keeps its folder as it is, so nothing
+would fetch for her, and nothing would say why. She is locked as well.
+Likewise **a sister is not unlocked** while the ancestor that fetches her
+folder is locked.
+
 **A reader is not unlocked before the writer of her index**: served, she
 would search an index nobody writes, the worker's settle would withhold her
 text leg (`text_index.settle`), and the reason would stay in her placement
 until the next boot. The writer is unlocked first.
 
 **Every collection locked** is a node kept as it is, not a misconfigured one
-(every file refused raises in `default_collection`): its control rows go into
-the first locked collection's manifest, as they go into the first served
-one's — node state that never travels, not its records, vectors or index.
+(every file refused raises in `default_collection`): its control rows go where
+a node holding none writes them (`_control_fallback`), never into a locked
+collection, which the routes scoped to the default collection (the books
+listing, a discover, a reset) would then act on.
 
 ## 5. Lock and unlock, in the worker
 
@@ -132,3 +149,9 @@ export bundle reads the stored vectors and loads nothing.
 - A federated search over every collection leaves a locked one out without
   naming it; named, it answers 409 "locked" (`query_service.resolve`).
 - Its event log is not on the System page while it is locked.
+- A locked deposit collection is not reached through LocalAGI's routes
+  (`app/localagi.py` reads `by_name`): its erase goes through `hold deposit
+  erase`.
+- A locked file that the loader refuses for another reason (an unmounted
+  build area, wrong model keys) is shown under "Held, not served" with that
+  reason, and is reached by the command line's rename and forget only.

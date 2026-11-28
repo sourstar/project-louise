@@ -725,6 +725,13 @@ def set_values(name: str, values: dict[str, str]) -> dict[str, Any]:
             raise SetRefused(collection_lock.refusal(c.name, "changed")
                              or f"{c.name} is locked")
     parsed = {k: _parse(k, v, where) for k, v in values.items()}
+    if "locked" in parsed and parsed["locked"] != bool(getattr(c, "locked", False)):
+        # THE LOCK'S OWN REFUSALS, whoever writes it: the lock box, `hold
+        # collection lock|unlock` and `--set locked=…` alike
+        from . import collection_lock
+        why = (collection_lock.why_not_lock if parsed["locked"] else collection_lock.why_not_unlock)(c.name)
+        if why:
+            raise SetRefused(why)
     return _apply(c, raw, path, parsed)
 
 

@@ -202,7 +202,7 @@ def client(isolated_config, monkeypatch):
 
 def test_the_lock_box_locks_and_the_card_keeps_three_acts(client):
     page = client.get("/admin/library").text
-    assert "setLocked('gutenberg', this.checked)" in page and 'data-kind="locked"' not in page
+    assert "setLocked('gutenberg', this.checked, this)" in page and 'data-kind="locked"' not in page
     r = client.post("/admin/library/gutenberg/lock", json={"locked": True})
     assert r.status_code == 200 and r.json()["locked"] is True
     assert collections_mod.is_locked("gutenberg") and collections_mod.load_all() == []
@@ -234,11 +234,14 @@ def test_a_locked_collection_is_removed(client):
 
 def test_a_node_whose_every_collection_is_locked_keeps_its_control_rows(node):
     """Not a misconfigured node (every file REFUSED, which raises): its
-    control manifest is the first locked collection's, and nothing runs."""
+    control rows go where a node holding none writes them — NEVER into a
+    locked collection, which the routes scoped to the default collection
+    (the books listing, a discover, a reset) would then act on (the second
+    read of the lock)."""
     _, _, write = node
     write("locked = true\n")
     assert collections_mod.load_all() == []
-    assert collections_mod.default_collection().name == "gutenberg"
+    assert collections_mod.default_collection().name == "control"
 
 
 # ---- what must still see a locked collection ---------------------------------
@@ -291,3 +294,102 @@ def test_node_show_lists_a_locked_collection(node, monkeypatch):
     write("locked = true\n")
     rows = [r for r in node_show.show()["collections"] if r["name"] == "gutenberg"]
     assert rows and rows[0]["state"] == "locked"
+
+
+# ---- the second read of the lock (2026-11-28) ----------------------------------
+
+def test_set_locked_asks_the_lock_s_refusals(node, monkeypatch):
+    """`hold config apply --set locked=…` is the documented way to lock: it
+    asks what `lock` and `unlock` ask, in the file's one writer."""
+    from app import text_index
+    _, path, write = node
+    write()
+    monkeypatch.setattr(text_index, "readers", lambda root, name: ["gutenberg-nemo"])
+    with pytest.raises(collection_file.SetRefused, match="unshare gutenberg-nemo"):
+        collection_file.set_values("gutenberg", {"locked": "true"})
+    assert "locked" not in path.read_text(encoding="utf-8")
+    monkeypatch.setattr(text_index, "readers", lambda root, name: [])
+    write("locked = true\n")
+    monkeypatch.setattr(collection_lock, "index_writer", lambda name, root=None: "writer")
+    real = collections_mod.is_locked
+    monkeypatch.setattr(collections_mod, "is_locked", lambda n: n == "writer" or real(n))
+    with pytest.raises(collection_file.SetRefused, match="unlock writer first"):
+        collection_file.set_values("gutenberg", {"locked": "false"})
+
+
+def test_an_ancestor_whose_folder_a_served_sister_reads_is_not_locked(node, monkeypatch):
+    """Locked, it would stop fetching for her, and nothing would say why."""
+    import types
+    _, path, write = node
+    write()
+    sister = types.SimpleNamespace(name="sister", acquire_by="gutenberg")
+    real = collections_mod.load_all
+    monkeypatch.setattr(collections_mod, "load_all",
+                        lambda skip_unreadable=False: ([*real(skip_unreadable=True)[0], sister], [])
+                        if skip_unreadable else real())
+    with pytest.raises(collection_lock.LockRefused, match="stop fetching for her"):
+        collection_lock.lock("gutenberg")
+    assert "locked" not in path.read_text(encoding="utf-8")
+
+
+def test_the_guard_reads_every_argument_that_names_a_collection(node, monkeypatch):
+    _, _, write = node
+    write("locked = true\n")
+    monkeypatch.setattr(louise.col, "name_of", lambda root, ref: ref)
+    parse = louise.build_parser().parse_args
+    for argv in (["hold", "collection", "migrate", "gutenberg", "--apply"],
+                 ["dev", "carry", "gutenberg", "other", "--yes"],
+                 ["dev", "carry", "other", "gutenberg", "--yes"]):
+        try:
+            a = parse(argv)
+        except SystemExit:
+            pytest.skip(f"{argv}: the parser's form changed")
+        assert louise._locked_refusal(a), argv
+    a = argparse.Namespace(fn=louise.cmd_collection_new, name="new", sister_of="gutenberg", root=None)
+    assert louise._locked_refusal(a), "a new sister would join the locked writer's index"
+    # what only reads it, its claims' export and a deposit's erase pass
+    for fn in (louise.cmd_snapshot_list, louise.cmd_snapshot_delta, louise.cmd_index_show,
+               louise.cmd_annotations_claims, louise.cmd_deposit_erase):
+        assert louise._locked_refusal(_ns(fn, "gutenberg")) is None, fn.__name__
+    # a user named like it is not a collection
+    assert louise._locked_refusal(argparse.Namespace(fn=louise.cmd_user, name="gutenberg")) is None
+
+
+def test_a_locked_annotations_collection_is_not_rerun_by_the_cascade(tmp_path, monkeypatch):
+    from app.hold import cascade_keeper, refit
+    monkeypatch.setattr(refit, "boot_refusal", lambda state: None)
+    monkeypatch.setattr(collections_mod, "is_locked", lambda n: n == "claims")
+    import inspect
+    params = list(inspect.signature(cascade_keeper._one).parameters)
+    args = {p: None for p in params}
+    args.update(root=tmp_path, a="claims")
+    assert cascade_keeper._one(**{k: v for k, v in args.items() if k in params}) is None
+
+
+def test_config_apply_counts_a_lock_as_no_refusal(node):
+    from app import effective_config
+    _, _, write = node
+    write("locked = true\n")
+    out = effective_config.apply("gutenberg")
+    assert out["locked"] == ["gutenberg"] and out["refused"] == []
+
+
+def test_a_locked_deposit_collection_is_read_and_erased_never_written(monkeypatch):
+    import types
+    from app.hold import codex as cx, deposit
+    fake = types.SimpleNamespace(name="dep", codex=types.SimpleNamespace())
+    monkeypatch.setattr(collections_mod, "by_name", lambda n: None)
+    monkeypatch.setattr(collections_mod, "locked_by_name", lambda n: fake if n == "dep" else None)
+    monkeypatch.setattr(collections_mod, "is_locked", lambda n: n == "dep")
+    monkeypatch.setattr(deposit, "is_deposit", lambda codex: True)
+    assert deposit._collection("dep", locked_ok=True) is fake
+    with pytest.raises(deposit.DepositError, match="locked"):
+        deposit._collection("dep")
+
+
+def test_a_locked_file_that_does_not_load_is_not_said_reachable(client, monkeypatch):
+    """Its three acts cannot reach it, so the routes do not claim they can."""
+    from app import web
+    monkeypatch.setattr(collections_mod, "is_locked", lambda n: True)
+    monkeypatch.setattr(collections_mod, "locked_by_name", lambda n: None)
+    assert web._not_served("broken").status_code == 404

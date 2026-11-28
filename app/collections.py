@@ -1598,14 +1598,13 @@ def default_collection() -> Collection:
     collections = load_all()
     if collections:
         return collections[0]
-    locked = load_locked()
-    if locked:
+    if _REFUSALS and all(r.reason == locked_says(r.name) for r in _REFUSALS):
         # EVERY COLLECTION LOCKED (07 §7.8 `locked`) is a node kept as it is,
-        # not a misconfigured one: its control rows (the worker's published
-        # snapshot, the query log) go into the first locked collection's
-        # manifest, as they go into the first served one's — node state that
-        # never travels, not its records, vectors or index; nothing runs on it
-        return locked[0]
+        # not a misconfigured one: its control rows go where a node holding
+        # none writes them (`_control_fallback`), and NEVER into a locked
+        # collection — the routes scoped to the default collection (the
+        # books listing, a discover, a reset) would act on it
+        return _control_fallback()
     if _REFUSALS:
         # The fallback's paths are DATA_DIR/manifest.db, DATA_DIR/fts and
         # DATA_DIR/lancedb — on this deployment the LEGACY gutenberg tree
