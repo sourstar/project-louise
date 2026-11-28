@@ -527,35 +527,48 @@ def pool(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *,
     text leg, and every gold record. What each question contributed, and
     how many of its gold records the text leg already found, are kept.
 
-    A RECALL SET (TREC's pooling): what enters matters, not its order, so the
-    text leg's own top `depth` is taken WITHOUT the reranker by default
-    (architecture, 2026-11-28: ~5 s a question reranked, ~70 min for the
-    Normattiva pool). It is not the same set: the search reranks and THEN
-    cuts at `depth`, so a reranked pool holds records the text leg's BM25
-    order would not. `rerank=True` builds it as before (the pools made
-    until 2026-11-28 were); the pool's file says which. `sample`: the first
-    N covered questions only, to measure the two ways against each other."""
+    A RECALL SET (TREC's pooling): what enters matters, not its order. The
+    reranker decides membership only where the search CUTS — where the text
+    leg finds more than `depth` records, it reranks and then keeps `depth`.
+    Measured on 50 Normattiva questions (2026-11-28): at depth 100 the two
+    ways gave identical pools (Jaccard 1.000, 48 of 48 gold) in 74 s
+    against 267 s; at depth 20 the reranker-free pool kept 43 of the
+    reranked pool's 46 gold (93.5 %, Jaccard 0.33). So, by default, each
+    question is asked first WITHOUT the reranker at `depth` + 1: where that
+    answers no more than `depth` records nothing is cut, and the set is the
+    reranked one's; only where it answers more is the question asked again
+    WITH the reranker, at `depth`. Each question records which (`reranked`).
+    `rerank=True` reranks every question (the pools made until 2026-11-28).
+    `sample`: the first N covered questions only."""
     search_fn = search_fn or text_search
-    import contextlib
-    off = contextlib.nullcontext() if rerank else reranker_override("off")
     name = held.collection.name
     ids: set[int] = set()
     per: list[dict[str, Any]] = []
-    with off:
-        for i, q in enumerate(questions):
-            relevant = {int(x) for x in q["relevant_doc_ids"] if int(x) in gold and gold[int(x)].held}
-            if not relevant:
-                continue
-            if sample is not None and len(per) >= sample:
-                break
-            found = {_native_of(h.get("uid")) for h in _hits(search_fn(q["question"], collections=[name],
-                                                                        limit=depth, as_of=as_of))} - {None}
-            golds = {_native_of(gold[x].uid) for x in relevant} - {None}
-            ids |= found | golds
-            per.append({"index": i, "text_records": len(found), "gold_records": len(golds),
-                        "gold_found_by_text": len(golds & found), "found": sorted(found)})
-    return {"built_from": name, "depth": depth, "as_of": as_of, "records": len(ids), "reranked": rerank,
-            "sample": sample, "native_ids": sorted(ids), "questions": per}
+
+    def found_by(limit: int) -> set:
+        return {_native_of(h.get("uid")) for h in _hits(search_fn(q["question"], collections=[name],
+                                                                   limit=limit, as_of=as_of))} - {None}
+    for i, q in enumerate(questions):
+        relevant = {int(x) for x in q["relevant_doc_ids"] if int(x) in gold and gold[int(x)].held}
+        if not relevant:
+            continue
+        if sample is not None and len(per) >= sample:
+            break
+        reranked = rerank
+        if rerank:
+            found = found_by(depth)
+        else:
+            with reranker_override("off"):
+                found = found_by(depth + 1)
+            if len(found) > depth:          # the search cuts here: the reranker decides what stays
+                found, reranked = found_by(depth), True
+        golds = {_native_of(gold[x].uid) for x in relevant} - {None}
+        ids |= found | golds
+        per.append({"index": i, "text_records": len(found), "gold_records": len(golds),
+                    "gold_found_by_text": len(golds & found), "found": sorted(found), "reranked": reranked})
+    return {"built_from": name, "depth": depth, "as_of": as_of, "records": len(ids),
+            "reranked": "all" if rerank else "where cut", "sample": sample,
+            "reranked_questions": sum(1 for p in per if p["reranked"]), "native_ids": sorted(ids), "questions": per}
 
 
 def pool_state(collection, native_ids: Iterable[int], *, window: int = 500) -> dict[str, int]:
@@ -1192,8 +1205,9 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--name", required=True)
             p.add_argument("--depth", type=int, default=POOL_DEPTH)
             p.add_argument("--rerank", action="store_true", dest="pool_rerank",
-                           help="build the pool as before 2026-11-28: the text leg reranked, then cut at "
-                                "--depth (by default the text leg's own order: a recall set needs no reranker)")
+                           help="rerank every question (the pools made until 2026-11-28); by default only "
+                                "where the text leg finds more than --depth records, the one place the "
+                                "reranker decides membership (measured 2026-11-28)")
             p.add_argument("--sample", type=int, default=None,
                            help="the first N covered questions only (to measure the two ways on a sample)")
             p.add_argument("--as-of", default=None, dest="as_of")

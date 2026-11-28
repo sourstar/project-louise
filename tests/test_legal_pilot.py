@@ -254,9 +254,9 @@ def test_the_pool_is_the_text_legs_top_records_and_every_gold_record(built):
     got = lp.pool(built, QUESTIONS, gold, depth=50, as_of="2025-01-01", search_fn=text)
     assert {lp._native_of(law), lp._native_of(sard), DEC_A_ID} == set(got["native_ids"])
     assert got["records"] == 3 and len(got["questions"]) == 2 and got["depth"] == 50
-    assert all(limit == 50 and as_of == "2025-01-01" for _q, limit, as_of in seen)
+    assert all(limit in (50, 51) and as_of == "2025-01-01" for _q, limit, as_of in seen)  # depth + 1 asks whether it cuts
     assert got["questions"][0] == {"index": 0, "text_records": 1, "gold_records": 1, "gold_found_by_text": 0,
-                                   "found": [DEC_A_ID]}, "the builder's list kept, for the chunker report"
+                                   "found": [DEC_A_ID], "reranked": False}, "the builder's list kept, for the chunker report"
     rows = [{"index": 0, "hits": [{"uid": f"normattiva:{DEC_A_ID}"}, {"uid": law}]}, {"index": 9, "hits": []}]
     assert lp.builder_share(rows, {0: {DEC_A_ID}}) == 0.5 and lp.builder_share(rows, {}) is None
 
@@ -486,23 +486,30 @@ def test_the_pool_s_chunks_are_counted_from_the_manifest():
     assert lp.pool_chunks(con, [1, 2, 9], "normattiva") == 15
 
 
-def test_the_pool_is_a_recall_set_taken_without_the_reranker_unless_asked(built):
-    """Architecture, 2026-11-28: ~5 s a question reranked, ~70 min for the
-    Normattiva pool. A recall set needs the text leg's own top `depth`; the
-    pool's file says which way it was built."""
+def test_the_pool_reranks_only_where_the_search_cuts(built):
+    """Measured 2026-11-28 on 50 Normattiva questions: identical at depth 100
+    (the cut never bit), 43 of 46 gold at depth 20 without the reranker. So a
+    question is reranked only where the text leg finds more than `depth`."""
     from app import collections as collections_mod
     cov = lp.coverage(built, CORPUS, QUESTIONS)
     gold = {int(k): lp.gold_from(v) for k, v in cov["gold"].items()}
-    seen = []
+    real = collections_mod.reranker_for(built.collection)
+    calls = []
 
     def text(q, *, collections, limit, as_of):
-        seen.append(collections_mod.reranker_for(built.collection))
-        return {"lists": [{"hits": [_hit(f"normattiva:{DEC_A_ID}", 0)]}]}
-    got = lp.pool(built, QUESTIONS, gold, depth=50, search_fn=text)
-    assert got["reranked"] is False and seen and all(r is None for r in seen), "no reranker during the pool"
-    seen.clear()
-    real = collections_mod.reranker_for(built.collection)
-    got = lp.pool(built, QUESTIONS, gold, depth=50, search_fn=text, rerank=True)
-    assert got["reranked"] is True and all(r == real for r in seen), "as before 2026-11-28"
-    got = lp.pool(built, QUESTIONS, gold, depth=50, search_fn=text, sample=1)
+        r = collections_mod.reranker_for(built.collection)
+        calls.append((limit, r))
+        n = 3 if r is None else limit                 # the text leg finds 3 records; reranked, `limit`
+        return {"lists": [{"hits": [_hit(f"normattiva:{DEC_A_ID + j}", j) for j in range(n)]}]}
+    got = lp.pool(built, QUESTIONS, gold, depth=5, search_fn=text)
+    assert got["reranked_questions"] == 0 and all(lim == 6 and r is None for lim, r in calls), \
+        "nothing cut at depth 5: no reranker asked"
+    calls.clear()
+    got = lp.pool(built, QUESTIONS, gold, depth=2, search_fn=text)
+    assert got["reranked_questions"] == len(got["questions"]) > 0, "cut at depth 2: reranked"
+    assert (3, None) in calls and (2, real) in calls
+    calls.clear()
+    got = lp.pool(built, QUESTIONS, gold, depth=5, search_fn=text, rerank=True)
+    assert got["reranked"] == "all" and all(r == real for _lim, r in calls)
+    got = lp.pool(built, QUESTIONS, gold, depth=5, search_fn=text, sample=1)
     assert len(got["questions"]) == 1 and got["sample"] == 1
