@@ -419,8 +419,9 @@ def test_record_line_2_is_now_writable_and_1_is_still_the_default(codex):
     from tests.hold.test_template import recipe
     assert tpl._record_line(recipe(record_line=2)) == 2
     assert tpl._record_line(recipe()) == 1
-    with pytest.raises(tpl.TemplateError, match="record_line is 1 or 2"):
-        tpl._record_line(recipe(record_line=3))
+    assert tpl._record_line(recipe(record_line=3)) == 3, "line 3 (origin_gaps, 2026-11-28)"
+    with pytest.raises(tpl.TemplateError, match="record_line is 1, 2 or 3"):
+        tpl._record_line(recipe(record_line=4))
 
 
 # ---- the space block ------------------------------------------------------

@@ -273,6 +273,11 @@ class CanonicalDoc:
     #: plugin that yields none, which is what keeps a figureless
     #: collection's record line byte-identical to `record_line` 1.
     figures: list[Figure] = field(default_factory=list)
+    #: 09 §9.5's `origin_gaps`, for a `record_line` 3 collection: what the
+    #: origin did not give for this record, `{"part", "why"}` each (absent,
+    #: unreadable, another's: <key>). Empty for a record given whole, and for
+    #: every plugin that reports none.
+    origin_gaps: list[dict] = field(default_factory=list)
     #: the origin's inconsistencies this parse met (`Issue`), OUTSIDE the
     #: record: `pack/build.py` writes the line from the fields above and
     #: never reads this one. Empty for a plugin that reports none.
