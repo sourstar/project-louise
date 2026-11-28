@@ -1598,22 +1598,23 @@ def default_collection() -> Collection:
     collections = load_all()
     if collections:
         return collections[0]
-    if _REFUSALS and all(r.reason == locked_says(r.name) for r in _REFUSALS):
-        # EVERY COLLECTION LOCKED (07 §7.8 `locked`) is a node kept as it is,
-        # not a misconfigured one: its control rows go where a node holding
-        # none writes them (`_control_fallback`), and NEVER into a locked
-        # collection — the routes scoped to the default collection (the
-        # books listing, a discover, a reset) would act on it
+    if any(r.reason == locked_says(r.name) for r in _REFUSALS):
+        # NOTHING SERVED AND A COLLECTION LOCKED (07 §7.8 `locked`) is a node
+        # the operator keeps as it is, whatever else it refuses beside: its
+        # control rows go where a node holding none writes them
+        # (`_control_fallback`), NEVER into a locked collection — the routes
+        # scoped to the default collection (the books listing, a discover, a
+        # reset) would act on it — and the node, the Library and the lock box
+        # that undoes it stay up (the lock's second read: a raise here took
+        # them down)
         return _control_fallback()
     if _REFUSALS:
         # The fallback's paths are DATA_DIR/manifest.db, DATA_DIR/fts and
-        # DATA_DIR/lancedb — on this deployment the LEGACY gutenberg tree
-        # that docs/notes/legacy-to-delete.md lists for deletion. Handing
-        # that back because every file was refused would put the node's
-        # control state, and anything else `db.connect()` writes without a
-        # collection, into a tree nothing serves and someone is about to
-        # remove. A node holding only refusals is misconfigured, and
-        # saying so is the only safe answer.
+        # DATA_DIR/lancedb — where the LEGACY gutenberg tree was (deleted
+        # 2026-09-18, docs/notes/legacy-to-delete.md). A node whose every
+        # file is refused, and none for a lock, is misconfigured, and saying
+        # so is the only safe answer: its control rows would go to a tree
+        # nothing serves while what is wrong goes unsaid.
         raise ValueError(
             "every collection file was refused, so this node has nothing to "
             "run and no collection to hold its control state: "

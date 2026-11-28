@@ -55,7 +55,10 @@ or `locked_by_name()`:
   collection would go live at its unlock — while the cascade keeper itself
   never runs it, nor writes a published marker for a locked source
   (`cascade_keeper._one`, `_publish_newest`: they list what is on disk, not
-  `load_all`);
+  `load_all`); and the source's old-run gate does not wait for a locked
+  annotator (`cascade.old_run_gate` says it is locked): waiting would stop
+  every later update of the source. Its claims derive from the source's
+  published snapshots, which stay, and the next one wakes it once unlocked;
 - `node show`, which lists it as `locked` with its reason;
 - the three acts and the lock box (§3).
 
@@ -98,22 +101,27 @@ lock must not do to another collection. She is unshared first (`hold
 collection unshare <sister>`, an index of her own built again by the
 worker), or locked as well. Locking the reader is always allowed.
 
-**An ancestor that fetches a served sister's origin folder** (the one-acquirer
-rule) is not locked either: locked, it keeps its folder as it is, so nothing
-would fetch for her, and nothing would say why. She is locked as well.
-Likewise **a sister is not unlocked** while the ancestor that fetches her
-folder is locked.
+**A collection that fetches an origin folder a served collection reads and
+does not fetch** is not locked either — whichever of them fetches, by the
+one-acquirer rule or by its own file's `acquire_enabled` (EUR-Lex5.next's
+`true` beside EUR-Lex5's `false`): locked, it keeps the folder as it is, so
+nothing would fetch for the other, and nothing would say why. The other is
+locked as well. Likewise **a collection is not unlocked** while the one that
+fetches its folder is locked.
 
 **A reader is not unlocked before the writer of her index**: served, she
 would search an index nobody writes, the worker's settle would withhold her
 text leg (`text_index.settle`), and the reason would stay in her placement
 until the next boot. The writer is unlocked first.
 
-**Every collection locked** is a node kept as it is, not a misconfigured one
-(every file refused raises in `default_collection`): its control rows go where
-a node holding none writes them (`_control_fallback`), never into a locked
-collection, which the routes scoped to the default collection (the books
-listing, a discover, a reset) would then act on.
+**Nothing served and a collection locked** — every collection locked, or the
+last served one locked beside files refused for other reasons — is a node kept
+as it is, not a misconfigured one (every file refused, none for a lock, still
+raises in `default_collection`): its control rows go where a node holding none
+writes them (`_control_fallback`), never into a locked collection, which the
+routes scoped to the default collection (the books listing, a discover, a
+reset) would then act on; and the Library, with the lock box that undoes it,
+stays up.
 
 ## 5. Lock and unlock, in the worker
 
@@ -149,9 +157,9 @@ export bundle reads the stored vectors and loads nothing.
 - A federated search over every collection leaves a locked one out without
   naming it; named, it answers 409 "locked" (`query_service.resolve`).
 - Its event log is not on the System page while it is locked.
-- A locked deposit collection is not reached through LocalAGI's routes
-  (`app/localagi.py` reads `by_name`): its erase goes through `hold deposit
-  erase`.
+- A locked deposit collection answers LocalAGI's routes 409 "locked", but for
+  the depositor's own erase (`DELETE …/entry/delete`), which is a removal and
+  a privacy duty (02 §2.9). LocalAGI's reset is refused like any other write.
 - A locked file that the loader refuses for another reason (an unmounted
   build area, wrong model keys) is shown under "Held, not served" with that
   reason, and is reached by the command line's rename and forget only.

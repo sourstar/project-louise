@@ -321,8 +321,11 @@ def test_an_ancestor_whose_folder_a_served_sister_reads_is_not_locked(node, monk
     """Locked, it would stop fetching for her, and nothing would say why."""
     import types
     _, path, write = node
-    write()
-    sister = types.SimpleNamespace(name="sister", acquire_by="gutenberg")
+    write('slices = "all"\n')
+    me = collections_mod._load_one(path)
+    assert me.acquire_enabled
+    sister = types.SimpleNamespace(name="sister", acquire_by="gutenberg", acquire_enabled=False,
+                                   corpus_dir=me.corpus_dir)
     real = collections_mod.load_all
     monkeypatch.setattr(collections_mod, "load_all",
                         lambda skip_unreadable=False: ([*real(skip_unreadable=True)[0], sister], [])
@@ -393,3 +396,71 @@ def test_a_locked_file_that_does_not_load_is_not_said_reachable(client, monkeypa
     monkeypatch.setattr(collections_mod, "is_locked", lambda n: True)
     monkeypatch.setattr(collections_mod, "locked_by_name", lambda n: None)
     assert web._not_served("broken").status_code == 404
+
+
+# ---- the lock's third read (2026-11-28) -----------------------------------------
+
+def test_a_locked_annotator_holds_up_no_update_of_its_source(tmp_path, monkeypatch):
+    """Never woken, it would keep the old-run gate shut and stop every later
+    update of its source, saying nothing of the lock."""
+    import types
+    from app.hold import cascade
+    monkeypatch.setattr(cascade, "published", lambda shard, snap: True)
+    monkeypatch.setattr(cascade, "annotators", lambda root, cid: ["claims", "other"])
+    monkeypatch.setattr(cascade, "started", lambda root, a, cid, snap: False)
+    monkeypatch.setattr(collections_mod, "is_locked", lambda n: n == "claims")
+    gate = cascade.old_run_gate(tmp_path, "src", types.SimpleNamespace(collection_id="c"), "2026-09")
+    assert gate.waiting == ("other",) and "claims is locked, not waited for" in gate.says
+    monkeypatch.setattr(cascade, "annotators", lambda root, cid: ["claims"])
+    gate = cascade.old_run_gate(tmp_path, "src", types.SimpleNamespace(collection_id="c"), "2026-09")
+    assert gate.open and "locked" in gate.says
+
+
+def test_locking_the_last_served_collection_beside_a_refused_file_keeps_the_node_up(node, monkeypatch):
+    """Another file under "Held, not served" and this one locked: the control
+    rows go to the fallback, not a raise that takes the Library — and the
+    lock box that undoes it — down."""
+    _, _, write = node
+    write("locked = true\n")
+    cfg = collections_mod.collections_dir()
+    (cfg / "broken.toml").write_text('title = "no codex"\n', encoding="utf-8")
+    assert collections_mod.load_all() == []
+    assert {r.name for r in collections_mod.refusals()} == {"gutenberg", "broken"}
+    assert collections_mod.default_collection().name == "control"
+    # every file refused, and none for a lock: still the loud refusal it was
+    write()
+    (cfg / "gutenberg.toml").unlink()
+    with pytest.raises(ValueError, match="every collection file was refused"):
+        collections_mod.default_collection()
+
+
+def test_a_fetcher_whose_folder_a_served_collection_reads_is_not_locked(node, monkeypatch):
+    """Whichever of them fetches — by the one-acquirer rule or by its file's
+    word — locking the one that does leaves the other's folder unfetched."""
+    import types
+    _, path, write = node
+    write()
+    me = collections_mod._load_one(path)
+    other = types.SimpleNamespace(name="ancestor", acquire_enabled=False, corpus_dir=me.corpus_dir)
+    import dataclasses
+    fetching = dataclasses.replace(me, acquire_enabled=True)
+    monkeypatch.setattr(collections_mod, "load_all",
+                        lambda skip_unreadable=False: ([fetching, other], []) if skip_unreadable else [fetching, other])
+    assert collection_lock.sisters_fetched_for("gutenberg") == ["ancestor"]
+    assert "stop fetching for her" in collection_lock.why_not_lock("gutenberg")
+    # another folder: nothing to refuse
+    other.corpus_dir = "/somewhere/else"
+    assert collection_lock.sisters_fetched_for("gutenberg") == []
+
+
+def test_a_depositor_deletes_an_entry_of_a_locked_deposit_collection(monkeypatch):
+    import types
+    from app import localagi
+    fake = types.SimpleNamespace(name="dep")
+    monkeypatch.setattr(collections_mod, "by_name", lambda n: None)
+    monkeypatch.setattr(collections_mod, "locked_by_name", lambda n: fake if n == "dep" else None)
+    monkeypatch.setattr(collections_mod, "is_private", lambda c: True)
+    assert localagi._deposit_collection("dep", locked_ok=True) is fake
+    with pytest.raises(localagi.LocalAgiError) as e:
+        localagi._deposit_collection("dep")
+    assert e.value.status == 409 and "locked" in e.value.message

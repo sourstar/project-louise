@@ -130,13 +130,23 @@ def old_run_gate(root, name: str, codex, snapshot_id: str) -> Gate:
     if not published(col.shard_dir_of(Path(root), name), snapshot_id):
         return Gate(False, f"waiting for snapshot {snapshot_id} to be published (its signature, "
                            f"snapshots/{snapshot_id}.sig.json)")
-    waiting = tuple(a for a in annotators(root, codex.collection_id)
-                    if not started(root, a, codex.collection_id, snapshot_id))
+    from app import collections as collections_mod
+    pending = [a for a in annotators(root, codex.collection_id)
+               if not started(root, a, codex.collection_id, snapshot_id)]
+    # A LOCKED ANNOTATOR IS NOT WAITED FOR (07 §7.8 `locked`; the lock's second
+    # read): it is kept as it is and never woken, so waiting for it would stop
+    # every later update of its source while saying nothing of the lock. Its
+    # claims derive from this collection's published snapshots, which stay;
+    # unlocked, it is woken by the next one
+    locked = tuple(a for a in pending if collections_mod.is_locked(a))
+    waiting = tuple(a for a in pending if a not in locked)
+    also = (f"; {', '.join(locked)} {'is' if len(locked) == 1 else 'are'} locked, not waited for"
+            if locked else "")
     if waiting:
         return Gate(False, f"waiting for the annotations cascade of {snapshot_id} to start: "
-                           f"{', '.join(waiting)} not woken yet", published=True, waiting=waiting)
+                           f"{', '.join(waiting)} not woken yet{also}", published=True, waiting=waiting)
     return Gate(True, f"snapshot {snapshot_id} is published and the annotations that declare "
-                      f"{name} have started from it", published=True)
+                      f"{name} have started from it{also}", published=True)
 
 
 # --------------------------------------------------------------------------

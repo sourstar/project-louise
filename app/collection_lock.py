@@ -68,14 +68,20 @@ def sisters_reading(name: str, root: Path | None = None) -> list[str]:
 
 
 def sisters_fetched_for(name: str) -> list[str]:
-    """The served collections whose origin folder `name` fetches for them
-    (the one-acquirer rule, `collections._one_acquirer`): locked, it would
-    stop fetching for them, and nothing would say why."""
+    """The served collections that read the origin folder `name` fetches and
+    do not fetch it themselves — the one acquirer a folder
+    (`collections._one_acquirer`), whichever of them the rule or a file
+    made it: locked, `name` would stop fetching for them, and nothing would
+    say why. Its folder by physical identity, never a name."""
     try:
         served = collections_mod.load_all(skip_unreadable=True)[0]
     except Exception:                                   # noqa: BLE001 — another file's fault
         return []
-    return [c.name for c in served if c.name != name and getattr(c, "acquire_by", None) == name]
+    me = next((c for c in served if c.name == name), None)
+    if me is None or not getattr(me, "acquire_enabled", False):
+        return []
+    return [c.name for c in served if c.name != name and not getattr(c, "acquire_enabled", False)
+            and collections_mod._same_folder(c.corpus_dir, me.corpus_dir)]
 
 
 def why_not_lock(name: str, root: Path | None = None) -> str | None:
@@ -118,10 +124,15 @@ def why_not_unlock(name: str, root: Path | None = None) -> str | None:
             after = next(c for c in collections_mod._one_acquirer(held) if c.name == name)
         except Exception:                               # noqa: BLE001 — unsure: the file says it
             after = None
-        by = getattr(after, "acquire_by", None)
-        if by and collections_mod.is_locked(by):
-            return (f"{name} reads {by}'s origin folder, which {by} fetches, and {by} is locked: "
-                    f"unlock {by} first, then {name}")
+        if after is not None and not getattr(after, "acquire_enabled", False):
+            # served, she would fetch nothing: the folder's acquirer is one
+            # that is locked, which keeps the folder as it is
+            by = next((c.name for c in collections_mod.load_locked()
+                       if c.name != name and getattr(c, "acquire_enabled", False)
+                       and collections_mod._same_folder(c.corpus_dir, after.corpus_dir)), None)
+            if by:
+                return (f"{name} reads {by}'s origin folder, which {by} fetches, and {by} is locked: "
+                        f"unlock {by} first, then {name}")
     return None
 
 

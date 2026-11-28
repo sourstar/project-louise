@@ -74,9 +74,17 @@ def _root():
     return collections_mod.louise_root() / "collections"
 
 
-def _deposit_collection(name: str):
-    """The collection a write names: held, and a deposit collection."""
+def _deposit_collection(name: str, *, locked_ok: bool = False):
+    """The collection a write names: held, and a deposit collection.
+    `locked_ok`: a LOCKED one too, for an erase — a removal, and a privacy
+    duty (02 §2.9; 07 §7.8 `locked`). Any other write to a locked one is a
+    409 saying so."""
     c = collections_mod.by_name(name)
+    if c is None and locked_ok:
+        c = collections_mod.locked_by_name(name)
+    if c is None and collections_mod.locked_by_name(name) is not None:
+        raise LocalAgiError(409, "LOCKED", f"{name} is locked: kept as it is, nothing is deposited "
+                                           f"into it; an entry can still be deleted (07 §7.8)")
     if c is None:
         raise LocalAgiError(404, "NOT_FOUND", f"no collection {name!r}")
     if not collections_mod.is_private(c):
@@ -211,7 +219,7 @@ async def entry(name: str, entry: str):
 @_wrap
 async def delete_entry(name: str, body: DeleteBody):
     from .hold import deposit
-    _deposit_collection(name)
+    _deposit_collection(name, locked_ok=True)
     remaining = (await _in_worker("erase", name, key=body.entry))["remaining"]
     return ok({"deleted_entry": body.entry, "remaining_entries": remaining,
                "entry_count": len(remaining)})

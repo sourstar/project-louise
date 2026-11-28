@@ -169,8 +169,9 @@ def _last_key(url: str) -> str:
     return "source_last:" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:24]
 
 
-def _collection(name: str):
-    return deposit._collection(name)
+def _collection(name: str, *, locked_ok: bool = False):
+    """`locked_ok`: a LOCKED deposit collection too, for a read (07 §7.8 `locked`)."""
+    return deposit._collection(name, locked_ok=locked_ok)
 
 
 def last_update(name: str, url: str) -> str:
@@ -178,7 +179,7 @@ def last_update(name: str, url: str) -> str:
     state, in the manifest, never desired state (invariant 10). "" before
     its first fetch."""
     from app import db
-    c = _collection(name)
+    c = _collection(name, locked_ok=True)
     with closing(deposit._connect(c, write=False)) as con:
         return db.get_control(con, _last_key(url)) or ""
 
