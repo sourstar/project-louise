@@ -64,7 +64,6 @@ for a derived-reading Codex and for no other. So no Codex, space or
 | `read.set` | the read set's id | the 16 fixed figures of the read gate (§4) |
 | `read.decoding` | `{temperature: 0, seed, max_tokens, top_k: 1}` | greedy decoding. Anything else is refused at create |
 | `read.input` | `{max_side, format}` | how a figure is resized before reading. It is derived and deterministic: the same figure bytes always give the same input bytes |
-| `read.acceptance` | `{metric, bound, measured_on: [device, device]}` | the measured cross-card bound (§4 below) |
 
 Fixed, as for annotations:
 - `plugin` is `"reading"`. A uid is content-derived, `reading:<read uid>:<figure sha256, first 16 hex>`, so a re-creation never renumbers, and idempotence keys on it (invariant 2);
@@ -107,20 +106,36 @@ generative reading:
 - on the producer's own card and build, every reading reproduces its own
   BYTES. A run that does not FAILS.
 
-**The cross-card bound, measured before anything is published.** Another card
-decodes other tokens, so a verifier cannot ask for bytes:
-- the 16 figures, and a 100-figure sample of the collection, are read on two
-  different cards;
-- each pair of readings is embedded in the collection's own space;
-- `read.acceptance.bound` is the minimum cosine observed, minus the space's
-  engine tolerance. It is stated in the Codex with the two devices.
+**The description is data** (operator, 2026-11-28: "We keep the description
+and the verification is: 1. check that the embedding of the description is
+reproducible (quantitative verification) 2. the peer can verify that the
+description matches the picture (qualitative). Our automatic check is only
+about 1."; Architecture accepted it). No cross-card bound is measured and no
+re-reading is automatic: a cosine bound would accept a different text that
+lands nearby.
 
-**`records-vs-origin`.**
-- It re-reads a sample of figures, embeds each re-reading in the space, and
-  accepts a record when it lies within `bound` of the carried text's vector.
-- On the producer's own card and build, it accepts bytes only.
-- A verifier without the figures member fetches the sampled figures first, or
-  says "unverified" (never "verified").
+**`records-vs-origin`, automatic**, checks three things:
+- the receipt: its input is the held figure's sha256, its output is the
+  record's text sha256;
+- the publisher's signature over it;
+- the vectors, within the space's tolerance (invariant 12, 03 §3.1).
+
+It reports "description not compared with the picture", and never
+"verified".
+
+**The qualitative check** is a person looking, or an optional re-read
+(`hold check <c> --re-read N`, best on the same card class, where even the
+bytes may match). It is recorded and reported as what it is: "looked at by
+<who>, <n> figures".
+
+## 4a. 08 — the named exception
+
+"No defence may rely on trusting the publisher" gets a written exception for
+derived readings. A description's FIDELITY to its picture is ATTRIBUTABLE,
+not detected: the signed receipt binds figure sha256 → text sha256 to its
+publisher, and no automatic check claims more. Invariant 11's "everything
+held is verifiable" names the same exception (CLAUDE.md: the operator's own
+text, changed on the operator's own word).
 
 ## 5. Updates — collection-updates.md §4, the cascade
 
@@ -136,7 +151,8 @@ decodes other tokens, so a verifier cannot ask for bytes:
 
 ## 6. 05 / 08 — how a hit shows
 
-- A hit reads "described by <read.encoder.label>". The read record's figure
+- A hit reads "described by <read.encoder.label>". It adds nothing else
+  unless a qualitative check was recorded for that collection. The read record's figure
   preview stands beside it (app/ask/preview.py).
 - A description never appears among the read collection's own facts, and
   never fills a field the read collection's record lacks.
