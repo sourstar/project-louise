@@ -472,7 +472,14 @@ Which claims apply:
 
 - **Collection.** The claim belongs to an annotations collection that this
   peer holds and may use, and whose `annotates.collection_id` is the
-  result's collection.
+  result's collection OR ANY OF ITS FAMILY (*amended 2026-11-28*, operator:
+  "An annotation refers to the corpus of a collection, thus applies to all
+  sisters and daughters" — A; "Add this rule to RAGE"): every collection
+  linked to it, in either direction and at any depth, by its Codex's lineage
+  (`continues`, `derived_from`, `replaces`) or by a records carry, an id no
+  longer held still linking (app/rage/family.py, docs/notes/rage.md §5). The
+  claim's state below is judged against the record it lands on, so a
+  relative whose record changed shows it `stale`.
 - **Snapshot.** The result was read from a target snapshot at or after
   `annotates.from_snapshot`.
 

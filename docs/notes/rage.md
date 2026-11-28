@@ -58,6 +58,7 @@ rewrite — each still sits beside the code it calls).
 | part | what it does | where |
 |---|---|---|
 | share and priority | a gate per encoder URL, levels CORPUS < TRANSLATE < QUERY < RERANK < CHAT, the interactive claim, standing aside | `app/rage/dispatch.py` |
+| the family rule | which collections are one family — lineage and records carries, both ways, any depth — for what applies to all of them: annotations first (§5) | `app/rage/family.py` |
 | settings in effect | the file's `[encoder]`, then the recommendation for this card, then the node's defaults | `collections.recipe_for` → `app/rage/settings.py`; the signed file `app/hold/rage_settings.py`; `louise hold rage-settings show\|record` |
 | record | one line a second: the card's busy, each gate's seconds held per collection, backlogs, queries | `app/rage/card_record.py` (reads the GPU probe's `/busy`, `app/gpu_busy.py`, `app/gpu_pmu.py`) |
 | feed | the documents, the lanes, the window of documents in flight | `app/worker.py` `_embed_producer`, `_embed_parallel` |
@@ -72,7 +73,29 @@ PMU for the card's busy share (record), deficit round robin for the card's
 budget between collections (share, next step), the scheduling notes'
 DRR/AIMD/CFS ([scheduling.md](scheduling.md)).
 
-## 5. The name's history
+## 5. The family rule
+
+*The operator, 2026-11-28: "An annotation refers to the corpus of a
+collection, thus applies to all sisters and daughters, correct?" — asked
+whether to follow the whole family or keep the target and its one carried
+twin, "A"; then "Add this rule to RAGE".*
+
+What applies to a collection's records applies to its WHOLE FAMILY: every
+collection linked to it, in either direction and at any depth, by its Codex's
+lineage — `continues` (a daughter's mother), `derived_from` (a sister's
+sister), `replaces.codex` (a corrective sister's predecessor) — or by a records
+carry (`carry.records_twin_of`). An id the node no longer holds (a mother
+retired, the Codex a refit replaced) stays a link, so sisters meet through
+it. One function decides it for every collection: `app.rage.family.family`.
+
+Read today by: the annotations a search attaches (`ask/annotations.attach`,
+05 §5.3), the graph walk over them (`ask/traverse`), and the annotations
+card's naming of its target (`web`). Each claim is still judged against the
+record it lands on (`annotations.state_of`): `current` where the relative's
+record has the text the claim was checked against, `stale` where it changed
+— a claim is never shown as a fact of text it was not made about.
+
+## 6. The name's history
 
 - **2026-09-20 → 2026-10-18.** RAGE named the model pool (before 2026-09-20
   "the model pool"), VeGa's predecessor: VeGa took its run identity and

@@ -224,9 +224,12 @@ def _targets_of(root: Path, codex) -> list[tuple[str, Any]]:
     want = {t.collection_id for t in targets_of(codex)}
     if not want:
         return []
-    # a held records twin of a target is one too (02 §2.4 A1f; annotations.answers_for)
+    # a target's family is one too: its sisters and daughters, by lineage and
+    # by a records carry (app/rage/family.py; annotations.answers_for)
+    from app.rage import family
+    relatives = family.held_collections()
     return [(n, c) for n, c in col.list_named(root)
-            if want & set(answers_for(root, n, c.collection_id))]
+            if want & set(answers_for(root, n, c.collection_id, relatives))]
 
 
 def _target_of(root: Path, codex) -> tuple[str, Any] | None:
