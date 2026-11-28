@@ -13,7 +13,8 @@ share nothing (§7.7) — and the kernel drops it with its holder, so a crash
 leaves no stale lock, only the holder's last words in the file for the next
 taker to read. `node pause <collection>` makes the worker release it at the
 end of the current unit; `node resume <collection>` makes it take it again
-(app/worker.py).
+(app/worker.py). The pause waits for that release, bounded, and so does a
+writer that finds a paused collection still the worker's (`take_waiting`).
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import json
 import os
 import socket
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -35,14 +37,21 @@ class Held(CodexError):
     """Another writer holds the collection. `holder` is what its lock file
     says; `exit_code` is 3 (retry when it is done) or 2 (07 §7.7's four)."""
 
-    def __init__(self, name: str, holder: dict[str, Any] | None, *, exit_code: int = 3):
+    def __init__(self, name: str, holder: dict[str, Any] | None, *, exit_code: int = 3,
+                 waited: float | None = None):
         self.holder = dict(holder or {})
         self.exit_code = exit_code
+        #: the seconds waited for the worker of a paused collection (`take_waiting`)
+        self.waited = waited
         who = (f"{self.holder.get('what') or 'another writer'} (pid "
                f"{self.holder.get('pid', '?')} on {self.holder.get('host', '?')}, since "
                f"{self.holder.get('since', '?')})")
-        tail = ("; `node pause <collection>` releases the node's" if exit_code == 2
-                else "; retry when it is done")
+        if waited is not None:
+            tail = (f"; its pause is recorded and still being applied: the worker lets go at the "
+                    f"end of its current unit, not yet after {waited:g} s; retry when it has")
+        else:
+            tail = ("; `node pause <collection>` releases the node's" if exit_code == 2
+                    else "; retry when it is done")
         super().__init__(f"{name!r} is held by {who} — one writer per collection "
                          f"(07 §7.7){tail}")
 
@@ -156,3 +165,75 @@ def holder(state: Path, *, file: str = LOCK) -> dict[str, Any] | None:
             return who if isinstance(who, dict) else {}
         fcntl.flock(f, fcntl.LOCK_UN)
         return None
+
+
+# ---- a paused collection's lock, waited for (docs/notes/manual-steps.md, 5) ----
+#
+# München, 2026-11-28: `node pause gutenberg` returned 0, and the jobs POSTed
+# 1-5 s after it were refused, "held by the node (worker) … retry when it is
+# done": the worker lets go at the end of the collection's current unit
+# (app/worker.py `_hold_locks`, `retire_collection`), 80 s after the pause
+# that time, so "by the book" was a wait of unknown length by hand.
+
+#: how often a bounded wait probes the lock: a probe is one flock call, and
+#: the unit waited for is seconds to a minute. Standard alternative, written
+#: down: a blocking flock(LOCK_EX) under a SIGALRM timeout wakes at the
+#: release itself; it TAKES the lock (the pause must not), cannot tell the
+#: worker from another holder before it has it, and an alarm is the main
+#: thread's only — it pays if a second's latency ever matters.
+POLL_S = 1.0
+
+
+def wait_while_held(state: Path, wait_s: float, *, still: Callable[[], bool] = lambda: True,
+                    by: str = WORKER, poll_s: float = POLL_S, file: str = LOCK
+                    ) -> dict[str, Any] | None:
+    """Wait, at most `wait_s`, while `by` (the worker) holds the lock and
+    `still()` is true — the collection's pause still recorded. None as soon
+    as `by` no longer holds it: free, or another writer's, which is not
+    waited for. `by`'s record when the bound passed or `still()` turned
+    false first. A probe, never a take: the worker does not take a paused
+    collection back (`_hold_locks`), so the caller takes it after."""
+    deadline = time.monotonic() + max(0.0, wait_s)
+    while True:
+        who = holder(state, file=file)
+        if who is None or who.get("what") != by:
+            return None
+        left = deadline - time.monotonic()
+        if left <= 0 or not still():
+            return who
+        time.sleep(min(poll_s, left))
+
+
+def take_waiting(state: Path, name: str, what: str, *, wait_s: float, still: Callable[[], bool],
+                 exit_code: int = 3, say: Callable[[str], None] | None = None,
+                 poll_s: float = POLL_S) -> Lock:
+    """`take`, except where THE WORKER holds the lock while `still()` — the
+    collection's pause recorded, which the worker applies at the end of its
+    current unit: then it is waited for, at most `wait_s`, said once through
+    `say`. Any other holder, a collection not paused, or `wait_s` 0 is
+    refused at once, as `take` refuses. Past the bound, `Held` with exit 3
+    and `waited`: the pause is still being applied, so a retry is the
+    answer — for 07 §7.7's four too, whose 2 says to pause first."""
+    try:
+        return take(state, name, what, exit_code=exit_code)
+    except Held as e:
+        if wait_s <= 0 or e.holder.get("what") != WORKER or not still():
+            raise
+    if say is not None:
+        say(f"waiting for the worker to finish {name}'s current unit: its pause is recorded "
+            f"(at most {wait_s:g} s)…")
+    deadline = time.monotonic() + wait_s
+    while True:
+        who = wait_while_held(state, deadline - time.monotonic(), still=still, poll_s=poll_s)
+        if who is None:
+            try:
+                return take(state, name, what, exit_code=exit_code)
+            except Held as e:
+                if e.holder.get("what") != WORKER:
+                    raise                     # another writer took it meanwhile: refused as `take` is
+                who = e.holder
+                time.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+        if not still():
+            raise Held(name, who, exit_code=exit_code)     # the pause withdrawn: refused as before it
+        if time.monotonic() >= deadline:
+            raise Held(name, who, exit_code=3, waited=wait_s)
