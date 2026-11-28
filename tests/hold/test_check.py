@@ -354,6 +354,26 @@ def test_one_attestation_per_completed_check_and_never_per_run(checkable):
     assert set(written) == {"roots", "license"}
 
 
+def test_every_check_says_how_long_it_took_and_signs_nothing_of_it(checkable):
+    """München, 2026-11-28: a 36.5-min scheduled check whose report named no
+    time, so its split by check could only be inferred. The report and the
+    log carry each check's seconds; the attestation (signed, published, 09
+    §9.8) does not."""
+    root, snapshot, codex = checkable
+    said = []
+    report = _run(root, codex, snapshot, ["roots", "license"], log=said.append)
+    assert all(o.secs is not None and o.secs >= 0 for o in report.outcomes)
+    rows = report.to_json()["checks"]
+    assert [r["check"] for r in rows] == ["roots", "license"]
+    assert all(isinstance(r["secs"], float) for r in rows)
+    assert all(line.rstrip().endswith(" s)") for line in said if line.startswith(("PASS", "FAIL", "INCON")))
+    body = env.verify(env.ATTESTATION, chk.attestation(report.outcomes[0], codex, snapshot, KEY,
+                                                       platform_image=PLATFORM, now=NOW))
+    assert "secs" not in body and "secs" not in body["detail"]
+    # a time is no part of what a check found
+    assert replace(report.outcomes[0], secs=99.0) == report.outcomes[0]
+
+
 def test_the_attestation_is_9_8s_body_and_verifies(checkable):
     root, snapshot, codex = checkable
     report = _run(root, codex, snapshot, ["roots"])
