@@ -645,22 +645,53 @@ def mark_tried(corpus: Path, lang: str, celex: str, why: str) -> None:
 
 def judge_unit(unit: Path, lang: str, celex: str) -> dict:
     """A held unit's state from its files: `whole`, and where it is not,
-    `why` — "unreadable" (its tree does not read), "lacks <packages>", or
-    "not its name: <files>" (files holding another act's bytes) — with
-    `lacks` and the tree's own latest modification (`origin_modified`)."""
-    from ..plugins.eurlex import from_tree, rdf
-    from ..plugins.eurlex.source import LANGUAGES
-    from .cellar import lacked_packages
+    `why` — "unreadable" (its tree or its files do not read), "lacks
+    <parts>", or "not its name: <reasons>" (files holding another file's or
+    act's bytes) — with `lacks`, `gaps` (part → 09 §9.5's why) and the
+    tree's own latest modification (`origin_modified`). THE SAME READING AS
+    THE RECORD'S `origin_gaps` (source.unit_gaps, formex.gaps; architecture's
+    B1, 2026-11-28): whole exactly where a parser-6 record states none."""
+    from ..plugins.eurlex import formex, from_tree, rdf
+    from ..plugins.eurlex.source import LANGUAGES, unit_files, unit_gaps
     try:
         note = from_tree.notice(rdf.loads((unit / rdf.TREE_FILE).read_bytes()), LANGUAGES[lang], celex)
     except (OSError, ValueError, KeyError, from_tree.TreeError):
-        return {"whole": False, "why": "unreadable", "lacks": [], "origin_modified": None}
-    lacked = lacked_packages(unit, note)
-    misnamed = [] if lacked else held_not_its_name(unit, celex)
-    why = (f"lacks {', '.join(lacked)}" if lacked else f"not its name: {'; '.join(misnamed)}" if misnamed
-           else None)
-    return {"whole": why is None, "why": why[:300] if why else None, "lacks": lacked,
-            "origin_modified": note.modified or note.last_modified}
+        return {"whole": False, "why": "unreadable", "lacks": [], "gaps": {}, "origin_modified": None}
+    modified = note.modified or note.last_modified
+    try:
+        files = held_for_judging(unit_files(unit))
+        view, packed = formex.unpack(files)
+        tree_fmx = {it.name for it in note.items.get("fmx4", []) if it.name}
+        listed = tree_fmx | {m for m, pkg in packed.items() if pkg in tree_fmx}
+        found = unit_gaps(files, view, note, celex, listed)
+    except (OSError, formex.FormexError):
+        return {"whole": False, "why": "unreadable", "lacks": [], "gaps": {}, "origin_modified": modified}
+    lacked = [p for p, (why, _r) in found.items() if why == formex.ABSENT]
+    other = list(dict.fromkeys(r for why, rs in found.values() if why != formex.ABSENT for r in rs))
+    why = (f"lacks {', '.join(lacked)}" if lacked else None)
+    if other:
+        why = f"{why}; " if why else ""
+        why += f"not its name: {'; '.join(other)}"
+    return {"whole": not found, "why": why[:300] if why else None, "lacks": lacked,
+            "gaps": {p: w for p, (w, _r) in found.items()}, "origin_modified": modified}
+
+
+def held_for_judging(entries) -> dict:
+    """A unit's items as `formex.unpack` takes them without reading figures
+    whole: a package and an .xml by path (read through, whole), any other
+    file its first bytes — all a judge of names against content reads."""
+    from ..plugins.eurlex import formex, rdf
+    from ..plugins.eurlex.source import NOTICE
+    out: dict = {}
+    for e in entries:
+        if e.name in (rdf.TREE_FILE, NOTICE):       # what the parse pops before reading the items
+            continue
+        if formex.is_package(e.name) or e.name.lower().endswith(".xml"):
+            out[e.name] = Path(e.path)
+        else:
+            with open(e.path, "rb") as f:
+                out[e.name] = f.read(formex._HEAD_BYTES)
+    return out
 
 
 def mark_degraded(corpus: Path, lang: str, celex: str, state: dict) -> None:

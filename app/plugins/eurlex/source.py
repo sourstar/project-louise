@@ -703,32 +703,33 @@ def _say_once(message: str) -> None:
         print(message, flush=True)
 
 
-def _origin_gaps(view: dict, act, celex: str) -> list[dict]:
-    """09 §9.5's `origin_gaps` of a Formex act, from the unit's own files:
-    each part the wrapper names and the unit does not hold "absent"; each
-    file holding what another file of the unit is named for "another's:
-    <that file>" (its own BIB.INSTANCE page against the names' pages,
-    `formex.stated_place`); each file not of its name's kind "unreadable".
-    A rendition (no Formex) states none."""
-    if act is None or getattr(act, "rendered_sections", None) is not None:
-        return []
-    gaps: dict[str, str] = {name: "absent" for name in (getattr(act, "missing", None) or [])}
-    heads = {n: b[:formex._HEAD_BYTES] for n, b in view.items() if isinstance(b, (bytes, bytearray))}
-    try:
-        wrapper = formex._parse(view[act.wrapper_file], act.wrapper_file)
-    except (KeyError, formex.FormexError):
-        return [{"part": p, "why": w} for p, w in sorted(gaps.items())]
-    named = [n for n in dict.fromkeys([*formex.main_names(wrapper), *formex.annex_names(wrapper)]) if n in heads]
-    for n in named:
-        if formex.misnamed(n, heads[n]) is not None:
-            gaps.setdefault(n, "unreadable")
-    places = {n: formex.stated_place(n, heads[n]) for n in named}
-    by_name_place = {(p[0], p[1], p[2]): n for n, p in places.items() if p is not None}
-    for n in formex.swapped(places):
-        p = places[n]
-        holds = by_name_place.get((p[0], p[3], p[4])) if p is not None else None
-        gaps.setdefault(n, f"another's: {holds}" if holds and holds != n else "unreadable")
-    return [{"part": p, "why": gaps[p]} for p in sorted(gaps, key=lambda s: s.encode("utf-8"))]
+def unit_gaps(files: dict, view: dict, note, celex: str, listed=None) -> dict[str, tuple[str, list[str]]]:
+    """What a unit did not give, from its OWN files and tree
+    (`formex.gaps`, B1): the packages its tree lists for the form read and
+    it lacks, and its Formex wrapper's files. `files` the unit's items as
+    held (a package by its name), `view` them read (`formex.unpack`). The
+    record's `origin_gaps` and the fetch's judge (eurlex_dump.judge_unit)
+    are this, so a record states gaps exactly where the judge says "not
+    whole". A wrapper that is another act's (`own_wrapper` refuses it) is no
+    gap of this act: its text is read from the next form."""
+    from ...acquire.cellar import form_of
+    lacked = ([it.name for it in note.items.get("fmx4", []) if it.name and formex.is_package(it.name)
+               and it.name not in files] if form_of(note) == "fmx4" else [])
+    wname = wrapper = None
+    if any(formex.is_wrapper(n) for n in view):
+        try:
+            wname = formex.own_wrapper(view, celex, view.__getitem__, listed, note.date_document)
+            wrapper = formex._parse(view[wname], wname)
+        except formex.FormexError:
+            wname = wrapper = None
+    if wrapper is not None:
+        view, _aliases = formex.doubled_names(view, [*formex.main_names(wrapper), *formex.annex_names(wrapper)])
+    return formex.gaps(view, wrapper, wname, lacked)
+
+
+def origin_gaps_of(gaps: dict[str, tuple[str, list[str]]]) -> list[dict]:
+    """09 §9.5's shape: one entry a part, sorted by its bytes."""
+    return [{"part": p, "why": gaps[p][0]} for p in sorted(gaps, key=lambda s: s.encode("utf-8"))]
 
 
 def _not_their_names(files: dict, celex: str) -> list[str]:
@@ -1018,8 +1019,9 @@ class EurlexSource:
 
     def at_parser_version(self, version: int) -> "EurlexSource | None":
         """This plugin parsing at `version`, for a collection whose Codex
-        names it (`collections.plugin_at`): 4 is this one, 3 the one that read
-        the facts from the notice (`EurlexSourceV3`)."""
+        names it (`collections.plugin_at`): 6 is this one, 5 the one before
+        `origin_gaps` (`EurlexSourceV5`), 3 the one that read the facts from
+        the notice (`EurlexSourceV3`)."""
         return {6: self, 5: _V5, 3: _V3}.get(int(version))
 
     # ---- discovery ---------------------------------------------------------------------------
@@ -1336,7 +1338,8 @@ class EurlexSource:
         stated_lang = notice_mod.CODE_OF.get(note.display_language or "", lang)
         try:
             if form == "fmx4":
-                act = formex.parse(view, celex, listed, note.date_document)
+                act = formex.parse(view, celex, listed, note.date_document,
+                                   set_aside=self.PARSER_VERSION >= 6)
                 for name in act.missing:
                     found.append(Issue("item-not-held", f"{act.wrapper_file} names {name}"))
             elif form in ("xhtml", "html"):
@@ -1564,7 +1567,8 @@ class EurlexSource:
             keys=sorted(keys),
             extra={k: v for k, v in extra.items() if v not in (None, "", [], {})},
             sections=sections,
-            origin_gaps=_origin_gaps(view, act, celex) if self.PARSER_VERSION >= 6 else [],
+            origin_gaps=origin_gaps_of(unit_gaps(files, view, note, celex, listed))
+            if self.PARSER_VERSION >= 6 else [],
             raw_hash=raw.raw_hash,
             issues=found,
         )
