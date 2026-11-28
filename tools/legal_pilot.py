@@ -521,26 +521,41 @@ POOL_DEPTH = 100
 
 
 def pool(held: Held, questions: list[dict[str, Any]], gold: dict[int, Gold], *,
-         depth: int = POOL_DEPTH, as_of: str | None = None, search_fn: Callable | None = None) -> dict[str, Any]:
+         depth: int = POOL_DEPTH, as_of: str | None = None, search_fn: Callable | None = None,
+         rerank: bool = False, sample: int | None = None) -> dict[str, Any]:
     """The candidate set: each covered question's top `depth` records by the
     text leg, and every gold record. What each question contributed, and
-    how many of its gold records the text leg already found, are kept."""
+    how many of its gold records the text leg already found, are kept.
+
+    A RECALL SET (TREC's pooling): what enters matters, not its order, so the
+    text leg's own top `depth` is taken WITHOUT the reranker by default
+    (architecture, 2026-11-28: ~5 s a question reranked, ~70 min for the
+    Normattiva pool). It is not the same set: the search reranks and THEN
+    cuts at `depth`, so a reranked pool holds records the text leg's BM25
+    order would not. `rerank=True` builds it as before (the pools made
+    until 2026-11-28 were); the pool's file says which. `sample`: the first
+    N covered questions only, to measure the two ways against each other."""
     search_fn = search_fn or text_search
+    import contextlib
+    off = contextlib.nullcontext() if rerank else reranker_override("off")
     name = held.collection.name
     ids: set[int] = set()
     per: list[dict[str, Any]] = []
-    for i, q in enumerate(questions):
-        relevant = {int(x) for x in q["relevant_doc_ids"] if int(x) in gold and gold[int(x)].held}
-        if not relevant:
-            continue
-        found = {_native_of(h.get("uid")) for h in _hits(search_fn(q["question"], collections=[name],
-                                                                    limit=depth, as_of=as_of))} - {None}
-        golds = {_native_of(gold[x].uid) for x in relevant} - {None}
-        ids |= found | golds
-        per.append({"index": i, "text_records": len(found), "gold_records": len(golds),
-                    "gold_found_by_text": len(golds & found), "found": sorted(found)})
-    return {"built_from": name, "depth": depth, "as_of": as_of, "records": len(ids),
-            "native_ids": sorted(ids), "questions": per}
+    with off:
+        for i, q in enumerate(questions):
+            relevant = {int(x) for x in q["relevant_doc_ids"] if int(x) in gold and gold[int(x)].held}
+            if not relevant:
+                continue
+            if sample is not None and len(per) >= sample:
+                break
+            found = {_native_of(h.get("uid")) for h in _hits(search_fn(q["question"], collections=[name],
+                                                                        limit=depth, as_of=as_of))} - {None}
+            golds = {_native_of(gold[x].uid) for x in relevant} - {None}
+            ids |= found | golds
+            per.append({"index": i, "text_records": len(found), "gold_records": len(golds),
+                        "gold_found_by_text": len(golds & found), "found": sorted(found)})
+    return {"built_from": name, "depth": depth, "as_of": as_of, "records": len(ids), "reranked": rerank,
+            "sample": sample, "native_ids": sorted(ids), "questions": per}
 
 
 def pool_state(collection, native_ids: Iterable[int], *, window: int = 500) -> dict[str, int]:
@@ -1176,6 +1191,11 @@ def main(argv: list[str] | None = None) -> int:
         if cmd == "pool":
             p.add_argument("--name", required=True)
             p.add_argument("--depth", type=int, default=POOL_DEPTH)
+            p.add_argument("--rerank", action="store_true", dest="pool_rerank",
+                           help="build the pool as before 2026-11-28: the text leg reranked, then cut at "
+                                "--depth (by default the text leg's own order: a recall set needs no reranker)")
+            p.add_argument("--sample", type=int, default=None,
+                           help="the first N covered questions only (to measure the two ways on a sample)")
             p.add_argument("--as-of", default=None, dest="as_of")
         if cmd == "enqueue":
             p.add_argument("--pool", required=True)
@@ -1276,7 +1296,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"written {path}")
             return 0
         if a.cmd == "pool":
-            got = pool(held, questions, gold, depth=a.depth, as_of=a.as_of)
+            got = pool(held, questions, gold, depth=a.depth, as_of=a.as_of, rerank=a.pool_rerank,
+                       sample=a.sample)
             path = a.out / "runs" / f"pool-{a.name}.json"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({**_stamp(held), "name": a.name, "split": a.split, **got},
