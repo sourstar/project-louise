@@ -106,3 +106,77 @@ def test_held_to_the_model_a_candidate_farther_than_the_reference_and_the_line_f
     candidate = {k: v + 0.02 for k, v in REF.items()}
     res = rp.run(PAIRS, _scorer(reference), _scorer(candidate), loads=1, cut_by=0, model=_scorer(dict(REF)))
     assert not rp.verdict(res)["pass"]
+
+
+def _lists(n=4, k=5):
+    return [{"query": f"q{i}", "documents": [f"doc {i}.{j} " + "x" * j for j in range(k)]} for i in range(n)]
+
+
+def test_another_parallel_identical_scores_and_orders_are_counted():
+    from tools.measure import rerank_parity as rp
+    base = lambda q, docs: [float(len(d)) + 0.25 * (hash(q) % 3) for d in docs]
+    same = rp.run(_lists(), base, base, concurrency=3, concurrent_ms={})
+    v = rp.verdict(same)
+    assert v["identical_to_reference"] == 4 and v["orders_changed"] == 0 and v["candidate_reproduces"]
+
+    calls = {"n": 0}
+
+    def drifts(q, docs):                     # a candidate whose bits move with its batch-mates
+        calls["n"] += 1
+        return [s + (1e-7 if calls["n"] % 2 else 0.0) for s in base(q, docs)]
+    moved = rp.verdict(rp.run(_lists(), base, drifts, concurrency=3, concurrent_ms={}))
+    assert moved["identical_to_reference"] < 4 and moved["orders_changed"] == 0
+    assert not moved["candidate_reproduces"] and moved["max_abs_delta"] <= 1e-6
+
+
+def test_an_order_that_flips_in_any_answer_is_counted():
+    from tools.measure import rerank_parity as rp
+    base = lambda q, docs: [1.0, 0.5, 0.5000001, 0.1][:len(docs)]
+    calls = {"n": 0}
+
+    def flips(q, docs):
+        calls["n"] += 1
+        s = base(q, docs)
+        return [s[0], s[2], s[1], s[3]][:len(docs)] if calls["n"] == 3 else s
+    pairs = [{"query": "q", "documents": ["a", "b", "c", "d"]}]
+    r = rp.run(pairs, base, flips)[0]
+    assert not r.order_same and r.identical
+
+
+def test_lists_in_flight_are_timed_for_both_and_the_reference_checked():
+    from tools.measure import rerank_parity as rp
+    base = lambda q, docs: [float(len(d)) for d in docs]
+    pairs, wall = _lists(), {}
+    results = rp.run(pairs, base, base, concurrency=4, concurrent_ms=wall)
+    t = rp.throughput(pairs, results, wall)
+    assert t["pairs"] == 20 and t["reference_same_with_lists_in_flight"] is True
+    assert {"candidate_ms_per_100_pairs", "reference_ms_per_100_pairs", "candidate_ms_per_100_pairs_concurrent",
+            "reference_ms_per_100_pairs_concurrent"} <= set(t)
+    # a candidate whose bits move only with other lists in flight is caught by that pass, by name
+    state = {"busy": False}
+
+    def busy_only(q, docs):
+        return [x + (1e-6 if state["busy"] else 0.0) for x in base(q, docs)]
+    orig = rp.concurrently
+
+    def marked(score, *a):
+        state["busy"] = True
+        try:
+            return orig(score, *a)
+        finally:
+            state["busy"] = False
+    rp.concurrently = marked
+    try:
+        caught = rp.run(pairs, base, busy_only, concurrency=4, concurrent_ms={})
+    finally:
+        rp.concurrently = orig
+    assert all(r.notes == ["4 lists at once: scored differently"] for r in caught)
+
+    calls = {"n": 0}
+
+    def unsteady(q, docs):                   # a reference that moves with others in flight
+        calls["n"] += 1
+        return [x + (0.001 if calls["n"] > len(pairs) + 1 else 0.0) for x in base(q, docs)]
+    wall2 = {}
+    rp.run(pairs, unsteady, base, concurrency=4, concurrent_ms=wall2)
+    assert wall2["reference_same"] is False

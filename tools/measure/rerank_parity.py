@@ -5,7 +5,7 @@ candidate lists - a model moved to another engine against the run it replaces
 
     python -m tools.measure.rerank_parity --capture SET.jsonl --queries 40 --per-query 50 \\
         --url http://localai:8080/v1/rerank --model <the candidate> --reference-model louise-rerank-medcpt \\
-        [--reference-url URL] [--loads 3] [--cut 7] [--calibration A,B] [--out parity.json]
+        [--reference-url URL] [--loads 3] [--cut 7] [--concurrency 6] [--calibration A,B] [--out parity.json]
 
 SET.jsonl is a rerank_bench capture: the lists the live search sends the
 reranker (`python -m tools.measure.rerank_bench capture umbrela <judged.jsonl>
@@ -25,6 +25,18 @@ next request loads it again). Latency: each model's whole-list request, warm,
 p50 and p95. `--calibration A,B`: the collection's Platt calibration
 (app/collections.py `Calibration`) applied to both, the largest difference of
 calibrated relevance.
+
+THE SAME MODEL AT ANOTHER `parallel` (2026-11-28, the architecture: the
+reranker's single slot). The reference is the model as it serves (parallel:1),
+the candidate a twin with more slots, so documents of one list - and of lists
+asked at the same time - share the engine's batches. Per query: whether the
+candidate's scores are THE SAME BITS as the reference's, and whether the full
+order of the list is the same in every answer the candidate gave (invariant 4
+(5): the same query and data give the same order). `--concurrency C`: one more
+pass with C lists in flight at once, as the search sends a question's lists
+(six), for both models: its answers join the candidate's reruns, and the
+wall time per 100 pairs of each model is reported beside the one-list-at-a-time
+time.
 
 THE MODEL'S OWN SCORES (`--torch-cross <hf snapshot>`, a cross-encoder): the
 same lists scored as the model card scores them - transformers'
@@ -80,11 +92,18 @@ class QueryResult:
     max_calibrated_delta: float | None = None
     candidate_vs_model: float | None = None
     reference_vs_model: float | None = None
+    identical: bool = False
+    order_same: bool = True
     notes: list[str] = field(default_factory=list)
 
 
 def top(scores: Sequence[float], k: int) -> list[int]:
     return sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:k]
+
+
+def order(scores: Sequence[float]) -> list[int]:
+    """The whole list's order, a tie broken by position (as `top`)."""
+    return top(scores, len(scores))
 
 
 def same_first(reference: Sequence[float], candidate: Sequence[float]) -> bool:
@@ -115,7 +134,9 @@ def compare(query: str, reference: Sequence[float], candidate: Sequence[float],
                     top10_share=round(len(set(head) & set(top(candidate, 10))) / max(1, len(head)), 4),
                     same_top1=same_first(reference, candidate),
                     max_abs_delta=round(max((abs(x - y) for x, y in zip(reference, candidate)), default=0.0), 6),
-                    reproduces=not notes, notes=notes)
+                    reproduces=not notes, notes=notes,
+                    identical=list(reference) == list(candidate),
+                    order_same=all(order(s) == order(reference) for s in [candidate, *reruns.values()]))
     if calibration is not None:
         a, b = calibration
         r.max_calibrated_delta = round(max((abs(platt(a, b, x) - platt(a, b, y))
@@ -134,6 +155,8 @@ def verdict(results: Sequence[QueryResult]) -> dict[str, Any]:
            "median_tau_top10": round(statistics.median([r.tau_top10 for r in results]), 4) if results else 0.0,
            "max_abs_delta": max((r.max_abs_delta for r in results), default=None),
            "candidate_reproduces": all(r.reproduces for r in results),
+           "identical_to_reference": sum(r.identical for r in results),
+           "orders_changed": sum(not r.order_same for r in results),
            "candidate_ms_p50": p([r.candidate_ms for r in results], 50),
            "candidate_ms_p95": p([r.candidate_ms for r in results], 95),
            "reference_ms_p50": p([r.reference_ms for r in results], 50),
@@ -169,9 +192,37 @@ def in_pieces(score: Scorer, query: str, docs: list[str], k: int) -> list[float]
     return out
 
 
+def concurrently(score: Scorer, pairs: list[dict[str, Any]], docs_of: list[list[str]],
+                 workers: int) -> tuple[list[list[float]], float]:
+    """Every list asked with `workers` in flight at once; the answers in the lists' order, and the wall time (ms)."""
+    from concurrent.futures import ThreadPoolExecutor
+    t0 = time.monotonic()
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        out = list(pool.map(lambda pd: score(pd[0]["query"], pd[1]), zip(pairs, docs_of)))
+    return out, (time.monotonic() - t0) * 1000
+
+
+def throughput(pairs: list[dict[str, Any]], results: Sequence[QueryResult],
+               concurrent_ms: dict[str, float] | None = None) -> dict[str, Any]:
+    """Milliseconds per 100 pairs: one list at a time (the timed first pass), and with the lists in flight at once."""
+    n = sum(len(p["documents"]) for p in pairs)
+    if not n:
+        return {}
+    out = {"pairs": n,
+           "candidate_ms_per_100_pairs": round(sum(r.candidate_ms for r in results) / n * 100, 1),
+           "reference_ms_per_100_pairs": round(sum(r.reference_ms for r in results) / n * 100, 1)}
+    for who in ("candidate", "reference"):
+        if who in (concurrent_ms or {}):
+            out[f"{who}_ms_per_100_pairs_concurrent"] = round(concurrent_ms[who] / n * 100, 1)
+    if "reference_same" in (concurrent_ms or {}):
+        out["reference_same_with_lists_in_flight"] = concurrent_ms["reference_same"]
+    return out
+
+
 def run(pairs: list[dict[str, Any]], reference: Scorer, candidate: Scorer, *, loads: int = 1, cut_by: int = 0,
         reload: Callable[[], None] | None = None, calibration: tuple[float, float] | None = None,
-        model: Scorer | None = None) -> list[QueryResult]:
+        model: Scorer | None = None, concurrency: int = 0,
+        concurrent_ms: dict[str, float] | None = None) -> list[QueryResult]:
     """Every query asked of both; the candidate's reruns asked as `compare` reads them. The fresh loads come after
     the first pass: `reload()` unloads the candidate, and each query's first answer after it is that load's."""
     docs_of = [[cut(d) for d in p["documents"]] for p in pairs]
@@ -188,6 +239,15 @@ def run(pairs: list[dict[str, Any]], reference: Scorer, candidate: Scorer, *, lo
         if cut_by > 0:
             extra[f"cut by {cut_by}"] = in_pieces(candidate, p["query"], docs, cut_by)
         firsts.append(cand); refs.append(ref); ms_c.append(mc); ms_r.append(mr); reruns.append(extra)
+    if concurrency > 1:
+        ref_c, wall_r = concurrently(reference, pairs, docs_of, concurrency)
+        cand_c, wall_c = concurrently(candidate, pairs, docs_of, concurrency)
+        for extra, scores in zip(reruns, cand_c):
+            extra[f"{concurrency} lists at once"] = scores
+        # the reference must be its own fixed point under the same load, or no comparison with it holds
+        same = all(list(scores) == list(ref) for ref, scores in zip(refs, ref_c))
+        if concurrent_ms is not None:
+            concurrent_ms.update({"candidate": wall_c, "reference": wall_r, "reference_same": same})
     for n in range(2, loads + 1):
         if reload is None:
             raise ValueError("fresh loads need a way to unload the candidate")
@@ -249,14 +309,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cut", type=int, default=7, help="also send the documents this many at a time (0: not)")
     ap.add_argument("--calibration", help="A,B: the collection's Platt calibration, applied to both")
     ap.add_argument("--torch-cross", help="the cross-encoder's HF snapshot: the model's own scores beside both")
+    ap.add_argument("--concurrency", type=int, default=0,
+                    help="one more pass with this many lists in flight at once, for both models (0: not)")
     ap.add_argument("--out", type=Path)
     a = ap.parse_args(argv)
     calibration = tuple(float(x) for x in a.calibration.split(",")) if a.calibration else None
     pairs = pairs_from_capture(a.capture, a.queries, a.per_query)
+    concurrent_ms: dict[str, float] = {}
     results = run(pairs, engine_scorer(a.reference_url or a.url, a.reference_model), engine_scorer(a.url, a.model),
                   loads=a.loads, cut_by=a.cut, reload=unloader(a.url, a.model), calibration=calibration,
-                  model=cross_encoder_scorer(a.torch_cross) if a.torch_cross else None)
-    report = {"verdict": verdict(results), "queries": [r.__dict__ for r in results]}
+                  model=cross_encoder_scorer(a.torch_cross) if a.torch_cross else None,
+                  concurrency=a.concurrency, concurrent_ms=concurrent_ms)
+    report = {"verdict": {**verdict(results), "throughput": throughput(pairs, results, concurrent_ms)},
+              "queries": [r.__dict__ for r in results]}
     if a.out:
         a.out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps(report["verdict"], indent=1))
