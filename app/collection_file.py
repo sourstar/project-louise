@@ -131,7 +131,7 @@ def _codex_toml_text(path: Path, *, codex: str, profile: str | None,
                      slices=None, kinds=None, share: bool = False,
                      reranker=None, source: str = "origin",
                      share_slices=None, share_kinds=None, embed_slices=None,
-                     embed_select=None, method=None) -> str:
+                     embed_select=None, method=None, locked: bool = False) -> str:
     """07 §7.8's file: `codex`, `title`, `slices`, `kinds`, `embed`,
     `share`, `[encoder]` naming where this node reaches the encoder, and
     `[reranker]` where it reaches the collection's reranker (05 §5.6).
@@ -208,6 +208,11 @@ def _codex_toml_text(path: Path, *, codex: str, profile: str | None,
     if embed_select is not None:
         lines.append(f"embed_select = {_toml_scalar(embed_select)}")
     lines.append(f"share = {'true' if share else 'false'}")
+    # 07 §7.8 `locked` (2026-11-27): written only when true (absent = false),
+    # carried through every rewrite — a rewrite that dropped it would serve,
+    # fetch for and load the models of a collection kept as it is
+    if locked:
+        lines.append("locked = true")
     # 07 §7.8 `share_slices` / `share_kinds` (2026-10-07): what serving is
     # narrowed to, carried through every rewrite like `source`
     if share_slices is not None:
@@ -332,7 +337,7 @@ def _write_collection_toml(path: Path, *, codex: str | None,
                             slices=None, kinds=None, share: bool = False,
                             reranker=None, source: str = "origin",
                             share_slices=None, share_kinds=None, embed_slices=None,
-                            embed_select=None, method=None) -> None:
+                            embed_select=None, method=None, locked: bool = False) -> None:
     """Rewrite a collection's Tier-2 file. `codex` has NO DEFAULT on
     purpose: a call site that forgets it must fail loudly here, because
     the failure it would otherwise cause is silent and unrepairable.
@@ -358,7 +363,7 @@ def _write_collection_toml(path: Path, *, codex: str | None,
             title=title, slices=slices, kinds=kinds, share=share,
             reranker=reranker, source=source,
             share_slices=share_slices, share_kinds=share_kinds, embed_slices=embed_slices,
-            embed_select=embed_select, method=method)
+            embed_select=embed_select, method=method, locked=locked)
         return
     lines = [f'plugin = "{plugin}"']
     if peer_source:
@@ -502,7 +507,8 @@ def _fields(c, raw: dict[str, Any]) -> dict[str, Any]:
         share_slices=c.share_slices, share_kinds=c.share_kinds,
         embed_slices=getattr(c, "embed_slices", None),
         embed_select=getattr(c, "embed_select", None),
-        method=getattr(c, "method", None))
+        method=getattr(c, "method", None),
+        locked=bool(getattr(c, "locked", False)))
 
 
 def rewrite(collection, **changes) -> Path:
@@ -535,6 +541,8 @@ def load(name: str):
 SETTABLE: dict[str, str] = {
     "embed": "off | on-demand | all | p2p",
     "share": "true | false",
+    "locked": "true | false: kept as it is — not searched, shared, fetched or processed, its "
+              "models not loaded for it; only renamed, exported or removed (07 §7.8)",
     "title": "this peer's own name for it; empty removes it",
     "slices": '"all", or slice names, comma-separated',
     "kinds": "member kinds, comma-separated (02 §2.6)",
@@ -557,6 +565,9 @@ SETTABLE: dict[str, str] = {
     "acquire_enabled": "true | false: whether the node fetches from the origin; default: as the "
                        "collection's kind does",
 }
+#: what a LOCKED file still takes (operator, 2026-11-27: "It can only be
+#: renamed, exported or removed"): its lock, and the name pages show
+LOCKED_SETTABLE = frozenset({"locked", "title"})
 #: `hold config show` prints the mode as `embed_mode`
 ALIASES = {"embed_mode": "embed"}
 _ENCODER_APIS = ("openai", "ollama", "vega")
@@ -616,7 +627,7 @@ def _parse(key: str, text: str, where: str) -> Any:
             if mode is None:
                 raise ValueError("embed needs a value")
             return mode
-        if key == "share":
+        if key in ("share", "locked"):
             return _bool(key, text)
         if key == "title":
             return text or None
@@ -705,6 +716,14 @@ def set_values(name: str, values: dict[str, str]) -> dict[str, Any]:
     nothing written and `SetRefused`. Returns what the file says now."""
     c, raw, path = load(name)
     where = str(path)
+    if getattr(c, "locked", False) and set(values) - LOCKED_SETTABLE:
+        # KEPT AS IT IS (07 §7.8 `locked`): its file changes only by its lock
+        # box and its shown name (the Library's rename…) until it is
+        # unlocked — the same call may unlock it and set more
+        if values.get("locked", "").strip().lower() != "false":
+            from . import collection_lock
+            raise SetRefused(collection_lock.refusal(c.name, "changed")
+                             or f"{c.name} is locked")
     parsed = {k: _parse(k, v, where) for k, v in values.items()}
     return _apply(c, raw, path, parsed)
 
@@ -748,6 +767,8 @@ def _apply(c, raw: dict[str, Any], path: Path, parsed: dict[str, Any], *,
             kw[field] = parsed[key]
     if "share" in parsed:
         kw["share"] = parsed["share"]
+    if "locked" in parsed:
+        kw["locked"] = parsed["locked"]
     if "acquire_enabled" in parsed:
         kw["acquire_enabled"] = parsed["acquire_enabled"]      # None: the derivation
     if "embed" in parsed:
@@ -794,7 +815,8 @@ def _effective_acquire(back) -> bool:
     resolution): the file's, through the one-acquirer rule over what is held
     (collections._one_acquirer)."""
     try:
-        held = [x for x in collections_mod.load_all(skip_unreadable=True)[0] if x.name != back.name] + [back]
+        held = [x for x in [*collections_mod.load_all(skip_unreadable=True)[0], *collections_mod.load_locked()]
+                if x.name != back.name] + [back]
         return next(x for x in collections_mod._one_acquirer(held) if x.name == back.name).acquire_enabled
     except Exception:   # noqa: BLE001 — another file's fault: this one's own value
         return back.acquire_enabled
@@ -815,7 +837,7 @@ def _read_back(back, kw: dict[str, Any], parsed: dict[str, Any]) -> None:
     got = {"title": back.title, "slices": back.slices, "kinds": back.kinds,
            "share_slices": back.share_slices, "share_kinds": back.share_kinds,
            "embed_slices": back.embed_slices, "embed_select": back.embed_select,
-           "share": back.share, "method": back.method}
+           "share": back.share, "method": back.method, "locked": back.locked}
     if parsed.get("acquire_enabled") is not None:
         got["acquire_enabled"] = back.acquire_enabled
     enc, rr = back.embed, back.reranker

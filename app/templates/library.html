@@ -161,6 +161,14 @@
                onchange="setShare('{{ c.name }}', this.checked, '{{ c.embed_mode_file or '' }}')">share</label>
     </div>
     {% endif %}
+    {# THE LOCK (operator, 2026-11-27; 07 §7.8 `locked`): kept as it is —
+       not searched or shared, nothing fetched or processed, its models not
+       loaded for it; only renamed, exported or removed. Ticked, the card
+       moves to "Locked" below (app/collection_lock.py) #}
+    <div style="flex:0 0 auto;min-width:0;align-self:flex-end;padding-bottom:6px">
+      <label class="check" title="kept as it is: not searched or shared, nothing fetched or processed, its models not loaded for it; it can then only be renamed, exported or removed. Untick to serve it again">
+        <input type="checkbox" data-lock onchange="setLocked('{{ c.name }}', this.checked)">lock</label>
+    </div>
   </div>
   {# WHICH HELD SLICES ARE EMBEDDED (07 §7.8 `embed_slices`; operator,
      2026-11-07: wikidata's grow dialog showed its 14 held families checked,
@@ -376,6 +384,14 @@
         <input type="checkbox" {{ 'checked' if a.share }}
                onchange="setShare('{{ a.name }}', this.checked, '')">share</label>
     </div>
+    {# THE LOCK (operator, 2026-11-27; 07 §7.8 `locked`): kept as it is —
+       not searched or shared, nothing fetched or processed, its models not
+       loaded for it; only renamed, exported or removed. Ticked, the card
+       moves to "Locked" below (app/collection_lock.py) #}
+    <div>
+      <label class="check" title="kept as it is: not searched or shared, nothing fetched or processed, its models not loaded for it; it can then only be renamed, exported or removed. Untick to serve it again">
+        <input type="checkbox" data-lock onchange="setLocked('{{ a.name }}', this.checked)">lock</label>
+    </div>
     {# operator, 2026-11-13: "I want a checkbox in the gui" — shown where a
        method this node runs can make the claims (annotation_methods.not_fitting);
        ticked from the file's `method` #}
@@ -440,6 +456,29 @@
    2026-10-20); the filter at each use, since a `set` in this block is not
    seen by the scripts block #}
 <div class="panel" id="offer">
+  {# LOCKED (07 §7.8 `locked`): held, kept as it is, and allowed three acts —
+     rename… (the name pages show), export bundle, remove… — and its lock box #}
+  {% if locked|default([], true) %}
+  <h2>Locked <span class="badge">{{ locked|length }}</span></h2>
+  {% for l in locked|default([], true) %}
+  <div class="panel" data-collection="{{ l.name }}" data-kind="locked">
+    <h2><span data-label title="local name {{ l.name }}">{{ label(l.name) }}</span> <span class="badge brass">locked</span>{% if l.annotations %} <span class="badge">annotations</span>{% endif %}</h2>
+    <div class="note">{{ l.reason }}</div>
+    <div class="row">
+      <div>
+        <label class="check" title="untick to serve it again: searched, shared as its file says, fetched for and processed from the worker's next round">
+          <input type="checkbox" data-lock checked onchange="setLocked('{{ l.name }}', this.checked)">lock</label>
+      </div>
+    </div>
+    <div class="actions">
+      <button title="the name pages show; its folders, files and the command line keep {{ l.name }}"
+              onclick="renameCollection('{{ l.name }}', {{ label(l.name)|tojson|forceescape }})">rename…</button>
+      {% if not l.annotations %}<button onclick="exportBundle('{{ l.name }}')">export bundle</button>{% endif %}
+      <button onclick="removeCollection('{{ l.name }}', '{{ l.source }}')">remove…</button>
+    </div>
+  </div>
+  {% endfor %}
+  {% endif %}
   {# RULE 2: a collection held but not served is shown here with its reason in plain words #}
   {% if refused|default([], true) %}
   <h2>Held, not served <span class="badge err">{{ refused|length }}</span></h2>
@@ -656,6 +695,14 @@ async function setMethod(name,method,on){
   try{await postJSON('/admin/library/'+name+'/method',{method:on?method:null});
     toast(name+(on?': updates by itself ('+method+') — the node checks within 5 minutes':': claims given by hand again')+' — saved to collections/'+name+'.toml')}
   catch(e){toast('update by itself failed: '+e);location.reload()}
+}
+// the lock (07 §7.8 `locked`): written to the collection's file; the worker
+// lets it go, or takes it back, at its next round
+async function setLocked(name,on){
+  try{const d=await postJSON('/admin/library/'+name+'/lock',{locked:on});
+    toast(name+(on?': locked — kept as it is; not searched or shared, nothing fetched or processed, its models not loaded for it':': unlocked — served again from the worker\'s next round')+' — saved to collections/'+name+'.toml');
+    location.reload()}
+  catch(e){toast('lock failed: '+e);location.reload()}
 }
 async function setShare(name,on,mode){
   if(!on&&mode==='p2p'&&!confirm(name+' embeds in all p2p mode, which publishes what it embeds; disabling sharing switches it to all local. Proceed?')){location.reload();return}

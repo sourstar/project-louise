@@ -445,7 +445,10 @@ def declarations(root, *, methods: Mapping[str, str | None] | None = None,
     held = dict(col._held(root))
     files: dict[str, str | None] = {}
     try:
-        for c in collections_mod.load_annotations():
+        # a LOCKED annotations collection declares its method all the same: a
+        # loop through it would go live at its unlock (07 §7.8 `locked`)
+        for c in [*collections_mod.load_annotations(),
+                  *(x for x in collections_mod.load_locked() if collections_mod.is_annotations(x))]:
             files[c.name] = getattr(c, "method", None)
     except Exception:   # noqa: BLE001 — a listing that cannot be read declares no method
         files = {}

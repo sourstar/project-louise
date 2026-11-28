@@ -714,7 +714,9 @@ def finish_pending() -> list[str]:
     does it: it may run in the web process, which writes nothing."""
     from app import collections as collections_mod
     done = []
-    for c in collections_mod.load_all():
+    # a LOCKED deposit collection too: an erase is a privacy duty (02 §2.9),
+    # and finishing one a crash cut short removes, which a lock allows
+    for c in [*collections_mod.load_all(), *collections_mod.load_locked()]:
         if c.codex is None or not is_deposit(c.codex):
             continue
         with closing(_connect(c)) as con:    # a WRITE opening: runs the purge

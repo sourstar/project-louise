@@ -505,6 +505,12 @@ class Collection:
     # the worker re-runs when the collection it annotates holds a newer
     # snapshot (app/hold/annotation_methods.py); None = claims given by hand
     method: str | None = None
+    # 07 §7.8 `locked` (operator, 2026-11-27): KEPT AS IT IS — not searched,
+    # not shared, nothing fetched or processed for it, its models not loaded
+    # for it; it can only be renamed, exported or removed. `load_all` and
+    # `load_annotations` refuse it (`LOCKED_SAYS`); `load_locked` lists it
+    # (docs/notes/collection-lock.md)
+    locked: bool = False
     #: why `embed_mode_default` is not what the file says: `embed = "p2p"`
     #: with `share = false` runs as `all` — p2p publishes what it embeds, and
     #: a node that does not share can publish nothing (07 §7.8, 2026-10-19)
@@ -687,6 +693,7 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
     share = raw.get("share", False)
     if not isinstance(share, bool):
         raise ValueError(f"{where}: share is true or false (07 §7.8), got {share!r}")
+    locked = _parse_locked(raw, where)
     share_slices = _parse_share_list(raw.get("share_slices"), "share_slices", where)
     share_kinds = _parse_share_list(raw.get("share_kinds"), "share_kinds", where)
     embed_slices = _parse_share_list(raw.get("embed_slices"), "embed_slices", where)
@@ -804,6 +811,7 @@ def _codex_collection(path: Path, raw: dict[str, Any], name: str) -> Collection:
         embed_slices=embed_slices,
         embed_select=embed_select,
         source=source,
+        locked=locked,
     )
 
 
@@ -831,6 +839,7 @@ def _annotations_collection(path: Path, raw: dict[str, Any], name: str, codex,
     kinds = _parse_kinds(raw.get("kinds", ["records", "relations"]), where)
     slices = _parse_slices(raw["slices"], where) if "slices" in raw else "all"
     method = _parse_method(raw.get("method"), where)
+    locked = _parse_locked(raw, where)
     return Collection(
         name=name, plugin=codex.plugin, profile=None, embed_mode_default="off",
         corpus_dir=d / "shard", manifest_path=d / "state" / "manifest.sqlite",
@@ -838,7 +847,25 @@ def _annotations_collection(path: Path, raw: dict[str, Any], name: str, codex,
         license_ack=_codex_ack(codex, d / "state"), embed=None, codex=codex,
         title=title, slices=slices, kinds=kinds, share=share,
         share_slices=share_slices, share_kinds=share_kinds,
-        source="shard", method=method)
+        source="shard", method=method, locked=locked)
+
+
+def _parse_locked(raw: dict[str, Any], where) -> bool:
+    """07 §7.8 `locked` (2026-11-27): true or false, absent = false."""
+    locked = raw.get("locked", False)
+    if not isinstance(locked, bool):
+        raise ValueError(f"{where}: locked is true or false (07 §7.8), got {locked!r}")
+    return locked
+
+
+def locked_says(name: str) -> str:
+    """Why a locked collection is not served, in plain words with the way
+    back (RULE 2): what `refusals()`, the Library and `hold collection show`
+    say."""
+    return (f"{name} is locked: kept as it is. It is not searched or shared, nothing is fetched "
+            f"or processed for it, and its models are not loaded for it. It can be renamed, "
+            f"exported or removed; untick its lock box in the Library, or run "
+            f"`louise hold collection unlock {name}`, to serve it again")
 
 
 def _parse_method(value, where: str) -> str | None:
@@ -901,6 +928,12 @@ def _list_annotations(out: list, left: list, held: list) -> None:
         except Exception:                               # noqa: BLE001
             continue
         if not is_annotations(c):
+            continue
+        if c.locked:
+            # LOCKED (07 §7.8 `locked`): not read at a question, not shared,
+            # no method re-run — held all the same (`share.offer.held_ids`)
+            left.append(Refusal(c.name, p, locked_says(c.name)))
+            held.append(c)
             continue
         # NOT SERVED MID-REFIT (invariant 1; the fourth read of caa9fd8f, 4):
         # its target's identity is being replaced — the seeder, the cascade
@@ -1072,7 +1105,7 @@ def sister_refusal(collection, held=None) -> str | None:
         return None
     try:
         # as the worker reads them: another file's fault is not hers
-        held = list(held) if held is not None else load_all(skip_unreadable=True)[0]
+        held = list(held) if held is not None else [*load_all(skip_unreadable=True)[0], *load_locked()]
     except Exception as e:  # noqa: BLE001 — unsure who acquires: no second writer
         return (f"{collection.name}: whether the collection she derives from acquires their corpus "
                 f"could not be read ({type(e).__name__}: {e}); nothing changed")
@@ -1359,6 +1392,54 @@ def refusals() -> tuple[Refusal, ...]:
     return _REFUSALS
 
 
+def load_locked() -> list:
+    """The collections held here and LOCKED (07 §7.8 `locked`), annotations
+    collections included: what `load_all` and `load_annotations` leave out
+    for it. For the few readers that must still see them — the Library's
+    card with its three actions (rename, export, remove) and its lock box,
+    and "does this node hold X?" (`share.offer.held_ids`). A file that does
+    not load is left out here: `load_all` names it. Never raises."""
+    cfg_dir = collections_dir()
+    if not cfg_dir.is_dir():
+        return []
+    out: list = []
+    for p in sorted(cfg_dir.glob("*.toml")):
+        try:
+            with open(p, "rb") as f:
+                if not tomllib.load(f).get("locked") is True:
+                    continue                    # the file read once, cheaply, for the many unlocked
+            c = _load_one(p)
+        except Exception:                               # noqa: BLE001
+            continue
+        if c.locked:
+            out.append(c)
+    return out
+
+
+def locked_by_name(name: str) -> Collection | None:
+    """Collection `name` when it is held and LOCKED, else None — for the
+    three acts a locked collection allows (rename, export, remove) and its
+    lock box."""
+    if not is_locked(name):
+        return None
+    try:
+        c = _load_one(config_toml_path(name))
+    except Exception:                                   # noqa: BLE001 — load_all names it
+        return None
+    return c if c.locked else None
+
+
+def is_locked(name: str) -> bool:
+    """Does collection `name`'s file say `locked = true`? Read from the file
+    alone (a command's guard, before it acts); False where there is no file
+    or it does not parse — the command then says that itself."""
+    try:
+        with open(config_toml_path(name), "rb") as f:
+            return tomllib.load(f).get("locked") is True
+    except (OSError, ValueError):
+        return False
+
+
 def load_all(*, skip_unreadable: bool = False):
     """The collections this node has: exactly the Codex collections whose
     files are in `collections/`, possibly none — and none when the
@@ -1380,6 +1461,7 @@ def load_all(*, skip_unreadable: bool = False):
     served: list[Collection] = []
     refused: list[Refusal] = []
     unreadable: list[tuple[str, str]] = []
+    locked: list[Collection] = []
     for p in sorted(cfg_dir.glob("*.toml")):
         name = p.stem
         # A MALFORMED file still raises, and that is deliberate. "A typo
@@ -1406,6 +1488,15 @@ def load_all(*, skip_unreadable: bool = False):
             # 02 §2.10: held, and nothing for the worker or a ranked list —
             # `load_annotations` is where it is listed
             continue
+        if c.locked:
+            # LOCKED (07 §7.8 `locked`, operator 2026-11-27): a POLICY
+            # refusal like NO_ENCODER — every reader of this listing (the
+            # worker, a search, sharing, the model keeper) leaves it out by
+            # the one rule; `load_locked` is the listing of what is held so
+            # (docs/notes/collection-lock.md)
+            refused.append(Refusal(name, p, locked_says(name)))
+            locked.append(c)
+            continue
         if c.embed is None:
             # NON-COMPLIANT, and said so where the operator looks (the
             # System page's refusals, `hold collection show`), never a
@@ -1413,7 +1504,10 @@ def load_all(*, skip_unreadable: bool = False):
             refused.append(Refusal(name, p, NO_ENCODER))
             continue
         served.append(c)
-    served = _one_acquirer(served)
+    # A LOCKED ANCESTOR STILL HOLDS HER FOLDER: kept as it is, its origin
+    # folder too, so a sister reading it does not take over its fetch
+    # (docs/notes/collection-lock.md §4); she fetches again once it is unlocked
+    served = [c for c in _one_acquirer(served + locked) if not c.locked]
     _REFUSALS = tuple(refused)
     return (served, unreadable) if skip_unreadable else served
 
@@ -1504,6 +1598,14 @@ def default_collection() -> Collection:
     collections = load_all()
     if collections:
         return collections[0]
+    locked = load_locked()
+    if locked:
+        # EVERY COLLECTION LOCKED (07 §7.8 `locked`) is a node kept as it is,
+        # not a misconfigured one: its control rows (the worker's published
+        # snapshot, the query log) go into the first locked collection's
+        # manifest, as they go into the first served one's — node state that
+        # never travels, not its records, vectors or index; nothing runs on it
+        return locked[0]
     if _REFUSALS:
         # The fallback's paths are DATA_DIR/manifest.db, DATA_DIR/fts and
         # DATA_DIR/lancedb — on this deployment the LEGACY gutenberg tree

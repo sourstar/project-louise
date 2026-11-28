@@ -159,7 +159,10 @@ def certifier_anchor():
     # `skip_unreadable` answers `(served, [(name, reason)…])` — the worker's
     # shape; iterating the pair listed nothing (found live 2026-10-07)
     served, _refused = collections_mod.load_all(skip_unreadable=True)
-    for c in served:
+    # a LOCKED collection is still certified here: a peer whose anchor stops
+    # listing it judges it MISMATCH and opens it (app/hold/anchor.py) — a lock
+    # keeps a collection as it is, it withdraws no certification
+    for c in [*served, *collections_mod.load_locked()]:
         codex = getattr(c, "codex", None)
         cert = getattr(codex, "certifier", None) if codex is not None else None
         if cert is not None and getattr(codex, "publication", "open") == "certified" and cert.key == own:
@@ -181,7 +184,7 @@ def certifier_pointer(collection_hex: str):
         raise HTTPException(404, "no pointer")
     root = collections_mod.louise_root() / "collections"
     served, _refused = collections_mod.load_all(skip_unreadable=True)
-    for c in served:
+    for c in [*served, *collections_mod.load_locked()]:    # locked: still certified, as above
         codex = getattr(c, "codex", None)
         if codex is None or shard_mod._hex(codex.collection_id) != collection_hex:
             continue

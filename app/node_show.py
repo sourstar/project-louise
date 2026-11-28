@@ -177,6 +177,12 @@ def show() -> dict[str, Any]:
         name, why = (bad if isinstance(bad, tuple) else (str(bad), "does not load"))[:2]
         rows.append({"name": name, "collection_id": None, "state": "refused", "reasons": [str(why)],
                      "paused": False, "embed": None, "integrity_violated": [], "doing": None, "stages": []})
+    # LOCKED (07 §7.8 `locked`): held and kept as it is — listed, never silent (RULE 2)
+    for c in collections_mod.load_locked():
+        rows.append({"name": c.name,
+                     "collection_id": getattr(getattr(c, "codex", None), "collection_id", None),
+                     "state": "locked", "reasons": [collections_mod.locked_says(c.name)],
+                     "paused": False, "embed": None, "integrity_violated": [], "doing": None, "stages": []})
     from app import disk_guard
     from app import node_profile
     try:

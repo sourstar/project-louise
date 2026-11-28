@@ -249,7 +249,8 @@ def _discard_partial(job: Job) -> None:
     from . import collections as collections_mod
     from .bundles import export as bundle_export
     try:
-        collection = collections_mod.by_name(job.args["collection"])
+        collection = (collections_mod.by_name(job.args["collection"])
+                      or collections_mod.locked_by_name(job.args["collection"]))
         where = bundle_export.workspace(collection) if collection else None
     except Exception:                                   # noqa: BLE001
         return
@@ -613,7 +614,10 @@ def _export(job_id: int, args: dict[str, Any]) -> dict[str, Any]:
     from . import collections as collections_mod, db, licensing
     from .bundles import export as bundle_export
     import tarfile
-    collection = collections_mod.by_name(args["collection"])
+    # a LOCKED collection is exported all the same: one of the three acts it
+    # allows (07 §7.8 `locked`, operator 2026-11-27)
+    collection = (collections_mod.by_name(args["collection"])
+                  or collections_mod.locked_by_name(args["collection"]))
     if collection is None:
         raise LookupError(f"no collection {args['collection']!r}")
     licensing.require_ack(collection, use="its vectors are exported as a bundle")

@@ -149,7 +149,10 @@ def held() -> dict[str, str]:
             return _cache[2]
     try:
         served, _ = collections_mod.load_all(skip_unreadable=True)
-        found = labels([entry_of(c) for c in [*served, *collections_mod.load_annotations()]])
+        # a LOCKED collection keeps its name on its card (07 §7.8 `locked`), and
+        # takes part in the postfix rule, so locking one renames no other
+        found = labels([entry_of(c) for c in [*served, *collections_mod.load_annotations(),
+                                              *collections_mod.load_locked()]])
     except Exception:  # noqa: BLE001 — names are a courtesy; a key is always right
         found = {}
     with _lock:
