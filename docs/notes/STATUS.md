@@ -1371,6 +1371,9 @@ measured (published figures disagree).
   after 0029 (tree `ab5de7ad…`): one reading — MemAvailable, each cgroup's limit, working set and room, the ZFS ARC where present —
   the park decided on it as before, a refusal logged with every figure and its answer ending with them. The ARC is said, NOT
   counted: that is for München's quiet-node reading and the next refusal's numbers.
+- **SERVER 0032 LIVE AGAIN since 2026-11-28 13:46Z** (München, the operator's "Now"; wrongly rolled back by a script at
+  11-27 21:51Z, the acceptance having passed, parking-step-2.md §15.1). Next: `zfs_arc_sys_free` 14 → 4 GiB on the operator's
+  word, R1 again, the 0036 card test.
 - **LIVE since 2026-11-27 14:45:24Z: engine `95d9f59679df` (`engine-pace.series`: the fade series + 0033), EVERY PARK PACED BY THE HOST.**
   München: the byte check VEGA/1 against VEGA/2 identical (bge-m3, nemotron, qwen3-4b); five gates exact, fingerprints identical to
   before (wikipedia worst 0.999939, pubmed query 0.999994, NeuRIS 1.000000); twenty unloads clean; step 5 as before (MADLAD T4 375/379,

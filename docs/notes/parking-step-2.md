@@ -1673,3 +1673,13 @@ The engine's own park lines ("… parked, N MiB to the host in M ms", `GGML_LOG_
 on the backend's stderr, which LocalAI 5.0.1 logs at DEBUG only (`pkg/model/process.go`:
 `xlog.Debug("GRPC stderr", …)`) and keeps per model for `GET /api/backend-logs/<model>`
 (admin): read them there, not in `docker logs`.
+
+**0032 back (München, 2026-11-28 13:46Z, the operator's "Now").** Server
+`v5.0.1-8-gaf5b1b84e` (`louise-localai:v5.0.1-gpu-intel-p1-p13-p19-poll-park-0032`,
+image `634409281c00`; rollback `-0031`); `localai_settings.py --check` exit 0;
+`park_host_floor_bytes` 12,884,901,888, unchanged; 98 backends before and after; the
+run ids of vega-bge-m3, vega-qwen3-embedding-4b, vega-nemotron-3-embed-1b and
+vega-medcpt-query the same before and after; the engine still `95d9f59679df`. Still to
+do: `zfs_arc_sys_free` 14 → 4 GiB (live and in the node's POSTINIT script), on the
+operator's word to München; then R1 again, judged on `park_http`'s result and never
+on logs; a day's watch of the ARC; the 0036 card test.
