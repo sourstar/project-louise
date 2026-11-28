@@ -384,8 +384,11 @@ def _one(root: Path, a: str, decl, *, now: datetime, failed: dict, log, run, sto
         if f["annotations"]:
             up = cascade.woken(root, s)
             if up is not None and up.get("state") in cascade.PENDING:
+                from app import collections as collections_mod
+                locked = (", and it is locked: nothing runs for it until it is unlocked"
+                          if collections_mod.is_locked(s) else "")
                 waits.append(f"waits for {s}, whose own update is {up.get('state')}"
-                             + (f" ({up['says']})" if up.get("says") else ""))
+                             + (f" ({up['says']})" if up.get("says") else "") + locked)
         why = cascade.update_in_flight(root, s, f["codex"], now=now)
         if why:
             waits.append(why)

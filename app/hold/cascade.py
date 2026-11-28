@@ -582,11 +582,17 @@ def update_in_flight(root, name: str, codex=None, *, now: datetime | None = None
     from . import collection as col
     from . import update as update_mod
     from . import update_state
+    from app import collections as collections_mod
     if codex is None:
         return None
     try:
         if update_mod.not_updated(codex) is not None:
             return None
+        if collections_mod.is_locked(name):
+            # still a wait — a dependent never derives from an old dump — but
+            # said for what it is (07 §7.8 `locked`; the lock's third read)
+            return (f"waits for {name}, which is locked: kept as it is, its update does not begin "
+                    f"until it is unlocked")
         lst = listing(col.shard_dir_of(Path(root), name))
         if lst.newest is None:
             return None                      # its first snapshot is built by hand

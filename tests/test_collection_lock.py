@@ -464,3 +464,35 @@ def test_a_depositor_deletes_an_entry_of_a_locked_deposit_collection(monkeypatch
     with pytest.raises(localagi.LocalAgiError) as e:
         localagi._deposit_collection("dep")
     assert e.value.status == 409 and "locked" in e.value.message
+
+
+
+def test_unlocking_a_sister_is_judged_on_who_fetches_by_the_rule(node, monkeypatch):
+    """gutenberg serves and fetches the folder; two locked sisters on it: the
+    unlock of either is not refused naming the other (the lock's fourth
+    read: a raw `acquire_enabled` read true for a sister stating nothing)."""
+    import dataclasses
+    import types
+    _, path, write = node
+    write('slices = "all"\n')
+    g = collections_mod._load_one(path)
+    sister = lambda n, cid: dataclasses.replace(
+        g, name=n, locked=True, acquire_stated=False,
+        codex=types.SimpleNamespace(collection_id=cid, derived_from=g.codex.collection_id))
+    nemo, qi = sister("nemo", "sha256:" + "1" * 64), sister("qi", "sha256:" + "2" * 64)
+    monkeypatch.setattr(collections_mod, "load_all",
+                        lambda skip_unreadable=False: ([g], []) if skip_unreadable else [g])
+    monkeypatch.setattr(collections_mod, "load_locked", lambda: [nemo, qi])
+    monkeypatch.setattr(collections_mod, "locked_by_name", lambda n: {"nemo": nemo, "qi": qi}.get(n))
+    monkeypatch.setattr(collection_lock, "index_writer", lambda name, root=None: None)
+    assert collection_lock.why_not_unlock("qi") is None
+    assert collection_lock.why_not_unlock("nemo") is None
+
+
+def test_a_dependent_s_wait_on_a_locked_source_names_the_lock(tmp_path, monkeypatch):
+    import types
+    from app.hold import cascade, update as update_mod
+    monkeypatch.setattr(update_mod, "not_updated", lambda codex: None)
+    monkeypatch.setattr(collections_mod, "is_locked", lambda n: n == "wikidata")
+    why = cascade.update_in_flight(tmp_path, "wikidata", types.SimpleNamespace())
+    assert why and "wikidata, which is locked" in why

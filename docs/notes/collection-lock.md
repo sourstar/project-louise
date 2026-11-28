@@ -58,7 +58,10 @@ or `locked_by_name()`:
   `load_all`); and the source's old-run gate does not wait for a locked
   annotator (`cascade.old_run_gate` says it is locked): waiting would stop
   every later update of the source. Its claims derive from the source's
-  published snapshots, which stay, and the next one wakes it once unlocked;
+  published snapshots, which stay, and the next one wakes it once unlocked.
+  A dependent of a LOCKED source still waits (it never derives from an old
+  dump, operator 2026-11-17), and its wait says the source is locked
+  (`cascade.update_in_flight`, the keeper's woken wait);
 - `node show`, which lists it as `locked` with its reason;
 - the three acts and the lock box (§3).
 
@@ -163,3 +166,5 @@ export bundle reads the stored vectors and loads nothing.
 - A locked file that the loader refuses for another reason (an unmounted
   build area, wrong model keys) is shown under "Held, not served" with that
   reason, and is reached by the command line's rename and forget only.
+- A served collection on a folder that holds nothing to fetch (`slices = []`)
+  still refuses its acquirer's lock: an over-refusal, harmless.

@@ -121,14 +121,17 @@ def why_not_unlock(name: str, root: Path | None = None) -> str | None:
             held = [*collections_mod.load_all(skip_unreadable=True)[0],
                     *(c for c in collections_mod.load_locked() if c.name != name),
                     dataclasses.replace(me, locked=False)]
-            after = next(c for c in collections_mod._one_acquirer(held) if c.name == name)
+            judged = collections_mod._one_acquirer(held)
+            after = next(c for c in judged if c.name == name)
         except Exception:                               # noqa: BLE001 — unsure: the file says it
-            after = None
+            judged, after = [], None
         if after is not None and not getattr(after, "acquire_enabled", False):
-            # served, she would fetch nothing: the folder's acquirer is one
-            # that is locked, which keeps the folder as it is
-            by = next((c.name for c in collections_mod.load_locked()
-                       if c.name != name and getattr(c, "acquire_enabled", False)
+            # served, she would fetch nothing: the folder's acquirer, AS THE
+            # ONE-ACQUIRER RULE JUDGES IT (never a file's raw value — a sister
+            # stating nothing reads true there), is one that is locked
+            by = next((c.name for c in judged
+                       if c.name != name and getattr(c, "locked", False)
+                       and getattr(c, "acquire_enabled", False)
                        and collections_mod._same_folder(c.corpus_dir, after.corpus_dir)), None)
             if by:
                 return (f"{name} reads {by}'s origin folder, which {by} fetches, and {by} is locked: "
