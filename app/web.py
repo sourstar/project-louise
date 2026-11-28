@@ -1278,7 +1278,7 @@ def _reader_plates(collection, doc: dict) -> None:
                                    "title": header.get("title")}) or header.get("origin_url")
     per_seq: dict = {}
     codex = getattr(collection, "codex", None)
-    if (codex is not None and getattr(codex, "record_line", 1) == 2
+    if (codex is not None and int(getattr(codex, "record_line", 1) or 1) >= 2
             and codex.license.cls != "red" and header.get("uid")):
         try:
             from .ask import results as ask_results

@@ -70,7 +70,7 @@ def test_a_figure_entry_is_9_5s_keys_in_9_5s_order():
 
 
 def test_a_bad_record_line_is_refused_before_any_bytes(tmp_path):
-    for bad in (0, 3, None, "two"):
+    for bad in (0, 4, None, "two"):
         with pytest.raises(pack_records.ShardFormatError, match="record_line"):
             pack_records.write_shard(tmp_path / "s.jsonl.zst", [_record()],
                                      record_line=bad)

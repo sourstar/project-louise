@@ -369,6 +369,7 @@ def _records_part(tree: str, codex, path: str, name: str, records_root: str,
     fmap, _broken = _family_map_at(Path(tree), codex)     # the parent reports a broken map
     rule = sl.parts_rule_of(getattr(codex, "slicing", None))
     slice_ = name.rsplit("/", 1)[0]
+    gaps_said = int(getattr(codex, "record_line", 1) or 1) >= 3
     seen, failed = 0, []
     hashes: list[str] = []
     uids: list[str] = []
@@ -386,11 +387,26 @@ def _records_part(tree: str, codex, path: str, name: str, records_root: str,
             failed.append(r["uid"])
         elif fmap is not None and _slice_unless_walked(fmap, r) not in (None, slice_):
             failed.append(f"{r['uid']}:slice")
+        elif gaps_said and not _gaps_as_said(r):
+            # 09 §9.5 line 3: what the origin did not give, in the format's
+            # one shape and order — a record lacking the key, or saying a gap
+            # the format cannot, is not a line-3 record
+            failed.append(f"{r['uid']}:origin_gaps")
     if rec.records_root(hashes) != records_root:
         failed.append(f"{name}:records_root")
     if rule is not None and not _cut_by_content(rule, uids, last_of_slice):
         failed.append(f"{name}:cut")
     return seen, failed
+
+
+def _gaps_as_said(record: dict) -> bool:
+    from app.pack import records as pack_records
+    if "origin_gaps" not in record:
+        return False
+    try:
+        return pack_records.origin_gaps(record["origin_gaps"]) == record["origin_gaps"]
+    except pack_records.ShardFormatError:
+        return False
 
 
 def _chunks_part(tree: str, codex, path: str, name: str, chunks: int,
@@ -1396,7 +1412,7 @@ def check_figures(ctx: Ctx) -> Outcome:
     from . import figures as figures_mod
 
     shards = _shards(ctx, "figures")
-    if int(getattr(ctx.codex, "record_line", 1) or 1) != 2:
+    if int(getattr(ctx.codex, "record_line", 1) or 1) < 2:
         return Outcome("figures", INCONCLUSIVE, {"shards": 0, "named": 0,
                                                  "held": 0, "failed": []},
                        why="this collection's `record_line` is 1, so its "
