@@ -66,7 +66,7 @@ SUFFIX = ".jsonl.zst"
 #: the Parquet container's suffix (09 §9.5 "The file (B)")
 PARQUET_SUFFIX = ".parquet"
 #: the record line's nested values: JSON text in their column
-NESTED_KEYS = frozenset({"creators", "subjects", "keys", "sections", "extra", "figures"})
+NESTED_KEYS = frozenset({"creators", "subjects", "keys", "sections", "extra", "figures", "origin_gaps"})
 #: the schema metadata a Parquet part carries (the JSONL index's counts)
 _META_RECORDS, _META_CHUNKS = b"louise.records", b"louise.chunks"
 #: who compresses a part's bytes: the zstd pyarrow bundles (statically
@@ -114,7 +114,45 @@ RECORD_KEYS_2 = tuple(
     k for key in RECORD_KEYS
     for k in ((key, "figures") if key == "sections" else (key,)))
 
-RECORD_KEYS_BY_LINE = {1: RECORD_KEYS, 2: RECORD_KEYS_2}
+#: 09 §9.5's THIRD shape (2026-11-28): line 2 with `origin_gaps` — what the
+#: origin did not give for the record — before `origin`, where the table
+#: puts it. `[]` on a record given whole, never null.
+RECORD_KEYS_3 = tuple(
+    k for key in RECORD_KEYS_2
+    for k in (("origin_gaps", key) if key == "origin" else (key,)))
+
+RECORD_KEYS_BY_LINE = {1: RECORD_KEYS, 2: RECORD_KEYS_2, 3: RECORD_KEYS_3}
+
+#: a gap's `why` (09 §9.5 `origin_gaps`): the part absent at the origin, served
+#: unreadable, or holding another entity's bytes ("another's: <its key>")
+#: 09 §9.5's `why`s: "unplaced" (operator, 2026-11-28: "if there is no mark
+#: there is no mark, consider the article degraded"): a part the origin gives
+#: and its text places nowhere — an image no marker stands for
+GAP_WHYS = ("absent", "unreadable", "unplaced")
+GAP_ANOTHERS = "another's: "
+
+
+def origin_gaps(value) -> list[dict]:
+    """`value` as 09 §9.5's `origin_gaps`: a list of `{"part", "why"}`, each
+    part named once, sorted by its bytes; `[]` for None. ShardFormatError for
+    any other shape: a gap the format cannot say is never written."""
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise ShardFormatError(f"origin_gaps is a list of {{part, why}} (09 §9.5), got {value!r}")
+    out: dict[str, str] = {}
+    for g in value:
+        if not isinstance(g, dict) or set(g) != {"part", "why"}:
+            raise ShardFormatError(f"origin_gaps: an entry is {{part, why}} (09 §9.5), got {g!r}")
+        part, why = g["part"], g["why"]
+        if not isinstance(part, str) or not part or not isinstance(why, str) or not (
+                why in GAP_WHYS or (why.startswith(GAP_ANOTHERS) and len(why) > len(GAP_ANOTHERS))):
+            raise ShardFormatError(f"origin_gaps: part is a name, why is absent | unreadable | unplaced | "
+                                   f"another's: <key> (09 §9.5), got {g!r}")
+        if part in out:
+            raise ShardFormatError(f"origin_gaps: {part!r} named twice (09 §9.5)")
+        out[part] = why
+    return [{"part": p, "why": out[p]} for p in sorted(out, key=lambda s: s.encode("utf-8"))]
 
 
 class ShardFormatError(RuntimeError):
@@ -143,7 +181,7 @@ def keys_for_line(record_line: int) -> tuple[str, ...]:
         return RECORD_KEYS_BY_LINE[int(record_line)]
     except (KeyError, TypeError, ValueError):
         raise ShardFormatError(
-            f"record_line is 1 or 2 (09 §9.5), got {record_line!r}") from None
+            f"record_line is 1, 2 or 3 (09 §9.5), got {record_line!r}") from None
 
 
 def is_parquet(path) -> bool:
@@ -154,11 +192,15 @@ def is_parquet(path) -> bool:
 def _ordered(record: dict, record_line: int) -> dict:
     keys = keys_for_line(record_line)
     ordered = {k: record.get(k) for k in keys}
-    if record_line == 2 and ordered["figures"] is None:
+    if int(record_line) >= 2 and ordered["figures"] is None:
         # `[]` when it has none, never null: §9.5 makes the key required in
         # shape 2, and a reader distinguishing "no plates" from "the writer
         # forgot" is a distinction the format does not offer.
         ordered["figures"] = []
+    if int(record_line) >= 3:
+        # the same for the gaps (09 §9.5, line 3): `[]` when whole, and always
+        # in the one shape and order the format says
+        ordered["origin_gaps"] = origin_gaps(ordered["origin_gaps"])
     return ordered
 
 

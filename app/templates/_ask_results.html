@@ -169,7 +169,7 @@
     {% for a in h.annotations %}{% set nid = a.record.uid.split(':', 1)[1] %}
     <span class="annotation">{% if a.record.held and nid.isdigit() %}<a href="/read/{{ h.source_collection or (h.chunk_id.split(':')[0]) }}/{{ nid }}" target="_blank" rel="noopener" dir="auto">{{ a.record.title or ('#' ~ nid) }}</a>{% else %}<span dir="auto">{{ a.record.title or a.record.uid }}</span>{% endif %}
       <span class="badge brass">{{ a.record.lang or '?' }}</span>
-      <span class="badge" title="claim {{ a.claim }} · {{ a.relation }} · {{ a.state }}">{{ a.type }}</span>, matched by {{ a.method.id if a.method is mapping else (a.method or '?') }}{% if a.state == 'stale' %} <span class="badge err" title="one record changed since the claim was checked">stale</span>{% endif %}</span>{% if not loop.last %} · {% endif %}
+      <span class="badge" title="claim {{ a.claim }} · {{ a.relation }} · {{ a.state }}">{{ a.type }}</span>, matched by {{ a.method.id if a.method is mapping else (a.method or '?') }}{% if a.state == 'stale' %} <span class="badge brass" title="checked against another version of this record (another version of the collection, or text changed since): it may not apply to this one">may not apply</span>{% endif %}</span>{% if not loop.last %} · {% endif %}
     {% endfor %}
   </div>
   {% endif %}

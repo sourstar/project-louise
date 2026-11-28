@@ -162,4 +162,8 @@ class ViewerGate:
                                                "(louise user add <name> gives one)"},
                                     status_code=401, headers={"WWW-Authenticate": "Bearer"})
             return await resp(scope, receive, send)
-        return await self.app(scope, receive, send)
+        # WHO IS LOOKING, for every reader route and what it calls (07 §7.8
+        # `hidden`; app/viewing.py): a sync route and a streamed answer inherit it
+        from app import viewing
+        with viewing.as_viewer(v):
+            return await self.app(scope, receive, send)

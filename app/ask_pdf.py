@@ -634,7 +634,8 @@ def _names() -> dict[str, str]:
     """collection_id -> the local name this node holds it under."""
     from app import collections as collections_mod
     out: dict[str, str] = {}
-    for c in collections_mod.load_all():
+    # never a collection hidden from the viewer being answered (07 §7.8 `hidden`)
+    for c in collections_mod.seen(collections_mod.load_all()):
         cid = getattr(getattr(c, "codex", None), "collection_id", None)
         if cid:
             out[cid] = c.name
@@ -768,9 +769,11 @@ def keep(question: str, answer: str, hits: list[dict], *, answer_lang: str | Non
     """The id a PDF link names for this answer."""
     pid = secrets.token_urlsafe(16)
     with _kept_lock:
+        from app import viewing
         _kept[pid] = (time.time() if now is None else now,
                       {"question": question, "answer": answer, "hits": list(hits or []),
-                       "answer_lang": answer_lang, "collections": list(collections or [])})
+                       "answer_lang": answer_lang, "collections": list(collections or [])},
+                      viewing.sees_all(viewing.current()))
         while len(_kept) > KEEP_MAX:
             _kept.popitem(last=False)
     return pid
@@ -786,4 +789,9 @@ def kept(pid: str, now: float | None = None) -> dict | None:
         if (time.time() if now is None else now) - got[0] > KEEP_S:
             del _kept[pid]
             return None
-        return got[1]
+    # an answer kept for an admin may cite what this reader may not see
+    # (07 §7.8 `hidden`): never theirs while anything is hidden from them
+    from app import collections as collections_mod, viewing
+    if got[2] and not viewing.sees_all(viewing.current()) and collections_mod.hidden_names_here():
+        return None
+    return got[1]

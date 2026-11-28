@@ -313,6 +313,9 @@ ISSUES = {
                     "no text and in no alternative (operator, 2026-11-26)",
     "item-not-its-form": "an item the origin lists under a manifestation is not of that form (a TIFF "
                          "page image declared application/pdf): held in the unit, not read as that form",
+    "files-not-their-names": "files of the unit hold another file's or act's bytes (two Formex items in "
+                             "each other's place): the record is kept as held, the unit marked degraded, "
+                             "and asked again only when the origin shows a change (operator, 2026-11-28)",
     "title-only": "the act's source holds no text but its title (an empty PREAMBLE and ENACTING.TERMS, no "
                   "annex): the record is held with its title and has no chunk",
     "no-text-layer": "page(s) of the act's PDF hold no text (a scan): the PDF is held whole in the "
@@ -700,6 +703,123 @@ def _say_once(message: str) -> None:
         print(message, flush=True)
 
 
+def unit_gaps(files: dict, view: dict, note, celex: str, listed=None) -> dict[str, tuple[str, list[str]]]:
+    """What a unit did not give, from its OWN files and tree
+    (`formex.gaps`, B1): the packages its tree lists for the form read and
+    it lacks, and its Formex wrapper's files. `files` the unit's items as
+    held (a package by its name), `view` them read (`formex.unpack`). The
+    record's `origin_gaps` and the fetch's judge (eurlex_dump.judge_unit)
+    are this, so a record states gaps exactly where the judge says "not
+    whole". A wrapper that is another act's (`own_wrapper` refuses it) is no
+    gap of this act: its text is read from the next form."""
+    from ...acquire.cellar import form_of
+    lacked = ([it.name for it in note.items.get("fmx4", []) if it.name and formex.is_package(it.name)
+               and it.name not in files] if form_of(note) == "fmx4" else [])
+    wname = wrapper = None
+    if any(formex.is_wrapper(n) for n in view):
+        try:
+            wname = formex.own_wrapper(view, celex, view.__getitem__, listed, note.date_document)
+            wrapper = formex._parse(view[wname], wname)
+        except formex.FormexError:
+            wname = wrapper = None
+    if wrapper is not None:
+        view, _aliases = formex.doubled_names(view, [*formex.main_names(wrapper), *formex.annex_names(wrapper)])
+    return formex.gaps(view, wrapper, wname, lacked)
+
+
+_TOKEN = re.compile(re.escape(formex.TOKEN_OPEN) + "([^" + formex.TOKEN_CLOSE + "]*)"
+                    + re.escape(formex.TOKEN_CLOSE))
+#: a note's place among the sections handed to RAGE's plates (split back after)
+_NOTE_HEADING = "\x00note"
+
+
+def strip_tokens(value):
+    """A rendered value without image tokens (a plate's marker stands in the
+    sections' and the notes' text only), recursively."""
+    if isinstance(value, str):
+        return _TOKEN.sub("", value) if formex.TOKEN_OPEN in value else value
+    if isinstance(value, list):
+        return [strip_tokens(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(strip_tokens(v) for v in value)
+    if isinstance(value, dict):
+        return {k: strip_tokens(v) for k, v in value.items()}
+    return value
+
+
+def _with_title(act, title: str):
+    import dataclasses
+    return dataclasses.replace(act, title=title) if title != act.title else act
+
+
+def plate_unit(unit_dir: Path):
+    """RAGE's view of a unit's items (app/rage/figures.py `Unit`): every file
+    but its tree and notice, by path, its packages' members read in place."""
+    from app.rage import figures as plates
+    return plates.Unit({e.name: Path(e.path) for e in unit_files(Path(unit_dir))
+                        if e.name not in (rdf_mod.TREE_FILE, NOTICE)})
+
+
+def held_plates(view: dict, form: str | None, note) -> list[str] | None:
+    """The images that are plates or orphans (architecture, 2026-11-28, as
+    `_orphan_images` reads them): every image the view holds, unless another
+    manifestation of the expression offers them or they are a PDF's page
+    scans — then none is, and an unreferenced one is no gap."""
+    images = [n for n, b in view.items() if _image_kind(n, b)]
+    if not images or any(items and f != form for f, items in (note.items or {}).items()):
+        return None
+    if form is not None and form.startswith("pdf") and any(
+            it.name in view and _is_pdf(view[it.name]) for it in note.items.get(form, []) if it.name):
+        return None
+    return images
+
+
+def _place_plates(unit_dir: Path, sections, notes: list[dict], view: dict, form, note):
+    """EUR-Lex's walk handed to RAGE (app/rage/figures.py, #998): each token
+    the readers left becomes `plates.SENTINEL` and one `plates.Ref`, the
+    sections first, then the notes' texts (architecture, 2026-11-28), and
+    `plates.place` makes the markers, the figures and the gaps."""
+    from app.rage import figures as plates
+    texts = [(strip_tokens(h), t) for h, t in sections]
+    texts += [(_NOTE_HEADING, n["text"]) for n in notes if isinstance(n.get("text"), str)]
+    refs: list = []
+
+    def sentinel(m: re.Match) -> str:
+        name, _sep, caption = m.group(1).partition(formex.TOKEN_SEP)
+        refs.append(plates.Ref(name, caption))
+        return plates.SENTINEL
+
+    texts = [(h, _TOKEN.sub(sentinel, t) if formex.TOKEN_OPEN in t else t) for h, t in texts]
+    held = held_plates(view, form, note)
+    if not refs and not held:
+        return texts[:len(sections)], notes, [], {}
+    with plate_unit(unit_dir) as unit:
+        got = plates.place(texts, refs, unit, held_images=held)
+    out_sections, rest = got.sections[:len(sections)], iter(got.sections[len(sections):])
+    out_notes = [{**n, "text": next(rest)[1]} if isinstance(n.get("text"), str) else n for n in notes]
+    gaps = {g["part"]: (g["why"], [f"{g['part']}: {g['why']} (the text's images)"]) for g in got.gaps}
+    return out_sections, out_notes, got.figures, gaps
+
+
+def origin_gaps_of(gaps: dict[str, tuple[str, list[str]]]) -> list[dict]:
+    """09 §9.5's shape: one entry a part, sorted by its bytes."""
+    return [{"part": p, "why": gaps[p][0]} for p in sorted(gaps, key=lambda s: s.encode("utf-8"))]
+
+
+def _not_their_names(files: dict, celex: str) -> list[str]:
+    """`formex.not_its_name` on the unit's own bytes (their heads): [] where
+    the unit holds no Formex wrapper of this act."""
+    if not any(formex.is_wrapper(n) for n in files):
+        return []
+    try:
+        wname = formex.own_wrapper(files, celex, files.__getitem__)
+        wrapper = formex._parse(files[wname], wname)
+    except (KeyError, formex.FormexError):
+        return []
+    return formex.not_its_name({n: b[:formex._HEAD_BYTES] for n, b in files.items()
+                                if isinstance(b, (bytes, bytearray))}, wrapper, wname)
+
+
 def _formex_title_only(view: dict, act) -> bool:
     """Does the Formex SOURCE hold no text but the title: its body's
     PREAMBLE and ENACTING.TERMS (absent or empty) and every annex the
@@ -934,7 +1054,15 @@ class EurlexSource:
     #: `extra.body_root`, `extra.valid_from_provisional`. Parser 4 is not
     #: carried: EUR-Lex4, the one Codex naming it, published nothing and is
     #: re-created as EUR-Lex5 (RULE 1, 02 §2.4 A1c).
-    PARSER_VERSION = 5
+    #: PARSER 6 (2026-11-28, the operator's rule B): a record states what the
+    #: origin did not give it — 09 §9.5 `origin_gaps`, for a `record_line` 3
+    #: collection — read from the unit's OWN files (a verifier reproduces it
+    #: from the corpus, never from this node's ledger): a file the wrapper
+    #: names and the unit does not hold ("absent"), a file holding what
+    #: another file's name says ("another's: <that file>"), a file that is
+    #: not of its name's kind ("unreadable"). Nothing else moves: at
+    #: `record_line` 1 or 2 the line drops the key, so parser 5 is carried.
+    PARSER_VERSION = 6
     #: the facts from the tree (4) or from the notice (3)
     TREE_FACTS = True
     #: 06 §6.2: Cellar keeps every OJ act and every consolidated version at
@@ -963,11 +1091,24 @@ class EurlexSource:
         {"field": "subjects", "kind": "flat", "separator": None, "authority": None},
     ]
 
+    def iter_figures(self, unit_dir: Path, native_id: int, hrefs: dict[str, str]):
+        """`(hash, bytes)` one plate at a time, for the container pass
+        (`plugin_io.figure_items`): RAGE's (`plates.iter_figures`), one open
+        of each of the unit's packages."""
+        from app.rage import figures as plates
+        with plate_unit(unit_dir) as unit:
+            yield from plates.iter_figures(unit, hrefs)
+
+    def read_figures(self, unit_dir: Path, native_id: int, hrefs: dict[str, str]) -> dict[str, bytes]:
+        """`iter_figures`, all at once, for the callers that take bytes."""
+        return dict(self.iter_figures(unit_dir, native_id, hrefs))
+
     def at_parser_version(self, version: int) -> "EurlexSource | None":
         """This plugin parsing at `version`, for a collection whose Codex
-        names it (`collections.plugin_at`): 4 is this one, 3 the one that read
-        the facts from the notice (`EurlexSourceV3`)."""
-        return {5: self, 3: _V3}.get(int(version))
+        names it (`collections.plugin_at`): 6 is this one, 5 the one before
+        `origin_gaps` (`EurlexSourceV5`), 3 the one that read the facts from
+        the notice (`EurlexSourceV3`)."""
+        return {6: self, 5: _V5, 3: _V3}.get(int(version))
 
     # ---- discovery ---------------------------------------------------------------------------
 
@@ -1283,7 +1424,8 @@ class EurlexSource:
         stated_lang = notice_mod.CODE_OF.get(note.display_language or "", lang)
         try:
             if form == "fmx4":
-                act = formex.parse(view, celex, listed, note.date_document)
+                act = formex.parse(view, celex, listed, note.date_document,
+                                   set_aside=self.PARSER_VERSION >= 6, figures=self.PARSER_VERSION >= 6)
                 for name in act.missing:
                     found.append(Issue("item-not-held", f"{act.wrapper_file} names {name}"))
             elif form in ("xhtml", "html"):
@@ -1291,7 +1433,8 @@ class EurlexSource:
                 # (`…01001401` page 14, `…01001501` page 15), the notice's order
                 # does not (32010D0699 lists the annexed draft first)
                 names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
-                act = rendition.parse_html(files, names, lang=stated_lang, root=root_tag, note=note)
+                act = rendition.parse_html(files, names, lang=stated_lang, root=root_tag, note=note,
+                                           figures=self.PARSER_VERSION >= 6)
             elif form is not None:
                 listed_names = sorted(it.name for it in note.items.get(form, []) if it.name in files)
                 # A PDF MANIFESTATION'S ITEMS BY THEIR CONTENT (2026-11-25,
@@ -1317,6 +1460,11 @@ class EurlexSource:
         # offered in a different format or there is a reference to the image
         # in the text, both work, just signal when an image has no alternative
         # form and no reference in the text"): said, never refused
+        misnamed = _not_their_names(files, celex)
+        if misnamed:
+            # DEGRADED, SAID (the operator's rule, 2026-11-28): the unit's files
+            # hold another act's bytes; the record is kept as the origin gave it
+            found.append(Issue("files-not-their-names", "; ".join(misnamed)[:300]))
         orphans = _orphan_images(view, form, note)
         if orphans:
             found.append(Issue("orphan-image", f"{len(orphans)} image(s) neither placed in the text nor offered "
@@ -1484,6 +1632,15 @@ class EurlexSource:
         if own_eli and own_eli != work_eli:
             keys.add(PROFILE.key(own_eli))
         sections = formex.sections(act)
+        plates_placed: list = []
+        plate_gaps: dict[str, tuple[str, list[str]]] = {}
+        if self.PARSER_VERSION >= 6:
+            sections, notes, plates_placed, plate_gaps = _place_plates(
+                unit, sections, extra.get("notes") or [], view, form, note)
+            if notes:
+                extra["notes"] = notes
+            act = _with_title(act, strip_tokens(act.title or ""))
+            extra = strip_tokens(extra)
         if act.rendered_sections is None and not any(text.strip() for _, text in sections) \
                 and _formex_title_only(view, act):
             # A CHUNKLESS DOCUMENT STATES WHY (lesson E1, 2026-11-25: 41 Formex
@@ -1506,6 +1663,9 @@ class EurlexSource:
             keys=sorted(keys),
             extra={k: v for k, v in extra.items() if v not in (None, "", [], {})},
             sections=sections,
+            figures=plates_placed,
+            origin_gaps=origin_gaps_of({**plate_gaps, **unit_gaps(files, view, note, celex, listed)})
+            if self.PARSER_VERSION >= 6 else [],
             raw_hash=raw.raw_hash,
             issues=found,
         )
@@ -1560,3 +1720,13 @@ class EurlexSourceV3(EurlexSource):
 
 
 _V3 = EurlexSourceV3()
+
+
+class EurlexSourceV5(EurlexSource):
+    """Parser 5, carried for the collections whose Codex names it
+    (EUR-Lex5.next): parser 6 without `origin_gaps` (which a `record_line`
+    1 or 2 line drops anyway)."""
+    PARSER_VERSION = 5
+
+
+_V5 = EurlexSourceV5()

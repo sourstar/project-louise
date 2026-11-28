@@ -334,7 +334,7 @@ def figure_place(collection: str, uid: str, hash_: str, *,
     from app.hold import collection as col, figures as fig
     from app.share import seeder
     root = Path(root) if root is not None else collections_mod.louise_root() / "collections"
-    name, codex = col.resolve(root, collection)
+    name, codex = collections_mod.resolve_seen(root, collection)    # never a hidden one's (07 §7.8)
     if codex.license.cls == "red":
         raise FigureNotServed(403, f"{name}: a red-class collection's figures are never served (04 §4.4)")
     from app import licensing

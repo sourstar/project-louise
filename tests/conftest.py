@@ -28,6 +28,18 @@ _STOP_SIGNALS = tuple(getattr(__import__("signal"), n) for n in ("SIGTERM", "SIG
 
 
 @pytest.fixture(autouse=True)
+def the_process_default_viewer_is_restored():
+    """The web's lifespan (`with TestClient(api.app)`) makes this process one
+    that answers readers (app/viewing.py `serve_readers`: outside a request,
+    nobody is looking). Each test ends with the default it began with, so a
+    test after it is not shown less by the order the suite runs in."""
+    from app import viewing
+    saved = viewing._default
+    yield
+    viewing._default = saved
+
+
+@pytest.fixture(autouse=True)
 def signal_handlers_are_restored():
     """A test that runs a command or a tool IN THIS PROCESS (louise.main,
     tools/measure/*.main) lets it install its own SIGTERM/SIGINT handler —

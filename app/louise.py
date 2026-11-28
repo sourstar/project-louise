@@ -1009,6 +1009,13 @@ def cmd_collection_new(a) -> int:
     state.mkdir(parents=True, exist_ok=True)
     (state / "calibration.json").write_text(json.dumps(measured, indent=1, sort_keys=True), encoding="utf-8")
     run.record("make", {"collection_id": codex.collection_id})
+    if re_create:
+        # THE FAMILY LINK (app/rage/family.py): what an annotation of the
+        # predecessor applies to follows the re-creation (operator, 2026-11-28)
+        pred_id = pred.collection_id if pred is not None else (
+            ((kept or {}).get("predecessor") or {}).get("collection_id"))
+        if pred_id and pred_id != codex.collection_id:
+            recreate.record_predecessor(a.root, name, pred_id)
 
     # carry (case F): what the predecessor holds that is provably identical
     if re_create:

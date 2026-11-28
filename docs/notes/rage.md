@@ -21,6 +21,15 @@ testbench for all the collections and models to come"). It:
 - **measures** itself: the card's busy share, who held it, the gaps, the
   query-under-load harness.
 
+**The ingestion rule** (operator, 2026-11-26: "the RAGE ingestion API to be
+extended for image OCR and adding of text layer to pdf … This is
+architecture's call"; 2026-11-28, on EUR-Lex's figures written in its
+plugin: "Why the fuck this is not a fucking part of RAGE API???", "I TOLD
+YOU TO DO IT!"): what more than one collection does with its origin —
+images, OCR, a PDF's text layer — is RAGE's, built once here and called by
+the plugins. A plugin keeps only what is its origin's own (how its files
+say where an image stands). A second copy in a plugin is a defect.
+
 **The base rule** (operator, 2026-11-01, step 2 of the GPU programme: "these
 optimizations are only part of the common collections backend (that is not
 the localai backend, but louise's engine…)"): how collections are embedded is
@@ -58,12 +67,14 @@ rewrite — each still sits beside the code it calls).
 | part | what it does | where |
 |---|---|---|
 | share and priority | a gate per encoder URL, levels CORPUS < TRANSLATE < QUERY < RERANK < CHAT, the interactive claim, standing aside | `app/rage/dispatch.py` |
+| the family rule | which collections are one family — lineage and records carries, both ways, any depth — for what applies to all of them: annotations first (§5) | `app/rage/family.py` |
 | settings in effect | the file's `[encoder]`, then the recommendation for this card, then the node's defaults | `collections.recipe_for` → `app/rage/settings.py`; the signed file `app/hold/rage_settings.py`; `louise hold rage-settings show\|record` |
 | record | one line a second: the card's busy, each gate's seconds held per collection, backlogs, queries | `app/rage/card_record.py` (reads the GPU probe's `/busy`, `app/gpu_busy.py`, `app/gpu_pmu.py`) |
 | feed | the documents, the lanes, the window of documents in flight | `app/worker.py` `_embed_producer`, `_embed_parallel` |
 | fill | requests filled across documents | `app/embeddings.py` `Coalescer`, `coalescing`, `batch_size` |
 | admission | the gate, and the run check before each write | `app/run_check.py`, `app/hold/runs.py` |
 | CPU reference | the encoder's CPU twin's answers to the set, the model's and not a collection's: kept once in the node's store by the space's key and resolved there by every caller (the gate, `cpu-reference`, `collection new`, which inherits it); the twin's name determined (`<model>-cpu`) (operator, 2026-11-22) | `app/rage/reference.py`; the files `app/hold/cpu_reference.py`; near-exact-runs.md §2 |
+| plates | what every collection does with its origin's images (operator, 2026-11-28: "Why the fuck this is not a fucking part of RAGE API???"): Gutenberg's proven rules made common — the plugin writes `SENTINEL` where an image stands and names it (`Ref`); RAGE makes the marker `[Illustration: …]`, the aligned `figures` entry (the Nth marker is `figures[N]`), the streamed SHA-256 and size, the "absent" and "unplaced" gaps, and reads the plates back one at a time for the container pass, which spools them (`hold.figures.FrameSpool`: one plate held, the same container bytes) | `app/rage/figures.py`; `plugin_io.figure_items` |
 | bench | one collection's row for a window (busy, chunks/s, lost, gaps, alone); searches under corpus load; the card per minute | `app/rage/bench.py` (`louise dev schedule-report --bench`), `tools/measure/query_under_load.py`, `louise dev schedule-report --gpu` |
 
 The standards it uses instead of its own inventions: dynamic batching as
@@ -72,7 +83,36 @@ PMU for the card's busy share (record), deficit round robin for the card's
 budget between collections (share, next step), the scheduling notes'
 DRR/AIMD/CFS ([scheduling.md](scheduling.md)).
 
-## 5. The name's history
+## 5. The family rule
+
+*The operator, 2026-11-28: "An annotation refers to the corpus of a
+collection, thus applies to all sisters and daughters, correct?" — asked
+whether to follow the whole family or keep the target and its one carried
+twin, "A"; then "Add this rule to RAGE".*
+
+What applies to a collection's records applies to its WHOLE FAMILY: every
+collection linked to it, in either direction and at any depth, by its Codex's
+lineage — `continues` (a daughter's mother), `derived_from` (a sister's
+sister), `replaces.codex` (a corrective sister's predecessor) — or by a records
+carry (`carry.records_twin_of`), or by a RE-CREATION (case F,
+`hold collection new --re-create`): it may change what a sister may not — the
+parser, the record line (EUR-Lex 5 → 6, 2026-11-28) — so its Codex names no
+lineage, and the make step records the collection it re-creates beside it
+(`state/recreated-from.json`, `recreate.record_predecessor`); the folder, and
+the link, move with the swap. Local to this node: a published lineage for a
+re-creation (a fourth Codex relation) pays once one is published to peers —
+there are none today. An id the node no longer holds (a mother
+retired, the Codex a refit replaced) stays a link, so sisters meet through
+it. One function decides it for every collection: `app.rage.family.family`.
+
+Read today by: the annotations a search attaches (`ask/annotations.attach`,
+05 §5.3), the graph walk over them (`ask/traverse`), and the annotations
+card's naming of its target (`web`). Each claim is still judged against the
+record it lands on (`annotations.state_of`): `current` where the relative's
+record has the text the claim was checked against, `stale` where it changed
+— a claim is never shown as a fact of text it was not made about.
+
+## 6. The name's history
 
 - **2026-09-20 → 2026-10-18.** RAGE named the model pool (before 2026-09-20
   "the model pool"), VeGa's predecessor: VeGa took its run identity and

@@ -82,6 +82,10 @@ def _deposit_collection(name: str, *, locked_ok: bool = False):
     c = collections_mod.by_name(name)
     if c is None and locked_ok:
         c = collections_mod.locked_by_name(name)
+    # one hidden from this caller (07 §7.8 `hidden`: the deposit token is not
+    # an admin) is the name nothing holds — its own deposit collections aside
+    if name in collections_mod.hidden_names_here() and not (c is not None and collections_mod.is_private(c)):
+        raise LocalAgiError(404, "NOT_FOUND", f"no collection {name!r}")
     if c is None and collections_mod.locked_by_name(name) is not None:
         raise LocalAgiError(409, "LOCKED", f"{name} is locked: kept as it is, nothing is deposited "
                                            f"into it; an entry can still be deleted (07 §7.8)")
@@ -193,7 +197,10 @@ async def create(body: CreateBody):
 @_wrap
 async def list_collections():
     """Deposit collections, and every held collection read-only (D2)."""
-    names = sorted(c.name for c in collections_mod.load_all())
+    # never one hidden from this caller (07 §7.8 `hidden`: the deposit token is
+    # not an admin), its own deposit collections aside (02 §2.9)
+    names = sorted(c.name for c in collections_mod.load_all()
+                   if collections_mod.is_private(c) or not collections_mod.hidden_here(c))
     return ok({"collections": names})
 
 
@@ -291,7 +298,7 @@ async def search(name: str, body: SearchBody):
     memory's business."""
     from . import query_service
     c = collections_mod.by_name(name)
-    if c is None:
+    if c is None or (collections_mod.hidden_here(c) and not collections_mod.is_private(c)):
         raise LocalAgiError(404, "NOT_FOUND", f"no collection {name!r}")
     k = max(1, min(int(body.max_results or 5), 100))
     try:
