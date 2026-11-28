@@ -46,3 +46,29 @@ def test_an_annotation_about_one_relative_applies_to_every_one(tmp_path):
     assert "M" in ask_ann.answers_for(tmp_path, "niece", "N", held)
     assert "N" in ask_ann.answers_for(tmp_path, "mother", "M", held), "and the other way round"
     assert ask_ann.answers_for(tmp_path, "alone", "Z", held) == ("Z",)
+
+
+# ---- the labels the web shows (operator, 2026-11-28: "Fix the labelling in the web ui") ----
+
+def test_an_annotation_says_every_collection_it_applies_to(monkeypatch):
+    """The one it was made for first, then its family held here — never "a
+    collection this node does not hold" while a relative is served."""
+    from app import collections as collections_mod, web
+    held = [C("gutenberg", "G"), C("gutenberg-nemo", "N", derived_from="G"), C("pubmed", "P")]
+    monkeypatch.setattr(collections_mod, "louise_root", lambda: __import__("pathlib").Path("/nonexistent"))
+    assert web._applies_to("G", held, held) == ["gutenberg", "gutenberg-nemo"]
+    assert web._applies_to("N", held, held) == ["gutenberg-nemo", "gutenberg"]
+    # the Codex it was made for is no longer held: its relatives still are
+    later = [C("gutenberg", "G2", replaces="G"), C("pubmed", "P")]
+    assert web._applies_to("G", later, later) == ["gutenberg"]
+    assert web._applies_to("Z", held, held) == []
+
+
+def test_a_claim_on_another_version_reads_may_not_apply_not_an_error():
+    """Operator: "some of the references may not apply, but that's it"."""
+    from pathlib import Path
+    tpl = Path("app/templates/_ask_results.html").read_text(encoding="utf-8")
+    assert "may not apply" in tpl
+    assert 'badge err" title="one record changed since the claim was checked">stale' not in tpl
+    lib = Path("app/templates/library.html").read_text(encoding="utf-8")
+    assert "t.applies_to|map('label_of')" in lib
