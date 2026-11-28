@@ -941,7 +941,7 @@ def _log_translation(lang: str, items: int, got: int, cached: int, missed: int, 
     translated or missed). Through the default collection's manifest, as
     the query log is; never fatal."""
     try:
-        con = db.connect()
+        con = db.control()
         try:
             db.log_event(con, "warn" if cut else "info", "translate",
                          f"stream into {lang}: {items} items — {got} translated ({cached} cached), "
@@ -1919,7 +1919,7 @@ def _ask_result(body: AskQueryBody) -> dict:
     _attach_figures(result)
     _attach_plates(result)
     _attach_history(result, body)
-    con = db.control()   # query_log lives in the default collection's manifest regardless
+    con = db.control()   # the query log is the node's (state/node.sqlite)
     # .get, not [...]: when every collection is withheld `run_search`
     # returns {hits, withheld} with no `timings` at all, and a KeyError
     # here answered the whole query with a 500 — the licence gate's own
@@ -2973,7 +2973,7 @@ def _worker_stats() -> dict:
     """The worker's published per-collection snapshot, or {} when it is
     silent or stale. Read once per page: it is one control-table row."""
     try:
-        con = db.read_only_connect()
+        con = db.read_only_control()          # published by the worker into state/node.sqlite
         if con is None:
             return {}
         try:
@@ -4826,7 +4826,7 @@ def _bandwidth_payload() -> dict:
         # per subscriber, and connect() re-runs the schema script and the
         # ALTER TABLE migrations each call — write-path work on a manifest
         # the pipeline threads are already contending for.
-        con = db.read_only_connect()
+        con = db.read_only_control()          # the worker's samples: state/node.sqlite
         if con is not None:
             worker_rates, age = db.read_worker_rates(con)
             # the seeding table rides the SAME cheap reader (one read-only
@@ -5103,6 +5103,19 @@ def _recent_events_all(limit: int = 60) -> list[dict]:
     counts are small and the alternative (a UNION over attached databases)
     would couple the page to every manifest being attachable at once."""
     rows: list[dict] = []
+    # THE NODE'S OWN LINES (state/node.sqlite, `db.control`): the worker's,
+    # the scheduler's, the seeder's, the control events — since 2026-11-28;
+    # older node lines stay in the manifests they were written to, read below
+    try:
+        con = db.read_only_control()
+        if con is not None:
+            try:
+                for r in con.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)):
+                    rows.append({**dict(r), "collection": "node"})
+            finally:
+                con.close()
+    except Exception:   # noqa: BLE001 — the node's log missing must not blank the rest
+        pass
     for collection in collections_mod.load_all():
         try:
             con = db.connect(collection)

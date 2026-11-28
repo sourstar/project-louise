@@ -115,9 +115,8 @@ def _con():
 
 
 def _log_con():
-    """The default collection's manifest, where query_log lives, whoever asks
-    — or the control fallback where it cannot be opened (`db.control`): a
-    log line never fails the request it logs."""
+    """state/node.sqlite, where the query log lives (`db.control`; operator,
+    2026-11-28, choice A), whoever asks."""
     return db.control()
 
 
@@ -315,14 +314,14 @@ def stats():
           SUM(fts_done) fts_done, SUM(embed_done=1) embed_done,
           SUM(tokens) tokens
         FROM documents WHERE in_scope=1 GROUP BY lang ORDER BY books DESC LIMIT 30""")]
-    log = _log_con()                    # query_log lives in the default's manifest, whoever asks
+    log = _log_con()                    # the query log is the node's (state/node.sqlite)
     usage = log.execute("""
         SELECT COUNT(*) queries, AVG(total_ms) avg_ms,
           SUM(CASE WHEN ts > strftime('%s','now')-86400 THEN 1 ELSE 0 END) last24h
         FROM query_log""").fetchone()
     recent = [dict(r) for r in log.execute(
         "SELECT ts,endpoint,query,mode,total_ms,n_results FROM query_log "
-        "ORDER BY id DESC LIMIT 15")]
+        "ORDER BY ts DESC, id DESC LIMIT 15")]
     def du(path):
         try:
             return sum(f.stat().st_size for f in Path(path).rglob("*") if f.is_file())
@@ -1105,7 +1104,7 @@ def _search_and_log(body: SearchBody) -> dict:
                          **({"annotations": body.annotations} if body.annotations is not None else {}),
                           verify=body.verify, rerank_depth=body.rerank_depth,
                           all_languages=body.all_languages, kind=body.kind)
-    con = _log_con()   # query_log lives in the default collection's manifest regardless
+    con = _log_con()   # the query log is the node's (state/node.sqlite)
     db.log_query(con, "search", body.query, body.mode, body.k, result["timings"],
                  len(result["hits"]), _source_qualified_ids(result["hits"]))
     return result
@@ -1563,7 +1562,7 @@ def kind_note(result: dict, lang: str | None = None) -> str:
 
 
 def _chat_answer(body: ChatBody, query: str, result: dict, t0: float, trace=None):
-    con = _log_con()   # query_log lives in the default collection's manifest regardless
+    con = _log_con()   # the query log is the node's (state/node.sqlite)
     prompt = _fit_answer(body, query, result)
     reads = prompt.reads
     rid = f"chatcmpl-{uuid.uuid4().hex[:12]}"
