@@ -11263,6 +11263,23 @@ on a fresh clone (fixture mtimes are pinned to the golden's values).
 Recorded because each was invisible until it wasn't, and each would be easy
 to reintroduce.
 
+- **A manifest overwritten by a TLS alert** (2026-11-28, EUR-Lex5.next).
+  Its header read `SQLit\x15\x03\x03…` (mtime 16:20:33Z): the first 5
+  bytes intact, then a TLS 1.2 alert record. At 16:09:19Z a node pause
+  stopped the fetch while a SPARQL query waited in `cellar._answer_of`'s
+  thread. The stop left that thread reading, and the caller's
+  `with httpx.Client()` closed the client. httpcore's pool close freed the
+  socket's descriptor, without a TCP shutdown, under the blocked reader.
+  Linux gives the lowest free number to the next open(), here the manifest.
+  When the answer came 11 min later, OpenSSL, which keeps the number,
+  read the manifest's first 5 bytes as a record header. It found type 'S'
+  invalid and wrote its alert after them. A plain socket only raises EBADF:
+  CPython re-reads its own field, OpenSSL does not. **A descriptor is closed
+  only by the thread that reads it**: a thread a stop may abandon owns its
+  client (`cellar._thread_client`). The test reads with real sockets. The
+  harm reaches any file the process holds read-write: a manifest, a WAL, a
+  `.part`.
+
 - **A fair share handed to collections that had no work** (2026-09-23).
   The parse pool's admission divided the children by PRESENCE —
   collections seen in a 30 s window — so wikipedia, the only one parsing,
