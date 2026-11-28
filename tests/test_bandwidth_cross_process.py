@@ -69,7 +69,7 @@ def test_the_payload_sums_both_processes(client, isolated_config, monkeypatch):
                         lambda: {"down": {"backfill": 100.0, "interactive": 7.0},
                                   "up": {"seeding": 1.0},
                                   "limits": {"down": None, "up": None}})
-    db.publish_worker_rates(db.connect(),
+    db.publish_worker_rates(db.control(),
                             {"down": {"backfill": 400.0, "delta": 3.0}, "up": {}})
 
     payload = web._bandwidth_payload()
@@ -97,7 +97,7 @@ def test_the_payload_says_when_the_worker_is_silent(client, isolated_config,
 
 
 def test_the_stream_endpoint_serves_the_merged_payload(client, isolated_config):
-    db.publish_worker_rates(db.connect(), {"down": {"backfill": 42.0}, "up": {}})
+    db.publish_worker_rates(db.control(), {"down": {"backfill": 42.0}, "up": {}})
     # the SSE generator never ends; the payload builder is the testable half
     payload = web._bandwidth_payload()
     assert payload["down"]["backfill"] >= 42.0
@@ -111,13 +111,14 @@ def test_the_polling_path_uses_a_cheap_reader(isolated_config, monkeypatch):
     db.connect() re-runs the schema script and the ALTER TABLE migrations on
     every call — write-path work against a manifest the pipeline threads are
     already contending for."""
-    db.publish_worker_rates(db.connect(), {"down": {"backfill": 1.0}, "up": {}})
+    db.publish_worker_rates(db.control(), {"down": {"backfill": 1.0}, "up": {}})
 
     calls = {"connect": 0, "ro": 0}
-    real_ro = db.read_only_connect
-    monkeypatch.setattr(db, "connect",
-                        lambda *a, **k: calls.__setitem__("connect", calls["connect"] + 1))
-    monkeypatch.setattr(db, "read_only_connect",
+    real_ro = db.read_only_control
+    for full in ("connect", "control"):
+        monkeypatch.setattr(db, full,
+                            lambda *a, **k: calls.__setitem__("connect", calls["connect"] + 1))
+    monkeypatch.setattr(db, "read_only_control",
                         lambda *a, **k: (calls.__setitem__("ro", calls["ro"] + 1),
                                           real_ro(*a, **k))[1])
 
@@ -128,12 +129,11 @@ def test_the_polling_path_uses_a_cheap_reader(isolated_config, monkeypatch):
 
 def test_the_reader_tolerates_a_manifest_that_does_not_exist_yet(isolated_config,
                                                                   monkeypatch):
-    """A node whose first collection has never been written must still serve
-    the Network page."""
-    from app import collections as collections_mod
-    c = collections_mod.default_collection()
-    monkeypatch.setattr(c.manifest_path.__class__, "exists", lambda self: False)
-    assert db.read_only_connect() is None
+    """A node whose state/node.sqlite has never been written (the worker's
+    samples are there since 2026-11-28) must still serve the Network page."""
+    from app import node_state
+    assert not node_state.path().exists()
+    assert db.read_only_control() is None
     payload = web._bandwidth_payload()
     assert payload["worker"]["reporting"] is False
 
@@ -163,7 +163,7 @@ def test_the_page_gets_totals_and_a_download_split_by_collection(isolated_config
     codex_collection("wikipedia", louise_root=config.DATA_DIR,
                      config_dir=collections_mod.collections_dir().parent)
 
-    con = db.connect()
+    con = db.control()
     db.publish_worker_rates(con, {"down": {"backfill": 40.0, "delta": 2.0},
                                   "up": {"seeding": 5.0}})
     db.publish_worker_stats(con, {
@@ -174,8 +174,8 @@ def test_the_page_gets_totals_and_a_download_split_by_collection(isolated_config
         "idle": {"embed": None},
     })
     calls = {"ro": 0}
-    real_ro = db.read_only_connect
-    monkeypatch.setattr(db, "read_only_connect",
+    real_ro = db.read_only_control
+    monkeypatch.setattr(db, "read_only_control",
                         lambda *a, **k: (calls.__setitem__("ro", calls["ro"] + 1),
                                           real_ro(*a, **k))[1])
 

@@ -12,6 +12,7 @@ failing CLOSED when it cannot see every manifest.
 """
 import json
 import sqlite3
+from contextlib import closing
 
 from fastapi.testclient import TestClient
 
@@ -31,6 +32,13 @@ class _Locked:
 
     def execute(self, *a, **k):
         raise sqlite3.OperationalError("database is locked")
+
+
+def _node_events() -> list[str]:
+    """The worker's boot lines: the node's own log, state/node.sqlite
+    (`db.control`; operator, 2026-11-28, choice A)."""
+    with closing(db.control()) as con:
+        return [r[0] for r in con.execute("SELECT message FROM events ORDER BY id")]
 
 
 def _events(collection):
@@ -182,7 +190,7 @@ def test_a_manifest_that_fails_to_open_once_does_not_cost_the_operators_value(
     monkeypatch.setattr(db, "connect", flaky)
     worker._move_node_control(node_state.connect(), [a, b])
     assert node_state.worker_state() == "paused"
-    assert any("NOT moved" in m for m in _events(b)), _events(b)
+    assert any("NOT moved" in m for m in _node_events()), _node_events()
 
     worker._move_node_control(node_state.connect(), [a, b])
     assert node_state.worker_state() == "paused"
@@ -204,14 +212,14 @@ def test_the_worker_boot_moves_the_state_from_the_first_collection(
     worker._move_node_control(node_state.connect(), [a, b])
 
     assert node_state.worker_state() == "seed-only"
-    assert any("node control moved to state/node.sqlite" in m for m in _events(a)), \
-        _events(a)
+    assert any("node control moved to state/node.sqlite" in m for m in _node_events()), \
+        _node_events()
 
 
 def test_a_node_with_no_state_says_it_is_paused(isolated_config, tmp_path):
     a = _collection(tmp_path, "aaa")
     worker._move_node_control(node_state.connect(), [a])
-    assert any("PAUSED by default" in m for m in _events(a)), _events(a)
+    assert any("PAUSED by default" in m for m in _node_events()), _node_events()
 
 
 def test_a_reader_that_must_create_nothing_can_peek(isolated_config):

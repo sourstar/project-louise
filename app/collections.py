@@ -1740,7 +1740,9 @@ def load_public() -> list:
 def default_collection() -> Collection:
     """The first collection load_all() returns — used wherever no explicit
     collection is given (single-collection call sites predating P0.5's
-    federation), and as the CONTROL manifest (worker state, seeding table).
+    federation). NOT the node's control any more: its state, query log,
+    node-wide events and the worker's samples are in state/node.sqlite
+    (`db.control`; operator, 2026-11-28, choice A).
     With zero collections the control manifest falls back to
     DATA_DIR/manifest.db (`_control_fallback`) so the node keeps running;
     it is NOT listed anywhere and no pipeline runs on it."""

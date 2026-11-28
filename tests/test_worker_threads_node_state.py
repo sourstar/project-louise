@@ -80,7 +80,7 @@ def test_the_beat_logs_the_fair_shares(isolated_config, monkeypatch):
     beat = threading.Thread(target=worker._stats_publisher, daemon=True)
     beat.start()
     try:
-        con = db.connect()
+        con = db.control()          # the node's own log: state/node.sqlite (2026-11-28, A)
         assert _wait(lambda: con.execute(
             "SELECT 1 FROM events WHERE stage='sched' LIMIT 1").fetchone() is not None), \
             "no fair-share line reached the log"

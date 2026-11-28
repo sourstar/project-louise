@@ -7755,8 +7755,7 @@ def _gossip_beat(collections, con) -> None:
 
 def _stats_publisher() -> None:
     from .acquire import seeding
-    con = None
-    owner = None
+    con = None          # state/node.sqlite (`db.control`) — this thread's own
     node_con = None     # state/node.sqlite — this thread's own (SQLite is thread-affine)
     seed_cons: dict[str, object] = {}
     while not _stop.wait(STATS_PUBLISH_INTERVAL_S):
@@ -7780,12 +7779,8 @@ def _stats_publisher() -> None:
                 # nobody heard of it, so nobody's digest named it a swarm.
                 _gossip_beat([], None)
                 continue
-            control = collections[0]          # node control follows sort order
-            if owner != control.name:
-                if con is not None:
-                    con.close()
-                con = db.connect(control)
-                owner = control.name
+            if con is None:                   # the node's telemetry: state/node.sqlite
+                con = db.control()
             db.publish_worker_stats(con, stats.recorder().snapshot())
             # pinned now, left pinned, failed calls (app/model_pins.py)
             db.publish_model_pins(con, model_pins.counters())
@@ -7881,12 +7876,13 @@ def _move_node_control(node_con, loaded) -> None:
             legacy.append(None)
     try:
         move = node_state.adopt_legacy(node_con, legacy)
-        log = next((con for con in legacy if con is not None), None)
 
         def _say(level: str, message: str) -> None:
-            if log is not None:
-                db.log_event(log, level, "worker", message)
-            else:
+            try:                                   # the node's own log (state/node.sqlite)
+                from contextlib import closing as _closing
+                with _closing(db.control()) as log:
+                    db.log_event(log, level, "worker", message)
+            except Exception:   # noqa: BLE001 — said on stdout at least
                 print(f"[{level}:worker] {message}", flush=True)
 
         if move.adopted:
@@ -7902,6 +7898,15 @@ def _move_node_control(node_con, loaded) -> None:
         # (db.worker_state), which stops every collection. The default is
         # right; being SILENT about it is not — it has twice read as "the
         # node is broken, nothing logs".
+        # THE QUERY LOG TOO, once (operator, 2026-11-28, choice A): out of
+        # every manifest it followed the first collection into
+        moved = node_state.adopt_query_log(node_con, legacy)
+        if moved is not None:
+            _say("info", f"query log moved to state/node.sqlite: {moved} question(s) "
+                         f"from the manifests (their copies stay, unread)")
+        elif db.get_control(node_con, node_state.QUERY_LOG_MOVED_KEY) is None:
+            _say("warn", "query log NOT moved to state/node.sqlite: a manifest could not be "
+                         "read; nothing was copied, and the next boot tries again")
         if db.get_control(node_con, db.WORKER_STATE_KEY) is None:
             _say("warn", f"the node has no {db.WORKER_STATE_KEY} in "
                  f"state/node.sqlite, so it is PAUSED by default and will "
@@ -8183,11 +8188,10 @@ def run_forever():
     last_discover = _last_discover
     last_discover.update({c.name: time.time() for c in all_collections})
     last_idle_log: dict[str, float] = {}
-    # zero collections (an empty collections/ directory): the node idles on
-    # the fallback control manifest until a TOML appears (hot-reloaded).
-    # That manifest carries only telemetry and this loop's event log now —
-    # the node's STATE is in state/node.sqlite (`node_con`).
-    control_con = cons[all_collections[0].name] if all_collections else db.connect()
+    # THE NODE'S OWN LOG AND TELEMETRY: state/node.sqlite (`db.control`;
+    # operator, 2026-11-28, choice A) — never the first collection's
+    # manifest, which a damaged header (EUR-Lex5.next's) took down with it
+    control_con = db.control()
     _main_loop_live.set()
 
     while not _stop.is_set():
@@ -8205,10 +8209,6 @@ def run_forever():
             if not all_collections:
                 time.sleep(config.WORKER_IDLE_SLEEP)
                 continue
-            # re-resolved each round: the previous first collection may have
-            # been removed mid-run. Telemetry and the log only — nothing a
-            # new first collection has to inherit.
-            control_con = cons[all_collections[0].name]
             # Tier-3 "boost bandwidth tonight" reaches the byte-moving process
             # here: the web process writes it to state/node.sqlite, the worker
             # applies it. Re-read each round so it takes effect within one
@@ -8320,8 +8320,7 @@ def run_forever():
             try:
                 db.log_event(control_con, "error", "worker", traceback.format_exc()[:1500])
             except Exception:
-                # control_con may point at a just-removed collection — the
-                # loop must survive even when its logger is gone
+                # the loop must survive even when its logger is gone
                 print(traceback.format_exc()[:1500], flush=True)
             time.sleep(5)
     _main_loop_live.clear()         # the beat stands down with the loop

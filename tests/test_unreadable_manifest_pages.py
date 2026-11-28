@@ -3,6 +3,8 @@ manifest overwritten from byte 5 by a TLS alert, "file is not a database";
 the operator: "System and library tabs still don't work"). A real file,
 damaged as that one was, beside a sound collection: every page and fragment
 a GET reaches without a parameter renders, or says so — never a 500."""
+import sqlite3
+from contextlib import closing
 from dataclasses import replace
 
 import pytest
@@ -134,10 +136,11 @@ def test_a_locked_manifest_is_not_refused_at_start():
     assert spaces.unreadable(sqlite3.DatabaseError("file is not a database"))
 
 
-def test_the_query_log_goes_to_the_control_fallback_when_the_control_manifest_does_not_open(
+def test_the_query_log_is_the_node_s_whatever_the_first_collection(
         isolated_config, monkeypatch, tmp_path, capsys):
-    """A question is never failed by its log line: the control manifest
-    unreadable, `db.control()` opens the node's fallback and says so."""
+    """Operator, 2026-11-28, choice A: the query log is in state/node.sqlite,
+    so the first collection's damaged manifest never reaches it."""
+    from app import node_state
     real, broken = _node(monkeypatch, tmp_path)
     monkeypatch.setattr(collections_mod, "load_all",
                         lambda *, skip_unreadable=False: ([broken, real], []) if skip_unreadable else [broken, real])
@@ -145,7 +148,10 @@ def test_the_query_log_goes_to_the_control_fallback_when_the_control_manifest_do
     con = db.control()
     try:
         db.log_query(con, "search", "chi era Garibaldi?", "hybrid", 10, {}, 0, [])
-        assert con.execute("SELECT COUNT(*) FROM query_log").fetchone()[0] == 1
+        db.log_event(con, "info", "control", "a node line")
     finally:
         con.close()
-    assert "[EUR-Lex5.next err:control] its manifest cannot be opened" in capsys.readouterr().out
+    with closing(sqlite3.connect(node_state.path())) as c:
+        assert c.execute("SELECT query FROM query_log").fetchall() == [("chi era Garibaldi?",)]
+        assert c.execute("SELECT message FROM events").fetchall() == [("a node line",)]
+    assert "[node info:control] a node line" in capsys.readouterr().out

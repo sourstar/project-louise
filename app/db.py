@@ -392,22 +392,34 @@ def unreadable(e: BaseException) -> str | None:
 
 
 def control() -> sqlite3.Connection:
-    """THE CONTROL MANIFEST FOR TELEMETRY: the query log, a control event.
-    The default collection's (`connect()`), or — where it cannot be opened —
-    the node's control fallback (`collections._control_fallback`), said on
-    each such open. 2026-11-28: EUR-Lex5.next sorted first, so her manifest
-    was the control one; its header overwritten, every question's log write
-    raised, and an answer would have been a 500 for its log line."""
-    try:
-        return connect()
-    except Exception as e:  # noqa: BLE001 — sorted: a lock is raised as before
-        why = unreadable(e)
-        if why is None:
-            raise
-        fallback = collections_mod._control_fallback()
-        print(f"{time.strftime('%H:%M:%S')} [{collections_mod.default_collection().name} err:control] "
-              f"{why}; this write goes to {fallback.manifest_path}", flush=True)
-        return connect(fallback)
+    """THE NODE'S OWN TELEMETRY: `state/node.sqlite` (operator, 2026-11-28,
+    choice A) — the query log, the node-wide events, the worker's published
+    samples (rates, stats, model pins, the seeding table). Never a
+    collection's manifest: they followed the first collection, and EUR-Lex5
+    .next's overwritten header failed the System tab with it. A manifest
+    connection's class, so `log_event` says `node`."""
+    from . import node_state
+    p = node_state.path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    con = sqlite3.connect(p, timeout=60, isolation_level=None, factory=ManifestConnection)
+    con.collection_name = "node"
+    con.row_factory = sqlite3.Row
+    wal(con)
+    con.execute("PRAGMA busy_timeout=60000")
+    node_state.ensure_schema(con)
+    return con
+
+
+def read_only_control() -> sqlite3.Connection | None:
+    """`control()` for the polling paths, as `read_only_connect` is for a
+    manifest: no DDL, no write lock; None before the file exists."""
+    from . import node_state
+    p = node_state.path()
+    if not p.exists():
+        return None
+    con = sqlite3.connect(p.resolve().as_uri() + "?mode=ro", uri=True, timeout=5, check_same_thread=False)
+    con.row_factory = sqlite3.Row
+    return con
 
 
 def connect(collection=None, *, shared: bool = False) -> sqlite3.Connection:
@@ -937,10 +949,10 @@ def log_event(con, level, stage, message, doc_uid=None):
     way (tests, tools) simply print without it.
 
     A NODE_STAGES line says `node` instead. The fair-share lines cover every
-    collection and are written through the first collection's manifest —
-    the node has no event log of its own — so they printed as gutenberg's
-    ("why is gutenberg logging about the other plugins?", operator,
-    2026-09-18)."""
+    collection and were written through the first collection's manifest, so
+    they printed as gutenberg's ("why is gutenberg logging about the other
+    plugins?", operator, 2026-09-18); the node has its own log since
+    2026-11-28 (state/node.sqlite, `db.control`), whose lines say `node`."""
     stamp = time.strftime("%H:%M:%S")
     tag = f" #{doc_uid}" if doc_uid else ""
     who = "node" if stage in NODE_STAGES else getattr(con, "collection_name", "")
