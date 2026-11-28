@@ -130,13 +130,23 @@ def old_run_gate(root, name: str, codex, snapshot_id: str) -> Gate:
     if not published(col.shard_dir_of(Path(root), name), snapshot_id):
         return Gate(False, f"waiting for snapshot {snapshot_id} to be published (its signature, "
                            f"snapshots/{snapshot_id}.sig.json)")
-    waiting = tuple(a for a in annotators(root, codex.collection_id)
-                    if not started(root, a, codex.collection_id, snapshot_id))
+    from app import collections as collections_mod
+    pending = [a for a in annotators(root, codex.collection_id)
+               if not started(root, a, codex.collection_id, snapshot_id)]
+    # A LOCKED ANNOTATOR IS NOT WAITED FOR (07 §7.8 `locked`; the lock's second
+    # read): it is kept as it is and never woken, so waiting for it would stop
+    # every later update of its source while saying nothing of the lock. Its
+    # claims derive from this collection's published snapshots, which stay;
+    # unlocked, it is woken by the next one
+    locked = tuple(a for a in pending if collections_mod.is_locked(a))
+    waiting = tuple(a for a in pending if a not in locked)
+    also = (f"; {', '.join(locked)} {'is' if len(locked) == 1 else 'are'} locked, not waited for"
+            if locked else "")
     if waiting:
         return Gate(False, f"waiting for the annotations cascade of {snapshot_id} to start: "
-                           f"{', '.join(waiting)} not woken yet", published=True, waiting=waiting)
+                           f"{', '.join(waiting)} not woken yet{also}", published=True, waiting=waiting)
     return Gate(True, f"snapshot {snapshot_id} is published and the annotations that declare "
-                      f"{name} have started from it", published=True)
+                      f"{name} have started from it{also}", published=True)
 
 
 # --------------------------------------------------------------------------
@@ -445,7 +455,10 @@ def declarations(root, *, methods: Mapping[str, str | None] | None = None,
     held = dict(col._held(root))
     files: dict[str, str | None] = {}
     try:
-        for c in collections_mod.load_annotations():
+        # a LOCKED annotations collection declares its method all the same: a
+        # loop through it would go live at its unlock (07 §7.8 `locked`)
+        for c in [*collections_mod.load_annotations(),
+                  *(x for x in collections_mod.load_locked() if collections_mod.is_annotations(x))]:
             files[c.name] = getattr(c, "method", None)
     except Exception:   # noqa: BLE001 — a listing that cannot be read declares no method
         files = {}
@@ -569,11 +582,17 @@ def update_in_flight(root, name: str, codex=None, *, now: datetime | None = None
     from . import collection as col
     from . import update as update_mod
     from . import update_state
+    from app import collections as collections_mod
     if codex is None:
         return None
     try:
         if update_mod.not_updated(codex) is not None:
             return None
+        if collections_mod.is_locked(name):
+            # still a wait — a dependent never derives from an old dump — but
+            # said for what it is (07 §7.8 `locked`; the lock's third read)
+            return (f"waits for {name}, which is locked: kept as it is, its update does not begin "
+                    f"until it is unlocked")
         lst = listing(col.shard_dir_of(Path(root), name))
         if lst.newest is None:
             return None                      # its first snapshot is built by hand

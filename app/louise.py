@@ -3135,6 +3135,89 @@ def cmd_collection_rename(a) -> int:
     return 0
 
 
+def cmd_collection_lock(a) -> int:
+    """`hold collection lock <collection>` (operator, 2026-11-27; 07 §7.8
+    `locked`): kept as it is — not searched or shared, nothing fetched or
+    processed for it, its models not loaded for it; only renamed, exported
+    or removed (app/collection_lock.py). Exit 2 refused, nothing written."""
+    from app import collection_lock
+    name = col.name_of(a.root, a.collection)
+    try:
+        _print(collection_lock.lock(name))
+    except collection_lock.LockRefused as e:
+        print(f"louise hold collection lock: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def cmd_collection_unlock(a) -> int:
+    """`hold collection unlock <collection>`: served again from the worker's
+    next round, as at a boot. Exit 2 for a name this node does not hold."""
+    from app import collection_lock
+    name = col.name_of(a.root, a.collection)
+    try:
+        _print(collection_lock.unlock(name))
+    except collection_lock.LockRefused as e:
+        print(f"louise hold collection unlock: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
+#: what a LOCKED collection still allows from the command line (operator,
+#: 2026-11-27: "It can only be renamed, exported or removed"), and what
+#: only reads it. Every other command naming a locked collection is
+#: refused before it acts (`_locked_refusal`): a whitelist, so a command
+#: added tomorrow is refused on a locked collection until it is listed
+_LOCK_ALLOWS = frozenset({
+    "cmd_collection_rename", "cmd_collection_forget", "cmd_vectors_export",
+    "cmd_annotations_claims",                            # an export: its claims to a file
+    "cmd_deposit_erase",                                 # a removal, and a privacy duty (02 §2.9)
+    "cmd_collection_lock", "cmd_collection_unlock",
+    # read only
+    "cmd_source_list", "cmd_deposit_list", "cmd_deposit_show",
+    "cmd_records_show", "cmd_issues_list", "cmd_config_show", "cmd_rage_settings_show",
+    "cmd_vectors_show", "cmd_snapshot_list", "cmd_snapshot_delta", "cmd_index_show",
+})
+#: the arguments that name a collection, where a command names it otherwise
+#: than `collection` (the second read of the lock, 2026-11-28): each is
+#: checked as `collection` is
+_LOCK_ARGS: dict[str, tuple[str, ...]] = {
+    "cmd_collection_migrate": ("name",),
+    "cmd_collection_new": ("name", "sister_of"),         # --re-create --name, --sister-of
+    "cmd_create": ("name",),
+    "cmd_derive": ("collection", "name"),
+    "cmd_share_fetch": ("collection", "name"),
+    "cmd_dev_carry": ("source", "target"),
+}
+
+
+def _locked_refusal(a) -> str | None:
+    """Why this command may not run — it names a locked collection and is
+    not one of `_LOCK_ALLOWS` — or None. `hold config apply --set
+    locked=false` is the unlock by its key, and is let through to
+    `collection_file.set_values`, which refuses any other value of a locked
+    file (app/collection_lock.py)."""
+    fn = getattr(getattr(a, "fn", None), "__name__", "")
+    if not fn or fn in _LOCK_ALLOWS or fn == "cmd_config_apply":
+        return None
+    named: list = []
+    for attr in _LOCK_ARGS.get(fn, ("collection",)):
+        v = getattr(a, attr, None)
+        named += list(v) if isinstance(v, (list, tuple)) else [v]
+    from app import collection_lock
+    for n in named:
+        if not isinstance(n, str) or not n:
+            continue
+        try:
+            name = col.name_of(getattr(a, "root", None), n)
+        except Exception:                               # noqa: BLE001 — the command says it
+            name = n
+        why = collection_lock.refusal(name, "worked on")
+        if why:
+            return why
+    return None
+
+
 # ---- the one writer per collection (07 §7.7) ---------------------------------
 _cli_locks: list = []
 
@@ -3173,11 +3256,15 @@ def _take_lock(root, name: str, what: str, *, exit_code: int = 3):
     finishing its unit: it is waited for, at most PAUSE_WAIT_S, said once
     (`lock.take_waiting`). Another holder, or a collection not paused, is
     refused at once. Not added to the command's locks: the caller releases."""
-    from app import node_state
+    from app import collections as collections_mod, node_state
     from app.hold import lock as lock_mod
+    # a LOCKED collection the worker still holds is let go at its next round,
+    # as a paused one is: waited for the same way (rename and forget, the acts
+    # a lock allows, right after the lock box is ticked)
     return lock_mod.take_waiting(lock_mod.state_dir(Path(root), name), name, what,
                                  exit_code=exit_code, wait_s=PAUSE_WAIT_S,
-                                 still=lambda: name in node_state.paused_collections(), say=_say_err)
+                                 still=lambda: (name in node_state.paused_collections()
+                                                or collections_mod.is_locked(name)), say=_say_err)
 
 
 def _release_cli_locks() -> None:
@@ -7600,7 +7687,9 @@ def _recipe_for(codex, name):
     from dataclasses import replace
     from app import collections as collections_mod
     from app.hold import embedder as emb
-    collection = collections_mod.by_name(name)
+    # a LOCKED collection reaches here only for the acts it allows
+    # (`_locked_refusal`): `vectors export`'s challenge rows (09 §9.7)
+    collection = collections_mod.by_name(name) or collections_mod.locked_by_name(name)
     if collection is None or getattr(collection, "embed", None) is None:
         # non-compliant: it names no encoder, and there is no default one
         # (operator, 2026-09-18) — everything that needs it defers, exit 3
@@ -8608,6 +8697,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", dest="dry_run",
                    help="name what would move; move nothing")
     p.set_defaults(fn=cmd_collection_rename)
+
+    p = verbs.add_parser("lock",
+                         help="kept as it is: not searched or shared, nothing fetched or processed, "
+                              "its models not loaded for it; only renamed, exported or removed "
+                              "(07 §7.8 `locked`)")
+    root_arg(p); p.add_argument("collection")
+    p.set_defaults(fn=cmd_collection_lock)
+    p = verbs.add_parser("unlock", help="served again from the worker's next round")
+    root_arg(p); p.add_argument("collection")
+    p.set_defaults(fn=cmd_collection_unlock)
 
     p = verbs.add_parser("ack",
                          help="record the licence acknowledgement a yellow- "
@@ -9658,6 +9757,10 @@ def main(argv=None) -> int:
         # as a node that genuinely holds none.
         print(f"louise: {root} is not a directory; --root is "
               f"<LOUISE_ROOT>/collections (07 §7.8)", file=sys.stderr)
+        return 2
+    why = _locked_refusal(a)
+    if why:
+        print(f"louise: {why}", file=sys.stderr)
         return 2
     from app import parallel
     try:

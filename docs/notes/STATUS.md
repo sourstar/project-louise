@@ -18,6 +18,14 @@ build at 12 cores, the GPU uncapped. The card's noise (operator): 0.2 sone
 idle, 3.1 sone at full load, coil whine ~0.9 sone; its fan range is being
 measured (published figures disagree).
 
+### 2026-11-28
+
+- **A COLLECTION CAN BE LOCKED (operator, 2026-11-27: "It simply stays frozen as it is … It can only be
+  renamed, exported or removed").** `locked = true` in its file (07 §7.8) is a refusal of `load_all`, so
+  nothing searches, shares, fetches for, processes or loads the models of it; the Library shows it on a
+  Locked card with rename…, export bundle, remove… and its lock box; `hold collection lock|unlock`.
+  docs/notes/collection-lock.md.
+
 ### 2026-11-27
 
 - **PERUGIA ON A 16 GB CARD, THE TEST PLAN** (operator: "In a few days the node Perugia will be resumed to

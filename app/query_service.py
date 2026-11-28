@@ -106,6 +106,12 @@ def resolve_collections(names: list[str] | None, *,
         c = c if c is not None and visible(c) else None
         (resolved if c else missing).append(c or n)
     if missing:
+        # a LOCKED one is held and said so, where it may be seen (07 §7.8 `locked`)
+        locked = [n for n in missing if isinstance(n, str)
+                  and (lc := collections_mod.locked_by_name(n)) is not None and visible(lc)]
+        if locked:
+            raise HTTPException(409, f"{', '.join(locked)}: locked — kept as it is and not searched; "
+                                     f"unlock it to search it (07 §7.8 `locked`)")
         raise HTTPException(400, f"unknown collection(s): {missing}")
     if not resolved:
         raise HTTPException(400, "collections must be non-empty when provided")

@@ -347,8 +347,11 @@ class WikidataSource:
         if held is not None:
             return Path(held.corpus_dir), getattr(held, "snapshot", None)
         served, _unreadable = collections_mod.load_all(skip_unreadable=True)
+        # a LOCKED one holds its dump all the same: a new collection reads it
+        # rather than downloading it again (07 §7.8 `locked`)
         reads = sorted({(str(c.corpus_dir), getattr(c, "snapshot", None) or "")
-                        for c in served if getattr(c, "plugin", None) == self.source_id})
+                        for c in [*served, *collections_mod.load_locked()]
+                        if getattr(c, "plugin", None) == self.source_id})
         if len(reads) > 1:
             raise pack.PackError(f"no collection is named {name} yet and the held wikidata collections read "
                                  f"different dumps ({'; '.join(f'{c} {s or chr(8212)}' for c, s in reads)}): the "
