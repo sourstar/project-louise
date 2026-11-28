@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from ..plugins.base import LicenseClass
-from . import cellar
+from . import cellar, met
 from .spec import (AcquisitionSpec, ChecksumSource, DeltaSpec, Endpoint, Filter, RateLimit,
                    RemoteFile, Transport)
 
@@ -743,11 +743,49 @@ EURLEX_SPEC = AcquisitionSpec(
 )
 
 
+# ---- The Met's Open Access (docs/notes/image-collections.md §8–§12; app/plugins/met) ----
+
+MET_SPEC = AcquisitionSpec(
+    source_id="met",
+    transport=Transport.HTTPS,
+    endpoints=(
+        # the collection API: no key; "Please limit request rate to 80
+        # requests per second" (metmuseum.github.io). Four connections, 0.05 s
+        # between starts (etiquette below): at most 20 a second
+        Endpoint(transport=Transport.HTTPS, url=met.API_URL, max_conns=4),
+    ),
+    # the bulk (MetObjects.csv) first, then every object the API lists
+    inventory=met.LISTING,
+    # an object = its API JSON (the completion mark, last) and its images
+    unit_fetcher=met.UNITS,
+    layout="one-file-per-doc",
+    filters=(met.CSV_PATH, "objects/*"),
+    checksums=ChecksumSource(kind="none"),       # none published; IIS's ETag is no content hash
+    delta=DeltaSpec(mode="full-resync"),
+    etiquette=RateLimit(max_conns=4, min_interval_s=0.05),
+    profiles={
+        # the first thousand object ids: a few hundred images
+        "demo": Filter(include=(met.CSV_PATH, "objects/0000/*")),
+        "full": Filter(),
+    },
+    profile_labels={
+        "demo": "the Open Access CSV and the objects numbered below 1,000, with their images",
+        "full": "every object the Met's API lists, with its images (~0.84 TB, counted 2026-11-28)",
+    },
+    estimated_bytes={"full": 843_000_000_000},
+    # CC0: the data (the CSV's LICENSE) and the public-domain images
+    # (metmuseum.org's Open Access policy); each object's own
+    # `isPublicDomain` and `rightsAndReproduction` are kept in its record
+    license_class=LicenseClass.GREEN,
+)
+
+
 ACQUIRE_REGISTRY: dict[str, AcquisitionSpec] = {
     "embedded": EMBEDDED_SPEC,
     "eurlex": EURLEX_SPEC,
     "gutenberg": GUTENBERG_SPEC,
     "legi": LEGI_SPEC,
+    "met": MET_SPEC,
     "neuris": NEURIS_SPEC,
     "normattiva": NORMATTIVA_SPEC,
     "pubmed": PUBMED_SPEC,
