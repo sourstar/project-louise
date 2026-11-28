@@ -100,3 +100,33 @@ operator says nothing, step 1 proceeds alone and step 2 waits.
 `collection_id`); 03 §3.3 (the read gate and its measured acceptance); 05/08
 (the "read by OCR" and "described by" labels); 02 §2.10 or a new kind (§5);
 for R2, 02 §2.4, 06 §6.1, 09 §9.3 and §9.12.
+
+## 8. The first origin: archive.org's Met gallery (operator, 2026-11-28)
+
+`https://archive.org/details/metropolitanmuseumofart-gallery`, uploaded
+2014. Counted 2026-11-28 from archive.org's metadata API:
+
+- **141,062 items**, one object each. A sampled item (`mma_stamp_seal_322153`)
+  holds one JPEG of **8 KB** (low resolution), a thumbnail, and the Met's own
+  `<id>_mma.json` (3 KB) beside `_meta.xml`.
+- **Rich metadata**: title, culture, date, medium, dimensions, provenance,
+  accession number, place, subjects. All of it is kept (invariant 11), the
+  `_mma.json` included. Step 1 (metadata + OCR) finds most objects on this alone.
+- **Licence**: `rights` points to the Met's Terms and Conditions (2014). It is
+  not CC0, so the class is at least yellow and needs a recorded acknowledgement
+  before the first byte (invariant 9).
+- **Another origin form exists**: the Met's own Open Access release (CC0
+  since 2017, its CSV and API, larger images, more objects). Invariant 11
+  wants the form chosen and recorded, with its reason. Pros: green licence,
+  better images, the issuer's own source. Cons: a different and larger
+  origin than the one the operator named.
+
+**The 35B as describer.** `qwen3.6-35b-a3b` is a vision-language model.
+unsloth's repository ships its projector (`mmproj-F16.gguf`, 0.90 GB), but
+our deploy (`louise-chat-qwen3.6-35b-a3b.yaml`) has `mmproj: ""`, so today
+it cannot see. Making it describe means:
+- a separate model entry with the same weights plus the projector (as
+  `louise-sum-` already reuses the file) and greedy decoding, gated as §4 says;
+- about 0.9 GB more on a card the 35B already nearly fills;
+- card time: 141 k images at an unmeasured few seconds each is days, so
+  this is measured on 100 images first (measuring.md).
