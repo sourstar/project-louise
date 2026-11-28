@@ -1919,7 +1919,7 @@ def _ask_result(body: AskQueryBody) -> dict:
     _attach_figures(result)
     _attach_plates(result)
     _attach_history(result, body)
-    con = db.connect()   # query_log lives in the default collection's manifest regardless
+    con = db.control()   # query_log lives in the default collection's manifest regardless
     # .get, not [...]: when every collection is withheld `run_search`
     # returns {hits, withheld} with no `timings` at all, and a KeyError
     # here answered the whole query with a 500 — the licence gate's own
@@ -4178,7 +4178,7 @@ def collection_remove(name: str, body: "RemoveBody | None" = None):
         except deposit.DepositError as e:
             raise HTTPException(409, f"{e} — `louise hold collection forget {name} --yes --here` removes "
                                      f"it in this process when no worker runs") from None
-        con = db.connect()
+        con = db.control()
         db.log_event(con, "info", "control",
                      f"collection {name!r} forgotten via admin UI: this node's copy and its state removed")
         return {"ok": True, "mode": "forget", **out,
@@ -4189,7 +4189,7 @@ def collection_remove(name: str, body: "RemoveBody | None" = None):
         raise HTTPException(400, f"{name!r} has no TOML file to retire")
     retired = toml_path.with_name(f"{name}.toml.removed-{int(time.time())}")
     toml_path.rename(retired)
-    con = db.connect()
+    con = db.control()
     db.log_event(con, "info", "control",
                  f"collection {name!r} removed via admin UI (TOML retired to "
                  f"{retired.name}; data kept on disk)")
@@ -4921,7 +4921,7 @@ def set_bandwidth_override(body: BandwidthOverrideBody):
     message = (f"bandwidth override {'cleared' if rate_bps is None else body.rate} "
                f"({body.hours}h)")
     try:
-        db.log_event(db.connect(), "info", "control", message)
+        db.log_event(db.control(), "info", "control", message)
     except Exception:   # noqa: BLE001 — the override is set; the event is a courtesy
         print(f"[info:control] {message}", flush=True)
     return {"ok": True, "rate_bps": rate_bps, "hours": body.hours}
@@ -5024,10 +5024,27 @@ def _effective_config() -> dict:
     override = node_state.bandwidth_override()
     tier3 = {"mode (state/node.sqlite, survives a restart)": node_mode.current(),
              "worker_state (state/node.sqlite)": node_state.worker_state(),
-             "scope (control table)": db.get_scope(db.connect()),
+             "scope (control table)": _control_scope(),
              "bandwidth override (state/node.sqlite, expires)":
                  _rate(override) if override else "(none)"}
     return {"tier1": tier1, "tier2": tier2, "tier2_platform": tier2_platform, "tier3": tier3}
+
+
+def _control_scope():
+    """The control table's scope, or why it cannot be read (2026-11-28: the
+    System tab answered 500 while the control manifest's header was
+    overwritten)."""
+    try:
+        con = db.connect()
+    except Exception as e:  # noqa: BLE001 — sorted: a lock is raised as before
+        why = db.unreadable(e)
+        if why is None:
+            raise
+        return f"(cannot be read: {why})"
+    try:
+        return db.get_scope(con)
+    finally:
+        con.close()
 
 
 def _idle_trim_said() -> str:

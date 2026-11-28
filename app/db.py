@@ -378,6 +378,38 @@ def wal(con, *, tries: int = 50, pause_s: float = 0.1) -> str:
     raise last
 
 
+def unreadable(e: BaseException) -> str | None:
+    """Why a manifest that raised `e` on opening cannot be used, or None for
+    what is not the file's fault: a lock or a busy file waits — deferral is
+    not failure (CLAUDE.md) — and is raised as it always was."""
+    if isinstance(e, sqlite3.OperationalError) and any(w in str(e) for w in ("locked", "busy")):
+        return None
+    if isinstance(e, (sqlite3.DatabaseError, OSError)):
+        return (f"its manifest cannot be opened ({type(e).__name__}: {e}): not served, shared or "
+                f"searched until it is repaired — a snapshot of state/ restored, or the collection "
+                f"re-created")
+    return None
+
+
+def control() -> sqlite3.Connection:
+    """THE CONTROL MANIFEST FOR TELEMETRY: the query log, a control event.
+    The default collection's (`connect()`), or — where it cannot be opened —
+    the node's control fallback (`collections._control_fallback`), said on
+    each such open. 2026-11-28: EUR-Lex5.next sorted first, so her manifest
+    was the control one; its header overwritten, every question's log write
+    raised, and an answer would have been a 500 for its log line."""
+    try:
+        return connect()
+    except Exception as e:  # noqa: BLE001 — sorted: a lock is raised as before
+        why = unreadable(e)
+        if why is None:
+            raise
+        fallback = collections_mod._control_fallback()
+        print(f"{time.strftime('%H:%M:%S')} [{collections_mod.default_collection().name} err:control] "
+              f"{why}; this write goes to {fallback.manifest_path}", flush=True)
+        return connect(fallback)
+
+
 def connect(collection=None, *, shared: bool = False) -> sqlite3.Connection:
     """The collection's manifest. `shared`: the connection may be handed from
     one thread to another (never used by two at once) — the embed stage's

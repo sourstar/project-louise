@@ -338,18 +338,8 @@ def validate_boot(collections: list) -> None:
             con.close()
 
 
-def unreadable(e: BaseException) -> str | None:
-    """Why a manifest that raised `e` on opening cannot be served, or None
-    for what is not the file's fault: a lock or a busy file waits — deferral
-    is not failure (CLAUDE.md) — and is raised as it always was."""
-    import sqlite3
-    if isinstance(e, sqlite3.OperationalError) and any(w in str(e) for w in ("locked", "busy")):
-        return None
-    if isinstance(e, (sqlite3.DatabaseError, OSError)):
-        return (f"its manifest cannot be opened ({type(e).__name__}: {e}): not served, shared or "
-                f"searched until it is repaired — a snapshot of state/ restored, or the collection "
-                f"re-created")
-    return None
+#: why a manifest cannot be opened (db.unreadable), for the boot check
+unreadable = db.unreadable
 
 
 def refuse_boot(collections: list) -> list[tuple]:
