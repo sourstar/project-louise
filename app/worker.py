@@ -5621,6 +5621,24 @@ _paused = threading.Event()          # set = the mode fetches nothing: paused, s
 _acquire_only = threading.Event()
 
 
+def _looks_held() -> bool:
+    """The node is PAUSED (`node pause`, or seed-only: nothing fetched,
+    parsed or embedded): no run check's look starts, and one running stops at
+    its gate's next slice as a paused collection's does (app/run_check.py
+    `hold_looks_while`). NOT download only: that is QUERY MODE's run mode
+    (app/node_mode.py `QUERY_RUN`), where a run a question hears must still be
+    gated, or the collection's search refuses its answers until embed mode."""
+    return _paused.is_set()
+
+
+def _hold_looks_to_the_mode() -> None:
+    from . import run_check
+    run_check.hold_looks_while(_looks_held)
+
+
+_hold_looks_to_the_mode()
+
+
 class _ParseHeld:
     """`is_set()` while the node's mode runs no parsing. A STOP for a scan,
     beside SIGTERM and the collection's removal: a scan already running when
@@ -6266,20 +6284,30 @@ def _join_pipeline_threads(timeout: float = 90.0) -> None:
     """Shutdown: each thread finishes its current document and exits (the
     stop event is checked between documents). The deadline is shared, and
     stragglers are daemon threads — a hung step cannot block SIGTERM's
-    exit-0 contract past the container's grace period."""
+    exit-0 contract past the container's grace period. ONE JOIN THAT RAISES
+    NEVER SKIPS THE OTHERS (`_joined`): what it skipped would be abandoned
+    mid-unit."""
     deadline = time.time() + timeout
+
+    def left() -> float:
+        return max(0.0, deadline - time.time())
     for thread, _ in list(_pipeline_threads.values()):
-        thread.join(timeout=max(0.0, deadline - time.time()))
+        _joined(thread.join, left)
     # the embed producers: what is in flight finishes (a long document stops
     # at its next slice) and is committed before the process exits
     for thread, _ in list(_embed_producers.values()):
-        thread.join(timeout=max(0.0, deadline - time.time()))
+        _joined(thread.join, left)
+    # a run check's look runs on a thread of its own (app/run_check.py `_Look`):
+    # its gate asks the stop between slices and ends at the next one, keeping
+    # nothing, its twin let go and its claim released
+    from . import run_check
+    _joined(run_check.join_gates, left)
     # scans stop at their next ref and commit the batch so far; give them
     # the same deadline so that commit lands before the process exits
     with _scan_lock:
         scans = list(_scan_threads.values())
     for thread in scans:
-        thread.join(timeout=max(0.0, deadline - time.time()))
+        _joined(thread.join, left)
     # Corpus and archive fetches too. They were never joined: a SIGTERM
     # abandoned them as daemon threads mid-pass — a listing unstoppable
     # anyway, a claim row left behind for the next boot to wait out. Their
@@ -6290,7 +6318,16 @@ def _join_pipeline_threads(timeout: float = 90.0) -> None:
         fetches = list(_acquire_threads.values())
     fetches += list(_archive_threads.values())
     for thread in fetches:
-        thread.join(timeout=max(0.0, deadline - time.time()))
+        _joined(thread.join, left)
+
+
+def _joined(join, left) -> None:
+    """One join of the shutdown, within what is left of its deadline; what it
+    raises is said, and the shutdown goes on to the next."""
+    try:
+        join(left())
+    except Exception as e:   # noqa: BLE001 — the next join still runs
+        print(f"[warn:worker] a join at shutdown raised {type(e).__name__}: {e}", flush=True)
 
 
 def _effective_embed_mode(collection, con=None) -> str:
@@ -8458,6 +8495,25 @@ def retire_collection(name: str, timeout: float = 60.0) -> None:
     with _acquire_lock:
         fetch = _acquire_threads.get(name)
     threads += [t for t in (scan, fetch) if t is not None]
+    # ITS RUN CHECK'S LOOK TOO (app/run_check.py `retire`): its stop was the
+    # worker's alone, so a pause left its gate measuring for up to the rest of
+    # the pass — the twin held, every other gate on it deferred — and its own
+    # connection made a forgotten collection's directory again. Retired, its
+    # gate stops at its next slice, keeps nothing and writes nothing; waited
+    # for here, beside the others, before the lock goes
+    from . import run_check
+    bound = max(0.0, deadline - time.time())
+    try:
+        if not run_check.retire(name, bound):
+            # in a slice longer than the bound: it stops at the slice's end,
+            # its next request held to what is left of the bound, and keeps,
+            # writes and leaves nothing (app/run_check.py `retire`)
+            print(f"[warn:worker] {name}: its run check's look (thread run-check-{name}) still runs "
+                  f"after the retirement's bound of {bound:.1f} s; it stops at its gate's next slice "
+                  f"and keeps nothing", flush=True)
+    except Exception as e:   # noqa: BLE001 — the retirement goes on
+        print(f"[warn:worker] {name}: its run check's look could not be retired: "
+              f"{type(e).__name__}: {e}", flush=True)
     for thread in threads:
         if thread is not threading.current_thread():
             thread.join(timeout=max(0.0, deadline - time.time()))
@@ -8516,6 +8572,10 @@ def _hold_locks(collections, paused: set[str], cons=None) -> list:
         try:
             _locks[name] = lock_mod.take(Path(c.manifest_path).parent, name,
                                          "the node (worker)")
+            # the collection runs again: its run check's looks may start
+            # (app/run_check.py `retire`'s tombstone)
+            from . import run_check
+            run_check.unretire(name)
             # a fresh event for what starts now; one still unwinding keeps its own,
             # set — cleared, a resume before its next poll read the retirement the
             # pause caused instead, and no re-arm (D7 again: the sixth read, run).
