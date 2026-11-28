@@ -139,3 +139,11 @@ def test_a_line_3_collection_says_its_gaps_and_passes_its_check(gaps_shard):
     out = chk.check_records(chk.Ctx(root=root, name="gaps", codex=codex, snapshot=snapshot,
                                     seed=b"\x05" * 32))
     assert out.result == chk.PASS, out.why
+
+
+def test_an_image_no_marker_stands_for_is_an_unplaced_gap():
+    """Operator, 2026-11-28: "if there is no mark there is no mark, consider
+    the article degraded": no `figures` entry, a gap said in the record."""
+    gaps = [{"part": "L_2006371BG.01009703.tif", "why": "unplaced"}]
+    line = json.loads(pack_records.canonical_line(_record(gaps=gaps), record_line=3))
+    assert line["origin_gaps"] == gaps
