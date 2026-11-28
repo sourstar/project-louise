@@ -256,3 +256,8 @@ archive.org is fetched in parallel with the Met.
 without images, the CSV holds `Dimensions` as a string, while the API JSON
 adds structured `measurements`. Fetching their JSON as well (~240 k requests,
 ~1–7 h at 10–80 req/s) keeps them.
+
+**SUPERSEDED, the same day** (operator: "Everything by the books then"). The
+archive.org shortcut is dropped. Every image is fetched from
+images.metmuseum.org by the plugin, and every object's JSON from the API.
+The measurement above stays as the record of why the shortcut was considered.
