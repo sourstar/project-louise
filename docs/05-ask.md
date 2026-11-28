@@ -476,8 +476,10 @@ Which claims apply:
   "An annotation refers to the corpus of a collection, thus applies to all
   sisters and daughters" — A; "Add this rule to RAGE"): every collection
   linked to it, in either direction and at any depth, by its Codex's lineage
-  (`continues`, `derived_from`, `replaces`) or by a records carry, an id no
-  longer held still linking (app/rage/family.py, docs/notes/rage.md §5). The
+  (`continues`, `derived_from`, `replaces`), by a records carry, or by a
+  re-creation's record of the collection it re-creates (case F, which may
+  change the parser and so names no lineage), an id no longer held still
+  linking (app/rage/family.py, docs/notes/rage.md §5). The
   claim's state below is judged against the record it lands on, so a
   relative whose record changed shows it `stale`.
 - **Snapshot.** The result was read from a target snapshot at or after

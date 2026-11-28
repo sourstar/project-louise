@@ -188,6 +188,8 @@ def test_after_the_operators_forget_the_swap_takes_the_name_and_the_file(held, s
     recipe_path = _new_recipe(tmp_path)
     assert _new(root, recipe_path) == SWAP_WAITS
     made = col.read(root, "old.next")
+    assert recreate.predecessor_of(root / "old.next" / "state") == old.collection_id, \
+        "the family link (app/rage/family.py) is written at the make, before the forget"
     forget_mod.forget(root, "old")                     # the operator's, in the session that deletes
     steps["order"].clear()
     capsys.readouterr()
@@ -215,6 +217,12 @@ def test_after_the_operators_forget_the_swap_takes_the_name_and_the_file(held, s
     assert "louise hold config apply old --set embed=all" in err
     assert "old" in node_state.paused_collections(), "paused until the operator resumes it"
     assert _new(root, recipe_path) == 0, "done is done: every step kept"
+    # THE FAMILY (operator, 2026-11-28): an annotation of the predecessor, forgotten,
+    # still applies to the collection that re-created it — the link moved with its folder
+    from app.rage import family
+    assert recreate.predecessor_of(root / "old" / "state") == old.collection_id
+    assert set(family.family(root, made.collection_id, [SimpleNamespace(name="old", codex=col.read(root, "old"))])) == \
+        {made.collection_id, old.collection_id}
 
 
 def test_a_stop_after_the_carry_resumes_without_carrying_again(held, steps, tmp_path):

@@ -84,7 +84,14 @@ What applies to a collection's records applies to its WHOLE FAMILY: every
 collection linked to it, in either direction and at any depth, by its Codex's
 lineage — `continues` (a daughter's mother), `derived_from` (a sister's
 sister), `replaces.codex` (a corrective sister's predecessor) — or by a records
-carry (`carry.records_twin_of`). An id the node no longer holds (a mother
+carry (`carry.records_twin_of`), or by a RE-CREATION (case F,
+`hold collection new --re-create`): it may change what a sister may not — the
+parser, the record line (EUR-Lex 5 → 6, 2026-11-28) — so its Codex names no
+lineage, and the make step records the collection it re-creates beside it
+(`state/recreated-from.json`, `recreate.record_predecessor`); the folder, and
+the link, move with the swap. Local to this node: a published lineage for a
+re-creation (a fourth Codex relation) pays once one is published to peers —
+there are none today. An id the node no longer holds (a mother
 retired, the Codex a refit replaced) stays a link, so sisters meet through
 it. One function decides it for every collection: `app.rage.family.family`.
 
