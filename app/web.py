@@ -938,8 +938,8 @@ def _log_translation(lang: str, items: int, got: int, cached: int, missed: int, 
     """One log line per stream request, so what the page did with a
     translation can be read back from the web log (2026-10-28: the answer
     stayed untranslated and nothing recorded whether it was asked for,
-    translated or missed). Through the default collection's manifest, as
-    the query log is; never fatal."""
+    translated or missed). Through the node's own log (state/node.sqlite,
+    `db.control`), as the query log is; never fatal."""
     try:
         con = db.control()
         try:

@@ -949,10 +949,10 @@ def log_event(con, level, stage, message, doc_uid=None):
     way (tests, tools) simply print without it.
 
     A NODE_STAGES line says `node` instead. The fair-share lines cover every
-    collection and are written through the first collection's manifest —
-    the node has no event log of its own — so they printed as gutenberg's
-    ("why is gutenberg logging about the other plugins?", operator,
-    2026-09-18)."""
+    collection and were written through the first collection's manifest, so
+    they printed as gutenberg's ("why is gutenberg logging about the other
+    plugins?", operator, 2026-09-18); the node has its own log since
+    2026-11-28 (state/node.sqlite, `db.control`), whose lines say `node`."""
     stamp = time.strftime("%H:%M:%S")
     tag = f" #{doc_uid}" if doc_uid else ""
     who = "node" if stage in NODE_STAGES else getattr(con, "collection_name", "")
