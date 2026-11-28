@@ -667,3 +667,75 @@ def test_a_formex_manifestation_without_a_wrapper_gives_way_to_the_next_form():
     assert cellar.form_of(SimpleNamespace(items={"fmx4": bare["fmx4"]})) == "fmx4", "the only form stays"
     unnamed = {**bare, "fmx4": [Item(uri="x/DOC_1", name=None, size=None, order=1)]}
     assert cellar.form_of(SimpleNamespace(items=unnamed)) == "fmx4", "unnamed items: as before"
+
+
+def test_a_stopped_query_s_thread_keeps_its_own_socket_after_the_caller_closes_its_client(monkeypatch):
+    """2026-11-28, EUR-Lex5.next's manifest overwritten from byte 5 by a TLS
+    alert: a stop abandoned the SPARQL thread mid-read, the caller's `with
+    httpx.Client()` closed the socket under it, and the freed descriptor's
+    number went to a manifest. Real sockets: the server answers after the
+    caller has stopped and closed its client — the abandoned thread must
+    still read it, on a connection of its own (charged: its bytes arrived).
+    On the shared one its descriptor is gone: a plain socket raises, and an
+    SSL socket's OpenSSL reads whatever file has the number now."""
+    import socket
+    import threading
+
+    from app.acquire.spec import TransferAborted
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(4)
+    port = srv.getsockname()[1]
+    seen: dict = {}
+    done, read = threading.Event(), threading.Event()
+    charged: list[int] = []
+    # Events, not time.sleep: this module's `no_wait` makes sleep a no-op
+
+    def serve():
+        conn, _ = srv.accept()
+        data = b""
+        while b"\r\n\r\n" not in data:
+            data += conn.recv(65536)
+        head, _sep, body = data.partition(b"\r\n\r\n")
+        length = int(re.search(rb"(?i)content-length: *(\d+)", head).group(1))
+        while len(body) < length:
+            body += conn.recv(65536)
+        threading.Event().wait(2.5)                     # the query evaluates; the caller stops meanwhile
+        answer = b'{"results": {"bindings": []}}'
+        try:
+            conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/sparql-results+json\r\n"
+                         b"Content-Length: %d\r\n\r\n%s" % (len(answer), answer))
+        except OSError:
+            pass
+        conn.close()
+        done.set()
+    threading.Thread(target=serve, daemon=True).start()
+
+    stop = threading.Event()
+    monkeypatch.setattr(cellar, "current_handle", lambda: SimpleNamespace(stop=stop))
+    threading.Timer(0.3, stop.set).start()
+    with pytest.raises(TransferAborted):
+        with httpx.Client(timeout=cellar.TIMEOUT_S) as client:
+            cellar.sparql(client, f"http://127.0.0.1:{port}", "SELECT 1", what="the count",
+                          charge=lambda n: (charged.append(n), read.set()))
+    assert done.wait(10), "the server never answered"
+    read.wait(5)
+    srv.close()
+    assert sum(charged) == len(b'{"results": {"bindings": []}}'), (charged, seen)
+
+
+def test_a_query_s_own_client_is_made_only_for_a_socket_pool():
+    """A fake or a MockTransport holds no socket: used as it is; a real
+    client's thread gets its own, sharing only the TLS context."""
+    class Fake:
+        pass
+    fake = Fake()
+    assert cellar._thread_client(fake) == (fake, False)
+    mocked = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+    assert cellar._thread_client(mocked) == (mocked, False)
+    with httpx.Client() as real:
+        own, owned = cellar._thread_client(real)
+        try:
+            assert owned and own is not real and own._transport is not real._transport
+        finally:
+            own.close()
